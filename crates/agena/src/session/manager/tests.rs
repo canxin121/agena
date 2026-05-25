@@ -4229,14 +4229,11 @@ mod runtime_builtin_tool_tests {
     struct LocalWebFixture {
         base_url: String,
         fetch_hits: Arc<AtomicUsize>,
-        search_hits: Arc<AtomicUsize>,
     }
 
     #[derive(Clone)]
     struct LocalWebServerState {
-        base_url: String,
         fetch_hits: Arc<AtomicUsize>,
-        search_hits: Arc<AtomicUsize>,
     }
 
     struct LocalLspFixture {
@@ -4253,30 +4250,7 @@ mod runtime_builtin_tool_tests {
             )
         }
 
-        async fn search_results(
-            State(state): State<LocalWebServerState>,
-        ) -> axum::Json<serde_json::Value> {
-            state.search_hits.fetch_add(1, Ordering::SeqCst);
-            axum::Json(serde_json::json!({
-                "web": {
-                    "results": [
-                        {
-                            "title": "Runtime Web Docs",
-                            "url": format!("{}/docs/runtime-web", state.base_url),
-                            "description": "Local runtime search result"
-                        },
-                        {
-                            "title": "External Result",
-                            "url": "https://example.com/external",
-                            "description": "Should be filtered out"
-                        }
-                    ]
-                }
-            }))
-        }
-
         let fetch_hits = Arc::new(AtomicUsize::new(0));
-        let search_hits = Arc::new(AtomicUsize::new(0));
         let listener =
             std::net::TcpListener::bind("127.0.0.1:0").expect("local web fixture should bind");
         listener
@@ -4287,13 +4261,10 @@ mod runtime_builtin_tool_tests {
             .expect("local web fixture should have an address");
         let base_url = format!("http://{addr}");
         let state = LocalWebServerState {
-            base_url: base_url.clone(),
             fetch_hits: fetch_hits.clone(),
-            search_hits: search_hits.clone(),
         };
         let app = Router::new()
             .route("/page", get(fetch_page))
-            .route("/search", get(search_results))
             .with_state(state);
         std::thread::Builder::new()
             .name("runtime-web-fixture".to_string())
@@ -4314,7 +4285,6 @@ mod runtime_builtin_tool_tests {
         LocalWebFixture {
             base_url,
             fetch_hits,
-            search_hits,
         }
     }
 
@@ -5129,6 +5099,32 @@ while True:
             let workspace = TempWorkspace::new();
             init_git_workspace(&workspace.root);
             let web_fixture = start_local_web_fixture().await;
+            let crawl_store = agena_crawl::CrawlStore::for_workspace(&workspace.root);
+            crawl_store
+                .save_document(&agena_crawl::StoredDocument {
+                    id: "runtime-web-docs".to_string(),
+                    url: format!("{}/docs/runtime-web", web_fixture.base_url),
+                    canonical_url: format!("{}/docs/runtime-web", web_fixture.base_url),
+                    title: "Runtime Web Docs".to_string(),
+                    markdown: "Runtime web local crawl search result.".to_string(),
+                    chunks: vec!["Runtime web local crawl search result.".to_string()],
+                    chunk_hashes: vec!["chunk-runtime-web".to_string()],
+                    links: Vec::new(),
+                    content_type: "text/html".to_string(),
+                    status: 200,
+                    truncated: false,
+                    rendered: false,
+                    hash: "hash-runtime-web".to_string(),
+                    raw_html_hash: "raw-runtime-web".to_string(),
+                    markdown_hash: "markdown-runtime-web".to_string(),
+                    simhash: 1,
+                    etag: None,
+                    last_modified: None,
+                    depth: 0,
+                    fetched_at: chrono::Utc::now(),
+                })
+                .expect("seed crawl document");
+            crawl_store.rebuild_index().expect("seed crawl index");
             let db = open_runtime_tool_database(&workspace.root, "runtime-tools-web.db").await;
             let (manager, _host) = build_runtime_tool_manager_with_provider_and_executor(
                 &workspace.root,
@@ -5136,13 +5132,7 @@ while True:
                 WebRuntimeProvider {
                     fetch_url: format!("{}/page", web_fixture.base_url),
                 },
-                |executor| {
-                    executor
-                        .with_web_search_backend(crate::config::WebSearchBackend {
-                            api_key: "test-brave-key".to_string(),
-                        })
-                        .with_web_search_url_override(format!("{}/search", web_fixture.base_url))
-                },
+                std::convert::identity,
             )
             .await;
 
@@ -5200,7 +5190,7 @@ while True:
             let search_payload = session_operation_payload(&session, "call_web_search_1");
             assert_eq!(
                 search_payload["backend"].as_str(),
-                Some("brave"),
+                Some("crawl"),
                 "web search should report the active provider"
             );
             let results = search_payload["results"]
@@ -5214,24 +5204,19 @@ while True:
             assert_eq!(
                 results[0]["title"].as_str(),
                 Some("Runtime Web Docs"),
-                "web search should parse the local Brave-like JSON payload"
+                "web search should return the local crawl-index result"
             );
             assert!(
                 results[0]["url"]
                     .as_str()
                     .is_some_and(|url| url.starts_with(&format!("{}/docs/", web_fixture.base_url))),
-                "web search should keep the local result URL"
+                "web search should keep the indexed result URL"
             );
 
             assert_eq!(
                 web_fixture.fetch_hits.load(Ordering::SeqCst),
                 1,
                 "the second fetch should be served from cache"
-            );
-            assert_eq!(
-                web_fixture.search_hits.load(Ordering::SeqCst),
-                1,
-                "web search should hit the local endpoint exactly once"
             );
         });
     }

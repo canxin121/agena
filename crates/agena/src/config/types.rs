@@ -1549,58 +1549,9 @@ pub struct WebToolsConfig {
     pub search: WebSearchConfig,
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct WebSearchConfig {
-    /// Reads from `api_key` and falls back to `BRAVE_API_KEY`.
-    pub api_key: Option<String>,
-}
-
-impl fmt::Debug for WebSearchConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("WebSearchConfig")
-            .field("api_key", &redacted(self.api_key.as_deref()))
-            .finish()
-    }
-}
-
-impl Default for WebSearchConfig {
-    fn default() -> Self {
-        Self { api_key: None }
-    }
-}
-
-#[derive(Clone, PartialEq, Eq)]
-pub struct WebSearchBackend {
-    pub api_key: String,
-}
-
-impl fmt::Debug for WebSearchBackend {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("WebSearchBackend")
-            .field("api_key", &redacted(Some(self.api_key.as_str())))
-            .finish()
-    }
-}
-
-impl WebSearchBackend {
-    pub fn name(&self) -> &'static str {
-        "brave"
-    }
-}
-
-impl WebSearchConfig {
-    /// Materialize the resolved backend, reading the API key from config or
-    /// falling back to `BRAVE_API_KEY`.
-    pub fn resolve(&self) -> WebSearchBackend {
-        let api_key = self
-            .api_key
-            .clone()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| std::env::var("BRAVE_API_KEY").unwrap_or_default());
-        WebSearchBackend { api_key }
-    }
-}
+pub struct WebSearchConfig {}
 
 #[cfg(test)]
 mod tests {
@@ -1620,12 +1571,18 @@ mod tests {
     }
 
     #[test]
-    fn web_search_config_rejects_removed_backend_field() {
+    fn web_search_config_rejects_removed_backend_and_api_key_fields() {
         let err = serde_json::from_value::<WebSearchConfig>(json!({
             "backend": "exa",
             "api_key": "test"
         }))
-        .expect_err("removed web search backend should be rejected");
-        assert!(err.to_string().contains("unknown field `backend`"));
+        .expect_err("removed web search backend and api key should be rejected");
+        assert!(err.to_string().contains("unknown field"));
+
+        let err = serde_json::from_value::<WebSearchConfig>(json!({
+            "api_key": "test"
+        }))
+        .expect_err("removed web search api key should be rejected");
+        assert!(err.to_string().contains("unknown field `api_key`"));
     }
 }

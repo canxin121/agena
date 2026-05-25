@@ -427,7 +427,7 @@ OpenAI ChatGPT -> Codex、Google ADC -> Gemini CLI；没有专属身份的 auth
 `providers.<id>.adapters.<adapter-id>.models."<model-id>".native_tools` 是 provider 原生远程内置 tool 的 canonical 配置入口。它和 `[web]`、plugin tool 是两条平行链路：
 
 - plugin tool 继续表示 host-executed function tools。
-- `[web]` 继续表示 Agena 本地 `agena.web` 的 fetch / Brave fallback search。
+- `[web]` 继续表示 Agena 本地 `agena.web` 的 fetch / local crawl-index search。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".native_tools` 表示某个具体 model 自己托管或 provider 规划、host 执行的 native tools。
 
 默认行为不是“一律开启”：
@@ -1388,29 +1388,18 @@ browser_wait_for_delay_ms
 ```toml
 [web]
 fetch_enabled = true
-
-[web.search]
-api_key = "..."
 ```
 
-`fetch_enabled` 控制 `web` 的 `fetch` command。`agena.web` 现在只支持 Brave Search，不再有 backend 选择。
+`fetch_enabled` 控制 `web` 的 `fetch` command。
 
 这里的 `[web]` 只影响 Agena 本地内建 `agena.web` plugin。它现在是轻量能力：
 
 - `fetch` 直接由本地 runtime 发 HTTP 请求。
-- `search` 目前仍是 Brave fallback backend。
+- `search` 查询 `crawl` 维护的本地 Tantivy 索引，不调用外部搜索 API。
 
-对于多页抓取、本地语料落盘和后续检索，优先用 `[crawl]` 对应的 `agena.crawl` plugin。
+对于多页抓取、本地语料落盘和后续检索，优先用 `[crawl]` 对应的 `agena.crawl` plugin。`web.search` 是兼容入口，适合让旧的 `web_search` tool call 查询已有 crawl 索引；如果本地索引还没有内容，需要先运行 `crawl`。
 
 如果要启用 OpenAI / Anthropic / Gemini 这类 provider-native remote tools，不要写在 `[web]`，而是写在 `providers.<id>.adapters.<adapter>.models.<model>.native_tools.*`。
-
-API key 可写在配置里，也可由环境变量提供：
-
-```text
-BRAVE_API_KEY
-```
-
-`api_key` 为空时会回落到 `BRAVE_API_KEY`。runtime 权限审计固定按 `https://api.search.brave.com/res/v1/web/search` 申请网络访问。
 
 ## Studio 服务配置
 

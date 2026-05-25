@@ -51,7 +51,7 @@
 | 浏览器自动化 | 当前无专门内置 browser plugin | Playwright MCP | 不自研，直接接入 `agena.mcp` | P1 |
 | Skills 格式 | `agena.skills` 扫描 `SKILL.md` / slash command | GitHub Agent Skills、Vercel Skills、AGENTS.md | 保留实现，增强兼容层 | P1 |
 | 代码结构化搜索 | 当前以 `glob`/`grep`/LSP 为主 | `ast-grep`、`tree-sitter` | 适合增强内置 tool | P1 |
-| Web 搜索 | `agena.web` 内置 Tavily/Exa/Brave/DDG | 独立 search MCP / 第三方 server | 先不替换，继续内置 | P2 |
+| Web 搜索 | `agena.web` 查询 `crawl` 本地索引 | 独立 search MCP / 第三方 server | 保持本地内置，不默认依赖外部搜索服务 | P2 |
 | Memory/RAG | `agena.memory` 已是文件持久化 + Tantivy 本地检索 + prompt 注入 | Qdrant、LanceDB、mem0 思路 | 适合新增更强 RAG/长期记忆能力，不适合替换当前本地 memory | P2 |
 | MCP 安全 | 当前主要靠权限系统和网络审计 | `mcp-firewall`、`mcp-scan`、`agent-scan` | 适合加在接入层和 CI，不适合塞进 tool body | P2 |
 | Tool discovery | `tool_search` 当前是内置 Tantivy 本地检索 | Meilisearch | 保持内置实现，暂不引入外部服务 | P3 |

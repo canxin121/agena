@@ -48,7 +48,7 @@ impl CrawlDir {
             path: agena_base_dir()
                 .join("projects")
                 .join(workspace_key(workspace_root))
-                .join("crawl"),
+                .join("web"),
         }
     }
 

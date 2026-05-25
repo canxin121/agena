@@ -5,13 +5,13 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use agena_crawl::{
+use agena_macros::StaticToolSurface;
+use agena_web::{
     BrowserRenderOptions, CrawlPageFetcher, CrawlRunOptions, CrawlRunReport, CrawlStore,
     CrawlStoreRetention, FetchedPage, LocalBrowserOptions, SpiderFetchOptions, StoredDocument,
     WebSearchEngine, WebSearchOptions, WebSearchResult, crawl_site, ensure_index_exists,
     fetch_page_with_spider, prepare_fetch_url, preview_text, results_to_text, search_web,
 };
-use agena_macros::StaticToolSurface;
 use async_trait::async_trait;
 use governor::{DefaultKeyedRateLimiter, Quota};
 use moka::future::Cache;
@@ -19,7 +19,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::config::CrawlConfig;
+use crate::config::WebConfig;
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostNetworkPermissionCheckRequest};
 use crate::plugin::sdk::{
@@ -28,10 +28,10 @@ use crate::plugin::sdk::{
     ToolTag,
 };
 
-pub const CRAWL_PLUGIN_ID: &str = "agena.crawl";
+pub const WEB_PLUGIN_ID: &str = "agena.web";
 
-pub struct CrawlPlugin {
-    config: CrawlConfig,
+pub struct WebPlugin {
+    config: WebConfig,
     workspace_root: OnceLock<PathBuf>,
     host: OnceLock<Arc<dyn HostClient>>,
     fetch_cache: Cache<String, FetchedPage>,
@@ -41,7 +41,7 @@ pub struct CrawlPlugin {
 
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    entry = "crawl",
+    entry = "web",
     description = "Preferred local web discovery and ingestion tool. Use action `search` for direct web search, `fetch` for one page, `crawl` to build a local index, `query` to search that index, `get` to inspect one stored page, or `list` to inspect the local crawl catalog.",
     summary = "Local web search, crawling, fetch, and embedded crawl index.",
     help = "This tool performs direct web search with embedded ferris-style search code, fetches pages with Spider, stores extracted markdown under the current workspace's Agena data directory, and queries the local Tantivy index. It does not use Firecrawl, Brave API, or any remote search API key service.",
@@ -56,7 +56,7 @@ pub struct CrawlPlugin {
     concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-enum CrawlToolInput {
+enum WebToolInput {
     #[tool(exec = "search")]
     Search {
         #[serde(flatten)]
@@ -173,11 +173,11 @@ struct CrawlWebSearchOutput {
 #[derive(Debug, Serialize)]
 struct CrawlQueryOutput {
     query: String,
-    results: Vec<agena_crawl::CrawlSearchHit>,
+    results: Vec<agena_web::CrawlSearchHit>,
 }
 
-impl CrawlPlugin {
-    pub fn new(config: CrawlConfig) -> Self {
+impl WebPlugin {
+    pub fn new(config: WebConfig) -> Self {
         Self {
             fetch_cache: Cache::builder()
                 .time_to_live(Duration::from_secs(config.fetch_cache_ttl_secs))
@@ -195,13 +195,13 @@ impl CrawlPlugin {
         self.workspace_root
             .get()
             .map(PathBuf::as_path)
-            .ok_or_else(|| PluginError::new("crawl plugin invoked before init"))
+            .ok_or_else(|| PluginError::new("web plugin invoked before init"))
     }
 
     fn host(&self) -> SdkResult<&Arc<dyn HostClient>> {
         self.host
             .get()
-            .ok_or_else(|| PluginError::new("crawl plugin host not initialized"))
+            .ok_or_else(|| PluginError::new("web plugin host not initialized"))
     }
 
     fn store(&self) -> SdkResult<CrawlStore> {
@@ -277,7 +277,7 @@ impl CrawlPlugin {
             serde_json::to_value(&page).map_err(|err| PluginError::new(err.to_string()))?;
         let text = format_fetched_page(&page);
         Ok(ToolInvokeOutput::text(text)
-            .with_title("crawl fetch")
+            .with_title("web fetch")
             .with_payload(payload))
     }
 
@@ -317,7 +317,7 @@ impl CrawlPlugin {
         let payload =
             serde_json::to_value(report).map_err(|err| PluginError::new(err.to_string()))?;
         Ok(ToolInvokeOutput::text(text)
-            .with_title("crawl run")
+            .with_title("web crawl")
             .with_payload(payload))
     }
 
@@ -325,7 +325,7 @@ impl CrawlPlugin {
         let query = input.query.trim();
         if query.is_empty() {
             return Err(PluginError::invalid_params(
-                "crawl search requires a non-empty query",
+                "web search requires a non-empty query",
             ));
         }
         let limit = clamp_limit(
@@ -370,7 +370,7 @@ impl CrawlPlugin {
         let payload =
             serde_json::to_value(output).map_err(|err| PluginError::new(err.to_string()))?;
         Ok(ToolInvokeOutput::text(text)
-            .with_title("crawl search")
+            .with_title("web search")
             .with_payload(payload))
     }
 
@@ -378,7 +378,7 @@ impl CrawlPlugin {
         let query = input.query.trim();
         if query.is_empty() {
             return Err(PluginError::invalid_params(
-                "crawl query requires a non-empty query",
+                "web query requires a non-empty query",
             ));
         }
         let limit = clamp_limit(
@@ -417,7 +417,7 @@ impl CrawlPlugin {
         let payload =
             serde_json::to_value(output).map_err(|err| PluginError::new(err.to_string()))?;
         Ok(ToolInvokeOutput::text(lines.join("\n"))
-            .with_title("crawl query")
+            .with_title("web query")
             .with_payload(payload))
     }
 
@@ -439,17 +439,17 @@ impl CrawlPlugin {
             (None, Some(url)) => store
                 .find_by_url(url)
                 .map_err(crawl_error_to_plugin)?
-                .ok_or_else(|| PluginError::new(format!("crawl document for '{url}' not found")))?,
+                .ok_or_else(|| PluginError::new(format!("web document for '{url}' not found")))?,
             _ => {
                 return Err(PluginError::invalid_params(
-                    "crawl get requires exactly one of `id` or `url`",
+                    "web get requires exactly one of `id` or `url`",
                 ));
             }
         };
         let payload =
             serde_json::to_value(&document).map_err(|err| PluginError::new(err.to_string()))?;
         Ok(ToolInvokeOutput::text(format_document(&document))
-            .with_title("crawl get")
+            .with_title("web get")
             .with_payload(payload))
     }
 
@@ -476,20 +476,20 @@ impl CrawlPlugin {
         let payload =
             serde_json::to_value(&documents).map_err(|err| PluginError::new(err.to_string()))?;
         Ok(ToolInvokeOutput::text(text)
-            .with_title("crawl list")
+            .with_title("web list")
             .with_payload(payload))
     }
 }
 
 #[async_trait]
-impl Plugin for CrawlPlugin {
+impl Plugin for WebPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(CRAWL_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
+        PluginManifest::builder(WEB_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
             .description(
-                "Local crawl/search plugin with embedded storage, caching, and Tantivy retrieval.",
+                "Local web search/fetch/crawl plugin with embedded storage, caching, and Tantivy retrieval.",
             )
             .hooks(HookSubscription::INIT | HookSubscription::TOOL_INVOKE)
-            .tool(crawl_decl())
+            .tool(web_decl())
             .build()
     }
 
@@ -500,19 +500,19 @@ impl Plugin for CrawlPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        if input.tool_name != "crawl" {
+        if input.tool_name != "web" {
             return Err(PluginError::invalid_params(format!(
-                "unknown crawl plugin tool '{}'",
+                "unknown web plugin tool '{}'",
                 input.tool_name
             )));
         }
-        match parse_crawl_input(input.input)? {
-            CrawlToolInput::Search { args } => self.invoke_search(&args).await,
-            CrawlToolInput::Fetch { args } => self.invoke_fetch(&args).await,
-            CrawlToolInput::Crawl { args } => self.invoke_crawl(&args).await,
-            CrawlToolInput::Query { args } => self.invoke_query(&args).await,
-            CrawlToolInput::Get { args } => self.invoke_get(&args).await,
-            CrawlToolInput::List { args } => self.invoke_list(&args).await,
+        match parse_web_input(input.input)? {
+            WebToolInput::Search { args } => self.invoke_search(&args).await,
+            WebToolInput::Fetch { args } => self.invoke_fetch(&args).await,
+            WebToolInput::Crawl { args } => self.invoke_crawl(&args).await,
+            WebToolInput::Query { args } => self.invoke_query(&args).await,
+            WebToolInput::Get { args } => self.invoke_get(&args).await,
+            WebToolInput::List { args } => self.invoke_list(&args).await,
         }
     }
 
@@ -521,18 +521,18 @@ impl Plugin for CrawlPlugin {
         tool: &str,
         input: &serde_json::Value,
     ) -> SdkResult<Vec<PathRequest>> {
-        if tool != "crawl" {
+        if tool != "web" {
             return Ok(Vec::new());
         }
-        let parsed = parse_crawl_input(input.clone())?;
+        let parsed = parse_web_input(input.clone())?;
         let store = self.store()?;
         let path = store.dir().display().to_string();
         let request = match parsed {
-            CrawlToolInput::Search { .. } => return Ok(Vec::new()),
-            CrawlToolInput::Fetch { .. } => return Ok(Vec::new()),
-            CrawlToolInput::Crawl { .. } => PathRequest::write(path),
-            CrawlToolInput::Query { .. } => PathRequest::write(path),
-            CrawlToolInput::Get { .. } | CrawlToolInput::List { .. } => PathRequest::read(path),
+            WebToolInput::Search { .. } => return Ok(Vec::new()),
+            WebToolInput::Fetch { .. } => return Ok(Vec::new()),
+            WebToolInput::Crawl { .. } => PathRequest::write(path),
+            WebToolInput::Query { .. } => PathRequest::write(path),
+            WebToolInput::Get { .. } | WebToolInput::List { .. } => PathRequest::read(path),
         };
         Ok(vec![request])
     }
@@ -542,12 +542,12 @@ impl Plugin for CrawlPlugin {
         tool: &str,
         input: &serde_json::Value,
     ) -> SdkResult<Vec<NetworkRequest>> {
-        if tool != "crawl" {
+        if tool != "web" {
             return Ok(Vec::new());
         }
-        let parsed = parse_crawl_input(input.clone())?;
+        let parsed = parse_web_input(input.clone())?;
         let requests = match parsed {
-            CrawlToolInput::Search { args } => {
+            WebToolInput::Search { args } => {
                 let engine = args
                     .engine
                     .as_deref()
@@ -556,38 +556,38 @@ impl Plugin for CrawlPlugin {
                     .map_err(crawl_error_to_plugin)?;
                 vec![NetworkRequest::connect(engine.permission_url().to_string())]
             }
-            CrawlToolInput::Fetch { args } => vec![NetworkRequest::connect(
+            WebToolInput::Fetch { args } => vec![NetworkRequest::connect(
                 prepare_fetch_url(args.url.as_str())
                     .map_err(crawl_error_to_plugin)?
                     .to_string(),
             )],
-            CrawlToolInput::Crawl { args } => vec![NetworkRequest::connect(
+            WebToolInput::Crawl { args } => vec![NetworkRequest::connect(
                 prepare_fetch_url(args.start_url.as_str())
                     .map_err(crawl_error_to_plugin)?
                     .to_string(),
             )],
-            CrawlToolInput::Query { .. }
-            | CrawlToolInput::Get { .. }
-            | CrawlToolInput::List { .. } => Vec::new(),
+            WebToolInput::Query { .. } | WebToolInput::Get { .. } | WebToolInput::List { .. } => {
+                Vec::new()
+            }
         };
         Ok(requests)
     }
 }
 
-fn crawl_decl() -> PluginToolDecl {
-    CrawlToolInput::tool_decl()
+fn web_decl() -> PluginToolDecl {
+    WebToolInput::tool_decl()
 }
 
-fn parse_crawl_input(input: serde_json::Value) -> SdkResult<CrawlToolInput> {
-    CrawlToolInput::parse_input(input)
+fn parse_web_input(input: serde_json::Value) -> SdkResult<WebToolInput> {
+    WebToolInput::parse_input(input)
 }
 
-fn crawl_error_to_plugin(err: agena_crawl::CrawlError) -> PluginError {
+fn crawl_error_to_plugin(err: agena_web::CrawlError) -> PluginError {
     PluginError::new(err.to_string())
 }
 
 struct PluginPageFetcher<'a> {
-    plugin: &'a CrawlPlugin,
+    plugin: &'a WebPlugin,
 }
 
 impl CrawlPageFetcher for PluginPageFetcher<'_> {
@@ -596,13 +596,12 @@ impl CrawlPageFetcher for PluginPageFetcher<'_> {
         url: &'a url::Url,
         use_cache: bool,
         render_js: bool,
-    ) -> Pin<Box<dyn Future<Output = Result<FetchedPage, agena_crawl::CrawlError>> + Send + 'a>>
-    {
+    ) -> Pin<Box<dyn Future<Output = Result<FetchedPage, agena_web::CrawlError>> + Send + 'a>> {
         Box::pin(async move {
             self.plugin
                 .fetch_page(url, use_cache, render_js)
                 .await
-                .map_err(|err| agena_crawl::CrawlError::InvalidInput(err.to_string()))
+                .map_err(|err| agena_web::CrawlError::InvalidInput(err.to_string()))
         })
     }
 }
@@ -733,12 +732,12 @@ fn host_matches(host: &str, pattern: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{crawl_decl, fetch_cache_key};
+    use super::{fetch_cache_key, web_decl};
     use crate::plugin::sdk::HostCapability;
 
     #[test]
-    fn crawl_decl_declares_permission_check_host_capability() {
-        let decl = crawl_decl();
+    fn web_decl_declares_permission_check_host_capability() {
+        let decl = web_decl();
         assert!(
             decl.host_capabilities
                 .contains(&HostCapability::PermissionCheck)
@@ -760,7 +759,7 @@ mod tests {
 
     #[test]
     fn plain_fetch_can_reuse_rendered_documents_but_not_reverse() {
-        let mut document = agena_crawl::StoredDocument {
+        let mut document = agena_web::StoredDocument {
             id: "doc-1".to_string(),
             url: "https://example.com/docs".to_string(),
             canonical_url: "https://example.com/docs".to_string(),
@@ -783,11 +782,11 @@ mod tests {
             fetched_at: chrono::Utc::now(),
         };
 
-        assert!(agena_crawl::document_matches_render_mode(&document, false));
-        assert!(!agena_crawl::document_matches_render_mode(&document, true));
+        assert!(agena_web::document_matches_render_mode(&document, false));
+        assert!(!agena_web::document_matches_render_mode(&document, true));
 
         document.rendered = true;
-        assert!(agena_crawl::document_matches_render_mode(&document, false));
-        assert!(agena_crawl::document_matches_render_mode(&document, true));
+        assert!(agena_web::document_matches_render_mode(&document, false));
+        assert!(agena_web::document_matches_render_mode(&document, true));
     }
 }

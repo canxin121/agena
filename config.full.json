@@ -131,7 +131,8 @@
       "min_query_chars": 8
     }
   },
-  "crawl": {
+  "web": {
+    "fetch_enabled": true,
     "default_max_pages": 10,
     "max_pages_limit": 100,
     "default_max_depth": 1,
@@ -144,8 +145,11 @@
     "document_cache_ttl_secs": 86400,
     "fetch_cache_ttl_secs": 900,
     "fetch_cache_capacity": 128,
+    "store_max_documents": 200,
+    "store_max_bytes": 104857600,
     "default_chunk_chars": 1800,
     "near_duplicate_hamming_distance": 3,
+    "search_engine": "bing",
     "search_default_limit": 5,
     "search_max_limit": 20,
     "list_default_limit": 20,
@@ -168,9 +172,6 @@
         }
       }
     }
-  },
-  "web": {
-    "fetch_enabled": true
   },
   "harnesses": {
     "browser": {

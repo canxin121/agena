@@ -5064,7 +5064,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_web_fetch_1",
-                    "crawl",
+                    "web",
                     serde_json::json!({
                         "action": "fetch",
                         "url": self.fetch_url
@@ -5074,7 +5074,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_web_fetch_2"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_web_fetch_2",
-                    "crawl",
+                    "web",
                     serde_json::json!({
                         "action": "fetch",
                         "url": self.fetch_url
@@ -5084,7 +5084,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_web_search_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_web_search_1",
-                    "crawl",
+                    "web",
                     serde_json::json!({
                         "action": "query",
                         "query": "runtime web",
@@ -5107,9 +5107,9 @@ while True:
             let workspace = TempWorkspace::new();
             init_git_workspace(&workspace.root);
             let web_fixture = start_local_web_fixture().await;
-            let crawl_store = agena_crawl::CrawlStore::for_workspace(&workspace.root);
+            let crawl_store = agena_web::CrawlStore::for_workspace(&workspace.root);
             crawl_store
-                .save_document(&agena_crawl::StoredDocument {
+                .save_document(&agena_web::StoredDocument {
                     id: "runtime-web-docs".to_string(),
                     url: format!("{}/docs/runtime-web", web_fixture.base_url),
                     canonical_url: format!("{}/docs/runtime-web", web_fixture.base_url),

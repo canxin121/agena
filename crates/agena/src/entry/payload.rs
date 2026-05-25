@@ -398,8 +398,8 @@ const DIRECT_GROUPED_TOOL_MAPPINGS: &[(&str, &str, &str)] = &[
     ("grep", "fs", "grep"),
     ("apply_patch", "fs", "apply_patch"),
     ("notebook_edit", "fs", "notebook_edit"),
-    ("web_fetch", "crawl", "fetch"),
-    ("web_search", "crawl", "search"),
+    ("web_fetch", "web", "fetch"),
+    ("web_search", "web", "search"),
     ("task", "task", "run"),
     ("tool_search", "tools", "search"),
     ("todo_write", "todo", "write"),
@@ -463,8 +463,8 @@ fn grouped_invocation_for_tool(
             }
             ("shell", command)
         }
-        "web_fetch" => ("crawl", "fetch"),
-        "web_search" => ("crawl", "search"),
+        "web_fetch" => ("web", "fetch"),
+        "web_search" => ("web", "search"),
         "task" => ("task", "run"),
         "tool_search" => ("tools", "search"),
         "todo_write" => ("todo", "write"),

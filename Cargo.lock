@@ -114,7 +114,6 @@ dependencies = [
 name = "agena"
 version = "0.1.0"
 dependencies = [
- "agena-crawl",
  "agena-keyring-store",
  "agena-lsp",
  "agena-macros",
@@ -124,6 +123,7 @@ dependencies = [
  "agena-plugin-marketplace",
  "agena-scheduler",
  "agena-skills",
+ "agena-web",
  "arc-swap",
  "ast-grep-core",
  "async-stream",
@@ -271,31 +271,6 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
-]
-
-[[package]]
-name = "agena-crawl"
-version = "0.1.0"
-dependencies = [
- "backoff",
- "blake3",
- "chrono",
- "crw-extract",
- "redb",
- "reqwest 0.13.3",
- "scraper 0.26.0",
- "serde",
- "serde_json",
- "simhash",
- "spider",
- "tantivy",
- "tempfile",
- "text-splitter",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "url",
- "urlencoding",
 ]
 
 [[package]]
@@ -644,6 +619,31 @@ dependencies = [
  "textwrap",
  "unicode-segmentation",
  "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "agena-web"
+version = "0.1.0"
+dependencies = [
+ "backoff",
+ "blake3",
+ "chrono",
+ "crw-extract",
+ "redb",
+ "reqwest 0.13.3",
+ "scraper 0.26.0",
+ "serde",
+ "serde_json",
+ "simhash",
+ "spider",
+ "tantivy",
+ "tempfile",
+ "text-splitter",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+ "urlencoding",
 ]
 
 [[package]]

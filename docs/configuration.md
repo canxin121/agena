@@ -27,7 +27,7 @@ agena config validate
 - `[agents.default]`: 全局默认 agent 名称。
 - `[agents.<name>]`: 自定义 agent。
 - `[permission]`: 路径、网络、tool 权限。
-- `[memory]` / `[crawl]` / `[mcp]` / `[lsp]` / `[web]` / `[harnesses]`: 内建能力的顶层配置。
+- `[memory]` / `[web]` / `[mcp]` / `[lsp]` / `[harnesses]`: 内建能力的顶层配置。
 
 `config.full.json` 展示了更完整的功能面：
 
@@ -35,7 +35,7 @@ agena config validate
 - runtime reload、runtime.session.gc、runtime.session.cache。
 - permission path/network/tool rules。
 - `memory` durable memory / retrieval 配置。
-- `crawl` 本地网页采集 / 索引默认参数。
+- `web` 本地网页搜索、单页抓取、多页采集 / 索引默认参数。
 - plugin transport、restart、storage、marketplace 安装后的配置形态。
 - provider model metadata，以及拆分后的 model thinking/speed modes。
 
@@ -152,7 +152,7 @@ agena \
 - map 通常按 key 合并。
 - provider config 按字段合并，`auth` 按字段合并，`adapters`、`extra_headers`、`ai_gateway_headers`、`feature_flags` 以及 provider/adapter 的 `models` map 会按 key 扩展或覆盖。
 - `plugins` 只合并 `timeouts`、`list`、`trusted_keys`、`default_quota` 和 `tool_presentation`；没有总开关。
-- `memory`、`crawl`、`mcp`、`lsp`、`web` 都是顶层配置源；对应 built-in plugin 只消费解析后的结果。
+- `memory`、`web`、`mcp`、`lsp` 都是顶层配置源；对应 built-in plugin 只消费解析后的结果。
 - 这些顶层块的合并语义跟随各自配置结构，例如 server map 按名称合并，`web` 采用整体替换，`memory.project_instructions` / `memory.retrieval` 也采用整体替换。
 
 这些规则由 `crates/agena/src/config/raw.rs` 中的 `Merge` 实现定义。
@@ -1303,10 +1303,11 @@ initialization_options
 
 LSP registry 是 lazy-spawn 的。相关 tool 首次触及匹配文件时才会启动对应 server。
 
-## Crawl
+## Web
 
 ```toml
-[crawl]
+[web]
+fetch_enabled = true
 default_max_pages = 10
 max_pages_limit = 100
 default_max_depth = 1
@@ -1336,7 +1337,7 @@ browser_wait_timeout_secs = 10
 browser_wait_for_delay_ms = 0
 ```
 
-`[crawl]` 控制内建 `agena.crawl` plugin 的默认行为。这个 plugin 是现在推荐的本地网页采集入口：
+`[web]` 控制内建 `agena.web` plugin 的默认行为。这个 plugin 是现在推荐的本地网页入口：
 
 - `fetch`: 单页抓取，带进程内 TTL cache，但不会写入本地索引。
 - `crawl`: 多页抓取、用 Spider 抓取页面、用 CRW extract 抽取 Markdown、落盘、维护 metadata、去重，并重建本地 Tantivy 索引。
@@ -1378,27 +1379,20 @@ browser_wait_for_delay_ms
 
 说明：
 
-- `crawl` 和 `fetch` 都使用 Spider 抓取；旧的 `web_fetch` / `web_search` typed payload 会兼容映射到 `crawl`，默认工具目录不再暴露单独的 `agena.web` plugin。
+- `web` 的 `crawl` 和 `fetch` action 都使用 Spider 抓取；旧的 `web_fetch` / `web_search` typed payload 会兼容映射到 `web` 的 `fetch` / `search` action。
 - `respect_robots_txt` 打开后 Spider 会按 robots.txt 约束抓取。
 - `document_cache_ttl_secs` 控制已保存文档在后续 crawl 中被直接复用的时长。
 - `fetch_cache_ttl_secs` / `fetch_cache_capacity` 控制进程内 HTTP fetch cache。
 - `store_max_documents` / `store_max_bytes` 控制持久 crawl 语料的上限；每次 `crawl` 写入后会删除最旧文档并重建索引，避免本地目录无限增长。
 - `near_duplicate_hamming_distance` 用于基于 SimHash 的近重复过滤。
-- `search_engine` 控制 `crawl search` 的默认搜索引擎；`crawl query` 不依赖模型，只使用本地 Tantivy BM25 / ngram 索引。
-- `browser_enabled` 会让 `crawl` 默认通过 Agena 托管的本地 Chrome/Chromium 进程抓取 JS 页面；单次 tool call 也可以用 `render_js` 覆盖。
+- `search_engine` 控制 `web search` 的默认搜索引擎；`web query` 不依赖模型，只使用本地 Tantivy BM25 / ngram 索引。
+- `browser_enabled` 会让 `web fetch` / `web crawl` 默认通过 Agena 托管的本地 Chrome/Chromium 进程抓取 JS 页面；单次 tool call 也可以用 `render_js` 覆盖。
 - `browser_executable_path` 可选，用于指定本地 Chrome/Chromium 可执行文件路径；不支持配置远端 DevTools/WebSocket 链接。
 - `browser_wait_for_network_idle`、`browser_wait_timeout_secs`、`browser_wait_for_selector` 和 `browser_wait_for_delay_ms` 控制渲染等待策略。
 
-如果你只是想临时拉一页内容，用 `crawl` 的 `fetch` action；如果你需要站内多页抓取、后续反复查询、或者想避免再接 Firecrawl 这类远程服务，用 `crawl` 的 `crawl` / `query` action。
+如果你只是想临时拉一页内容，用 `web` 的 `fetch` action；如果你需要站内多页抓取、后续查询、或者想避免再接 Firecrawl 这类远程服务，用 `web` 的 `crawl` / `query` action。
 
-## Web
-
-```toml
-[web]
-fetch_enabled = true
-```
-
-`[web]` 只保留为历史配置壳；默认工具目录不再暴露单独的 `agena.web` plugin。网络搜索、单页抓取、多页抓取和本地 crawl 索引查询都归到 `[crawl]` / `agena.crawl`。
+`[crawl]` 作为旧配置表名仍可被读取，但只作为 `[web]` 的兼容别名；新配置应写 `[web]`。旧的 `plugins.list."agena.crawl"` 不再是有效 plugin id，请改成 `plugins.list."agena.web"`。
 
 如果要启用 OpenAI / Anthropic / Gemini 这类 provider-native remote tools，不要写在 `[web]`，而是写在 `providers.<id>.adapters.<adapter>.models.<model>.native_tools.*`。
 

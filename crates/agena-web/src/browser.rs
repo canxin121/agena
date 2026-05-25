@@ -152,7 +152,7 @@ fn find_browser_executable(configured: Option<&Path>) -> Result<PathBuf, CrawlEr
             return Ok(path.to_path_buf());
         }
         return Err(CrawlError::InvalidInput(format!(
-            "configured crawl.browser_executable_path '{}' is not executable",
+            "configured web.browser_executable_path '{}' is not executable",
             path.display()
         )));
     }
@@ -171,7 +171,7 @@ fn find_browser_executable(configured: Option<&Path>) -> Result<PathBuf, CrawlEr
     }
 
     Err(CrawlError::InvalidInput(
-        "local browser rendering requires Chrome/Chromium; set crawl.browser_executable_path or AGENA_CHROME_PATH".to_string(),
+        "local browser rendering requires Chrome/Chromium; set web.browser_executable_path or AGENA_CHROME_PATH".to_string(),
     ))
 }
 
@@ -222,8 +222,5 @@ fn browser_profile_dir() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
-    std::env::temp_dir().join(format!(
-        "agena-crawl-browser-{}-{nanos}",
-        std::process::id()
-    ))
+    std::env::temp_dir().join(format!("agena-web-browser-{}-{nanos}", std::process::id()))
 }

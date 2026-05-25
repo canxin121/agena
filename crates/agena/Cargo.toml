@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 [dependencies]
-agena-crawl = { workspace = true }
+agena-web = { workspace = true }
 agena-mcp-client = { workspace = true }
 agena-mcp-server = { workspace = true }
 agena-lsp = { workspace = true }

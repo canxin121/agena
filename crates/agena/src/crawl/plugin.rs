@@ -5,9 +5,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use agena_crawl::{
-    BrowserRenderOptions, CrawlDocumentSummary, CrawlStore, FetchOptions, FetchedPage,
-    LocalBrowserOptions, SpiderFetchOptions, StoredDocument, build_client, fetch_page_with_spider,
-    prepare_fetch_url, preview_text,
+    BrowserRenderOptions, CrawlDocumentSummary, CrawlStore, FetchedPage, LocalBrowserOptions,
+    SpiderFetchOptions, StoredDocument, fetch_page_with_spider, prepare_fetch_url, preview_text,
 };
 use agena_macros::StaticToolSurface;
 use async_trait::async_trait;
@@ -17,7 +16,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::config::{CrawlConfig, CrawlFetchEngine};
+use crate::config::CrawlConfig;
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostNetworkPermissionCheckRequest};
 use crate::plugin::sdk::{
@@ -179,15 +178,6 @@ impl CrawlPlugin {
         Ok(CrawlStore::for_workspace(self.workspace_root()?))
     }
 
-    fn fetch_options(&self) -> FetchOptions {
-        let mut options = FetchOptions::default();
-        options.max_body_bytes = self.config.max_body_bytes as usize;
-        options.timeout = Duration::from_secs(self.config.fetch_timeout_secs);
-        options.max_retries = self.config.max_fetch_retries as usize;
-        options.user_agent = crate::provider::CLAUDE_USER_WEB_FETCH_USER_AGENT.to_string();
-        options
-    }
-
     fn spider_fetch_options(&self, rendered: bool) -> SpiderFetchOptions {
         let delay = (self.config.browser_wait_for_delay_ms > 0)
             .then(|| Duration::from_millis(self.config.browser_wait_for_delay_ms));
@@ -229,8 +219,7 @@ impl CrawlPlugin {
         use_cache: bool,
         render_js: bool,
     ) -> SdkResult<FetchedPage> {
-        let engine = effective_fetch_engine(self.config.fetch_engine, render_js);
-        let cache_key = fetch_cache_key(url, engine, render_js);
+        let cache_key = fetch_cache_key(url, render_js);
         if use_cache && let Some(hit) = self.fetch_cache.get(cache_key.as_str()).await {
             return Ok(hit);
         }
@@ -238,15 +227,10 @@ impl CrawlPlugin {
             self.host_limiter.until_key_ready(&host.to_string()).await;
         }
         self.ensure_network_permission(url).await?;
-        let page = if matches!(engine, CrawlFetchEngine::Spider) {
-            let options = self.spider_fetch_options(render_js);
-            fetch_page_with_spider(url, &options).await
-        } else {
-            let options = self.fetch_options();
-            let client = build_client(&options).map_err(crawl_error_to_plugin)?;
-            agena_crawl::fetch_page_with_client(&client, url, &options).await
-        }
-        .map_err(crawl_error_to_plugin)?;
+        let options = self.spider_fetch_options(render_js);
+        let page = fetch_page_with_spider(url, &options)
+            .await
+            .map_err(crawl_error_to_plugin)?;
         if use_cache {
             self.fetch_cache.insert(cache_key, page.clone()).await;
         }
@@ -390,8 +374,7 @@ impl CrawlPlugin {
         let total_documents = store.list_documents().map_err(crawl_error_to_plugin)?.len();
         let payload = CrawlRunOutput {
             start_url: start_url.to_string(),
-            engine: render_engine_name(effective_fetch_engine(self.config.fetch_engine, render_js))
-                .to_string(),
+            engine: "spider".to_string(),
             rendered: render_js,
             stored_count,
             cached_count,
@@ -629,28 +612,12 @@ fn is_near_duplicate(candidate: u64, existing: &[u64], max_distance: u32) -> boo
         .any(|value| simhash::hamming_distance(candidate, *value) <= max_distance)
 }
 
-fn fetch_cache_key(url: &url::Url, engine: CrawlFetchEngine, render_js: bool) -> String {
+fn fetch_cache_key(url: &url::Url, render_js: bool) -> String {
     format!(
-        "{}:{}:{}",
-        render_engine_name(engine),
+        "spider:{}:{}",
         if render_js { "rendered" } else { "plain" },
         url
     )
-}
-
-fn effective_fetch_engine(engine: CrawlFetchEngine, render_js: bool) -> CrawlFetchEngine {
-    if render_js {
-        CrawlFetchEngine::Spider
-    } else {
-        engine
-    }
-}
-
-fn render_engine_name(engine: CrawlFetchEngine) -> &'static str {
-    match engine {
-        CrawlFetchEngine::Reqwest => "reqwest",
-        CrawlFetchEngine::Spider => "spider",
-    }
 }
 
 fn enqueue_links(
@@ -770,17 +737,18 @@ fn format_crawl_run(output: &CrawlRunOutput) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{document_matches_render_mode, effective_fetch_engine, fetch_cache_key};
-    use crate::config::CrawlFetchEngine;
+    use super::{document_matches_render_mode, fetch_cache_key};
 
     #[test]
-    fn render_js_forces_spider_engine_for_cache_and_reporting() {
+    fn fetch_cache_key_tracks_render_mode() {
         let url = url::Url::parse("https://example.com/docs").expect("url parses");
-        let engine = effective_fetch_engine(CrawlFetchEngine::Reqwest, true);
-        assert_eq!(engine, CrawlFetchEngine::Spider);
         assert_eq!(
-            fetch_cache_key(&url, engine, true),
+            fetch_cache_key(&url, true),
             "spider:rendered:https://example.com/docs"
+        );
+        assert_eq!(
+            fetch_cache_key(&url, false),
+            "spider:plain:https://example.com/docs"
         );
     }
 

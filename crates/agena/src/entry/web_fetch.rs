@@ -11,6 +11,7 @@
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
+use agena_crawl::{FetchOptions, build_client, fetch_page_with_client};
 use lru::LruCache;
 
 use crate::message::WebFetchToolInput;
@@ -125,53 +126,18 @@ fn fetch_async(
 ) -> impl std::future::Future<Output = Result<(u16, String, bool), ToolError>> + Send {
     let url = url.clone();
     async move {
-        let client = reqwest::Client::builder()
-            .timeout(REQUEST_TIMEOUT)
-            .user_agent(crate::provider::CLAUDE_USER_WEB_FETCH_USER_AGENT)
-            .build()
+        let mut options = FetchOptions::default();
+        options.timeout = REQUEST_TIMEOUT;
+        options.max_body_bytes = MAX_BODY_BYTES;
+        options.user_agent = crate::provider::CLAUDE_USER_WEB_FETCH_USER_AGENT.to_string();
+        let client = build_client(&options)
             .map_err(|e| ToolError::Plugin(format!("web_fetch: client build failed: {e}")))?;
-
-        let response = client
-            .get(url.clone())
-            .header("Accept", "text/html, text/plain, application/xhtml+xml")
-            .header("Accept-Language", "en;q=0.9, *;q=0.5")
-            .send()
+        let page = fetch_page_with_client(&client, &url, &options)
             .await
             .map_err(|e| ToolError::Plugin(format!("web_fetch: request failed: {e}")))?;
 
-        let status = response.status().as_u16();
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
-
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| ToolError::Plugin(format!("web_fetch: read body failed: {e}")))?;
-        let truncated = bytes.len() > MAX_BODY_BYTES;
-        let slice = if truncated {
-            &bytes[..MAX_BODY_BYTES]
-        } else {
-            &bytes[..]
-        };
-
-        let body = String::from_utf8_lossy(slice).into_owned();
-        let markdown = if content_type.starts_with("text/html") || looks_like_html(&body) {
-            html2md::parse_html(&body)
-        } else {
-            body
-        };
-
-        Ok((status, markdown, truncated))
+        Ok((page.status, page.markdown, page.truncated))
     }
-}
-
-fn looks_like_html(body: &str) -> bool {
-    let head = body.trim_start();
-    head.starts_with('<') || head.to_ascii_lowercase().contains("<html")
 }
 
 fn should_upgrade_http(raw_url: &str) -> bool {

@@ -72,6 +72,8 @@ pub struct ResolvedConfig {
     #[serde(skip_serializing)]
     pub memory: MemoryConfig,
     #[serde(skip_serializing)]
+    pub crawl: CrawlConfig,
+    #[serde(skip_serializing)]
     pub mcp: McpConfig,
     #[serde(skip_serializing)]
     pub lsp: LspConfig,
@@ -363,6 +365,96 @@ impl Default for MemoryRetrievalConfig {
             enabled: true,
             limit: 3,
             min_query_chars: 8,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CrawlConfig {
+    pub fetch_engine: CrawlFetchEngine,
+    pub default_max_pages: u32,
+    pub max_pages_limit: u32,
+    pub default_max_depth: u32,
+    pub max_depth_limit: u32,
+    pub default_same_host_only: bool,
+    pub request_delay_ms: u64,
+    pub fetch_timeout_secs: u64,
+    pub max_body_bytes: u64,
+    pub respect_robots_txt: bool,
+    pub document_cache_ttl_secs: u64,
+    pub fetch_cache_ttl_secs: u64,
+    pub fetch_cache_capacity: u64,
+    pub default_chunk_chars: u32,
+    pub near_duplicate_hamming_distance: u32,
+    pub search_default_limit: u32,
+    pub search_max_limit: u32,
+    pub list_default_limit: u32,
+    pub list_max_limit: u32,
+    pub max_fetch_retries: u32,
+    pub vector_search_enabled: bool,
+    pub rerank_enabled: bool,
+    pub embedding_model: String,
+    pub reranker_model: String,
+    pub vector_candidate_limit: u32,
+    pub min_vector_query_chars: u32,
+    pub hybrid_rrf_k: u32,
+    pub rerank_limit: u32,
+    pub browser_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_connection_url: Option<String>,
+    pub browser_wait_for_network_idle: bool,
+    pub browser_wait_timeout_secs: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_wait_for_selector: Option<String>,
+    pub browser_wait_for_delay_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CrawlFetchEngine {
+    Reqwest,
+    #[default]
+    Spider,
+}
+
+impl Default for CrawlConfig {
+    fn default() -> Self {
+        Self {
+            fetch_engine: CrawlFetchEngine::Spider,
+            default_max_pages: 10,
+            max_pages_limit: 100,
+            default_max_depth: 1,
+            max_depth_limit: 4,
+            default_same_host_only: true,
+            request_delay_ms: 400,
+            fetch_timeout_secs: 30,
+            max_body_bytes: 5 * 1024 * 1024,
+            respect_robots_txt: true,
+            document_cache_ttl_secs: 24 * 60 * 60,
+            fetch_cache_ttl_secs: 15 * 60,
+            fetch_cache_capacity: 128,
+            default_chunk_chars: 1800,
+            near_duplicate_hamming_distance: 3,
+            search_default_limit: 5,
+            search_max_limit: 20,
+            list_default_limit: 20,
+            list_max_limit: 100,
+            max_fetch_retries: 2,
+            vector_search_enabled: false,
+            rerank_enabled: false,
+            embedding_model: "MultilingualE5Small".to_string(),
+            reranker_model: "jinaai/jina-reranker-v2-base-multilingual".to_string(),
+            vector_candidate_limit: 20,
+            min_vector_query_chars: 3,
+            hybrid_rrf_k: 60,
+            rerank_limit: 10,
+            browser_enabled: false,
+            browser_connection_url: None,
+            browser_wait_for_network_idle: true,
+            browser_wait_timeout_secs: 10,
+            browser_wait_for_selector: None,
+            browser_wait_for_delay_ms: 0,
         }
     }
 }

@@ -118,6 +118,7 @@ Vue 前端。主要通过 `packages/agena-studio-web/src/agena/lib/agenaApi.ts` 
 - `agent` / `agents`: default agent policy、disk/runtime subagent registry。
 - `tool` / `plugins/provided`: provided tools and runtime-provided static plugins.
 - `memory`: project instructions and memory plugin.
+- `crawl`: local Spider/CRW crawl plugin with optional browser rendering, Tantivy BM25, redb metadata, and persistent chunk vector search.
 - `storage`: database URL/path resolution.
 - `tracing` / `metrics`: logging, DB tracing, process/provider/tool/session counters.
 

@@ -3,6 +3,8 @@ name = "agena-echo-plugin-stdio"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+
 [[bin]]
 name = "agena-echo-plugin-stdio"
 path = "src/main.rs"

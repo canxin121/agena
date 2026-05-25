@@ -161,6 +161,7 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
     let shell_id = shell_plugin_id().to_string();
     let web_id = web_plugin_id().to_string();
     let workflow_id = workflow_plugin_id().to_string();
+    let crawl_id = crate::crawl::crawl_plugin_id().to_string();
     let mut list = std::collections::BTreeMap::new();
     for id in [
         &skills_id,
@@ -172,6 +173,7 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
         &shell_id,
         &web_id,
         &workflow_id,
+        &crawl_id,
     ] {
         let options = if id == &workflow_id {
             serde_json::json!({})
@@ -207,6 +209,10 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
             .register_static(shell_id, new_shell_plugin())
             .register_static(web_id, new_web_plugin())
             .register_static(workflow_id, new_workflow_plugin())
+            .register_static(
+                crawl_id,
+                crate::crawl::new_crawl_plugin(crate::config::CrawlConfig::default()),
+            )
             .build()
             .await
     })
@@ -2438,6 +2444,7 @@ mod tests {
         let shell_id = super::shell_plugin_id().to_string();
         let web_id = super::web_plugin_id().to_string();
         let workflow_id = super::workflow_plugin_id().to_string();
+        let crawl_id = crate::crawl::crawl_plugin_id().to_string();
         let mut list = BTreeMap::new();
         for id in [
             &skills_id,
@@ -2449,6 +2456,7 @@ mod tests {
             &shell_id,
             &web_id,
             &workflow_id,
+            &crawl_id,
         ] {
             let options = if id == &workflow_id {
                 serde_json::json!({})
@@ -2493,6 +2501,10 @@ mod tests {
                 .register_static(shell_id, super::new_shell_plugin())
                 .register_static(web_id, super::new_web_plugin())
                 .register_static(workflow_id, super::new_workflow_plugin())
+                .register_static(
+                    crawl_id,
+                    crate::crawl::new_crawl_plugin(crate::config::CrawlConfig::default()),
+                )
                 .register_static("fixture", FixturePlugin)
                 .build()
                 .await
@@ -2512,6 +2524,7 @@ mod tests {
         let shell_id = super::shell_plugin_id().to_string();
         let web_id = super::web_plugin_id().to_string();
         let workflow_id = super::workflow_plugin_id().to_string();
+        let crawl_id = crate::crawl::crawl_plugin_id().to_string();
         let mut list = BTreeMap::new();
         for id in [
             &skills_id,
@@ -2523,6 +2536,7 @@ mod tests {
             &shell_id,
             &web_id,
             &workflow_id,
+            &crawl_id,
         ] {
             let options = if id == &workflow_id {
                 serde_json::json!({})
@@ -2559,6 +2573,10 @@ mod tests {
                 .register_static(shell_id, super::new_shell_plugin())
                 .register_static(web_id, super::new_web_plugin())
                 .register_static(workflow_id, super::new_workflow_plugin())
+                .register_static(
+                    crawl_id,
+                    crate::crawl::new_crawl_plugin(crate::config::CrawlConfig::default()),
+                )
                 .build()
                 .await
                 .expect("default plugin host should build")
@@ -2953,6 +2971,12 @@ mod tests {
             .expect("fs tool should be available");
         assert_eq!(fs.plugin_name, super::fs_plugin_id());
         assert!(fs.has_tag(crate::plugin::sdk::ToolTag::FilesystemRead));
+        let crawl = tools
+            .iter()
+            .find(|tool| tool.exposed_name == "crawl")
+            .expect("crawl tool should be available");
+        assert_eq!(crawl.plugin_name, crate::crawl::crawl_plugin_id());
+        assert!(crawl.has_tag(crate::plugin::sdk::ToolTag::Network));
 
         let fs_count = tools
             .iter()

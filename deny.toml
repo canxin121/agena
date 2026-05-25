@@ -27,6 +27,7 @@ ignore = [
 [licenses]
 allow = [
     "MIT",
+    "MIT-0",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
@@ -40,8 +41,8 @@ allow = [
     "CC0-1.0",
     "CDLA-Permissive-2.0",
     "OpenSSL",
-    # html2md is GPL-3.0+; tracked for replacement.
-    # Removing this when html2md is swapped out.
+    "AGPL-3.0",
+    "AGPL-3.0-or-later",
     "GPL-3.0",
     "GPL-3.0-or-later",
 ]

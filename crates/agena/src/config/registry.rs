@@ -345,6 +345,10 @@ impl super::ConfigResolution {
                 crate::tool::new_workflow_plugin(),
             )
             .register_static(
+                crate::crawl::crawl_plugin_id(),
+                crate::crawl::new_crawl_plugin(self.config.crawl.clone()),
+            )
+            .register_static(
                 crate::memory::memory_plugin_id(),
                 crate::memory::new_memory_plugin(self.config.memory.clone()),
             );

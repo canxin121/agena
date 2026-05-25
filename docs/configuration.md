@@ -27,7 +27,7 @@ agena config validate
 - `[agents.default]`: 全局默认 agent 名称。
 - `[agents.<name>]`: 自定义 agent。
 - `[permission]`: 路径、网络、tool 权限。
-- `[memory]` / `[mcp]` / `[lsp]` / `[web]` / `[harnesses]`: 内建能力的顶层配置。
+- `[memory]` / `[crawl]` / `[mcp]` / `[lsp]` / `[web]` / `[harnesses]`: 内建能力的顶层配置。
 
 `config.full.json` 展示了更完整的功能面：
 
@@ -35,6 +35,7 @@ agena config validate
 - runtime reload、runtime.session.gc、runtime.session.cache。
 - permission path/network/tool rules。
 - `memory` durable memory / retrieval 配置。
+- `crawl` 本地网页采集 / 索引默认参数。
 - plugin transport、restart、storage、marketplace 安装后的配置形态。
 - provider model metadata，以及拆分后的 model thinking/speed modes。
 
@@ -151,7 +152,7 @@ agena \
 - map 通常按 key 合并。
 - provider config 按字段合并，`auth` 按字段合并，`adapters`、`extra_headers`、`ai_gateway_headers`、`feature_flags` 以及 provider/adapter 的 `models` map 会按 key 扩展或覆盖。
 - `plugins` 只合并 `timeouts`、`list`、`trusted_keys`、`default_quota` 和 `tool_presentation`；没有总开关。
-- `memory`、`mcp`、`lsp`、`web` 都是顶层配置源；对应 built-in plugin 只消费解析后的结果。
+- `memory`、`crawl`、`mcp`、`lsp`、`web` 都是顶层配置源；对应 built-in plugin 只消费解析后的结果。
 - 这些顶层块的合并语义跟随各自配置结构，例如 server map 按名称合并，`web` 采用整体替换，`memory.project_instructions` / `memory.retrieval` 也采用整体替换。
 
 这些规则由 `crates/agena/src/config/raw.rs` 中的 `Merge` 实现定义。
@@ -1302,6 +1303,109 @@ initialization_options
 
 LSP registry 是 lazy-spawn 的。相关 tool 首次触及匹配文件时才会启动对应 server。
 
+## Crawl
+
+```toml
+[crawl]
+fetch_engine = "spider" # "spider" or "reqwest"
+default_max_pages = 10
+max_pages_limit = 100
+default_max_depth = 1
+max_depth_limit = 4
+default_same_host_only = true
+request_delay_ms = 400
+fetch_timeout_secs = 30
+max_body_bytes = 5242880
+respect_robots_txt = true
+document_cache_ttl_secs = 86400
+fetch_cache_ttl_secs = 900
+fetch_cache_capacity = 128
+default_chunk_chars = 1800
+near_duplicate_hamming_distance = 3
+search_default_limit = 5
+search_max_limit = 20
+list_default_limit = 20
+list_max_limit = 100
+max_fetch_retries = 2
+vector_search_enabled = false
+rerank_enabled = false
+embedding_model = "MultilingualE5Small"
+reranker_model = "jinaai/jina-reranker-v2-base-multilingual"
+vector_candidate_limit = 20
+min_vector_query_chars = 3
+hybrid_rrf_k = 60
+rerank_limit = 10
+browser_enabled = false
+# browser_connection_url = "ws://127.0.0.1:9222/devtools/browser/..."
+browser_wait_for_network_idle = true
+browser_wait_timeout_secs = 10
+# browser_wait_for_selector = "main"
+browser_wait_for_delay_ms = 0
+```
+
+`[crawl]` 控制内建 `agena.crawl` plugin 的默认行为。这个 plugin 是现在推荐的本地网页采集入口：
+
+- `fetch`: 单页抓取，带进程内 TTL cache，但不会写入本地索引。
+- `crawl`: 多页抓取、用 Spider 抓取页面、用 CRW extract 抽取 Markdown、落盘、维护 metadata、去重，并重建本地 Tantivy + vector 索引。
+- `search`: 查询当前 workspace 的本地 crawl 语料；默认 BM25，本地向量检索打开后会做 hybrid retrieval 和可选 rerank。
+- `get` / `list`: 检查已保存文档。
+
+字段说明：
+
+```text
+fetch_engine
+default_max_pages
+max_pages_limit
+default_max_depth
+max_depth_limit
+default_same_host_only
+request_delay_ms
+fetch_timeout_secs
+max_body_bytes
+respect_robots_txt
+document_cache_ttl_secs
+fetch_cache_ttl_secs
+fetch_cache_capacity
+default_chunk_chars
+near_duplicate_hamming_distance
+search_default_limit
+search_max_limit
+list_default_limit
+list_max_limit
+max_fetch_retries
+vector_search_enabled
+rerank_enabled
+embedding_model
+reranker_model
+vector_candidate_limit
+min_vector_query_chars
+hybrid_rrf_k
+rerank_limit
+browser_enabled
+browser_connection_url
+browser_wait_for_network_idle
+browser_wait_timeout_secs
+browser_wait_for_selector
+browser_wait_for_delay_ms
+```
+
+说明：
+
+- `fetch_engine = "spider"` 是推荐默认值；`"reqwest"` 保留为轻量 fallback。
+- `respect_robots_txt` 打开后 Spider 会按 robots.txt 约束抓取。
+- `document_cache_ttl_secs` 控制已保存文档在后续 crawl 中被直接复用的时长。
+- `fetch_cache_ttl_secs` / `fetch_cache_capacity` 控制进程内 HTTP fetch cache。
+- `near_duplicate_hamming_distance` 用于基于 SimHash 的近重复过滤。
+- `vector_search_enabled` 打开后会为 chunk 生成 embedding，持久化到 workspace-local `vectors.redb`，并在 `search` 中做 BM25 + vector 的 RRF 融合。
+- `rerank_enabled` 会在 hybrid retrieval 之后尝试用本地 reranker 再排一次序。
+- `embedding_model` 目前使用 `fastembed` 的 `EmbeddingModel` variant 名称。
+- `reranker_model` 目前使用 `fastembed` 支持的 reranker model code。
+- `browser_enabled` 会让 `crawl` 默认通过 Spider 的 Chrome 渲染路径抓取 JS 页面；单次 tool call 也可以用 `render_js` 覆盖。
+- `browser_connection_url` 可指向远端 Chrome DevTools/WebSocket endpoint；为空时使用 Spider/Chrome 的默认发现逻辑。
+- `browser_wait_for_network_idle`、`browser_wait_timeout_secs`、`browser_wait_for_selector` 和 `browser_wait_for_delay_ms` 控制渲染等待策略。
+
+如果你只是想临时拉一页内容，`web.fetch` 仍然保留；如果你需要站内多页抓取、后续反复查询、或者想避免再接 Firecrawl 这类远程服务，优先用 `crawl`。
+
 ## Web
 
 ```toml
@@ -1314,10 +1418,12 @@ api_key = "..."
 
 `fetch_enabled` 控制 `web` 的 `fetch` command。`agena.web` 现在只支持 Brave Search，不再有 backend 选择。
 
-这里的 `[web]` 只影响 Agena 本地内建 `agena.web` plugin：
+这里的 `[web]` 只影响 Agena 本地内建 `agena.web` plugin。它现在是轻量能力：
 
 - `fetch` 直接由本地 runtime 发 HTTP 请求。
 - `search` 目前仍是 Brave fallback backend。
+
+对于多页抓取、本地语料落盘和后续检索，优先用 `[crawl]` 对应的 `agena.crawl` plugin。
 
 如果要启用 OpenAI / Anthropic / Gemini 这类 provider-native remote tools，不要写在 `[web]`，而是写在 `providers.<id>.adapters.<adapter>.models.<model>.native_tools.*`。
 

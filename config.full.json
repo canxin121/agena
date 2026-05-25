@@ -131,6 +131,42 @@
       "min_query_chars": 8
     }
   },
+  "crawl": {
+    "fetch_engine": "spider",
+    "default_max_pages": 10,
+    "max_pages_limit": 100,
+    "default_max_depth": 1,
+    "max_depth_limit": 4,
+    "default_same_host_only": true,
+    "request_delay_ms": 400,
+    "fetch_timeout_secs": 30,
+    "max_body_bytes": 5242880,
+    "respect_robots_txt": true,
+    "document_cache_ttl_secs": 86400,
+    "fetch_cache_ttl_secs": 900,
+    "fetch_cache_capacity": 128,
+    "default_chunk_chars": 1800,
+    "near_duplicate_hamming_distance": 3,
+    "search_default_limit": 5,
+    "search_max_limit": 20,
+    "list_default_limit": 20,
+    "list_max_limit": 100,
+    "max_fetch_retries": 2,
+    "vector_search_enabled": false,
+    "rerank_enabled": false,
+    "embedding_model": "MultilingualE5Small",
+    "reranker_model": "jinaai/jina-reranker-v2-base-multilingual",
+    "vector_candidate_limit": 20,
+    "min_vector_query_chars": 3,
+    "hybrid_rrf_k": 60,
+    "rerank_limit": 10,
+    "browser_enabled": false,
+    "browser_connection_url": null,
+    "browser_wait_for_network_idle": true,
+    "browser_wait_timeout_secs": 10,
+    "browser_wait_for_selector": null,
+    "browser_wait_for_delay_ms": 0
+  },
   "mcp": {
     "servers": {
       "docs": {

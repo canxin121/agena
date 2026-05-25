@@ -74,6 +74,12 @@ web_search = "provider_hosted"
 - provider-native remote tools 的路由和 hosted 默认值写在 `providers.<id>.adapters.<adapter>.models.<model>.native_tools`
 - 运行时模型选择由 `provider_id`、`adapter_id`、`model_id` 三个字段共同决定，不使用三段字符串编码
 
+当前对话 runtime 已经接通的 provider-hosted 组合是：
+
+- OpenAI：`web_search`、`file_search`、`code_execution`
+- Anthropic：`web_search`
+- Gemini：`web_search`、`url_context`、`code_execution`
+
 ## 四层职责
 
 ### provider

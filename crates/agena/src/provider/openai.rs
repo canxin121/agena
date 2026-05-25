@@ -9,6 +9,7 @@ use std::{
 use tokio::sync::Mutex;
 
 use crate::{
+    config::{NativeToolFreshness, ProviderNativeToolKind, ProviderNativeToolRoute},
     error::{AppError, ProviderErrorKind},
     message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, MessageUsage},
     model::{
@@ -55,6 +56,12 @@ pub struct OpenAiAdapter {
     realtime_ws_url: Option<String>,
     top_level_prompt_cache_override: Option<bool>,
     atomgit_coding_plan_models: bool,
+}
+
+#[derive(Debug, Default)]
+struct OpenAiResponsesToolPlan {
+    tools: Vec<serde_json::Value>,
+    include: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -769,6 +776,12 @@ impl OpenAiAdapter {
         request: &CompletionRequest,
         model: String,
     ) -> Result<CompletionResponse, AppError> {
+        if !request.native_tools.bindings().is_empty() {
+            return Err(AppError::Config(format!(
+                "provider `{}` model `{}` configures native hosted tools, but the OpenAI chat API path does not support them; use Responses mode instead",
+                self.id, model
+            )));
+        }
         let model_id = ModelId::new(model.clone());
         let prompt_cache_key = self
             .uses_chat_compatible_request_fields()
@@ -870,6 +883,12 @@ impl OpenAiAdapter {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
+        if !request.native_tools.bindings().is_empty() {
+            return Err(AppError::Config(format!(
+                "provider `{}` model `{}` configures native hosted tools, but the OpenAI chat API path does not support them; use Responses mode instead",
+                self.id, model
+            )));
+        }
         let model_id = ModelId::new(model.clone());
         let prompt_cache_key = self
             .uses_chat_compatible_request_fields()
@@ -1183,10 +1202,9 @@ impl OpenAiAdapter {
         let model_name = ModelId::new(model);
         let conversation_items =
             Self::realtime_conversation_items_for_messages(request.messages.as_slice());
-        let response_tools = (!request.tools.is_empty()).then(|| {
-            serde_json::to_value(Self::responses_tools(request.tools.as_slice()))
-                .expect("realtime tool definitions should serialize")
-        });
+        let tool_plan = Self::responses_tool_plan(request)?;
+        let response_tools =
+            (!tool_plan.tools.is_empty()).then(|| serde_json::Value::Array(tool_plan.tools));
         let system = request.system.clone();
         let temperature = request.temperature;
         let max_output_tokens = request.max_output_tokens;
@@ -1570,17 +1588,287 @@ impl OpenAiAdapter {
         })
     }
 
-    fn responses_tools(tools: &[crate::plugin::registry::PluginEntry]) -> Vec<OpenAiResponsesTool> {
-        tools
-            .iter()
-            .map(|tool| OpenAiResponsesTool {
-                kind: "function",
-                name: tool.exposed_name.clone(),
-                description: tool.description_text().to_string(),
-                parameters: tool.sanitized_input_schema(),
-                strict: tool.decl.strict,
-            })
-            .collect()
+    fn merge_tool_provider_options(
+        map: &mut serde_json::Map<String, serde_json::Value>,
+        extra: Option<&serde_json::Value>,
+        tool_label: &str,
+    ) -> Result<(), AppError> {
+        let Some(extra) = extra else {
+            return Ok(());
+        };
+        let extra = extra.as_object().ok_or_else(|| {
+            AppError::Config(format!(
+                "openai native tool `{tool_label}` provider_options must be a JSON object"
+            ))
+        })?;
+        for (key, value) in extra {
+            map.insert(key.clone(), value.clone());
+        }
+        Ok(())
+    }
+
+    fn responses_tool_plan(
+        request: &CompletionRequest,
+    ) -> Result<OpenAiResponsesToolPlan, AppError> {
+        let mut plan = OpenAiResponsesToolPlan::default();
+        for tool in &request.tools {
+            let mut map = serde_json::Map::new();
+            map.insert(
+                "type".to_owned(),
+                serde_json::Value::String("function".to_owned()),
+            );
+            map.insert(
+                "name".to_owned(),
+                serde_json::Value::String(tool.exposed_name.clone()),
+            );
+            map.insert(
+                "description".to_owned(),
+                serde_json::Value::String(tool.description_text().to_string()),
+            );
+            map.insert("parameters".to_owned(), tool.sanitized_input_schema());
+            if tool.decl.strict {
+                map.insert("strict".to_owned(), serde_json::Value::Bool(true));
+            }
+            plan.tools.push(serde_json::Value::Object(map));
+        }
+
+        for binding in request.native_tools.bindings() {
+            if binding.route != ProviderNativeToolRoute::ProviderHosted {
+                return Err(AppError::Config(format!(
+                    "openai native tool `{}` only supports `provider_hosted` routes in the current runtime",
+                    binding.tool.config_key()
+                )));
+            }
+            match binding.tool {
+                ProviderNativeToolKind::WebSearch => {
+                    let config = &request.native_tools.hosted.web_search;
+                    if config.max_results.is_some() {
+                        return Err(AppError::Config(
+                            "openai native tool `web_search` does not support `hosted.web_search.max_results`; use `provider_options` for provider-specific overrides instead".to_owned(),
+                        ));
+                    }
+                    let mut map = serde_json::Map::new();
+                    map.insert(
+                        "type".to_owned(),
+                        serde_json::Value::String("web_search".to_owned()),
+                    );
+                    if let Some(freshness) = config.freshness {
+                        match freshness {
+                            NativeToolFreshness::Auto => {}
+                            NativeToolFreshness::Cached => {
+                                map.insert(
+                                    "external_web_access".to_owned(),
+                                    serde_json::Value::Bool(false),
+                                );
+                            }
+                            NativeToolFreshness::Live => {
+                                map.insert(
+                                    "external_web_access".to_owned(),
+                                    serde_json::Value::Bool(true),
+                                );
+                            }
+                        }
+                    }
+                    if let Some(search_context_size) = config.search_context_size.as_ref() {
+                        map.insert(
+                            "search_context_size".to_owned(),
+                            serde_json::Value::String(search_context_size.clone()),
+                        );
+                    }
+                    if !config.user_location.is_empty() {
+                        let mut location = serde_json::Map::new();
+                        location.insert(
+                            "type".to_owned(),
+                            serde_json::Value::String("approximate".to_owned()),
+                        );
+                        if let Some(country) = config.user_location.country.as_ref() {
+                            location.insert(
+                                "country".to_owned(),
+                                serde_json::Value::String(country.clone()),
+                            );
+                        }
+                        if let Some(region) = config.user_location.region.as_ref() {
+                            location.insert(
+                                "region".to_owned(),
+                                serde_json::Value::String(region.clone()),
+                            );
+                        }
+                        if let Some(city) = config.user_location.city.as_ref() {
+                            location
+                                .insert("city".to_owned(), serde_json::Value::String(city.clone()));
+                        }
+                        if let Some(timezone) = config.user_location.timezone.as_ref() {
+                            location.insert(
+                                "timezone".to_owned(),
+                                serde_json::Value::String(timezone.clone()),
+                            );
+                        }
+                        map.insert(
+                            "user_location".to_owned(),
+                            serde_json::Value::Object(location),
+                        );
+                    }
+                    if !config.allowed_domains.is_empty() || !config.blocked_domains.is_empty() {
+                        let mut filters = serde_json::Map::new();
+                        if !config.allowed_domains.is_empty() {
+                            filters.insert(
+                                "allowed_domains".to_owned(),
+                                serde_json::Value::Array(
+                                    config
+                                        .allowed_domains
+                                        .iter()
+                                        .cloned()
+                                        .map(serde_json::Value::String)
+                                        .collect(),
+                                ),
+                            );
+                        }
+                        if !config.blocked_domains.is_empty() {
+                            filters.insert(
+                                "blocked_domains".to_owned(),
+                                serde_json::Value::Array(
+                                    config
+                                        .blocked_domains
+                                        .iter()
+                                        .cloned()
+                                        .map(serde_json::Value::String)
+                                        .collect(),
+                                ),
+                            );
+                        }
+                        map.insert("filters".to_owned(), serde_json::Value::Object(filters));
+                    }
+                    Self::merge_tool_provider_options(
+                        &mut map,
+                        config.provider_options.as_ref(),
+                        "web_search",
+                    )?;
+                    plan.tools.push(serde_json::Value::Object(map));
+                    plan.include
+                        .push("web_search_call.action.sources".to_owned());
+                }
+                ProviderNativeToolKind::FileSearch => {
+                    let config = &request.native_tools.hosted.file_search;
+                    if config.vector_store_ids.is_empty() {
+                        return Err(AppError::Config(
+                            "openai native tool `file_search` requires at least one `vector_store_ids` entry".to_owned(),
+                        ));
+                    }
+                    let mut map = serde_json::Map::new();
+                    map.insert(
+                        "type".to_owned(),
+                        serde_json::Value::String("file_search".to_owned()),
+                    );
+                    map.insert(
+                        "vector_store_ids".to_owned(),
+                        serde_json::Value::Array(
+                            config
+                                .vector_store_ids
+                                .iter()
+                                .cloned()
+                                .map(serde_json::Value::String)
+                                .collect(),
+                        ),
+                    );
+                    if let Some(max_results) = config.max_results {
+                        map.insert(
+                            "max_num_results".to_owned(),
+                            serde_json::Value::Number(max_results.into()),
+                        );
+                    }
+                    Self::merge_tool_provider_options(
+                        &mut map,
+                        config.provider_options.as_ref(),
+                        "file_search",
+                    )?;
+                    plan.tools.push(serde_json::Value::Object(map));
+                    if config.include_results.unwrap_or(false) {
+                        plan.include.push("file_search_call.results".to_owned());
+                    }
+                }
+                ProviderNativeToolKind::CodeExecution => {
+                    let config = &request.native_tools.hosted.code_execution;
+                    let container = &config.container;
+                    let mut map = serde_json::Map::new();
+                    map.insert(
+                        "type".to_owned(),
+                        serde_json::Value::String("code_interpreter".to_owned()),
+                    );
+                    if let Some(container_id) = container.id.as_ref() {
+                        if container.kind.is_some()
+                            || container.memory_limit.is_some()
+                            || !container.file_ids.is_empty()
+                        {
+                            return Err(AppError::Config(
+                                "openai native tool `code_execution` cannot combine `container.id` with `container.type`, `memory_limit`, or `file_ids`".to_owned(),
+                            ));
+                        }
+                        map.insert(
+                            "container".to_owned(),
+                            serde_json::Value::String(container_id.clone()),
+                        );
+                    } else if !container.is_empty() {
+                        let kind = container.kind.as_deref().unwrap_or("auto");
+                        if kind != "auto" {
+                            return Err(AppError::Config(format!(
+                                "openai native tool `code_execution` only supports container type `auto`, found `{kind}`"
+                            )));
+                        }
+                        let mut container_map = serde_json::Map::new();
+                        container_map.insert(
+                            "type".to_owned(),
+                            serde_json::Value::String("auto".to_owned()),
+                        );
+                        if let Some(memory_limit) = container.memory_limit.as_ref() {
+                            container_map.insert(
+                                "memory_limit".to_owned(),
+                                serde_json::Value::String(memory_limit.clone()),
+                            );
+                        }
+                        if !container.file_ids.is_empty() {
+                            container_map.insert(
+                                "file_ids".to_owned(),
+                                serde_json::Value::Array(
+                                    container
+                                        .file_ids
+                                        .iter()
+                                        .cloned()
+                                        .map(serde_json::Value::String)
+                                        .collect(),
+                                ),
+                            );
+                        }
+                        map.insert(
+                            "container".to_owned(),
+                            serde_json::Value::Object(container_map),
+                        );
+                    }
+                    Self::merge_tool_provider_options(
+                        &mut map,
+                        config.provider_options.as_ref(),
+                        "code_execution",
+                    )?;
+                    plan.tools.push(serde_json::Value::Object(map));
+                }
+                ProviderNativeToolKind::ImageGeneration => {
+                    return Err(AppError::Config(
+                        "openai native tool `image_generation` is not enabled in Agena runtime yet because generated image outputs are not projected into assistant message parts".to_owned(),
+                    ));
+                }
+                other => {
+                    return Err(AppError::Config(format!(
+                        "openai native tool `{}` is not supported by the current runtime",
+                        other.config_key()
+                    )));
+                }
+            }
+        }
+
+        Ok(plan)
+    }
+
+    fn native_tools_request_requires_responses(request: &CompletionRequest) -> bool {
+        !request.native_tools.bindings().is_empty()
     }
 
     fn is_vision_request(request: &CompletionRequest) -> bool {
@@ -2144,6 +2432,14 @@ impl ModelRuntime for OpenAiAdapter {
         Some(self.capability_family)
     }
 
+    fn validate_native_tools_request(
+        &self,
+        _adapter_id: Option<&crate::model::AdapterId>,
+        request: &CompletionRequest,
+    ) -> Result<(), AppError> {
+        Self::responses_tool_plan(request).map(|_| ())
+    }
+
     fn model_capabilities_for_adapter(
         &self,
         adapter_id: Option<&crate::model::AdapterId>,
@@ -2282,19 +2578,29 @@ impl ModelRuntime for OpenAiAdapter {
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
         let model = request.model.clone();
+        let native_tools_require_responses =
+            Self::native_tools_request_requires_responses(&request);
 
         if !self.should_use_responses(model.as_str()) {
+            if native_tools_require_responses {
+                return Err(AppError::Config(format!(
+                    "provider `{}` model `{}` configures native hosted tools, but the selected OpenAI API mode resolves to chat; switch this provider/model to Responses mode",
+                    self.id, model
+                )));
+            }
             return self
                 .complete_with_chat_api(&request, model.to_string())
                 .await;
         }
 
         let input = self.responses_input_for_request(&request);
+        let tool_plan = Self::responses_tool_plan(&request)?;
 
         let body = OpenAiResponsesRequest {
             model: model.to_string(),
             input,
-            tools: Self::responses_tools(request.tools.as_slice()),
+            tools: tool_plan.tools,
+            include: (!tool_plan.include.is_empty()).then_some(tool_plan.include),
             max_output_tokens: request.max_output_tokens,
             temperature: request.temperature,
             prompt_cache_key: request.prompt_cache_key.clone(),
@@ -2329,7 +2635,9 @@ impl ModelRuntime for OpenAiAdapter {
         {
             Ok(payload) => payload,
             Err(AppError::HttpStatus { status, .. })
-                if self.can_fallback_to_chat() && Self::responses_endpoint_unsupported(status) =>
+                if !native_tools_require_responses
+                    && self.can_fallback_to_chat()
+                    && Self::responses_endpoint_unsupported(status) =>
             {
                 return self
                     .complete_with_chat_api(&request, model.to_string())
@@ -2380,11 +2688,13 @@ impl ModelRuntime for OpenAiAdapter {
         input_request.system = None;
         input_request.previous_response_id = None;
         let input = self.responses_input_for_request(&input_request);
+        let tool_plan = Self::responses_tool_plan(&request)?;
         let body = OpenAiResponsesCompactRequest {
             model: model.to_string(),
             instructions: request.system.clone(),
             input,
-            tools: Self::responses_tools(request.tools.as_slice()),
+            tools: tool_plan.tools,
+            include: (!tool_plan.include.is_empty()).then_some(tool_plan.include),
             parallel_tool_calls: request
                 .request_override
                 .parallel_tool_calls()
@@ -2430,25 +2740,41 @@ impl ModelRuntime for OpenAiAdapter {
     > {
         tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
         let model = request.model.clone();
+        let native_tools_require_responses =
+            Self::native_tools_request_requires_responses(&request);
 
         if matches!(self.stream_mode, OpenAiStreamMode::RealtimeWebSocket) {
+            if native_tools_require_responses {
+                return Err(AppError::Config(format!(
+                    "provider `{}` model `{}` configures native hosted tools, but OpenAI realtime websocket mode does not support them; use SSE Responses streaming instead",
+                    self.id, model
+                )));
+            }
             return self
                 .complete_stream_with_realtime_ws(&request, model.to_string())
                 .await;
         }
 
         if !self.should_use_responses(model.as_str()) {
+            if native_tools_require_responses {
+                return Err(AppError::Config(format!(
+                    "provider `{}` model `{}` configures native hosted tools, but the selected OpenAI API mode resolves to chat; switch this provider/model to Responses mode",
+                    self.id, model
+                )));
+            }
             return self
                 .complete_stream_with_chat_api(&request, model.to_string())
                 .await;
         }
 
         let input = self.responses_input_for_request(&request);
+        let tool_plan = Self::responses_tool_plan(&request)?;
 
         let body = OpenAiResponsesRequest {
             model: model.to_string(),
             input,
-            tools: Self::responses_tools(request.tools.as_slice()),
+            tools: tool_plan.tools,
+            include: (!tool_plan.include.is_empty()).then_some(tool_plan.include),
             max_output_tokens: request.max_output_tokens,
             temperature: request.temperature,
             prompt_cache_key: request.prompt_cache_key.clone(),
@@ -2498,6 +2824,7 @@ impl ModelRuntime for OpenAiAdapter {
 
         if !response.status().is_success() {
             if self.can_fallback_to_chat()
+                && !native_tools_require_responses
                 && Self::responses_endpoint_unsupported(response.status())
             {
                 return self
@@ -2731,7 +3058,9 @@ struct OpenAiResponsesRequest {
     model: String,
     input: Vec<OpenAiResponsesInputItem>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    tools: Vec<OpenAiResponsesTool>,
+    tools: Vec<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    include: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2762,7 +3091,9 @@ struct OpenAiResponsesCompactRequest {
     instructions: Option<String>,
     input: Vec<OpenAiResponsesInputItem>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    tools: Vec<OpenAiResponsesTool>,
+    tools: Vec<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    include: Option<Vec<String>>,
     parallel_tool_calls: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt_cache_key: Option<String>,
@@ -2787,17 +3118,6 @@ struct OpenAiResponsesCompactResponse {
 #[derive(Debug, Serialize)]
 struct OpenAiResponsesTextConfig {
     verbosity: String,
-}
-
-#[derive(Debug, Serialize)]
-struct OpenAiResponsesTool {
-    #[serde(rename = "type")]
-    kind: &'static str,
-    name: String,
-    description: String,
-    parameters: serde_json::Value,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    strict: bool,
 }
 
 #[derive(Debug, Serialize)]

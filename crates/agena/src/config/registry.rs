@@ -415,6 +415,7 @@ fn build_provider(
                 (adapter_id, target_model_id),
                 ProviderModelRoute {
                     enabled: config.enabled,
+                    native_tools: config.native_tools.clone(),
                     definition: config.definition.clone(),
                 },
             ))

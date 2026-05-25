@@ -1002,6 +1002,10 @@ impl SessionManager {
                 .await?;
 
             let processor_ids = self.store.reserve_processor_ids().await?;
+            let native_tools = state
+                .processor
+                .provider_registry()
+                .native_tools_config(&options.model)?;
             let run = SessionRunRequest {
                 session_id: session.id,
                 model: options.model.clone(),
@@ -1011,6 +1015,7 @@ impl SessionManager {
                     prepared.system.clone(),
                     prepared.messages.clone(),
                     tools,
+                    native_tools,
                     Some(prepared.prompt_cache_key.clone()),
                     prepared.previous_response_id.clone(),
                     Some(prepared.prompt_window_generation),

@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::ProviderNativeToolsConfig;
 
 impl ProviderRegistry {
     pub async fn list_models(&self, provider_id: &str) -> Result<Vec<Model>, AppError> {
@@ -31,6 +32,15 @@ impl ProviderRegistry {
     pub fn model_metadata(&self, model: &ModelRef) -> Result<ModelMetadata, AppError> {
         self.with_model_ref_provider(model, |provider, adapter_id, model_id| {
             provider.model_metadata_for_adapter(adapter_id, model_id)
+        })
+    }
+
+    pub fn native_tools_config(
+        &self,
+        model: &ModelRef,
+    ) -> Result<ProviderNativeToolsConfig, AppError> {
+        self.with_model_ref_provider(model, |provider, adapter_id, model_id| {
+            provider.native_tools_config_for_adapter(adapter_id, model_id)
         })
     }
 

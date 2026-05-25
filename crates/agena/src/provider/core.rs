@@ -3,6 +3,7 @@ use futures_core::Stream;
 use futures_util::stream;
 use std::collections::BTreeMap;
 
+use crate::config::ProviderNativeToolsConfig;
 use crate::error::AppError;
 use crate::model::{
     AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode,
@@ -98,6 +99,20 @@ pub trait ModelRuntime: Send + Sync {
     fn default_model(&self) -> &ModelId;
     fn default_adapter(&self) -> Option<&AdapterId> {
         None
+    }
+
+    fn native_tools_config(&self, model: &ModelId) -> ProviderNativeToolsConfig {
+        self.native_tools_config_for_adapter(None, model)
+    }
+
+    fn native_tools_config_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> ProviderNativeToolsConfig {
+        let _ = adapter_id;
+        let _ = model;
+        ProviderNativeToolsConfig::default()
     }
 
     /// Return the capability family used to look up model capabilities and
@@ -197,6 +212,22 @@ pub trait ModelRuntime: Send + Sync {
             metadata.assistant_reasoning_field.as_deref(),
             metadata.assistant_reasoning_interleaved.unwrap_or(false),
         );
+    }
+
+    fn validate_native_tools_request(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: &CompletionRequest,
+    ) -> Result<(), AppError> {
+        let _ = adapter_id;
+        if request.native_tools.bindings().is_empty() {
+            return Ok(());
+        }
+        Err(AppError::Config(format!(
+            "provider `{}` model `{}` does not support configured native tools",
+            self.id(),
+            request.model
+        )))
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, AppError>;

@@ -10,6 +10,7 @@ use std::{
 use tokio::sync::Mutex;
 
 use crate::{
+    config::{ProviderNativeToolKind, ProviderNativeToolRoute},
     error::AppError,
     message::{AttachmentItem, AttachmentKind, Message, MessageUsage},
     model::{ModelId, ProviderId},
@@ -448,25 +449,135 @@ impl AnthropicAdapter {
         }
     }
 
-    fn tools(
-        &self,
-        tools: &[crate::plugin::registry::PluginEntry],
-    ) -> Vec<AnthropicEntryDefinition> {
-        tools
-            .iter()
-            .map(|tool| AnthropicEntryDefinition {
-                name: tool.exposed_name.clone(),
-                description: tool.description_text().to_string(),
-                input_schema: tool.sanitized_input_schema(),
-                cache_control: None,
-                eager_input_streaming: self.supports_eager_input_streaming().then_some(true),
-            })
-            .collect()
+    fn merge_tool_provider_options(
+        map: &mut serde_json::Map<String, Value>,
+        extra: Option<&Value>,
+        tool_label: &str,
+    ) -> Result<(), AppError> {
+        let Some(extra) = extra else {
+            return Ok(());
+        };
+        let extra = extra.as_object().ok_or_else(|| {
+            AppError::Config(format!(
+                "anthropic native tool `{tool_label}` provider_options must be a JSON object"
+            ))
+        })?;
+        for (key, value) in extra {
+            map.insert(key.clone(), value.clone());
+        }
+        Ok(())
+    }
+
+    fn tools(&self, request: &CompletionRequest) -> Result<Vec<Value>, AppError> {
+        let mut tools = Vec::new();
+        for tool in &request.tools {
+            let mut map = serde_json::Map::new();
+            map.insert("name".to_owned(), Value::String(tool.exposed_name.clone()));
+            map.insert(
+                "description".to_owned(),
+                Value::String(tool.description_text().to_string()),
+            );
+            map.insert("input_schema".to_owned(), tool.sanitized_input_schema());
+            if self.supports_eager_input_streaming() {
+                map.insert("eager_input_streaming".to_owned(), Value::Bool(true));
+            }
+            tools.push(Value::Object(map));
+        }
+
+        for binding in request.native_tools.bindings() {
+            if binding.route != ProviderNativeToolRoute::ProviderHosted {
+                return Err(AppError::Config(format!(
+                    "anthropic native tool `{}` only supports `provider_hosted` routes in the current runtime",
+                    binding.tool.config_key()
+                )));
+            }
+            match binding.tool {
+                ProviderNativeToolKind::WebSearch => {
+                    let config = &request.native_tools.hosted.web_search;
+                    if config.freshness.is_some()
+                        || config.max_results.is_some()
+                        || config.search_context_size.is_some()
+                    {
+                        return Err(AppError::Config(
+                            "anthropic native tool `web_search` only supports domain filters, user_location, and provider_options in the current runtime".to_owned(),
+                        ));
+                    }
+                    if !config.allowed_domains.is_empty() && !config.blocked_domains.is_empty() {
+                        return Err(AppError::Config(
+                            "anthropic native tool `web_search` cannot set both `allowed_domains` and `blocked_domains` in the same request".to_owned(),
+                        ));
+                    }
+                    let mut map = serde_json::Map::new();
+                    map.insert(
+                        "type".to_owned(),
+                        Value::String("web_search_20250305".to_owned()),
+                    );
+                    map.insert("name".to_owned(), Value::String("web_search".to_owned()));
+                    if !config.allowed_domains.is_empty() {
+                        map.insert(
+                            "allowed_domains".to_owned(),
+                            Value::Array(
+                                config
+                                    .allowed_domains
+                                    .iter()
+                                    .cloned()
+                                    .map(Value::String)
+                                    .collect(),
+                            ),
+                        );
+                    }
+                    if !config.blocked_domains.is_empty() {
+                        map.insert(
+                            "blocked_domains".to_owned(),
+                            Value::Array(
+                                config
+                                    .blocked_domains
+                                    .iter()
+                                    .cloned()
+                                    .map(Value::String)
+                                    .collect(),
+                            ),
+                        );
+                    }
+                    if !config.user_location.is_empty() {
+                        let mut location = serde_json::Map::new();
+                        location.insert("type".to_owned(), Value::String("approximate".to_owned()));
+                        if let Some(country) = config.user_location.country.as_ref() {
+                            location.insert("country".to_owned(), Value::String(country.clone()));
+                        }
+                        if let Some(region) = config.user_location.region.as_ref() {
+                            location.insert("region".to_owned(), Value::String(region.clone()));
+                        }
+                        if let Some(city) = config.user_location.city.as_ref() {
+                            location.insert("city".to_owned(), Value::String(city.clone()));
+                        }
+                        if let Some(timezone) = config.user_location.timezone.as_ref() {
+                            location.insert("timezone".to_owned(), Value::String(timezone.clone()));
+                        }
+                        map.insert("user_location".to_owned(), Value::Object(location));
+                    }
+                    Self::merge_tool_provider_options(
+                        &mut map,
+                        config.provider_options.as_ref(),
+                        "web_search",
+                    )?;
+                    tools.push(Value::Object(map));
+                }
+                other => {
+                    return Err(AppError::Config(format!(
+                        "anthropic native tool `{}` is not supported by the current runtime",
+                        other.config_key()
+                    )));
+                }
+            }
+        }
+
+        Ok(tools)
     }
 
     fn apply_prompt_cache_hints(
         system: &mut [AnthropicTextBlock],
-        tools: &mut [AnthropicEntryDefinition],
+        tools: &mut [Value],
         messages: &mut [AnthropicMessage],
     ) {
         // Keep cache markers stable across tool-use loops: tool definitions
@@ -476,8 +587,12 @@ impl AnthropicAdapter {
             block.cache_control = Some(prompt_cache::PromptCacheControl::ephemeral());
         }
 
-        if let Some(tool) = tools.last_mut() {
-            tool.cache_control = Some(prompt_cache::PromptCacheControl::ephemeral());
+        if let Some(tool) = tools.last_mut().and_then(Value::as_object_mut) {
+            tool.insert(
+                "cache_control".to_owned(),
+                serde_json::to_value(prompt_cache::PromptCacheControl::ephemeral())
+                    .expect("anthropic prompt cache control should serialize"),
+            );
         }
 
         if let Some(block) = Self::latest_user_cache_block(messages) {
@@ -600,6 +715,14 @@ impl ModelRuntime for AnthropicAdapter {
         Some(crate::provider::CapabilityFamily::Anthropic)
     }
 
+    fn validate_native_tools_request(
+        &self,
+        _adapter_id: Option<&crate::model::AdapterId>,
+        request: &CompletionRequest,
+    ) -> Result<(), AppError> {
+        self.tools(request).map(|_| ())
+    }
+
     fn stream_resume_policy(&self) -> StreamResumePolicy {
         StreamResumePolicy::ReplaySafePrefix
     }
@@ -686,7 +809,9 @@ impl ModelRuntime for AnthropicAdapter {
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
             system_chunks.push(AnthropicTextBlock::text(system.clone()));
         }
-        let mut tools = (!request.tools.is_empty()).then(|| self.tools(request.tools.as_slice()));
+        let mut tools = (!request.tools.is_empty() || !request.native_tools.bindings().is_empty())
+            .then(|| self.tools(&request))
+            .transpose()?;
 
         let mut messages = Vec::new();
         for msg in &request.messages {
@@ -821,7 +946,9 @@ impl ModelRuntime for AnthropicAdapter {
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
             system_chunks.push(AnthropicTextBlock::text(system.clone()));
         }
-        let mut tools = (!request.tools.is_empty()).then(|| self.tools(request.tools.as_slice()));
+        let mut tools = (!request.tools.is_empty() || !request.native_tools.bindings().is_empty())
+            .then(|| self.tools(&request))
+            .transpose()?;
 
         let mut messages = Vec::new();
         for msg in &request.messages {
@@ -1112,7 +1239,7 @@ struct AnthropicMessagesRequest {
     system: Option<Vec<AnthropicTextBlock>>,
     messages: Vec<AnthropicMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<AnthropicEntryDefinition>>,
+    tools: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1133,17 +1260,6 @@ struct AnthropicMessagesRequest {
 struct AnthropicOutputConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     effort: Option<&'static str>,
-}
-
-#[derive(Debug, Serialize)]
-struct AnthropicEntryDefinition {
-    name: String,
-    description: String,
-    input_schema: Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    cache_control: Option<prompt_cache::PromptCacheControl>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    eager_input_streaming: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]

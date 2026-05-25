@@ -10,6 +10,7 @@ use futures_core::Stream;
 use futures_util::StreamExt;
 use tracing::Instrument;
 
+use crate::config::ProviderNativeToolsConfig;
 use crate::error::{AppError, ProviderErrorKind};
 use crate::model::{
     AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelPricing, ModelPricingTier,
@@ -357,6 +358,16 @@ impl ModelRuntime for NamedProvider {
         fn model_speed_modes / model_speed_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode>;
         fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<super::PromptCacheShape>;
+        fn native_tools_config / native_tools_config_for_adapter (&self, model: &ModelId) -> ProviderNativeToolsConfig;
+    }
+
+    fn validate_native_tools_request(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: &CompletionRequest,
+    ) -> Result<(), AppError> {
+        self.target
+            .validate_native_tools_request(adapter_id, request)
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {
@@ -668,19 +679,19 @@ fn validate_request_capabilities(
         }
     }
 
-    if unsupported.is_empty() {
-        return Ok(());
+    if !unsupported.is_empty() {
+        let details = unsupported
+            .into_iter()
+            .map(|(modality, label)| format!("{} (`{label}`)", modality.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(AppError::Provider(format!(
+            "provider `{}` model `{}` explicitly does not support requested input modalities: {details}",
+            model.provider_id, model.model_id
+        )));
     }
 
-    let details = unsupported
-        .into_iter()
-        .map(|(modality, label)| format!("{} (`{label}`)", modality.as_str()))
-        .collect::<Vec<_>>()
-        .join(", ");
-    Err(AppError::Provider(format!(
-        "provider `{}` model `{}` explicitly does not support requested input modalities: {details}",
-        model.provider_id, model.model_id
-    )))
+    provider.validate_native_tools_request(model.adapter_id.as_ref(), request)
 }
 
 fn elapsed_ms(started_at: Instant) -> u64 {

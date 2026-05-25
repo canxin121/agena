@@ -1324,7 +1324,6 @@ store_max_documents = 200
 store_max_bytes = 104857600
 default_chunk_chars = 1800
 near_duplicate_hamming_distance = 3
-search_engine = "bing" # bing | duckduckgo | baidu
 search_default_limit = 5
 search_max_limit = 20
 list_default_limit = 20
@@ -1364,7 +1363,6 @@ store_max_documents
 store_max_bytes
 default_chunk_chars
 near_duplicate_hamming_distance
-search_engine
 search_default_limit
 search_max_limit
 list_default_limit
@@ -1385,7 +1383,8 @@ browser_wait_for_delay_ms
 - `fetch_cache_ttl_secs` / `fetch_cache_capacity` 控制进程内 HTTP fetch cache。
 - `store_max_documents` / `store_max_bytes` 控制持久 crawl 语料的上限；每次 `crawl` 写入后会删除最旧文档并重建索引，避免本地目录无限增长。
 - `near_duplicate_hamming_distance` 用于基于 SimHash 的近重复过滤。
-- `search_engine` 控制 `web search` 的默认搜索引擎；`web query` 不依赖模型，只使用本地 Tantivy BM25 / ngram 索引。
+- `web search` 的 `engine` 参数由 AI 在调用时选择：`auto`、`duckduckgo`、`bing` 或 `baidu`。省略或传 `auto` 时会按 `duckduckgo -> bing -> baidu` 自动尝试，直到拿到结果。
+- `web query` 不依赖模型，只使用本地 Tantivy BM25 / ngram 索引。
 - `browser_enabled` 会让 `web fetch` / `web crawl` 默认通过 Agena 托管的本地 Chrome/Chromium 进程抓取 JS 页面；单次 tool call 也可以用 `render_js` 覆盖。
 - `browser_executable_path` 可选，用于指定本地 Chrome/Chromium 可执行文件路径；不支持配置远端 DevTools/WebSocket 链接。
 - `browser_wait_for_network_idle`、`browser_wait_timeout_secs`、`browser_wait_for_selector` 和 `browser_wait_for_delay_ms` 控制渲染等待策略。

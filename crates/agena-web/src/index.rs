@@ -94,7 +94,7 @@ pub fn search_documents(
     let (parsed_query, errors) = parser.parse_query_lenient(query);
     if !errors.is_empty() {
         tracing::debug!(
-            target: "agena::crawl",
+            target: "agena::web",
             "crawl query parsed leniently for '{query}': {:?}",
             errors
         );

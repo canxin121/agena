@@ -67,7 +67,7 @@ impl ManagedBrowser {
             };
 
         tracing::debug!(
-            target: "agena::crawl",
+            target: "agena::web",
             executable = %executable.display(),
             endpoint = %endpoint,
             "started managed local browser for crawl rendering"

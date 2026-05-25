@@ -61,7 +61,7 @@ pub async fn fetch_page_with_spider(
     options: &SpiderFetchOptions,
 ) -> Result<FetchedPage, CrawlError> {
     tracing::debug!(
-        target: "agena::crawl",
+        target: "agena::web",
         url = %url,
         rendered = options.browser.enabled,
         "fetching page via spider"
@@ -89,7 +89,7 @@ pub async fn fetch_page_with_spider(
                 Err(RecvError::Closed) => break,
                 Err(RecvError::Lagged(skipped)) => {
                     tracing::warn!(
-                        target: "agena::crawl",
+                        target: "agena::web",
                         skipped,
                         "spider page receiver lagged while fetching a single page"
                     );

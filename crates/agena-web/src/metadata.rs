@@ -2,16 +2,16 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
-use redb::{Database, ReadableDatabase, TableDefinition};
+use redb::{Database, ReadableDatabase, TableDefinition, TableError};
 
 use crate::{CrawlError, StoredDocument};
 
-const DOCUMENT_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("crawl_documents");
-const URL_TO_ID_TABLE: TableDefinition<&str, &str> = TableDefinition::new("crawl_url_to_id");
+const DOCUMENT_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("web_documents");
+const URL_TO_ID_TABLE: TableDefinition<&str, &str> = TableDefinition::new("web_url_to_id");
 const MARKDOWN_HASH_TO_ID_TABLE: TableDefinition<&str, &str> =
-    TableDefinition::new("crawl_markdown_hash_to_id");
+    TableDefinition::new("web_markdown_hash_to_id");
 const RAW_HASH_TO_ID_TABLE: TableDefinition<&str, &str> =
-    TableDefinition::new("crawl_raw_hash_to_id");
+    TableDefinition::new("web_raw_hash_to_id");
 
 static OPEN_DATABASES: LazyLock<Mutex<HashMap<PathBuf, Arc<Database>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -35,7 +35,27 @@ impl CrawlMetadataStore {
             open.insert(path.to_path_buf(), Arc::clone(&created));
             created
         };
-        Ok(Self { db })
+        let store = Self { db };
+        store.ensure_tables()?;
+        Ok(store)
+    }
+
+    fn ensure_tables(&self) -> Result<(), CrawlError> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let _ = write_txn.open_table(DOCUMENT_TABLE)?;
+        }
+        {
+            let _ = write_txn.open_table(URL_TO_ID_TABLE)?;
+        }
+        {
+            let _ = write_txn.open_table(MARKDOWN_HASH_TO_ID_TABLE)?;
+        }
+        {
+            let _ = write_txn.open_table(RAW_HASH_TO_ID_TABLE)?;
+        }
+        write_txn.commit()?;
+        Ok(())
     }
 
     pub fn save_document(&self, document: &StoredDocument) -> Result<(), CrawlError> {
@@ -90,7 +110,11 @@ impl CrawlMetadataStore {
         canonical_url: &str,
     ) -> Result<Option<String>, CrawlError> {
         let read_txn = self.db.begin_read()?;
-        let url_to_id = read_txn.open_table(URL_TO_ID_TABLE)?;
+        let url_to_id = match read_txn.open_table(URL_TO_ID_TABLE) {
+            Ok(table) => table,
+            Err(TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
         Ok(url_to_id
             .get(canonical_url)?
             .map(|value| value.value().to_string()))
@@ -101,7 +125,11 @@ impl CrawlMetadataStore {
         markdown_hash: &str,
     ) -> Result<Option<String>, CrawlError> {
         let read_txn = self.db.begin_read()?;
-        let hash_to_id = read_txn.open_table(MARKDOWN_HASH_TO_ID_TABLE)?;
+        let hash_to_id = match read_txn.open_table(MARKDOWN_HASH_TO_ID_TABLE) {
+            Ok(table) => table,
+            Err(TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
         Ok(hash_to_id
             .get(markdown_hash)?
             .map(|value| value.value().to_string()))
@@ -112,7 +140,11 @@ impl CrawlMetadataStore {
         raw_hash: &str,
     ) -> Result<Option<String>, CrawlError> {
         let read_txn = self.db.begin_read()?;
-        let hash_to_id = read_txn.open_table(RAW_HASH_TO_ID_TABLE)?;
+        let hash_to_id = match read_txn.open_table(RAW_HASH_TO_ID_TABLE) {
+            Ok(table) => table,
+            Err(TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
         Ok(hash_to_id
             .get(raw_hash)?
             .map(|value| value.value().to_string()))

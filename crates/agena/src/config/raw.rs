@@ -2346,12 +2346,6 @@ fn validate_web_config(web: &crate::config::types::WebConfig) -> Result<(), Conf
                 .to_string(),
         ));
     }
-    if agena_web::normalize_web_search_engine(web.search_engine.as_str()).is_none() {
-        return Err(ConfigError::Validation(format!(
-            "web.search_engine must be one of bing, duckduckgo, baidu, got `{}`",
-            web.search_engine
-        )));
-    }
     if web.list_default_limit > web.list_max_limit {
         return Err(ConfigError::Validation(
             "web.list_default_limit must be less than or equal to web.list_max_limit".to_string(),
@@ -2758,18 +2752,15 @@ mod tests {
     }
 
     #[test]
-    fn web_config_rejects_unknown_search_engine() {
-        let err = resolve_config(json!({
+    fn web_config_rejects_removed_search_engine_setting() {
+        let err = serde_json::from_value::<RawConfig>(json!({
             "web": {
                 "search_engine": "brave"
             }
         }))
-        .expect_err("invalid web search engine should fail");
+        .expect_err("fixed web search engine config should be rejected");
 
-        assert!(
-            err.to_string()
-                .contains("web.search_engine must be one of bing, duckduckgo, baidu")
-        );
+        assert!(err.to_string().contains("unknown field `search_engine`"));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! Plugin manifest: the contract between a plugin and the host. Either
-//! delivered as a TOML file next to a cdylib/stdio binary or returned by the
+//! delivered as a JSON file next to a cdylib/stdio binary or returned by the
 //! `meta/manifest` JSON-RPC method.
 
 use std::collections::BTreeMap;
@@ -34,7 +34,11 @@ pub struct PluginManifest {
     #[serde(default, skip_serializing_if = "PluginUiContributions::is_empty")]
     pub ui: PluginUiContributions,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub options_schema: Option<serde_json::Value>,
+    pub config_schema: Option<serde_json::Value>,
+    /// Optional localized schema overlays keyed by locale, for hosts that
+    /// render generic JSON Schema config editors.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub config_schema_i18n: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -782,7 +786,8 @@ impl PluginManifest {
                 entries: Vec::new(),
                 plugin_capabilities: Vec::new(),
                 ui: PluginUiContributions::default(),
-                options_schema: None,
+                config_schema: None,
+                config_schema_i18n: BTreeMap::new(),
             },
         }
     }
@@ -838,8 +843,25 @@ impl PluginManifestBuilder {
         self
     }
 
-    pub fn options_schema(mut self, schema: serde_json::Value) -> Self {
-        self.inner.options_schema = Some(schema);
+    pub fn config_schema(mut self, schema: serde_json::Value) -> Self {
+        self.inner.config_schema = Some(schema);
+        self
+    }
+
+    pub fn config_schema_locale(
+        mut self,
+        locale: impl Into<String>,
+        schema: serde_json::Value,
+    ) -> Self {
+        self.inner.config_schema_i18n.insert(locale.into(), schema);
+        self
+    }
+
+    pub fn config_schema_i18n(
+        mut self,
+        schemas: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Self {
+        self.inner.config_schema_i18n.extend(schemas);
         self
     }
 
@@ -986,5 +1008,5 @@ impl PluginToolDecl {
     }
 }
 
-/// Map an tool name and any plugin-scoped options to the registry-side key.
+/// Free-form metadata attached to manifests, tools, and UI declarations.
 pub type Metadata = BTreeMap<String, String>;

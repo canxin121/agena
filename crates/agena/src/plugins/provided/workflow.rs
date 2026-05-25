@@ -975,18 +975,18 @@ impl Plugin for WorkflowPlugin {
             .hooks(HookSubscription::TOOL_INVOKE | HookSubscription::AGENT_STOP)
             .plugin_capability(HostCapability::AgentRegistry)
             .tools(entries())
-            .options_schema(crate::entry::definition::json_schema_for::<
+            .config_schema(crate::entry::definition::json_schema_for::<
                 WorkflowPluginOptions,
             >())
             .build()
     }
 
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
-        let _options = if ctx.options.is_null() {
+        let _config = if ctx.config.is_null() {
             WorkflowPluginOptions::default()
         } else {
-            serde_json::from_value(ctx.options)
-                .map_err(|err| PluginError::new(format!("invalid workflow options: {err}")))?
+            serde_json::from_value(ctx.config)
+                .map_err(|err| PluginError::new(format!("invalid workflow config: {err}")))?
         };
         *self
             .host

@@ -20,9 +20,9 @@ pub struct InitContext {
     /// Bearer token the plugin must use when calling back into the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_callback_token: Option<String>,
-    /// Plugin-scoped options forwarded from `[plugins.list.<id>.options]`.
+    /// Plugin-owned configuration forwarded from `plugins.list.<id>.config`.
     #[serde(default)]
-    pub options: serde_json::Value,
+    pub config: serde_json::Value,
     /// Protocol version both sides agreed on (currently always `1`).
     pub protocol_version: u32,
 }

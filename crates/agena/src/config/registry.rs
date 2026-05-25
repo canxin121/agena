@@ -307,18 +307,7 @@ impl super::ConfigResolution {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
         let agena_version = env!("CARGO_PKG_VERSION").to_string();
-        let mut plugin_config = self.config.plugins.clone();
-        if mcp_manager.is_some() {
-            plugin_config
-                .list
-                .entry(crate::tool::mcp_plugin_id().to_string())
-                .or_insert_with(|| crate::plugin::PluginEntry::Static {
-                    options: serde_json::to_value(&self.config.mcp)
-                        .unwrap_or(serde_json::Value::Null),
-                    timeouts: Default::default(),
-                    disabled: false,
-                });
-        }
+        let plugin_config = self.config.plugins.clone();
         let mut builder = PluginHostBuilder::new(workspace_root, agena_version)
             .with_config(plugin_config)
             .register_static(crate::tool::lsp_plugin_id(), crate::tool::new_lsp_plugin())
@@ -343,13 +332,10 @@ impl super::ConfigResolution {
                 crate::tool::workflow_plugin_id(),
                 crate::tool::new_workflow_plugin(),
             )
-            .register_static(
-                crate::web::web_plugin_id(),
-                crate::web::new_web_plugin(self.config.web.clone()),
-            )
+            .register_static(crate::web::web_plugin_id(), crate::web::new_web_plugin())
             .register_static(
                 crate::memory::memory_plugin_id(),
-                crate::memory::new_memory_plugin(self.config.memory.clone()),
+                crate::memory::new_memory_plugin(),
             );
         if let Some(manager) = mcp_manager {
             builder = builder.register_static(

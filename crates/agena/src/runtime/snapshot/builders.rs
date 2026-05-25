@@ -88,7 +88,7 @@ pub(super) fn build_tool_executor(
 
     let mut executor = ToolExecutor::new(workspace_root.to_path_buf(), agent)
         .with_plugin_manager(plugins)
-        .with_tool_presentation(resolution.config.plugins.tool_presentation.clone())
+        .with_tool_presentation(resolution.config.plugins.policy.tool_presentation.clone())
         .with_subagent_registry(agents)
         .with_plan_registry(crate::tool::plan_registry_for_executor())
         .with_worktree_registry(worktree_registry);
@@ -106,7 +106,7 @@ pub(super) fn build_tool_executor(
 
 pub(super) fn build_lsp_registry(
     workspace_root: &Path,
-    config: &crate::config::LspConfig,
+    config: &crate::plugins::provided::lsp::LspConfig,
 ) -> Arc<agena_lsp::LspRegistry> {
     use agena_lsp::{LspRegistry, LspServerSpec};
 
@@ -117,7 +117,7 @@ pub(super) fn build_lsp_registry(
     ));
 
     let registry_for_register = registry.clone();
-    let entries: Vec<(String, crate::config::LspServerConfig)> = config
+    let entries: Vec<(String, crate::plugins::provided::lsp::LspServerConfig)> = config
         .servers
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -148,110 +148,6 @@ pub(super) fn build_lsp_registry(
     });
 
     registry
-}
-
-pub(super) async fn build_mcp_manager(
-    config: &crate::config::McpConfig,
-) -> Arc<agena_mcp_client::McpConnectionManager> {
-    use agena_mcp_client::{FileTokenStore, McpConnectionManager, ServerSpec, TokenStore};
-
-    let mut manager = McpConnectionManager::new(
-        crate::provider::CODEX_MCP_CLIENT_NAME,
-        crate::provider::CODEX_PACKAGE_VERSION,
-    );
-
-    // Best-effort: open the on-disk token store so HttpAuth::BearerFromStore
-    // can resolve. A missing file is fine; a corrupt one is logged and the
-    // store is left unset (runtime continues, just without token lookup).
-    match FileTokenStore::open_default() {
-        Ok(store) => {
-            manager.set_token_store(Arc::new(store) as Arc<dyn TokenStore>);
-        }
-        Err(err) => {
-            tracing::warn!(
-                target: "agena::mcp",
-                "failed to open default token store: {err}"
-            );
-        }
-    }
-
-    let manager = Arc::new(manager);
-    // Failures only disable that one server — the rest of the runtime keeps booting.
-    for (name, entry) in &config.servers {
-        let manager = manager.clone();
-        let name = name.clone();
-        let spec = match entry {
-            crate::config::McpServerConfig::Stdio {
-                command,
-                args,
-                env,
-                cwd,
-            } => ServerSpec::Stdio {
-                command: command.clone(),
-                args: args.clone(),
-                env: env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-                cwd: cwd.clone(),
-            },
-            crate::config::McpServerConfig::Http { url, headers, auth } => {
-                let Some(parsed) = parse_mcp_server_url(name.as_str(), url.as_str()) else {
-                    continue;
-                };
-                let auth = map_mcp_auth(auth.as_ref());
-                ServerSpec::Http {
-                    url: parsed,
-                    headers: headers
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect(),
-                    auth,
-                }
-            }
-        };
-        if let Err(e) = manager.add_server(&name, spec).await {
-            tracing::warn!(
-                target: "agena::mcp",
-                "failed to connect MCP server '{name}': {e}"
-            );
-        } else {
-            tracing::info!(target: "agena::mcp", "connected MCP server '{name}'");
-        }
-    }
-    manager
-}
-
-fn parse_mcp_server_url(name: &str, url: &str) -> Option<url::Url> {
-    match url::Url::parse(url) {
-        Ok(parsed) => Some(parsed),
-        Err(err) => {
-            tracing::warn!(
-                target: "agena::mcp",
-                "skipping mcp server '{name}': invalid url '{url}': {err}"
-            );
-            None
-        }
-    }
-}
-
-fn map_mcp_auth(
-    auth: Option<&crate::config::McpHttpAuthConfig>,
-) -> Option<agena_mcp_client::HttpAuth> {
-    auth.map(|cfg| match cfg {
-        crate::config::McpHttpAuthConfig::Bearer { token } => {
-            agena_mcp_client::HttpAuth::Bearer(token.clone())
-        }
-        crate::config::McpHttpAuthConfig::BearerFromEnv { env } => {
-            agena_mcp_client::HttpAuth::BearerFromEnv(env.clone())
-        }
-        crate::config::McpHttpAuthConfig::BearerFromStore => {
-            agena_mcp_client::HttpAuth::BearerFromStore
-        }
-        crate::config::McpHttpAuthConfig::Custom { headers } => agena_mcp_client::HttpAuth::Custom(
-            headers
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-        ),
-    })
 }
 
 pub(super) fn session_manager_config(resolution: &ConfigResolution) -> SessionManagerConfig {
@@ -323,7 +219,7 @@ pub(super) fn collect_watch_paths(resolution: &ConfigResolution) -> Vec<PathBuf>
         .unwrap_or_else(|| Path::new("."));
 
     for entry in resolution.config.plugins.list.values() {
-        if let crate::plugin::PluginEntry::Cdylib { path, .. } = entry {
+        if let crate::plugin::PluginPackage::Cdylib { path, .. } = &entry.package {
             let resolved = if path.is_absolute() {
                 path.clone()
             } else {

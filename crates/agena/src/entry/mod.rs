@@ -163,27 +163,20 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
         &workflow_id,
         &web_id,
     ] {
-        let options = if id == &workflow_id {
+        let config = if id == &workflow_id {
             serde_json::json!({})
         } else {
             serde_json::Value::Null
         };
         list.insert(
             (*id).clone(),
-            crate::plugin::PluginEntry::Static {
-                options,
-                timeouts: Default::default(),
-                disabled: false,
-            },
+            crate::plugin::PluginEntry::static_config(config),
         );
     }
     let config = crate::plugin::PluginsConfig {
-        timeouts: Default::default(),
+        host: Default::default(),
+        policy: Default::default(),
         list,
-        trusted_keys: Default::default(),
-        default_quota: Default::default(),
-        quotas: Default::default(),
-        tool_presentation: Default::default(),
     };
     mcp::block_on(async move {
         PluginHostBuilder::new(workspace_root, env!("CARGO_PKG_VERSION"))
@@ -196,10 +189,7 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
             .register_static(settings_id, new_settings_plugin())
             .register_static(shell_id, new_shell_plugin())
             .register_static(workflow_id, new_workflow_plugin())
-            .register_static(
-                web_id,
-                crate::web::new_web_plugin(crate::config::WebConfig::default()),
-            )
+            .register_static(web_id, crate::web::new_web_plugin())
             .build()
             .await
     })
@@ -2421,35 +2411,18 @@ mod tests {
             &workflow_id,
             &web_id,
         ] {
-            let options = if id == &workflow_id {
+            let config = if id == &workflow_id {
                 serde_json::json!({})
             } else {
                 serde_json::Value::Null
             };
-            list.insert(
-                (*id).clone(),
-                PluginEntry::Static {
-                    options,
-                    timeouts: Default::default(),
-                    disabled: false,
-                },
-            );
+            list.insert((*id).clone(), PluginEntry::static_config(config));
         }
-        list.insert(
-            "fixture".to_string(),
-            PluginEntry::Static {
-                options: serde_json::Value::Null,
-                timeouts: Default::default(),
-                disabled: false,
-            },
-        );
+        list.insert("fixture".to_string(), PluginEntry::static_default());
         let config = PluginsConfig {
-            timeouts: Default::default(),
+            host: Default::default(),
+            policy: Default::default(),
             list,
-            trusted_keys: Default::default(),
-            default_quota: Default::default(),
-            quotas: Default::default(),
-            tool_presentation: Default::default(),
         };
         test_plugin_runtime().block_on(async {
             PluginHostBuilder::new(root, "test")
@@ -2463,10 +2436,7 @@ mod tests {
                 .register_static(settings_id, super::new_settings_plugin())
                 .register_static(shell_id, super::new_shell_plugin())
                 .register_static(workflow_id, super::new_workflow_plugin())
-                .register_static(
-                    web_id,
-                    crate::web::new_web_plugin(crate::config::WebConfig::default()),
-                )
+                .register_static(web_id, crate::web::new_web_plugin())
                 .register_static("fixture", FixturePlugin)
                 .build()
                 .await
@@ -2498,27 +2468,17 @@ mod tests {
             &workflow_id,
             &web_id,
         ] {
-            let options = if id == &workflow_id {
+            let config = if id == &workflow_id {
                 serde_json::json!({})
             } else {
                 serde_json::Value::Null
             };
-            list.insert(
-                (*id).clone(),
-                PluginEntry::Static {
-                    options,
-                    timeouts: Default::default(),
-                    disabled: false,
-                },
-            );
+            list.insert((*id).clone(), PluginEntry::static_config(config));
         }
         let config = PluginsConfig {
-            timeouts: Default::default(),
+            host: Default::default(),
+            policy: Default::default(),
             list,
-            trusted_keys: Default::default(),
-            default_quota: Default::default(),
-            quotas: Default::default(),
-            tool_presentation: Default::default(),
         };
         test_plugin_runtime().block_on(async {
             PluginHostBuilder::new(root, "test")
@@ -2532,10 +2492,7 @@ mod tests {
                 .register_static(settings_id, super::new_settings_plugin())
                 .register_static(shell_id, super::new_shell_plugin())
                 .register_static(workflow_id, super::new_workflow_plugin())
-                .register_static(
-                    web_id,
-                    crate::web::new_web_plugin(crate::config::WebConfig::default()),
-                )
+                .register_static(web_id, crate::web::new_web_plugin())
                 .build()
                 .await
                 .expect("default plugin host should build")

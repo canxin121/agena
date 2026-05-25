@@ -34,34 +34,43 @@ provider
                 └── metadata / capabilities / thinking_modes / speed_modes
 ```
 
-对应 TOML：
+对应 JSON：
 
-```toml
-[execution]
-provider = "openai"
-adapter = "openai"
-model = "gpt-5"
-agent = "build"
-
-[providers.openai]
-enabled = true
-
-[providers.openai.auth]
-mode = "api"
-base_url = "https://api.openai.com"
-api_key_env = "OPENAI_API_KEY"
-
-[providers.openai.adapters.openai]
-enabled = true
-
-[providers.openai.adapters.openai.models."gpt-5"]
-enabled = true
-
-[providers.openai.adapters.openai.models."gpt-5".native_tools]
-enabled = true
-
-[providers.openai.adapters.openai.models."gpt-5".native_tools.routes]
-web_search = "provider_hosted"
+```json
+{
+  "execution": {
+    "provider": "openai",
+    "adapter": "openai",
+    "model": "gpt-5",
+    "agent": "build"
+  },
+  "providers": {
+    "openai": {
+      "enabled": true,
+      "auth": {
+        "mode": "api",
+        "base_url": "https://api.openai.com",
+        "api_key_env": "OPENAI_API_KEY"
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "models": {
+            "gpt-5": {
+              "enabled": true,
+              "native_tools": {
+                "enabled": true,
+                "routes": {
+                  "web_search": "provider_hosted"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 关键约束：
@@ -179,17 +188,28 @@ provider-native hosted tools 默认直接复用这一层 auth；不会再单独�
 
 三层都支持 `enabled`：
 
-```toml
-[providers.shared]
-enabled = true
-defaults.adapter = "openai"
-defaults.model = "gpt-4.1-mini"
-
-[providers.shared.adapters.openai]
-enabled = true
-
-[providers.shared.adapters.openai.models."gpt-4.1-mini"]
-enabled = true
+```json
+{
+  "providers": {
+    "shared": {
+      "enabled": true,
+      "defaults": {
+        "adapter": "openai",
+        "model": "gpt-4.1-mini"
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "models": {
+            "gpt-4.1-mini": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 行为：
@@ -229,11 +249,18 @@ sap_ai_core
 
 用于显式 endpoint + API key：
 
-```toml
-[providers.openai.auth]
-mode = "api"
-base_url = "https://api.openai.com"
-api_key_env = "OPENAI_API_KEY"
+```json
+{
+  "providers": {
+    "openai": {
+      "auth": {
+        "mode": "api",
+        "base_url": "https://api.openai.com",
+        "api_key_env": "OPENAI_API_KEY"
+      }
+    }
+  }
+}
 ```
 
 字段：
@@ -251,22 +278,44 @@ api_key_env = "OPENAI_API_KEY"
 
 如果某个网关需要自定义前缀，就显式写出来：
 
-```toml
-[providers.shared.auth.protocol_paths]
-openai = "/api/provider/openai/v1"
-anthropic = "/api/provider/anthropic/v1"
-gemini = "/api/provider/google/v1beta"
+```json
+{
+  "providers": {
+    "shared": {
+      "auth": {
+        "protocol_paths": {
+          "openai": "/api/provider/openai/v1",
+          "anthropic": "/api/provider/anthropic/v1",
+          "gemini": "/api/provider/google/v1beta"
+        }
+      }
+    }
+  }
+}
 ```
 
 ### `credential`
 
 用于登录态 / OAuth / refresh token：
 
-```toml
-[providers."github-copilot".auth]
-mode = "credential"
-issuer = "github_copilot"
-credential = { type = "oauth", issuer = "github_copilot", refresh = "...", access = "...", expires_at_ms = 4102444800000 }
+```json
+{
+  "providers": {
+    "github-copilot": {
+      "auth": {
+        "mode": "credential",
+        "issuer": "github_copilot",
+        "credential": {
+          "type": "oauth",
+          "issuer": "github_copilot",
+          "refresh": "...",
+          "access": "...",
+          "expires_at_ms": 4102444800000
+        }
+      }
+    }
+  }
+}
 ```
 
 字段：
@@ -287,25 +336,39 @@ credential = { type = "oauth", issuer = "github_copilot", refresh = "...", acces
 
 用于 AWS 原生签名：
 
-```toml
-[providers.bedrock.auth]
-mode = "bedrock_sigv4"
-base_url = "https://bedrock-runtime.us-east-1.amazonaws.com"
-region = "us-east-1"
-profile = "prod"
+```json
+{
+  "providers": {
+    "bedrock": {
+      "auth": {
+        "mode": "bedrock_sigv4",
+        "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+        "region": "us-east-1",
+        "profile": "prod"
+      }
+    }
+  }
+}
 ```
 
 ### `google_adc`
 
 用于 Vertex / Google ADC。和 `api` 一样，它也需要一个共享入口的 `base_url`；区别只是凭证来源来自 Google ADC，而不是 API key。
 
-```toml
-[providers.vertex.auth]
-mode = "google_adc"
-base_url = "https://us-central1-aiplatform.googleapis.com"
-
-[providers.vertex.auth.protocol_paths]
-openai = "/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
+```json
+{
+  "providers": {
+    "vertex": {
+      "auth": {
+        "mode": "google_adc",
+        "base_url": "https://us-central1-aiplatform.googleapis.com",
+        "protocol_paths": {
+          "openai": "/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
+        }
+      }
+    }
+  }
+}
 ```
 
 ### `sap_ai_core`
@@ -333,85 +396,149 @@ auth 决定身份来源；adapter 决定协议。
 
 ### OpenAI API
 
-```toml
-[execution]
-provider = "openai"
-adapter = "openai"
-model = "gpt-5"
-agent = "build"
-
-[providers.openai]
-defaults.adapter = "openai"
-defaults.model = "gpt-5"
-
-[providers.openai.auth]
-mode = "api"
-base_url = "https://api.openai.com"
-api_key_env = "OPENAI_API_KEY"
-
-[providers.openai.adapters.openai]
-enabled = true
-
-[providers.openai.adapters.openai.models."gpt-5"]
-enabled = true
+```json
+{
+  "execution": {
+    "provider": "openai",
+    "adapter": "openai",
+    "model": "gpt-5",
+    "agent": "build"
+  },
+  "providers": {
+    "openai": {
+      "defaults": {
+        "adapter": "openai",
+        "model": "gpt-5"
+      },
+      "auth": {
+        "mode": "api",
+        "base_url": "https://api.openai.com",
+        "api_key_env": "OPENAI_API_KEY"
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "models": {
+            "gpt-5": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 ### ChatGPT Codex OAuth
 
-```toml
-[providers.chatgpt]
-defaults.adapter = "openai"
-defaults.model = "gpt-5.3-codex"
-
-[providers.chatgpt.auth]
-mode = "credential"
-issuer = "openai_chatgpt"
-credential = { type = "oauth", issuer = "openai_chatgpt", refresh = "...", access = "...", expires_at_ms = 4102444800000, account_id = "acct-123" }
-
-[providers.chatgpt.adapters.openai]
-enabled = true
-backend = "chatgpt_codex"
-
-[providers.chatgpt.adapters.openai.models."gpt-5.3-codex"]
-enabled = true
+```json
+{
+  "providers": {
+    "chatgpt": {
+      "defaults": {
+        "adapter": "openai",
+        "model": "gpt-5.3-codex"
+      },
+      "auth": {
+        "mode": "credential",
+        "issuer": "openai_chatgpt",
+        "credential": {
+          "type": "oauth",
+          "issuer": "openai_chatgpt",
+          "refresh": "...",
+          "access": "...",
+          "expires_at_ms": 4102444800000,
+          "account_id": "acct-123"
+        }
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "backend": "chatgpt_codex",
+          "models": {
+            "gpt-5.3-codex": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 ### GitHub Copilot OpenAI
 
-```toml
-[providers."github-copilot"]
-defaults.adapter = "openai"
-defaults.model = "gpt-4o-mini"
-
-[providers."github-copilot".auth]
-mode = "credential"
-issuer = "github_copilot"
-credential = { type = "oauth", issuer = "github_copilot", refresh = "...", access = "...", expires_at_ms = 4102444800000 }
-
-[providers."github-copilot".adapters.openai]
-enabled = true
-
-[providers."github-copilot".adapters.openai.models."gpt-4o-mini"]
-enabled = true
+```json
+{
+  "providers": {
+    "github-copilot": {
+      "defaults": {
+        "adapter": "openai",
+        "model": "gpt-4o-mini"
+      },
+      "auth": {
+        "mode": "credential",
+        "issuer": "github_copilot",
+        "credential": {
+          "type": "oauth",
+          "issuer": "github_copilot",
+          "refresh": "...",
+          "access": "...",
+          "expires_at_ms": 4102444800000
+        }
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "models": {
+            "gpt-4o-mini": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 ### AtomGit OAuth
 
-```toml
-[providers.atomgit]
-defaults.adapter = "openai"
-defaults.model = "Kimi-K2-Instruct"
-
-[providers.atomgit.auth]
-mode = "credential"
-issuer = "atomgit"
-credential = { type = "oauth", issuer = "atomgit", refresh = "...", access = "...", expires_at_ms = 4102444800000, account_id = "atomgit-user" }
-
-[providers.atomgit.adapters.openai]
-enabled = true
-
-[providers.atomgit.adapters.openai.models."Kimi-K2-Instruct"]
-enabled = true
+```json
+{
+  "providers": {
+    "atomgit": {
+      "defaults": {
+        "adapter": "openai",
+        "model": "Kimi-K2-Instruct"
+      },
+      "auth": {
+        "mode": "credential",
+        "issuer": "atomgit",
+        "credential": {
+          "type": "oauth",
+          "issuer": "atomgit",
+          "refresh": "...",
+          "access": "...",
+          "expires_at_ms": 4102444800000,
+          "account_id": "atomgit-user"
+        }
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "models": {
+            "Kimi-K2-Instruct": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 AtomGit 的默认模型列表流程会对齐 AtomCode：先按 `Max -> Pro -> Lite`
@@ -423,57 +550,92 @@ AtomGit 的默认模型列表流程会对齐 AtomCode：先按 `Max -> Pro -> Li
 
 ### GitHub Copilot Anthropic
 
-```toml
-[providers."github-copilot-claude"]
-defaults.adapter = "anthropic"
-defaults.model = "claude-sonnet-4"
-
-[providers."github-copilot-claude".auth]
-mode = "credential"
-issuer = "github_copilot"
-credential = { type = "oauth", issuer = "github_copilot", refresh = "...", access = "...", expires_at_ms = 4102444800000 }
-
-[providers."github-copilot-claude".adapters.anthropic]
-enabled = true
-auth_header = "authorization"
-auth_scheme = "Bearer"
-extra_beta_header = "interleaved-thinking-2025-05-14"
-
-[providers."github-copilot-claude".adapters.anthropic.models."claude-sonnet-4"]
-enabled = true
+```json
+{
+  "providers": {
+    "github-copilot-claude": {
+      "defaults": {
+        "adapter": "anthropic",
+        "model": "claude-sonnet-4"
+      },
+      "auth": {
+        "mode": "credential",
+        "issuer": "github_copilot",
+        "credential": {
+          "type": "oauth",
+          "issuer": "github_copilot",
+          "refresh": "...",
+          "access": "...",
+          "expires_at_ms": 4102444800000
+        }
+      },
+      "adapters": {
+        "anthropic": {
+          "enabled": true,
+          "auth_header": "authorization",
+          "auth_scheme": "Bearer",
+          "extra_beta_header": "interleaved-thinking-2025-05-14",
+          "models": {
+            "claude-sonnet-4": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 ### Shared Multi-Adapter Provider
 
-```toml
-[providers.shared]
-defaults.adapter = "openai"
-defaults.model = "gpt-4.1-mini"
-
-[providers.shared.auth]
-mode = "api"
-base_url = "https://gateway.example.com"
-api_key_env = "SHARED_GATEWAY_API_KEY"
-
-[providers.shared.auth.protocol_paths]
-openai = "/v1"
-anthropic = "/v1"
-gemini = "/v1beta"
-
-[providers.shared.adapters.openai]
-enabled = true
-
-[providers.shared.adapters.openai.models."gpt-4.1-mini"]
-enabled = true
-
-[providers.shared.adapters.openai.models."gpt-4.1-mini".thinking_modes.deep]
-thinking = { type = "effort", effort = "high" }
-
-[providers.shared.adapters.anthropic]
-enabled = true
-
-[providers.shared.adapters.anthropic.models."claude-sonnet-4"]
-enabled = true
+```json
+{
+  "providers": {
+    "shared": {
+      "defaults": {
+        "adapter": "openai",
+        "model": "gpt-4.1-mini"
+      },
+      "auth": {
+        "mode": "api",
+        "base_url": "https://gateway.example.com",
+        "api_key_env": "SHARED_GATEWAY_API_KEY",
+        "protocol_paths": {
+          "openai": "/v1",
+          "anthropic": "/v1",
+          "gemini": "/v1beta"
+        }
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "models": {
+            "gpt-4.1-mini": {
+              "enabled": true,
+              "thinking_modes": {
+                "deep": {
+                  "thinking": {
+                    "type": "effort",
+                    "effort": "high"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "anthropic": {
+          "enabled": true,
+          "models": {
+            "claude-sonnet-4": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 这里：
@@ -484,38 +646,53 @@ enabled = true
 
 ### Provider-Routed Shared Gateway
 
-```toml
-[providers.provider_gateway]
-defaults.adapter = "openai"
-defaults.model = "gpt-4.1-mini"
-
-[providers.provider_gateway.auth]
-mode = "api"
-base_url = "https://api.cxits.cn"
-api_key_env = "CX_API_KEY"
-
-[providers.provider_gateway.auth.protocol_paths]
-openai = "/api/provider/openai/v1"
-anthropic = "/api/provider/anthropic/v1"
-gemini = "/api/provider/google/v1beta"
-
-[providers.provider_gateway.adapters.openai]
-enabled = true
-
-[providers.provider_gateway.adapters.openai.models."gpt-4.1-mini"]
-enabled = true
-
-[providers.provider_gateway.adapters.anthropic]
-enabled = true
-
-[providers.provider_gateway.adapters.anthropic.models."claude-sonnet-4"]
-enabled = true
-
-[providers.provider_gateway.adapters.gemini]
-enabled = true
-
-[providers.provider_gateway.adapters.gemini.models."gemini-2.5-pro"]
-enabled = true
+```json
+{
+  "providers": {
+    "provider_gateway": {
+      "defaults": {
+        "adapter": "openai",
+        "model": "gpt-4.1-mini"
+      },
+      "auth": {
+        "mode": "api",
+        "base_url": "https://api.cxits.cn",
+        "api_key_env": "CX_API_KEY",
+        "protocol_paths": {
+          "openai": "/api/provider/openai/v1",
+          "anthropic": "/api/provider/anthropic/v1",
+          "gemini": "/api/provider/google/v1beta"
+        }
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "models": {
+            "gpt-4.1-mini": {
+              "enabled": true
+            }
+          }
+        },
+        "anthropic": {
+          "enabled": true,
+          "models": {
+            "claude-sonnet-4": {
+              "enabled": true
+            }
+          }
+        },
+        "gemini": {
+          "enabled": true,
+          "models": {
+            "gemini-2.5-pro": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 这里不再需要回退和猜测。共享根路径就是 `https://api.cxits.cn`，其余协议前缀由 `protocol_paths` 显式给出：
@@ -526,22 +703,33 @@ enabled = true
 
 ### Amazon Bedrock SigV4
 
-```toml
-[providers.bedrock]
-defaults.adapter = "amazon_bedrock"
-defaults.model = "anthropic.claude-3-7-sonnet-20250219-v1:0"
-
-[providers.bedrock.auth]
-mode = "bedrock_sigv4"
-base_url = "https://bedrock-runtime.us-east-1.amazonaws.com"
-region = "us-east-1"
-profile = "prod"
-
-[providers.bedrock.adapters.amazon_bedrock]
-enabled = true
-
-[providers.bedrock.adapters.amazon_bedrock.models."anthropic.claude-3-7-sonnet-20250219-v1:0"]
-enabled = true
+```json
+{
+  "providers": {
+    "bedrock": {
+      "defaults": {
+        "adapter": "amazon_bedrock",
+        "model": "anthropic.claude-3-7-sonnet-20250219-v1:0"
+      },
+      "auth": {
+        "mode": "bedrock_sigv4",
+        "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+        "region": "us-east-1",
+        "profile": "prod"
+      },
+      "adapters": {
+        "amazon_bedrock": {
+          "enabled": true,
+          "models": {
+            "anthropic.claude-3-7-sonnet-20250219-v1:0": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 ## 迁移后的结论

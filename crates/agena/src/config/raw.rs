@@ -11,18 +11,17 @@ use crate::provider::{
 
 use super::{
     AgentConfig, BedrockSigv4AuthConfig, ConfigEnvironment, ConfigError, HarnessViewportConfig,
-    HarnessesConfig, HttpProviderAdapterConfig, McpConfig, MemoryConfig, OpenAiApiModeConfig,
-    PluginConfig, ProjectInstructionsConfig, ProviderAdapterDefinition, ProviderAdapterOverlay,
-    ProviderApiAuthConfig, ProviderAuthConfig, ProviderAuthMode, ProviderAuthOverlay,
-    ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig, ProviderDefaultsConfig,
-    ProviderGitlabAuthConfig, ProviderHostedToolConfigs, ProviderModelDiscoveryConfig,
-    ProviderModelOverlay, ProviderNativeToolKind, ProviderNativeToolRoute,
-    ProviderNativeToolsConfig, ProviderOverlay, ProviderProtocolPathsConfig,
-    ProviderProtocolPathsOverlay, ResolvedConfig, ResolvedProviderAdapterConfig,
-    ResolvedProviderConfig, ResolvedProviderModelConfig, RuntimeConfig, RuntimeGcConfig,
-    RuntimeModelCatalogConfig, RuntimeProvidersConfig, RuntimeSessionConfig, SessionCacheConfig,
-    SessionCompactionConfig, SessionConfig, StreamTransportMode, TracingConfig, UiConfig,
-    WebConfig,
+    HarnessesConfig, HttpProviderAdapterConfig, OpenAiApiModeConfig, PluginConfig,
+    ProviderAdapterDefinition, ProviderAdapterOverlay, ProviderApiAuthConfig, ProviderAuthConfig,
+    ProviderAuthMode, ProviderAuthOverlay, ProviderCapabilityFamilyConfig,
+    ProviderCredentialAuthConfig, ProviderDefaultsConfig, ProviderGitlabAuthConfig,
+    ProviderHostedToolConfigs, ProviderModelDiscoveryConfig, ProviderModelOverlay,
+    ProviderNativeToolKind, ProviderNativeToolRoute, ProviderNativeToolsConfig, ProviderOverlay,
+    ProviderProtocolPathsConfig, ProviderProtocolPathsOverlay, ResolvedConfig,
+    ResolvedProviderAdapterConfig, ResolvedProviderConfig, ResolvedProviderModelConfig,
+    RuntimeConfig, RuntimeGcConfig, RuntimeModelCatalogConfig, RuntimeProvidersConfig,
+    RuntimeSessionConfig, SessionCacheConfig, SessionCompactionConfig, SessionConfig,
+    StreamTransportMode, TracingConfig, UiConfig,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -98,8 +97,21 @@ fn reject_unsupported_fields(path: &Path, text: &str) -> Result<(), ConfigError>
     }
     if table.contains_key("hooks") {
         return Err(ConfigError::Validation(
-            "`hooks` has been removed; implement hook behavior as a regular plugin under `[plugins.list.<id>]`".to_string(),
+            "`hooks` has been removed; implement hook behavior as a regular plugin under `plugins.list.<id>`".to_string(),
         ));
+    }
+    for (field, plugin_id) in [
+        ("memory", "agena.memory"),
+        ("web", "agena.web"),
+        ("crawl", "agena.web"),
+        ("mcp", "agena.mcp"),
+        ("lsp", "agena.lsp"),
+    ] {
+        if table.contains_key(field) {
+            return Err(ConfigError::Validation(format!(
+                "`{field}` has moved under `plugins.list.\"{plugin_id}\".config`"
+            )));
+        }
     }
     if let Some(providers) = table.get("providers").and_then(Value::as_object) {
         for (provider_id, provider) in providers {
@@ -196,12 +208,6 @@ pub(crate) struct RawConfig {
     pub(crate) permission: Option<crate::agent::PermissionConfig>,
     pub(crate) agents: RawAgentsConfig,
     pub(crate) plugins: Option<PluginConfig>,
-    pub(crate) memory: Option<MemoryConfig>,
-    /// Backward-compatible alias for the old `[crawl]` table.
-    pub(crate) crawl: Option<WebConfig>,
-    pub(crate) mcp: Option<McpConfig>,
-    pub(crate) lsp: Option<crate::config::types::LspConfig>,
-    pub(crate) web: Option<WebConfig>,
     pub(crate) harnesses: Option<HarnessesConfig>,
     pub(crate) providers: RawProvidersConfig,
 }
@@ -215,11 +221,6 @@ impl RawConfig {
         merge_option_struct(&mut self.permission, overlay.permission);
         self.agents.merge_from(overlay.agents);
         merge_option_struct(&mut self.plugins, overlay.plugins);
-        merge_option_struct(&mut self.memory, overlay.memory);
-        merge_option_struct(&mut self.crawl, overlay.crawl);
-        merge_option_struct(&mut self.mcp, overlay.mcp);
-        merge_option_struct(&mut self.lsp, overlay.lsp);
-        merge_option_struct(&mut self.web, overlay.web);
         merge_option_struct(&mut self.harnesses, overlay.harnesses);
         self.providers.merge_from(overlay.providers);
     }
@@ -232,11 +233,6 @@ impl RawConfig {
             && self.permission.is_none()
             && self.agents.is_empty()
             && self.plugins.is_none()
-            && self.memory.is_none()
-            && self.crawl.is_none()
-            && self.mcp.is_none()
-            && self.lsp.is_none()
-            && self.web.is_none()
             && self.harnesses.is_none()
             && self.providers.is_empty()
     }
@@ -267,7 +263,7 @@ impl RawConfig {
             config.ui.get_or_insert_with(RawUiConfig::default).locale = Some(locale);
         }
         // Note: `AGENA_PLUGIN_PATHS` is no longer supported — the new plugin
-        // config requires explicit `[plugins.list.<id>]` entries.
+        // config requires explicit `plugins.list.<id>` entries.
 
         apply_env_number(env, "AGENA_PROVIDER_HTTP_TIMEOUT_SECS", |value| {
             config
@@ -405,19 +401,13 @@ impl RawConfig {
         let permission = self.permission.unwrap_or_default();
         let plugins: PluginConfig = self.plugins.unwrap_or_default();
         PluginRuntimeOptions::validate_builtin_plugins(&plugins)?;
-        let memory: MemoryConfig = self.memory.unwrap_or_default();
-        let mut web: WebConfig = self.crawl.unwrap_or_default();
-        if let Some(web_overlay) = self.web {
-            web.merge_from(web_overlay);
-        }
-        let mcp: McpConfig = self.mcp.unwrap_or_default();
-        let lsp: crate::config::types::LspConfig = self.lsp.unwrap_or_default();
+        let mcp = crate::plugins::provided::mcp::config_from_plugins(&plugins)
+            .map_err(ConfigError::Validation)?;
         let harnesses: HarnessesConfig = self.harnesses.unwrap_or_default();
         let providers_default = self.providers.default.clone();
         let agents_default = self.agents.default.clone();
 
         validate_harnesses(&harnesses)?;
-        validate_web_config(&web)?;
 
         let providers = self
             .providers
@@ -449,10 +439,6 @@ impl RawConfig {
             agents: self.agents.agents,
             plugins,
             plugin_storage: crate::config::types::PluginStorageConfig::default(),
-            memory,
-            mcp,
-            lsp,
-            web,
             harnesses,
             providers,
         })
@@ -536,29 +522,16 @@ struct PluginRuntimeOptions;
 
 impl PluginRuntimeOptions {
     fn validate_builtin_plugins(plugins: &PluginConfig) -> Result<(), ConfigError> {
-        for (plugin_id, entry) in &plugins.list {
+        for plugin_id in plugins.list.keys() {
             if plugin_id == "agena.hooks" {
                 return Err(ConfigError::Validation(
-                    "`plugins.list.\"agena.hooks\"` has been removed; implement hook behavior as a regular plugin under `[plugins.list.<id>]`".to_string(),
+                    "`plugins.list.\"agena.hooks\"` has been removed; implement hook behavior as a regular plugin under `plugins.list.<id>`".to_string(),
                 ));
             }
             if plugin_id == "agena.crawl" {
                 return Err(ConfigError::Validation(
-                    "`plugins.list.\"agena.crawl\"` has been renamed to `plugins.list.\"agena.web\"`; move configuration fields under top-level `web`".to_string(),
+                    "`plugins.list.\"agena.crawl\"` has been renamed to `plugins.list.\"agena.web\"`; move configuration fields under `plugins.list.\"agena.web\".config`".to_string(),
                 ));
-            }
-            let options = entry.options();
-            if options.is_null() {
-                continue;
-            }
-            match plugin_id.as_str() {
-                "agena.memory" | "agena.mcp" | "agena.lsp" | "agena.web" => {
-                    let field = plugin_id.trim_start_matches("agena.");
-                    return Err(ConfigError::Validation(format!(
-                        "`plugins.list.\"{plugin_id}\".options` is no longer a config source; move those fields under top-level `{field}`"
-                    )));
-                }
-                _ => {}
             }
         }
         Ok(())
@@ -573,36 +546,11 @@ impl Merge for PluginConfig {
         if !overlay.list.is_empty() {
             self.list = overlay.list;
         }
-        self.timeouts = overlay.timeouts;
-        if !overlay.quotas.is_empty() {
-            self.quotas = overlay.quotas;
+        if !overlay.host.is_default() {
+            self.host = overlay.host;
         }
-        if !overlay.trusted_keys.is_empty() {
-            self.trusted_keys = overlay.trusted_keys;
-        }
-        if overlay.default_quota != Default::default() {
-            self.default_quota = overlay.default_quota;
-        }
-        if !overlay.tool_presentation.is_default() {
-            self.tool_presentation = overlay.tool_presentation;
-        }
-    }
-}
-
-impl Merge for McpConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        // A more-specific layer fully replaces server entries with the same
-        // name; entries it doesn't mention pass through unchanged.
-        for (name, server) in overlay.servers {
-            self.servers.insert(name, server);
-        }
-    }
-}
-
-impl Merge for crate::config::types::LspConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        for (name, server) in overlay.servers {
-            self.servers.insert(name, server);
+        if !overlay.policy.is_default() {
+            self.policy = overlay.policy;
         }
     }
 }
@@ -618,32 +566,6 @@ impl Merge for HarnessesConfig {
         for (name, config) in overlay.editor {
             self.editor.insert(name, config);
         }
-    }
-}
-
-impl Merge for MemoryConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        self.project_instructions
-            .merge_from(overlay.project_instructions);
-        self.retrieval.merge_from(overlay.retrieval);
-    }
-}
-
-impl Merge for ProjectInstructionsConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        *self = overlay;
-    }
-}
-
-impl Merge for crate::config::types::MemoryRetrievalConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        *self = overlay;
-    }
-}
-
-impl Merge for crate::config::types::WebConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        *self = overlay;
     }
 }
 
@@ -1010,7 +932,7 @@ impl ProviderOverlay {
         provider_id: String,
         _env: &dyn ConfigEnvironment,
         harnesses: &HarnessesConfig,
-        mcp: &McpConfig,
+        mcp: &crate::plugins::provided::mcp::McpConfig,
     ) -> Result<(String, ResolvedProviderConfig), ConfigError> {
         let enabled = self.enabled.unwrap_or(true);
         if self.adapters.is_empty() {
@@ -1155,7 +1077,7 @@ fn validate_provider_model_native_tools(
     provider_id: &str,
     models: &BTreeMap<String, ResolvedProviderModelConfig>,
     harnesses: &HarnessesConfig,
-    mcp: &McpConfig,
+    mcp: &crate::plugins::provided::mcp::McpConfig,
 ) -> Result<(), ConfigError> {
     for (route_id, model) in models {
         validate_provider_native_tools(
@@ -1174,7 +1096,7 @@ fn validate_provider_native_tools(
     route_id: Option<&str>,
     config: &ProviderNativeToolsConfig,
     harnesses: &HarnessesConfig,
-    mcp: &McpConfig,
+    mcp: &crate::plugins::provided::mcp::McpConfig,
 ) -> Result<(), ConfigError> {
     validate_hosted_native_tool_config(provider_id, route_id, &config.hosted)?;
 
@@ -2285,93 +2207,6 @@ fn validate_harnesses(harnesses: &HarnessesConfig) -> Result<(), ConfigError> {
     Ok(())
 }
 
-fn validate_web_config(web: &crate::config::types::WebConfig) -> Result<(), ConfigError> {
-    for (label, value) in [
-        ("web.default_max_pages", web.default_max_pages),
-        ("web.max_pages_limit", web.max_pages_limit),
-        ("web.max_depth_limit", web.max_depth_limit),
-        ("web.default_chunk_chars", web.default_chunk_chars),
-        (
-            "web.near_duplicate_hamming_distance",
-            web.near_duplicate_hamming_distance,
-        ),
-        ("web.search_default_limit", web.search_default_limit),
-        ("web.search_max_limit", web.search_max_limit),
-        ("web.list_default_limit", web.list_default_limit),
-        ("web.list_max_limit", web.list_max_limit),
-    ] {
-        if value == 0 {
-            return Err(ConfigError::Validation(format!(
-                "{label} must be greater than 0"
-            )));
-        }
-    }
-    for (label, value) in [
-        ("web.request_delay_ms", web.request_delay_ms),
-        ("web.fetch_timeout_secs", web.fetch_timeout_secs),
-        ("web.max_body_bytes", web.max_body_bytes),
-        (
-            "web.browser_wait_timeout_secs",
-            web.browser_wait_timeout_secs,
-        ),
-        ("web.document_cache_ttl_secs", web.document_cache_ttl_secs),
-        ("web.fetch_cache_ttl_secs", web.fetch_cache_ttl_secs),
-        ("web.fetch_cache_capacity", web.fetch_cache_capacity),
-        ("web.store_max_bytes", web.store_max_bytes),
-    ] {
-        if value == 0 {
-            return Err(ConfigError::Validation(format!(
-                "{label} must be greater than 0"
-            )));
-        }
-    }
-    if web.store_max_documents == 0 {
-        return Err(ConfigError::Validation(
-            "web.store_max_documents must be greater than 0".to_string(),
-        ));
-    }
-    if web.default_max_pages > web.max_pages_limit {
-        return Err(ConfigError::Validation(
-            "web.default_max_pages must be less than or equal to web.max_pages_limit".to_string(),
-        ));
-    }
-    if web.default_max_depth > web.max_depth_limit {
-        return Err(ConfigError::Validation(
-            "web.default_max_depth must be less than or equal to web.max_depth_limit".to_string(),
-        ));
-    }
-    if web.search_default_limit > web.search_max_limit {
-        return Err(ConfigError::Validation(
-            "web.search_default_limit must be less than or equal to web.search_max_limit"
-                .to_string(),
-        ));
-    }
-    if web.list_default_limit > web.list_max_limit {
-        return Err(ConfigError::Validation(
-            "web.list_default_limit must be less than or equal to web.list_max_limit".to_string(),
-        ));
-    }
-    if web
-        .browser_executable_path
-        .as_deref()
-        .is_some_and(|value| value.trim().is_empty())
-    {
-        return Err(ConfigError::Validation(
-            "web.browser_executable_path must not be empty when set".to_string(),
-        ));
-    }
-    if web
-        .browser_wait_for_selector
-        .as_deref()
-        .is_some_and(|value| value.trim().is_empty())
-    {
-        return Err(ConfigError::Validation(
-            "web.browser_wait_for_selector must not be empty when set".to_string(),
-        ));
-    }
-    Ok(())
-}
-
 fn validate_harness_name(scope: &str, name: &str) -> Result<(), ConfigError> {
     if name.trim().is_empty() {
         return Err(ConfigError::Validation(format!(
@@ -2586,11 +2421,20 @@ mod tests {
     #[test]
     fn resolves_provider_native_tools_and_bindings() {
         let resolved = resolve_config(json!({
-            "mcp": {
-                "servers": {
-                    "docs": {
-                        "transport": "http",
-                        "url": "https://example.com/mcp"
+            "plugins": {
+                "list": {
+                    "agena.mcp": {
+                        "package": {
+                            "kind": "static"
+                        },
+                        "config": {
+                            "servers": {
+                                "docs": {
+                                    "transport": "http",
+                                    "url": "https://example.com/mcp"
+                                }
+                            }
+                        }
                     }
                 }
             },
@@ -2679,28 +2523,22 @@ mod tests {
     }
 
     #[test]
-    fn web_builtin_plugin_options_are_rejected() {
-        let raw = serde_json::from_value::<RawConfig>(json!({
+    fn old_flat_plugin_entry_shape_is_rejected() {
+        let err = serde_json::from_value::<RawConfig>(json!({
             "plugins": {
                 "list": {
                     "agena.web": {
                         "kind": "static",
-                        "options": {
+                        "config": {
                             "default_max_pages": 20
                         }
                     }
                 }
             }
         }))
-        .expect("config should parse");
+        .expect_err("old flat plugin package fields should be rejected");
 
-        let err = raw
-            .resolve_with_env(&TestEnvironment)
-            .expect_err("web plugin options should be rejected");
-        assert!(
-            err.to_string()
-                .contains("move those fields under top-level `web`")
-        );
+        assert!(err.to_string().contains("unknown field `kind`"));
     }
 
     #[test]
@@ -2709,7 +2547,9 @@ mod tests {
             "plugins": {
                 "list": {
                     "agena.crawl": {
-                        "kind": "static"
+                        "package": {
+                            "kind": "static"
+                        }
                     }
                 }
             }
@@ -2723,32 +2563,28 @@ mod tests {
     }
 
     #[test]
-    fn crawl_table_remains_web_config_alias() {
-        let resolved = resolve_config(json!({
+    fn crawl_table_is_rejected() {
+        let err = serde_json::from_value::<RawConfig>(json!({
             "crawl": {
                 "default_max_pages": 7
             }
         }))
-        .expect("crawl compatibility alias should resolve");
+        .expect_err("crawl compatibility alias should be rejected");
 
-        assert_eq!(resolved.web.default_max_pages, 7);
+        assert!(err.to_string().contains("unknown field `crawl`"));
     }
 
     #[test]
-    fn web_config_rejects_default_pages_above_limit() {
-        let err = resolve_config(json!({
+    fn web_table_is_rejected() {
+        let err = serde_json::from_value::<RawConfig>(json!({
             "web": {
                 "default_max_pages": 20,
                 "max_pages_limit": 10
             }
         }))
-        .expect_err("invalid web config should fail");
+        .expect_err("top-level web config should be rejected");
 
-        assert!(
-            err.to_string().contains(
-                "web.default_max_pages must be less than or equal to web.max_pages_limit"
-            )
-        );
+        assert!(err.to_string().contains("unknown field `web`"));
     }
 
     #[test]
@@ -2758,9 +2594,9 @@ mod tests {
                 "search_engine": "brave"
             }
         }))
-        .expect_err("fixed web search engine config should be rejected");
+        .expect_err("top-level web config should be rejected");
 
-        assert!(err.to_string().contains("unknown field `search_engine`"));
+        assert!(err.to_string().contains("unknown field `web`"));
     }
 
     #[test]

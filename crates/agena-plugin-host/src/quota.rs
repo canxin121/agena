@@ -4,8 +4,8 @@
 //! must outlive the callback.
 //!
 //! Defaults are intentionally permissive (unlimited): operators opt in
-//! per-plugin via `[plugins.list.<id>.quota]` so bundled high-volume
-//! plugins (`agena.fs`, `agena.shell`) don't get throttled.
+//! per-plugin via `plugins.host.quotas.<id>` so high-volume plugins can be
+//! throttled without changing their own config.
 
 use std::collections::HashMap;
 use std::sync::Mutex;

@@ -13,14 +13,14 @@ Agena 的扩展能力统一通过 plugin host 接入。模型可见的 tools、M
 
 ## 总览
 
-Runtime build 会构建一个 `PluginHost`。这个 host 加载 runtime 注册的 static plugin，以及用户在 `[plugins.list.<id>]` 中声明的 plugin。
+Runtime build 会构建一个 `PluginHost`。这个 host 加载 runtime 注册的 static plugin，以及用户在 `plugins.list.<id>` 中声明的 plugin。
 
 ```text
 config.json
   |
-  +-- [plugins] -------------------+
+  +-- plugins ---------------------+
   |                                |
-  +-- [plugins.list."agena.*"]     |
+  +-- plugins.list."agena.*"       |
        |                           |
        v                           v
 RuntimeConfigRegistry        PluginHostBuilder
@@ -96,24 +96,31 @@ Tool 的模型可见说明有两种模式：
 
 配置优先级从高到低：
 
-1. `[plugins.tool_presentation.tools]` 中的具体 tool 覆盖。
-2. `[plugins.tool_presentation.plugins]` 中的 plugin 覆盖。
+1. `plugins.policy.tool_presentation.tools` 中的具体 tool 覆盖。
+2. `plugins.policy.tool_presentation.plugins` 中的 plugin 覆盖。
 3. manifest 里的 `description_mode`。
-4. `[plugins.tool_presentation].default_mode`。
+4. `plugins.policy.tool_presentation.default_mode`。
 
 示例：
 
-```toml
-[plugins.tool_presentation]
-default_mode = "help"
-
-[plugins.tool_presentation.plugins]
-"agena.skills" = "help"
-"agena.mcp" = "help"
-
-[plugins.tool_presentation.tools]
-fs = "detailed"
-"agena.workflow/tools" = "detailed"
+```json
+{
+  "plugins": {
+    "policy": {
+      "tool_presentation": {
+        "default_mode": "help",
+        "plugins": {
+          "agena.skills": "help",
+          "agena.mcp": "help"
+        },
+        "tools": {
+          "fs": "detailed",
+          "agena.workflow/tools": "detailed"
+        }
+      }
+    }
+  }
+}
 ```
 
 `tools` 的 `search` action 用于发现已注册 tools；`help` action 用于拿到任意已注册 tool 的详细说明。Plugin 作者可以在 manifest 中设置 `summary` 和 `help`，也可以通过 `tool.definition` hook 改写 `description`、`summary`、`help`、`description_mode` 和 `input_schema`。
@@ -175,15 +182,15 @@ Runtime build 注册：
 
 ## Transport
 
-`[plugins.list.<id>]` 的 `kind` 选择 plugin transport。
+`plugins.list.<id>.package.kind` 选择 plugin transport。
 
 | kind | 场景 | 关键字段 |
 | --- | --- | --- |
-| `static` | runtime 内注册的 in-process plugin | `options`, `timeouts` |
-| `cdylib` | 本地动态库 plugin | `path`, `options`, `timeouts`, `sha256`, `signature` |
-| `stdio` | 子进程 JSON-RPC plugin | `command`, `args`, `env`, `cwd`, `restart`, `options`, `timeouts`, `sha256` |
-| `http` | 远端 JSON-RPC plugin | `url`, `auth`, `options`, `timeouts` |
-| `wasm` | WebAssembly plugin | `path`, `options`, `timeouts`, `sha256` |
+| `static` | runtime 内注册的 in-process plugin | `package`, `config`, `timeouts` |
+| `cdylib` | 本地动态库 plugin | `package.path`, `config`, `timeouts`, `sha256`, `signature` |
+| `stdio` | 子进程 JSON-RPC plugin | `package.command`, `package.args`, `package.env`, `package.cwd`, `package.restart`, `config`, `timeouts`, `sha256` |
+| `http` | 远端 JSON-RPC plugin | `package.url`, `package.auth`, `config`, `timeouts` |
+| `wasm` | WebAssembly plugin | `package.path`, `config`, `timeouts`, `sha256` |
 
 选择建议：
 
@@ -197,85 +204,176 @@ Runtime build 注册：
 
 最小配置：
 
-```toml
-[plugins]
-enabled = true
-
-[plugins.list.echo]
-kind = "stdio"
-command = "node"
-args = ["./plugins/echo/index.js"]
-options = { uppercase = true }
+```json
+{
+  "plugins": {
+    "list": {
+      "echo": {
+        "package": {
+          "kind": "stdio",
+          "command": "node",
+          "args": [
+            "./plugins/echo/index.js"
+          ]
+        },
+        "config": {
+          "uppercase": true
+        }
+      }
+    }
+  }
+}
 ```
 
 完整一些的 stdio 配置：
 
-```toml
-[plugins]
-enabled = true
-timeouts = { init = "10s", tool_invoke = "60s", permission_ask = "10s" }
-
-[plugins.list.lint]
-kind = "stdio"
-command = "node"
-args = ["./plugins/lint/index.js"]
-env = { LOG_LEVEL = "info" }
-cwd = "."
-restart = { policy = "on-failure", min_backoff = "1s", max_backoff = "30s", max_retries = 5 }
-options = { project = "rust" }
-timeouts = { tool_invoke = "30s" }
+```json
+{
+  "plugins": {
+    "host": {
+      "timeouts": {
+        "init": "10s",
+        "tool_invoke": "60s",
+        "permission_ask": "10s"
+      }
+    },
+    "list": {
+      "lint": {
+        "package": {
+          "kind": "stdio",
+          "command": "node",
+          "args": [
+            "./plugins/lint/index.js"
+          ],
+          "env": {
+            "LOG_LEVEL": "info"
+          },
+          "cwd": ".",
+          "restart": {
+            "policy": "on-failure",
+            "min_backoff": "1s",
+            "max_backoff": "30s",
+            "max_retries": 5
+          }
+        },
+        "config": {
+          "project": "rust"
+        },
+        "timeouts": {
+          "tool_invoke": "30s"
+        }
+      }
+    }
+  }
+}
 ```
 
 HTTP plugin：
 
-```toml
-[plugins.list.cloud-policy]
-kind = "http"
-url = "https://policy.example.com/agena/rpc"
-auth = { kind = "bearer", token_env = "AGENA_POLICY_TOKEN" }
-options = { org_id = "acme" }
+```json
+{
+  "plugins": {
+    "list": {
+      "cloud-policy": {
+        "package": {
+          "kind": "http",
+          "url": "https://policy.example.com/agena/rpc",
+          "auth": {
+            "kind": "bearer",
+            "token_env": "AGENA_POLICY_TOKEN"
+          }
+        },
+        "config": {
+          "org_id": "acme"
+        }
+      }
+    }
+  }
+}
 ```
 
 cdylib plugin：
 
-```toml
-[plugins.list.echo]
-kind = "cdylib"
-path = "examples/echo_plugin/target/debug/libagena_echo_plugin.so"
-options = { uppercase = true }
+```json
+{
+  "plugins": {
+    "list": {
+      "echo": {
+        "package": {
+          "kind": "cdylib",
+          "path": "examples/echo_plugin/target/debug/libagena_echo_plugin.so"
+        },
+        "config": {
+          "uppercase": true
+        }
+      }
+    }
+  }
+}
 ```
 
 Wasm plugin：
 
-```toml
-[plugins.list.sandboxed]
-kind = "wasm"
-path = "./plugins/sandboxed/plugin.wasm"
-sha256 = "..."
+```json
+{
+  "plugins": {
+    "list": {
+      "sandboxed": {
+        "package": {
+          "kind": "wasm",
+          "path": "./plugins/sandboxed/plugin.wasm",
+          "sha256": "..."
+        }
+      }
+    }
+  }
+}
 ```
 
-Static plugin options override：
+Static plugin config override：
 
-```toml
-[plugins.list."agena.web"]
-kind = "static"
-timeouts = { tool_invoke = "45s" }
+```json
+{
+  "plugins": {
+    "list": {
+      "agena.web": {
+        "package": {
+          "kind": "static"
+        },
+        "timeouts": {
+          "tool_invoke": "45s"
+        }
+      }
+    }
+  }
+}
 ```
 
-`PluginHostBuilder::register_static` 会把已注册 static plugin 加入 load list。需要给 static plugin 设置 `timeouts` 时，显式写对应 `[plugins.list.<id>]`。内建能力的实际配置源应使用顶层 `memory`、`mcp`、`lsp`、`web`。
+`PluginHostBuilder::register_static` 只注册可用的 in-process factory；是否加载由 active config 中的 `plugins.list.<id>` 决定。内建能力没有特殊配置通道，实际配置写在对应 static plugin entry 的 `config` 中。
 
-## `[plugins]` 字段
+## `plugins` 字段
 
-顶层 `[plugins]` 支持：
+顶层 `plugins` 支持：
 
 | 字段 | 含义 |
 | --- | --- |
-| `enabled` | 是否启用 plugin host。设为 `false` 时返回空 plugin host。 |
-| `timeouts` | 全局 plugin timeout overlay。 |
+| `host` | plugin host 生命周期、timeout、quota、trusted key 配置。 |
+| `policy` | plugin/tool 展示策略。 |
 | `list` | plugin 声明表，key 是 plugin id。 |
+
+`plugins.host` 支持：
+
+| 字段 | 含义 |
+| --- | --- |
+| `timeouts` | 全局 plugin timeout overlay。 |
 | `default_quota` | 没有单独 quota 的 plugin 使用的默认 host callback quota。 |
 | `quotas` | 按 plugin id 设置 host callback quota。 |
 | `trusted_keys` | cdylib signature 校验使用的 ed25519 public key。 |
+
+`plugins.policy` 支持：
+
+| 字段 | 含义 |
+| --- | --- |
 | `tool_presentation` | 控制 tool 说明进入模型请求时使用 `detailed` 还是 `help` 模式。 |
 
 Timeout 字段：
@@ -291,47 +389,93 @@ Timeout 字段：
 
 Duration 支持 `ms`、`s`、`m`、`h`：
 
-```toml
-[plugins]
-timeouts = { init = "10s", tool_invoke = "2m", fast = "500ms" }
+```json
+{
+  "plugins": {
+    "host": {
+      "timeouts": {
+        "init": "10s",
+        "tool_invoke": "2m",
+        "fast": "500ms"
+      }
+    }
+  }
+}
 ```
 
 Quota 用于限制 plugin 调用 host callback 的频率和并发数。默认不限制。
 
-```toml
-[plugins.default_quota]
-rate_per_sec = 20
-burst = 40
-max_concurrent = 8
-
-[plugins.quotas."cloud-policy"]
-rate_per_sec = 5
-burst = 10
-max_concurrent = 2
+```json
+{
+  "plugins": {
+    "host": {
+      "default_quota": {
+        "rate_per_sec": 20,
+        "burst": 40,
+        "max_concurrent": 8
+      },
+      "quotas": {
+        "cloud-policy": {
+          "rate_per_sec": 5,
+          "burst": 10,
+          "max_concurrent": 2
+        }
+      }
+    }
+  }
+}
 ```
 
 Supply-chain 校验可以使用 artifact hash 和 trusted key：
 
-```toml
-[plugins.trusted_keys]
-acme = "0123456789abcdef..."
-
-[plugins.list.secure-plugin]
-kind = "cdylib"
-path = "./plugins/secure/libsecure.so"
-sha256 = "..."
-signature = { key_id = "acme", signature = "..." }
+```json
+{
+  "plugins": {
+    "host": {
+      "trusted_keys": {
+        "acme": "0123456789abcdef..."
+      }
+    },
+    "list": {
+      "secure-plugin": {
+        "package": {
+          "kind": "cdylib",
+          "path": "./plugins/secure/libsecure.so",
+          "sha256": "...",
+          "signature": {
+            "key_id": "acme",
+            "signature": "..."
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 ## Stdio Restart
 
 `stdio` plugin 支持 restart policy：
 
-```toml
-[plugins.list.worker]
-kind = "stdio"
-command = "./plugins/worker"
-restart = { policy = "always", min_backoff = "1s", max_backoff = "30s", max_retries = 5 }
+```json
+{
+  "plugins": {
+    "list": {
+      "worker": {
+        "package": {
+          "kind": "stdio",
+          "command": "./plugins/worker",
+          "restart": {
+            "policy": "always",
+            "min_backoff": "1s",
+            "max_backoff": "30s",
+            "max_retries": 5
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 可用 `policy`：
@@ -353,23 +497,45 @@ Runtime status 会记录 stdio plugin 的 pid、restart count、last exit code�
 
 HTTP transport 的 auth 写在 plugin tool 内：
 
-```toml
-[plugins.list.policy]
-kind = "http"
-url = "https://policy.example.com/agena/rpc"
-auth = { kind = "none" }
+```json
+{
+  "plugins": {
+    "list": {
+      "policy": {
+        "package": {
+          "kind": "http",
+          "url": "https://policy.example.com/agena/rpc",
+          "auth": {
+            "kind": "none"
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 Bearer token：
 
-```toml
-auth = { kind = "bearer", token_env = "PLUGIN_TOKEN" }
+```json
+{
+  "auth": {
+    "kind": "bearer",
+    "token_env": "PLUGIN_TOKEN"
+  }
+}
 ```
 
 Basic auth：
 
-```toml
-auth = { kind = "basic", username = "user", password_env = "PLUGIN_PASSWORD" }
+```json
+{
+  "auth": {
+    "kind": "basic",
+    "username": "user",
+    "password_env": "PLUGIN_PASSWORD"
+  }
+}
 ```
 
 HTTP plugin 初始化时，host 会把 callback URL 和 bearer token 放进 `InitContext`。Plugin 通过 callback URL 调用 host API 时需要携带这个 bearer token。
@@ -390,7 +556,8 @@ Manifest 包含：
 - `entries`
 - `plugin_capabilities`
 - `ui`
-- `options_schema`
+- `config_schema`
+- `config_schema_i18n`
 
 Rust SDK 中的最小 plugin：
 
@@ -692,47 +859,93 @@ host.ensure_network_permission(HostNetworkPermissionCheckRequest::connect(url)).
 
 Tool 权限配置分为 tag、tool name 和 tool-specific rules：
 
-```toml
-[permission.tools.tags]
-filesystem_read = "allow"
-filesystem_write = "ask"
-network = "ask"
-internet = "ask"
-task = "ask"
-shell = "ask"
-
-[permission.tools.names]
-shell = "ask"
-fs = "ask"
-"my-plugin.echo" = "allow"
+```json
+{
+  "permission": {
+    "tools": {
+      "tags": {
+        "filesystem_read": "allow",
+        "filesystem_write": "ask",
+        "network": "ask",
+        "internet": "ask",
+        "task": "ask",
+        "shell": "ask"
+      },
+      "names": {
+        "shell": "ask",
+        "fs": "ask",
+        "my-plugin.echo": "allow"
+      }
+    }
+  }
+}
 ```
 
 `names` 覆盖 runtime-provided 和 user-configured plugin tools。
 
 ## MCP
 
-MCP server 本身直接配置在顶层 `mcp`，并通过 `agena.mcp` plugin tools 对模型暴露。
+MCP server 配置在 `plugins.list."agena.mcp".config`，并通过 `agena.mcp` plugin tools 对模型暴露。
 
-```toml
-[mcp.servers.filesystem]
-transport = "stdio"
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
+```json
+{
+  "plugins": {
+    "list": {
+      "agena.mcp": {
+        "package": {
+          "kind": "static"
+        },
+        "config": {
+          "servers": {
+            "filesystem": {
+              "transport": "stdio",
+              "command": "npx",
+              "args": [
+                "-y",
+                "@modelcontextprotocol/server-filesystem",
+                "."
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 Remote HTTP:
 
-```toml
-[mcp.servers.remote]
-transport = "http"
-url = "https://mcp.example.com"
-headers = { }
-auth = { kind = "bearer_from_env", env = "MCP_TOKEN" }
+```json
+{
+  "plugins": {
+    "list": {
+      "agena.mcp": {
+        "package": {
+          "kind": "static"
+        },
+        "config": {
+          "servers": {
+            "remote": {
+              "transport": "http",
+              "url": "https://mcp.example.com",
+              "headers": {},
+              "auth": {
+                "kind": "bearer_from_env",
+                "env": "MCP_TOKEN"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 Runtime build 时：
 
-1. 从顶层 `mcp` 读取 MCP server config。
+1. 从 `plugins.list."agena.mcp".config` 读取 MCP server config。
 2. 构建 `McpConnectionManager`。
 3. 注册 `agena.mcp` static plugin。
 4. `agena.mcp` 从 MCP manager 读取 tool/resource/prompt capabilities。
@@ -807,12 +1020,12 @@ Marketplace 是 plugin 的安装和升级分发层。Registry index 是 JSON，�
 - `command`
 - `args`
 - `env`
-- `options`
+- `config`
 - `min_agena_version`
 - `archive`
 - `dependencies`
 
-安装时，marketplace client 会解析 registry、选择版本、下载 artifact、校验 hash/signature、写入 active config 的 `[plugins.list.<id>]`，并记录安装元数据。
+安装时，marketplace client 会解析 registry、选择版本、下载 artifact、校验 hash/signature、写入 active config 的 `plugins.list.<id>`，并记录安装元数据。
 
 CLI：
 
@@ -858,7 +1071,7 @@ agena plugin inspect <plugin-id>
 agena plugin logs <plugin-id>
 agena plugin logs <plugin-id> --after-seq 100 --limit 100
 agena plugin status --format json
-agena plugin inspect <plugin-id> --format toml
+agena plugin inspect <plugin-id> --format json
 ```
 
 Studio/backend API：
@@ -894,10 +1107,10 @@ Studio/backend API：
 
 1. 选择 transport。
 2. 使用 `agena-plugin-sdk` 实现 `Plugin` trait。
-3. 在 `manifest()` 中声明 hooks、entries、capabilities 和 options schema。
+3. 在 `manifest()` 中声明 hooks、entries、capabilities 和 config schema。
 4. 在 `tool_invoke` 或相关 hook 方法中实现行为。
 5. 按 transport 导出 plugin。
-6. 在 `config.json` 的 `[plugins.list.<id>]` 中配置。
+6. 在 `config.json` 的 `plugins.list.<id>` 中配置。
 7. 用 `agena config validate` 验证配置。
 8. 用 `agena plugin status` 和 `agena plugin inspect <id>` 验证加载结果。
 
@@ -929,7 +1142,7 @@ Runtime reload 会重建 runtime snapshot 和 plugin host。对配置完全一�
 
 - plugin id 变化。
 - kind 变化。
-- path/command/url/options/timeouts/env/restart 等 tool config 变化。
+- package/config/timeouts/env/restart 等 plugin entry 变化。
 - trusted key、signature、hash 等校验信息变化。
 
 加载失败的 plugin 不会阻止整个 host 构建。Host 会记录 failed status 和 error log，其他 plugin 仍可继续运行。

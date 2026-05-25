@@ -9,41 +9,87 @@ use crate::sdk::ToolDescriptionMode;
 
 pub use crate::quota::QuotaConfig;
 
-/// Top-level `[plugins]` config block, parsed from agena's config layer.
+/// Top-level `plugins` config object, parsed from agena's JSON config layer.
+///
+/// The host only owns transport, policy and lifecycle fields. Plugin-specific
+/// configuration lives in [`PluginEntry::config`] as JSON and is validated
+/// against the plugin manifest at load time.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct PluginsConfig {
-    #[serde(default)]
-    pub timeouts: TimeoutsConfig,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "PluginHostConfig::is_default")]
+    pub host: PluginHostConfig,
+    #[serde(default, skip_serializing_if = "PluginPolicyConfig::is_default")]
+    pub policy: PluginPolicyConfig,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub list: BTreeMap<String, PluginEntry>,
-    /// Global default quota applied to plugins without their own
-    /// `[plugins.list.<id>.quota]`. Defaults to unlimited.
+}
+
+impl Default for PluginsConfig {
+    fn default() -> Self {
+        Self {
+            host: PluginHostConfig::default(),
+            policy: PluginPolicyConfig::default(),
+            list: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PluginHostConfig {
+    pub timeouts: TimeoutsConfig,
+    /// Global default quota applied to plugins without their own quota.
+    /// Defaults to unlimited.
     #[serde(default, skip_serializing_if = "QuotaConfig::is_unlimited_ref")]
     pub default_quota: QuotaConfig,
-    /// Optional per-plugin overrides, keyed by plugin id. A plugin without
-    /// an entry here uses `default_quota`.
+    /// Optional per-plugin overrides, keyed by plugin id. A plugin without an
+    /// entry here uses `default_quota`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub quotas: BTreeMap<String, QuotaConfig>,
-    /// `key_id -> hex-encoded ed25519 public key`. Cdylib entries with a
-    /// `signature` field reference one of these keys.
+    /// `key_id -> hex-encoded ed25519 public key`. Signed package/artifact
+    /// entries reference one of these keys.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub trusted_keys: BTreeMap<String, String>,
+}
+
+impl Default for PluginHostConfig {
+    fn default() -> Self {
+        Self {
+            timeouts: TimeoutsConfig::default(),
+            default_quota: QuotaConfig::default(),
+            quotas: BTreeMap::new(),
+            trusted_keys: BTreeMap::new(),
+        }
+    }
+}
+
+impl PluginHostConfig {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PluginPolicyConfig {
     /// Controls how tool descriptions are exposed to the model. The detailed
     /// help remains available through host/tool help APIs.
     #[serde(default, skip_serializing_if = "ToolPresentationConfig::is_default")]
     pub tool_presentation: ToolPresentationConfig,
 }
 
-impl Default for PluginsConfig {
+impl Default for PluginPolicyConfig {
     fn default() -> Self {
         Self {
-            timeouts: TimeoutsConfig::default(),
-            list: BTreeMap::new(),
-            default_quota: QuotaConfig::default(),
-            quotas: BTreeMap::new(),
-            trusted_keys: BTreeMap::new(),
             tool_presentation: ToolPresentationConfig::default(),
         }
+    }
+}
+
+impl PluginPolicyConfig {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
     }
 }
 
@@ -99,7 +145,7 @@ impl ToolPresentationConfig {
 }
 
 /// ed25519 signature over a plugin artifact. The public key is looked up by
-/// `key_id` in `[plugins.trusted_keys]`.
+/// `key_id` in `plugins.host.trusted_keys`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginSignature {
     pub key_id: String,
@@ -107,34 +153,50 @@ pub struct PluginSignature {
     pub signature: String,
 }
 
-/// One entry under `[plugins.list.<id>]`. The `kind` discriminator selects
-/// the transport.
+/// One entry under `plugins.list.<id>`. The host knows how to load the
+/// `package`; `config` is plugin-owned JSON.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PluginEntry {
+    #[serde(default = "default_plugin_enabled")]
+    pub enabled: bool,
+    pub package: PluginPackage,
+    #[serde(default)]
+    pub config: serde_json::Value,
+    #[serde(default)]
+    pub timeouts: TimeoutsConfig,
+}
+
+impl Default for PluginEntry {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            package: PluginPackage::Static {},
+            config: serde_json::Value::Null,
+            timeouts: TimeoutsConfig::default(),
+        }
+    }
+}
+
+fn default_plugin_enabled() -> bool {
+    true
+}
+
+/// Generic plugin package/transport descriptor. Built-in plugins use the same
+/// `Static` package kind as any other in-process plugin available to the host.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum PluginEntry {
-    Static {
-        #[serde(default)]
-        options: serde_json::Value,
-        #[serde(default)]
-        timeouts: TimeoutsConfig,
-        #[serde(default)]
-        disabled: bool,
-    },
+pub enum PluginPackage {
+    Static {},
     Cdylib {
         path: PathBuf,
-        #[serde(default)]
-        options: serde_json::Value,
-        #[serde(default)]
-        timeouts: TimeoutsConfig,
-        #[serde(default)]
-        disabled: bool,
         /// Optional sha256 hex digest of the cdylib bytes. If set, the
         /// host computes the digest at load time and refuses to load on
         /// mismatch. Requires the `signing` cargo feature.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sha256: Option<String>,
         /// Optional ed25519 signature in hex over the cdylib bytes; the
-        /// public key is looked up in `[plugins.trusted_keys]`. Requires
+        /// public key is looked up in `plugins.host.trusted_keys`. Requires
         /// the `signing` cargo feature.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         signature: Option<PluginSignature>,
@@ -149,12 +211,6 @@ pub enum PluginEntry {
         cwd: Option<PathBuf>,
         #[serde(default)]
         restart: RestartPolicy,
-        #[serde(default)]
-        options: serde_json::Value,
-        #[serde(default)]
-        timeouts: TimeoutsConfig,
-        #[serde(default)]
-        disabled: bool,
         /// Optional sha256 of the binary at `command`. Requires the
         /// `signing` cargo feature.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -164,21 +220,9 @@ pub enum PluginEntry {
         url: Url,
         #[serde(default)]
         auth: HttpAuth,
-        #[serde(default)]
-        options: serde_json::Value,
-        #[serde(default)]
-        timeouts: TimeoutsConfig,
-        #[serde(default)]
-        disabled: bool,
     },
     Wasm {
         path: PathBuf,
-        #[serde(default)]
-        options: serde_json::Value,
-        #[serde(default)]
-        timeouts: TimeoutsConfig,
-        #[serde(default)]
-        disabled: bool,
         /// Optional sha256 of the wasm bytes for supply-chain verification.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sha256: Option<String>,
@@ -186,44 +230,39 @@ pub enum PluginEntry {
 }
 
 impl PluginEntry {
-    pub fn options(&self) -> &serde_json::Value {
-        match self {
-            PluginEntry::Static { options, .. }
-            | PluginEntry::Cdylib { options, .. }
-            | PluginEntry::Stdio { options, .. }
-            | PluginEntry::Http { options, .. }
-            | PluginEntry::Wasm { options, .. } => options,
+    pub fn static_config(config: serde_json::Value) -> Self {
+        Self {
+            enabled: true,
+            package: PluginPackage::Static {},
+            config,
+            timeouts: TimeoutsConfig::default(),
         }
+    }
+
+    pub fn static_default() -> Self {
+        Self::static_config(serde_json::Value::Null)
+    }
+
+    pub fn config(&self) -> &serde_json::Value {
+        &self.config
     }
 
     pub fn timeouts(&self) -> &TimeoutsConfig {
-        match self {
-            PluginEntry::Static { timeouts, .. }
-            | PluginEntry::Cdylib { timeouts, .. }
-            | PluginEntry::Stdio { timeouts, .. }
-            | PluginEntry::Http { timeouts, .. }
-            | PluginEntry::Wasm { timeouts, .. } => timeouts,
-        }
+        &self.timeouts
     }
 
     pub fn kind_str(&self) -> &'static str {
-        match self {
-            PluginEntry::Static { .. } => "static",
-            PluginEntry::Cdylib { .. } => "cdylib",
-            PluginEntry::Stdio { .. } => "stdio",
-            PluginEntry::Http { .. } => "http",
-            PluginEntry::Wasm { .. } => "wasm",
+        match &self.package {
+            PluginPackage::Static { .. } => "static",
+            PluginPackage::Cdylib { .. } => "cdylib",
+            PluginPackage::Stdio { .. } => "stdio",
+            PluginPackage::Http { .. } => "http",
+            PluginPackage::Wasm { .. } => "wasm",
         }
     }
 
     pub fn disabled(&self) -> bool {
-        match self {
-            PluginEntry::Static { disabled, .. }
-            | PluginEntry::Cdylib { disabled, .. }
-            | PluginEntry::Stdio { disabled, .. }
-            | PluginEntry::Http { disabled, .. }
-            | PluginEntry::Wasm { disabled, .. } => *disabled,
-        }
+        !self.enabled
     }
 }
 

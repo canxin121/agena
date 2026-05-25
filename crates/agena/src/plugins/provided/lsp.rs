@@ -1,10 +1,12 @@
 //! `agena.lsp` plugin: read-only observability of the configured
 //! LSP servers plus model-visible navigation commands.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use agena_macros::StaticToolSurface;
 use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::message::{
@@ -20,6 +22,46 @@ use crate::plugin::sdk::{
 use crate::plugins::provided::router;
 
 pub(crate) const LSP_PLUGIN_ID: &str = "agena.lsp";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub(crate) struct LspConfig {
+    /// Map of `<server_name> -> <server spec>`. Each entry is spawned on
+    /// demand by [`agena_lsp::LspRegistry`] when an LSP-using tool first
+    /// touches a matching file.
+    pub servers: BTreeMap<String, LspServerConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub(crate) struct LspServerConfig {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    /// File extensions (without the leading `.`) routed to this server.
+    /// Empty matches everything.
+    #[serde(default)]
+    pub file_extensions: Vec<String>,
+    /// Marker filenames whose presence identifies the project root.
+    #[serde(default)]
+    pub root_markers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initialization_options: Option<serde_json::Value>,
+}
+
+pub(crate) fn config_from_plugins(
+    plugins: &crate::plugin::PluginsConfig,
+) -> Result<LspConfig, String> {
+    let Some(entry) = plugins.list.get(LSP_PLUGIN_ID) else {
+        return Ok(LspConfig::default());
+    };
+    if entry.disabled() || entry.config().is_null() {
+        return Ok(LspConfig::default());
+    }
+    serde_json::from_value(entry.config().clone())
+        .map_err(|err| format!("plugins.list.\"{LSP_PLUGIN_ID}\".config: {err}"))
+}
 
 pub(crate) struct LspPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
@@ -96,6 +138,7 @@ impl Plugin for LspPlugin {
         PluginManifest::builder("agena-lsp", env!("CARGO_PKG_VERSION"))
             .description("LSP read-only observability and navigation tools.")
             .hooks(HookSubscription::TOOL_INVOKE)
+            .config_schema(crate::entry::definition::json_schema_for::<LspConfig>())
             .tool(lsp_decl())
             .build()
     }

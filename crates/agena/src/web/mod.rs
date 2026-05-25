@@ -1,9 +1,9 @@
 mod plugin;
 
-pub use plugin::{WEB_PLUGIN_ID, WebPlugin};
+pub use plugin::{WEB_PLUGIN_ID, WebConfig, WebPlugin};
 
-pub fn new_web_plugin(config: crate::config::WebConfig) -> impl crate::plugin::sdk::Plugin {
-    WebPlugin::new(config)
+pub fn new_web_plugin() -> impl crate::plugin::sdk::Plugin {
+    WebPlugin::new()
 }
 
 pub fn web_plugin_id() -> &'static str {

@@ -38,81 +38,90 @@ export OPENCODE_API_KEY=...
 
 把下面片段放进 `~/.agena/config.json`。默认模型使用 OpenAI-compatible 路由，MiniMax M2.7 / M2.5 使用 Anthropic Messages 路由。
 
-```toml
-[providers]
-default = "opencode-go"
-
-[providers."opencode-go".defaults]
-adapter = "openai"
-model = "kimi-k2.6"
-
-[providers."opencode-go".auth]
-mode = "api"
-base_url = "https://opencode.ai/zen/go"
-api_key_env = "OPENCODE_API_KEY"
-
-[providers."opencode-go".adapters.openai]
-enabled = true
-api_mode = "chat"
-models_url = "https://opencode.ai/zen/go/v1/models"
-
-[providers."opencode-go".adapters.openai.models."minimax-m2.7"]
-enabled = false
-
-[providers."opencode-go".adapters.openai.models."minimax-m2.5"]
-enabled = false
-
-[providers."opencode-go".adapters.anthropic]
-enabled = true
-messages_url = "https://opencode.ai/zen/go/v1/messages"
-models_url = "https://opencode.ai/zen/go/v1/models"
-
-[providers."opencode-go".adapters.anthropic.models."minimax-m2.7"]
-enabled = true
-
-[providers."opencode-go".adapters.anthropic.models."minimax-m2.5"]
-enabled = true
-
-# OpenCode Go 的 /models 会返回同一批模型。这里把已知的非 Anthropic
-# Messages 模型从 anthropic adapter 下隐藏，避免 UI / TUI 里出现错误协议路由。
-[providers."opencode-go".adapters.anthropic.models."kimi-k2.6"]
-enabled = false
-
-[providers."opencode-go".adapters.anthropic.models."kimi-k2.5"]
-enabled = false
-
-[providers."opencode-go".adapters.anthropic.models."glm-5.1"]
-enabled = false
-
-[providers."opencode-go".adapters.anthropic.models."glm-5"]
-enabled = false
-
-[providers."opencode-go".adapters.anthropic.models."deepseek-v4-pro"]
-enabled = false
-
-[providers."opencode-go".adapters.anthropic.models."deepseek-v4-flash"]
-enabled = false
-
-[providers."opencode-go".adapters.anthropic.models."qwen3.6-plus"]
-enabled = false
-
-[providers."opencode-go".adapters.anthropic.models."qwen3.5-plus"]
-enabled = false
-
-[providers."opencode-go".adapters.anthropic.models."mimo-v2-pro"]
-enabled = false
-
-[providers."opencode-go".adapters.anthropic.models."mimo-v2-omni"]
-enabled = false
-
-[providers."opencode-go".adapters.anthropic.models."mimo-v2.5-pro"]
-enabled = false
-
-[providers."opencode-go".adapters.anthropic.models."mimo-v2.5"]
-enabled = false
-
-[providers."opencode-go".adapters.anthropic.models."hy3-preview"]
-enabled = false
+```json
+{
+  "providers": {
+    "default": "opencode-go",
+    "opencode-go": {
+      "defaults": {
+        "adapter": "openai",
+        "model": "kimi-k2.6"
+      },
+      "auth": {
+        "mode": "api",
+        "base_url": "https://opencode.ai/zen/go",
+        "api_key_env": "OPENCODE_API_KEY"
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "api_mode": "chat",
+          "models_url": "https://opencode.ai/zen/go/v1/models",
+          "models": {
+            "minimax-m2.7": {
+              "enabled": false
+            },
+            "minimax-m2.5": {
+              "enabled": false
+            }
+          }
+        },
+        "anthropic": {
+          "enabled": true,
+          "messages_url": "https://opencode.ai/zen/go/v1/messages",
+          "models_url": "https://opencode.ai/zen/go/v1/models",
+          "models": {
+            "minimax-m2.7": {
+              "enabled": true
+            },
+            "minimax-m2.5": {
+              "enabled": true
+            },
+            "kimi-k2.6": {
+              "enabled": false
+            },
+            "kimi-k2.5": {
+              "enabled": false
+            },
+            "glm-5.1": {
+              "enabled": false
+            },
+            "glm-5": {
+              "enabled": false
+            },
+            "deepseek-v4-pro": {
+              "enabled": false
+            },
+            "deepseek-v4-flash": {
+              "enabled": false
+            },
+            "qwen3.6-plus": {
+              "enabled": false
+            },
+            "qwen3.5-plus": {
+              "enabled": false
+            },
+            "mimo-v2-pro": {
+              "enabled": false
+            },
+            "mimo-v2-omni": {
+              "enabled": false
+            },
+            "mimo-v2.5-pro": {
+              "enabled": false
+            },
+            "mimo-v2.5": {
+              "enabled": false
+            },
+            "hy3-preview": {
+              "enabled": false
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 ## 为什么这样配置
@@ -137,7 +146,7 @@ TUI、Studio 和后端 API 可以把 `provider_id`、`adapter_id`、`model_id` �
 
 ```bash
 cargo run -p agena-cli -- config validate
-cargo run -p agena-cli -- config resolve --format toml
+cargo run -p agena-cli -- config resolve --format json
 cargo run -p agena-cli -- provider models opencode-go
 cargo run -p agena-cli -- exec --model opencode-go/kimi-k2.6 "用一句话回答：你能工作吗？"
 ```
@@ -148,78 +157,91 @@ cargo run -p agena-cli -- exec --model opencode-go/kimi-k2.6 "用一句话回答
 
 免费模型建议单独配置成 `opencode-free`。这里使用 `api_key = "public"`，并给每个 adapter 设置 `model_discovery = "configured_only"`，这样模型列表只会展示下面显式声明的免费模型，不会把 Zen `/models` 返回的付费模型暴露出来。
 
-```toml
-[providers."opencode-free"]
-defaults.adapter = "openai"
-defaults.model = "deepseek-v4-flash-free"
-
-[providers."opencode-free".auth]
-mode = "api"
-base_url = "https://opencode.ai/zen"
-api_key = "public"
-
-[providers."opencode-free".auth.protocol_paths]
-gemini = "/v1"
-
-[providers."opencode-free".adapters.openai]
-enabled = true
-api_mode = "chat"
-model_discovery = "configured_only"
-
-[providers."opencode-free".adapters.openai.models."deepseek-v4-flash-free"]
-enabled = true
-
-[providers."opencode-free".adapters.openai.models."kimi-k2.5-free"]
-enabled = true
-
-[providers."opencode-free".adapters.openai.models."glm-5-free"]
-enabled = true
-
-[providers."opencode-free".adapters.openai.models."glm-4.7-free"]
-enabled = true
-
-[providers."opencode-free".adapters.openai.models."mimo-v2-flash-free"]
-enabled = true
-
-[providers."opencode-free".adapters.openai.models."mimo-v2-pro-free"]
-enabled = true
-
-[providers."opencode-free".adapters.openai.models."mimo-v2-omni-free"]
-enabled = true
-
-[providers."opencode-free".adapters.openai.models."hy3-preview-free"]
-enabled = true
-
-[providers."opencode-free".adapters.openai.models."ling-2.6-flash-free"]
-enabled = true
-
-[providers."opencode-free".adapters.openai.models."ring-2.6-1t-free"]
-enabled = true
-
-[providers."opencode-free".adapters.openai.models."trinity-large-preview-free"]
-enabled = true
-
-[providers."opencode-free".adapters.openai.models."nemotron-3-super-free"]
-enabled = true
-
-[providers."opencode-free".adapters.openai.models."big-pickle"]
-enabled = true
-
-[providers."opencode-free".adapters.openai.models."grok-code"]
-enabled = true
-
-[providers."opencode-free".adapters.anthropic]
-enabled = true
-model_discovery = "configured_only"
-
-[providers."opencode-free".adapters.anthropic.models."minimax-m2.1-free"]
-enabled = true
-
-[providers."opencode-free".adapters.anthropic.models."minimax-m2.5-free"]
-enabled = true
-
-[providers."opencode-free".adapters.anthropic.models."qwen3.6-plus-free"]
-enabled = true
+```json
+{
+  "providers": {
+    "opencode-free": {
+      "defaults": {
+        "adapter": "openai",
+        "model": "deepseek-v4-flash-free"
+      },
+      "auth": {
+        "mode": "api",
+        "base_url": "https://opencode.ai/zen",
+        "api_key": "public",
+        "protocol_paths": {
+          "gemini": "/v1"
+        }
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "api_mode": "chat",
+          "model_discovery": "configured_only",
+          "models": {
+            "deepseek-v4-flash-free": {
+              "enabled": true
+            },
+            "kimi-k2.5-free": {
+              "enabled": true
+            },
+            "glm-5-free": {
+              "enabled": true
+            },
+            "glm-4.7-free": {
+              "enabled": true
+            },
+            "mimo-v2-flash-free": {
+              "enabled": true
+            },
+            "mimo-v2-pro-free": {
+              "enabled": true
+            },
+            "mimo-v2-omni-free": {
+              "enabled": true
+            },
+            "hy3-preview-free": {
+              "enabled": true
+            },
+            "ling-2.6-flash-free": {
+              "enabled": true
+            },
+            "ring-2.6-1t-free": {
+              "enabled": true
+            },
+            "trinity-large-preview-free": {
+              "enabled": true
+            },
+            "nemotron-3-super-free": {
+              "enabled": true
+            },
+            "big-pickle": {
+              "enabled": true
+            },
+            "grok-code": {
+              "enabled": true
+            }
+          }
+        },
+        "anthropic": {
+          "enabled": true,
+          "model_discovery": "configured_only",
+          "models": {
+            "minimax-m2.1-free": {
+              "enabled": true
+            },
+            "minimax-m2.5-free": {
+              "enabled": true
+            },
+            "qwen3.6-plus-free": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 运行：
@@ -246,50 +268,65 @@ cargo run -p agena-cli -- \
 
 如果你有 `OPENCODE_API_KEY`，可以配置完整 Zen provider。建议仍然使用 `model_discovery = "configured_only"`，然后按协议把常用模型放到对应 adapter 下；这样不会在每个 adapter 下重复显示所有模型。
 
-```toml
-[providers."opencode-zen"]
-defaults.adapter = "openai"
-defaults.model = "gpt-5.5"
-
-[providers."opencode-zen".auth]
-mode = "api"
-base_url = "https://opencode.ai/zen"
-api_key_env = "OPENCODE_API_KEY"
-
-[providers."opencode-zen".auth.protocol_paths]
-gemini = "/v1"
-
-[providers."opencode-zen".adapters.openai]
-enabled = true
-api_mode = "auto"
-model_discovery = "configured_only"
-
-[providers."opencode-zen".adapters.openai.models."gpt-5.5"]
-enabled = true
-
-[providers."opencode-zen".adapters.openai.models."gpt-5.3-codex"]
-enabled = true
-
-[providers."opencode-zen".adapters.openai.models."kimi-k2.6"]
-enabled = true
-
-[providers."opencode-zen".adapters.anthropic]
-enabled = true
-model_discovery = "configured_only"
-
-[providers."opencode-zen".adapters.anthropic.models."claude-sonnet-4-6"]
-enabled = true
-
-[providers."opencode-zen".adapters.anthropic.models."minimax-m2.7"]
-enabled = true
-
-[providers."opencode-zen".adapters.gemini]
-enabled = true
-auth_header = "x-goog-api-key"
-model_discovery = "configured_only"
-
-[providers."opencode-zen".adapters.gemini.models."gemini-3.1-pro"]
-enabled = true
+```json
+{
+  "providers": {
+    "opencode-zen": {
+      "defaults": {
+        "adapter": "openai",
+        "model": "gpt-5.5"
+      },
+      "auth": {
+        "mode": "api",
+        "base_url": "https://opencode.ai/zen",
+        "api_key_env": "OPENCODE_API_KEY",
+        "protocol_paths": {
+          "gemini": "/v1"
+        }
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "api_mode": "auto",
+          "model_discovery": "configured_only",
+          "models": {
+            "gpt-5.5": {
+              "enabled": true
+            },
+            "gpt-5.3-codex": {
+              "enabled": true
+            },
+            "kimi-k2.6": {
+              "enabled": true
+            }
+          }
+        },
+        "anthropic": {
+          "enabled": true,
+          "model_discovery": "configured_only",
+          "models": {
+            "claude-sonnet-4-6": {
+              "enabled": true
+            },
+            "minimax-m2.7": {
+              "enabled": true
+            }
+          }
+        },
+        "gemini": {
+          "enabled": true,
+          "auth_header": "x-goog-api-key",
+          "model_discovery": "configured_only",
+          "models": {
+            "gemini-3.1-pro": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 Zen 需要显式把 Gemini 协议前缀改成 `/v1`。OpenCode Zen 的 Gemini 路径是 `/zen/v1/models/<model>:generateContent`，不是 Google 原生的 `/v1beta/...`；因此 `auth.protocol_paths.gemini = "/v1"` 必须单独写出来。

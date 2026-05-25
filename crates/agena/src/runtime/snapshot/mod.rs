@@ -164,7 +164,7 @@ impl RuntimeSnapshot {
     }
 
     /// Hot-reload variant that lets the new snapshot reuse plugin transports
-    /// from the previous snapshot when the corresponding `[plugins.list.<id>]`
+    /// from the previous snapshot when the corresponding `plugins.list.<id>`
     /// entry is byte-identical.
     pub(crate) async fn build_with_previous(
         generation: u64,
@@ -197,10 +197,19 @@ impl RuntimeSnapshot {
         previous: Option<Arc<RuntimeSnapshot>>,
     ) -> Result<Self, AppError> {
         let resolution = loader.load(load_request)?;
-        let mcp_manager = if resolution.config.mcp.servers.is_empty() {
-            None
+        let mcp_config =
+            crate::plugins::provided::mcp::config_from_plugins(&resolution.config.plugins)
+                .map_err(AppError::Config)?;
+        let mcp_plugin_enabled = resolution
+            .config
+            .plugins
+            .list
+            .get(crate::tool::mcp_plugin_id())
+            .is_some_and(|entry| !entry.disabled());
+        let mcp_manager = if mcp_plugin_enabled {
+            Some(crate::plugins::provided::mcp::build_manager(&mcp_config).await)
         } else {
-            Some(build_mcp_manager(&resolution.config.mcp).await)
+            None
         };
         let plugins = if let Some(prev) = previous.as_ref() {
             let prev_host = prev.plugin_manager();
@@ -259,10 +268,19 @@ impl RuntimeSnapshot {
         );
         register_config_agents(&agents, &resolution, &resolution.config.agents);
         let reusing_session_manager = existing_session_manager.is_some();
-        let lsp_registry = if resolution.config.lsp.servers.is_empty() {
-            None
+        let lsp_config =
+            crate::plugins::provided::lsp::config_from_plugins(&resolution.config.plugins)
+                .map_err(AppError::Config)?;
+        let lsp_plugin_enabled = resolution
+            .config
+            .plugins
+            .list
+            .get(crate::tool::lsp_plugin_id())
+            .is_some_and(|entry| !entry.disabled());
+        let lsp_registry = if lsp_plugin_enabled {
+            Some(build_lsp_registry(workspace_root, &lsp_config))
         } else {
-            Some(build_lsp_registry(workspace_root, &resolution.config.lsp))
+            None
         };
         let session_manager = database.as_ref().map(|db| {
             build_or_reconfigure_session_manager(

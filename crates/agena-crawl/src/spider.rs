@@ -5,13 +5,15 @@ use spider::website::Website;
 use tokio::sync::broadcast::error::RecvError;
 use url::Url;
 
+pub use crate::browser::LocalBrowserOptions;
+use crate::browser::local_browser_endpoint;
 use crate::extract::{extract_page_from_body, looks_like_html, truncate_utf8};
 use crate::{CrawlError, FetchedPage, canonicalize_url};
 
 #[derive(Debug, Clone)]
 pub struct BrowserRenderOptions {
     pub enabled: bool,
-    pub connection_url: Option<String>,
+    pub local_browser: LocalBrowserOptions,
     pub wait_for_network_idle: bool,
     pub wait_for_selector: Option<String>,
     pub wait_timeout: Duration,
@@ -22,7 +24,7 @@ impl Default for BrowserRenderOptions {
     fn default() -> Self {
         Self {
             enabled: false,
-            connection_url: None,
+            local_browser: LocalBrowserOptions::default(),
             wait_for_network_idle: true,
             wait_for_selector: None,
             wait_timeout: Duration::from_secs(10),
@@ -73,7 +75,7 @@ pub async fn fetch_page_with_spider(
         .with_request_timeout(Some(options.timeout))
         .with_respect_robots_txt(options.respect_robots_txt)
         .with_user_agent(Some(options.user_agent.as_str()));
-    configure_browser(&mut website, &options.browser);
+    configure_browser(&mut website, &options.browser)?;
     let mut website = website
         .build()
         .map_err(|_| CrawlError::InvalidInput(format!("invalid crawl url '{}'", url)))?;
@@ -135,13 +137,15 @@ fn page_from_spider_page(
     ))
 }
 
-fn configure_browser(website: &mut Website, options: &BrowserRenderOptions) {
+fn configure_browser(
+    website: &mut Website,
+    options: &BrowserRenderOptions,
+) -> Result<(), CrawlError> {
     if !options.enabled {
-        return;
+        return Ok(());
     }
-    if let Some(connection_url) = &options.connection_url {
-        website.with_chrome_connection(Some(connection_url.clone()));
-    }
+    let connection_url = local_browser_endpoint(&options.local_browser)?;
+    website.with_chrome_connection(Some(connection_url));
     if options.wait_for_network_idle {
         website
             .with_wait_for_idle_network0(Some(WaitForIdleNetwork::new(Some(options.wait_timeout))));
@@ -155,4 +159,5 @@ fn configure_browser(website: &mut Website, options: &BrowserRenderOptions) {
     if let Some(delay) = options.delay {
         website.with_wait_for_delay(Some(WaitForDelay::new(Some(delay))));
     }
+    Ok(())
 }

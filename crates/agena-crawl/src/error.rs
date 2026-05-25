@@ -24,8 +24,6 @@ pub enum CrawlError {
     RedbDatabase(#[from] redb::DatabaseError),
     #[error("commit error: {0}")]
     RedbCommit(#[from] redb::CommitError),
-    #[error("embedding error: {0}")]
-    FastEmbed(#[from] fastembed::Error),
     #[error("{0}")]
     InvalidInput(String),
     #[error("{0} not found")]

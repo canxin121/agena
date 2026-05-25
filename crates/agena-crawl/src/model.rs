@@ -34,8 +34,6 @@ pub struct StoredDocument {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chunk_hashes: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub chunk_embeddings: Vec<Vec<f32>>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<String>,
     pub content_type: String,
     pub status: u16,
@@ -50,10 +48,6 @@ pub struct StoredDocument {
     pub etag: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_modified: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub embedding_model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub embedding_dimension: Option<u32>,
     pub depth: u32,
     pub fetched_at: DateTime<Utc>,
 }
@@ -66,8 +60,6 @@ pub struct CrawlDocumentSummary {
     pub depth: u32,
     pub fetched_at: DateTime<Utc>,
     pub chunk_count: usize,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub embedding_dimension: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -80,10 +72,6 @@ pub struct CrawlSearchHit {
     pub score: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lexical_score: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub vector_score: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rerank_score: Option<f32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub match_sources: Vec<String>,
 }
@@ -108,7 +96,6 @@ impl StoredDocument {
             markdown: page.markdown.clone(),
             chunks,
             chunk_hashes,
-            chunk_embeddings: Vec::new(),
             links: page.links,
             content_type: page.content_type,
             status: page.status,
@@ -120,8 +107,6 @@ impl StoredDocument {
             simhash: simhash::simhash(page.markdown.as_str()),
             etag: page.etag,
             last_modified: page.last_modified,
-            embedding_model: None,
-            embedding_dimension: None,
             depth,
             fetched_at: Utc::now(),
         }
@@ -135,7 +120,6 @@ impl StoredDocument {
             depth: self.depth,
             fetched_at: self.fetched_at,
             chunk_count: self.chunks.len(),
-            embedding_dimension: self.embedding_dimension,
         }
     }
 }

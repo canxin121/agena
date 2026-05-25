@@ -68,16 +68,7 @@ impl CrawlDir {
         self.path.join("metadata.redb")
     }
 
-    pub fn vector_db_path(&self) -> PathBuf {
-        self.path.join("vectors.redb")
-    }
-
-    pub fn model_cache_dir(&self) -> PathBuf {
-        self.path.join(".models")
-    }
-
     pub fn ensure_exists(&self) -> io::Result<()> {
-        std::fs::create_dir_all(self.docs_dir())?;
-        std::fs::create_dir_all(self.model_cache_dir())
+        std::fs::create_dir_all(self.docs_dir())
     }
 }

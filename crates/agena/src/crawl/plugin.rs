@@ -5,9 +5,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use agena_crawl::{
-    BrowserRenderOptions, CrawlDocumentSummary, CrawlStore, EmbeddingService,
-    EmbeddingServiceConfig, FetchOptions, FetchedPage, HybridSearchOptions, SpiderFetchOptions,
-    StoredDocument, build_client, fetch_page_with_spider, hybrid_search_documents,
+    BrowserRenderOptions, CrawlDocumentSummary, CrawlStore, FetchOptions, FetchedPage,
+    LocalBrowserOptions, SpiderFetchOptions, StoredDocument, build_client, fetch_page_with_spider,
     prepare_fetch_url, preview_text,
 };
 use agena_macros::StaticToolSurface;
@@ -17,7 +16,6 @@ use moka::future::Cache;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use tokio::task::spawn_blocking;
 
 use crate::config::{CrawlConfig, CrawlFetchEngine};
 use crate::plugin::PluginError;
@@ -34,7 +32,6 @@ pub struct CrawlPlugin {
     config: CrawlConfig,
     workspace_root: OnceLock<PathBuf>,
     host: OnceLock<Arc<dyn HostClient>>,
-    embedding_service: OnceLock<Result<Arc<EmbeddingService>, String>>,
     fetch_cache: Cache<String, FetchedPage>,
     host_limiter: DefaultKeyedRateLimiter<String>,
     sync_lock: Mutex<()>,
@@ -143,7 +140,6 @@ struct CrawlRunOutput {
     cached_count: usize,
     duplicate_count: usize,
     near_duplicate_count: usize,
-    embedded_count: usize,
     failure_count: usize,
     total_documents: usize,
     documents: Vec<CrawlDocumentSummary>,
@@ -162,7 +158,6 @@ impl CrawlPlugin {
             config,
             workspace_root: OnceLock::new(),
             host: OnceLock::new(),
-            embedding_service: OnceLock::new(),
             sync_lock: Mutex::new(()),
         }
     }
@@ -204,50 +199,21 @@ impl CrawlPlugin {
             respect_robots_txt: self.config.respect_robots_txt,
             browser: BrowserRenderOptions {
                 enabled: rendered,
-                connection_url: self.config.browser_connection_url.clone(),
+                local_browser: LocalBrowserOptions {
+                    executable_path: self
+                        .config
+                        .browser_executable_path
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(PathBuf::from),
+                    startup_timeout: Duration::from_secs(self.config.browser_wait_timeout_secs),
+                },
                 wait_for_network_idle: self.config.browser_wait_for_network_idle,
                 wait_for_selector: self.config.browser_wait_for_selector.clone(),
                 wait_timeout: Duration::from_secs(self.config.browser_wait_timeout_secs),
                 delay,
             },
-        }
-    }
-
-    fn hybrid_search_options(&self, limit: usize) -> HybridSearchOptions {
-        HybridSearchOptions {
-            lexical_limit: limit.max(self.config.vector_candidate_limit as usize),
-            vector_limit: self.config.vector_candidate_limit as usize,
-            min_vector_query_chars: self.config.min_vector_query_chars as usize,
-            rrf_k: self.config.hybrid_rrf_k as usize,
-            rerank_limit: self.config.rerank_limit as usize,
-        }
-    }
-
-    fn embedding_service(&self) -> Option<Arc<EmbeddingService>> {
-        if !self.config.vector_search_enabled {
-            return None;
-        }
-        match self.embedding_service.get_or_init(|| {
-            let workspace_root = self.workspace_root().map_err(|err| err.to_string())?;
-            let store = CrawlStore::for_workspace(workspace_root);
-            let config = EmbeddingServiceConfig {
-                embedding_model: self.config.embedding_model.clone(),
-                reranker_model: self.config.reranker_model.clone(),
-                cache_dir: store.dir().join(".models"),
-                enable_rerank: self.config.rerank_enabled,
-            };
-            EmbeddingService::new(&config)
-                .map(Arc::new)
-                .map_err(|err| err.to_string())
-        }) {
-            Ok(service) => Some(Arc::clone(service)),
-            Err(err) => {
-                tracing::warn!(
-                    target: "agena::crawl",
-                    "vector search unavailable for crawl plugin: {err}"
-                );
-                None
-            }
         }
     }
 
@@ -272,9 +238,6 @@ impl CrawlPlugin {
             self.host_limiter.until_key_ready(&host.to_string()).await;
         }
         self.ensure_network_permission(url).await?;
-        if render_js {
-            self.ensure_browser_network_permission().await?;
-        }
         let page = if matches!(engine, CrawlFetchEngine::Spider) {
             let options = self.spider_fetch_options(render_js);
             fetch_page_with_spider(url, &options).await
@@ -288,22 +251,6 @@ impl CrawlPlugin {
             self.fetch_cache.insert(cache_key, page.clone()).await;
         }
         Ok(page)
-    }
-
-    async fn ensure_browser_network_permission(&self) -> SdkResult<()> {
-        let Some(connection_url) = self
-            .config
-            .browser_connection_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            return Ok(());
-        };
-        let url = url::Url::parse(connection_url).map_err(|err| {
-            PluginError::new(format!("invalid crawl.browser_connection_url: {err}"))
-        })?;
-        self.ensure_network_permission(&url).await
     }
 
     async fn invoke_fetch(&self, input: &CrawlFetchInput) -> SdkResult<ToolInvokeOutput> {
@@ -338,7 +285,6 @@ impl CrawlPlugin {
         let use_cache = input.use_cache.unwrap_or(true);
         let render_js = input.render_js.unwrap_or(self.config.browser_enabled);
         let store = self.store()?;
-        let embedding_service = self.embedding_service();
 
         let mut queue = VecDeque::from([(start_url.clone(), 0u32)]);
         let mut seen_urls = HashSet::from([start_url.to_string()]);
@@ -348,7 +294,6 @@ impl CrawlPlugin {
         let mut cached_count = 0usize;
         let mut duplicate_count = 0usize;
         let mut near_duplicate_count = 0usize;
-        let mut embedded_count = 0usize;
         let mut known_simhashes = store
             .list_documents()
             .map_err(crawl_error_to_plugin)?
@@ -390,7 +335,7 @@ impl CrawlPlugin {
                         failures.push(format!("{url}: http {}", page.status));
                         continue;
                     }
-                    let mut document = StoredDocument::from_fetched_page(
+                    let document = StoredDocument::from_fetched_page(
                         page.clone(),
                         depth,
                         self.config.default_chunk_chars as usize,
@@ -418,20 +363,6 @@ impl CrawlPlugin {
                     ) {
                         near_duplicate_count += 1;
                         continue;
-                    }
-
-                    if let Some(service) = embedding_service.clone() {
-                        document = spawn_blocking(move || {
-                            let mut document = document;
-                            service.embed_document(&mut document)?;
-                            Ok::<StoredDocument, agena_crawl::CrawlError>(document)
-                        })
-                        .await
-                        .map_err(|err| PluginError::new(err.to_string()))?
-                        .map_err(crawl_error_to_plugin)?;
-                        if document.embedding_dimension.is_some() {
-                            embedded_count += 1;
-                        }
                     }
 
                     store
@@ -466,7 +397,6 @@ impl CrawlPlugin {
             cached_count,
             duplicate_count,
             near_duplicate_count,
-            embedded_count,
             failure_count: failures.len(),
             total_documents,
             documents: documents.clone(),
@@ -494,21 +424,7 @@ impl CrawlPlugin {
         );
         let store = self.store()?;
         ensure_index_exists(&store).map_err(crawl_error_to_plugin)?;
-        let options = self.hybrid_search_options(limit);
-        let embedding_service = self.embedding_service();
-        let query_owned = query.to_string();
-        let hits = spawn_blocking(move || {
-            hybrid_search_documents(
-                &store,
-                query_owned.as_str(),
-                limit,
-                &options,
-                embedding_service.as_deref(),
-            )
-        })
-        .await
-        .map_err(|err| PluginError::new(err.to_string()))?
-        .map_err(crawl_error_to_plugin)?;
+        let hits = store.search(query, limit).map_err(crawl_error_to_plugin)?;
         let mut lines = vec![format!(
             "Found {} crawl hit(s) for '{}'.",
             hits.len(),
@@ -596,7 +512,7 @@ impl Plugin for CrawlPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder(CRAWL_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
             .description(
-                "Local crawl/search plugin with embedded storage, caching, and hybrid retrieval.",
+                "Local crawl/search plugin with embedded storage, caching, and Tantivy retrieval.",
             )
             .hooks(HookSubscription::INIT | HookSubscription::TOOL_INVOKE)
             .tool(crawl_decl())
@@ -654,14 +570,7 @@ impl Plugin for CrawlPlugin {
             return Ok(Vec::new());
         }
         let parsed = parse_crawl_input(input.clone())?;
-        let render_js = match &parsed {
-            CrawlToolInput::Fetch { args } => args.render_js.unwrap_or(self.config.browser_enabled),
-            CrawlToolInput::Crawl { args } => args.render_js.unwrap_or(self.config.browser_enabled),
-            CrawlToolInput::Search { .. }
-            | CrawlToolInput::Get { .. }
-            | CrawlToolInput::List { .. } => false,
-        };
-        let mut requests = match parsed {
+        let requests = match parsed {
             CrawlToolInput::Fetch { args } => vec![NetworkRequest::connect(
                 prepare_fetch_url(args.url.as_str())
                     .map_err(crawl_error_to_plugin)?
@@ -676,19 +585,6 @@ impl Plugin for CrawlPlugin {
             | CrawlToolInput::Get { .. }
             | CrawlToolInput::List { .. } => Vec::new(),
         };
-        if render_js
-            && let Some(connection_url) = self
-                .config
-                .browser_connection_url
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        {
-            requests.push(NetworkRequest::connect(connection_url.to_string()));
-        }
-        if self.config.vector_search_enabled {
-            requests.push(NetworkRequest::connect("https://huggingface.co"));
-        }
         Ok(requests)
     }
 }
@@ -835,12 +731,6 @@ fn format_document(document: &StoredDocument) -> String {
         if document.rendered { "yes" } else { "no" }
     ));
     lines.push(format!("Fetched: {}", document.fetched_at.to_rfc3339()));
-    if let Some(model) = &document.embedding_model {
-        lines.push(format!("Embedding Model: {model}"));
-    }
-    if let Some(dim) = document.embedding_dimension {
-        lines.push(format!("Embedding Dimension: {dim}"));
-    }
     lines.push(String::new());
     lines.push(preview_text(document.markdown.as_str(), 5000));
     lines.join("\n")
@@ -848,7 +738,7 @@ fn format_document(document: &StoredDocument) -> String {
 
 fn format_crawl_run(output: &CrawlRunOutput) -> String {
     let mut lines = vec![format!(
-        "Crawled from {} via {} (rendered: {}). New pages stored: {}. Cached pages reused: {}. Exact duplicates skipped: {}. Near duplicates skipped: {}. Embedded: {}. Failures: {}. Total indexed documents: {}.",
+        "Crawled from {} via {} (rendered: {}). New pages stored: {}. Cached pages reused: {}. Exact duplicates skipped: {}. Near duplicates skipped: {}. Failures: {}. Total indexed documents: {}.",
         output.start_url,
         output.engine,
         if output.rendered { "yes" } else { "no" },
@@ -856,7 +746,6 @@ fn format_crawl_run(output: &CrawlRunOutput) -> String {
         output.cached_count,
         output.duplicate_count,
         output.near_duplicate_count,
-        output.embedded_count,
         output.failure_count,
         output.total_documents
     )];
@@ -905,7 +794,6 @@ mod tests {
             markdown: "content".to_string(),
             chunks: vec!["content".to_string()],
             chunk_hashes: vec!["chunk".to_string()],
-            chunk_embeddings: Vec::new(),
             links: Vec::new(),
             content_type: "text/html".to_string(),
             status: 200,
@@ -917,8 +805,6 @@ mod tests {
             simhash: 1,
             etag: None,
             last_modified: None,
-            embedding_model: None,
-            embedding_dimension: None,
             depth: 0,
             fetched_at: chrono::Utc::now(),
         };

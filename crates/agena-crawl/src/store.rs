@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::{
     CrawlDir, CrawlDocumentSummary, CrawlError, StoredDocument, metadata::CrawlMetadataStore,
-    prepare_fetch_url, rebuild_search_index, search_documents, vector_index::CrawlVectorIndex,
+    prepare_fetch_url, rebuild_search_index, search_documents,
 };
 
 #[derive(Clone)]
@@ -35,7 +35,6 @@ impl CrawlStore {
         fs::write(&temp_path, bytes)?;
         fs::rename(temp_path, path)?;
         self.metadata()?.save_document(document)?;
-        self.vector_index()?.replace_document(document)?;
         Ok(())
     }
 
@@ -115,9 +114,7 @@ impl CrawlStore {
     pub fn rebuild_index(&self) -> Result<(), CrawlError> {
         self.ensure_exists()?;
         let documents = self.list_documents()?;
-        rebuild_search_index(self.dir.index_dir().as_path(), &documents)?;
-        self.vector_index()?.rebuild(&documents)?;
-        Ok(())
+        rebuild_search_index(self.dir.index_dir().as_path(), &documents)
     }
 
     pub fn search(
@@ -128,22 +125,8 @@ impl CrawlStore {
         search_documents(self.dir.index_dir().as_path(), query, limit)
     }
 
-    pub fn vector_search(
-        &self,
-        query_vector: &[f32],
-        embedding_model: Option<&str>,
-        limit: usize,
-    ) -> Result<Vec<crate::CrawlSearchHit>, CrawlError> {
-        self.vector_index()?
-            .search(query_vector, embedding_model, limit)
-    }
-
     fn metadata(&self) -> Result<CrawlMetadataStore, CrawlError> {
         CrawlMetadataStore::open(self.dir.metadata_db_path().as_path())
-    }
-
-    fn vector_index(&self) -> Result<CrawlVectorIndex, CrawlError> {
-        CrawlVectorIndex::open(self.dir.vector_db_path().as_path())
     }
 
     fn document_path(&self, id: &str) -> std::path::PathBuf {
@@ -182,10 +165,7 @@ mod tests {
             etag: None,
             last_modified: None,
             chunk_hashes: vec!["chunk-hash-1".to_string()],
-            chunk_embeddings: vec![vec![1.0, 0.0]],
             hash: "hash-1".to_string(),
-            embedding_model: Some("test-model".to_string()),
-            embedding_dimension: Some(2),
             depth: 0,
             fetched_at: Utc::now(),
         };
@@ -202,11 +182,5 @@ mod tests {
         let hits = store.search("Tantivy index", 5).expect("search succeeds");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, document.id);
-
-        let vector_hits = store
-            .vector_search(&[1.0, 0.0], Some("test-model"), 5)
-            .expect("vector search succeeds");
-        assert_eq!(vector_hits.len(), 1);
-        assert_eq!(vector_hits[0].id, document.id);
     }
 }

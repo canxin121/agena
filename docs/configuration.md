@@ -1327,16 +1327,8 @@ search_max_limit = 20
 list_default_limit = 20
 list_max_limit = 100
 max_fetch_retries = 2
-vector_search_enabled = false
-rerank_enabled = false
-embedding_model = "MultilingualE5Small"
-reranker_model = "jinaai/jina-reranker-v2-base-multilingual"
-vector_candidate_limit = 20
-min_vector_query_chars = 3
-hybrid_rrf_k = 60
-rerank_limit = 10
 browser_enabled = false
-# browser_connection_url = "ws://127.0.0.1:9222/devtools/browser/..."
+# browser_executable_path = "/usr/bin/google-chrome"
 browser_wait_for_network_idle = true
 browser_wait_timeout_secs = 10
 # browser_wait_for_selector = "main"
@@ -1346,8 +1338,8 @@ browser_wait_for_delay_ms = 0
 `[crawl]` 控制内建 `agena.crawl` plugin 的默认行为。这个 plugin 是现在推荐的本地网页采集入口：
 
 - `fetch`: 单页抓取，带进程内 TTL cache，但不会写入本地索引。
-- `crawl`: 多页抓取、用 Spider 抓取页面、用 CRW extract 抽取 Markdown、落盘、维护 metadata、去重，并重建本地 Tantivy + vector 索引。
-- `search`: 查询当前 workspace 的本地 crawl 语料；默认 BM25，本地向量检索打开后会做 hybrid retrieval 和可选 rerank。
+- `crawl`: 多页抓取、用 Spider 抓取页面、用 CRW extract 抽取 Markdown、落盘、维护 metadata、去重，并重建本地 Tantivy 索引。
+- `search`: 查询当前 workspace 的本地 crawl 语料；使用 Tantivy BM25 / ngram 全文检索，不加载 embedding 或 rerank 模型。
 - `get` / `list`: 检查已保存文档。
 
 字段说明：
@@ -1373,16 +1365,8 @@ search_max_limit
 list_default_limit
 list_max_limit
 max_fetch_retries
-vector_search_enabled
-rerank_enabled
-embedding_model
-reranker_model
-vector_candidate_limit
-min_vector_query_chars
-hybrid_rrf_k
-rerank_limit
 browser_enabled
-browser_connection_url
+browser_executable_path
 browser_wait_for_network_idle
 browser_wait_timeout_secs
 browser_wait_for_selector
@@ -1396,12 +1380,9 @@ browser_wait_for_delay_ms
 - `document_cache_ttl_secs` 控制已保存文档在后续 crawl 中被直接复用的时长。
 - `fetch_cache_ttl_secs` / `fetch_cache_capacity` 控制进程内 HTTP fetch cache。
 - `near_duplicate_hamming_distance` 用于基于 SimHash 的近重复过滤。
-- `vector_search_enabled` 打开后会为 chunk 生成 embedding，持久化到 workspace-local `vectors.redb`，并在 `search` 中做 BM25 + vector 的 RRF 融合。
-- `rerank_enabled` 会在 hybrid retrieval 之后尝试用本地 reranker 再排一次序。
-- `embedding_model` 目前使用 `fastembed` 的 `EmbeddingModel` variant 名称。
-- `reranker_model` 目前使用 `fastembed` 支持的 reranker model code。
-- `browser_enabled` 会让 `crawl` 默认通过 Spider 的 Chrome 渲染路径抓取 JS 页面；单次 tool call 也可以用 `render_js` 覆盖。
-- `browser_connection_url` 可指向远端 Chrome DevTools/WebSocket endpoint；为空时使用 Spider/Chrome 的默认发现逻辑。
+- `search` 不依赖模型，只使用本地 Tantivy BM25 / ngram 索引。
+- `browser_enabled` 会让 `crawl` 默认通过 Agena 托管的本地 Chrome/Chromium 进程抓取 JS 页面；单次 tool call 也可以用 `render_js` 覆盖。
+- `browser_executable_path` 可选，用于指定本地 Chrome/Chromium 可执行文件路径；不支持配置远端 DevTools/WebSocket 链接。
 - `browser_wait_for_network_idle`、`browser_wait_timeout_secs`、`browser_wait_for_selector` 和 `browser_wait_for_delay_ms` 控制渲染等待策略。
 
 如果你只是想临时拉一页内容，`web.fetch` 仍然保留；如果你需要站内多页抓取、后续反复查询、或者想避免再接 Firecrawl 这类远程服务，优先用 `crawl`。

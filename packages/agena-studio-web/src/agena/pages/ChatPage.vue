@@ -11,12 +11,7 @@ import {
 import { openGlobalCommandPalette } from '@/agena/lib/commandPaletteRegistry'
 import ChatPageContent from './ChatPageContent.vue'
 import { createChatPageContentState } from './chatPageContentModel'
-import {
-  messageBlocks,
-  messageUsageFacts,
-  readPayloadMessageId,
-  readPayloadPartId,
-} from './chatRenderModel'
+import { messageBlocks, messageUsageFacts, readPayloadMessageId, readPayloadPartId } from './chatRenderModel'
 import { useChatCommandState } from './useChatCommandState'
 import { useChatDerivedState } from './useChatDerivedState'
 import { useChatSessionActions } from './useChatSessionActions'
@@ -237,6 +232,7 @@ const {
   sending,
   sessionImportJsonl,
   sessionState,
+  sessions,
   syncEventStream,
   prompt: (message, defaultValue) => (typeof window === 'undefined' ? null : window.prompt(message, defaultValue)),
   userInputDrafts,

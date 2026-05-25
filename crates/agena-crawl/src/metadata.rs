@@ -39,11 +39,13 @@ impl CrawlMetadataStore {
     }
 
     pub fn save_document(&self, document: &StoredDocument) -> Result<(), CrawlError> {
-        let bytes = serde_json::to_vec(document)?;
         let write_txn = self.db.begin_write()?;
         {
+            // Older Agena versions stored the full document in redb as well
+            // as JSON. Keep removing that duplicate entry as documents are
+            // refreshed so metadata stays index-only going forward.
             let mut docs = write_txn.open_table(DOCUMENT_TABLE)?;
-            docs.insert(document.id.as_str(), bytes.as_slice())?;
+            docs.remove(document.id.as_str())?;
         }
         {
             let mut url_to_id = write_txn.open_table(URL_TO_ID_TABLE)?;
@@ -61,13 +63,26 @@ impl CrawlMetadataStore {
         Ok(())
     }
 
-    pub fn get_document(&self, id: &str) -> Result<Option<StoredDocument>, CrawlError> {
-        let read_txn = self.db.begin_read()?;
-        let docs = read_txn.open_table(DOCUMENT_TABLE)?;
-        let Some(value) = docs.get(id)? else {
-            return Ok(None);
-        };
-        Ok(Some(serde_json::from_slice(value.value())?))
+    pub fn delete_document(&self, document: &StoredDocument) -> Result<(), CrawlError> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut docs = write_txn.open_table(DOCUMENT_TABLE)?;
+            docs.remove(document.id.as_str())?;
+        }
+        {
+            let mut url_to_id = write_txn.open_table(URL_TO_ID_TABLE)?;
+            url_to_id.remove(document.canonical_url.as_str())?;
+        }
+        {
+            let mut hash_to_id = write_txn.open_table(MARKDOWN_HASH_TO_ID_TABLE)?;
+            hash_to_id.remove(document.markdown_hash.as_str())?;
+        }
+        {
+            let mut raw_hash_to_id = write_txn.open_table(RAW_HASH_TO_ID_TABLE)?;
+            raw_hash_to_id.remove(document.raw_html_hash.as_str())?;
+        }
+        write_txn.commit()?;
+        Ok(())
     }
 
     pub fn find_document_id_by_url(

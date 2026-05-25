@@ -32,4 +32,4 @@ pub use search::{
 pub use spider::{
     BrowserRenderOptions, LocalBrowserOptions, SpiderFetchOptions, fetch_page_with_spider,
 };
-pub use store::CrawlStore;
+pub use store::{CrawlStore, CrawlStorePruneReport, CrawlStoreRetention};

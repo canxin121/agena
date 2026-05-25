@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use agena_crawl::{
     BrowserRenderOptions, CrawlPageFetcher, CrawlRunOptions, CrawlRunReport, CrawlStore,
-    FetchedPage, LocalBrowserOptions, SpiderFetchOptions, StoredDocument, WebSearchEngine,
-    WebSearchOptions, WebSearchResult, crawl_site, ensure_index_exists, fetch_page_with_spider,
-    prepare_fetch_url, preview_text, results_to_text, search_web,
+    CrawlStoreRetention, FetchedPage, LocalBrowserOptions, SpiderFetchOptions, StoredDocument,
+    WebSearchEngine, WebSearchOptions, WebSearchResult, crawl_site, ensure_index_exists,
+    fetch_page_with_spider, prepare_fetch_url, preview_text, results_to_text, search_web,
 };
 use agena_macros::StaticToolSurface;
 use async_trait::async_trait;
@@ -304,6 +304,10 @@ impl CrawlPlugin {
             document_cache_ttl: Duration::from_secs(self.config.document_cache_ttl_secs),
             max_chunk_chars: self.config.default_chunk_chars as usize,
             near_duplicate_hamming_distance: self.config.near_duplicate_hamming_distance,
+            store_retention: Some(CrawlStoreRetention {
+                max_documents: self.config.store_max_documents as usize,
+                max_total_bytes: self.config.store_max_bytes,
+            }),
         };
         let fetcher = PluginPageFetcher { plugin: self };
         let report = crawl_site(&start_url, &store, &options, &fetcher)
@@ -676,7 +680,7 @@ fn format_web_search(output: &CrawlWebSearchOutput) -> String {
 
 fn format_crawl_run(output: &CrawlRunReport) -> String {
     let mut lines = vec![format!(
-        "Crawled from {} via {} (rendered: {}). New pages stored: {}. Cached pages reused: {}. Exact duplicates skipped: {}. Near duplicates skipped: {}. Failures: {}. Total indexed documents: {}.",
+        "Crawled from {} via {} (rendered: {}). New pages stored: {}. Cached pages reused: {}. Exact duplicates skipped: {}. Near duplicates skipped: {}. Old pages pruned: {} ({} bytes). Failures: {}. Total indexed documents: {}.",
         output.start_url,
         output.engine,
         if output.rendered { "yes" } else { "no" },
@@ -684,6 +688,8 @@ fn format_crawl_run(output: &CrawlRunReport) -> String {
         output.cached_count,
         output.duplicate_count,
         output.near_duplicate_count,
+        output.pruned_document_count,
+        output.pruned_document_bytes,
         output.failure_count,
         output.total_documents
     )];

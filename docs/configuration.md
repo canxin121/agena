@@ -1319,6 +1319,8 @@ respect_robots_txt = true
 document_cache_ttl_secs = 86400
 fetch_cache_ttl_secs = 900
 fetch_cache_capacity = 128
+store_max_documents = 200
+store_max_bytes = 104857600
 default_chunk_chars = 1800
 near_duplicate_hamming_distance = 3
 search_engine = "bing" # bing | duckduckgo | baidu
@@ -1357,6 +1359,8 @@ respect_robots_txt
 document_cache_ttl_secs
 fetch_cache_ttl_secs
 fetch_cache_capacity
+store_max_documents
+store_max_bytes
 default_chunk_chars
 near_duplicate_hamming_distance
 search_engine
@@ -1378,6 +1382,7 @@ browser_wait_for_delay_ms
 - `respect_robots_txt` 打开后 Spider 会按 robots.txt 约束抓取。
 - `document_cache_ttl_secs` 控制已保存文档在后续 crawl 中被直接复用的时长。
 - `fetch_cache_ttl_secs` / `fetch_cache_capacity` 控制进程内 HTTP fetch cache。
+- `store_max_documents` / `store_max_bytes` 控制持久 crawl 语料的上限；每次 `crawl` 写入后会删除最旧文档并重建索引，避免本地目录无限增长。
 - `near_duplicate_hamming_distance` 用于基于 SimHash 的近重复过滤。
 - `search_engine` 控制 `crawl search` 的默认搜索引擎；`crawl query` 不依赖模型，只使用本地 Tantivy BM25 / ngram 索引。
 - `browser_enabled` 会让 `crawl` 默认通过 Agena 托管的本地 Chrome/Chromium 进程抓取 JS 页面；单次 tool call 也可以用 `render_js` 覆盖。

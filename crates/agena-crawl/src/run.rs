@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::{
-    CrawlDocumentSummary, CrawlError, CrawlStore, FetchedPage, StoredDocument, prepare_fetch_url,
+    CrawlDocumentSummary, CrawlError, CrawlStore, CrawlStorePruneReport, CrawlStoreRetention,
+    FetchedPage, StoredDocument, prepare_fetch_url,
 };
 
 #[derive(Debug, Clone)]
@@ -19,6 +20,7 @@ pub struct CrawlRunOptions {
     pub document_cache_ttl: Duration,
     pub max_chunk_chars: usize,
     pub near_duplicate_hamming_distance: u32,
+    pub store_retention: Option<CrawlStoreRetention>,
 }
 
 impl Default for CrawlRunOptions {
@@ -32,6 +34,10 @@ impl Default for CrawlRunOptions {
             document_cache_ttl: Duration::from_secs(24 * 60 * 60),
             max_chunk_chars: 1800,
             near_duplicate_hamming_distance: 3,
+            store_retention: Some(CrawlStoreRetention {
+                max_documents: 200,
+                max_total_bytes: 100 * 1024 * 1024,
+            }),
         }
     }
 }
@@ -45,6 +51,8 @@ pub struct CrawlRunReport {
     pub cached_count: usize,
     pub duplicate_count: usize,
     pub near_duplicate_count: usize,
+    pub pruned_document_count: usize,
+    pub pruned_document_bytes: u64,
     pub failure_count: usize,
     pub total_documents: usize,
     pub documents: Vec<CrawlDocumentSummary>,
@@ -161,6 +169,10 @@ pub async fn crawl_site(
         }
     }
 
+    let prune_report = match options.store_retention {
+        Some(retention) => store.prune(retention)?,
+        None => CrawlStorePruneReport::default(),
+    };
     store.rebuild_index()?;
     let total_documents = store.list_documents()?.len();
     Ok(CrawlRunReport {
@@ -171,6 +183,8 @@ pub async fn crawl_site(
         cached_count,
         duplicate_count,
         near_duplicate_count,
+        pruned_document_count: prune_report.removed_document_count,
+        pruned_document_bytes: prune_report.removed_bytes,
         failure_count: failures.len(),
         total_documents,
         documents,

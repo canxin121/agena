@@ -1307,7 +1307,6 @@ LSP registry 是 lazy-spawn 的。相关 tool 首次触及匹配文件时才会�
 
 ```toml
 [crawl]
-fetch_engine = "spider" # "spider" or "reqwest"
 default_max_pages = 10
 max_pages_limit = 100
 default_max_depth = 1
@@ -1326,7 +1325,6 @@ search_default_limit = 5
 search_max_limit = 20
 list_default_limit = 20
 list_max_limit = 100
-max_fetch_retries = 2
 browser_enabled = false
 # browser_executable_path = "/usr/bin/google-chrome"
 browser_wait_for_network_idle = true
@@ -1345,7 +1343,6 @@ browser_wait_for_delay_ms = 0
 字段说明：
 
 ```text
-fetch_engine
 default_max_pages
 max_pages_limit
 default_max_depth
@@ -1364,7 +1361,6 @@ search_default_limit
 search_max_limit
 list_default_limit
 list_max_limit
-max_fetch_retries
 browser_enabled
 browser_executable_path
 browser_wait_for_network_idle
@@ -1375,7 +1371,7 @@ browser_wait_for_delay_ms
 
 说明：
 
-- `fetch_engine = "spider"` 是推荐默认值；`"reqwest"` 保留为轻量 fallback。
+- `crawl` 始终使用 Spider 抓取；轻量单页 HTTP fetch 由独立的 `web.fetch` 提供。
 - `respect_robots_txt` 打开后 Spider 会按 robots.txt 约束抓取。
 - `document_cache_ttl_secs` 控制已保存文档在后续 crawl 中被直接复用的时长。
 - `fetch_cache_ttl_secs` / `fetch_cache_capacity` 控制进程内 HTTP fetch cache。

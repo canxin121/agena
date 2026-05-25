@@ -372,7 +372,6 @@ impl Default for MemoryRetrievalConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CrawlConfig {
-    pub fetch_engine: CrawlFetchEngine,
     pub default_max_pages: u32,
     pub max_pages_limit: u32,
     pub default_max_depth: u32,
@@ -391,7 +390,6 @@ pub struct CrawlConfig {
     pub search_max_limit: u32,
     pub list_default_limit: u32,
     pub list_max_limit: u32,
-    pub max_fetch_retries: u32,
     pub browser_enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub browser_executable_path: Option<String>,
@@ -402,18 +400,9 @@ pub struct CrawlConfig {
     pub browser_wait_for_delay_ms: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum CrawlFetchEngine {
-    Reqwest,
-    #[default]
-    Spider,
-}
-
 impl Default for CrawlConfig {
     fn default() -> Self {
         Self {
-            fetch_engine: CrawlFetchEngine::Spider,
             default_max_pages: 10,
             max_pages_limit: 100,
             default_max_depth: 1,
@@ -432,7 +421,6 @@ impl Default for CrawlConfig {
             search_max_limit: 20,
             list_default_limit: 20,
             list_max_limit: 100,
-            max_fetch_retries: 2,
             browser_enabled: false,
             browser_executable_path: None,
             browser_wait_for_network_idle: true,

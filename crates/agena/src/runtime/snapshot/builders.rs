@@ -117,6 +117,7 @@ pub(super) fn build_lsp_registry(
     ));
 
     let registry_for_register = registry.clone();
+    let defaults = config.defaults.clone();
     let entries: Vec<(String, crate::plugins::provided::lsp::LspServerConfig)> = config
         .servers
         .iter()
@@ -125,20 +126,7 @@ pub(super) fn build_lsp_registry(
 
     tokio::spawn(async move {
         for (name, entry) in entries {
-            let env = entry
-                .env
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
-            let spec = LspServerSpec {
-                name: name.clone(),
-                command: entry.command.clone(),
-                args: entry.args.clone(),
-                env,
-                file_extensions: entry.file_extensions.clone(),
-                root_markers: entry.root_markers.clone(),
-                initialization_options: entry.initialization_options.clone(),
-            };
+            let spec: LspServerSpec = entry.runtime_spec(name.clone(), &defaults);
             registry_for_register.register(spec).await;
             tracing::info!(
                 target: "agena::lsp",

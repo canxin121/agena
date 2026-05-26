@@ -13,16 +13,15 @@ pub mod model;
 pub mod model_catalog;
 pub mod permission;
 pub use agena_plugin_host as plugin;
-pub mod entry;
+pub mod plugins;
 pub mod provider;
 pub mod role;
 pub mod runtime;
 pub(crate) mod search;
 pub mod session;
 pub mod storage;
+pub mod tool;
 pub mod tracing;
 pub mod web;
-pub use entry as tool;
-pub mod plugins;
 
 pub use error::AppError;

@@ -121,7 +121,7 @@ pub async fn list_marketplace_installed_plugins(
         })
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
-    Ok(entries_json(entries))
+    Ok(items_json(entries))
 }
 
 pub async fn list_marketplace_outdated_plugins(
@@ -138,7 +138,7 @@ pub async fn list_marketplace_outdated_plugins(
             latest_version: record.latest_version,
         })
         .collect::<Vec<_>>();
-    Ok(entries_json(entries))
+    Ok(items_json(entries))
 }
 
 pub async fn install_marketplace_plugin(

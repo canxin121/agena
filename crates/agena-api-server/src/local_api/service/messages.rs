@@ -124,7 +124,7 @@ impl ApiService {
 
 fn message_resource_from_message(
     session_id: i64,
-    message: &VisibleMessageEntry,
+    message: &VisibleMessageRecord,
     parts_mode: PartLoadMode,
     part_count: u64,
 ) -> MessageResource {
@@ -150,19 +150,19 @@ fn message_resource_from_message(
 }
 
 #[derive(Debug, Clone)]
-struct VisibleMessageEntry {
+struct VisibleMessageRecord {
     message: Message,
     updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
 struct VisibleMessageProjection {
-    messages: Vec<VisibleMessageEntry>,
+    messages: Vec<VisibleMessageRecord>,
     hidden_message_aliases: HashMap<i64, i64>,
 }
 
 impl VisibleMessageProjection {
-    fn find_message(&self, message_id: i64) -> Option<&VisibleMessageEntry> {
+    fn find_message(&self, message_id: i64) -> Option<&VisibleMessageRecord> {
         let visible_id = self
             .hidden_message_aliases
             .get(&message_id)
@@ -233,7 +233,7 @@ async fn load_visible_part_counts(
     Ok(counts)
 }
 
-fn visible_part_count(part_counts: &HashMap<i64, u64>, message: &VisibleMessageEntry) -> u64 {
+fn visible_part_count(part_counts: &HashMap<i64, u64>, message: &VisibleMessageRecord) -> u64 {
     part_counts
         .get(&message.message.id)
         .copied()
@@ -251,7 +251,7 @@ fn project_visible_messages(messages: Vec<Message>) -> VisibleMessageProjection 
 
         if message.role != Role::Assistant {
             let updated_at = message.created_at;
-            visible.push(VisibleMessageEntry {
+            visible.push(VisibleMessageRecord {
                 message,
                 updated_at,
             });
@@ -293,10 +293,10 @@ fn normalize_message_parts(message: &mut Message) {
 }
 
 fn paginate_visible_messages(
-    messages: &[VisibleMessageEntry],
+    messages: &[VisibleMessageRecord],
     cursor: Option<MessageCursor>,
     limit: u64,
-) -> (Vec<VisibleMessageEntry>, bool, Option<(i64, i64)>) {
+) -> (Vec<VisibleMessageRecord>, bool, Option<(i64, i64)>) {
     let mut filtered = messages
         .iter()
         .filter(|message| match cursor {
@@ -322,7 +322,7 @@ fn paginate_visible_messages(
     (filtered, has_more, next_cursor)
 }
 
-fn message_cursor_key(message: &VisibleMessageEntry) -> (i64, i64) {
+fn message_cursor_key(message: &VisibleMessageRecord) -> (i64, i64) {
     (
         message.message.created_at.timestamp_millis(),
         message.message.id,
@@ -332,7 +332,7 @@ fn message_cursor_key(message: &VisibleMessageEntry) -> (i64, i64) {
 fn collapse_assistant_group(
     mut group: Vec<Message>,
     updated_at: DateTime<Utc>,
-) -> VisibleMessageEntry {
+) -> VisibleMessageRecord {
     let mut visible = group
         .first()
         .cloned()
@@ -354,7 +354,7 @@ fn collapse_assistant_group(
     visible.parts = parts;
     normalize_message_parts(&mut visible);
 
-    VisibleMessageEntry {
+    VisibleMessageRecord {
         message: visible,
         updated_at,
     }

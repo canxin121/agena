@@ -1,7 +1,7 @@
 use serde::de::DeserializeOwned;
 use serde_json::Value as JsonValue;
 
-use crate::message::{FileChangeEntry, FileChangeKind};
+use crate::message::{FileChangeKind, FileChangeRecord};
 
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
@@ -34,7 +34,7 @@ pub(crate) fn execute_tool(
                 changes: result
                     .files
                     .iter()
-                    .map(|f| FileChangeEntry {
+                    .map(|f| FileChangeRecord {
                         path: f.path.clone(),
                         kind: match f.kind {
                             super::apply_patch::PatchOpKind::Add => FileChangeKind::Added,

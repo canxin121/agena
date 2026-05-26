@@ -440,7 +440,7 @@ pub struct PluginInstallArgs {
     /// Path to the agena config.json that should receive the plugin tool.
     #[arg(long)]
     pub config: Option<PathBuf>,
-    /// Overwrite an existing entry with the same plugin id.
+    /// Overwrite an existing plugin config with the same plugin id.
     #[arg(long, default_value_t = false)]
     pub force: bool,
     /// Compute side-effects but skip writing the config or cache.
@@ -943,7 +943,7 @@ struct SessionGoalClearedOutput {
 struct MemoryListOutput {
     dir: String,
     count: usize,
-    entries: Vec<MemorySummaryOutput>,
+    memories: Vec<MemorySummaryOutput>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1171,7 +1171,7 @@ struct AgentsListOutput {
 
 #[derive(Debug, Serialize)]
 struct PluginStatusOutput {
-    entries: Vec<crate::plugin::status::PluginStatus>,
+    statuses: Vec<crate::plugin::status::PluginStatus>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1182,7 +1182,7 @@ struct PluginInspectOutput {
 #[derive(Debug, Serialize)]
 struct PluginLogsOutput {
     plugin_id: String,
-    entries: Vec<crate::plugin::PluginLogEntry>,
+    logs: Vec<crate::plugin::PluginLogRecord>,
 }
 
 impl AgenaCli {
@@ -1277,7 +1277,7 @@ impl AgenaCli {
             PluginSubcommand::Status(args) => {
                 let runtime = self.session_runtime().await?;
                 let output = PluginStatusOutput {
-                    entries: runtime
+                    statuses: runtime
                         .current_snapshot()
                         .plugin_manager()
                         .plugin_statuses(),
@@ -1314,7 +1314,7 @@ impl AgenaCli {
                 }
                 let output = PluginLogsOutput {
                     plugin_id: args.plugin_id.clone(),
-                    entries: plugin_manager.plugin_logs(
+                    logs: plugin_manager.plugin_logs(
                         args.plugin_id.as_str(),
                         args.after_seq,
                         args.limit,
@@ -1935,22 +1935,22 @@ impl AgenaCli {
                 let entries = store
                     .list()
                     .map_err(|error| AppError::Config(error.to_string()))?;
-                let entries = entries
+                let memories = entries
                     .into_iter()
-                    .map(|entry| MemorySummaryOutput {
-                        file_name: entry.file_name.clone(),
-                        name: memory_entry_name(&entry),
-                        description: entry.frontmatter.description.clone(),
-                        memory_type: memory_type_label(entry.frontmatter.r#type),
-                        path: entry.path.display().to_string(),
+                    .map(|memory| MemorySummaryOutput {
+                        file_name: memory.file_name.clone(),
+                        name: memory_record_name(&memory),
+                        description: memory.frontmatter.description.clone(),
+                        memory_type: memory_type_label(memory.frontmatter.r#type),
+                        path: memory.path.display().to_string(),
                     })
                     .collect::<Vec<_>>();
                 render_serialized(
                     args.format,
                     &MemoryListOutput {
                         dir: store.dir().display().to_string(),
-                        count: entries.len(),
-                        entries,
+                        count: memories.len(),
+                        memories,
                     },
                 )
             }
@@ -2999,14 +2999,14 @@ impl McpServerBackend for AgenaMcpBackend {
     async fn list_prompts(&self) -> Result<Vec<PromptDescriptor>, McpServerError> {
         let mut prompts = self
             .plugins
-            .entry_entries()
+            .registered_tools()
             .into_iter()
             .filter(|entry| {
                 matches!(
                     entry.plugin_name.as_str(),
                     "agena.workflow" | "agena.skills"
                 ) && entry.decl.input_schema
-                    == crate::entry::definition::json_schema_for::<
+                    == crate::tool::definition::json_schema_for::<
                         crate::message::WorkflowPromptToolInput,
                     >()
             })
@@ -3023,14 +3023,13 @@ impl McpServerBackend for AgenaMcpBackend {
     async fn get_prompt(&self, params: GetPromptParams) -> Result<GetPromptResult, McpServerError> {
         let entry = self
             .plugins
-            .lookup_entry(params.name.as_str())
+            .lookup_tool(params.name.as_str())
             .ok_or_else(|| McpServerError::NotFound(params.name.clone()))?;
         if !matches!(
             entry.plugin_name.as_str(),
             "agena.workflow" | "agena.skills"
         ) || entry.decl.input_schema
-            != crate::entry::definition::json_schema_for::<crate::message::WorkflowPromptToolInput>(
-            )
+            != crate::tool::definition::json_schema_for::<crate::message::WorkflowPromptToolInput>()
         {
             return Err(McpServerError::NotFound(params.name));
         }
@@ -3123,7 +3122,7 @@ fn ensure_memory_index_path(store: &MemoryStore) -> Result<PathBuf, AppError> {
     Ok(path)
 }
 
-fn memory_entry_name(entry: &crate::memory::MemoryEntry) -> String {
+fn memory_record_name(entry: &crate::memory::MemoryRecord) -> String {
     if entry.frontmatter.name.trim().is_empty() {
         entry.file_name.trim_end_matches(".md").to_string()
     } else {
@@ -3415,23 +3414,23 @@ fn format_debug_session_output(output: &DebugSessionOutput) -> String {
 }
 
 fn format_plugin_logs_output(output: &PluginLogsOutput) -> String {
-    if output.entries.is_empty() {
+    if output.logs.is_empty() {
         return format!("plugin {} has no retained logs", output.plugin_id);
     }
     output
-        .entries
+        .logs
         .iter()
-        .map(|entry| {
-            let timestamp = DateTime::<Utc>::from_timestamp_millis(entry.timestamp_ms)
+        .map(|log| {
+            let timestamp = DateTime::<Utc>::from_timestamp_millis(log.timestamp_ms)
                 .map(|ts| ts.to_rfc3339())
-                .unwrap_or_else(|| entry.timestamp_ms.to_string());
+                .unwrap_or_else(|| log.timestamp_ms.to_string());
             let mut line = format!(
                 "[{}] #{} {} {} {}",
-                timestamp, entry.seq, entry.level, entry.source, entry.message
+                timestamp, log.seq, log.level, log.source, log.message
             );
-            if !entry.fields.is_null() {
+            if !log.fields.is_null() {
                 line.push(' ');
-                line.push_str(&entry.fields.to_string());
+                line.push_str(&log.fields.to_string());
             }
             line
         })

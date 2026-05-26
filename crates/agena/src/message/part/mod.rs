@@ -7,7 +7,7 @@ mod structured;
 mod tool;
 
 pub use activity::{
-    ErrorPart, FileChangeEntry, FileChangeKind, InteractiveRequestPart, PendingInteractiveRequest,
+    ErrorPart, FileChangeKind, FileChangeRecord, InteractiveRequestPart, PendingInteractiveRequest,
     PendingInteractiveRequestKind, ReasoningPart, RequestPart, TextPart, TodoItem, TodoPriority,
     TodoStatus, UserInputOption, UserInputQuestion, UserInputReply, UserInputReplyKind,
     UserInputRequest, WebSearchResult,

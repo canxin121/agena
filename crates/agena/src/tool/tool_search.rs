@@ -1,5 +1,5 @@
 use crate::message::ToolSearchToolInput;
-use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
+use crate::plugin::registry::RegisteredTool;
 use crate::plugin::sdk::ToolTag;
 use crate::search::tool_catalog::{ToolCatalogDocument, search_tool_catalog};
 
@@ -16,14 +16,14 @@ pub(crate) struct SearchableTool {
 }
 
 impl SearchableTool {
-    pub(crate) fn from_entry(entry: RegistryPluginEntry) -> Self {
-        let description = entry
+    pub(crate) fn from_registered_tool(registered_tool: RegisteredTool) -> Self {
+        let description = registered_tool
             .summary_text()
-            .unwrap_or_else(|| entry.description_text())
+            .unwrap_or_else(|| registered_tool.description_text())
             .to_string();
-        let tags = entry.effective_tags();
+        let tags = registered_tool.effective_tags();
         Self {
-            name: entry.exposed_name,
+            name: registered_tool.exposed_name,
             description,
             tags,
         }
@@ -37,7 +37,7 @@ pub(crate) fn execute(
     let catalog = executor
         .searchable_tools()
         .into_iter()
-        .map(SearchableTool::from_entry)
+        .map(SearchableTool::from_registered_tool)
         .collect::<Vec<_>>();
     execute_with_tools(&catalog, input)
 }

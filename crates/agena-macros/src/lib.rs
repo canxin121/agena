@@ -18,7 +18,7 @@ pub fn derive_static_tool_surface(input: TokenStream) -> TokenStream {
 
 #[derive(Default)]
 struct SurfaceConfig {
-    entry: Option<LitStr>,
+    tool: Option<LitStr>,
     description: Option<LitStr>,
     summary: Option<LitStr>,
     help: Option<LitStr>,
@@ -37,9 +37,9 @@ enum VariantMapping {
 fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
     let name = input.ident;
     let surface = parse_surface_config(&input.attrs)?;
-    let entry = surface.entry.ok_or_else(|| {
-        syn::Error::new_spanned(&name, "missing #[tool_surface(entry = \"...\")]")
-    })?;
+    let tool = surface
+        .tool
+        .ok_or_else(|| syn::Error::new_spanned(&name, "missing #[tool_surface(tool = \"...\")]"))?;
     let description = surface.description.ok_or_else(|| {
         syn::Error::new_spanned(&name, "missing #[tool_surface(description = \"...\")]")
     })?;
@@ -110,8 +110,8 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
 
             pub(crate) fn tool_decl() -> crate::plugin::sdk::PluginToolDecl {
                 crate::plugin::sdk::PluginToolDecl::new(
-                    #entry,
-                    crate::entry::definition::json_schema_for::<Self>(),
+                    #tool,
+                    crate::tool::definition::json_schema_for::<Self>(),
                 )
                 .description(#description)
                 #summary_chain
@@ -123,16 +123,16 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
                 #strict_chain
             }
 
-            pub(crate) fn resolve_entry(
-                entry: &str,
+            pub(crate) fn resolve_tool(
+                tool: &str,
                 input: serde_json::Value,
             ) -> crate::plugin::sdk::Result<(String, serde_json::Value)> {
-                match entry {
-                    #entry => {}
+                match tool {
+                    #tool => {}
                     other => {
                         return Err(crate::plugin::PluginError::invalid_params(format!(
-                            "unknown {} entry '{other}'",
-                            #entry
+                            "unknown {} tool '{other}'",
+                            #tool
                         )));
                     }
                 }
@@ -239,7 +239,7 @@ fn apply_surface_name_value(config: &mut SurfaceConfig, value: MetaNameValue) ->
         return Err(syn::Error::new_spanned(value.path, "expected identifier"));
     };
     match ident.to_string().as_str() {
-        "entry" => config.entry = Some(expr_lit_str(&value.value, "entry")?),
+        "tool" => config.tool = Some(expr_lit_str(&value.value, "tool")?),
         "description" => config.description = Some(expr_lit_str(&value.value, "description")?),
         "summary" => config.summary = Some(expr_lit_str(&value.value, "summary")?),
         "help" => config.help = Some(expr_lit_str(&value.value, "help")?),

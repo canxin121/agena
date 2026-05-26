@@ -399,8 +399,9 @@ impl RawConfig {
         let runtime = RuntimeConfig::from_raw(raw_runtime)?;
         let session = SessionConfig::from_raw(raw_session)?;
         let permission = self.permission.unwrap_or_default();
-        let plugins: PluginConfig = self.plugins.unwrap_or_default();
-        PluginRuntimeOptions::validate_builtin_plugins(&plugins)?;
+        let plugins: PluginConfig =
+            crate::plugins::sources::resolve_plugin_config(self.plugins.unwrap_or_default());
+        PluginRuntimeOptions::validate_plugin_ids(&plugins)?;
         let mcp = crate::plugins::provided::mcp::config_from_plugins(&plugins)
             .map_err(ConfigError::Validation)?;
         let harnesses: HarnessesConfig = self.harnesses.unwrap_or_default();
@@ -521,7 +522,7 @@ fn resolve_default_agent(
 struct PluginRuntimeOptions;
 
 impl PluginRuntimeOptions {
-    fn validate_builtin_plugins(plugins: &PluginConfig) -> Result<(), ConfigError> {
+    fn validate_plugin_ids(plugins: &PluginConfig) -> Result<(), ConfigError> {
         for plugin_id in plugins.list.keys() {
             if plugin_id == "agena.hooks" {
                 return Err(ConfigError::Validation(
@@ -2210,7 +2211,7 @@ fn validate_harnesses(harnesses: &HarnessesConfig) -> Result<(), ConfigError> {
 fn validate_harness_name(scope: &str, name: &str) -> Result<(), ConfigError> {
     if name.trim().is_empty() {
         return Err(ConfigError::Validation(format!(
-            "{scope} entry names cannot be empty"
+            "{scope} names cannot be empty"
         )));
     }
     Ok(())
@@ -2428,10 +2429,17 @@ mod tests {
                             "kind": "static"
                         },
                         "config": {
+                            "runtime": {
+                                "token_store": {
+                                    "enabled": true
+                                }
+                            },
                             "servers": {
                                 "docs": {
                                     "transport": "http",
-                                    "url": "https://example.com/mcp"
+                                    "endpoint": {
+                                        "url": "https://example.com/mcp"
+                                    }
                                 }
                             }
                         }
@@ -2523,7 +2531,7 @@ mod tests {
     }
 
     #[test]
-    fn old_flat_plugin_entry_shape_is_rejected() {
+    fn old_flat_plugin_config_shape_is_rejected() {
         let err = serde_json::from_value::<RawConfig>(json!({
             "plugins": {
                 "list": {

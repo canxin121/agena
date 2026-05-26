@@ -28,7 +28,7 @@ CLI / TUI / Studio Web / Desktop / API clients
 - Studio Web 通过 REST 和 session SSE 与 Studio server 通信。
 - TUI 和 CLI 直接使用 `agena` core，不需要 HTTP server。
 - Desktop app 是 Tauri shell，启动并连接 packaged `agena-studio` sidecar。
-- 插件通过 `agena-plugin-host` 接入，既可以贡献 entries，也可以通过 hook 影响 prompt、provider、权限、shell env、事件、状态栏等。
+- 插件通过 `agena-plugin-host` 接入，既可以贡献模型可见 tools，也可以通过 hook 影响 prompt、provider、权限、shell env、事件、状态栏等。
 
 ## Workspace 结构
 
@@ -318,10 +318,10 @@ Plugin manifest defines:
 
 Core registers runtime-provided static plugins during runtime build, including:
 
-- filesystem entries.
-- shell entries.
-- web entries.
-- workflow entries.
+- filesystem tools.
+- shell tools.
+- web tools.
+- workflow tools.
 - skills filesystem.
 - LSP.
 - cron/scheduler.
@@ -344,7 +344,7 @@ Plugin host can invoke hooks for:
 - pre_run/post_run.
 - notification.
 
-Host callbacks allow plugins to ask user input, spawn subagents, list/invoke entries, read and reload config, publish/subscribe events, use scheduler, manage worktrees, access LSP/MCP registries, store plugin data/secrets, register entries/agents/hooks/themes/statusline segments, and more. Static UI contributions live in the manifest, while dynamic statusline/theme updates still flow through host callbacks and are merged into the same UI catalog.
+Host callbacks allow plugins to ask user input, spawn subagents, list/invoke tools, read and reload config, publish/subscribe events, use scheduler, manage worktrees, access LSP/MCP registries, store plugin data/secrets, register dynamic tools/agents/hooks/themes/statusline segments, and more. Static UI contributions live in the manifest, while dynamic statusline/theme updates still flow through host callbacks and are merged into the same UI catalog.
 
 ## Permission architecture
 

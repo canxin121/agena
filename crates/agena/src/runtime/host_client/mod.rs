@@ -26,19 +26,19 @@ use crate::plugin::sdk::host_api::{
     HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse,
     HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec,
     HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
-    HostPlanEntry, HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatus,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostRenameSessionRequest, HostRenameSessionResponse, HostSchedulerCreateRequest,
-    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
-    HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
-    HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostTodoItem,
-    HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostUpdateGoalRequest,
-    HostUpdateGoalResponse, HostWorktreeEntry, HostWorktreeListResponse, LogLevel, MonitorEvent,
-    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
-    MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
-    current_host_callback_context,
+    HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPlanSummary,
+    HostPluginStatus, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
+    HostPluginStatusListResponse, HostRenameSessionRequest, HostRenameSessionResponse,
+    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
+    HostSchedulerDeleteResponse, HostSchedulerJob, HostSchedulerListResponse,
+    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
+    HostSecretSetRequest, HostSession, HostStorageDeleteRequest, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageRecord,
+    HostStorageSetRequest, HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest,
+    HostUpdateGoalRequest, HostUpdateGoalResponse, HostWorktreeListResponse, HostWorktreeSummary,
+    LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
+    MonitorStartRequest, MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest,
+    SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -430,11 +430,11 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<ToolInvokeOutput, PluginError> {
         let host = self.plugin_manager();
         let resolution = host
-            .lookup_entry(&tool)
-            .ok_or_else(|| PluginError::new(format!("entry `{tool}` not found")))?;
+            .lookup_tool(&tool)
+            .ok_or_else(|| PluginError::new(format!("tool `{tool}` not found")))?;
 
         let caller = self.callback_context()?;
-        let plugin_id = resolution.plugin_name.clone();
+        let plugin_id = resolution.plugin_id.clone();
         if caller
             .plugin_id
             .as_ref()
@@ -836,17 +836,17 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostStorageListRequest,
     ) -> Result<HostStorageListResponse, PluginError> {
-        let entries = self
+        let records = self
             .with_plugin_storage(req.scope, req.visibility, |store, locator| {
                 store.list(locator, req.namespace.as_deref(), req.prefix.as_deref())
             })?
             .into_iter()
-            .map(|entry| HostStorageEntry {
+            .map(|entry| HostStorageRecord {
                 namespace: entry.namespace,
                 key: entry.key,
             })
             .collect();
-        Ok(HostStorageListResponse { entries })
+        Ok(HostStorageListResponse { records })
     }
 
     async fn secret_get(
@@ -875,12 +875,12 @@ impl HostClient for RuntimeHostClient {
 
     async fn plugin_status_list(&self) -> Result<HostPluginStatusListResponse, PluginError> {
         let host = self.plugin_manager();
-        let entries = host
+        let statuses = host
             .plugin_statuses()
             .into_iter()
             .map(host_status_to_sdk)
             .collect();
-        Ok(HostPluginStatusListResponse { entries })
+        Ok(HostPluginStatusListResponse { statuses })
     }
 
     async fn plugin_status_get(
@@ -920,7 +920,7 @@ impl HostClient for RuntimeHostClient {
             "lsp registry is not enabled in this runtime",
         )?;
         let pairs = registry.collect_diagnostics().await;
-        let mut entries = Vec::new();
+        let mut diagnostics_out = Vec::new();
         for (uri, diagnostics) in pairs {
             if let Some(filter) = req.uri.as_ref()
                 && filter != &uri
@@ -928,7 +928,7 @@ impl HostClient for RuntimeHostClient {
                 continue;
             }
             for diagnostic in diagnostics {
-                entries.push(HostLspDiagnostic {
+                diagnostics_out.push(HostLspDiagnostic {
                     uri: uri.clone(),
                     severity: lsp_severity_string(diagnostic.severity),
                     message: diagnostic.message,
@@ -944,7 +944,9 @@ impl HostClient for RuntimeHostClient {
                 });
             }
         }
-        Ok(HostLspListDiagnosticsResponse { entries })
+        Ok(HostLspListDiagnosticsResponse {
+            diagnostics: diagnostics_out,
+        })
     }
 
     async fn plan_list(&self) -> Result<HostPlanListResponse, PluginError> {
@@ -952,17 +954,17 @@ impl HostClient for RuntimeHostClient {
             |executor| executor.plan_registry().cloned(),
             "plan registry is not enabled in this runtime",
         )?;
-        let entries: Vec<HostPlanEntry> = registry
+        let plans: Vec<HostPlanSummary> = registry
             .read()
             .iter()
-            .map(|(session_id, plan)| HostPlanEntry {
+            .map(|(session_id, plan)| HostPlanSummary {
                 session_id: *session_id,
                 slug: plan.slug.clone(),
                 file_path: plan.file_path.display().to_string(),
                 started_at_ms: plan.started_at.timestamp_millis(),
             })
             .collect();
-        Ok(HostPlanListResponse { entries })
+        Ok(HostPlanListResponse { plans })
     }
 
     async fn plan_get(&self, req: HostPlanGetRequest) -> Result<HostPlanGetResponse, PluginError> {
@@ -976,7 +978,7 @@ impl HostClient for RuntimeHostClient {
         };
         let body = std::fs::read_to_string(&plan.file_path).ok();
         Ok(HostPlanGetResponse {
-            entry: Some(HostPlanEntry {
+            plan: Some(HostPlanSummary {
                 session_id: req.session_id,
                 slug: plan.slug.clone(),
                 file_path: plan.file_path.display().to_string(),
@@ -991,16 +993,16 @@ impl HostClient for RuntimeHostClient {
             |executor| executor.worktree_registry().cloned(),
             "worktree registry is not enabled in this runtime",
         )?;
-        let entries: Vec<HostWorktreeEntry> = crate::tool::worktree_list_active(&registry)
+        let worktrees: Vec<HostWorktreeSummary> = crate::tool::worktree_list_active(&registry)
             .into_iter()
-            .map(|w| HostWorktreeEntry {
+            .map(|w| HostWorktreeSummary {
                 session_id: w.session_id,
                 path: w.path.display().to_string(),
                 branch: w.branch,
                 created_here: w.created_here,
             })
             .collect();
-        Ok(HostWorktreeListResponse { entries })
+        Ok(HostWorktreeListResponse { worktrees })
     }
 
     async fn scheduler_list(&self) -> Result<HostSchedulerListResponse, PluginError> {

@@ -8,8 +8,8 @@ use crate::local_api::{
     AuthApiKeyWriteRequest, AuthBrowserStartResource, AuthCodeExchangeRequest, AuthCredentialType,
     AuthDeviceStartResource, AuthEnterpriseDevicePollRequest, AuthEnterpriseDeviceRequest,
     AuthLoginResultResource, AuthProviderRequest, AuthProviderResource, AuthRedirectRequest,
-    AuthStatePollRequest, AuthUserCodeDevicePollRequest, EntriesResponse, HealthResponse,
-    ItemsResponse, MarketplaceInstallRequest, MarketplaceInstalledPluginResource,
+    AuthStatePollRequest, AuthUserCodeDevicePollRequest, HealthResponse, ItemsResponse,
+    MarketplaceInstallRequest, MarketplaceInstalledPluginResource,
     MarketplaceOutdatedPluginResource, MarketplacePluginResource, MarketplaceRegistryRequest,
     MarketplaceSearchRequest, MarketplaceSearchResponse, MarketplaceUninstallRequestBody,
     MarketplaceUpgradeRequest, MessageListQuery, ModelCatalogListResponse,
@@ -172,10 +172,6 @@ async fn query_json<T>(
         Some(value) => Ok(Json(value)),
         None => unreachable!("{unexpected}"),
     }
-}
-
-fn entries_json<T>(entries: Vec<T>) -> Json<EntriesResponse<T>> {
-    Json(EntriesResponse { entries })
 }
 
 fn items_json<T>(items: Vec<T>) -> Json<ItemsResponse<T>> {

@@ -25,14 +25,13 @@ use crate::host_api::{
     HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
     HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
     HostAgentSwitchRequest, HostAgentSwitchResponse, HostClient, HostConfigReloadResponse,
-    HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostEntryListResponse,
-    HostEntryMutationResponse, HostEntryRegisterRequest, HostEntryRemoveRequest,
-    HostEntryUpdateRequest, HostExitPlanModeRequest, HostExitWorktreeRequest, HostHookListResponse,
-    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
-    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
-    HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-    HostPermissionCheckResponse, HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
+    HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostExitPlanModeRequest,
+    HostExitWorktreeRequest, HostHookListResponse, HostLspListDiagnosticsRequest,
+    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
+    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
+    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
+    HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredToolListResponse,
     HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
     HostSchedulerDeleteResponse, HostSchedulerListResponse, HostSecretDeleteRequest,
     HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
@@ -40,9 +39,11 @@ use crate::host_api::{
     HostStatuslineRemoveResponse, HostStorageDeleteRequest, HostStorageGetRequest,
     HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
     HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
-    HostThemeRemoveResponse, HostTodoWriteRequest, HostWorktreeListResponse, LogLevel,
-    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
-    MonitorStopRequest, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    HostThemeRemoveResponse, HostTodoWriteRequest, HostToolMutationResponse,
+    HostToolRegisterRequest, HostToolRemoveRequest, HostToolUpdateRequest,
+    HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
+    MonitorStartRequest, MonitorStopRequest, SpawnSubtaskRequest, SpawnSubtaskResponse,
+    ToolDescriptor,
 };
 use crate::plugin::Plugin;
 use crate::rpc::{
@@ -374,17 +375,7 @@ impl HostClient for StdioHostClient {
     ) -> crate::error::Result<PermissionDecision> {
         let params =
             serde_json::to_value(req).map_err(|e| PluginError::invalid_params(e.to_string()))?;
-        match self.call(method::HOST_PERMISSION_ASK, params.clone()).await {
-            Ok(decision) => Ok(decision),
-            Err(err)
-                if err.code == crate::error::PluginErrorCode::NotImplemented
-                    || err.message.contains("method not found")
-                    || err.message.contains("not implemented") =>
-            {
-                self.call(method::HOST_PERMISSION_ASK_LEGACY, params).await
-            }
-            Err(err) => Err(err),
-        }
+        self.call(method::HOST_PERMISSION_ASK, params).await
     }
 
     async fn check_path_permission(
@@ -600,12 +591,12 @@ impl HostClient for StdioHostClient {
         .await
     }
 
-    async fn entry_register(
+    async fn register_tool(
         &self,
-        req: HostEntryRegisterRequest,
-    ) -> crate::error::Result<HostEntryMutationResponse> {
+        req: HostToolRegisterRequest,
+    ) -> crate::error::Result<HostToolMutationResponse> {
         self.call(
-            method::HOST_ENTRY_REGISTER,
+            method::HOST_TOOL_REGISTRY_REGISTER,
             serde_json::json!({
                 "request": req,
                 "context": crate::host_api::current_host_callback_context(),
@@ -614,12 +605,12 @@ impl HostClient for StdioHostClient {
         .await
     }
 
-    async fn entry_update(
+    async fn update_tool(
         &self,
-        req: HostEntryUpdateRequest,
-    ) -> crate::error::Result<HostEntryMutationResponse> {
+        req: HostToolUpdateRequest,
+    ) -> crate::error::Result<HostToolMutationResponse> {
         self.call(
-            method::HOST_ENTRY_UPDATE,
+            method::HOST_TOOL_REGISTRY_UPDATE,
             serde_json::json!({
                 "request": req,
                 "context": crate::host_api::current_host_callback_context(),
@@ -628,12 +619,12 @@ impl HostClient for StdioHostClient {
         .await
     }
 
-    async fn entry_remove(
+    async fn remove_tool(
         &self,
-        req: HostEntryRemoveRequest,
-    ) -> crate::error::Result<HostEntryMutationResponse> {
+        req: HostToolRemoveRequest,
+    ) -> crate::error::Result<HostToolMutationResponse> {
         self.call(
-            method::HOST_ENTRY_REMOVE,
+            method::HOST_TOOL_REGISTRY_REMOVE,
             serde_json::json!({
                 "request": req,
                 "context": crate::host_api::current_host_callback_context(),
@@ -642,9 +633,9 @@ impl HostClient for StdioHostClient {
         .await
     }
 
-    async fn entry_list(&self) -> crate::error::Result<HostEntryListResponse> {
+    async fn list_registered_tools(&self) -> crate::error::Result<HostRegisteredToolListResponse> {
         self.call(
-            method::HOST_ENTRY_LIST,
+            method::HOST_TOOL_REGISTRY_LIST,
             serde_json::json!({
                 "context": crate::host_api::current_host_callback_context(),
             }),

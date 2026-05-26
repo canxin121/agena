@@ -1,12 +1,12 @@
-//! Per-entry loader: build a `LoadedPlugin` for one config entry.
+//! Loader for one configured plugin.
 
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::config::{PluginEntry, PluginPackage, PluginSignature};
+use crate::config::{ConfiguredPlugin, PluginPackage, PluginSignature};
 use crate::error::{HostError, TransportError};
 use crate::host::{HostHandle, LoadedPlugin};
-use crate::registry::{effective_host_capabilities_for_manifest, per_entry_host_capabilities};
+use crate::registry::{effective_host_capabilities_for_manifest, per_tool_host_capabilities};
 use crate::sdk::rpc::method;
 use crate::sdk::{InitContext, InitOutcome, PluginManifest};
 use crate::transport::{
@@ -20,7 +20,7 @@ pub struct StaticRegistration {
 #[allow(clippy::too_many_arguments)]
 pub async fn load_entry(
     plugin_id: &str,
-    entry: &PluginEntry,
+    configured_plugin: &ConfiguredPlugin,
     static_registry: &mut std::collections::HashMap<String, StaticRegistration>,
     host_handle: Arc<HostHandle>,
     agena_version: &str,
@@ -28,7 +28,7 @@ pub async fn load_entry(
     env_lookup: &(dyn Fn(&str) -> Option<String> + Send + Sync),
     trusted_keys: &std::collections::BTreeMap<String, String>,
 ) -> Result<LoadedPlugin, HostError> {
-    let transport: Arc<dyn PluginTransport> = match &entry.package {
+    let transport: Arc<dyn PluginTransport> = match &configured_plugin.package {
         PluginPackage::Static { .. } => {
             let registration =
                 static_registry
@@ -206,15 +206,15 @@ pub async fn load_entry(
         .set_plugin_capabilities(
             plugin_id.to_string(),
             effective_host_capabilities_for_manifest(
-                &prefetched_manifest.entries,
+                &prefetched_manifest.tools,
                 &prefetched_manifest.plugin_capabilities,
             ),
         )
         .await;
     host_handle
-        .set_plugin_entry_capabilities(
+        .set_plugin_tool_capabilities(
             plugin_id.to_string(),
-            per_entry_host_capabilities(&prefetched_manifest.entries),
+            per_tool_host_capabilities(&prefetched_manifest.tools),
         )
         .await;
 
@@ -224,7 +224,7 @@ pub async fn load_entry(
         plugin_id: plugin_id.to_string(),
         host_callback_url: host_handle.callback_url(plugin_id),
         host_callback_token: host_handle.callback_token(plugin_id).await,
-        config: entry.config().clone(),
+        config: configured_plugin.config().clone(),
         protocol_version: crate::sdk::rpc::PROTOCOL_VERSION,
     };
 
@@ -247,15 +247,15 @@ pub async fn load_entry(
             message: e.to_string(),
         })?;
 
-    validate_manifest_config(plugin_id, &outcome.manifest, entry.config())?;
+    validate_manifest_config(plugin_id, &outcome.manifest, configured_plugin.config())?;
 
-    let trust_level = plugin_trust_level(entry, trusted_keys);
-    let provenance = plugin_provenance(entry, trusted_keys);
+    let trust_level = plugin_trust_level(configured_plugin, trusted_keys);
+    let provenance = plugin_provenance(configured_plugin, trusted_keys);
 
     Ok(LoadedPlugin::new(
         plugin_id.to_string(),
-        entry.kind_str(),
-        entry.clone(),
+        configured_plugin.kind_str(),
+        configured_plugin.clone(),
         transport,
         outcome.manifest,
         trust_level,
@@ -264,10 +264,10 @@ pub async fn load_entry(
 }
 
 fn plugin_trust_level(
-    entry: &PluginEntry,
+    configured_plugin: &ConfiguredPlugin,
     trusted_keys: &std::collections::BTreeMap<String, String>,
 ) -> String {
-    match &entry.package {
+    match &configured_plugin.package {
         PluginPackage::Static { .. } => "static".to_string(),
         PluginPackage::Cdylib {
             signature, sha256, ..
@@ -299,11 +299,11 @@ fn plugin_trust_level(
 }
 
 fn plugin_provenance(
-    entry: &PluginEntry,
+    configured_plugin: &ConfiguredPlugin,
     trusted_keys: &std::collections::BTreeMap<String, String>,
 ) -> Vec<String> {
-    let mut provenance = vec![format!("transport:{}", entry.kind_str())];
-    match &entry.package {
+    let mut provenance = vec![format!("transport:{}", configured_plugin.kind_str())];
+    match &configured_plugin.package {
         PluginPackage::Static { .. } => provenance.push("static registration".to_string()),
         PluginPackage::Cdylib {
             path,
@@ -362,6 +362,9 @@ fn validate_manifest_config(
     manifest: &PluginManifest,
     config: &serde_json::Value,
 ) -> Result<(), HostError> {
+    if config.is_null() {
+        return Ok(());
+    }
     let Some(schema) = manifest.config_schema.as_ref() else {
         return Ok(());
     };

@@ -232,7 +232,7 @@ impl SessionRunOptions {
         &self,
         system: Option<String>,
         messages: Vec<Message>,
-        tools: Vec<crate::plugin::registry::PluginEntry>,
+        tools: Vec<crate::plugin::registry::RegisteredTool>,
         native_tools: ProviderNativeToolsConfig,
         prompt_cache_key: Option<String>,
         previous_response_id: Option<String>,

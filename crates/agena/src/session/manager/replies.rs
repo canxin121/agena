@@ -1218,7 +1218,7 @@ impl SessionManager {
         &self,
         _session: &Session,
         options: &SessionRunOptions,
-        tools: &[crate::plugin::registry::PluginEntry],
+        tools: &[crate::plugin::registry::RegisteredTool],
         state: &SessionManagerState,
     ) -> PromptTurnBudget {
         let fallback_budget = state.processor.max_prompt_chars();

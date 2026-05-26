@@ -1,4 +1,4 @@
-//! Plugin tool name registry. Collisions are disambiguated as `plugin/tool`.
+//! Plugin tool name registry. Model-visible tool names are always `plugin/tool`.
 
 use std::collections::BTreeMap;
 
@@ -7,35 +7,51 @@ use serde::{Deserialize, Serialize};
 use crate::sdk::{HostCapability, PluginToolDecl};
 
 #[derive(Debug, Clone)]
-pub struct PluginEntryRegistry {
-    /// `exposed_name → entry`. `exposed_name` is the name shown
-    /// to the model: bare `tool` if unique, else `plugin/tool`.
-    by_exposed: BTreeMap<String, PluginEntry>,
+pub struct PluginToolRegistry {
+    /// `exposed_name -> tool`. `exposed_name` is the name shown
+    /// to the model and is always `plugin/tool`.
+    by_exposed: BTreeMap<String, RegisteredTool>,
     generation: u64,
 }
 
 #[derive(Debug, Clone)]
-pub struct PluginEntrySnapshot {
+pub struct ToolRegistrySnapshot {
     pub generation: u64,
-    pub entries: Vec<PluginEntry>,
+    pub tools: Vec<RegisteredTool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PluginEntry {
+pub struct RegisteredTool {
+    /// Host-local plugin id from `plugins.list.<id>`. This is used to route
+    /// calls back to the loaded transport.
+    pub plugin_id: String,
+    /// Manifest plugin name. This is the namespace shown to the model.
     pub plugin_name: String,
     pub original_name: String,
     pub exposed_name: String,
     pub decl: PluginToolDecl,
 }
 
-impl PluginEntry {
+impl RegisteredTool {
     pub fn new(plugin_name: impl Into<String>, decl: PluginToolDecl) -> Self {
         let plugin_name = plugin_name.into();
+        Self::new_with_plugin_id(plugin_name.clone(), plugin_name, decl)
+    }
+
+    pub fn new_with_plugin_id(
+        plugin_id: impl Into<String>,
+        plugin_name: impl Into<String>,
+        decl: PluginToolDecl,
+    ) -> Self {
+        let plugin_id = plugin_id.into();
+        let plugin_name = plugin_name.into();
         let original_name = decl.name.clone();
+        let exposed_name = exposed_tool_name(&plugin_name, &original_name);
         Self {
+            plugin_id,
             plugin_name,
             original_name: original_name.clone(),
-            exposed_name: original_name,
+            exposed_name,
             decl,
         }
     }
@@ -65,7 +81,7 @@ impl PluginEntry {
     }
 }
 
-impl PluginEntryRegistry {
+impl PluginToolRegistry {
     pub fn new() -> Self {
         Self {
             by_exposed: BTreeMap::new(),
@@ -73,60 +89,71 @@ impl PluginEntryRegistry {
         }
     }
 
-    pub fn extend_from_plugin(&mut self, plugin_name: &str, decls: &[PluginToolDecl]) {
+    pub fn extend_from_plugin(
+        &mut self,
+        plugin_id: &str,
+        plugin_name: &str,
+        decls: &[PluginToolDecl],
+    ) {
+        assert_valid_tool_namespace(plugin_name, "plugin name");
         for decl in decls {
-            self.upsert_from_plugin(plugin_name, decl.clone());
+            self.upsert_from_plugin(plugin_id, plugin_name, decl.clone());
         }
     }
 
-    pub fn upsert_from_plugin(&mut self, plugin_name: &str, decl: PluginToolDecl) -> PluginEntry {
+    pub fn upsert_from_plugin(
+        &mut self,
+        plugin_id: &str,
+        plugin_name: &str,
+        decl: PluginToolDecl,
+    ) -> RegisteredTool {
+        assert_valid_tool_namespace(plugin_name, "plugin name");
         let original_name = decl.name.clone();
-        let mut entries = self.entries_owned();
-        entries.retain(|entry| {
-            !(entry.plugin_name == plugin_name && entry.original_name == original_name)
-        });
-        entries.push(PluginEntry {
+        assert_valid_tool_namespace(&original_name, "tool name");
+        let mut tools = self.registered_tools_owned();
+        tools.retain(|tool| !(tool.plugin_id == plugin_id && tool.original_name == original_name));
+        tools.push(RegisteredTool {
+            plugin_id: plugin_id.to_string(),
             plugin_name: plugin_name.to_string(),
             original_name: original_name.clone(),
-            exposed_name: original_name.clone(),
+            exposed_name: exposed_tool_name(plugin_name, &original_name),
             decl,
         });
-        self.rebuild(entries);
+        self.rebuild(tools);
         self.generation += 1;
-        self.lookup_for_plugin(plugin_name, &original_name)
-            .expect("upserted entry should exist after rebuild")
+        self.lookup_for_plugin(plugin_id, &original_name)
+            .expect("upserted tool should exist after rebuild")
             .clone()
     }
 
     pub fn remove_from_plugin(
         &mut self,
-        plugin_name: &str,
+        plugin_id: &str,
         original_name: &str,
-    ) -> Option<PluginEntry> {
-        let removed = self.lookup_for_plugin(plugin_name, original_name)?.clone();
-        let mut entries = self.entries_owned();
-        entries.retain(|entry| {
-            !(entry.plugin_name == plugin_name && entry.original_name == original_name)
-        });
-        self.rebuild(entries);
+    ) -> Option<RegisteredTool> {
+        assert_valid_tool_namespace(original_name, "tool name");
+        let removed = self.lookup_for_plugin(plugin_id, original_name)?.clone();
+        let mut tools = self.registered_tools_owned();
+        tools.retain(|tool| !(tool.plugin_id == plugin_id && tool.original_name == original_name));
+        self.rebuild(tools);
         self.generation += 1;
         Some(removed)
     }
 
     pub fn remove_exposed_from_plugin(
         &mut self,
-        plugin_name: &str,
+        plugin_id: &str,
         exposed_name: &str,
-    ) -> Option<PluginEntry> {
+    ) -> Option<RegisteredTool> {
         let original_name = self
             .by_exposed
             .get(exposed_name)
-            .filter(|entry| entry.plugin_name == plugin_name)
-            .map(|entry| entry.original_name.clone())?;
-        self.remove_from_plugin(plugin_name, &original_name)
+            .filter(|tool| tool.plugin_id == plugin_id)
+            .map(|tool| tool.original_name.clone())?;
+        self.remove_from_plugin(plugin_id, &original_name)
     }
 
-    pub fn lookup(&self, exposed_name: &str) -> Option<&PluginEntry> {
+    pub fn lookup_tool(&self, exposed_name: &str) -> Option<&RegisteredTool> {
         self.by_exposed.get(exposed_name)
     }
 
@@ -134,18 +161,18 @@ impl PluginEntryRegistry {
         self.generation
     }
 
-    pub fn snapshot(&self) -> PluginEntrySnapshot {
-        PluginEntrySnapshot {
+    pub fn snapshot(&self) -> ToolRegistrySnapshot {
+        ToolRegistrySnapshot {
             generation: self.generation,
-            entries: self.entries_owned(),
+            tools: self.registered_tools_owned(),
         }
     }
 
-    pub fn entries_owned(&self) -> Vec<PluginEntry> {
+    pub fn registered_tools_owned(&self) -> Vec<RegisteredTool> {
         self.by_exposed.values().cloned().collect()
     }
 
-    pub fn entries(&self) -> impl Iterator<Item = &PluginEntry> {
+    pub fn registered_tools(&self) -> impl Iterator<Item = &RegisteredTool> {
         self.by_exposed.values()
     }
 
@@ -153,37 +180,43 @@ impl PluginEntryRegistry {
         self.by_exposed.len()
     }
 
-    fn rebuild(&mut self, mut entries: Vec<PluginEntry>) {
-        let mut counts = BTreeMap::<String, usize>::new();
-        for entry in &entries {
-            *counts.entry(entry.original_name.clone()).or_default() += 1;
+    fn rebuild(&mut self, mut tools: Vec<RegisteredTool>) {
+        for tool in &mut tools {
+            assert_valid_tool_namespace(&tool.plugin_name, "plugin name");
+            assert_valid_tool_namespace(&tool.original_name, "tool name");
+            tool.exposed_name = exposed_tool_name(&tool.plugin_name, &tool.original_name);
         }
-        for entry in &mut entries {
-            entry.exposed_name = if counts
-                .get(&entry.original_name)
-                .copied()
-                .unwrap_or_default()
-                > 1
-            {
-                format!("{}/{}", entry.plugin_name, entry.original_name)
-            } else {
-                entry.original_name.clone()
-            };
-        }
-        self.by_exposed = entries
+        self.by_exposed = tools
             .into_iter()
-            .map(|entry| (entry.exposed_name.clone(), entry))
+            .map(|tool| (tool.exposed_name.clone(), tool))
             .collect();
     }
 
-    fn lookup_for_plugin(&self, plugin_name: &str, original_name: &str) -> Option<&PluginEntry> {
+    fn lookup_for_plugin(&self, plugin_id: &str, original_name: &str) -> Option<&RegisteredTool> {
         self.by_exposed
             .values()
-            .find(|entry| entry.plugin_name == plugin_name && entry.original_name == original_name)
+            .find(|tool| tool.plugin_id == plugin_id && tool.original_name == original_name)
     }
 }
 
-impl Default for PluginEntryRegistry {
+pub fn exposed_tool_name(plugin_name: &str, tool_name: &str) -> String {
+    assert_valid_tool_namespace(plugin_name, "plugin name");
+    assert_valid_tool_namespace(tool_name, "tool name");
+    format!("{plugin_name}/{tool_name}")
+}
+
+fn assert_valid_tool_namespace(value: &str, label: &str) {
+    assert!(
+        !value.trim().is_empty(),
+        "{label} must not be empty for plugin tool exposure"
+    );
+    assert!(
+        !value.contains('/'),
+        "{label} `{value}` must not contain `/`; model-visible tool names use `plugin/tool`"
+    );
+}
+
+impl Default for PluginToolRegistry {
     fn default() -> Self {
         Self::new()
     }
@@ -203,7 +236,7 @@ pub fn effective_host_capabilities(decls: &[PluginToolDecl]) -> Vec<HostCapabili
 
 /// Same as [`effective_host_capabilities`] but additionally folds in
 /// manifest-level `plugin_capabilities`. Used by the host to authorize
-/// plugins that need host capabilities without exposing any tool entry
+/// plugins that need host capabilities without exposing any model-visible tool
 /// (e.g. background skill discovery plugins).
 pub fn effective_host_capabilities_for_manifest(
     decls: &[PluginToolDecl],
@@ -218,12 +251,12 @@ pub fn effective_host_capabilities_for_manifest(
     capabilities
 }
 
-/// Per-entry capability map: each declared entry maps to its own
+/// Per-tool capability map: each declared tool maps to its own
 /// declared `host_capabilities` list. Used by [`HostHandle`] so that a
-/// plugin shipping multiple entries can scope dangerous capabilities to
-/// just the entry that needs them rather than leaking them via the union
-/// to every entry the plugin owns.
-pub fn per_entry_host_capabilities(
+/// plugin shipping multiple tools can scope dangerous capabilities to
+/// just the tool that needs them rather than leaking them via the union
+/// to every tool the plugin owns.
+pub fn per_tool_host_capabilities(
     decls: &[PluginToolDecl],
 ) -> std::collections::HashMap<String, Vec<HostCapability>> {
     let mut out = std::collections::HashMap::new();

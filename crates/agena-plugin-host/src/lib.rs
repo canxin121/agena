@@ -15,8 +15,8 @@ pub mod transport;
 
 pub use agena_plugin_sdk as sdk;
 pub use config::{
-    HttpAuth, PluginEntry, PluginHostConfig, PluginPackage, PluginPolicyConfig, PluginSignature,
-    PluginsConfig, RestartPolicy, TimeoutsConfig, ToolPresentationConfig,
+    ConfiguredPlugin, HttpAuth, PluginHostConfig, PluginPackage, PluginPolicyConfig,
+    PluginSignature, PluginsConfig, RestartPolicy, TimeoutsConfig, ToolPresentationConfig,
 };
 pub use error::{HostError, TransportError};
 pub use host::{
@@ -27,8 +27,8 @@ pub use host::{
 };
 #[cfg(feature = "signing")]
 pub use loader::{verify_sha256, verify_signature, verify_signature_bytes};
-pub use logs::{PluginLogEntry, PluginLogStore};
-pub use registry::PluginEntryRegistry;
+pub use logs::{PluginLogRecord, PluginLogStore};
+pub use registry::PluginToolRegistry;
 pub use sdk::host_api::{
     HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
     HostStatuslineSegment, HostThemePalette,

@@ -76,7 +76,7 @@ use crate::terminal;
 use crate::tui_config::{TuiConfig, TuiStatusLineConfig};
 use crate::ui_text;
 use agena_api_server::local_api::{
-    ModelCatalogEntryResource, ModelCatalogListResponse, ModelCatalogResponse,
+    CatalogModelResource, ModelCatalogListResponse, ModelCatalogResponse,
 };
 use agena_tui_components::{
     ConfirmDialogState, DashboardSelectionState, DetailTextLine, DetailTextSpec, Editor,
@@ -91,10 +91,12 @@ use agena_tui_components::{
     refresh_search_panels_overlay,
 };
 
+mod plugin_workbench;
 mod provider_studio;
 mod transcript_view;
 mod view;
 
+use self::plugin_workbench::*;
 use self::provider_studio::*;
 
 use self::transcript_view::{
@@ -104,7 +106,6 @@ use self::transcript_view::{
 
 const MESSAGE_PAGE_SIZE: u64 = 40;
 const TIMELINE_EVENT_LIMIT: u64 = 200;
-const PLUGIN_INSPECTOR_LOG_LIMIT: usize = 20;
 const UI_TICK_MS: u64 = 32;
 const REFRESH_INTERVAL_MS: u64 = 250;
 const DRAFT_PERSIST_INTERVAL_MS: u64 = 250;
@@ -305,7 +306,7 @@ struct DraftStore {
 
 #[derive(Debug, Clone, Default)]
 struct PromptHistory {
-    entries: Vec<String>,
+    items: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -620,7 +621,7 @@ enum Route {
     Picker(PickerOverlay),
     SessionModelChooser(SessionModelChooserOverlay),
     Timeline(TimelineOverlay),
-    PluginInspector(PluginInspectorOverlay),
+    PluginWorkbench(Box<PluginWorkbenchOverlay>),
     ProviderStudio(Box<ProviderStudioOverlay>),
     ModelCatalogStudio(ModelCatalogStudioOverlay),
 }
@@ -759,14 +760,14 @@ impl SectionedListSection for PermissionStudioSection {
 enum PermissionStudioSectionId {
     RootPath,
     RootNetwork,
-    RootEntries,
+    RootTools,
     PathDefaults,
     PathRules,
     NetworkZones,
     NetworkRules,
-    EntryTags,
-    EntryNames,
-    EntryCommandRules,
+    ToolTags,
+    ToolNames,
+    ToolCommandRules,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -776,9 +777,9 @@ enum PermissionStudioPage {
     PathRules,
     NetworkZones,
     NetworkRules,
-    EntryTags,
-    EntryNames,
-    EntryCommandRules,
+    ToolTags,
+    ToolNames,
+    ToolCommandRules,
 }
 
 type PermissionStudioEditor = EditorDialogState<PermissionStudioEditorAction>;
@@ -922,10 +923,10 @@ enum SettingsPickerAction {
     EditField(SettingsFieldSpec),
     EditRuntimeSetting(RuntimeSettingSpec),
     ToggleToolDescriptionMode,
-    TogglePluginEntryDisabled {
+    TogglePluginConfigEnabled {
         plugin_id: String,
-        entry: JsonValue,
-        disabled: bool,
+        configured_plugin: JsonValue,
+        enabled: bool,
     },
     OpenAgent(Box<AgentDescriptor>),
     OpenProviderWorkbench,
@@ -937,6 +938,7 @@ enum SettingsPickerAction {
     OpenGlobalPermissionWorkbench,
     OpenCurrentSessionPermissionWorkbench,
     OpenPermissionRules,
+    OpenPluginWorkbench,
     OpenConfigFile,
 }
 
@@ -1138,10 +1140,10 @@ struct PathBrowserOverlayMeta {
 
 type FileAttachOverlay = SearchListOverlay<PathBuf, TypedPathValue, FileAttachOverlayMeta, Editor>;
 type PathBrowserOverlay =
-    SearchListOverlay<PathBrowserEntry, TypedPathValue, PathBrowserOverlayMeta, Editor>;
+    SearchListOverlay<PathBrowserItem, TypedPathValue, PathBrowserOverlayMeta, Editor>;
 
 #[derive(Debug, Clone)]
-struct PathBrowserEntry {
+struct PathBrowserItem {
     path: PathBuf,
     label: String,
     detail: String,
@@ -1181,23 +1183,6 @@ struct TimelineItem {
     linked_message_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, Default)]
-struct PluginInspectorOverlayMeta;
-
-type PluginInspectorOverlay =
-    SearchPanelsOverlay<PluginInspectorItem, PluginInspectorOverlayMeta, Editor>;
-
-#[derive(Debug, Clone)]
-struct PluginInspectorItem {
-    plugin_id: String,
-    summary: String,
-    detail_body: Text<'static>,
-    logs: String,
-    search_text: String,
-    copy_text: String,
-    state: agena::plugin::status::PluginRunState,
-}
-
 #[derive(Debug, Clone)]
 struct ProviderStudioOverlay {
     title: String,
@@ -1212,7 +1197,7 @@ struct ProviderStudioOverlay {
     adapter_selection_touched: bool,
     selected_adapter_ids: BTreeSet<String>,
     selected_model_keys: BTreeSet<String>,
-    catalog_matches: BTreeMap<String, ModelCatalogEntryResource>,
+    catalog_matches: BTreeMap<String, CatalogModelResource>,
     listing_adapter_models: bool,
     saving: bool,
     pending_adapter_models_key: Option<String>,
@@ -1296,7 +1281,7 @@ struct ModelCatalogStudioOverlay {
     offset: usize,
     limit: usize,
     loading: bool,
-    workbench: ListWorkbenchState<ModelCatalogEntryResource, LineInputOverlay>,
+    workbench: ListWorkbenchState<CatalogModelResource, LineInputOverlay>,
 }
 
 #[derive(Debug, Clone)]
@@ -1434,7 +1419,7 @@ impl SearchListCustomValue<PathBrowserOverlayMeta> for TypedPathValue {
     }
 }
 
-impl SearchListItem for PathBrowserEntry {
+impl SearchListItem for PathBrowserItem {
     fn search_list_label(&self) -> String {
         self.label.clone()
     }
@@ -1509,7 +1494,7 @@ impl SearchListItem for PickerItem {
                 commands::command_matches_query(spec, query)
                     || self.detail.to_ascii_lowercase().contains(query)
             }
-            PickerValue::RuntimeEntry(_) => {
+            PickerValue::RuntimeTool(_) => {
                 self.label.to_ascii_lowercase().contains(query)
                     || self.detail.to_ascii_lowercase().contains(query)
             }
@@ -1562,7 +1547,7 @@ struct PickerItem {
 #[derive(Debug, Clone)]
 enum PickerValue {
     Command(&'static CommandSpec),
-    RuntimeEntry(String),
+    RuntimeTool(String),
     Provider(ProviderSummaryResource),
     Session(i64),
     Message(i64),
@@ -1741,7 +1726,7 @@ struct SlashCommandSuggestionItem {
 #[derive(Debug, Clone)]
 enum SlashCommandSuggestionValue {
     Command(&'static CommandSpec),
-    RuntimeEntry(String),
+    RuntimeTool(String),
 }
 
 #[derive(Debug, Clone)]
@@ -1838,7 +1823,7 @@ struct PersistentComposerDraftElement {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct PersistentPromptHistoryEntry {
+struct PromptHistoryRecord {
     text: String,
 }
 
@@ -2306,7 +2291,7 @@ impl App {
         }
 
         if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('P')) {
-            self.open_plugin_inspector_overlay("");
+            self.open_plugin_workbench("");
             return;
         }
 
@@ -2482,7 +2467,7 @@ impl App {
                 self.handle_session_model_chooser_overlay_key(key, dialog)
             }
             Route::Timeline(dialog) => self.handle_timeline_overlay_key(key, dialog),
-            Route::PluginInspector(dialog) => self.handle_plugin_inspector_overlay_key(key, dialog),
+            Route::PluginWorkbench(dialog) => self.handle_plugin_workbench_key(key, dialog),
             Route::ProviderStudio(dialog) => self.handle_provider_studio_overlay_key(key, dialog),
             Route::ModelCatalogStudio(dialog) => {
                 self.handle_model_catalog_studio_overlay_key(key, dialog)
@@ -3159,15 +3144,20 @@ impl App {
                 let Some(item) = dialog.state.selected_item().cloned() else {
                     return false;
                 };
-                let SettingsPickerAction::TogglePluginEntryDisabled {
+                let SettingsPickerAction::TogglePluginConfigEnabled {
                     plugin_id,
-                    entry,
-                    disabled,
+                    configured_plugin,
+                    enabled,
                 } = item.action
                 else {
                     return false;
                 };
-                self.toggle_plugin_entry_disabled(plugin_id.as_str(), entry, disabled, dialog);
+                self.toggle_plugin_config_enabled(
+                    plugin_id.as_str(),
+                    configured_plugin,
+                    enabled,
+                    dialog,
+                );
                 false
             }
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l')
@@ -3834,7 +3824,7 @@ impl App {
     fn path_browser_entries_with_root(
         workspace_root: &Path,
         dialog: &PathBrowserOverlay,
-    ) -> Vec<PathBrowserEntry> {
+    ) -> Vec<PathBrowserItem> {
         let raw = dialog.input.text().trim();
         let resolved = Self::resolve_browser_input_path_with_root(workspace_root, raw);
         let (directory, needle) = if resolved.is_dir() {
@@ -3855,7 +3845,7 @@ impl App {
 
         let mut entries = Vec::new();
         if let Some(parent) = directory.parent() {
-            entries.push(PathBrowserEntry {
+            entries.push(PathBrowserItem {
                 path: parent.to_path_buf(),
                 label: "../".to_string(),
                 detail: parent.display().to_string(),
@@ -3879,7 +3869,7 @@ impl App {
                 if !needle.is_empty() && !name.to_ascii_lowercase().contains(needle.as_str()) {
                     return None;
                 }
-                Some(PathBrowserEntry {
+                Some(PathBrowserItem {
                     label: if is_dir {
                         format!("{name}/")
                     } else {
@@ -4110,10 +4100,10 @@ impl App {
                     PermissionStudioPage::NetworkRules => {
                         Some(PermissionStudioSectionId::NetworkRules)
                     }
-                    PermissionStudioPage::EntryTags => Some(PermissionStudioSectionId::EntryTags),
-                    PermissionStudioPage::EntryNames => Some(PermissionStudioSectionId::EntryNames),
-                    PermissionStudioPage::EntryCommandRules => {
-                        Some(PermissionStudioSectionId::EntryCommandRules)
+                    PermissionStudioPage::ToolTags => Some(PermissionStudioSectionId::ToolTags),
+                    PermissionStudioPage::ToolNames => Some(PermissionStudioSectionId::ToolNames),
+                    PermissionStudioPage::ToolCommandRules => {
+                        Some(PermissionStudioSectionId::ToolCommandRules)
                     }
                     PermissionStudioPage::PathDefaults
                     | PermissionStudioPage::NetworkZones
@@ -4214,8 +4204,8 @@ impl App {
                 self.persist_permission_studio(dialog, permission)?;
                 self.set_permission_studio_page_with_section(
                     dialog,
-                    PermissionStudioPage::EntryTags,
-                    Some(PermissionStudioSectionId::EntryTags),
+                    PermissionStudioPage::ToolTags,
+                    Some(PermissionStudioSectionId::ToolTags),
                     PermissionStudioFocus::Items,
                 );
             }
@@ -4243,8 +4233,8 @@ impl App {
                 self.persist_permission_studio(dialog, permission)?;
                 self.set_permission_studio_page_with_section(
                     dialog,
-                    PermissionStudioPage::EntryNames,
-                    Some(PermissionStudioSectionId::EntryNames),
+                    PermissionStudioPage::ToolNames,
+                    Some(PermissionStudioSectionId::ToolNames),
                     PermissionStudioFocus::Items,
                 );
             }
@@ -4272,8 +4262,8 @@ impl App {
                 self.persist_permission_studio(dialog, permission)?;
                 self.set_permission_studio_page_with_section(
                     dialog,
-                    PermissionStudioPage::EntryCommandRules,
-                    Some(PermissionStudioSectionId::EntryCommandRules),
+                    PermissionStudioPage::ToolCommandRules,
+                    Some(PermissionStudioSectionId::ToolCommandRules),
                     PermissionStudioFocus::Items,
                 );
             }
@@ -4815,50 +4805,6 @@ impl App {
         }
     }
 
-    fn handle_plugin_inspector_overlay_key(
-        &mut self,
-        key: KeyEvent,
-        dialog: &mut PluginInspectorOverlay,
-    ) -> bool {
-        match key.code {
-            KeyCode::Enter => false,
-            KeyCode::Tab => {
-                if let Some(item) = dialog.selected_item() {
-                    dialog.input.set_text(item.plugin_id.clone());
-                    Self::refresh_plugin_inspector_overlay(dialog);
-                }
-                false
-            }
-            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.reload_plugin_inspector_overlay(dialog);
-                false
-            }
-            KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(item) = dialog.selected_item() {
-                    match set_clipboard_text(item.copy_text.as_str()) {
-                        Ok(()) => self
-                            .flash_success(ui_text::t(&self.i18n, "flash-timeline-event-copied")),
-                        Err(error) => self.flash_error(self.i18n.text_args(
-                            "flash-clipboard-copy-failed",
-                            &crate::fl_args!("error" => error.to_string()),
-                        )),
-                    }
-                }
-                false
-            }
-            _ => match dialog.handle_filter_input_key(key, 10) {
-                SearchInputKeyResult::Close => true,
-                SearchInputKeyResult::Navigated => false,
-                SearchInputKeyResult::Edited { changed } => {
-                    if changed {
-                        Self::refresh_plugin_inspector_overlay(dialog);
-                    }
-                    false
-                }
-            },
-        }
-    }
-
     fn handle_provider_studio_overlay_key(
         &mut self,
         key: KeyEvent,
@@ -5163,10 +5109,8 @@ impl App {
                     Self::refresh_timeline_overlay(dialog);
                     handled_route = true;
                 }
-                Route::PluginInspector(dialog) => {
-                    dialog.input.flush_all_pending_input();
-                    dialog.input.insert_str(text.as_str());
-                    Self::refresh_plugin_inspector_overlay(dialog);
+                Route::PluginWorkbench(dialog) => {
+                    Self::paste_plugin_workbench(dialog, text.as_str());
                     handled_route = true;
                 }
                 Route::ProviderStudio(dialog) => {
@@ -5834,7 +5778,7 @@ impl App {
         search.query.flush_all_pending_input();
         let query = search.query.text().trim().to_ascii_lowercase();
         search.items = prompt_history
-            .entries
+            .items
             .iter()
             .enumerate()
             .rev()
@@ -6100,7 +6044,7 @@ impl App {
 
         let name = match &item.value {
             SlashCommandSuggestionValue::Command(spec) => spec.name,
-            SlashCommandSuggestionValue::RuntimeEntry(name) => name.as_str(),
+            SlashCommandSuggestionValue::RuntimeTool(name) => name.as_str(),
         };
         let replacement = format!("/{name}");
         self.slash_command_suggestions = None;
@@ -6186,15 +6130,15 @@ impl App {
             .collect::<Vec<_>>();
 
         items.extend(
-            self.runtime_entry_command_rows()
+            self.runtime_tool_command_rows()
                 .into_iter()
-                .filter(|entry| runtime_entry_matches_slash_query(entry.label.as_str(), &query))
+                .filter(|entry| runtime_tool_matches_slash_query(entry.label.as_str(), &query))
                 .map(|entry| {
                     let label = entry.label;
                     SlashCommandSuggestionItem {
                         label: format!("/{label}"),
                         detail: entry.detail,
-                        value: SlashCommandSuggestionValue::RuntimeEntry(label),
+                        value: SlashCommandSuggestionValue::RuntimeTool(label),
                     }
                 }),
         );
@@ -7881,7 +7825,7 @@ impl App {
         let Some((name, _)) = commands::parse_invocation(input) else {
             return false;
         };
-        self.backend.runtime_entry_exists(name)
+        self.backend.runtime_tool_exists(name)
     }
 
     /// Primary submit action (Ctrl+Enter by default). When the AI is
@@ -7989,8 +7933,8 @@ impl App {
                 ));
                 return;
             }
-            if self.backend.runtime_entry_exists(name) {
-                self.execute_runtime_entry_prompt(name, args);
+            if self.backend.runtime_tool_exists(name) {
+                self.execute_runtime_tool_prompt(name, args);
                 return;
             }
         }
@@ -8659,18 +8603,6 @@ impl App {
         )
     }
 
-    fn build_plugin_inspector_overlay(&self, query: &str) -> PluginInspectorOverlay {
-        self.build_search_panels_overlay(
-            ui_text::t(&self.i18n, "overlay-plugins-title"),
-            ui_text::t(&self.i18n, "overlay-plugins-prompt"),
-            ui_text::t(&self.i18n, "overlay-plugins-empty"),
-            ui_text::t(&self.i18n, "overlay-plugins-footer"),
-            Editor::from_text(query.to_string()),
-            false,
-            PluginInspectorOverlayMeta,
-        )
-    }
-
     fn open_file_attach_overlay(&mut self) {
         self.overlay = Some(Overlay::FileAttach(self.build_file_attach_overlay()));
     }
@@ -8692,12 +8624,6 @@ impl App {
         };
         self.current_route = Route::Timeline(self.build_timeline_overlay(session_id));
         self.request_timeline(session_id, limit);
-    }
-
-    fn open_plugin_inspector_overlay(&mut self, query: &str) {
-        let mut dialog = self.build_plugin_inspector_overlay(query);
-        self.reload_plugin_inspector_overlay(&mut dialog);
-        self.current_route = Route::PluginInspector(dialog);
     }
 
     fn open_settings_studio(&mut self, query: &str) {
@@ -8724,7 +8650,7 @@ impl App {
         let agents = self.backend.list_agent_descriptors();
         let default_agent = self.backend.default_agent_name();
         let plugins_default_mode = settings_studio_plugins_default_mode(&sources);
-        let plugin_entry_items = settings_studio_plugin_entry_items(
+        let plugin_config_items = settings_studio_plugin_config_items(
             &self.i18n,
             &sources,
             &self.backend.plugin_statuses(),
@@ -8747,7 +8673,7 @@ impl App {
                 });
         let model_catalog = self
             .backend
-            .list_model_catalog_entries("", 0, 1)
+            .list_model_catalog_models("", 0, 1)
             .map_err(|error| error.to_string())?;
 
         let general_items = settings_studio_general_items(&self.i18n, &sources);
@@ -8828,9 +8754,9 @@ impl App {
                 summary: self.i18n.text_args(
                     "overlay-settings-section-plugin-entries-summary",
                     &crate::fl_args!(
-                        "count" => plugin_entry_items.len() as i64,
-                        "disabled" => settings_studio_plugin_entry_disabled_count(
-                            &plugin_entry_items
+                        "count" => plugin_config_items.len() as i64,
+                        "inactive" => settings_studio_plugin_config_inactive_count(
+                            &plugin_config_items
                         ) as i64,
                     ),
                 ),
@@ -8838,7 +8764,7 @@ impl App {
                     &self.i18n,
                     "overlay-settings-section-plugin-entries-description",
                 ),
-                items: plugin_entry_items,
+                items: plugin_config_items,
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::Agents,
@@ -8879,7 +8805,7 @@ impl App {
                 label: ui_text::t(&self.i18n, "overlay-settings-section-model-catalog-label"),
                 summary: self.i18n.text_args(
                     "overlay-settings-section-model-catalog-summary",
-                    &crate::fl_args!("count" => model_catalog.summary.entry_count as i64),
+                    &crate::fl_args!("count" => model_catalog.summary.model_count as i64),
                 ),
                 description: ui_text::t(
                     &self.i18n,
@@ -9253,13 +9179,13 @@ impl App {
             PermissionStudioPage::NetworkRules => PermissionStudioEditorAction::AddNetworkRule {
                 duplicate_from: None,
             },
-            PermissionStudioPage::EntryTags => PermissionStudioEditorAction::AddToolTag {
+            PermissionStudioPage::ToolTags => PermissionStudioEditorAction::AddToolTag {
                 duplicate_from: None,
             },
-            PermissionStudioPage::EntryNames => PermissionStudioEditorAction::AddToolName {
+            PermissionStudioPage::ToolNames => PermissionStudioEditorAction::AddToolName {
                 duplicate_from: None,
             },
-            PermissionStudioPage::EntryCommandRules => PermissionStudioEditorAction::AddToolRule {
+            PermissionStudioPage::ToolCommandRules => PermissionStudioEditorAction::AddToolRule {
                 duplicate_from: None,
             },
         };
@@ -9310,7 +9236,7 @@ impl App {
                     duplicate_from: Some(duplicate_from),
                 }
             }
-            PermissionStudioPage::EntryTags => {
+            PermissionStudioPage::ToolTags => {
                 let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog)
                 else {
                     self.flash_warning(ui_text::t(
@@ -9323,7 +9249,7 @@ impl App {
                     duplicate_from: Some(duplicate_from),
                 }
             }
-            PermissionStudioPage::EntryNames => {
+            PermissionStudioPage::ToolNames => {
                 let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog)
                 else {
                     self.flash_warning(ui_text::t(
@@ -9336,7 +9262,7 @@ impl App {
                     duplicate_from: Some(duplicate_from),
                 }
             }
-            PermissionStudioPage::EntryCommandRules => {
+            PermissionStudioPage::ToolCommandRules => {
                 let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog)
                 else {
                     self.flash_warning(ui_text::t(
@@ -9408,7 +9334,7 @@ impl App {
                     ConfirmAction::PermissionStudioDeleteNetworkRule { target: label },
                 )
             }
-            PermissionStudioPage::EntryTags => {
+            PermissionStudioPage::ToolTags => {
                 let Some(label) = self.permission_studio_selected_item_label(dialog) else {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
@@ -9428,7 +9354,7 @@ impl App {
                     ConfirmAction::PermissionStudioDeleteToolTag { key: label },
                 )
             }
-            PermissionStudioPage::EntryNames => {
+            PermissionStudioPage::ToolNames => {
                 let Some(label) = self.permission_studio_selected_item_label(dialog) else {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
@@ -9448,7 +9374,7 @@ impl App {
                     ConfirmAction::PermissionStudioDeleteToolName { key: label },
                 )
             }
-            PermissionStudioPage::EntryCommandRules => {
+            PermissionStudioPage::ToolCommandRules => {
                 let Some(label) = self.permission_studio_selected_item_label(dialog) else {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
@@ -9602,12 +9528,17 @@ impl App {
                 self.toggle_tool_description_mode(dialog);
                 false
             }
-            SettingsPickerAction::TogglePluginEntryDisabled {
+            SettingsPickerAction::TogglePluginConfigEnabled {
                 plugin_id,
-                entry,
-                disabled,
+                configured_plugin,
+                enabled,
             } => {
-                self.toggle_plugin_entry_disabled(plugin_id.as_str(), entry, disabled, dialog);
+                self.toggle_plugin_config_enabled(
+                    plugin_id.as_str(),
+                    configured_plugin,
+                    enabled,
+                    dialog,
+                );
                 false
             }
             SettingsPickerAction::OpenAgent(agent) => {
@@ -9665,6 +9596,16 @@ impl App {
                 self.open_permission_rule_picker("");
                 false
             }
+            SettingsPickerAction::OpenPluginWorkbench => {
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
+                match self.build_plugin_workbench("") {
+                    Ok(workbench) => {
+                        self.current_route = Route::PluginWorkbench(Box::new(workbench));
+                    }
+                    Err(error) => self.flash_error(error),
+                }
+                false
+            }
             SettingsPickerAction::OpenConfigFile => {
                 self.open_runtime_config_in_editor();
                 false
@@ -9710,6 +9651,9 @@ impl App {
                 self.build_permission_rule_picker_overlay(dialog.input.text())
                     .map(Route::Picker)
                     .unwrap_or(Route::Picker(dialog))
+            }
+            Route::PluginWorkbench(dialog) => {
+                Route::PluginWorkbench(Box::new(self.refresh_restored_plugin_workbench(*dialog)))
             }
             other => other,
         }
@@ -10557,31 +10501,31 @@ impl App {
         }
     }
 
-    fn toggle_plugin_entry_disabled(
+    fn toggle_plugin_config_enabled(
         &mut self,
         plugin_id: &str,
-        entry: JsonValue,
-        disabled: bool,
+        configured_plugin: JsonValue,
+        enabled: bool,
         dialog: &mut SettingsStudioOverlay,
     ) {
-        let Some(mut entry_object) = entry.as_object().cloned() else {
+        let Some(mut plugin_object) = configured_plugin.as_object().cloned() else {
             self.flash_error(self.i18n.text_args(
-                "flash-plugin-entry-not-object",
+                "flash-plugin-config-not-object",
                 &crate::fl_args!("plugin_id" => plugin_id),
             ));
             return;
         };
-        entry_object.insert("disabled".to_string(), JsonValue::Bool(!disabled));
+        plugin_object.insert("enabled".to_string(), JsonValue::Bool(!enabled));
         match self.block_on_async(self.backend.set_config_setting(
             &format!("plugins.list.{}", quoted_settings_segment(plugin_id)),
-            JsonValue::Object(entry_object),
+            JsonValue::Object(plugin_object),
         )) {
             Ok(_) => {
                 self.flash_success(self.i18n.text_args(
-                    if disabled {
-                        "flash-plugin-entry-enabled"
+                    if enabled {
+                        "flash-plugin-config-disabled"
                     } else {
-                        "flash-plugin-entry-disabled"
+                        "flash-plugin-config-enabled"
                     },
                     &crate::fl_args!("plugin_id" => plugin_id),
                 ));
@@ -10797,12 +10741,12 @@ impl App {
             })
             .collect::<Vec<_>>();
         all_items.extend(
-            self.runtime_entry_command_rows()
+            self.runtime_tool_command_rows()
                 .into_iter()
                 .map(|entry| PickerItem {
                     label: format!("/{}", entry.label),
                     detail: entry.detail,
-                    value: PickerValue::RuntimeEntry(entry.label),
+                    value: PickerValue::RuntimeTool(entry.label),
                 }),
         );
         let overlay = self.build_picker_overlay(
@@ -10818,9 +10762,9 @@ impl App {
         self.current_route = Route::Picker(overlay);
     }
 
-    fn runtime_entry_command_rows(&self) -> Vec<crate::backend::InspectorRow> {
+    fn runtime_tool_command_rows(&self) -> Vec<crate::backend::InspectorRow> {
         self.backend
-            .runtime_entry_rows()
+            .runtime_tool_rows()
             .into_iter()
             .filter(|entry| commands::find_command(entry.label.as_str()).is_none())
             .collect()
@@ -11086,7 +11030,7 @@ impl App {
                 last_refresh_at: None,
                 last_successful_source: None,
                 last_error: None,
-                entry_count: 0,
+                model_count: 0,
             },
             total: 0,
             offset: 0,
@@ -11107,7 +11051,7 @@ impl App {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = backend
-                .list_model_catalog_entries(query.as_str(), offset, 50)
+                .list_model_catalog_models(query.as_str(), offset, 50)
                 .map_err(|error| error.to_string());
             let _ = tx.send(AppMessage::ModelCatalogLoaded {
                 query,
@@ -11906,21 +11850,23 @@ impl App {
                 })
             })
             .collect::<Vec<_>>();
-        let catalog_entries = self.backend.lookup_model_catalog_entries(&lookup_ids);
+        let catalog_entries = self.backend.lookup_model_catalog_models(&lookup_ids);
         dialog.catalog_matches = dialog
             .adapter_models
             .iter()
             .flat_map(|adapter| {
-                adapter.models.iter().filter_map(|model| {
-                    provider_studio_catalog_match_entry(model, &catalog_entries).map(|entry| {
-                        (
-                            provider_studio_model_key(
-                                adapter.adapter_id.as_str(),
-                                model.id.as_str(),
-                            ),
-                            entry.clone(),
-                        )
-                    })
+                adapter.models.iter().filter_map(|provider_model| {
+                    provider_studio_catalog_match_model(provider_model, &catalog_entries).map(
+                        |catalog_model| {
+                            (
+                                provider_studio_model_key(
+                                    adapter.adapter_id.as_str(),
+                                    provider_model.id.as_str(),
+                                ),
+                                catalog_model.clone(),
+                            )
+                        },
+                    )
                 })
             })
             .collect();
@@ -12123,35 +12069,14 @@ impl App {
         refresh_search_panels_overlay(dialog, |item, query| item.search_text.contains(query));
     }
 
-    fn reload_plugin_inspector_overlay(&self, dialog: &mut PluginInspectorOverlay) {
-        dialog.all_items = self
-            .backend
-            .plugin_statuses()
-            .into_iter()
-            .map(|status| {
-                let plugin_id = status.plugin_id.clone();
-                let inspect = self.backend.plugin_inspect(plugin_id.as_str());
-                let logs =
-                    self.backend
-                        .plugin_logs(plugin_id.as_str(), None, PLUGIN_INSPECTOR_LOG_LIMIT);
-                build_plugin_inspector_item(&self.i18n, status, inspect, logs)
-            })
-            .collect();
-        Self::refresh_plugin_inspector_overlay(dialog);
-    }
-
-    fn refresh_plugin_inspector_overlay(dialog: &mut PluginInspectorOverlay) {
-        refresh_search_panels_overlay(dialog, |item, query| item.search_text.contains(query));
-    }
-
     fn handle_picker_selection(&mut self, kind: PickerKind, item: PickerItem) {
         match (kind, item.value) {
             (PickerKind::Commands, PickerValue::Command(spec)) => {
                 self.execute_command(spec, "");
             }
-            (PickerKind::Commands, PickerValue::RuntimeEntry(entry_name)) => {
+            (PickerKind::Commands, PickerValue::RuntimeTool(tool_name)) => {
                 self.composer
-                    .set_text(format!("/{entry_name} ").trim_end().to_string());
+                    .set_text(format!("/{tool_name} ").trim_end().to_string());
                 self.focus = Focus::Composer;
                 self.sync_composer_suggestions();
             }
@@ -12512,7 +12437,7 @@ impl App {
         }
     }
 
-    fn execute_runtime_entry_prompt(&mut self, entry_name: &str, args: &str) {
+    fn execute_runtime_tool_prompt(&mut self, tool_name: &str, args: &str) {
         let target_session_id = self
             .transcript
             .session_id
@@ -12520,7 +12445,7 @@ impl App {
             .unwrap_or(-1);
         let prompt = match self
             .backend
-            .runtime_entry_prompt(target_session_id, entry_name, args)
+            .runtime_tool_prompt(target_session_id, tool_name, args)
         {
             Ok(prompt) => prompt,
             Err(error) => {
@@ -12683,7 +12608,7 @@ impl App {
     }
 
     fn handle_plugins_command(&mut self, _spec: &'static CommandSpec, args: &str) {
-        self.open_plugin_inspector_overlay(args.trim());
+        self.open_plugin_workbench(args.trim());
     }
 
     fn handle_settings_command(&mut self, args: &str) {
@@ -12702,7 +12627,7 @@ impl App {
     }
 
     fn handle_review_command(&mut self, args: &str) {
-        self.execute_runtime_entry_prompt("review", args);
+        self.execute_runtime_tool_prompt("review", args);
     }
 
     fn handle_worktree_command(&mut self, args: &str) {
@@ -13327,7 +13252,7 @@ impl App {
                 Self::refresh_session_model_chooser_overlay(dialog, false, None);
             }
             Route::Timeline(dialog) => dialog.input.flush_pending_input_if_due(now),
-            Route::PluginInspector(dialog) => dialog.input.flush_pending_input_if_due(now),
+            Route::PluginWorkbench(dialog) => Self::flush_plugin_workbench_input(dialog, now),
             Route::ProviderStudio(dialog) => {
                 if let Some(editor) = dialog.editor.as_mut() {
                     editor.input.flush_pending_input_if_due(now);
@@ -14864,62 +14789,55 @@ fn settings_studio_plugins_count(sources: &ConfigJsonSources, path: &str) -> usi
         .unwrap_or(0)
 }
 
-fn settings_studio_plugin_entry_items(
+fn settings_studio_plugin_config_items(
     i18n: &I18n,
     sources: &ConfigJsonSources,
     runtime_statuses: &[agena::plugin::status::PluginStatus],
 ) -> Vec<SettingsStudioItem> {
-    let plugin_entries_value =
+    let plugin_configs_value =
         get_json_path(&sources.effective, Some("plugins.list")).unwrap_or(JsonValue::Null);
-    let plugin_entries = plugin_entries_value
+    let plugin_configs = plugin_configs_value
         .as_object()
         .cloned()
         .unwrap_or_default();
-    let file_entries_value =
+    let file_configs_value =
         get_json_path(&sources.file, Some("plugins.list")).unwrap_or(JsonValue::Null);
-    let file_entries = file_entries_value.as_object().cloned().unwrap_or_default();
+    let file_configs = file_configs_value.as_object().cloned().unwrap_or_default();
 
     let mut items = runtime_statuses
         .iter()
         .filter_map(|status| {
             let plugin_id = status.plugin_id.as_str();
-            let (entry, source) = if let Some(entry) = plugin_entries.get(plugin_id) {
-                (
-                    entry.clone(),
-                    if file_entries.contains_key(plugin_id) {
-                        "file".to_string()
-                    } else {
-                        "runtime".to_string()
-                    },
-                )
-            } else if status.kind == "static" {
-                (
-                    json!({
-                        "kind": "static",
-                        "disabled": false,
-                    }),
-                    "builtin".to_string(),
-                )
-            } else {
-                return None;
-            };
-            let entry_object = entry.as_object()?;
-            let disabled = entry_object
-                .get("disabled")
+            let (configured_plugin, source) =
+                if let Some(configured_plugin) = plugin_configs.get(plugin_id) {
+                    (
+                        configured_plugin.clone(),
+                        if file_configs.contains_key(plugin_id) {
+                            "file".to_string()
+                        } else {
+                            "runtime".to_string()
+                        },
+                    )
+                } else {
+                    return None;
+                };
+            let configured_plugin_object = configured_plugin.as_object()?;
+            let enabled = configured_plugin_object
+                .get("enabled")
                 .and_then(JsonValue::as_bool)
-                .unwrap_or(false);
+                .unwrap_or(true);
             let value = i18n.text_args(
-                "settings-plugin-entry-value",
+                "settings-plugin-config-value",
                 &crate::fl_args!(
                     "kind" => status.kind.to_string(),
-                    "source" => settings_plugin_entry_source_label(i18n, source.as_str()),
+                    "source" => settings_plugin_config_source_label(i18n, source.as_str()),
                     "state" => status.state.as_str().to_string(),
                     "status" => ui_text::t(
                         i18n,
-                        if disabled {
-                            "settings-plugin-entry-status-disabled"
+                        if enabled {
+                            "settings-plugin-config-status-enabled"
                         } else {
-                            "settings-plugin-entry-status-enabled"
+                            "settings-plugin-config-status-disabled"
                         },
                     )
                 ),
@@ -14927,17 +14845,17 @@ fn settings_studio_plugin_entry_items(
             Some(SettingsStudioItem {
                 label: status.plugin_id.clone(),
                 value,
-                detail: plugin_entry_detail_text(
+                detail: plugin_config_detail_text(
                     i18n,
                     status,
-                    entry_object,
+                    configured_plugin_object,
                     source.as_str(),
-                    disabled,
+                    enabled,
                 ),
-                action: SettingsPickerAction::TogglePluginEntryDisabled {
+                action: SettingsPickerAction::TogglePluginConfigEnabled {
                     plugin_id: status.plugin_id.clone(),
-                    entry,
-                    disabled,
+                    configured_plugin,
+                    enabled,
                 },
             })
         })
@@ -14946,48 +14864,47 @@ fn settings_studio_plugin_entry_items(
     items
 }
 
-fn settings_plugin_entry_source_label(i18n: &I18n, source: &str) -> String {
+fn settings_plugin_config_source_label(i18n: &I18n, source: &str) -> String {
     ui_text::t(
         i18n,
         match source {
-            "file" => "settings-plugin-entry-source-file",
-            "runtime" => "settings-plugin-entry-source-runtime",
-            "builtin" => "settings-plugin-entry-source-builtin",
+            "file" => "settings-plugin-config-source-file",
+            "runtime" => "settings-plugin-config-source-runtime",
             _ => "value-unknown",
         },
     )
 }
 
-fn plugin_entry_detail_text(
+fn plugin_config_detail_text(
     i18n: &I18n,
     status: &agena::plugin::status::PluginStatus,
-    entry: &JsonMap<String, JsonValue>,
+    configured_plugin: &JsonMap<String, JsonValue>,
     source: &str,
-    disabled: bool,
+    enabled: bool,
 ) -> String {
     let mut parts = vec![
         i18n.text_args(
-            "settings-plugin-entry-detail-kind",
+            "settings-plugin-config-detail-kind",
             &crate::fl_args!("kind" => status.kind.to_string()),
         ),
         i18n.text_args(
-            "settings-plugin-entry-detail-source",
-            &crate::fl_args!("source" => settings_plugin_entry_source_label(i18n, source)),
+            "settings-plugin-config-detail-source",
+            &crate::fl_args!("source" => settings_plugin_config_source_label(i18n, source)),
         ),
         i18n.text_args(
-            "settings-plugin-entry-detail-state",
+            "settings-plugin-config-detail-state",
             &crate::fl_args!("state" => status.state.as_str().to_string()),
         ),
     ];
     if let Some(pid) = status.pid {
         parts.push(i18n.text_args(
-            "settings-plugin-entry-detail-pid",
+            "settings-plugin-config-detail-pid",
             &crate::fl_args!("pid" => pid.to_string()),
         ));
     }
     if status.restart_count > 0 {
         parts.push(i18n.text_args(
-            "settings-plugin-entry-detail-restarts",
+            "settings-plugin-config-detail-restarts",
             &crate::fl_args!("count" => status.restart_count as i64),
         ));
     }
@@ -14998,29 +14915,25 @@ fn plugin_entry_detail_text(
         .filter(|value| !value.is_empty())
     {
         parts.push(i18n.text_args(
-            "settings-plugin-entry-detail-last-error",
+            "settings-plugin-config-detail-last-error",
             &crate::fl_args!("error" => error.to_string()),
         ));
     }
-    parts.push(if disabled {
-        ui_text::t(i18n, "settings-plugin-entry-detail-disabled")
+    parts.push(if enabled {
+        ui_text::t(i18n, "settings-plugin-config-detail-enabled")
     } else {
-        ui_text::t(i18n, "settings-plugin-entry-detail-enabled")
+        ui_text::t(i18n, "settings-plugin-config-detail-disabled")
     });
-    if source == "builtin" {
-        parts.push(ui_text::t(i18n, "settings-plugin-entry-detail-builtin"));
-    }
-    if entry
-        .get("options")
-        .and_then(JsonValue::as_object)
-        .is_some_and(|options| !options.is_empty())
+    if configured_plugin
+        .get("config")
+        .is_some_and(|config| !config.is_null())
     {
         parts.push(ui_text::t(
             i18n,
-            "settings-plugin-entry-detail-custom-options",
+            "settings-plugin-config-detail-custom-config",
         ));
     }
-    parts.push(ui_text::t(i18n, "settings-plugin-entry-detail-toggle"));
+    parts.push(ui_text::t(i18n, "settings-plugin-config-detail-toggle"));
     join_inline_segments(parts)
 }
 
@@ -15034,6 +14947,12 @@ fn settings_studio_plugin_items(
     let tool_override_count =
         settings_studio_plugins_count(sources, "plugins.tool_presentation.tools");
     vec![
+        SettingsStudioItem {
+            label: ui_text::t(i18n, "settings-plugin-workbench-label"),
+            value: "/plugins".to_string(),
+            detail: ui_text::t(i18n, "settings-plugin-workbench-detail"),
+            action: SettingsPickerAction::OpenPluginWorkbench,
+        },
         SettingsStudioItem {
             label: "plugins.tool_presentation.default_mode".to_string(),
             value: settings_studio_tool_description_mode_label(i18n, default_mode.as_str()),
@@ -15055,13 +14974,13 @@ fn settings_studio_plugin_items(
     ]
 }
 
-fn settings_studio_plugin_entry_disabled_count(items: &[SettingsStudioItem]) -> usize {
+fn settings_studio_plugin_config_inactive_count(items: &[SettingsStudioItem]) -> usize {
     items
         .iter()
         .filter(|item| {
             matches!(
                 &item.action,
-                SettingsPickerAction::TogglePluginEntryDisabled { disabled: true, .. }
+                SettingsPickerAction::TogglePluginConfigEnabled { enabled: false, .. }
             )
         })
         .count()
@@ -15800,31 +15719,31 @@ fn permission_studio_nav_items(i18n: &I18n) -> Vec<PermissionStudioNavItem> {
             selectable: true,
         },
         PermissionStudioNavItem {
-            label: ui_text::t(i18n, "permission-studio-nav-entry-access"),
+            label: ui_text::t(i18n, "permission-studio-nav-tool-access"),
             level: 0,
-            page: PermissionStudioPage::EntryTags,
-            section: Some(PermissionStudioSectionId::EntryTags),
+            page: PermissionStudioPage::ToolTags,
+            section: Some(PermissionStudioSectionId::ToolTags),
             selectable: false,
         },
         PermissionStudioNavItem {
             label: ui_text::t(i18n, "permission-studio-nav-tag-rules"),
             level: 1,
-            page: PermissionStudioPage::EntryTags,
-            section: Some(PermissionStudioSectionId::EntryTags),
+            page: PermissionStudioPage::ToolTags,
+            section: Some(PermissionStudioSectionId::ToolTags),
             selectable: true,
         },
         PermissionStudioNavItem {
             label: ui_text::t(i18n, "permission-studio-nav-name-rules"),
             level: 1,
-            page: PermissionStudioPage::EntryNames,
-            section: Some(PermissionStudioSectionId::EntryNames),
+            page: PermissionStudioPage::ToolNames,
+            section: Some(PermissionStudioSectionId::ToolNames),
             selectable: true,
         },
         PermissionStudioNavItem {
             label: ui_text::t(i18n, "permission-studio-nav-command-rules"),
             level: 1,
-            page: PermissionStudioPage::EntryCommandRules,
-            section: Some(PermissionStudioSectionId::EntryCommandRules),
+            page: PermissionStudioPage::ToolCommandRules,
+            section: Some(PermissionStudioSectionId::ToolCommandRules),
             selectable: true,
         },
     ]
@@ -15837,9 +15756,9 @@ fn permission_studio_nav_index_for_page(page: &PermissionStudioPage) -> usize {
         PermissionStudioPage::PathRules => 3,
         PermissionStudioPage::NetworkZones => 5,
         PermissionStudioPage::NetworkRules => 6,
-        PermissionStudioPage::EntryTags => 8,
-        PermissionStudioPage::EntryNames => 9,
-        PermissionStudioPage::EntryCommandRules => 10,
+        PermissionStudioPage::ToolTags => 8,
+        PermissionStudioPage::ToolNames => 9,
+        PermissionStudioPage::ToolCommandRules => 10,
     }
 }
 
@@ -16015,9 +15934,9 @@ fn permission_studio_footer(i18n: &I18n, page: &PermissionStudioPage) -> String 
         | PermissionStudioPage::PathRules
         | PermissionStudioPage::NetworkZones
         | PermissionStudioPage::NetworkRules
-        | PermissionStudioPage::EntryTags
-        | PermissionStudioPage::EntryNames
-        | PermissionStudioPage::EntryCommandRules => {
+        | PermissionStudioPage::ToolTags
+        | PermissionStudioPage::ToolNames
+        | PermissionStudioPage::ToolCommandRules => {
             ui_text::t(i18n, "overlay-permission-studio-footer-nested")
         }
     }
@@ -16043,10 +15962,10 @@ fn permission_studio_page_label(i18n: &I18n, page: &PermissionStudioPage) -> Str
         PermissionStudioPage::NetworkRules => {
             ui_text::t(i18n, "permission-studio-page-network-rules")
         }
-        PermissionStudioPage::EntryTags => ui_text::t(i18n, "permission-studio-page-entry-tags"),
-        PermissionStudioPage::EntryNames => ui_text::t(i18n, "permission-studio-page-entry-names"),
-        PermissionStudioPage::EntryCommandRules => {
-            ui_text::t(i18n, "permission-studio-page-entry-command-rules")
+        PermissionStudioPage::ToolTags => ui_text::t(i18n, "permission-studio-page-tool-tags"),
+        PermissionStudioPage::ToolNames => ui_text::t(i18n, "permission-studio-page-tool-names"),
+        PermissionStudioPage::ToolCommandRules => {
+            ui_text::t(i18n, "permission-studio-page-tool-command-rules")
         }
     }
 }
@@ -16232,7 +16151,7 @@ fn permission_studio_sections(
                 items: rule_items,
             }]
         }
-        PermissionStudioPage::EntryTags => {
+        PermissionStudioPage::ToolTags => {
             let mut keys = dialog
                 .permission
                 .tools
@@ -16258,12 +16177,12 @@ fn permission_studio_sections(
                 })
                 .collect::<Vec<_>>();
             vec![PermissionStudioSection {
-                id: PermissionStudioSectionId::EntryTags,
+                id: PermissionStudioSectionId::ToolTags,
                 label: ui_text::t(i18n, "permission-studio-page-tags"),
                 items: tag_items,
             }]
         }
-        PermissionStudioPage::EntryNames => {
+        PermissionStudioPage::ToolNames => {
             let mut keys = dialog
                 .permission
                 .tools
@@ -16289,12 +16208,12 @@ fn permission_studio_sections(
                 })
                 .collect::<Vec<_>>();
             vec![PermissionStudioSection {
-                id: PermissionStudioSectionId::EntryNames,
+                id: PermissionStudioSectionId::ToolNames,
                 label: ui_text::t(i18n, "permission-studio-page-names"),
                 items: name_items,
             }]
         }
-        PermissionStudioPage::EntryCommandRules => {
+        PermissionStudioPage::ToolCommandRules => {
             let mut keys = dialog
                 .permission
                 .tools
@@ -16320,7 +16239,7 @@ fn permission_studio_sections(
                 })
                 .collect::<Vec<_>>();
             vec![PermissionStudioSection {
-                id: PermissionStudioSectionId::EntryCommandRules,
+                id: PermissionStudioSectionId::ToolCommandRules,
                 label: ui_text::t(i18n, "permission-studio-page-tool-rules"),
                 items: tool_rule_items,
             }]
@@ -16394,8 +16313,8 @@ fn permission_studio_sections(
                 ],
             },
             PermissionStudioSection {
-                id: PermissionStudioSectionId::RootEntries,
-                label: ui_text::t(i18n, "permission-studio-page-entries"),
+                id: PermissionStudioSectionId::RootTools,
+                label: ui_text::t(i18n, "permission-studio-page-tools"),
                 items: vec![
                     PermissionStudioItem {
                         label: ui_text::t(i18n, "permission-studio-page-tags"),
@@ -16615,15 +16534,15 @@ fn apply_permission_studio_text_input(
         }
         PermissionStudioTextTarget::ToolTagKey { key } => {
             rename_tool_tag(permission, key.as_str(), value.as_str());
-            PermissionStudioPage::EntryTags
+            PermissionStudioPage::ToolTags
         }
         PermissionStudioTextTarget::ToolNameKey { key } => {
             rename_tool_name(permission, key.as_str(), value.as_str());
-            PermissionStudioPage::EntryNames
+            PermissionStudioPage::ToolNames
         }
         PermissionStudioTextTarget::ToolRuleName { tool_name } => {
             rename_tool_rule(permission, tool_name.as_str(), value.as_str());
-            PermissionStudioPage::EntryCommandRules
+            PermissionStudioPage::ToolCommandRules
         }
     };
     normalize_permission_config(permission);
@@ -17308,7 +17227,7 @@ fn settings_studio_model_catalog_items(
 ) -> Vec<SettingsStudioItem> {
     vec![SettingsStudioItem {
         label: ui_text::t(i18n, "settings-model-catalog-open-label"),
-        value: response.summary.entry_count.to_string(),
+        value: response.summary.model_count.to_string(),
         detail: ui_text::t(i18n, "settings-model-catalog-open-detail"),
         action: SettingsPickerAction::OpenModelCatalogWorkbench,
     }]
@@ -17800,15 +17719,17 @@ fn provider_model_catalog_lookup_id(model: &ProviderModel) -> String {
         .unwrap_or_else(|| agena::model_catalog::canonical_model_catalog_id(model.id.as_str()))
 }
 
-fn provider_studio_catalog_match_entry<'a>(
+fn provider_studio_catalog_match_model<'a>(
     model: &ProviderModel,
-    entries: &'a [ModelCatalogEntryResource],
-) -> Option<&'a ModelCatalogEntryResource> {
+    catalog_models: &'a [CatalogModelResource],
+) -> Option<&'a CatalogModelResource> {
     let lookup_id = provider_model_catalog_lookup_id(model);
-    entries
+    catalog_models
         .iter()
-        .filter(|entry| entry.model_id == model.id.as_str() || entry.model_id == lookup_id)
-        .min_by_key(|entry| entry.model_id.as_str())
+        .filter(|catalog_model| {
+            catalog_model.model_id == model.id.as_str() || catalog_model.model_id == lookup_id
+        })
+        .min_by_key(|catalog_model| catalog_model.model_id.as_str())
 }
 
 impl SessionViewMode {
@@ -17950,14 +17871,13 @@ impl PromptHistory {
             if line.is_empty() {
                 continue;
             }
-            let entry =
-                serde_json::from_str::<PersistentPromptHistoryEntry>(line).map_err(|error| {
-                    format!(
-                        "invalid prompt history {}:{}: {error}",
-                        path.display(),
-                        index + 1
-                    )
-                })?;
+            let entry = serde_json::from_str::<PromptHistoryRecord>(line).map_err(|error| {
+                format!(
+                    "invalid prompt history {}:{}: {error}",
+                    path.display(),
+                    index + 1
+                )
+            })?;
             if let Some(text) = Self::normalized_text(entry.text.as_str()) {
                 history.push(text);
             }
@@ -17966,7 +17886,7 @@ impl PromptHistory {
     }
 
     fn persist(&self, path: &Path) -> UiResult<()> {
-        if self.entries.is_empty() {
+        if self.items.is_empty() {
             match fs::remove_file(path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -17982,8 +17902,8 @@ impl PromptHistory {
         }
 
         let mut raw = String::new();
-        for text in &self.entries {
-            let line = serde_json::to_string(&PersistentPromptHistoryEntry { text: text.clone() })
+        for text in &self.items {
+            let line = serde_json::to_string(&PromptHistoryRecord { text: text.clone() })
                 .map_err(|error| error.to_string())?;
             raw.push_str(line.as_str());
             raw.push('\n');
@@ -18006,28 +17926,28 @@ impl PromptHistory {
     }
 
     fn push(&mut self, text: String) -> bool {
-        if self.entries.last().is_some_and(|entry| entry == &text) {
+        if self.items.last().is_some_and(|item| item == &text) {
             return false;
         }
-        self.entries.retain(|entry| entry != &text);
-        self.entries.push(text);
-        if self.entries.len() > MAX_PROMPT_HISTORY_ENTRIES {
-            let excess = self.entries.len() - MAX_PROMPT_HISTORY_ENTRIES;
-            self.entries.drain(0..excess);
+        self.items.retain(|item| item != &text);
+        self.items.push(text);
+        if self.items.len() > MAX_PROMPT_HISTORY_ENTRIES {
+            let excess = self.items.len() - MAX_PROMPT_HISTORY_ENTRIES;
+            self.items.drain(0..excess);
         }
         true
     }
 
     fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.items.is_empty()
     }
 
     fn len(&self) -> usize {
-        self.entries.len()
+        self.items.len()
     }
 
     fn get(&self, index: usize) -> Option<&str> {
-        self.entries.get(index).map(String::as_str)
+        self.items.get(index).map(String::as_str)
     }
 }
 
@@ -19215,335 +19135,6 @@ fn format_timestamp_ms(timestamp_ms: i64) -> String {
     DateTime::<Utc>::from_timestamp_millis(timestamp_ms)
         .map(format_timestamp)
         .unwrap_or_else(|| timestamp_ms.to_string())
-}
-
-fn build_plugin_inspector_item(
-    i18n: &I18n,
-    status: agena::plugin::status::PluginStatus,
-    inspect: Option<agena::plugin::PluginInspect>,
-    logs: Vec<agena::plugin::PluginLogEntry>,
-) -> PluginInspectorItem {
-    let manifest = inspect.as_ref().and_then(|item| item.manifest.as_ref());
-    let summary = manifest.map_or_else(
-        || {
-            format!(
-                "{} [{}] {}",
-                status.plugin_id,
-                status.state.as_str(),
-                status.kind
-            )
-        },
-        |manifest| {
-            format!(
-                "{} [{}] {} — {}@{}",
-                status.plugin_id,
-                status.state.as_str(),
-                status.kind,
-                manifest.name,
-                manifest.version
-            )
-        },
-    );
-    let authority = inspect.as_ref().and_then(|item| item.authority.as_ref());
-    let (detail_body, detail_plain) =
-        build_plugin_inspector_detail(i18n, &status, manifest, authority);
-    let logs_text = format_plugin_inspector_logs(i18n, logs.as_slice());
-    let copy_text = format!(
-        "{summary}\n\n{detail_plain}\n\n{}\n-----------\n{logs_text}",
-        ui_text::t(i18n, "overlay-plugins-logs")
-    );
-    let search_text = format!(
-        "{} {} {}",
-        summary.to_ascii_lowercase(),
-        detail_plain.to_ascii_lowercase(),
-        logs_text.to_ascii_lowercase()
-    );
-
-    PluginInspectorItem {
-        plugin_id: status.plugin_id.clone(),
-        summary,
-        detail_body,
-        logs: logs_text,
-        search_text,
-        copy_text,
-        state: status.state,
-    }
-}
-
-fn build_plugin_inspector_detail(
-    i18n: &I18n,
-    status: &agena::plugin::status::PluginStatus,
-    manifest: Option<&agena::plugin::PluginManifest>,
-    authority: Option<&agena::plugin::host::PluginAuthoritySummary>,
-) -> (Text<'static>, String) {
-    let mut lines = vec![
-        app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-plugins-detail-plugin-id"),
-            status.plugin_id.clone(),
-        ),
-        app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-plugins-detail-kind"),
-            status.kind.to_string(),
-        ),
-        app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-plugins-detail-state"),
-            status.state.as_str().to_string(),
-        ),
-        app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-plugins-detail-pid"),
-            status
-                .pid
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-        ),
-        app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-plugins-detail-restart-count"),
-            status.restart_count.to_string(),
-        ),
-        app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-plugins-detail-last-exit-code"),
-            status
-                .last_exit_code
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-        ),
-        app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-plugins-detail-last-restart"),
-            status
-                .last_restart_at_ms
-                .map(format_timestamp_ms)
-                .unwrap_or_else(|| "-".to_string()),
-        ),
-    ];
-    if let Some(error) = status.last_error.as_deref() {
-        lines.push(app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-plugins-detail-last-error"),
-            error.to_string(),
-        ));
-    }
-
-    lines.push(app_detail_plain_line(String::new()));
-    match manifest {
-        Some(manifest) => {
-            lines.push(app_detail_labeled_line(
-                ui_text::t(i18n, "overlay-plugins-detail-manifest"),
-                format!("{}@{}", manifest.name, manifest.version),
-            ));
-            if let Some(description) = manifest.description.as_deref() {
-                lines.push(app_detail_labeled_line(
-                    ui_text::t(i18n, "overlay-plugins-detail-description"),
-                    description.to_string(),
-                ));
-            }
-            if !manifest.authors.is_empty() {
-                lines.push(app_detail_labeled_line(
-                    ui_text::t(i18n, "overlay-plugins-detail-authors"),
-                    manifest.authors.join(", "),
-                ));
-            }
-            if !manifest.transports.is_empty() {
-                lines.push(app_detail_labeled_line(
-                    ui_text::t(i18n, "overlay-plugins-detail-transports"),
-                    manifest
-                        .transports
-                        .iter()
-                        .map(|transport| format!("{transport:?}"))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                ));
-            }
-            lines.push(app_detail_labeled_line(
-                ui_text::t(i18n, "overlay-plugins-detail-hooks"),
-                format!("{:?}", manifest.hooks),
-            ));
-            lines.push(app_detail_labeled_line(
-                ui_text::t(i18n, "overlay-plugins-detail-entries"),
-                manifest.entries.len().to_string(),
-            ));
-            for entry in manifest.entries.iter().take(5) {
-                lines.extend(
-                    format_plugin_entry_summary_lines(i18n, entry)
-                        .into_iter()
-                        .map(|line| app_detail_plain_line(format!("  {line}"))),
-                );
-            }
-            if manifest.entries.len() > 5 {
-                lines.push(app_detail_plain_line(i18n.text_args(
-                    "overlay-plugins-detail-more-entries",
-                    &crate::fl_args!("count" => (manifest.entries.len() - 5) as i64),
-                )));
-            }
-            let capabilities = manifest
-                .entries
-                .iter()
-                .flat_map(|entry| entry.host_capabilities.iter())
-                .map(|capability| format!("{capability:?}"))
-                .collect::<BTreeSet<_>>();
-            if !capabilities.is_empty() {
-                lines.push(app_detail_labeled_line(
-                    ui_text::t(i18n, "overlay-plugins-detail-capabilities"),
-                    capabilities.into_iter().collect::<Vec<_>>().join(", "),
-                ));
-            }
-        }
-        None => lines.push(app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-plugins-detail-manifest"),
-            ui_text::t(i18n, "overlay-plugins-detail-manifest-unavailable"),
-        )),
-    }
-
-    if let Some(authority) = authority {
-        lines.push(app_detail_plain_line(String::new()));
-        lines.push(app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-plugins-detail-trust-level"),
-            authority.trust_level.to_string(),
-        ));
-        if !authority.provenance.is_empty() {
-            lines.push(app_detail_labeled_line(
-                ui_text::t(i18n, "overlay-plugins-detail-provenance"),
-                authority.provenance.join(" | "),
-            ));
-        }
-        if !authority.plugin_capabilities.is_empty() {
-            lines.push(app_detail_labeled_line(
-                ui_text::t(i18n, "overlay-plugins-detail-effective-capabilities"),
-                authority.plugin_capabilities.join(", "),
-            ));
-        }
-        if !authority.entry_capabilities.is_empty() {
-            lines.push(app_detail_plain_line(format!(
-                "{}:",
-                ui_text::t(i18n, "overlay-plugins-detail-entry-capabilities")
-            )));
-            for (entry, capabilities) in &authority.entry_capabilities {
-                lines.push(app_detail_plain_line(format!(
-                    "  - {}: {}",
-                    entry,
-                    capabilities.join(", ")
-                )));
-            }
-        }
-    }
-
-    let detail_document =
-        build_detail_document(lines.as_slice(), &DetailTextSpec::with_label_width(18));
-    (detail_document.text, detail_document.plain)
-}
-
-fn format_plugin_entry_summary_lines(
-    i18n: &I18n,
-    entry: &agena::plugin::PluginToolDecl,
-) -> Vec<String> {
-    let mut lines = vec![format!("{}", entry.name)];
-    if let Some(description) = entry.description_text().trim().split('\n').next()
-        && !description.trim().is_empty()
-    {
-        lines.push(format!(
-            "{}: {}",
-            ui_text::t(i18n, "overlay-plugins-detail-description"),
-            description.trim()
-        ));
-    }
-    if let Some(summary) = entry.summary_text() {
-        lines.push(format!(
-            "{}: {summary}",
-            ui_text::t(i18n, "overlay-plugins-detail-summary")
-        ));
-    }
-    if let Some(help) = entry.help_text() {
-        lines.push(format!(
-            "{}: {help}",
-            ui_text::t(i18n, "overlay-plugins-detail-help")
-        ));
-    }
-    let mut facts = Vec::new();
-    if let Some(mode) = entry.description_mode {
-        let mode_label = match mode {
-            agena::plugin::ToolDescriptionMode::Detailed => {
-                ui_text::t(i18n, "settings-plugin-mode-detailed")
-            }
-            agena::plugin::ToolDescriptionMode::Help => {
-                ui_text::t(i18n, "settings-plugin-mode-help")
-            }
-        };
-        facts.push(i18n.text_args(
-            "overlay-plugins-detail-fact-mode",
-            &crate::fl_args!("mode" => mode_label),
-        ));
-    }
-    if entry.strict {
-        facts.push(ui_text::t(i18n, "overlay-plugins-detail-fact-strict"));
-    }
-    if matches!(
-        entry.streaming,
-        agena::plugin::sdk::ToolStreamingMode::Streaming
-    ) {
-        facts.push(ui_text::t(i18n, "overlay-plugins-detail-fact-streaming"));
-    }
-    if entry.concurrency_safe {
-        facts.push(ui_text::t(
-            i18n,
-            "overlay-plugins-detail-fact-concurrency-safe",
-        ));
-    }
-    if !entry.tags.is_empty() {
-        facts.push(i18n.text_args(
-            "overlay-plugins-detail-fact-tags",
-            &crate::fl_args!(
-                "tags" => entry
-                    .tags
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        ));
-    }
-    if !facts.is_empty() {
-        lines.push(format!(
-            "{}: {}",
-            ui_text::t(i18n, "overlay-plugins-detail-facts"),
-            join_inline_segments(facts)
-        ));
-    }
-    if !entry.host_capabilities.is_empty() {
-        lines.push(format!(
-            "{}: {}",
-            ui_text::t(i18n, "overlay-plugins-detail-host-capabilities"),
-            entry
-                .host_capabilities
-                .iter()
-                .map(|capability| format!("{capability:?}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    lines
-}
-
-fn format_plugin_inspector_logs(i18n: &I18n, entries: &[agena::plugin::PluginLogEntry]) -> String {
-    if entries.is_empty() {
-        return ui_text::t(i18n, "overlay-plugins-logs-empty");
-    }
-    entries
-        .iter()
-        .map(|entry| {
-            let mut line = format!(
-                "[{}] #{} {} {} {}",
-                format_timestamp_ms(entry.timestamp_ms),
-                entry.seq,
-                entry.level,
-                entry.source,
-                entry.message
-            );
-            if !entry.fields.is_null() {
-                line.push(' ');
-                line.push_str(entry.fields.to_string().as_str());
-            }
-            line
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn build_timeline_item(i18n: &I18n, record: &DomainEvent) -> TimelineItem {
@@ -22398,7 +21989,7 @@ fn split_command_args_once(value: &str) -> Option<(&str, &str)> {
     }
 }
 
-fn runtime_entry_matches_slash_query(label: &str, query: &str) -> bool {
+fn runtime_tool_matches_slash_query(label: &str, query: &str) -> bool {
     let query = query.trim().to_ascii_lowercase();
     if query.is_empty() {
         return true;
@@ -23561,13 +23152,18 @@ mod tests {
             "默认 provider id"
         );
 
-        let error = parse_settings_field_input(&i18n, SETTINGS_FIELDS[5], "maybe")
+        let bool_field = SETTINGS_FIELDS
+            .iter()
+            .copied()
+            .find(|field| matches!(field.kind, SettingsFieldKind::Bool))
+            .expect("settings should expose at least one bool field");
+        let error = parse_settings_field_input(&i18n, bool_field, "maybe")
             .expect_err("expected localized settings parse error");
         assert_eq!(
             error,
             i18n.text_args(
                 "settings-field-parse-bool",
-                &crate::fl_args!("field" => SETTINGS_FIELDS[5].path),
+                &crate::fl_args!("field" => bool_field.path),
             )
         );
     }
@@ -23595,15 +23191,25 @@ mod tests {
     }
 
     #[test]
-    fn settings_plugin_entries_include_runtime_builtin_plugins() {
+    fn settings_plugin_entries_use_effective_plugin_entries() {
         let i18n = I18n::english();
         let sources = ConfigJsonSources {
             config_path: PathBuf::from("/tmp/agena-config.json"),
             config_found: true,
             file: json!({}),
-            effective: json!({ "plugins": { "list": {} } }),
+            effective: json!({
+                "plugins": {
+                    "list": {
+                        "agena.fs": {
+                            "enabled": true,
+                            "package": { "kind": "static" },
+                            "config": null
+                        }
+                    }
+                }
+            }),
         };
-        let items = settings_studio_plugin_entry_items(
+        let items = settings_studio_plugin_config_items(
             &i18n,
             &sources,
             &[PluginStatus {
@@ -23620,7 +23226,7 @@ mod tests {
 
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].label, "agena.fs");
-        assert!(items[0].value.contains("builtin"));
-        assert!(items[0].detail.contains("built-in plugin"));
+        assert!(items[0].value.contains("runtime"));
+        assert!(!items[0].detail.contains("built-in plugin"));
     }
 }

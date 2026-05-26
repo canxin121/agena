@@ -4,7 +4,7 @@ use crate::{
     config::ProviderNativeToolsConfig,
     message::{Message, MessageUsage},
     model::{ModelId, ModelSpeedModeRequestOverride, ProviderId},
-    plugin::registry::PluginEntry as RegistryPluginEntry,
+    plugin::registry::RegisteredTool,
 };
 
 /// Controls extended thinking / reasoning for providers that support it.
@@ -93,7 +93,7 @@ pub struct CompletionRequest {
     pub system: Option<String>,
     pub messages: Vec<Message>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<RegistryPluginEntry>,
+    pub tools: Vec<RegisteredTool>,
     #[serde(default, skip_serializing_if = "ProviderNativeToolsConfig::is_empty")]
     pub native_tools: ProviderNativeToolsConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]

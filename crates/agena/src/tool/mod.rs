@@ -41,16 +41,16 @@ use crate::message::{
 use crate::permission::{AccessKind, NetworkTarget, PermissionAction, PermissionDecision};
 use crate::plugin::{
     PluginHost, PluginHostBuilder, ToolAfterInput as PluginToolAfterInput,
-    ToolBeforeInput as PluginToolBeforeInput, ToolDefinitionInput as PluginEntryDefinitionInput,
+    ToolBeforeInput as PluginToolBeforeInput, ToolDefinitionInput as PluginToolDefinitionInput,
     ToolFailureInput as PluginToolFailureInput, ToolInvokeInput as PluginToolInvokeInput,
     ToolPermissionNetworksInput as PluginToolPermissionNetworksInput,
     ToolPermissionPathsInput as PluginToolPermissionPathsInput,
-    registry::PluginEntry as RegistryPluginEntry,
+    registry::RegisteredTool,
     sdk::{
         InputNetworkSpec as SdkInputNetworkSpec, InputPathSpec as SdkInputPathSpec,
         NetworkAccessSpec as SdkNetworkAccessSpec, PathAccessSpec as SdkPathAccessSpec,
         PathKind as SdkPathKind, ShellEnvInput as PluginShellEnvInput,
-        ToolStreamingMode as SdkEntryStreamingMode,
+        ToolStreamingMode as SdkToolStreamingMode,
     },
 };
 use crate::plugins::provided::{
@@ -142,54 +142,15 @@ pub fn new_workflow_plugin() -> impl crate::plugin::sdk::Plugin {
 
 pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<PluginHost>, String> {
     let workspace_root = workspace_root.into();
-    let skills_id = skills_plugin_id().to_string();
-    let lsp_id = lsp_plugin_id().to_string();
-    let cron_id = cron_plugin_id().to_string();
-    let code_id = code_plugin_id().to_string();
-    let fs_id = fs_plugin_id().to_string();
-    let settings_id = settings_plugin_id().to_string();
-    let shell_id = shell_plugin_id().to_string();
-    let workflow_id = workflow_plugin_id().to_string();
-    let web_id = crate::web::web_plugin_id().to_string();
-    let mut list = std::collections::BTreeMap::new();
-    for id in [
-        &skills_id,
-        &lsp_id,
-        &cron_id,
-        &code_id,
-        &fs_id,
-        &settings_id,
-        &shell_id,
-        &workflow_id,
-        &web_id,
-    ] {
-        let config = if id == &workflow_id {
-            serde_json::json!({})
-        } else {
-            serde_json::Value::Null
-        };
-        list.insert(
-            (*id).clone(),
-            crate::plugin::PluginEntry::static_config(config),
-        );
-    }
-    let config = crate::plugin::PluginsConfig {
-        host: Default::default(),
-        policy: Default::default(),
-        list,
-    };
+    let config =
+        crate::plugins::sources::resolve_plugin_config(crate::plugin::PluginsConfig::default());
     mcp::block_on(async move {
-        PluginHostBuilder::new(workspace_root, env!("CARGO_PKG_VERSION"))
-            .with_config(config)
-            .register_static(skills_id, new_skills_plugin())
-            .register_static(lsp_id, new_lsp_plugin())
-            .register_static(cron_id, new_cron_plugin())
-            .register_static(code_id, new_code_plugin())
-            .register_static(fs_id, new_fs_plugin())
-            .register_static(settings_id, new_settings_plugin())
-            .register_static(shell_id, new_shell_plugin())
-            .register_static(workflow_id, new_workflow_plugin())
-            .register_static(web_id, crate::web::new_web_plugin())
+        let mcp_config =
+            mcp::config_from_plugins(&config).map_err(crate::plugin::HostError::Config)?;
+        let mcp_manager = mcp::build_manager(&mcp_config).await;
+        let builder =
+            PluginHostBuilder::new(workspace_root, env!("CARGO_PKG_VERSION")).with_config(config);
+        crate::plugins::sources::register_static_transports(builder, Some(mcp_manager))
             .build()
             .await
     })
@@ -278,42 +239,42 @@ pub enum ToolError {
     UnsupportedInvocation(String),
 }
 
-fn present_tool_entry(
-    mut entry: RegistryPluginEntry,
+fn present_registered_tool(
+    mut registered_tool: RegisteredTool,
     presentation: &crate::plugin::ToolPresentationConfig,
-) -> RegistryPluginEntry {
+) -> RegisteredTool {
     let mode = presentation.mode_for(
-        entry.plugin_name.as_str(),
-        entry.original_name.as_str(),
-        entry.exposed_name.as_str(),
-        entry.decl.description_mode,
+        registered_tool.plugin_name.as_str(),
+        registered_tool.original_name.as_str(),
+        registered_tool.exposed_name.as_str(),
+        registered_tool.decl.description_mode,
     );
     if mode == crate::plugin::ToolDescriptionMode::Help {
-        entry.decl.description = Some(compact_tool_description(&entry));
+        registered_tool.decl.description = Some(compact_tool_description(&registered_tool));
     }
-    entry.decl.help = None;
-    entry
+    registered_tool.decl.help = None;
+    registered_tool
 }
 
-fn compact_tool_description(entry: &RegistryPluginEntry) -> String {
+fn compact_tool_description(registered_tool: &RegisteredTool) -> String {
     format!(
         "{} Full usage is available from the `tools` tool: call action `help` with tool `{}`.",
-        tool_summary(entry),
-        entry.exposed_name
+        tool_summary(registered_tool),
+        registered_tool.exposed_name
     )
 }
 
-fn tool_summary(entry: &RegistryPluginEntry) -> String {
-    if let Some(summary) = entry.summary_text() {
+fn tool_summary(registered_tool: &RegisteredTool) -> String {
+    if let Some(summary) = registered_tool.summary_text() {
         return summary.to_string();
     }
-    entry
+    registered_tool
         .description_text()
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
         .map(ToString::to_string)
-        .unwrap_or_else(|| format!("Tool `{}`.", entry.exposed_name))
+        .unwrap_or_else(|| format!("Tool `{}`.", registered_tool.exposed_name))
 }
 
 #[derive(Clone)]
@@ -522,11 +483,11 @@ impl ToolExecutor {
         ToolCatalog::for_model(self.model_id.as_deref())
     }
 
-    fn catalogued_tools_raw(&self) -> Vec<RegistryPluginEntry> {
+    fn catalogued_tools_raw(&self) -> Vec<RegisteredTool> {
         let catalog = self.tool_catalog();
         let mut tools = self
             .plugins
-            .entry_entries()
+            .registered_tools()
             .into_iter()
             .filter(|entry| catalog.is_tool_enabled(entry))
             .collect::<Vec<_>>();
@@ -543,8 +504,8 @@ impl ToolExecutor {
             tools = tools
                 .into_iter()
                 .map(|mut entry| {
-                    let input = PluginEntryDefinitionInput {
-                        tool_name: entry.exposed_name.clone(),
+                    let input = PluginToolDefinitionInput {
+                        tool_name: entry.original_name.clone(),
                         plugin_name: entry.plugin_name.clone(),
                         description: entry.description_text().to_string(),
                         summary: entry.decl.summary.clone(),
@@ -577,22 +538,22 @@ impl ToolExecutor {
         tools
     }
 
-    fn catalogued_tools(&self) -> Vec<RegistryPluginEntry> {
+    fn catalogued_tools(&self) -> Vec<RegisteredTool> {
         self.catalogued_tools_raw()
             .into_iter()
-            .map(|entry| present_tool_entry(entry, &self.tool_presentation))
+            .map(|entry| present_registered_tool(entry, &self.tool_presentation))
             .collect()
     }
 
-    pub fn detailed_tools(&self) -> Vec<RegistryPluginEntry> {
+    pub fn detailed_tools(&self) -> Vec<RegisteredTool> {
         self.catalogued_tools_raw()
     }
 
-    pub fn searchable_tools(&self) -> Vec<RegistryPluginEntry> {
+    pub fn searchable_tools(&self) -> Vec<RegisteredTool> {
         self.catalogued_tools()
     }
 
-    pub fn available_tools(&self) -> Vec<RegistryPluginEntry> {
+    pub fn available_tools(&self) -> Vec<RegisteredTool> {
         self.catalogued_tools()
     }
 
@@ -603,27 +564,27 @@ impl ToolExecutor {
         };
         entry.decl.concurrency_safe
             && !entry.has_tag(crate::plugin::sdk::ToolTag::Interactive)
-            && is_concurrency_safe_entry_invocation(&entry, &invocation)
+            && is_concurrency_safe_tool_invocation(&entry, &invocation)
     }
 
-    pub fn available_tools_for_messages(&self, messages: &[Message]) -> Vec<RegistryPluginEntry> {
+    pub fn available_tools_for_messages(&self, messages: &[Message]) -> Vec<RegisteredTool> {
         let _ = messages;
         self.available_tools()
     }
 
-    fn invocation_definition(&self, invocation: &ToolInvocation) -> Option<RegistryPluginEntry> {
+    fn invocation_definition(&self, invocation: &ToolInvocation) -> Option<RegisteredTool> {
         self.plugin_invocation_definition(&PluginInvocation::from_tool_invocation(invocation))
     }
 
     fn plugin_invocation_definition(
         &self,
         invocation: &PluginInvocation,
-    ) -> Option<RegistryPluginEntry> {
+    ) -> Option<RegisteredTool> {
         self.catalogued_tools()
             .into_iter()
-            .find(|entry| entry.exposed_name == invocation.entry_name)
+            .find(|entry| entry.exposed_name == invocation.tool_name)
             .or_else(|| {
-                let canonical = canonical_entry_name(invocation.entry_name.as_str());
+                let canonical = canonical_tool_name(invocation.tool_name.as_str());
                 self.catalogued_tools()
                     .into_iter()
                     .find(|entry| entry.exposed_name == canonical)
@@ -640,7 +601,7 @@ impl ToolExecutor {
         }
 
         self.plugins
-            .lookup_entry(invocation.entry_name.as_str())
+            .lookup_tool(invocation.tool_name.as_str())
             .map(|entry| entry.plugin_name)
             .unwrap_or_else(|| "custom".to_string())
     }
@@ -648,14 +609,14 @@ impl ToolExecutor {
     fn invocation_streaming_mode(
         &self,
         invocation: &ToolInvocation,
-    ) -> Option<SdkEntryStreamingMode> {
+    ) -> Option<SdkToolStreamingMode> {
         self.plugin_invocation_streaming_mode(&PluginInvocation::from_tool_invocation(invocation))
     }
 
     fn plugin_invocation_streaming_mode(
         &self,
         invocation: &PluginInvocation,
-    ) -> Option<SdkEntryStreamingMode> {
+    ) -> Option<SdkToolStreamingMode> {
         self.plugin_resolution_for_plugin_invocation(invocation)
             .map(|entry| entry.decl.streaming)
     }
@@ -685,7 +646,7 @@ impl ToolExecutor {
     fn plugin_resolution_for_invocation(
         &self,
         invocation: &ToolInvocation,
-    ) -> Option<crate::plugin::registry::PluginEntry> {
+    ) -> Option<crate::plugin::registry::RegisteredTool> {
         self.plugin_resolution_for_plugin_invocation(&PluginInvocation::from_tool_invocation(
             invocation,
         ))
@@ -694,12 +655,12 @@ impl ToolExecutor {
     fn plugin_resolution_for_plugin_invocation(
         &self,
         invocation: &PluginInvocation,
-    ) -> Option<crate::plugin::registry::PluginEntry> {
+    ) -> Option<crate::plugin::registry::RegisteredTool> {
         self.plugins
-            .lookup_entry(invocation.entry_name.as_str())
+            .lookup_tool(invocation.tool_name.as_str())
             .or_else(|| {
                 self.plugins
-                    .lookup_entry(canonical_entry_name(invocation.entry_name.as_str()))
+                    .lookup_tool(canonical_tool_name(invocation.tool_name.as_str()))
             })
     }
 
@@ -722,13 +683,13 @@ impl ToolExecutor {
     fn collect_dynamic_path_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
-        entry: &crate::plugin::registry::PluginEntry,
+        registered_tool: &crate::plugin::registry::RegisteredTool,
         input: &serde_json::Value,
     ) -> Result<(), ToolError> {
         let result = self.plugins.dispatch_tool_permission_paths(
-            entry,
+            registered_tool,
             PluginToolPermissionPathsInput {
-                tool_name: entry.original_name.clone(),
+                tool_name: registered_tool.original_name.clone(),
                 workspace_root: self.workspace_root.to_string_lossy().to_string(),
                 input: input.clone(),
             },
@@ -774,13 +735,13 @@ impl ToolExecutor {
     fn collect_dynamic_network_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
-        entry: &crate::plugin::registry::PluginEntry,
+        registered_tool: &crate::plugin::registry::RegisteredTool,
         input: &serde_json::Value,
     ) -> Result<(), ToolError> {
         let result = self.plugins.dispatch_tool_permission_networks(
-            entry,
+            registered_tool,
             PluginToolPermissionNetworksInput {
-                tool_name: entry.original_name.clone(),
+                tool_name: registered_tool.original_name.clone(),
                 workspace_root: self.workspace_root.to_string_lossy().to_string(),
                 input: input.clone(),
             },
@@ -1052,7 +1013,11 @@ impl ToolExecutor {
         session_id: i64,
         call_id: i64,
     ) -> Result<PreparedToolInvocation, ToolError> {
-        let tool_name = invocation_name(invocation).to_owned();
+        let exposed_tool_name = invocation_name(invocation).to_owned();
+        let hook_tool_name = self
+            .plugin_resolution_for_invocation(invocation)
+            .map(|entry| entry.original_name)
+            .unwrap_or_else(|| exposed_tool_name.clone());
         let plugin_name = self.invocation_plugin_name_for(invocation);
         let input_json = invocation_input_json(invocation)?;
         let input_value: serde_json::Value = serde_json::from_str(&input_json)
@@ -1061,7 +1026,7 @@ impl ToolExecutor {
         let hooked = self
             .plugins
             .dispatch_tool_before(PluginToolBeforeInput {
-                tool_name: tool_name.clone(),
+                tool_name: hook_tool_name,
                 plugin_name: plugin_name.clone(),
                 session_id,
                 call_id,
@@ -1076,7 +1041,7 @@ impl ToolExecutor {
             .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
 
         let mut prepared_invocation =
-            parse_invocation_from_json(tool_name.as_str(), input_json.as_str())?;
+            parse_invocation_from_json(exposed_tool_name.as_str(), input_json.as_str())?;
         prepared_invocation.plugin_name = Some(plugin_name);
 
         Ok(PreparedToolInvocation {
@@ -1134,7 +1099,7 @@ impl ToolExecutor {
     ) -> Result<Option<StreamingToolExecution>, ToolError> {
         if !matches!(
             self.invocation_streaming_mode(invocation),
-            Some(SdkEntryStreamingMode::Streaming)
+            Some(SdkToolStreamingMode::Streaming)
         ) {
             return Ok(None);
         }
@@ -1142,7 +1107,7 @@ impl ToolExecutor {
 
         let resolution = self
             .plugin_resolution_for_plugin_invocation(&plugin_invocation)
-            .ok_or_else(|| ToolError::UnknownTool(plugin_invocation.entry_name.clone()))?;
+            .ok_or_else(|| ToolError::UnknownTool(plugin_invocation.tool_name.clone()))?;
         let executor_guard = in_process_router::install_executor_context(
             self,
             session_id,
@@ -1240,7 +1205,7 @@ impl ToolExecutor {
                 .entered();
         let resolution = self
             .plugin_resolution_for_plugin_invocation(&plugin_invocation)
-            .ok_or_else(|| ToolError::UnknownTool(plugin_invocation.entry_name.clone()))?;
+            .ok_or_else(|| ToolError::UnknownTool(plugin_invocation.tool_name.clone()))?;
         let _executor_guard = in_process_router::install_executor_context(
             self,
             session_id,
@@ -1336,10 +1301,14 @@ impl ToolExecutor {
         call_id: i64,
         execution: &mut ToolInvocationExecution,
     ) -> Result<(), ToolError> {
-        let tool_name = invocation_name(invocation).to_owned();
+        let exposed_tool_name = invocation_name(invocation).to_owned();
+        let hook_tool_name = self
+            .plugin_resolution_for_invocation(invocation)
+            .map(|entry| entry.original_name)
+            .unwrap_or(exposed_tool_name);
         let plugin_name = self.invocation_plugin_name_for(invocation);
         let after_in = PluginToolAfterInput {
-            tool_name,
+            tool_name: hook_tool_name,
             plugin_name: plugin_name.clone(),
             session_id,
             call_id,
@@ -1380,14 +1349,18 @@ impl ToolExecutor {
         if self.plugins.is_empty() {
             return;
         }
-        let tool_name = invocation_name(invocation).to_owned();
+        let exposed_tool_name = invocation_name(invocation).to_owned();
+        let hook_tool_name = self
+            .plugin_resolution_for_invocation(invocation)
+            .map(|entry| entry.original_name)
+            .unwrap_or(exposed_tool_name);
         let plugin_name = self.invocation_plugin_name_for(invocation);
         let input_value = invocation_input_json(invocation)
             .ok()
             .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
             .unwrap_or(serde_json::Value::Null);
         let failure_input = PluginToolFailureInput {
-            tool_name,
+            tool_name: hook_tool_name,
             plugin_name,
             session_id,
             call_id,
@@ -1686,10 +1659,10 @@ fn invocation_name(invocation: &ToolInvocation) -> String {
 }
 
 fn plugin_invocation_name(invocation: &PluginInvocation) -> String {
-    invocation.entry_name.clone()
+    invocation.tool_name.clone()
 }
 
-fn canonical_entry_name(name: &str) -> &str {
+fn canonical_tool_name(name: &str) -> &str {
     name
 }
 
@@ -1700,7 +1673,7 @@ fn command_from_input(input: &StructuredObject) -> Option<&str> {
 }
 
 fn invocation_effective_tags(
-    definition: &RegistryPluginEntry,
+    definition: &RegisteredTool,
     invocation: &ToolInvocation,
 ) -> Vec<crate::plugin::sdk::ToolTag> {
     let mut tags = definition.effective_tags();
@@ -1709,32 +1682,42 @@ fn invocation_effective_tags(
     };
 
     match (definition.exposed_name.as_str(), command) {
-        ("fs", "read" | "glob" | "grep") => {
+        ("agena.fs/fs", "read" | "glob" | "grep") => {
             set_invocation_access_tags(&mut tags, true, false, true, false)
         }
-        ("fs", "apply_patch" | "notebook_edit") => {
+        ("agena.fs/fs", "apply_patch" | "notebook_edit") => {
             set_invocation_access_tags(&mut tags, false, true, false, true)
         }
-        ("settings", "get" | "list" | "validate") => {
+        ("agena.settings/settings", "get" | "list" | "validate") => {
             set_invocation_access_tags(&mut tags, true, false, false, false)
         }
-        ("settings", "set" | "delete" | "patch") => {
+        ("agena.settings/settings", "set" | "delete" | "patch") => {
             set_invocation_access_tags(&mut tags, false, true, false, true)
         }
-        ("schedule", "list") => set_invocation_access_tags(&mut tags, true, false, false, false),
-        ("schedule", "create" | "delete" | "wakeup") => {
-            set_invocation_access_tags(&mut tags, false, true, false, false)
-        }
-        ("session", "get") => set_invocation_access_tags(&mut tags, true, false, false, false),
-        ("session", "rename") => set_invocation_access_tags(&mut tags, false, true, false, false),
-        ("goal", "get") => set_invocation_access_tags(&mut tags, true, false, false, false),
-        ("goal", "create" | "clear" | "complete") => {
-            set_invocation_access_tags(&mut tags, false, true, false, false)
-        }
-        ("mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => {
+        ("agena.cron/schedule", "list") => {
             set_invocation_access_tags(&mut tags, true, false, false, false)
         }
-        ("mcp", "call") => set_invocation_access_tags(&mut tags, false, true, false, false),
+        ("agena.cron/schedule", "create" | "delete" | "wakeup") => {
+            set_invocation_access_tags(&mut tags, false, true, false, false)
+        }
+        ("agena.workflow/session", "get") => {
+            set_invocation_access_tags(&mut tags, true, false, false, false)
+        }
+        ("agena.workflow/session", "rename") => {
+            set_invocation_access_tags(&mut tags, false, true, false, false)
+        }
+        ("agena.workflow/goal", "get") => {
+            set_invocation_access_tags(&mut tags, true, false, false, false)
+        }
+        ("agena.workflow/goal", "create" | "clear" | "complete") => {
+            set_invocation_access_tags(&mut tags, false, true, false, false)
+        }
+        ("agena.mcp/mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => {
+            set_invocation_access_tags(&mut tags, true, false, false, false)
+        }
+        ("agena.mcp/mcp", "call") => {
+            set_invocation_access_tags(&mut tags, false, true, false, false)
+        }
         _ => {}
     }
 
@@ -1771,35 +1754,37 @@ fn set_invocation_access_tags(
     }
 }
 
-fn is_concurrency_safe_entry_invocation(
-    entry: &RegistryPluginEntry,
+fn is_concurrency_safe_tool_invocation(
+    registered_tool: &RegisteredTool,
     invocation: &PluginInvocation,
 ) -> bool {
     let Some(command) = command_from_input(&invocation.input) else {
-        return entry.decl.concurrency_safe;
+        return registered_tool.decl.concurrency_safe;
     };
 
-    match (entry.exposed_name.as_str(), command) {
-        ("fs", "read" | "glob" | "grep") => true,
-        ("fs", "apply_patch" | "notebook_edit") => false,
-        ("settings", "get" | "list" | "validate") => true,
-        ("settings", "set" | "delete" | "patch") => false,
-        ("schedule", "list") => true,
-        ("schedule", "create" | "delete" | "wakeup") => false,
-        ("session", "get") => true,
-        ("session", "rename") => false,
-        ("goal", "get") => true,
-        ("goal", "create" | "clear" | "complete") => false,
-        ("mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => true,
-        ("mcp", "call") => false,
-        _ => entry.decl.concurrency_safe,
+    match (registered_tool.exposed_name.as_str(), command) {
+        ("agena.fs/fs", "read" | "glob" | "grep") => true,
+        ("agena.fs/fs", "apply_patch" | "notebook_edit") => false,
+        ("agena.settings/settings", "get" | "list" | "validate") => true,
+        ("agena.settings/settings", "set" | "delete" | "patch") => false,
+        ("agena.cron/schedule", "list") => true,
+        ("agena.cron/schedule", "create" | "delete" | "wakeup") => false,
+        ("agena.workflow/session", "get") => true,
+        ("agena.workflow/session", "rename") => false,
+        ("agena.workflow/goal", "get") => true,
+        ("agena.workflow/goal", "create" | "clear" | "complete") => false,
+        ("agena.mcp/mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => {
+            true
+        }
+        ("agena.mcp/mcp", "call") => false,
+        _ => registered_tool.decl.concurrency_safe,
     }
 }
 
 fn apply_patch_execution_from_tool_output(output: &ToolOutput) -> Option<ApplyPatchExecution> {
     let payload = output.to_json_payload()?;
     let operation_id = payload.get("operation_id")?.as_str()?.to_string();
-    let changes: Vec<crate::message::FileChangeEntry> =
+    let changes: Vec<crate::message::FileChangeRecord> =
         serde_json::from_value(payload.get("changes")?.clone()).ok()?;
     let before_hash = payload
         .get("before_hash")
@@ -2083,7 +2068,7 @@ mod tests {
     use crate::plugin::sdk::{
         EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, Result as SdkResult,
     };
-    use crate::plugin::{PluginEntry, PluginHost, PluginHostBuilder, PluginsConfig};
+    use crate::plugin::{ConfiguredPlugin, PluginHost, PluginHostBuilder, PluginsConfig};
     use crate::role::Role;
 
     use super::{
@@ -2091,6 +2076,14 @@ mod tests {
         ToolPayloadOutput,
     };
     use crate::plugins::provided::router as in_process_router;
+
+    const FS_TOOL: &str = "agena.fs/fs";
+    const SHELL_TOOL: &str = "agena.shell/shell";
+    const TOOLS_TOOL: &str = "agena.workflow/tools";
+    const TODO_TOOL: &str = "agena.workflow/todo";
+    const TASK_TOOL: &str = "agena.workflow/task";
+    const FIXTURE_ECHO_TOOL: &str = "fixture/plugin_echo";
+    const WEB_FETCH_TOOL: &str = "agena.web/fetch";
 
     #[derive(Debug)]
     struct TempWorkspace {
@@ -2161,7 +2154,7 @@ mod tests {
 
         async fn list_tools(&self) -> SdkResult<Vec<ToolDescriptor>> {
             Ok(vec![ToolDescriptor {
-                name: "fs".to_string(),
+                name: FS_TOOL.to_string(),
                 description: Some("Patch files in the workspace".to_string()),
                 summary: Some("Patch files".to_string()),
                 help: Some("Patch files in the workspace.".to_string()),
@@ -2416,9 +2409,9 @@ mod tests {
             } else {
                 serde_json::Value::Null
             };
-            list.insert((*id).clone(), PluginEntry::static_config(config));
+            list.insert((*id).clone(), ConfiguredPlugin::static_config(config));
         }
-        list.insert("fixture".to_string(), PluginEntry::static_default());
+        list.insert("fixture".to_string(), ConfiguredPlugin::static_default());
         let config = PluginsConfig {
             host: Default::default(),
             policy: Default::default(),
@@ -2473,7 +2466,7 @@ mod tests {
             } else {
                 serde_json::Value::Null
             };
-            list.insert((*id).clone(), PluginEntry::static_config(config));
+            list.insert((*id).clone(), ConfiguredPlugin::static_config(config));
         }
         let config = PluginsConfig {
             host: Default::default(),
@@ -2776,7 +2769,7 @@ mod tests {
     }
 
     #[test]
-    fn task_plugin_entry_generates_session_id() {
+    fn task_plugin_tool_generates_session_id() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
         let invocation = ToolPayloadInput::Task(TaskToolInput {
@@ -2825,10 +2818,10 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let invocation = ToolInvocation::new(
-            "tools",
+            TOOLS_TOOL,
             StructuredObject::try_from(serde_json::json!({
                 "action": "help",
-                "tool": "fs",
+                "tool": FS_TOOL,
                 "include_schema": false
             }))
             .expect("tools help input should serialize"),
@@ -2837,7 +2830,7 @@ mod tests {
             .execute_invocation_detailed(&invocation, 7, 9)
             .expect("tools help should succeed");
 
-        assert!(result.view.output_text.contains("Tool: fs"));
+        assert!(result.view.output_text.contains("Tool: agena.fs/fs"));
         assert!(result.view.output_text.contains("Description:"));
     }
 
@@ -2847,10 +2840,10 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let initial = executor.available_tools();
-        assert!(initial.iter().any(|tool| tool.exposed_name == "tools"));
-        assert!(initial.iter().any(|tool| tool.exposed_name == "todo"));
-        assert!(initial.iter().any(|tool| tool.exposed_name == "shell"));
-        assert!(initial.iter().any(|tool| tool.exposed_name == "task"));
+        assert!(initial.iter().any(|tool| tool.exposed_name == TOOLS_TOOL));
+        assert!(initial.iter().any(|tool| tool.exposed_name == TODO_TOOL));
+        assert!(initial.iter().any(|tool| tool.exposed_name == SHELL_TOOL));
+        assert!(initial.iter().any(|tool| tool.exposed_name == TASK_TOOL));
 
         let messages = vec![Message {
             id: 99,
@@ -2870,8 +2863,8 @@ mod tests {
         }];
         let available = executor.available_tools_for_messages(messages.as_slice());
 
-        assert!(available.iter().any(|tool| tool.exposed_name == "shell"));
-        assert!(available.iter().any(|tool| tool.exposed_name == "task"));
+        assert!(available.iter().any(|tool| tool.exposed_name == SHELL_TOOL));
+        assert!(available.iter().any(|tool| tool.exposed_name == TASK_TOOL));
     }
 
     #[test]
@@ -2883,20 +2876,20 @@ mod tests {
         let tools = executor.available_tools();
         let fs = tools
             .iter()
-            .find(|tool| tool.exposed_name == "fs")
+            .find(|tool| tool.exposed_name == FS_TOOL)
             .expect("fs tool should be available");
         assert_eq!(fs.plugin_name, super::fs_plugin_id());
         assert!(fs.has_tag(crate::plugin::sdk::ToolTag::FilesystemRead));
         let web = tools
             .iter()
-            .find(|tool| tool.exposed_name == "web")
-            .expect("web tool should be available");
+            .find(|tool| tool.exposed_name == WEB_FETCH_TOOL)
+            .expect("web fetch tool should be available");
         assert_eq!(web.plugin_name, crate::web::web_plugin_id());
         assert!(web.has_tag(crate::plugin::sdk::ToolTag::Network));
 
         let fs_count = tools
             .iter()
-            .filter(|tool| tool.exposed_name == "fs")
+            .filter(|tool| tool.exposed_name == FS_TOOL)
             .count();
         assert_eq!(fs_count, 1);
     }
@@ -2914,11 +2907,11 @@ mod tests {
         let visible = executor
             .available_tools()
             .into_iter()
-            .find(|tool| tool.exposed_name == "plugin_echo")
+            .find(|tool| tool.exposed_name == FIXTURE_ECHO_TOOL)
             .expect("plugin_echo should be model-visible");
         assert_eq!(
             visible.description_text(),
-            "Echo a plugin message. Full usage is available from the `tools` tool: call action `help` with tool `plugin_echo`."
+            "Echo a plugin message. Full usage is available from the `tools` tool: call action `help` with tool `fixture/plugin_echo`."
         );
         assert!(
             visible.decl.help.is_none(),
@@ -2928,7 +2921,7 @@ mod tests {
         let detailed = executor
             .detailed_tools()
             .into_iter()
-            .find(|tool| tool.exposed_name == "plugin_echo")
+            .find(|tool| tool.exposed_name == FIXTURE_ECHO_TOOL)
             .expect("plugin_echo should have detailed help");
         assert_eq!(
             detailed.help_text(),
@@ -2946,9 +2939,9 @@ mod tests {
             assert!(
                 executor
                     .plugin_manager()
-                    .lookup_entry(definition.exposed_name.as_str())
+                    .lookup_tool(definition.exposed_name.as_str())
                     .is_some(),
-                "missing registry entry for {}",
+                "missing registered tool for {}",
                 definition.exposed_name
             );
         }
@@ -2957,9 +2950,9 @@ mod tests {
             assert!(
                 executor
                     .plugin_manager()
-                    .lookup_entry(definition.exposed_name.as_str())
+                    .lookup_tool(definition.exposed_name.as_str())
                     .is_some(),
-                "missing registry entry for {}",
+                "missing registered tool for {}",
                 definition.exposed_name
             );
         }
@@ -2978,7 +2971,7 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         let registry = executor
             .plugin_manager()
-            .entry_entries()
+            .registered_tools()
             .into_iter()
             .map(|entry| entry.exposed_name.clone())
             .collect::<std::collections::BTreeSet<_>>();
@@ -3082,7 +3075,7 @@ mod tests {
             network_effects: Vec::new(),
         })
         .into_invocation();
-        assert_eq!(invocation.name, "shell");
+        assert_eq!(invocation.name, SHELL_TOOL);
 
         let prepared = executor
             .prepare_invocation(&invocation, 7, 9)
@@ -3254,8 +3247,8 @@ mod tests {
             .map(|item| item.exposed_name.as_str())
             .collect::<std::collections::BTreeSet<_>>();
 
-        assert!(names.contains("fs"));
-        assert!(!names.contains("task"));
+        assert!(names.contains(FS_TOOL));
+        assert!(!names.contains(TASK_TOOL));
 
         let err = executor
             .execute_tool_payload_detailed(&ToolPayloadInput::ApplyPatch(ApplyPatchToolInput {
@@ -3272,14 +3265,12 @@ mod tests {
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_plugin_manager(&workspace.root));
 
-        assert!(
-            executor.available_tools().iter().any(|tool| {
-                tool.exposed_name == "plugin_echo" && tool.plugin_name == "fixture"
-            })
-        );
+        assert!(executor.available_tools().iter().any(|tool| {
+            tool.exposed_name == FIXTURE_ECHO_TOOL && tool.plugin_name == "fixture"
+        }));
 
         let invocation = ToolInvocation {
-            name: "plugin_echo".to_string(),
+            name: FIXTURE_ECHO_TOOL.to_string(),
             plugin_name: None,
             input: StructuredObject::try_from(json!({ "message": "hello" }))
                 .expect("structured object should build"),
@@ -3338,7 +3329,7 @@ mod tests {
             input,
             plugin_name,
         } = prepared.invocation;
-        assert_eq!(name, "fs");
+        assert_eq!(name, FS_TOOL);
         assert_eq!(plugin_name.as_deref(), Some(super::fs_plugin_id()));
         let payload = serde_json::Value::from(input);
         assert_eq!(payload["action"], "read");
@@ -3348,7 +3339,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_invocation_preserves_plugin_entry_name() {
+    fn prepare_invocation_preserves_plugin_tool_name() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
         let invocation = ToolInvocation {
@@ -3928,7 +3919,7 @@ mod tests {
 
     #[test]
     fn bash_tool_schema_requires_declared_effect_fields() {
-        let schema = crate::entry::definition::json_schema_for::<ShellCommandInput>();
+        let schema = crate::tool::definition::json_schema_for::<ShellCommandInput>();
         let required = schema
             .get("required")
             .and_then(serde_json::Value::as_array)

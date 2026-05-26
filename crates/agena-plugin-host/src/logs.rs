@@ -9,7 +9,7 @@ use crate::status::now_ms;
 const DEFAULT_MAX_ENTRIES_PER_PLUGIN: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PluginLogEntry {
+pub struct PluginLogRecord {
     pub seq: u64,
     pub timestamp_ms: i64,
     pub plugin_id: String,
@@ -23,7 +23,7 @@ pub struct PluginLogEntry {
 pub struct PluginLogStore {
     max_entries_per_plugin: usize,
     next_seq: AtomicU64,
-    inner: RwLock<HashMap<String, VecDeque<PluginLogEntry>>>,
+    inner: RwLock<HashMap<String, VecDeque<PluginLogRecord>>>,
 }
 
 impl Default for PluginLogStore {
@@ -48,9 +48,9 @@ impl PluginLogStore {
         source: impl Into<String>,
         message: impl Into<String>,
         fields: serde_json::Value,
-    ) -> PluginLogEntry {
+    ) -> PluginLogRecord {
         let plugin_id = plugin_id.into();
-        let entry = PluginLogEntry {
+        let record = PluginLogRecord {
             seq: self.next_seq.fetch_add(1, Ordering::SeqCst),
             timestamp_ms: now_ms(),
             plugin_id: plugin_id.clone(),
@@ -61,12 +61,12 @@ impl PluginLogStore {
         };
         if let Ok(mut guard) = self.inner.write() {
             let bucket = guard.entry(plugin_id).or_default();
-            bucket.push_back(entry.clone());
+            bucket.push_back(record.clone());
             while bucket.len() > self.max_entries_per_plugin {
                 bucket.pop_front();
             }
         }
-        entry
+        record
     }
 
     pub fn list(
@@ -74,7 +74,7 @@ impl PluginLogStore {
         plugin_id: &str,
         after_seq: Option<u64>,
         limit: usize,
-    ) -> Vec<PluginLogEntry> {
+    ) -> Vec<PluginLogRecord> {
         let limit = if limit == 0 {
             self.max_entries_per_plugin
         } else {
@@ -87,7 +87,7 @@ impl PluginLogStore {
             .map(|entries| {
                 entries
                     .into_iter()
-                    .filter(|entry| after_seq.is_none_or(|seq| entry.seq > seq))
+                    .filter(|record| after_seq.is_none_or(|seq| record.seq > seq))
                     .take(limit)
                     .collect()
             })

@@ -47,6 +47,10 @@ impl I18n {
     pub fn text_args(&self, key: &str, args: &FluentArgs) -> String {
         LOCALES.lookup_with_args(&self.locale, key, args)
     }
+
+    pub fn locale_tag(&self) -> String {
+        self.locale.to_string()
+    }
 }
 
 pub const SUPPORTED_LOCALES: &[(&str, &str)] = &[

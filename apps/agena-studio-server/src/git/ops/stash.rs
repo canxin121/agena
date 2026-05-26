@@ -13,7 +13,7 @@ use super::super::{
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GitStashEntry {
+pub struct GitStashRecord {
     pub r#ref: String,
     pub title: String,
 }
@@ -21,7 +21,7 @@ pub struct GitStashEntry {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitStashListResponse {
-    pub stashes: Vec<GitStashEntry>,
+    pub stashes: Vec<GitStashRecord>,
 }
 
 fn invalid_stash_ref_response() -> Response {
@@ -62,14 +62,14 @@ pub async fn git_stash_list(Query(q): Query<DirectoryQuery>) -> Response {
         Err(resp) => return resp,
     };
 
-    let mut stashes: Vec<GitStashEntry> = Vec::new();
+    let mut stashes: Vec<GitStashRecord> = Vec::new();
     for line in out.lines() {
         // stash@{0}: On branch: message
         if let Some((r, rest)) = line.split_once(':') {
             let r = r.trim();
             let title = rest.trim();
             if !r.is_empty() {
-                stashes.push(GitStashEntry {
+                stashes.push(GitStashRecord {
                     r#ref: r.to_string(),
                     title: title.to_string(),
                 });

@@ -14,7 +14,7 @@ pub use project_instructions::{
     ProjectInstructionLayer, discover, discover_global, render_section,
 };
 pub use prompt::build_memory_prompt_section;
-pub use store::{MemoryEntry, MemoryError, MemoryFrontmatter, MemoryStore, MemoryType, NewMemory};
+pub use store::{MemoryError, MemoryFrontmatter, MemoryRecord, MemoryStore, MemoryType, NewMemory};
 
 pub fn new_memory_plugin() -> impl crate::plugin::sdk::Plugin {
     MemoryPlugin::new()

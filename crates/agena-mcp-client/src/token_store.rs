@@ -37,11 +37,11 @@ pub enum TokenStoreError {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct StoreFile {
     #[serde(default)]
-    servers: BTreeMap<String, ServerEntry>,
+    servers: BTreeMap<String, ServerTokenRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ServerEntry {
+struct ServerTokenRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     bearer: Option<String>,
 }
@@ -89,7 +89,7 @@ impl FileTokenStore {
             let entry = guard
                 .servers
                 .entry(server.to_string())
-                .or_insert_with(|| ServerEntry { bearer: None });
+                .or_insert_with(|| ServerTokenRecord { bearer: None });
             entry.bearer = Some(token.to_string());
         }
         self.persist()

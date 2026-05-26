@@ -308,45 +308,13 @@ impl super::ConfigResolution {
             .unwrap_or_else(|| PathBuf::from("."));
         let agena_version = env!("CARGO_PKG_VERSION").to_string();
         let plugin_config = self.config.plugins.clone();
-        let mut builder = PluginHostBuilder::new(workspace_root, agena_version)
-            .with_config(plugin_config)
-            .register_static(crate::tool::lsp_plugin_id(), crate::tool::new_lsp_plugin())
-            .register_static(
-                crate::tool::cron_plugin_id(),
-                crate::tool::new_cron_plugin(),
-            )
-            .register_static(
-                crate::tool::code_plugin_id(),
-                crate::tool::new_code_plugin(),
-            )
-            .register_static(crate::tool::fs_plugin_id(), crate::tool::new_fs_plugin())
-            .register_static(
-                crate::tool::settings_plugin_id(),
-                crate::tool::new_settings_plugin(),
-            )
-            .register_static(
-                crate::tool::shell_plugin_id(),
-                crate::tool::new_shell_plugin(),
-            )
-            .register_static(
-                crate::tool::workflow_plugin_id(),
-                crate::tool::new_workflow_plugin(),
-            )
-            .register_static(crate::web::web_plugin_id(), crate::web::new_web_plugin())
-            .register_static(
-                crate::memory::memory_plugin_id(),
-                crate::memory::new_memory_plugin(),
-            );
-        if let Some(manager) = mcp_manager {
-            builder = builder.register_static(
-                crate::tool::mcp_plugin_id(),
-                crate::tool::new_mcp_plugin(manager),
-            );
-        }
-        builder = builder.register_static(
-            crate::tool::skills_plugin_id(),
-            crate::tool::new_skills_plugin(),
-        );
+        let mcp_manager = match mcp_manager {
+            Some(manager) => Some(manager),
+            None => self.build_mcp_manager_from_plugin_config().await?,
+        };
+        let mut builder =
+            PluginHostBuilder::new(workspace_root, agena_version).with_config(plugin_config);
+        builder = crate::plugins::sources::register_static_transports(builder, mcp_manager);
         if let (Some(prev_host), Some(prev_cfg)) = (previous_host, previous_config) {
             builder = builder.with_previous(prev_host, prev_cfg);
         }
@@ -354,6 +322,19 @@ impl super::ConfigResolution {
             .build()
             .await
             .map_err(|e| ConfigError::Validation(format!("plugin host: {e}")))
+    }
+
+    async fn build_mcp_manager_from_plugin_config(
+        &self,
+    ) -> Result<Option<Arc<agena_mcp_client::McpConnectionManager>>, ConfigError> {
+        if !crate::plugins::provided::mcp::static_bridge_enabled(&self.config.plugins) {
+            return Ok(None);
+        }
+        let config = crate::plugins::provided::mcp::config_from_plugins(&self.config.plugins)
+            .map_err(ConfigError::Validation)?;
+        Ok(Some(
+            crate::plugins::provided::mcp::build_manager(&config).await,
+        ))
     }
 }
 

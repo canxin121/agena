@@ -191,11 +191,11 @@ pub struct RewindCheckpoint {
     pub target_message_id: i64,
     /// Per-message audit entries for every message skipped by the rewind.
     /// Order matches the original transcript order.
-    pub dropped: Vec<RewindCheckpointEntry>,
+    pub dropped: Vec<RewindCheckpointRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RewindCheckpointEntry {
+pub struct RewindCheckpointRecord {
     pub message_id: i64,
     pub role: String,
     /// Truncated preview of the message body (≤256 chars). Full content is

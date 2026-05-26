@@ -73,7 +73,7 @@ impl From<HttpModelCatalogResponse> for ModelCatalogResponse {
             last_refresh_at: value.last_refresh_at,
             last_successful_source: value.last_successful_source,
             last_error: value.last_error,
-            entry_count: value.entry_count,
+            model_count: value.model_count,
         }
     }
 }
@@ -176,7 +176,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
         last_refresh_at: catalog.last_refresh_at,
         last_successful_source: catalog.last_successful_source,
         last_error: catalog.last_error,
-        entry_count: catalog.entries.len(),
+        model_count: catalog.models.len(),
     }
     .into();
     let background_tasks = state
@@ -192,7 +192,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             max_sessions: resolution.config.runtime.session.cache.max_sessions,
             ttl_secs: resolution.config.runtime.session.cache.ttl_secs,
             max_bytes: resolution.config.runtime.session.cache.max_bytes,
-            entry_count: stats.entry_count,
+            session_count: stats.session_count,
             total_bytes: stats.total_bytes,
             hits: stats.hits,
             misses: stats.misses,
@@ -261,11 +261,11 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
         let mut commands = Vec::new();
         let entries = snapshot
             .plugin_manager()
-            .entry_entries()
+            .registered_tools()
             .into_iter()
             .filter(|entry| entry.plugin_name == "agena.skills")
             .collect::<Vec<_>>();
-        let skill_key_for = |entry: &agena::plugin::registry::PluginEntry| {
+        let skill_key_for = |entry: &agena::plugin::registry::RegisteredTool| {
             entry
                 .decl
                 .tags
@@ -278,7 +278,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
                 })
                 .unwrap_or_else(|| entry.original_name.clone())
         };
-        let has_custom_tag = |entry: &agena::plugin::registry::PluginEntry, expected: &str| {
+        let has_custom_tag = |entry: &agena::plugin::registry::RegisteredTool, expected: &str| {
             entry.decl.tags.iter().any(|tag| match tag {
                 agena::plugin::sdk::ToolTag::Custom(value) => value == expected,
                 _ => false,

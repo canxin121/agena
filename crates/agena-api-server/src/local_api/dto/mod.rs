@@ -5,7 +5,7 @@ use agena::{
     agent::PermissionConfig,
     agents::AgentScope,
     message::PartContent,
-    model_catalog::{ModelCatalogEntryRecord, ModelCatalogEntrySourceKind},
+    model_catalog::{CatalogModelRecord, ModelCatalogSnapshotSourceKind},
     permission::PermissionMode,
     provider::ProviderModel,
     runtime::{
@@ -46,11 +46,6 @@ pub struct HealthResponse {
     pub generation: u64,
     pub loaded_at: DateTime<Utc>,
     pub database_connected: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct EntriesResponse<T> {
-    pub entries: Vec<T>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -109,7 +104,7 @@ pub struct RuntimeSessionCacheResource {
     pub max_sessions: usize,
     pub ttl_secs: u64,
     pub max_bytes: usize,
-    pub entry_count: usize,
+    pub session_count: usize,
     pub total_bytes: usize,
     pub hits: u64,
     pub misses: u64,

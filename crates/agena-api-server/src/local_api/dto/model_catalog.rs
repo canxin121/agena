@@ -7,10 +7,10 @@ pub struct ModelCatalogResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_refresh_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_successful_source: Option<ModelCatalogEntrySourceKind>,
+    pub last_successful_source: Option<ModelCatalogSnapshotSourceKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
-    pub entry_count: usize,
+    pub model_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -28,7 +28,7 @@ pub struct ModelCatalogListResponse {
     pub limit: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub available_origins: Vec<String>,
-    pub items: Vec<ModelCatalogEntryResource>,
+    pub items: Vec<CatalogModelResource>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -39,7 +39,7 @@ pub enum ModelCatalogSourceKind {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ModelCatalogEntryResource {
+pub struct CatalogModelResource {
     pub model_id: String,
     pub source: ModelCatalogSourceKind,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -97,22 +97,22 @@ pub struct ModelCatalogEntryResource {
     pub capabilities: agena::provider::ModelCapabilityPatch,
 }
 
-impl From<ModelCatalogEntryRecord> for ModelCatalogEntryResource {
-    fn from(value: ModelCatalogEntryRecord) -> Self {
+impl From<CatalogModelRecord> for CatalogModelResource {
+    fn from(value: CatalogModelRecord) -> Self {
         Self::from_record(value, None)
     }
 }
 
-impl ModelCatalogEntryResource {
+impl CatalogModelResource {
     pub fn from_record(
-        value: ModelCatalogEntryRecord,
-        last_successful_source: Option<ModelCatalogEntrySourceKind>,
+        value: CatalogModelRecord,
+        last_successful_source: Option<ModelCatalogSnapshotSourceKind>,
     ) -> Self {
-        let source = match last_successful_source.unwrap_or(ModelCatalogEntrySourceKind::Generated)
-        {
-            ModelCatalogEntrySourceKind::Generated => ModelCatalogSourceKind::Generated,
-            ModelCatalogEntrySourceKind::Cache => ModelCatalogSourceKind::Cache,
-        };
+        let source =
+            match last_successful_source.unwrap_or(ModelCatalogSnapshotSourceKind::Generated) {
+                ModelCatalogSnapshotSourceKind::Generated => ModelCatalogSourceKind::Generated,
+                ModelCatalogSnapshotSourceKind::Cache => ModelCatalogSourceKind::Cache,
+            };
         let source_label = Some(str::to_owned(match source {
             ModelCatalogSourceKind::Generated => "generated catalog",
             ModelCatalogSourceKind::Cache => "cached catalog",

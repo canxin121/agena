@@ -1025,7 +1025,7 @@ pub struct ListQuery {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct ListEntry {
+pub struct ListItem {
     pub name: String,
     pub path: String,
     pub is_directory: bool,
@@ -1037,7 +1037,7 @@ pub struct ListEntry {
 #[serde(rename_all = "camelCase")]
 pub struct ListResponse {
     pub path: String,
-    pub entries: Vec<ListEntry>,
+    pub entries: Vec<ListItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1147,7 +1147,7 @@ pub async fn fs_list(Query(q): Query<ListQuery>) -> ApiResult<Json<ListResponse>
             is_directory = st.is_dir();
         }
 
-        entries.push(ListEntry {
+        entries.push(ListItem {
             name,
             path: to_api_path(&path),
             is_directory,

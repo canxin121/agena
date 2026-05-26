@@ -21,28 +21,28 @@ fn model_catalog_summary(
         last_refresh_at: catalog.last_refresh_at,
         last_successful_source: catalog.last_successful_source,
         last_error: catalog.last_error.clone(),
-        entry_count: catalog.entries.len(),
+        model_count: catalog.models.len(),
     }
 }
 
-fn model_catalog_entry_resources(
+fn model_catalog_model_resources(
     catalog: &agena::model_catalog::ModelCatalogResponse,
-) -> Vec<crate::local_api::ModelCatalogEntryResource> {
+) -> Vec<crate::local_api::CatalogModelResource> {
     catalog
-        .entries
+        .models
         .iter()
         .cloned()
-        .map(|entry| {
-            crate::local_api::ModelCatalogEntryResource::from_record(
-                entry,
+        .map(|model| {
+            crate::local_api::CatalogModelResource::from_record(
+                model,
                 catalog.last_successful_source,
             )
         })
         .collect()
 }
 
-fn model_catalog_entry_search_text(entry: &crate::local_api::ModelCatalogEntryResource) -> String {
-    let thinking_mode_text = entry
+fn model_catalog_model_search_text(model: &crate::local_api::CatalogModelResource) -> String {
+    let thinking_mode_text = model
         .thinking_modes
         .iter()
         .flat_map(|(name, mode)| {
@@ -58,7 +58,7 @@ fn model_catalog_entry_search_text(entry: &crate::local_api::ModelCatalogEntryRe
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let speed_mode_text = entry
+    let speed_mode_text = model
         .speed_modes
         .iter()
         .flat_map(|(name, mode)| {
@@ -74,40 +74,40 @@ fn model_catalog_entry_search_text(entry: &crate::local_api::ModelCatalogEntryRe
         .join("\n");
 
     [
-        entry.model_id.clone(),
-        entry.display_name.clone().unwrap_or_default(),
-        entry.origin.clone().unwrap_or_default(),
-        entry.description.clone().unwrap_or_default(),
-        entry.output_modalities.join(","),
-        entry
+        model.model_id.clone(),
+        model.display_name.clone().unwrap_or_default(),
+        model.origin.clone().unwrap_or_default(),
+        model.description.clone().unwrap_or_default(),
+        model.output_modalities.join(","),
+        model
             .context_window_tokens
             .map(|value| value.to_string())
             .unwrap_or_default(),
-        entry
+        model
             .max_input_tokens
             .map(|value| value.to_string())
             .unwrap_or_default(),
-        entry
+        model
             .max_output_tokens
             .map(|value| value.to_string())
             .unwrap_or_default(),
-        entry
+        model
             .pricing
             .as_ref()
             .and_then(|value| serde_json::to_string(value).ok())
             .unwrap_or_default(),
-        entry.default_temperature.clone().unwrap_or_default(),
-        entry.default_top_p.clone().unwrap_or_default(),
-        entry
+        model.default_temperature.clone().unwrap_or_default(),
+        model.default_top_p.clone().unwrap_or_default(),
+        model
             .default_top_k
             .map(|value| value.to_string())
             .unwrap_or_default(),
-        match entry.source {
+        match model.source {
             crate::local_api::ModelCatalogSourceKind::Generated => "generated".to_owned(),
             crate::local_api::ModelCatalogSourceKind::Cache => "cache".to_owned(),
         },
-        entry.source_label.clone().unwrap_or_default(),
-        entry
+        model.source_label.clone().unwrap_or_default(),
+        model
             .lifecycle
             .map(|value| match value {
                 agena::model::ModelLifecycle::Active => "active",
@@ -138,10 +138,10 @@ pub async fn get_model_catalog(
     let catalog = snapshot.model_catalog_response();
     let summary = model_catalog_summary(runtime, &catalog);
     let available_origins = {
-        let mut origins = model_catalog_entry_resources(&catalog)
+        let mut origins = model_catalog_model_resources(&catalog)
             .into_iter()
-            .filter_map(|entry| {
-                let origin = entry.origin.unwrap_or_default();
+            .filter_map(|model| {
+                let origin = model.origin.unwrap_or_default();
                 let trimmed = origin.trim();
                 (!trimmed.is_empty()).then(|| trimmed.to_owned())
             })
@@ -166,16 +166,16 @@ pub async fn get_model_catalog(
     let offset = query.offset.unwrap_or(0);
     let limit = crate::local_api::normalize_limit(query.limit.map(|value| value as u64)) as usize;
 
-    let filtered = model_catalog_entry_resources(&catalog)
+    let filtered = model_catalog_model_resources(&catalog)
         .into_iter()
-        .filter(|entry| {
+        .filter(|model| {
             if let Some(origin_filter) = origin_filter
-                && entry.origin.as_deref().map(str::trim) != Some(origin_filter)
+                && model.origin.as_deref().map(str::trim) != Some(origin_filter)
             {
                 return false;
             }
             if let Some(search) = search.as_deref() {
-                return model_catalog_entry_search_text(entry).contains(search);
+                return model_catalog_model_search_text(model).contains(search);
             }
             true
         })
@@ -219,9 +219,9 @@ pub async fn lookup_model_catalog(
         .collect::<BTreeSet<_>>();
     let snapshot = state.runtime().current_snapshot();
     let catalog = snapshot.model_catalog_response();
-    let items = model_catalog_entry_resources(&catalog)
+    let items = model_catalog_model_resources(&catalog)
         .into_iter()
-        .filter(|entry| requested.contains(entry.model_id.as_str()))
+        .filter(|model| requested.contains(model.model_id.as_str()))
         .collect::<Vec<_>>();
     Ok(items_json(items))
 }

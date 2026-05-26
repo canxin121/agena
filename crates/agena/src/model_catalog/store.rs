@@ -3,7 +3,7 @@ use super::*;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct CachedOfficialCatalog {
     pub(super) fetched_at_unix_ms: i64,
-    pub(super) source: ModelCatalogEntrySourceKind,
+    pub(super) source: ModelCatalogSnapshotSourceKind,
     pub(super) document: ModelCatalogDocument,
 }
 

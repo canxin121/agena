@@ -56,7 +56,7 @@ pub use credential_store::{
 };
 pub use edit::{
     ConfigSettingsDeleteInput, ConfigSettingsEditOptions, ConfigSettingsEditResponse,
-    ConfigSettingsGetInput, ConfigSettingsListEntry, ConfigSettingsListInput,
+    ConfigSettingsGetInput, ConfigSettingsListInput, ConfigSettingsListItem,
     ConfigSettingsListResponse, ConfigSettingsPatchInput, ConfigSettingsPathInput,
     ConfigSettingsReadResponse, ConfigSettingsReloadResponse, ConfigSettingsSetInput,
     ConfigSettingsSource, ConfigSettingsValidateInput, ConfigSettingsValidateResponse,

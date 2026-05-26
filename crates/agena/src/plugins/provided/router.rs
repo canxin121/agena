@@ -10,8 +10,6 @@ use std::sync::{LazyLock, Mutex};
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 
-use crate::entry::result::ToolPayloadExecution;
-use crate::entry::{ToolExecutor, ToolPayloadOutput, ToolRuntimeContext, orchestrator};
 use crate::message::{
     ApplyPatchToolInput, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
     LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, MonitorToolInput,
@@ -22,6 +20,8 @@ use crate::plugin::sdk::{
     HookSubscription, InitContext, InitOutcome, NetworkRequest, Plugin, PluginManifest,
     PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
 };
+use crate::tool::result::ToolPayloadExecution;
+use crate::tool::{ToolExecutor, ToolPayloadOutput, ToolRuntimeContext, orchestrator};
 
 thread_local! {
     static IN_PROCESS_TOOL_CTX: RefCell<Option<ToolExecutor>> = const { RefCell::new(None) };
@@ -84,25 +84,24 @@ fn current_executor(
         call_id,
         tool_name: tool_name.to_string(),
     };
-    let entry_key = routed_entry_name(tool_name).map(|entry_name| InProcessContextKey {
+    let tool_key = routed_tool_name(tool_name).map(|tool_name| InProcessContextKey {
         session_id,
         call_id,
-        tool_name: entry_name.to_string(),
+        tool_name: tool_name.to_string(),
     });
     IN_PROCESS_TOOL_CTX_BY_CALL
         .lock()
         .ok()
         .and_then(|contexts| {
-            contexts.get(&key).cloned().or_else(|| {
-                entry_key
-                    .as_ref()
-                    .and_then(|key| contexts.get(key).cloned())
-            })
+            contexts
+                .get(&key)
+                .cloned()
+                .or_else(|| tool_key.as_ref().and_then(|key| contexts.get(key).cloned()))
         })
         .ok_or_else(|| PluginError::new("static plugin invoked without executor context"))
 }
 
-fn routed_entry_name(tool_name: &str) -> Option<&'static str> {
+fn routed_tool_name(tool_name: &str) -> Option<&'static str> {
     match tool_name {
         "read" | "glob" | "grep" | "apply_patch" | "notebook_edit" => Some("fs"),
         "bash" | "powershell" | "monitor" => Some("shell"),
@@ -117,7 +116,7 @@ fn routed_entry_name(tool_name: &str) -> Option<&'static str> {
 pub(crate) struct InProcessToolPlugin {
     plugin_name: &'static str,
     description: &'static str,
-    entries: Vec<PluginToolDecl>,
+    tools: Vec<PluginToolDecl>,
     resolver: Option<ToolInputResolver>,
 }
 
@@ -125,13 +124,13 @@ impl InProcessToolPlugin {
     pub fn new_with_resolver(
         plugin_name: &'static str,
         description: &'static str,
-        entries: Vec<PluginToolDecl>,
+        tools: Vec<PluginToolDecl>,
         resolver: ToolInputResolver,
     ) -> Self {
         Self {
             plugin_name,
             description,
-            entries,
+            tools,
             resolver: Some(resolver),
         }
     }
@@ -155,9 +154,10 @@ impl Plugin for InProcessToolPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut builder = PluginManifest::builder(self.plugin_name, env!("CARGO_PKG_VERSION"))
             .description(self.description)
-            .hooks(HookSubscription::TOOL_INVOKE);
-        for entry in &self.entries {
-            builder = builder.tool(entry.clone());
+            .hooks(HookSubscription::TOOL_INVOKE)
+            .config_schema(crate::tool::definition::empty_config_schema());
+        for tool in &self.tools {
+            builder = builder.tool(tool.clone());
         }
         builder.build()
     }
@@ -225,7 +225,7 @@ pub(crate) fn permission_paths_for(
         }
         "apply_patch" => {
             let payload: ApplyPatchToolInput = serde_json::from_value(input.clone())?;
-            let paths = crate::entry::apply_patch::planned_paths(&payload.patch)
+            let paths = crate::tool::apply_patch::planned_paths(&payload.patch)
                 .map_err(|err| PluginError::new(err.to_string()))?;
             Ok(paths
                 .into_iter()
@@ -356,7 +356,7 @@ fn declared_shell_network_requests(
     effects: &[NetworkEffect],
 ) -> SdkResult<Vec<NetworkRequest>> {
     if effects.is_empty()
-        && let Some(reason) = crate::entry::shell_tools::network_command_reason(command)
+        && let Some(reason) = crate::tool::shell_tools::network_command_reason(command)
     {
         return Err(PluginError::invalid_params(format!(
             "{tool} network_effects must declare at least one target because the command appears to use the network: {reason}"

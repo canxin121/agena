@@ -37,7 +37,7 @@ impl<P: Plugin> PluginDispatcher<P> {
         *self.host.write().await = Some(host);
     }
 
-    /// Single entry-point: routes a method/params pair to the right `Plugin`
+    /// Single dispatch point: routes a method/params pair to the right `Plugin`
     /// trait method and returns the JSON-encoded result.
     pub async fn dispatch(&self, method_name: &str, params: Value) -> Result<Value> {
         let plugin = Arc::clone(&self.plugin);
@@ -80,7 +80,7 @@ impl<P: Plugin> PluginDispatcher<P> {
                     session_id: Some(i.session_id),
                     call_id: Some(i.call_id),
                     workspace_root: Some(i.workspace_root.clone()),
-                    entry_name: Some(i.tool_name.clone()),
+                    tool_name: Some(i.tool_name.clone()),
                     ..crate::host_api::HostCallbackContext::default()
                 };
                 ok_json(
@@ -97,7 +97,7 @@ impl<P: Plugin> PluginDispatcher<P> {
                     session_id: Some(i.session_id),
                     call_id: Some(i.call_id),
                     workspace_root: Some(i.workspace_root.clone()),
-                    entry_name: Some(i.tool_name.clone()),
+                    tool_name: Some(i.tool_name.clone()),
                     ..crate::host_api::HostCallbackContext::default()
                 };
                 ok_json(
@@ -111,7 +111,7 @@ impl<P: Plugin> PluginDispatcher<P> {
                     session_id: Some(i.session_id),
                     call_id: Some(i.call_id),
                     workspace_root: Some(i.workspace_root.clone()),
-                    entry_name: Some(i.tool_name.clone()),
+                    tool_name: Some(i.tool_name.clone()),
                     ..crate::host_api::HostCallbackContext::default()
                 };
                 let output =
@@ -121,7 +121,7 @@ impl<P: Plugin> PluginDispatcher<P> {
             method::HOOK_TOOL_PERMISSION_PATHS => {
                 let i: ToolPermissionPathsInput = serde_json::from_value(params)?;
                 let ctx = crate::host_api::HostCallbackContext {
-                    entry_name: Some(i.tool_name.clone()),
+                    tool_name: Some(i.tool_name.clone()),
                     ..crate::host_api::HostCallbackContext::default()
                 };
                 ok_json(
@@ -135,7 +135,7 @@ impl<P: Plugin> PluginDispatcher<P> {
             method::HOOK_TOOL_PERMISSION_NETWORKS => {
                 let i: ToolPermissionNetworksInput = serde_json::from_value(params)?;
                 let ctx = crate::host_api::HostCallbackContext {
-                    entry_name: Some(i.tool_name.clone()),
+                    tool_name: Some(i.tool_name.clone()),
                     ..crate::host_api::HostCallbackContext::default()
                 };
                 ok_json(
@@ -174,7 +174,7 @@ impl<P: Plugin> PluginDispatcher<P> {
                 let i: ProviderListInput = serde_json::from_value(params)?;
                 ok_json(&plugin.provider_list(i).await?)
             }
-            method::HOOK_PERMISSION_ASK | method::HOOK_PERMISSION_ASK_LEGACY => {
+            method::HOOK_PERMISSION_ASK => {
                 let i: PermissionAskInput = serde_json::from_value(params)?;
                 ok_json(&plugin.permission_ask(i).await?)
             }
@@ -224,7 +224,7 @@ impl<P: Plugin> PluginDispatcher<P> {
                     session_id: Some(i.session_id),
                     call_id: Some(i.call_id),
                     workspace_root: Some(i.workspace_root.clone()),
-                    entry_name: Some(i.tool_name.clone()),
+                    tool_name: Some(i.tool_name.clone()),
                     ..crate::host_api::HostCallbackContext::default()
                 };
                 crate::host_api::with_host_callback_context(ctx, plugin.tool_execute_failure(i))
@@ -234,7 +234,7 @@ impl<P: Plugin> PluginDispatcher<P> {
             method::HOOK_TOOL_DEFINITION => {
                 let i: ToolDefinitionInput = serde_json::from_value(params)?;
                 let ctx = crate::host_api::HostCallbackContext {
-                    entry_name: Some(i.tool_name.clone()),
+                    tool_name: Some(i.tool_name.clone()),
                     ..crate::host_api::HostCallbackContext::default()
                 };
                 ok_json(
@@ -287,7 +287,7 @@ impl<P: Plugin> PluginDispatcher<P> {
                 session_id: Some(input.session_id),
                 call_id: Some(input.call_id),
                 workspace_root: Some(input.workspace_root.clone()),
-                entry_name: Some(input.tool_name.clone()),
+                tool_name: Some(input.tool_name.clone()),
                 ..inherited_context.unwrap_or_default()
             };
             let result = crate::host_api::with_host_callback_context(

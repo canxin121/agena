@@ -13,16 +13,16 @@ pub(crate) const SHELL_PLUGIN_ID: &str = "agena.shell";
 
 pub(crate) fn new_plugin() -> InProcessToolPlugin {
     InProcessToolPlugin::new_with_resolver(
-        "agena-shell",
+        SHELL_PLUGIN_ID,
         "Shell command tools backed by the in-process executor bridge.",
         vec![ShellToolInput::tool_decl()],
-        ShellToolInput::resolve_entry,
+        ShellToolInput::resolve_tool,
     )
 }
 
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    entry = "shell",
+    tool = "shell",
     description = "Shell command dispatcher. Set action to exec, monitor_start, monitor_list, monitor_read, or monitor_stop. Exec payloads must declare `shell = bash|powershell` plus filesystem_effects and network_effects for every path or network target the command may access.",
     summary = "Run shell, PowerShell, or monitor commands.",
     help = "Use action `exec` for one-shot shell commands, with `shell = bash|powershell`. Use `monitor_start`, `monitor_list`, `monitor_read`, and `monitor_stop` for long-running processes. Shell execution payloads must declare `filesystem_effects` and `network_effects` for any paths or outbound targets the command may access; pass empty arrays when there is no filesystem or network effect beyond entering `workdir`.",

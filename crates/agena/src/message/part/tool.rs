@@ -488,7 +488,7 @@ pub struct NotebookEditToolInput {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInvocation {
-    pub entry_name: String,
+    pub tool_name: String,
     pub plugin_name: Option<String>,
     pub input: StructuredObject,
 }
@@ -496,7 +496,7 @@ pub struct PluginInvocation {
 impl PluginInvocation {
     pub fn from_tool_invocation(invocation: &ToolInvocation) -> Self {
         Self {
-            entry_name: invocation.name.clone(),
+            tool_name: invocation.name.clone(),
             plugin_name: invocation.plugin_name.clone(),
             input: invocation.input.clone(),
         }
@@ -577,7 +577,7 @@ pub enum OperationBlock {
     },
     FileChanges {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        changes: Vec<super::FileChangeEntry>,
+        changes: Vec<super::FileChangeRecord>,
     },
     SearchResults {
         #[serde(default, skip_serializing_if = "Option::is_none")]

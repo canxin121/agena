@@ -5416,6 +5416,7 @@ mod tests {
             tool::fs_plugin_id().to_string(),
             tool::settings_plugin_id().to_string(),
             tool::shell_plugin_id().to_string(),
+            tool::schema_lab_plugin_id().to_string(),
             web::web_plugin_id().to_string(),
             tool::workflow_plugin_id().to_string(),
             memory::memory_plugin_id().to_string(),

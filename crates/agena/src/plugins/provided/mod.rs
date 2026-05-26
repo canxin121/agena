@@ -4,6 +4,7 @@ pub mod fs;
 pub mod lsp;
 pub mod mcp;
 pub mod router;
+pub mod schema_lab;
 pub mod settings;
 pub mod shell;
 pub mod skills;

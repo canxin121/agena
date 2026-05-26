@@ -48,6 +48,10 @@ pub(crate) fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
             static_entry(serde_json::Value::Null),
         ),
         (
+            crate::tool::schema_lab_plugin_id().to_string(),
+            static_entry(serde_json::Value::Null),
+        ),
+        (
             crate::web::web_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
@@ -103,6 +107,10 @@ pub(crate) fn register_static_transports(
         .register_static(
             crate::tool::workflow_plugin_id(),
             crate::tool::new_workflow_plugin(),
+        )
+        .register_static(
+            crate::tool::schema_lab_plugin_id(),
+            crate::tool::new_schema_lab_plugin(),
         )
         .register_static(crate::web::web_plugin_id(), crate::web::new_web_plugin())
         .register_static(

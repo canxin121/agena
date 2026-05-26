@@ -5,8 +5,9 @@ use crate::plugin::sdk::{PluginManifest, ToolTag};
 use crate::plugin::sdk::Plugin;
 use crate::plugins::provided::code as provided_code;
 use crate::plugins::provided::{
-    cron as provided_cron, fs as provided_fs, lsp as provided_lsp, settings as provided_settings,
-    shell as provided_shell, workflow as provided_workflow,
+    cron as provided_cron, fs as provided_fs, lsp as provided_lsp,
+    schema_lab as provided_schema_lab, settings as provided_settings, shell as provided_shell,
+    workflow as provided_workflow,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +112,10 @@ fn tool_entries() -> Vec<RegisteredTool> {
     extend_manifest_entries(&mut entries, crate::web::new_web_plugin().manifest());
     extend_manifest_entries(&mut entries, crate::memory::new_memory_plugin().manifest());
     extend_manifest_entries(&mut entries, provided_workflow::new_plugin().manifest());
+    extend_manifest_entries(
+        &mut entries,
+        provided_schema_lab::SchemaLabPlugin::new().manifest(),
+    );
     entries
 }
 

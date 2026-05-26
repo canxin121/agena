@@ -33,11 +33,18 @@ pub(super) struct PluginWorkbenchOverlay {
     visible_plugins: Vec<usize>,
     selected_plugin: usize,
     detail_tab: PluginDetailTab,
+    config_view: PluginConfigView,
     config_focus: PluginConfigFocus,
+    selected_toolbar_action: usize,
+    selected_section: usize,
     selected_node: usize,
+    selected_diagnostic: usize,
+    selected_diff_row: usize,
     config_scroll: usize,
     diagnostics_scroll: usize,
     show_diff: bool,
+    drilldown: Option<PluginConfigDrilldownOverlay>,
+    actions: Option<PluginConfigActionOverlay>,
     editor: Option<PluginConfigEditOverlay>,
 }
 
@@ -71,7 +78,6 @@ enum PluginConfigFilter {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PluginDetailTab {
-    Overview,
     Config,
     Tools,
     Commands,
@@ -80,9 +86,13 @@ enum PluginDetailTab {
     Diagnostics,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PluginConfigView {
+    Effective,
+}
+
 impl PluginDetailTab {
-    const ALL: [Self; 7] = [
-        Self::Overview,
+    const ALL: [Self; 6] = [
         Self::Config,
         Self::Tools,
         Self::Commands,
@@ -93,7 +103,6 @@ impl PluginDetailTab {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Overview => "Overview",
             Self::Config => "Config",
             Self::Tools => "Tools",
             Self::Commands => "Commands",
@@ -116,6 +125,7 @@ impl PluginDetailTab {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PluginConfigFocus {
+    Toolbar,
     Structure,
     Editor,
     FieldInfo,
@@ -134,6 +144,9 @@ struct PluginWorkbenchPlugin {
     status: agena::plugin::status::PluginStatus,
     inspect: Option<agena::plugin::PluginInspect>,
     configured_plugin_value: Option<JsonValue>,
+    saved_override: JsonValue,
+    draft_override: JsonValue,
+    default_config: JsonValue,
     saved_config: JsonValue,
     draft_config: JsonValue,
     schema: Option<JsonValue>,
@@ -141,7 +154,7 @@ struct PluginWorkbenchPlugin {
     diagnostics: Vec<ConfigDiagnostic>,
     runtime_diagnostics: Vec<ConfigDiagnostic>,
     diff: Vec<ConfigDiffRow>,
-    nodes: Vec<ConfigNodeSummary>,
+    sections: Vec<ConfigSectionView>,
     logs: Vec<agena::plugin::PluginLogRecord>,
     dirty: bool,
     branch_drafts: BTreeMap<String, JsonValue>,
@@ -172,18 +185,6 @@ enum PathSegment {
 
 type ConfigPath = Vec<PathSegment>;
 
-#[derive(Debug, Clone)]
-struct ConfigNodeSummary {
-    path: ConfigPath,
-    title: String,
-    kind: String,
-    preview: String,
-    depth: usize,
-    error_count: usize,
-    warning_count: usize,
-    dirty: bool,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DiagnosticSeverity {
     Error,
@@ -207,7 +208,193 @@ struct ConfigDiffRow {
     summary: String,
 }
 
+#[derive(Debug, Clone)]
+struct ConfigSectionView {
+    key: String,
+    title: String,
+    path: ConfigPath,
+    issue_count: usize,
+    dirty: bool,
+    body: ConfigSectionBody,
+}
+
+#[derive(Debug, Clone)]
+enum ConfigSectionBody {
+    Overview {
+        cards: Vec<ConfigOverviewCard>,
+        lines: Vec<String>,
+    },
+    Form {
+        notice: Option<String>,
+        groups: Vec<ConfigGroupView>,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct ConfigOverviewCard {
+    title: String,
+    summary: String,
+    issue_label: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ConfigGroupView {
+    title: String,
+    layout: ConfigGroupLayout,
+    rows: Vec<ConfigRowView>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigGroupLayout {
+    Standard,
+    Pair {
+        left_label: &'static str,
+        right_label: &'static str,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct ConfigRowView {
+    title: String,
+    primary_path: ConfigPath,
+    additional_paths: Vec<ConfigPath>,
+    editor: ConfigRowEditor,
+    description: Option<String>,
+    constraints: Vec<String>,
+    diagnostics: Vec<ConfigDiagnostic>,
+    value_display: String,
+    default_display: String,
+    secondary_value_display: Option<String>,
+    secondary_default_display: Option<String>,
+    state: ConfigRowState,
+    inactive_reason: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+enum ConfigRowEditor {
+    Bool {
+        path: ConfigPath,
+    },
+    Scalar {
+        path: ConfigPath,
+        kind: ScalarEditKind,
+    },
+    NullableString {
+        path: ConfigPath,
+    },
+    Enum {
+        path: ConfigPath,
+        variants: Vec<JsonValue>,
+    },
+    PairInteger {
+        left_path: ConfigPath,
+        right_path: ConfigPath,
+    },
+    Structured {
+        path: ConfigPath,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigRowState {
+    Default,
+    Override,
+    Dirty,
+    Error,
+    Inactive,
+}
+
+impl ConfigRowState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Override => "Changed",
+            Self::Dirty => "Dirty",
+            Self::Error => "Error",
+            Self::Inactive => "Inactive",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompactToolbarAction {
+    Validate,
+    ResetAll,
+    Diff,
+    Save,
+    Restart,
+}
+
+const COMPACT_TOOLBAR_ACTIONS: [CompactToolbarAction; 5] = [
+    CompactToolbarAction::Validate,
+    CompactToolbarAction::ResetAll,
+    CompactToolbarAction::Diff,
+    CompactToolbarAction::Save,
+    CompactToolbarAction::Restart,
+];
+
+impl CompactToolbarAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Validate => "Validate",
+            Self::ResetAll => "Reset All",
+            Self::Diff => "Diff",
+            Self::Save => "Save",
+            Self::Restart => "Restart",
+        }
+    }
+
+    fn shortcut(self) -> &'static str {
+        match self {
+            Self::Validate => "V",
+            Self::ResetAll => "R",
+            Self::Diff => "D",
+            Self::Save => "S",
+            Self::Restart => "^R",
+        }
+    }
+}
+
 type PluginConfigEditOverlay = EditorDialogState<PluginConfigEditAction>;
+
+#[derive(Debug, Clone)]
+struct PluginConfigDrilldownOverlay {
+    plugin_id: String,
+    path: ConfigPath,
+    title: String,
+    groups: Vec<ConfigGroupView>,
+    selected_row: usize,
+}
+
+#[derive(Debug, Clone)]
+struct PluginConfigActionOverlay {
+    title: String,
+    subject: String,
+    actions: Vec<PluginConfigActionItem>,
+    selected_action: usize,
+}
+
+#[derive(Debug, Clone)]
+struct PluginConfigActionItem {
+    label: String,
+    description: String,
+    action: PluginConfigAction,
+}
+
+#[derive(Debug, Clone)]
+enum PluginConfigAction {
+    ResetField {
+        plugin_id: String,
+        paths: Vec<ConfigPath>,
+        focus_path: ConfigPath,
+    },
+    ResetGroup {
+        plugin_id: String,
+        paths: Vec<ConfigPath>,
+        focus_path: ConfigPath,
+    },
+}
 
 #[derive(Debug, Clone)]
 enum PluginConfigEditAction {
@@ -215,6 +402,15 @@ enum PluginConfigEditAction {
         plugin_id: String,
         path: ConfigPath,
         kind: ScalarEditKind,
+    },
+    SetNullableString {
+        plugin_id: String,
+        path: ConfigPath,
+    },
+    SetPairIntegers {
+        plugin_id: String,
+        left_path: ConfigPath,
+        right_path: ConfigPath,
     },
     AddObjectField {
         plugin_id: String,
@@ -262,9 +458,14 @@ impl PluginWorkbenchOverlay {
         self.plugins.get_mut(visible_index)
     }
 
-    fn selected_node(&self) -> Option<&ConfigNodeSummary> {
+    fn selected_section(&self) -> Option<&ConfigSectionView> {
         self.selected_plugin()
-            .and_then(|plugin| plugin.nodes.get(self.selected_node))
+            .and_then(|plugin| plugin.sections.get(self.selected_section))
+    }
+
+    fn selected_row(&self) -> Option<&ConfigRowView> {
+        let section = self.selected_section()?;
+        section_row_at(section, self.config_view, self.selected_node)
     }
 
     fn clamp_selection(&mut self) {
@@ -275,15 +476,67 @@ impl PluginWorkbenchOverlay {
                 .selected_plugin
                 .min(self.visible_plugins.len().saturating_sub(1));
         }
-        let node_count = self
+        let section_count = self
             .selected_plugin()
-            .map(|plugin| plugin.nodes.len())
+            .map(|plugin| plugin.sections.len())
             .unwrap_or_default();
-        if node_count == 0 {
+        if section_count == 0 {
+            self.selected_section = 0;
+        } else {
+            self.selected_section = self.selected_section.min(section_count.saturating_sub(1));
+        }
+        let row_count = self
+            .selected_section()
+            .map(|section| section_row_count(section, self.config_view))
+            .unwrap_or_default();
+        if row_count == 0 {
             self.selected_node = 0;
         } else {
-            self.selected_node = self.selected_node.min(node_count.saturating_sub(1));
+            self.selected_node = self.selected_node.min(row_count.saturating_sub(1));
         }
+        let diagnostic_count = self
+            .selected_plugin()
+            .map(plugin_all_diagnostics)
+            .map(|diagnostics| diagnostics.len())
+            .unwrap_or_default();
+        if diagnostic_count == 0 {
+            self.selected_diagnostic = 0;
+        } else {
+            self.selected_diagnostic = self.selected_diagnostic.min(diagnostic_count - 1);
+        }
+        let diff_count = self
+            .selected_plugin()
+            .map(|plugin| plugin.diff.len())
+            .unwrap_or_default();
+        if diff_count == 0 {
+            self.selected_diff_row = 0;
+        } else {
+            self.selected_diff_row = self.selected_diff_row.min(diff_count - 1);
+        }
+        if let Some(actions) = self.actions.as_mut() {
+            if actions.actions.is_empty() {
+                actions.selected_action = 0;
+            } else {
+                actions.selected_action = actions
+                    .selected_action
+                    .min(actions.actions.len().saturating_sub(1));
+            }
+        }
+        if self
+            .selected_plugin()
+            .is_some_and(plugin_uses_compact_config_layout)
+            && !matches!(
+                self.config_focus,
+                PluginConfigFocus::Toolbar
+                    | PluginConfigFocus::Structure
+                    | PluginConfigFocus::Editor
+            )
+        {
+            self.config_focus = PluginConfigFocus::Structure;
+        }
+        self.selected_toolbar_action = self
+            .selected_toolbar_action
+            .min(COMPACT_TOOLBAR_ACTIONS.len().saturating_sub(1));
     }
 }
 
@@ -327,12 +580,19 @@ impl App {
             plugins,
             visible_plugins: Vec::new(),
             selected_plugin: 0,
-            detail_tab: PluginDetailTab::Overview,
+            detail_tab: PluginDetailTab::Config,
+            config_view: PluginConfigView::Effective,
             config_focus: PluginConfigFocus::Structure,
+            selected_toolbar_action: 0,
+            selected_section: 0,
             selected_node: 0,
+            selected_diagnostic: 0,
+            selected_diff_row: 0,
             config_scroll: 0,
             diagnostics_scroll: 0,
             show_diff: false,
+            drilldown: None,
+            actions: None,
             editor: None,
         };
         refresh_plugin_workbench_filter(&mut dialog);
@@ -344,15 +604,22 @@ impl App {
         let selected_plugin_id = dialog
             .selected_plugin()
             .map(|plugin| plugin.plugin_id.clone());
-        let selected_path = dialog.selected_node().map(|node| node.path.clone());
+        let selected_section_key = dialog.selected_section().map(|section| section.key.clone());
+        let selected_path = dialog.selected_row().map(|row| row.primary_path.clone());
         match self.build_plugin_workbench(query.as_str()) {
             Ok(mut refreshed) => {
                 refreshed.mode = dialog.mode;
                 refreshed.transport_filter = dialog.transport_filter;
                 refreshed.config_filter = dialog.config_filter;
                 refreshed.detail_tab = dialog.detail_tab;
+                refreshed.config_view = dialog.config_view;
                 refreshed.config_focus = dialog.config_focus;
+                refreshed.selected_toolbar_action = dialog.selected_toolbar_action;
                 refreshed.show_diff = dialog.show_diff;
+                refreshed.drilldown = dialog
+                    .drilldown
+                    .as_ref()
+                    .and_then(|overlay| rebuild_drilldown_overlay(&refreshed, overlay));
                 refresh_plugin_workbench_filter(&mut refreshed);
                 if let Some(plugin_id) = selected_plugin_id {
                     if let Some(index) = refreshed.visible_plugins.iter().position(|visible| {
@@ -364,12 +631,27 @@ impl App {
                         refreshed.selected_plugin = index;
                     }
                 }
-                if let Some(path) = selected_path {
-                    refreshed.selected_node = refreshed
+                if let Some(section_key) = selected_section_key {
+                    refreshed.selected_section = refreshed
                         .selected_plugin()
-                        .and_then(|plugin| plugin.nodes.iter().position(|node| node.path == path))
+                        .and_then(|plugin| {
+                            plugin
+                                .sections
+                                .iter()
+                                .position(|section| section.key == section_key)
+                        })
                         .unwrap_or_default();
                 }
+                if let Some(path) = selected_path {
+                    if let Some((section_index, row_index)) = refreshed
+                        .selected_plugin()
+                        .and_then(|plugin| find_row_position(plugin, refreshed.config_view, &path))
+                    {
+                        refreshed.selected_section = section_index;
+                        refreshed.selected_node = row_index;
+                    }
+                }
+                refreshed.clamp_selection();
                 *dialog = refreshed;
             }
             Err(error) => self.flash_error(error),
@@ -384,7 +666,8 @@ impl App {
         let selected_plugin_id = dialog
             .selected_plugin()
             .map(|plugin| plugin.plugin_id.clone());
-        let selected_path = dialog.selected_node().map(|node| node.path.clone());
+        let selected_section_key = dialog.selected_section().map(|section| section.key.clone());
+        let selected_path = dialog.selected_row().map(|row| row.primary_path.clone());
         let Ok(mut refreshed) = self.build_plugin_workbench(query.as_str()) else {
             return dialog;
         };
@@ -392,8 +675,17 @@ impl App {
         refreshed.transport_filter = dialog.transport_filter;
         refreshed.config_filter = dialog.config_filter;
         refreshed.detail_tab = dialog.detail_tab;
+        refreshed.config_view = dialog.config_view;
         refreshed.config_focus = dialog.config_focus;
+        refreshed.selected_toolbar_action = dialog.selected_toolbar_action;
         refreshed.show_diff = dialog.show_diff;
+        refreshed.selected_diagnostic = dialog.selected_diagnostic;
+        refreshed.selected_diff_row = dialog.selected_diff_row;
+        refreshed.drilldown = dialog
+            .drilldown
+            .as_ref()
+            .and_then(|overlay| rebuild_drilldown_overlay(&refreshed, overlay));
+        refreshed.actions = dialog.actions.clone();
         refresh_plugin_workbench_filter(&mut refreshed);
         if let Some(plugin_id) = selected_plugin_id {
             if let Some(index) = refreshed.visible_plugins.iter().position(|visible| {
@@ -405,12 +697,27 @@ impl App {
                 refreshed.selected_plugin = index;
             }
         }
-        if let Some(path) = selected_path {
-            refreshed.selected_node = refreshed
+        if let Some(section_key) = selected_section_key {
+            refreshed.selected_section = refreshed
                 .selected_plugin()
-                .and_then(|plugin| plugin.nodes.iter().position(|node| node.path == path))
+                .and_then(|plugin| {
+                    plugin
+                        .sections
+                        .iter()
+                        .position(|section| section.key == section_key)
+                })
                 .unwrap_or_default();
         }
+        if let Some(path) = selected_path {
+            if let Some((section_index, row_index)) = refreshed
+                .selected_plugin()
+                .and_then(|plugin| find_row_position(plugin, refreshed.config_view, &path))
+            {
+                refreshed.selected_section = section_index;
+                refreshed.selected_node = row_index;
+            }
+        }
+        refreshed.clamp_selection();
         refreshed
     }
 
@@ -419,6 +726,13 @@ impl App {
         key: KeyEvent,
         dialog: &mut PluginWorkbenchOverlay,
     ) -> bool {
+        if dialog.actions.is_some() {
+            return self.handle_plugin_config_actions_key(key, dialog);
+        }
+        if dialog.drilldown.is_some() {
+            return self.handle_plugin_config_drilldown_key(key, dialog);
+        }
+
         if let Some(editor) = dialog.editor.as_mut() {
             match drive_editor_dialog_key(editor, key) {
                 EditorDialogKeyResult::Continue => return false,
@@ -454,7 +768,8 @@ impl App {
             KeyCode::Esc => true,
             KeyCode::Enter => {
                 dialog.mode = PluginWorkbenchMode::Detail;
-                dialog.detail_tab = PluginDetailTab::Overview;
+                dialog.detail_tab = PluginDetailTab::Config;
+                dialog.selected_section = 0;
                 dialog.selected_node = 0;
                 false
             }
@@ -591,13 +906,92 @@ impl App {
         key: KeyEvent,
         dialog: &mut PluginWorkbenchOverlay,
     ) -> bool {
+        let compact_layout = dialog
+            .selected_plugin()
+            .is_some_and(plugin_uses_compact_config_layout);
+        if compact_layout && dialog.show_diff {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('d') | KeyCode::Char('D') => {
+                    dialog.show_diff = false;
+                    return false;
+                }
+                _ => return false,
+            }
+        }
+        if compact_layout {
+            match key.code {
+                KeyCode::Enter if dialog.config_focus == PluginConfigFocus::Toolbar => {
+                    self.run_compact_toolbar_action(dialog);
+                    return false;
+                }
+                KeyCode::Enter if dialog.config_focus == PluginConfigFocus::Structure => {
+                    dialog.config_focus = PluginConfigFocus::Editor;
+                    return false;
+                }
+                KeyCode::Right | KeyCode::Char('l')
+                    if dialog.config_focus == PluginConfigFocus::Toolbar =>
+                {
+                    move_index(
+                        &mut dialog.selected_toolbar_action,
+                        COMPACT_TOOLBAR_ACTIONS.len(),
+                        1,
+                    );
+                    return false;
+                }
+                KeyCode::Left | KeyCode::Char('h')
+                    if dialog.config_focus == PluginConfigFocus::Toolbar =>
+                {
+                    move_index(
+                        &mut dialog.selected_toolbar_action,
+                        COMPACT_TOOLBAR_ACTIONS.len(),
+                        -1,
+                    );
+                    return false;
+                }
+                KeyCode::Right | KeyCode::Char('l')
+                    if dialog.config_focus == PluginConfigFocus::Structure =>
+                {
+                    dialog.config_focus = PluginConfigFocus::Editor;
+                    return false;
+                }
+                KeyCode::Left | KeyCode::Char('h')
+                    if dialog.config_focus == PluginConfigFocus::Structure =>
+                {
+                    return false;
+                }
+                KeyCode::Left | KeyCode::Char('h')
+                    if dialog.config_focus == PluginConfigFocus::Editor =>
+                {
+                    dialog.config_focus = PluginConfigFocus::Structure;
+                    return false;
+                }
+                KeyCode::Right | KeyCode::Char('l')
+                    if dialog.config_focus == PluginConfigFocus::Editor =>
+                {
+                    return false;
+                }
+                KeyCode::Up | KeyCode::Char('k')
+                    if dialog.config_focus == PluginConfigFocus::Toolbar =>
+                {
+                    dialog.config_focus = PluginConfigFocus::Structure;
+                    return false;
+                }
+                KeyCode::Down | KeyCode::Char('j')
+                    if dialog.config_focus == PluginConfigFocus::Toolbar =>
+                {
+                    dialog.config_focus = PluginConfigFocus::Structure;
+                    return false;
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Tab if key.modifiers.is_empty() => {
-                dialog.config_focus = next_config_focus(dialog.config_focus);
+                dialog.config_focus = next_config_focus(dialog.config_focus, compact_layout);
                 false
             }
             KeyCode::BackTab => {
-                dialog.config_focus = previous_config_focus(dialog.config_focus);
+                dialog.config_focus = previous_config_focus(dialog.config_focus, compact_layout);
                 false
             }
             KeyCode::Char('s') | KeyCode::Char('S') => {
@@ -612,16 +1006,31 @@ impl App {
                 self.insert_selected_plugin_defaults(dialog);
                 false
             }
+            KeyCode::Char('x') | KeyCode::Char('X') => {
+                self.open_selected_config_actions(dialog);
+                false
+            }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.delete_selected_config_node(dialog);
+                if dialog.config_focus == PluginConfigFocus::Diagnostics {
+                    self.jump_to_selected_bottom_item(dialog);
+                } else {
+                    self.delete_selected_config_node(dialog);
+                }
                 false
             }
             KeyCode::Char('D') => {
                 dialog.show_diff = !dialog.show_diff;
+                if !compact_layout {
+                    dialog.clamp_selection();
+                }
+                false
+            }
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.restart_selected_plugin(dialog);
                 false
             }
             KeyCode::Char('r') => {
-                self.reset_selected_plugin_config_to_saved(dialog);
+                self.reset_selected_plugin_config_to_defaults(dialog);
                 false
             }
             KeyCode::Char('a') | KeyCode::Char('A') => {
@@ -633,42 +1042,238 @@ impl App {
                 false
             }
             KeyCode::Enter | KeyCode::Char('e') => {
-                self.open_selected_config_value_editor(dialog);
+                if dialog.config_focus == PluginConfigFocus::Diagnostics {
+                    self.jump_to_selected_bottom_item(dialog);
+                } else {
+                    self.open_selected_config_value_editor(dialog);
+                }
                 false
             }
             KeyCode::PageUp => {
-                move_selected_config_node(dialog, -(CONFIG_EDITOR_PAGE_SIZE as isize));
+                match dialog.config_focus {
+                    PluginConfigFocus::Toolbar => {}
+                    PluginConfigFocus::Structure => {
+                        move_selected_config_section(dialog, -(CONFIG_EDITOR_PAGE_SIZE as isize));
+                    }
+                    PluginConfigFocus::Diagnostics => {
+                        move_selected_bottom_panel_row(dialog, -(CONFIG_EDITOR_PAGE_SIZE as isize));
+                    }
+                    _ => move_selected_config_node(dialog, -(CONFIG_EDITOR_PAGE_SIZE as isize)),
+                }
                 false
             }
             KeyCode::PageDown => {
-                move_selected_config_node(dialog, CONFIG_EDITOR_PAGE_SIZE as isize);
+                match dialog.config_focus {
+                    PluginConfigFocus::Toolbar => {}
+                    PluginConfigFocus::Structure => {
+                        move_selected_config_section(dialog, CONFIG_EDITOR_PAGE_SIZE as isize);
+                    }
+                    PluginConfigFocus::Diagnostics => {
+                        move_selected_bottom_panel_row(dialog, CONFIG_EDITOR_PAGE_SIZE as isize);
+                    }
+                    _ => move_selected_config_node(dialog, CONFIG_EDITOR_PAGE_SIZE as isize),
+                }
                 false
             }
             KeyCode::Home => {
-                dialog.selected_node = 0;
+                match dialog.config_focus {
+                    PluginConfigFocus::Toolbar => dialog.selected_toolbar_action = 0,
+                    PluginConfigFocus::Structure => dialog.selected_section = 0,
+                    PluginConfigFocus::Diagnostics => match dialog.show_diff {
+                        true => dialog.selected_diff_row = 0,
+                        false => dialog.selected_diagnostic = 0,
+                    },
+                    _ => dialog.selected_node = 0,
+                }
+                dialog.clamp_selection();
                 false
             }
             KeyCode::End => {
-                dialog.selected_node = dialog
-                    .selected_plugin()
-                    .map(|plugin| plugin.nodes.len().saturating_sub(1))
-                    .unwrap_or_default();
+                match dialog.config_focus {
+                    PluginConfigFocus::Toolbar => {
+                        dialog.selected_toolbar_action =
+                            COMPACT_TOOLBAR_ACTIONS.len().saturating_sub(1);
+                    }
+                    PluginConfigFocus::Structure => {
+                        dialog.selected_section = dialog
+                            .selected_plugin()
+                            .map(|plugin| plugin.sections.len().saturating_sub(1))
+                            .unwrap_or_default();
+                    }
+                    PluginConfigFocus::Diagnostics => {
+                        if dialog.show_diff {
+                            dialog.selected_diff_row = dialog
+                                .selected_plugin()
+                                .map(|plugin| plugin.diff.len().saturating_sub(1))
+                                .unwrap_or_default();
+                        } else {
+                            dialog.selected_diagnostic = dialog
+                                .selected_plugin()
+                                .map(plugin_all_diagnostics)
+                                .map(|diagnostics| diagnostics.len().saturating_sub(1))
+                                .unwrap_or_default();
+                        }
+                    }
+                    _ => {
+                        dialog.selected_node = dialog
+                            .selected_section()
+                            .map(|section| {
+                                section_row_count(section, dialog.config_view).saturating_sub(1)
+                            })
+                            .unwrap_or_default();
+                    }
+                }
+                dialog.clamp_selection();
                 false
             }
             KeyCode::Left | KeyCode::Char('h') => {
-                dialog.config_focus = previous_config_focus(dialog.config_focus);
+                dialog.config_focus = previous_config_focus(dialog.config_focus, compact_layout);
                 false
             }
             KeyCode::Right | KeyCode::Char('l') => {
-                dialog.config_focus = next_config_focus(dialog.config_focus);
+                dialog.config_focus = next_config_focus(dialog.config_focus, compact_layout);
                 false
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                move_selected_config_node(dialog, -1);
+                match dialog.config_focus {
+                    PluginConfigFocus::Structure => move_selected_config_section(dialog, -1),
+                    PluginConfigFocus::Diagnostics => move_selected_bottom_panel_row(dialog, -1),
+                    _ => move_selected_config_node(dialog, -1),
+                }
                 false
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                move_selected_config_node(dialog, 1);
+                match dialog.config_focus {
+                    PluginConfigFocus::Structure => move_selected_config_section(dialog, 1),
+                    PluginConfigFocus::Diagnostics => move_selected_bottom_panel_row(dialog, 1),
+                    _ => move_selected_config_node(dialog, 1),
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_plugin_config_actions_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut PluginWorkbenchOverlay,
+    ) -> bool {
+        let Some(overlay) = dialog.actions.as_mut() else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Esc => {
+                dialog.actions = None;
+                false
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                move_index(&mut overlay.selected_action, overlay.actions.len(), -1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                move_index(&mut overlay.selected_action, overlay.actions.len(), 1);
+                false
+            }
+            KeyCode::Home => {
+                overlay.selected_action = 0;
+                false
+            }
+            KeyCode::End => {
+                overlay.selected_action = overlay.actions.len().saturating_sub(1);
+                false
+            }
+            KeyCode::Enter => {
+                self.commit_plugin_config_action(dialog);
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_plugin_config_drilldown_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut PluginWorkbenchOverlay,
+    ) -> bool {
+        let Some(overlay_snapshot) = dialog.drilldown.as_ref().cloned() else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Esc => {
+                dialog.drilldown = None;
+                false
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let count = drilldown_row_count(&overlay_snapshot, dialog.config_view);
+                let Some(overlay) = dialog.drilldown.as_mut() else {
+                    return false;
+                };
+                move_index(&mut overlay.selected_row, count, -1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let count = drilldown_row_count(&overlay_snapshot, dialog.config_view);
+                let Some(overlay) = dialog.drilldown.as_mut() else {
+                    return false;
+                };
+                move_index(&mut overlay.selected_row, count, 1);
+                false
+            }
+            KeyCode::PageUp => {
+                let count = drilldown_row_count(&overlay_snapshot, dialog.config_view);
+                let Some(overlay) = dialog.drilldown.as_mut() else {
+                    return false;
+                };
+                move_index_page(
+                    &mut overlay.selected_row,
+                    count,
+                    -1,
+                    CONFIG_EDITOR_PAGE_SIZE,
+                );
+                false
+            }
+            KeyCode::PageDown => {
+                let count = drilldown_row_count(&overlay_snapshot, dialog.config_view);
+                let Some(overlay) = dialog.drilldown.as_mut() else {
+                    return false;
+                };
+                move_index_page(&mut overlay.selected_row, count, 1, CONFIG_EDITOR_PAGE_SIZE);
+                false
+            }
+            KeyCode::Home => {
+                let Some(overlay) = dialog.drilldown.as_mut() else {
+                    return false;
+                };
+                overlay.selected_row = 0;
+                false
+            }
+            KeyCode::End => {
+                let Some(overlay) = dialog.drilldown.as_mut() else {
+                    return false;
+                };
+                overlay.selected_row =
+                    drilldown_row_count(&overlay_snapshot, dialog.config_view).saturating_sub(1);
+                false
+            }
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                self.open_add_config_value_editor_for_path(
+                    dialog,
+                    overlay_snapshot.plugin_id.clone(),
+                    overlay_snapshot.path.clone(),
+                );
+                false
+            }
+            KeyCode::Char('x') | KeyCode::Char('X') => {
+                self.open_selected_config_actions(dialog);
+                false
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.delete_drilldown_selected_row(dialog);
+                false
+            }
+            KeyCode::Enter | KeyCode::Char('e') => {
+                self.open_drilldown_selected_row_editor(dialog);
                 false
             }
             _ => false,
@@ -742,59 +1347,328 @@ impl App {
         }
     }
 
-    fn reset_selected_plugin_config_to_saved(&mut self, dialog: &mut PluginWorkbenchOverlay) {
+    fn run_compact_toolbar_action(&mut self, dialog: &mut PluginWorkbenchOverlay) {
+        let action = COMPACT_TOOLBAR_ACTIONS
+            .get(dialog.selected_toolbar_action)
+            .copied()
+            .unwrap_or(CompactToolbarAction::Validate);
+        match action {
+            CompactToolbarAction::Validate => self.validate_selected_plugin_config(dialog),
+            CompactToolbarAction::ResetAll => self.reset_selected_plugin_config_to_defaults(dialog),
+            CompactToolbarAction::Diff => {
+                dialog.show_diff = !dialog.show_diff;
+                dialog.clamp_selection();
+            }
+            CompactToolbarAction::Save => self.save_selected_plugin_config(dialog),
+            CompactToolbarAction::Restart => self.restart_selected_plugin(dialog),
+        }
+    }
+
+    fn restart_selected_plugin(&mut self, dialog: &mut PluginWorkbenchOverlay) {
+        let Some(plugin) = dialog.selected_plugin() else {
+            return;
+        };
+        self.flash_info(format!(
+            "restart is not available for {} from this screen",
+            plugin.plugin_id
+        ));
+    }
+
+    fn reset_selected_plugin_config_to_defaults(&mut self, dialog: &mut PluginWorkbenchOverlay) {
         let Some(plugin) = dialog.selected_plugin_mut() else {
             return;
         };
-        plugin.draft_config = plugin.saved_config.clone();
+        plugin.draft_config = plugin.default_config.clone();
+        plugin.draft_override = JsonValue::Null;
         plugin.branch_drafts.clear();
         recompute_plugin_config_state(plugin);
-        self.flash_success(format!("reset {} config to saved value", plugin.plugin_id));
+        self.flash_success(format!(
+            "reset {} config to plugin defaults",
+            plugin.plugin_id
+        ));
     }
 
     fn delete_selected_config_node(&mut self, dialog: &mut PluginWorkbenchOverlay) {
-        let Some(path) = dialog.selected_node().map(|node| node.path.clone()) else {
+        let Some(row) = dialog.selected_row().cloned() else {
             return;
         };
-        if path.is_empty() {
+        if row.primary_path.is_empty() {
             self.flash_warning("root config cannot be deleted".to_owned());
             return;
         }
-        let Some(plugin) = dialog.selected_plugin_mut() else {
+        let Some(selected_plugin_id) = dialog
+            .selected_plugin()
+            .map(|plugin| plugin.plugin_id.clone())
+        else {
             return;
         };
-        if remove_value_at_path(&mut plugin.draft_config, &path).is_some() {
-            recompute_plugin_config_state(plugin);
-            dialog.selected_node = dialog.selected_node.saturating_sub(1);
-            dialog.clamp_selection();
+        let changed = if let Some(plugin) = dialog.selected_plugin_mut() {
+            let mut changed = false;
+            for path in row_paths(&row) {
+                changed |= reset_effective_value_at_path(
+                    &mut plugin.draft_config,
+                    &plugin.default_config,
+                    path.as_slice(),
+                );
+            }
+            if changed {
+                recompute_plugin_config_state(plugin);
+            }
+            changed
+        } else {
+            false
+        };
+        if changed {
+            select_config_path(
+                dialog,
+                selected_plugin_id.as_str(),
+                row.primary_path.as_slice(),
+            );
+        }
+    }
+
+    fn open_selected_config_actions(&mut self, dialog: &mut PluginWorkbenchOverlay) {
+        let Some(context) = selected_config_row_context(dialog) else {
+            return;
+        };
+        let field_paths = row_paths(&context.row)
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let actions = vec![
+            PluginConfigActionItem {
+                label: "Reset Field".to_owned(),
+                description: format!("Restore {} to the plugin default value.", context.row.title),
+                action: PluginConfigAction::ResetField {
+                    plugin_id: context.plugin_id.clone(),
+                    paths: field_paths,
+                    focus_path: context.row.primary_path.clone(),
+                },
+            },
+            PluginConfigActionItem {
+                label: "Reset Group".to_owned(),
+                description: format!(
+                    "Restore every field in {} to the plugin defaults.",
+                    context.group_title
+                ),
+                action: PluginConfigAction::ResetGroup {
+                    plugin_id: context.plugin_id,
+                    paths: context.group_paths,
+                    focus_path: context.row.primary_path,
+                },
+            },
+        ];
+        dialog.actions = Some(PluginConfigActionOverlay {
+            title: "Field Actions".to_owned(),
+            subject: context.row.title,
+            actions,
+            selected_action: 0,
+        });
+    }
+
+    fn commit_plugin_config_action(&mut self, dialog: &mut PluginWorkbenchOverlay) {
+        let Some(overlay) = dialog.actions.clone() else {
+            return;
+        };
+        let Some(item) = overlay.actions.get(overlay.selected_action).cloned() else {
+            dialog.actions = None;
+            return;
+        };
+        match item.action {
+            PluginConfigAction::ResetField {
+                plugin_id,
+                paths,
+                focus_path,
+            }
+            | PluginConfigAction::ResetGroup {
+                plugin_id,
+                paths,
+                focus_path,
+            } => {
+                self.reset_config_paths(dialog, plugin_id.as_str(), paths.as_slice(), &focus_path);
+            }
+        }
+        dialog.actions = None;
+    }
+
+    fn jump_to_selected_bottom_item(&mut self, dialog: &mut PluginWorkbenchOverlay) {
+        let Some(plugin) = dialog.selected_plugin() else {
+            return;
+        };
+        let target_path = if dialog.show_diff {
+            plugin
+                .diff
+                .get(dialog.selected_diff_row)
+                .map(|row| row.path.clone())
+        } else {
+            plugin_all_diagnostics(plugin)
+                .get(dialog.selected_diagnostic)
+                .map(|diagnostic| diagnostic.path.clone())
+        };
+        let Some(target_path) = target_path else {
+            return;
+        };
+        let plugin_id = plugin.plugin_id.clone();
+        if dialog
+            .selected_plugin()
+            .and_then(|plugin| find_row_position(plugin, dialog.config_view, &target_path))
+            .is_none()
+        {
+            dialog.config_view = PluginConfigView::Effective;
+        }
+        self.focus_config_path(dialog, plugin_id.as_str(), target_path.as_slice());
+        dialog.config_focus = PluginConfigFocus::Editor;
+    }
+
+    fn reset_config_paths(
+        &mut self,
+        dialog: &mut PluginWorkbenchOverlay,
+        plugin_id: &str,
+        paths: &[ConfigPath],
+        focus_path: &ConfigPath,
+    ) {
+        let changed = if let Some(plugin) = dialog
+            .plugins
+            .iter_mut()
+            .find(|plugin| plugin.plugin_id == plugin_id)
+        {
+            let mut changed = false;
+            for path in paths {
+                changed |= reset_effective_value_at_path(
+                    &mut plugin.draft_config,
+                    &plugin.default_config,
+                    path.as_slice(),
+                );
+            }
+            if changed {
+                recompute_plugin_config_state(plugin);
+            }
+            changed
+        } else {
+            false
+        };
+        if changed {
+            self.focus_config_path(dialog, plugin_id, focus_path.as_slice());
+            if let Some(current) = dialog.drilldown.clone() {
+                dialog.drilldown = rebuild_drilldown_overlay(dialog, &current);
+            }
+        }
+    }
+
+    fn focus_config_path(
+        &mut self,
+        dialog: &mut PluginWorkbenchOverlay,
+        plugin_id: &str,
+        target_path: &[PathSegment],
+    ) {
+        dialog.drilldown = None;
+        select_config_path(dialog, plugin_id, target_path);
+        if dialog
+            .selected_plugin()
+            .and_then(|plugin| find_row_position(plugin, dialog.config_view, target_path))
+            .is_some()
+        {
+            return;
+        }
+        let Some((section_index, row_index, row)) = dialog.selected_plugin().and_then(|plugin| {
+            find_best_section_row_for_path(plugin, dialog.config_view, target_path)
+        }) else {
+            return;
+        };
+        dialog.selected_section = section_index;
+        dialog.selected_node = row_index;
+        dialog.clamp_selection();
+        let ConfigRowEditor::Structured { path } = &row.editor else {
+            return;
+        };
+        self.open_structured_row_drilldown(
+            dialog,
+            plugin_id.to_owned(),
+            path.clone(),
+            row.title.clone(),
+        );
+        self.focus_drilldown_path(dialog, target_path);
+    }
+
+    fn focus_drilldown_path(
+        &mut self,
+        dialog: &mut PluginWorkbenchOverlay,
+        target_path: &[PathSegment],
+    ) {
+        loop {
+            let Some(overlay) = dialog.drilldown.clone() else {
+                return;
+            };
+            let Some((row_index, row)) =
+                find_best_drilldown_row_for_path(&overlay, dialog.config_view, target_path)
+            else {
+                return;
+            };
+            if let Some(current) = dialog.drilldown.as_mut() {
+                current.selected_row = row_index;
+            }
+            if row.primary_path.as_slice() == target_path
+                || row
+                    .additional_paths
+                    .iter()
+                    .any(|candidate| candidate.as_slice() == target_path)
+            {
+                return;
+            }
+            let ConfigRowEditor::Structured { path } = &row.editor else {
+                return;
+            };
+            self.open_structured_row_drilldown(
+                dialog,
+                overlay.plugin_id.clone(),
+                path.clone(),
+                row.title.clone(),
+            );
         }
     }
 
     fn open_add_config_value_editor(&mut self, dialog: &mut PluginWorkbenchOverlay) {
-        let Some(node) = dialog.selected_node().cloned() else {
+        let Some(row) = dialog.selected_row().cloned() else {
             return;
         };
         let Some(plugin) = dialog.selected_plugin() else {
             return;
         };
-        let value = get_value_at_path(&plugin.draft_config, &node.path).unwrap_or(&JsonValue::Null);
+        self.open_add_config_value_editor_for_path(
+            dialog,
+            plugin.plugin_id.clone(),
+            row.primary_path,
+        );
+    }
+
+    fn open_add_config_value_editor_for_path(
+        &mut self,
+        dialog: &mut PluginWorkbenchOverlay,
+        plugin_id: String,
+        path: ConfigPath,
+    ) {
+        let Some(plugin) = dialog
+            .plugins
+            .iter()
+            .find(|plugin| plugin.plugin_id == plugin_id)
+        else {
+            return;
+        };
+        let value = get_value_at_path(&plugin.draft_config, &path).unwrap_or(&JsonValue::Null);
         if value.is_object() {
             dialog.editor = Some(EditorDialogState::new(
                 "Add Field".to_owned(),
                 format!(
                     "Enter a field name for {}. The new value starts as a structured null; use `t` to choose another JSON type.",
-                    path_display(&node.path)
+                    path_display(&path)
                 ),
                 "Enter create  Esc cancel".to_owned(),
                 false,
                 Editor::default(),
-                PluginConfigEditAction::AddObjectField {
-                    plugin_id: plugin.plugin_id.clone(),
-                    path: node.path,
-                },
+                PluginConfigEditAction::AddObjectField { plugin_id, path },
             ));
         } else if value.is_array() {
-            self.append_config_array_item(dialog, node.path);
+            self.append_config_array_item(dialog, path);
         } else {
             self.flash_warning("add is available for object and array nodes".to_owned());
         }
@@ -824,14 +1698,30 @@ impl App {
     }
 
     fn open_config_type_selector(&mut self, dialog: &mut PluginWorkbenchOverlay) {
-        let Some(node) = dialog.selected_node().cloned() else {
+        let Some(row) = dialog.selected_row().cloned() else {
             return;
         };
         let Some(plugin) = dialog.selected_plugin() else {
             return;
         };
+        self.open_type_selector_for_row(dialog, plugin.plugin_id.clone(), row);
+    }
+
+    fn open_type_selector_for_row(
+        &mut self,
+        dialog: &mut PluginWorkbenchOverlay,
+        plugin_id: String,
+        row: ConfigRowView,
+    ) {
+        let Some(plugin) = dialog
+            .plugins
+            .iter()
+            .find(|plugin| plugin.plugin_id == plugin_id)
+        else {
+            return;
+        };
         let schema = plugin.schema.as_ref().and_then(|schema| {
-            declared_schema_for_path(schema, schema, &plugin.draft_config, &node.path)
+            declared_schema_for_path(schema, schema, &plugin.draft_config, &row.primary_path)
         });
         if let Some(branches) = schema.as_ref().and_then(branch_choices) {
             dialog.editor = Some(EditorDialogState::new(
@@ -842,7 +1732,7 @@ impl App {
                 Editor::default(),
                 PluginConfigEditAction::SelectBranch {
                     plugin_id: plugin.plugin_id.clone(),
-                    path: node.path,
+                    path: row.primary_path.clone(),
                     branches,
                 },
             ));
@@ -867,7 +1757,7 @@ impl App {
             "Select Type".to_owned(),
             format!(
                 "Choose JSON type for {}: {}",
-                path_display(&node.path),
+                path_display(&row.primary_path),
                 choices.join(", ")
             ),
             "Enter type  Esc cancel".to_owned(),
@@ -875,22 +1765,124 @@ impl App {
             Editor::default(),
             PluginConfigEditAction::SelectType {
                 plugin_id: plugin.plugin_id.clone(),
-                path: node.path,
+                path: row.primary_path.clone(),
                 choices,
             },
         ));
     }
 
     fn open_selected_config_value_editor(&mut self, dialog: &mut PluginWorkbenchOverlay) {
-        let Some(node) = dialog.selected_node().cloned() else {
+        let Some(row) = dialog.selected_row().cloned() else {
             return;
         };
         let Some(plugin) = dialog.selected_plugin() else {
             return;
         };
-        let value = get_value_at_path(&plugin.draft_config, &node.path).unwrap_or(&JsonValue::Null);
+        self.open_row_editor(dialog, plugin.plugin_id.clone(), row);
+    }
+
+    fn open_drilldown_selected_row_editor(&mut self, dialog: &mut PluginWorkbenchOverlay) {
+        let Some(overlay) = dialog.drilldown.as_ref() else {
+            return;
+        };
+        let Some(row) =
+            drilldown_row_at(overlay, dialog.config_view, overlay.selected_row).cloned()
+        else {
+            return;
+        };
+        self.open_row_editor(dialog, overlay.plugin_id.clone(), row);
+    }
+
+    fn open_row_editor(
+        &mut self,
+        dialog: &mut PluginWorkbenchOverlay,
+        plugin_id: String,
+        row: ConfigRowView,
+    ) {
+        let Some(plugin) = dialog
+            .plugins
+            .iter()
+            .find(|plugin| plugin.plugin_id == plugin_id)
+        else {
+            return;
+        };
+        match &row.editor {
+            ConfigRowEditor::Bool { path } => {
+                let current = get_value_at_path(&plugin.draft_config, path)
+                    .and_then(JsonValue::as_bool)
+                    .unwrap_or(false);
+                self.set_config_value_at(
+                    dialog,
+                    plugin.plugin_id.clone(),
+                    path.clone(),
+                    json!(!current),
+                );
+                return;
+            }
+            ConfigRowEditor::NullableString { path } => {
+                let current = get_value_at_path(&plugin.draft_config, path)
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                dialog.editor = Some(EditorDialogState::new(
+                    format!("Edit {}", row.title),
+                    "Enter a value. Leave it blank to use Not set.".to_owned(),
+                    editor_save_footer(&self.i18n, false),
+                    false,
+                    Editor::from_text(current),
+                    PluginConfigEditAction::SetNullableString {
+                        plugin_id: plugin.plugin_id.clone(),
+                        path: path.clone(),
+                    },
+                ));
+                return;
+            }
+            ConfigRowEditor::PairInteger {
+                left_path,
+                right_path,
+            } => {
+                let (left_label, right_label) =
+                    pair_editor_labels(left_path.as_slice(), right_path.as_slice());
+                let left = get_value_at_path(&plugin.draft_config, left_path)
+                    .and_then(JsonValue::as_i64)
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "0".to_owned());
+                let right = get_value_at_path(&plugin.draft_config, right_path)
+                    .and_then(JsonValue::as_i64)
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "0".to_owned());
+                dialog.editor = Some(EditorDialogState::new(
+                    format!("Edit {}", row.title),
+                    format!(
+                        "Enter the two values for {}.\nFirst line: {}\nSecond line: {}",
+                        row.title, left_label, right_label
+                    ),
+                    editor_save_footer(&self.i18n, true),
+                    true,
+                    Editor::from_text(format!("{left}\n{right}")),
+                    PluginConfigEditAction::SetPairIntegers {
+                        plugin_id: plugin.plugin_id.clone(),
+                        left_path: left_path.clone(),
+                        right_path: right_path.clone(),
+                    },
+                ));
+                return;
+            }
+            ConfigRowEditor::Structured { path } => {
+                self.open_structured_row_drilldown(
+                    dialog,
+                    plugin.plugin_id.clone(),
+                    path.clone(),
+                    row.title.clone(),
+                );
+                return;
+            }
+            _ => {}
+        }
+        let value =
+            get_value_at_path(&plugin.draft_config, &row.primary_path).unwrap_or(&JsonValue::Null);
         let schema = plugin.schema.as_ref().and_then(|schema| {
-            declared_schema_for_path(schema, schema, &plugin.draft_config, &node.path)
+            declared_schema_for_path(schema, schema, &plugin.draft_config, &row.primary_path)
         });
         if let Some(variants) = schema
             .as_ref()
@@ -900,13 +1892,13 @@ impl App {
         {
             dialog.editor = Some(EditorDialogState::new(
                 "Select Value".to_owned(),
-                format_enum_prompt(&node.title, variants),
+                format_enum_prompt(&row.title, variants),
                 "Enter value number/text  Esc cancel".to_owned(),
                 false,
                 Editor::from_text(preview_value(value)),
                 PluginConfigEditAction::SelectEnum {
                     plugin_id: plugin.plugin_id.clone(),
-                    path: node.path,
+                    path: row.primary_path.clone(),
                     variants: variants.clone(),
                 },
             ));
@@ -915,13 +1907,13 @@ impl App {
         if let Some(branches) = schema.as_ref().and_then(branch_choices) {
             dialog.editor = Some(EditorDialogState::new(
                 "Select Branch".to_owned(),
-                format_branch_prompt(node.title.as_str(), &branches),
+                format_branch_prompt(row.title.as_str(), &branches),
                 "Enter branch number/title  Esc cancel".to_owned(),
                 false,
                 Editor::default(),
                 PluginConfigEditAction::SelectBranch {
                     plugin_id: plugin.plugin_id.clone(),
-                    path: node.path,
+                    path: row.primary_path.clone(),
                     branches,
                 },
             ));
@@ -932,7 +1924,7 @@ impl App {
                 self.set_config_value_at(
                     dialog,
                     plugin.plugin_id.clone(),
-                    node.path,
+                    row.primary_path.clone(),
                     json!(!current),
                 );
             }
@@ -941,28 +1933,28 @@ impl App {
                     .as_ref()
                     .is_some_and(|schema| schema_string_is_multiline(schema));
                 dialog.editor = Some(EditorDialogState::new(
-                    format!("Edit {}", node.title),
-                    field_prompt(schema.as_ref(), &node),
+                    format!("Edit {}", row.title),
+                    field_prompt_for_row(schema.as_ref(), &row),
                     editor_save_footer(&self.i18n, multiline),
                     multiline,
                     Editor::from_text(text.clone()),
                     PluginConfigEditAction::SetScalar {
                         plugin_id: plugin.plugin_id.clone(),
-                        path: node.path,
+                        path: row.primary_path.clone(),
                         kind: ScalarEditKind::String,
                     },
                 ));
             }
             JsonValue::Number(number) => {
                 dialog.editor = Some(EditorDialogState::new(
-                    format!("Edit {}", node.title),
-                    field_prompt(schema.as_ref(), &node),
+                    format!("Edit {}", row.title),
+                    field_prompt_for_row(schema.as_ref(), &row),
                     "Enter save  Esc cancel".to_owned(),
                     false,
                     Editor::from_text(number.to_string()),
                     PluginConfigEditAction::SetScalar {
                         plugin_id: plugin.plugin_id.clone(),
-                        path: node.path,
+                        path: row.primary_path.clone(),
                         kind: if number.as_i64().is_some() || number.as_u64().is_some() {
                             ScalarEditKind::Integer
                         } else {
@@ -971,10 +1963,15 @@ impl App {
                     },
                 ));
             }
-            JsonValue::Null => self.open_config_type_selector(dialog),
+            JsonValue::Null => {
+                self.open_type_selector_for_row(dialog, plugin.plugin_id.clone(), row)
+            }
             JsonValue::Object(_) | JsonValue::Array(_) => {
-                self.flash_info(
-                    "selected structured value is edited through its child rows".to_owned(),
+                self.open_structured_row_drilldown(
+                    dialog,
+                    plugin.plugin_id.clone(),
+                    row.primary_path.clone(),
+                    row.title.clone(),
                 );
             }
         }
@@ -996,12 +1993,76 @@ impl App {
         };
         set_value_at_path(&mut plugin.draft_config, &path, value);
         recompute_plugin_config_state(plugin);
-        dialog.selected_node = plugin
-            .nodes
-            .iter()
-            .position(|node| node.path == path)
-            .unwrap_or(dialog.selected_node);
+        select_config_path(dialog, plugin_id.as_str(), path.as_slice());
+        if let Some(current) = dialog.drilldown.clone() {
+            dialog.drilldown = rebuild_drilldown_overlay(dialog, &current);
+        }
         dialog.clamp_selection();
+    }
+
+    fn open_structured_row_drilldown(
+        &mut self,
+        dialog: &mut PluginWorkbenchOverlay,
+        plugin_id: String,
+        path: ConfigPath,
+        title: String,
+    ) {
+        let Some(plugin) = dialog
+            .plugins
+            .iter()
+            .find(|plugin| plugin.plugin_id == plugin_id)
+        else {
+            return;
+        };
+        let groups = build_drilldown_groups(plugin, &path, title.as_str());
+        dialog.drilldown = Some(PluginConfigDrilldownOverlay {
+            plugin_id,
+            path,
+            title,
+            groups,
+            selected_row: 0,
+        });
+    }
+
+    fn delete_drilldown_selected_row(&mut self, dialog: &mut PluginWorkbenchOverlay) {
+        let Some(overlay) = dialog.drilldown.as_ref() else {
+            return;
+        };
+        let Some(row) =
+            drilldown_row_at(overlay, dialog.config_view, overlay.selected_row).cloned()
+        else {
+            return;
+        };
+        if row.primary_path.is_empty() {
+            self.flash_warning("root config cannot be deleted".to_owned());
+            return;
+        }
+        let plugin_id = overlay.plugin_id.clone();
+        let changed = if let Some(plugin) = dialog
+            .plugins
+            .iter_mut()
+            .find(|plugin| plugin.plugin_id == plugin_id)
+        {
+            let mut changed = false;
+            for path in row_paths(&row) {
+                changed |= reset_effective_value_at_path(
+                    &mut plugin.draft_config,
+                    &plugin.default_config,
+                    path.as_slice(),
+                );
+            }
+            if changed {
+                recompute_plugin_config_state(plugin);
+            }
+            changed
+        } else {
+            false
+        };
+        if changed {
+            if let Some(current) = dialog.drilldown.clone() {
+                dialog.drilldown = rebuild_drilldown_overlay(dialog, &current);
+            }
+        }
     }
 
     fn commit_plugin_config_editor(
@@ -1018,6 +2079,36 @@ impl App {
             } => {
                 let value = parse_scalar_editor_value(kind, input)?;
                 self.set_config_value_at(dialog, plugin_id, path, value);
+            }
+            PluginConfigEditAction::SetNullableString { plugin_id, path } => {
+                let trimmed = input.trim();
+                let value = if trimmed.is_empty() {
+                    JsonValue::Null
+                } else {
+                    JsonValue::String(trimmed.to_owned())
+                };
+                self.set_config_value_at(dialog, plugin_id, path, value);
+            }
+            PluginConfigEditAction::SetPairIntegers {
+                plugin_id,
+                left_path,
+                right_path,
+            } => {
+                let (left_value, right_value) = parse_pair_integer_editor_values(input)?;
+                let selection_plugin_id = plugin_id.clone();
+                self.set_config_value_at(
+                    dialog,
+                    plugin_id.clone(),
+                    left_path.clone(),
+                    JsonValue::Number(JsonNumber::from(left_value)),
+                );
+                self.set_config_value_at(
+                    dialog,
+                    plugin_id,
+                    right_path,
+                    JsonValue::Number(JsonNumber::from(right_value)),
+                );
+                select_config_path(dialog, selection_plugin_id.as_str(), left_path.as_slice());
             }
             PluginConfigEditAction::AddObjectField { plugin_id, path } => {
                 let key = input.trim();
@@ -1045,11 +2136,7 @@ impl App {
                     .unwrap_or(JsonValue::Null);
                 set_value_at_path(&mut plugin.draft_config, &child_path, default);
                 recompute_plugin_config_state(plugin);
-                dialog.selected_node = plugin
-                    .nodes
-                    .iter()
-                    .position(|node| node.path == child_path)
-                    .unwrap_or(dialog.selected_node);
+                select_config_path(dialog, plugin_id.as_str(), child_path.as_slice());
             }
             PluginConfigEditAction::SelectType {
                 plugin_id,
@@ -1071,6 +2158,7 @@ impl App {
                 let value = default_value_for_type(selected.as_str(), schema.as_ref());
                 set_value_at_path(&mut plugin.draft_config, &path, value);
                 recompute_plugin_config_state(plugin);
+                select_config_path(dialog, plugin_id.as_str(), path.as_slice());
             }
             PluginConfigEditAction::SelectBranch {
                 plugin_id,
@@ -1110,6 +2198,7 @@ impl App {
                     });
                 set_value_at_path(&mut plugin.draft_config, &path, value);
                 recompute_plugin_config_state(plugin);
+                select_config_path(dialog, plugin_id.as_str(), path.as_slice());
             }
             PluginConfigEditAction::SelectEnum {
                 plugin_id,
@@ -1269,6 +2358,10 @@ fn render_plugin_detail_page(frame: &mut Frame, area: Rect, dialog: &PluginWorkb
         return;
     };
     if dialog.detail_tab == PluginDetailTab::Config {
+        if plugin_uses_compact_config_layout(plugin) {
+            render_plugin_compact_config_page(frame, area, dialog, plugin);
+            return;
+        }
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -1307,7 +2400,6 @@ fn render_plugin_detail_page(frame: &mut Frame, area: Rect, dialog: &PluginWorkb
     );
     render_plugin_tabs(frame, rows[1], dialog.detail_tab);
     let body = match dialog.detail_tab {
-        PluginDetailTab::Overview => plugin_overview_text(plugin),
         PluginDetailTab::Config => Text::default(),
         PluginDetailTab::Tools => plugin_tools_text(plugin),
         PluginDetailTab::Commands => plugin_commands_text(plugin),
@@ -1319,7 +2411,7 @@ fn render_plugin_detail_page(frame: &mut Frame, area: Rect, dialog: &PluginWorkb
     render_plugin_footer(
         frame,
         rows[3],
-        "Esc plugins  Left/Right tabs  Tab next  Shift+Tab previous  PageUp/PageDown scroll  r refresh",
+        "Esc plugins  Tab/Down next tab  Shift+Tab/Up previous tab  PageUp/PageDown scroll  r refresh",
     );
 }
 
@@ -1337,7 +2429,7 @@ fn render_plugin_config_page(frame: &mut Frame, area: Rect, dialog: &PluginWorkb
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
+            Constraint::Length(5),
             Constraint::Min(12),
             Constraint::Length(8),
             Constraint::Length(1),
@@ -1393,9 +2485,9 @@ fn render_plugin_config_page(frame: &mut Frame, area: Rect, dialog: &PluginWorkb
         "Diagnostics"
     };
     let bottom_text = if dialog.show_diff {
-        config_diff_text(plugin)
+        config_diff_text(dialog, plugin)
     } else {
-        config_diagnostics_text(plugin)
+        config_diagnostics_text(dialog, plugin)
     };
     render_plugin_panel(
         frame,
@@ -1405,12 +2497,71 @@ fn render_plugin_config_page(frame: &mut Frame, area: Rect, dialog: &PluginWorkb
             dialog.config_focus == PluginConfigFocus::Diagnostics,
         ),
         bottom_text,
-        None,
+        Some((bottom_panel_scroll(dialog, plugin) as u16, 0)),
     );
-    render_plugin_footer(
-        frame,
+    render_plugin_footer(frame, rows[3], config_focus_text(dialog, plugin).as_str());
+}
+
+fn render_plugin_compact_config_page(
+    frame: &mut Frame,
+    area: Rect,
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+) {
+    let block = Block::default()
+        .title(format!(" {} / Config ", clean(plugin.plugin_id.as_str())))
+        .borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(10),
+        ])
+        .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(compact_config_header_line(plugin)).wrap(Wrap { trim: false }),
+        rows[0],
+    );
+    frame.render_widget(
+        Paragraph::new(compact_config_view_line(plugin, dialog)).wrap(Wrap { trim: false }),
+        rows[1],
+    );
+    frame.render_widget(
+        Paragraph::new(compact_config_toolbar_text(dialog)).wrap(Wrap { trim: false }),
+        rows[2],
+    );
+    frame.render_widget(
+        Paragraph::new(compact_config_divider(inner.width)).wrap(Wrap { trim: false }),
         rows[3],
-        "Esc plugins  Left/Right focus  Ctrl+Left/Right tabs  Enter/e edit  a add  t type/branch  s save  v validate  i defaults  D diff",
+    );
+
+    let body = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(20),
+            Constraint::Length(1),
+            Constraint::Min(28),
+        ])
+        .split(rows[4]);
+    frame.render_widget(
+        Paragraph::new(compact_config_sections_text(dialog, plugin, body[0].width))
+            .wrap(Wrap { trim: false }),
+        body[0],
+    );
+    frame.render_widget(
+        Paragraph::new(compact_vertical_divider(rows[4].height)).wrap(Wrap { trim: false }),
+        body[1],
+    );
+    frame.render_widget(
+        Paragraph::new(config_editor_text(dialog, plugin)).wrap(Wrap { trim: false }),
+        body[2],
     );
 }
 
@@ -1420,7 +2571,22 @@ fn render_plugin_workbench_editor_overlay(
     _workbench_area: Rect,
     dialog: &PluginWorkbenchOverlay,
 ) {
+    if dialog.show_diff
+        && dialog
+            .selected_plugin()
+            .is_some_and(plugin_uses_compact_config_layout)
+    {
+        if let Some(plugin) = dialog.selected_plugin() {
+            render_plugin_config_diff_overlay(frame, area, dialog, plugin);
+        }
+    }
+    if let Some(overlay) = dialog.drilldown.as_ref() {
+        render_plugin_config_drilldown_overlay(frame, area, dialog, overlay);
+    }
     let Some(editor) = dialog.editor.as_ref() else {
+        if let Some(actions) = dialog.actions.as_ref() {
+            render_plugin_config_actions_overlay(frame, area, actions);
+        }
         return;
     };
     render_editor_dialog(
@@ -1438,6 +2604,191 @@ fn render_plugin_workbench_editor_overlay(
         },
         &editor.input,
     );
+    if let Some(actions) = dialog.actions.as_ref() {
+        render_plugin_config_actions_overlay(frame, area, actions);
+    }
+}
+
+fn render_plugin_config_actions_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    overlay: &PluginConfigActionOverlay,
+) {
+    let surface = render_framed_surface(
+        frame,
+        area,
+        SurfaceMode::Overlay,
+        &FramedSurfaceSpec {
+            title: clean(overlay.title.clone()).into(),
+            target_width: 82,
+            target_height: 16,
+        },
+    );
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(6), Constraint::Length(1)])
+        .split(surface.inner);
+    let mut lines = Vec::new();
+    lines.push(Line::from(Span::styled(
+        overlay.subject.clone(),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+    for (index, item) in overlay.actions.iter().enumerate() {
+        let prefix = if index == overlay.selected_action {
+            "> "
+        } else {
+            "  "
+        };
+        let style = if index == overlay.selected_action {
+            plugin_workbench_selection_highlight_style()
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(Span::styled(
+            clean(format!("{prefix}{}", item.label)),
+            style,
+        )));
+        lines.push(Line::from(clean(format!("    {}", item.description))));
+    }
+    render_plugin_panel(
+        frame,
+        rows[0],
+        overlay.title.as_str(),
+        Text::from(lines),
+        None,
+    );
+    render_plugin_footer(frame, rows[1], "Enter apply  Esc close  Up/Down move");
+}
+
+fn render_plugin_config_drilldown_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    dialog: &PluginWorkbenchOverlay,
+    overlay: &PluginConfigDrilldownOverlay,
+) {
+    let surface = render_framed_surface(
+        frame,
+        area,
+        SurfaceMode::Overlay,
+        &FramedSurfaceSpec {
+            title: clean(format!(
+                "{} · {}",
+                overlay.title,
+                path_display(&overlay.path)
+            ))
+            .into(),
+            target_width: 108,
+            target_height: 30,
+        },
+    );
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(8), Constraint::Length(1)])
+        .split(surface.inner);
+    let mut lines = Vec::new();
+    lines.push(Line::from(Span::styled(
+        overlay.title.clone(),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    for group in &overlay.groups {
+        if !group
+            .rows
+            .iter()
+            .any(|row| row_visible(row, dialog.config_view))
+        {
+            continue;
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            group.title.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            fixed_columns(
+                &[
+                    ("Setting", 26),
+                    ("Value", 28),
+                    ("Default", 24),
+                    ("State", 10),
+                ],
+                rows[0].width.saturating_sub(4),
+            ),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        let mut visible_index = 0usize;
+        for drill_group in &overlay.groups {
+            for row in &drill_group.rows {
+                if !row_visible(row, dialog.config_view) {
+                    continue;
+                }
+                if std::ptr::eq(drill_group, group) {
+                    let style = if visible_index == overlay.selected_row {
+                        plugin_workbench_selection_highlight_style()
+                    } else {
+                        Style::default()
+                    };
+                    let line = fixed_columns(
+                        &[
+                            (row.title.as_str(), 26),
+                            (row.value_display.as_str(), 28),
+                            (row.default_display.as_str(), 24),
+                            (row.state.label(), 10),
+                        ],
+                        rows[0].width.saturating_sub(4),
+                    );
+                    lines.push(Line::from(Span::styled(clean(line), style)));
+                }
+                visible_index += 1;
+            }
+        }
+    }
+    if lines.len() == 1 {
+        lines.push(Line::from(""));
+        lines.push(Line::from("No editable rows."));
+    }
+    render_plugin_panel(
+        frame,
+        rows[0],
+        overlay.title.as_str(),
+        Text::from(lines),
+        None,
+    );
+    render_plugin_footer(
+        frame,
+        rows[1],
+        "Esc close  Enter edit/open  a add  x actions  Ctrl+d reset row  Up/Down move",
+    );
+}
+
+fn render_plugin_config_diff_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+) {
+    let surface = render_framed_surface(
+        frame,
+        area,
+        SurfaceMode::Overlay,
+        &FramedSurfaceSpec {
+            title: clean("Config Diff").into(),
+            target_width: 112,
+            target_height: 18,
+        },
+    );
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(6), Constraint::Length(1)])
+        .split(surface.inner);
+    render_plugin_panel(
+        frame,
+        rows[0],
+        "Config Diff",
+        config_diff_text(dialog, plugin),
+        None,
+    );
+    render_plugin_footer(frame, rows[1], "D/Esc close");
 }
 
 fn render_plugin_panel(
@@ -1494,46 +2845,127 @@ fn transport_display(transport: &str) -> &str {
     }
 }
 
+fn plugin_uses_compact_config_layout(plugin: &PluginWorkbenchPlugin) -> bool {
+    plugin.plugin_id == "agena.web"
+}
+
+fn compact_plugin_label(plugin: &PluginWorkbenchPlugin) -> String {
+    plugin
+        .plugin_id
+        .rsplit('.')
+        .next()
+        .unwrap_or(plugin.plugin_id.as_str())
+        .to_owned()
+}
+
+fn compact_config_header_line(plugin: &PluginWorkbenchPlugin) -> String {
+    let save_state = if plugin.dirty { "Dirty" } else { "Saved" };
+    let config_label = format!("Config: {} / {}", plugin.config_status.label, save_state);
+    let label = compact_plugin_label(plugin);
+    let version_label = format!("v{}", plugin.version);
+    fixed_columns(
+        &[
+            (label.as_str(), 24),
+            (version_label.as_str(), 14),
+            (transport_display(plugin.transport.as_str()), 14),
+            (config_label.as_str(), 30),
+        ],
+        112,
+    )
+}
+
+fn compact_config_view_line(
+    plugin: &PluginWorkbenchPlugin,
+    _dialog: &PluginWorkbenchOverlay,
+) -> String {
+    format!(
+        "Changed: {}                            Restart: Not required",
+        override_leaf_count(&plugin.draft_override),
+    )
+}
+
+fn compact_config_toolbar_text(dialog: &PluginWorkbenchOverlay) -> Text<'static> {
+    let mut spans = Vec::new();
+    for (index, action) in COMPACT_TOOLBAR_ACTIONS.iter().copied().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let label = format!("[ {} ({}) ]", action.label(), action.shortcut());
+        let style = if dialog.config_focus == PluginConfigFocus::Toolbar
+            && dialog.selected_toolbar_action == index
+        {
+            plugin_workbench_selection_highlight_style()
+        } else {
+            Style::default()
+        };
+        spans.push(Span::styled(label, style));
+    }
+    Text::from(Line::from(spans))
+}
+
+fn compact_config_divider(width: u16) -> String {
+    "─".repeat(width as usize)
+}
+
+fn compact_vertical_divider(height: u16) -> Text<'static> {
+    Text::from((0..height).map(|_| Line::from("│")).collect::<Vec<_>>())
+}
+
+fn compact_config_sections_text(
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+    width: u16,
+) -> Text<'static> {
+    let mut lines = vec![Line::from(Span::styled(
+        "Sections",
+        Style::default().add_modifier(Modifier::BOLD),
+    ))];
+    lines.push(Line::from(""));
+    let content_width = width.saturating_sub(1).max(6) as usize;
+    for (index, section) in plugin.sections.iter().enumerate() {
+        let mut label = section.title.clone();
+        if section.issue_count > 0 {
+            label.push_str(format!(" !{}", section.issue_count).as_str());
+        } else if section.dirty {
+            label.push_str(" dirty");
+        }
+        let focused =
+            dialog.config_focus == PluginConfigFocus::Structure && index == dialog.selected_section;
+        let prefixes = if focused { ("> ", "  ") } else { ("  ", "  ") };
+        let wrapped = wrap_prefixed_text(label.as_str(), prefixes.0, prefixes.1, content_width);
+        for line in wrapped {
+            let padded = pad_to_width(line.as_str(), content_width);
+            let style = if focused {
+                plugin_workbench_selection_highlight_style()
+            } else {
+                Style::default()
+            };
+            lines.push(Line::from(Span::styled(padded, style)));
+        }
+    }
+    Text::from(lines)
+}
+
 fn config_structure_text(
     dialog: &PluginWorkbenchOverlay,
     plugin: &PluginWorkbenchPlugin,
 ) -> Text<'static> {
-    if plugin.nodes.is_empty() {
-        return Text::from("No structure nodes.");
+    if plugin.sections.is_empty() {
+        return Text::from("No sections.");
     }
     let mut lines = Vec::new();
-    for (index, node) in plugin.nodes.iter().enumerate() {
-        let selected = index == dialog.selected_node;
+    for (index, section) in plugin.sections.iter().enumerate() {
+        let selected = index == dialog.selected_section;
         let marker = if selected { "> " } else { "  " };
-        let connector = if node.depth == 0 {
-            ""
-        } else if node.depth == 1 {
-            "|- "
-        } else {
-            "`- "
-        };
-        let mut suffix = if node.error_count > 0 {
-            format!("error {}", node.error_count)
-        } else if node.warning_count > 0 {
-            format!("warning {}", node.warning_count)
-        } else if node.dirty {
+        let suffix = if section.issue_count > 0 {
+            format!("!{}", section.issue_count)
+        } else if section.dirty {
             "dirty".to_owned()
-        } else if matches!(node.kind.as_str(), "object" | "array") {
-            node.preview.clone()
         } else {
-            node.kind.clone()
+            String::new()
         };
-        if suffix.is_empty() {
-            suffix = node.kind.clone();
-        }
-        let title = format!(
-            "{}{}{}{}",
-            marker,
-            "  ".repeat(node.depth),
-            connector,
-            node.title
-        );
-        let line = fixed_columns(&[(title.as_str(), 24), (suffix.as_str(), 18)], 44);
+        let title = format!("{marker}{}", section.title);
+        let line = fixed_columns(&[(title.as_str(), 22), (suffix.as_str(), 10)], 36);
         let style = if selected {
             plugin_workbench_selection_highlight_style()
         } else {
@@ -1600,7 +3032,9 @@ fn build_plugin_workbench_plugin(
         .unwrap_or(JsonValue::Null);
     let schema = manifest.and_then(|manifest| localized_config_schema(manifest, locale));
     let schema_missing = schema.is_none();
+    let default_config = materialized_config_value(schema.as_ref(), &JsonValue::Null);
     let saved_config = materialized_config_value(schema.as_ref(), &raw_config);
+    let saved_override = derive_override_value(&default_config, &saved_config);
     let mut plugin = PluginWorkbenchPlugin {
         plugin_id: status.plugin_id.clone(),
         visible_tool,
@@ -1615,6 +3049,9 @@ fn build_plugin_workbench_plugin(
         status,
         inspect,
         configured_plugin_value,
+        saved_override: saved_override.clone(),
+        draft_override: saved_override,
+        default_config,
         saved_config: saved_config.clone(),
         draft_config: saved_config,
         schema,
@@ -1622,7 +3059,7 @@ fn build_plugin_workbench_plugin(
         diagnostics: Vec::new(),
         runtime_diagnostics: Vec::new(),
         diff: Vec::new(),
-        nodes: Vec::new(),
+        sections: Vec::new(),
         logs,
         dirty: false,
         branch_drafts: BTreeMap::new(),
@@ -1632,20 +3069,20 @@ fn build_plugin_workbench_plugin(
 }
 
 fn recompute_plugin_config_state(plugin: &mut PluginWorkbenchPlugin) {
-    plugin.dirty = plugin.draft_config != plugin.saved_config;
+    plugin.draft_override = derive_override_value(&plugin.default_config, &plugin.draft_config);
+    plugin.dirty = normalize_override_value(plugin.draft_override.clone())
+        != normalize_override_value(plugin.saved_override.clone());
     plugin.diagnostics = validate_config_value(
         plugin.schema.as_ref(),
         &plugin.draft_config,
         plugin.schema_missing,
     );
+    plugin
+        .diagnostics
+        .extend(plugin_semantic_diagnostics(plugin));
     plugin.runtime_diagnostics = runtime_diagnostics(&plugin.status);
     plugin.diff = diff_config_values(&plugin.saved_config, &plugin.draft_config);
-    plugin.nodes = build_config_nodes(
-        plugin.schema.as_ref(),
-        &plugin.draft_config,
-        &plugin.saved_config,
-        plugin.diagnostics.as_slice(),
-    );
+    plugin.sections = build_config_sections(plugin);
     plugin.config_status = config_status_for_plugin(plugin);
 }
 
@@ -1701,6 +3138,1900 @@ fn config_status_for_plugin(plugin: &PluginWorkbenchPlugin) -> PluginConfigStatu
     PluginConfigStatus {
         kind: PluginConfigStatusKind::Valid,
         label: "Valid".to_owned(),
+    }
+}
+
+fn normalize_override_value(value: JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Object(object) => {
+            let mut normalized = JsonMap::new();
+            for (key, value) in object {
+                let normalized_value = normalize_override_value(value);
+                let is_empty_object = normalized_value
+                    .as_object()
+                    .is_some_and(|object| object.is_empty());
+                if !is_empty_object {
+                    normalized.insert(key, normalized_value);
+                }
+            }
+            if normalized.is_empty() {
+                JsonValue::Null
+            } else {
+                JsonValue::Object(normalized)
+            }
+        }
+        JsonValue::Array(items) => JsonValue::Array(
+            items
+                .into_iter()
+                .map(normalize_override_value)
+                .collect::<Vec<_>>(),
+        ),
+        other => other,
+    }
+}
+
+fn derive_override_value(default: &JsonValue, effective: &JsonValue) -> JsonValue {
+    derive_override_option(default, effective).unwrap_or(JsonValue::Null)
+}
+
+fn derive_override_option(default: &JsonValue, effective: &JsonValue) -> Option<JsonValue> {
+    if default == effective {
+        return None;
+    }
+    match (default, effective) {
+        (JsonValue::Object(default), JsonValue::Object(effective)) => {
+            let mut patch = JsonMap::new();
+            let keys = default
+                .keys()
+                .chain(effective.keys())
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            for key in keys {
+                let child_default = default.get(key.as_str()).unwrap_or(&JsonValue::Null);
+                let child_effective = effective.get(key.as_str()).unwrap_or(&JsonValue::Null);
+                if let Some(child_patch) = derive_override_option(child_default, child_effective) {
+                    patch.insert(key, child_patch);
+                }
+            }
+            (!patch.is_empty()).then_some(JsonValue::Object(patch))
+        }
+        (JsonValue::Array(default), JsonValue::Array(effective)) => {
+            (default != effective).then_some(JsonValue::Array(effective.clone()))
+        }
+        _ => Some(effective.clone()),
+    }
+}
+
+fn row_paths(row: &ConfigRowView) -> Vec<&ConfigPath> {
+    std::iter::once(&row.primary_path)
+        .chain(row.additional_paths.iter())
+        .collect()
+}
+
+fn reset_effective_value_at_path(
+    value: &mut JsonValue,
+    default_root: &JsonValue,
+    path: &[PathSegment],
+) -> bool {
+    let path = path.to_vec();
+    let before = get_value_at_path(value, &path)
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    if let Some(default_value) = get_value_at_path(default_root, &path).cloned() {
+        set_value_at_path(value, &path, default_value);
+    } else if remove_value_at_path(value, &path).is_none() {
+        return false;
+    }
+    get_value_at_path(value, &path)
+        .cloned()
+        .unwrap_or(JsonValue::Null)
+        != before
+}
+
+fn path_present_in_value(value: &JsonValue, path: &[PathSegment]) -> bool {
+    let mut cursor = value;
+    for segment in path {
+        match segment {
+            PathSegment::Key(key) => {
+                let Some(next) = cursor.as_object().and_then(|object| object.get(key)) else {
+                    return false;
+                };
+                cursor = next;
+            }
+            PathSegment::Index(index) => {
+                let Some(next) = cursor.as_array().and_then(|items| items.get(*index)) else {
+                    return false;
+                };
+                cursor = next;
+            }
+        }
+    }
+    true
+}
+
+fn path_is_prefix_of(prefix: &[PathSegment], path: &[PathSegment]) -> bool {
+    prefix.len() <= path.len()
+        && prefix
+            .iter()
+            .zip(path.iter())
+            .all(|(left, right)| left == right)
+}
+
+fn section_row_count(section: &ConfigSectionView, view: PluginConfigView) -> usize {
+    match &section.body {
+        ConfigSectionBody::Overview { .. } => 0,
+        ConfigSectionBody::Form { groups, .. } => groups
+            .iter()
+            .map(|group| {
+                group
+                    .rows
+                    .iter()
+                    .filter(|row| row_visible(row, view))
+                    .count()
+            })
+            .sum(),
+    }
+}
+
+fn section_row_at(
+    section: &ConfigSectionView,
+    view: PluginConfigView,
+    index: usize,
+) -> Option<&ConfigRowView> {
+    let ConfigSectionBody::Form { groups, .. } = &section.body else {
+        return None;
+    };
+    let mut visible_index = 0usize;
+    for group in groups {
+        for row in &group.rows {
+            if !row_visible(row, view) {
+                continue;
+            }
+            if visible_index == index {
+                return Some(row);
+            }
+            visible_index += 1;
+        }
+    }
+    None
+}
+
+fn find_row_position(
+    plugin: &PluginWorkbenchPlugin,
+    view: PluginConfigView,
+    path: &[PathSegment],
+) -> Option<(usize, usize)> {
+    for (section_index, section) in plugin.sections.iter().enumerate() {
+        let mut row_index = 0usize;
+        let ConfigSectionBody::Form { groups, .. } = &section.body else {
+            continue;
+        };
+        for group in groups {
+            for row in &group.rows {
+                if !row_visible(row, view) {
+                    continue;
+                }
+                if row.primary_path.as_slice() == path
+                    || row
+                        .additional_paths
+                        .iter()
+                        .any(|candidate| candidate.as_slice() == path)
+                {
+                    return Some((section_index, row_index));
+                }
+                row_index += 1;
+            }
+        }
+    }
+    None
+}
+
+fn find_best_section_row_for_path(
+    plugin: &PluginWorkbenchPlugin,
+    view: PluginConfigView,
+    target_path: &[PathSegment],
+) -> Option<(usize, usize, ConfigRowView)> {
+    let mut best: Option<(usize, usize, usize, ConfigRowView)> = None;
+    for (section_index, section) in plugin.sections.iter().enumerate() {
+        let mut row_index = 0usize;
+        let ConfigSectionBody::Form { groups, .. } = &section.body else {
+            continue;
+        };
+        for group in groups {
+            for row in &group.rows {
+                if !row_visible(row, view) {
+                    continue;
+                }
+                if let Some(prefix_len) = row_best_path_prefix_len(row, target_path) {
+                    let replace = best
+                        .as_ref()
+                        .is_none_or(|(_, _, current_len, _)| prefix_len > *current_len);
+                    if replace {
+                        best = Some((section_index, row_index, prefix_len, row.clone()));
+                    }
+                }
+                row_index += 1;
+            }
+        }
+    }
+    best.map(|(section_index, row_index, _, row)| (section_index, row_index, row))
+}
+
+fn find_best_drilldown_row_for_path(
+    overlay: &PluginConfigDrilldownOverlay,
+    view: PluginConfigView,
+    target_path: &[PathSegment],
+) -> Option<(usize, ConfigRowView)> {
+    let mut best: Option<(usize, usize, ConfigRowView)> = None;
+    let mut visible_index = 0usize;
+    for group in &overlay.groups {
+        for row in &group.rows {
+            if !row_visible(row, view) {
+                continue;
+            }
+            if let Some(prefix_len) = row_best_path_prefix_len(row, target_path) {
+                let replace = best
+                    .as_ref()
+                    .is_none_or(|(_, current_len, _)| prefix_len > *current_len);
+                if replace {
+                    best = Some((visible_index, prefix_len, row.clone()));
+                }
+            }
+            visible_index += 1;
+        }
+    }
+    best.map(|(row_index, _, row)| (row_index, row))
+}
+
+fn row_best_path_prefix_len(row: &ConfigRowView, target_path: &[PathSegment]) -> Option<usize> {
+    std::iter::once(&row.primary_path)
+        .chain(row.additional_paths.iter())
+        .filter(|candidate| path_is_prefix_of(candidate.as_slice(), target_path))
+        .map(|candidate| candidate.len())
+        .max()
+}
+
+fn move_selected_config_section(dialog: &mut PluginWorkbenchOverlay, delta: isize) {
+    let item_count = dialog
+        .selected_plugin()
+        .map(|plugin| plugin.sections.len())
+        .unwrap_or_default();
+    move_index(&mut dialog.selected_section, item_count, delta);
+    dialog.selected_node = 0;
+    dialog.clamp_selection();
+}
+
+fn move_selected_bottom_panel_row(dialog: &mut PluginWorkbenchOverlay, delta: isize) {
+    let item_count = if dialog.show_diff {
+        dialog
+            .selected_plugin()
+            .map(|plugin| plugin.diff.len())
+            .unwrap_or_default()
+    } else {
+        dialog
+            .selected_plugin()
+            .map(plugin_all_diagnostics)
+            .map(|diagnostics| diagnostics.len())
+            .unwrap_or_default()
+    };
+    if dialog.show_diff {
+        move_index(&mut dialog.selected_diff_row, item_count, delta);
+    } else {
+        move_index(&mut dialog.selected_diagnostic, item_count, delta);
+    }
+    dialog.clamp_selection();
+}
+
+fn bottom_panel_scroll(dialog: &PluginWorkbenchOverlay, plugin: &PluginWorkbenchPlugin) -> usize {
+    let item_count = if dialog.show_diff {
+        plugin.diff.len()
+    } else {
+        plugin_all_diagnostics(plugin).len()
+    };
+    let selected = if dialog.show_diff {
+        dialog.selected_diff_row
+    } else {
+        dialog.selected_diagnostic
+    };
+    if item_count == 0 {
+        0
+    } else {
+        1 + selected.saturating_sub(4)
+    }
+}
+
+fn select_config_path(dialog: &mut PluginWorkbenchOverlay, plugin_id: &str, path: &[PathSegment]) {
+    let Some(plugin) = dialog
+        .plugins
+        .iter()
+        .find(|plugin| plugin.plugin_id == plugin_id)
+    else {
+        return;
+    };
+    if let Some((section_index, row_index)) = find_row_position(plugin, dialog.config_view, path) {
+        dialog.selected_section = section_index;
+        dialog.selected_node = row_index;
+    }
+    dialog.clamp_selection();
+}
+
+fn row_visible(_row: &ConfigRowView, _view: PluginConfigView) -> bool {
+    true
+}
+
+#[derive(Debug, Clone)]
+struct SelectedConfigRowContext {
+    plugin_id: String,
+    row: ConfigRowView,
+    group_title: String,
+    group_paths: Vec<ConfigPath>,
+}
+
+fn selected_config_row_context(
+    dialog: &PluginWorkbenchOverlay,
+) -> Option<SelectedConfigRowContext> {
+    if let Some(overlay) = dialog.drilldown.as_ref() {
+        let row = drilldown_row_at(overlay, dialog.config_view, overlay.selected_row)?.clone();
+        let group = drilldown_group_for_row(overlay, dialog.config_view, overlay.selected_row)?;
+        return Some(SelectedConfigRowContext {
+            plugin_id: overlay.plugin_id.clone(),
+            row,
+            group_title: group.title.clone(),
+            group_paths: group_row_paths(group),
+        });
+    }
+    let plugin = dialog.selected_plugin()?;
+    let section = dialog.selected_section()?;
+    let row = section_row_at(section, dialog.config_view, dialog.selected_node)?.clone();
+    let group = section_group_for_row(section, dialog.config_view, dialog.selected_node)?;
+    Some(SelectedConfigRowContext {
+        plugin_id: plugin.plugin_id.clone(),
+        row,
+        group_title: group.title.clone(),
+        group_paths: group_row_paths(group),
+    })
+}
+
+fn group_row_paths(group: &ConfigGroupView) -> Vec<ConfigPath> {
+    let mut paths = Vec::new();
+    for row in &group.rows {
+        for path in row_paths(row) {
+            paths.push(path.clone());
+        }
+    }
+    paths
+}
+
+fn section_group_for_row(
+    section: &ConfigSectionView,
+    view: PluginConfigView,
+    index: usize,
+) -> Option<&ConfigGroupView> {
+    let ConfigSectionBody::Form { groups, .. } = &section.body else {
+        return None;
+    };
+    let mut visible_index = 0usize;
+    for group in groups {
+        for row in &group.rows {
+            if !row_visible(row, view) {
+                continue;
+            }
+            if visible_index == index {
+                return Some(group);
+            }
+            visible_index += 1;
+        }
+    }
+    None
+}
+
+fn drilldown_group_for_row(
+    overlay: &PluginConfigDrilldownOverlay,
+    view: PluginConfigView,
+    index: usize,
+) -> Option<&ConfigGroupView> {
+    let mut visible_index = 0usize;
+    for group in &overlay.groups {
+        for row in &group.rows {
+            if !row_visible(row, view) {
+                continue;
+            }
+            if visible_index == index {
+                return Some(group);
+            }
+            visible_index += 1;
+        }
+    }
+    None
+}
+
+fn build_drilldown_groups(
+    plugin: &PluginWorkbenchPlugin,
+    path: &ConfigPath,
+    title: &str,
+) -> Vec<ConfigGroupView> {
+    let value = get_value_at_path(&plugin.draft_config, path).unwrap_or(&JsonValue::Null);
+    match value {
+        JsonValue::Object(_) => build_generic_object_groups(plugin, path, title),
+        JsonValue::Array(items) => {
+            let rows = items
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    let mut item_path = path.clone();
+                    item_path.push(PathSegment::Index(index));
+                    build_row_for_path(plugin, item_path, format!("Item {index}").as_str(), None)
+                })
+                .collect::<Vec<_>>();
+            vec![ConfigGroupView {
+                title: title.to_owned(),
+                layout: ConfigGroupLayout::Standard,
+                rows,
+            }]
+        }
+        _ => vec![ConfigGroupView {
+            title: title.to_owned(),
+            layout: ConfigGroupLayout::Standard,
+            rows: vec![build_row_for_path(plugin, path.clone(), title, None)],
+        }],
+    }
+}
+
+fn drilldown_row_count(overlay: &PluginConfigDrilldownOverlay, view: PluginConfigView) -> usize {
+    overlay
+        .groups
+        .iter()
+        .map(|group| {
+            group
+                .rows
+                .iter()
+                .filter(|row| row_visible(row, view))
+                .count()
+        })
+        .sum()
+}
+
+fn drilldown_row_at(
+    overlay: &PluginConfigDrilldownOverlay,
+    view: PluginConfigView,
+    index: usize,
+) -> Option<&ConfigRowView> {
+    let mut visible_index = 0usize;
+    for group in &overlay.groups {
+        for row in &group.rows {
+            if !row_visible(row, view) {
+                continue;
+            }
+            if visible_index == index {
+                return Some(row);
+            }
+            visible_index += 1;
+        }
+    }
+    None
+}
+
+fn rebuild_drilldown_overlay(
+    dialog: &PluginWorkbenchOverlay,
+    previous: &PluginConfigDrilldownOverlay,
+) -> Option<PluginConfigDrilldownOverlay> {
+    let plugin = dialog
+        .plugins
+        .iter()
+        .find(|plugin| plugin.plugin_id == previous.plugin_id)?;
+    let groups = build_drilldown_groups(plugin, &previous.path, previous.title.as_str());
+    let mut overlay = PluginConfigDrilldownOverlay {
+        plugin_id: previous.plugin_id.clone(),
+        path: previous.path.clone(),
+        title: previous.title.clone(),
+        groups,
+        selected_row: previous.selected_row,
+    };
+    if drilldown_row_count(&overlay, dialog.config_view) == 0 {
+        overlay.selected_row = 0;
+    } else {
+        overlay.selected_row = overlay
+            .selected_row
+            .min(drilldown_row_count(&overlay, dialog.config_view).saturating_sub(1));
+    }
+    Some(overlay)
+}
+
+fn plugin_semantic_diagnostics(plugin: &PluginWorkbenchPlugin) -> Vec<ConfigDiagnostic> {
+    if plugin.plugin_id != "agena.web" {
+        return Vec::new();
+    }
+    let mut diagnostics = Vec::new();
+    for (path, label) in [
+        (
+            config_path(["fetch", "request", "delay_ms"]),
+            "fetch.request.delay_ms",
+        ),
+        (
+            config_path(["fetch", "request", "timeout_secs"]),
+            "fetch.request.timeout_secs",
+        ),
+        (
+            config_path(["fetch", "request", "max_body_bytes"]),
+            "fetch.request.max_body_bytes",
+        ),
+        (
+            config_path(["fetch", "cache", "ttl_secs"]),
+            "fetch.cache.ttl_secs",
+        ),
+        (
+            config_path(["fetch", "cache", "capacity"]),
+            "fetch.cache.capacity",
+        ),
+        (
+            config_path(["crawl", "defaults", "max_pages"]),
+            "crawl.defaults.max_pages",
+        ),
+        (
+            config_path(["crawl", "limits", "max_pages"]),
+            "crawl.limits.max_pages",
+        ),
+        (
+            config_path(["crawl", "limits", "max_depth"]),
+            "crawl.limits.max_depth",
+        ),
+        (
+            config_path(["crawl", "indexing", "document_cache_ttl_secs"]),
+            "crawl.indexing.document_cache_ttl_secs",
+        ),
+        (
+            config_path(["crawl", "indexing", "chunk_chars"]),
+            "crawl.indexing.chunk_chars",
+        ),
+        (
+            config_path(["crawl", "indexing", "near_duplicate_hamming_distance"]),
+            "crawl.indexing.near_duplicate_hamming_distance",
+        ),
+        (
+            config_path(["search", "default_limit"]),
+            "search.default_limit",
+        ),
+        (config_path(["search", "max_limit"]), "search.max_limit"),
+        (
+            config_path(["store", "retention", "max_documents"]),
+            "store.retention.max_documents",
+        ),
+        (
+            config_path(["store", "retention", "max_bytes"]),
+            "store.retention.max_bytes",
+        ),
+        (
+            config_path(["store", "listing", "default_limit"]),
+            "store.listing.default_limit",
+        ),
+        (
+            config_path(["store", "listing", "max_limit"]),
+            "store.listing.max_limit",
+        ),
+        (
+            config_path(["browser", "wait", "timeout_secs"]),
+            "browser.wait.timeout_secs",
+        ),
+    ] {
+        if get_value_at_path(&plugin.draft_config, &path)
+            .and_then(JsonValue::as_u64)
+            .is_some_and(|value| value == 0)
+        {
+            push_diag(
+                &mut diagnostics,
+                DiagnosticSeverity::Error,
+                &path,
+                &title_for_config_path(plugin, &path, label),
+                "must be greater than 0",
+            );
+        }
+    }
+    for (left_path, right_path, message) in [
+        (
+            config_path(["crawl", "defaults", "max_pages"]),
+            config_path(["crawl", "limits", "max_pages"]),
+            "default value must be <= limit",
+        ),
+        (
+            config_path(["crawl", "defaults", "max_depth"]),
+            config_path(["crawl", "limits", "max_depth"]),
+            "default value must be <= limit",
+        ),
+        (
+            config_path(["search", "default_limit"]),
+            config_path(["search", "max_limit"]),
+            "default value must be <= max",
+        ),
+        (
+            config_path(["store", "listing", "default_limit"]),
+            config_path(["store", "listing", "max_limit"]),
+            "default value must be <= max",
+        ),
+    ] {
+        let Some(left) =
+            get_value_at_path(&plugin.draft_config, &left_path).and_then(JsonValue::as_u64)
+        else {
+            continue;
+        };
+        let Some(right) =
+            get_value_at_path(&plugin.draft_config, &right_path).and_then(JsonValue::as_u64)
+        else {
+            continue;
+        };
+        if left > right {
+            push_diag(
+                &mut diagnostics,
+                DiagnosticSeverity::Error,
+                &left_path,
+                &title_for_config_path(plugin, &left_path, "Value"),
+                message,
+            );
+        }
+    }
+    for (path, message) in [
+        (
+            config_path(["browser", "executable_path"]),
+            "executable path cannot be empty when set",
+        ),
+        (
+            config_path(["browser", "wait", "for_selector"]),
+            "selector cannot be empty when set",
+        ),
+    ] {
+        if get_value_at_path(&plugin.draft_config, &path)
+            .and_then(JsonValue::as_str)
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            push_diag(
+                &mut diagnostics,
+                DiagnosticSeverity::Error,
+                &path,
+                &title_for_config_path(plugin, &path, "Value"),
+                message,
+            );
+        }
+    }
+    diagnostics
+}
+
+fn build_config_sections(plugin: &PluginWorkbenchPlugin) -> Vec<ConfigSectionView> {
+    if plugin.plugin_id == "agena.web" {
+        build_web_config_sections(plugin)
+    } else {
+        build_generic_config_sections(plugin)
+    }
+}
+
+fn build_web_config_sections(plugin: &PluginWorkbenchPlugin) -> Vec<ConfigSectionView> {
+    let fetch_enabled = get_value_at_path(&plugin.draft_config, &config_path(["fetch", "enabled"]))
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(true);
+    let mut sections = vec![ConfigSectionView {
+        key: "overview".to_owned(),
+        title: "Overview".to_owned(),
+        path: Vec::new(),
+        issue_count: plugin
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+            .count(),
+        dirty: plugin.dirty,
+        body: ConfigSectionBody::Overview {
+            cards: vec![
+                ConfigOverviewCard {
+                    title: "Fetch".to_owned(),
+                    summary: format!(
+                        "{}, {}, {}",
+                        if fetch_enabled { "enabled" } else { "disabled" },
+                        compact_duration_summary(
+                            get_value_at_path(
+                                &plugin.draft_config,
+                                &config_path(["fetch", "request", "delay_ms"]),
+                            )
+                            .and_then(JsonValue::as_u64)
+                            .unwrap_or_default(),
+                            "ms",
+                            "delay",
+                        ),
+                        compact_duration_summary(
+                            get_value_at_path(
+                                &plugin.draft_config,
+                                &config_path(["fetch", "request", "timeout_secs"]),
+                            )
+                            .and_then(JsonValue::as_u64)
+                            .unwrap_or_default(),
+                            "s",
+                            "timeout",
+                        )
+                    ),
+                    issue_label: section_issue_label(plugin, &config_path(["fetch"])),
+                },
+                ConfigOverviewCard {
+                    title: "Crawl".to_owned(),
+                    summary: format!(
+                        "{} / depth {}, limit {} / {}",
+                        get_value_at_path(
+                            &plugin.draft_config,
+                            &config_path(["crawl", "defaults", "max_pages"]),
+                        )
+                        .and_then(JsonValue::as_u64)
+                        .unwrap_or_default(),
+                        get_value_at_path(
+                            &plugin.draft_config,
+                            &config_path(["crawl", "defaults", "max_depth"]),
+                        )
+                        .and_then(JsonValue::as_u64)
+                        .unwrap_or_default(),
+                        get_value_at_path(
+                            &plugin.draft_config,
+                            &config_path(["crawl", "limits", "max_pages"]),
+                        )
+                        .and_then(JsonValue::as_u64)
+                        .unwrap_or_default(),
+                        get_value_at_path(
+                            &plugin.draft_config,
+                            &config_path(["crawl", "limits", "max_depth"]),
+                        )
+                        .and_then(JsonValue::as_u64)
+                        .unwrap_or_default(),
+                    ),
+                    issue_label: section_issue_label(plugin, &config_path(["crawl"])),
+                },
+                ConfigOverviewCard {
+                    title: "Search".to_owned(),
+                    summary: format!(
+                        "default {}, max {}",
+                        get_value_at_path(
+                            &plugin.draft_config,
+                            &config_path(["search", "default_limit"]),
+                        )
+                        .and_then(JsonValue::as_u64)
+                        .unwrap_or_default(),
+                        get_value_at_path(
+                            &plugin.draft_config,
+                            &config_path(["search", "max_limit"]),
+                        )
+                        .and_then(JsonValue::as_u64)
+                        .unwrap_or_default(),
+                    ),
+                    issue_label: section_issue_label(plugin, &config_path(["search"])),
+                },
+                ConfigOverviewCard {
+                    title: "Store".to_owned(),
+                    summary: format!(
+                        "{} docs, {}, listing {} / {}",
+                        get_value_at_path(
+                            &plugin.draft_config,
+                            &config_path(["store", "retention", "max_documents"]),
+                        )
+                        .and_then(JsonValue::as_u64)
+                        .unwrap_or_default(),
+                        format_bytes_summary(
+                            get_value_at_path(
+                                &plugin.draft_config,
+                                &config_path(["store", "retention", "max_bytes"]),
+                            )
+                            .and_then(JsonValue::as_u64)
+                            .unwrap_or_default()
+                        ),
+                        get_value_at_path(
+                            &plugin.draft_config,
+                            &config_path(["store", "listing", "default_limit"]),
+                        )
+                        .and_then(JsonValue::as_u64)
+                        .unwrap_or_default(),
+                        get_value_at_path(
+                            &plugin.draft_config,
+                            &config_path(["store", "listing", "max_limit"]),
+                        )
+                        .and_then(JsonValue::as_u64)
+                        .unwrap_or_default(),
+                    ),
+                    issue_label: section_issue_label(plugin, &config_path(["store"])),
+                },
+                ConfigOverviewCard {
+                    title: "Browser".to_owned(),
+                    summary: format!(
+                        "{}, wait {}, selector {}",
+                        if get_value_at_path(
+                            &plugin.draft_config,
+                            &config_path(["browser", "enabled"]),
+                        )
+                        .and_then(JsonValue::as_bool)
+                        .unwrap_or(false)
+                        {
+                            "enabled"
+                        } else {
+                            "disabled"
+                        },
+                        compact_duration_summary(
+                            get_value_at_path(
+                                &plugin.draft_config,
+                                &config_path(["browser", "wait", "timeout_secs"]),
+                            )
+                            .and_then(JsonValue::as_u64)
+                            .unwrap_or_default(),
+                            "s",
+                            "",
+                        ),
+                        if get_value_at_path(
+                            &plugin.draft_config,
+                            &config_path(["browser", "wait", "for_selector"]),
+                        )
+                        .and_then(JsonValue::as_str)
+                        .is_some_and(|value| !value.trim().is_empty())
+                        {
+                            "set"
+                        } else {
+                            "not set"
+                        }
+                    ),
+                    issue_label: section_issue_label(plugin, &config_path(["browser"])),
+                },
+            ],
+            lines: vec![
+                format!(
+                    "Schema             {}",
+                    if plugin.schema_missing {
+                        "Missing"
+                    } else {
+                        "Available"
+                    }
+                ),
+                "Effective mode     Full config values".to_owned(),
+                format!(
+                    "Changed            {} field(s)",
+                    override_leaf_count(&plugin.draft_override)
+                ),
+                format!(
+                    "Diagnostics        {}",
+                    if plugin.diagnostics.is_empty() {
+                        "No issues".to_owned()
+                    } else {
+                        format!("{} issue(s)", plugin.diagnostics.len())
+                    }
+                ),
+            ],
+        },
+    }];
+
+    sections.push(web_form_section(
+        plugin,
+        "fetch",
+        "Fetch",
+        config_path(["fetch"]),
+        (!fetch_enabled).then(|| {
+            "Fetch disabled: agena.web/fetch and agena.web/crawl will be unavailable".to_owned()
+        }),
+        vec![
+            ConfigGroupView {
+                title: "Fetch".to_owned(),
+                layout: ConfigGroupLayout::Standard,
+                rows: vec![build_bool_row(
+                    plugin,
+                    "Enabled",
+                    config_path(["fetch", "enabled"]),
+                    None,
+                )],
+            },
+            ConfigGroupView {
+                title: "Request".to_owned(),
+                layout: ConfigGroupLayout::Standard,
+                rows: vec![
+                    build_integer_row(
+                        plugin,
+                        "Delay",
+                        config_path(["fetch", "request", "delay_ms"]),
+                        (!fetch_enabled).then(|| "Fetch is disabled".to_owned()),
+                    ),
+                    build_integer_row(
+                        plugin,
+                        "Timeout",
+                        config_path(["fetch", "request", "timeout_secs"]),
+                        (!fetch_enabled).then(|| "Fetch is disabled".to_owned()),
+                    ),
+                    build_integer_row(
+                        plugin,
+                        "Max body size",
+                        config_path(["fetch", "request", "max_body_bytes"]),
+                        (!fetch_enabled).then(|| "Fetch is disabled".to_owned()),
+                    ),
+                    build_bool_row(
+                        plugin,
+                        "Respect robots.txt",
+                        config_path(["fetch", "request", "respect_robots_txt"]),
+                        (!fetch_enabled).then(|| "Fetch is disabled".to_owned()),
+                    ),
+                ],
+            },
+            ConfigGroupView {
+                title: "Cache".to_owned(),
+                layout: ConfigGroupLayout::Standard,
+                rows: vec![
+                    build_integer_row(
+                        plugin,
+                        "TTL",
+                        config_path(["fetch", "cache", "ttl_secs"]),
+                        (!fetch_enabled).then(|| "Fetch is disabled".to_owned()),
+                    ),
+                    build_integer_row(
+                        plugin,
+                        "Capacity",
+                        config_path(["fetch", "cache", "capacity"]),
+                        (!fetch_enabled).then(|| "Fetch is disabled".to_owned()),
+                    ),
+                ],
+            },
+        ],
+    ));
+
+    sections.push(web_form_section(
+        plugin,
+        "crawl",
+        "Crawl",
+        config_path(["crawl"]),
+        None,
+        vec![
+            ConfigGroupView {
+                title: "Crawl Range".to_owned(),
+                layout: ConfigGroupLayout::Pair {
+                    left_label: "Value",
+                    right_label: "Limit",
+                },
+                rows: vec![
+                    build_pair_integer_row(
+                        plugin,
+                        "Max pages",
+                        config_path(["crawl", "defaults", "max_pages"]),
+                        config_path(["crawl", "limits", "max_pages"]),
+                        None,
+                    ),
+                    build_pair_integer_row(
+                        plugin,
+                        "Max depth",
+                        config_path(["crawl", "defaults", "max_depth"]),
+                        config_path(["crawl", "limits", "max_depth"]),
+                        None,
+                    ),
+                    build_bool_row(
+                        plugin,
+                        "Same host only",
+                        config_path(["crawl", "defaults", "same_host_only"]),
+                        None,
+                    ),
+                ],
+            },
+            ConfigGroupView {
+                title: "Indexing".to_owned(),
+                layout: ConfigGroupLayout::Standard,
+                rows: vec![
+                    build_integer_row(
+                        plugin,
+                        "Document cache TTL",
+                        config_path(["crawl", "indexing", "document_cache_ttl_secs"]),
+                        None,
+                    ),
+                    build_integer_row(
+                        plugin,
+                        "Chunk size",
+                        config_path(["crawl", "indexing", "chunk_chars"]),
+                        None,
+                    ),
+                    build_integer_row(
+                        plugin,
+                        "Near-duplicate distance",
+                        config_path(["crawl", "indexing", "near_duplicate_hamming_distance"]),
+                        None,
+                    ),
+                ],
+            },
+        ],
+    ));
+
+    sections.push(web_form_section(
+        plugin,
+        "search",
+        "Search",
+        config_path(["search"]),
+        None,
+        vec![ConfigGroupView {
+            title: "Search Results".to_owned(),
+            layout: ConfigGroupLayout::Pair {
+                left_label: "Value",
+                right_label: "Max",
+            },
+            rows: vec![build_pair_integer_row(
+                plugin,
+                "Result limit",
+                config_path(["search", "default_limit"]),
+                config_path(["search", "max_limit"]),
+                None,
+            )],
+        }],
+    ));
+
+    sections.push(web_form_section(
+        plugin,
+        "store",
+        "Store",
+        config_path(["store"]),
+        None,
+        vec![
+            ConfigGroupView {
+                title: "Retention".to_owned(),
+                layout: ConfigGroupLayout::Standard,
+                rows: vec![
+                    build_integer_row(
+                        plugin,
+                        "Max documents",
+                        config_path(["store", "retention", "max_documents"]),
+                        None,
+                    ),
+                    build_integer_row(
+                        plugin,
+                        "Max bytes",
+                        config_path(["store", "retention", "max_bytes"]),
+                        None,
+                    ),
+                ],
+            },
+            ConfigGroupView {
+                title: "Listing".to_owned(),
+                layout: ConfigGroupLayout::Pair {
+                    left_label: "Value",
+                    right_label: "Max",
+                },
+                rows: vec![build_pair_integer_row(
+                    plugin,
+                    "List limit",
+                    config_path(["store", "listing", "default_limit"]),
+                    config_path(["store", "listing", "max_limit"]),
+                    None,
+                )],
+            },
+        ],
+    ));
+
+    sections.push(web_form_section(
+        plugin,
+        "browser",
+        "Browser",
+        config_path(["browser"]),
+        None,
+        vec![
+            ConfigGroupView {
+                title: "Browser".to_owned(),
+                layout: ConfigGroupLayout::Standard,
+                rows: vec![
+                    build_bool_row(plugin, "Enabled", config_path(["browser", "enabled"]), None),
+                    build_nullable_string_row(
+                        plugin,
+                        "Executable path",
+                        config_path(["browser", "executable_path"]),
+                        None,
+                    ),
+                ],
+            },
+            ConfigGroupView {
+                title: "Wait".to_owned(),
+                layout: ConfigGroupLayout::Standard,
+                rows: vec![
+                    build_bool_row(
+                        plugin,
+                        "Network idle",
+                        config_path(["browser", "wait", "for_network_idle"]),
+                        None,
+                    ),
+                    build_integer_row(
+                        plugin,
+                        "Timeout",
+                        config_path(["browser", "wait", "timeout_secs"]),
+                        None,
+                    ),
+                    build_nullable_string_row(
+                        plugin,
+                        "Selector",
+                        config_path(["browser", "wait", "for_selector"]),
+                        None,
+                    ),
+                    build_integer_row(
+                        plugin,
+                        "Extra delay",
+                        config_path(["browser", "wait", "delay_ms"]),
+                        None,
+                    ),
+                ],
+            },
+        ],
+    ));
+    sections
+}
+
+fn build_generic_config_sections(plugin: &PluginWorkbenchPlugin) -> Vec<ConfigSectionView> {
+    let mut sections = vec![build_generic_overview_section(plugin)];
+    let root_value = &plugin.draft_config;
+    let root_schema = plugin.schema.as_ref();
+    if let Some(object) = root_value.as_object() {
+        for key in ordered_object_keys(root_schema, object) {
+            let path = vec![PathSegment::Key(key.clone())];
+            sections.push(build_generic_section(
+                plugin,
+                &path,
+                title_for_config_path(plugin, &path, key.as_str()),
+            ));
+        }
+    } else {
+        sections.push(build_generic_section(
+            plugin,
+            &Vec::new(),
+            "Config".to_owned(),
+        ));
+    }
+    sections
+}
+
+fn config_path<const N: usize>(segments: [&str; N]) -> ConfigPath {
+    segments
+        .into_iter()
+        .map(|segment| PathSegment::Key(segment.to_owned()))
+        .collect()
+}
+
+fn section_issue_label(plugin: &PluginWorkbenchPlugin, path: &[PathSegment]) -> Option<String> {
+    let count = plugin
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.severity == DiagnosticSeverity::Error
+                && path_is_prefix_of(path, diagnostic.path.as_slice())
+        })
+        .count();
+    (count > 0).then(|| format!("Error {count}"))
+}
+
+fn section_issue_count(plugin: &PluginWorkbenchPlugin, path: &[PathSegment]) -> usize {
+    plugin
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.severity == DiagnosticSeverity::Error
+                && path_is_prefix_of(path, diagnostic.path.as_slice())
+        })
+        .count()
+}
+
+fn section_dirty(plugin: &PluginWorkbenchPlugin, path: &[PathSegment]) -> bool {
+    if path.is_empty() {
+        return plugin.dirty;
+    }
+    path_present_in_value(&plugin.draft_override, path)
+        || !diff_config_values(
+            get_value_at_path(&plugin.saved_config, &path.to_vec()).unwrap_or(&JsonValue::Null),
+            get_value_at_path(&plugin.draft_config, &path.to_vec()).unwrap_or(&JsonValue::Null),
+        )
+        .is_empty()
+}
+
+fn web_form_section(
+    plugin: &PluginWorkbenchPlugin,
+    key: &str,
+    title: &str,
+    path: ConfigPath,
+    notice: Option<String>,
+    groups: Vec<ConfigGroupView>,
+) -> ConfigSectionView {
+    ConfigSectionView {
+        key: key.to_owned(),
+        title: title.to_owned(),
+        issue_count: section_issue_count(plugin, &path),
+        dirty: section_dirty(plugin, &path),
+        path,
+        body: ConfigSectionBody::Form { notice, groups },
+    }
+}
+
+fn build_generic_overview_section(plugin: &PluginWorkbenchPlugin) -> ConfigSectionView {
+    let mut cards = Vec::new();
+    if let Some(root) = plugin.draft_config.as_object() {
+        for key in ordered_object_keys(plugin.schema.as_ref(), root) {
+            let path = vec![PathSegment::Key(key.clone())];
+            let summary = get_value_at_path(&plugin.draft_config, &path)
+                .map(preview_value)
+                .unwrap_or_else(|| "missing".to_owned());
+            cards.push(ConfigOverviewCard {
+                title: title_for_config_path(plugin, &path, key.as_str()),
+                summary,
+                issue_label: section_issue_label(plugin, &path),
+            });
+        }
+    }
+    ConfigSectionView {
+        key: "overview".to_owned(),
+        title: "Overview".to_owned(),
+        path: Vec::new(),
+        issue_count: plugin
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+            .count(),
+        dirty: plugin.dirty,
+        body: ConfigSectionBody::Overview {
+            cards,
+            lines: vec![
+                format!(
+                    "Schema             {}",
+                    if plugin.schema_missing {
+                        "Missing"
+                    } else {
+                        "Available"
+                    }
+                ),
+                "Effective mode     Full config values".to_owned(),
+                format!(
+                    "Changed            {} field(s)",
+                    override_leaf_count(&plugin.draft_override)
+                ),
+                format!(
+                    "Diagnostics        {}",
+                    if plugin.diagnostics.is_empty() {
+                        "No issues".to_owned()
+                    } else {
+                        format!("{} issue(s)", plugin.diagnostics.len())
+                    }
+                ),
+            ],
+        },
+    }
+}
+
+fn build_generic_section(
+    plugin: &PluginWorkbenchPlugin,
+    path: &ConfigPath,
+    title: String,
+) -> ConfigSectionView {
+    let value = get_value_at_path(&plugin.draft_config, path).unwrap_or(&JsonValue::Null);
+    let groups = if value.is_object() {
+        build_generic_object_groups(plugin, path, title.as_str())
+    } else {
+        vec![ConfigGroupView {
+            title: title.clone(),
+            layout: ConfigGroupLayout::Standard,
+            rows: vec![build_row_for_path(
+                plugin,
+                path.clone(),
+                title.as_str(),
+                None,
+            )],
+        }]
+    };
+    ConfigSectionView {
+        key: path
+            .last()
+            .and_then(|segment| match segment {
+                PathSegment::Key(key) => Some(key.clone()),
+                PathSegment::Index(_) => None,
+            })
+            .unwrap_or_else(|| "config".to_owned()),
+        title,
+        path: path.clone(),
+        issue_count: section_issue_count(plugin, path),
+        dirty: section_dirty(plugin, path),
+        body: ConfigSectionBody::Form {
+            notice: None,
+            groups,
+        },
+    }
+}
+
+fn build_generic_object_groups(
+    plugin: &PluginWorkbenchPlugin,
+    path: &ConfigPath,
+    title: &str,
+) -> Vec<ConfigGroupView> {
+    let value = get_value_at_path(&plugin.draft_config, path)
+        .and_then(JsonValue::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let schema = plugin
+        .schema
+        .as_ref()
+        .and_then(|schema| schema_for_path(schema, schema, &plugin.draft_config, path));
+    let mut primitive_rows = Vec::new();
+    let mut groups = Vec::new();
+    for key in ordered_object_keys(schema.as_ref(), &value) {
+        let mut child_path = path.clone();
+        child_path.push(PathSegment::Key(key.clone()));
+        let child_value = value.get(key.as_str()).unwrap_or(&JsonValue::Null);
+        let child_schema = schema
+            .as_ref()
+            .and_then(|schema| object_property_schema(schema, key.as_str()));
+        if child_value.is_object()
+            && !schema_is_map_like(child_schema.as_ref().unwrap_or(&JsonValue::Null))
+        {
+            groups.push(ConfigGroupView {
+                title: title_for_config_path(plugin, &child_path, key.as_str()),
+                layout: ConfigGroupLayout::Standard,
+                rows: flatten_generic_object_rows(plugin, &child_path),
+            });
+        } else {
+            primitive_rows.push(build_row_for_path(
+                plugin,
+                child_path,
+                title_for_schema_or_key(
+                    child_schema.as_ref().unwrap_or(&JsonValue::Null),
+                    key.as_str(),
+                )
+                .as_str(),
+                None,
+            ));
+        }
+    }
+    if !primitive_rows.is_empty() {
+        groups.insert(
+            0,
+            ConfigGroupView {
+                title: title.to_owned(),
+                layout: ConfigGroupLayout::Standard,
+                rows: primitive_rows,
+            },
+        );
+    }
+    if groups.is_empty() {
+        groups.push(ConfigGroupView {
+            title: title.to_owned(),
+            layout: ConfigGroupLayout::Standard,
+            rows: vec![build_structured_row(plugin, title, path.clone(), None)],
+        });
+    }
+    groups
+}
+
+fn flatten_generic_object_rows(
+    plugin: &PluginWorkbenchPlugin,
+    path: &ConfigPath,
+) -> Vec<ConfigRowView> {
+    let value = get_value_at_path(&plugin.draft_config, path)
+        .and_then(JsonValue::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let schema = plugin
+        .schema
+        .as_ref()
+        .and_then(|schema| schema_for_path(schema, schema, &plugin.draft_config, path));
+    let mut rows = Vec::new();
+    for key in ordered_object_keys(schema.as_ref(), &value) {
+        let mut child_path = path.clone();
+        child_path.push(PathSegment::Key(key.clone()));
+        rows.push(build_row_for_path(
+            plugin,
+            child_path.clone(),
+            title_for_config_path(plugin, &child_path, key.as_str()).as_str(),
+            None,
+        ));
+    }
+    rows
+}
+
+fn build_row_for_path(
+    plugin: &PluginWorkbenchPlugin,
+    path: ConfigPath,
+    title: &str,
+    inactive_reason: Option<String>,
+) -> ConfigRowView {
+    let value = get_value_at_path(&plugin.draft_config, &path).unwrap_or(&JsonValue::Null);
+    let schema = plugin
+        .schema
+        .as_ref()
+        .and_then(|schema| schema_for_path(schema, schema, &plugin.draft_config, &path));
+    if schema
+        .as_ref()
+        .and_then(|schema| schema.get("enum"))
+        .and_then(JsonValue::as_array)
+        .is_some()
+    {
+        return build_enum_row(plugin, title, path, inactive_reason);
+    }
+    let type_choices = schema.as_ref().map(schema_type_choices).unwrap_or_default();
+    if type_choices.iter().any(|kind| kind == "null")
+        && type_choices.iter().any(|kind| kind == "string")
+    {
+        return build_nullable_string_row(plugin, title, path, inactive_reason);
+    }
+    match value {
+        JsonValue::Bool(_) => build_bool_row(plugin, title, path, inactive_reason),
+        JsonValue::Number(number) if number.as_i64().is_some() || number.as_u64().is_some() => {
+            build_integer_row(plugin, title, path, inactive_reason)
+        }
+        JsonValue::Number(_) => build_number_row(plugin, title, path, inactive_reason),
+        JsonValue::String(_) => build_string_row(plugin, title, path, inactive_reason),
+        JsonValue::Null => build_nullable_string_row(plugin, title, path, inactive_reason),
+        JsonValue::Object(_) | JsonValue::Array(_) => {
+            build_structured_row(plugin, title, path, inactive_reason)
+        }
+    }
+}
+
+fn build_bool_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView {
+    let value = get_value_at_path(&plugin.draft_config, &path)
+        .cloned()
+        .unwrap_or(JsonValue::Bool(false));
+    let default = get_value_at_path(&plugin.default_config, &path)
+        .cloned()
+        .unwrap_or(JsonValue::Bool(false));
+    build_config_row(
+        plugin,
+        title,
+        path.clone(),
+        Vec::new(),
+        ConfigRowEditor::Bool { path: path.clone() },
+        format_bool_checkbox(value.as_bool().unwrap_or(false)),
+        default
+            .as_bool()
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "false".to_owned()),
+        None,
+        None,
+        inactive_reason,
+        path_description(plugin, &path),
+        path_constraints(plugin, &path),
+    )
+}
+
+fn build_integer_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView {
+    build_numeric_row(
+        plugin,
+        title,
+        path,
+        ScalarEditKind::Integer,
+        inactive_reason,
+    )
+}
+
+fn build_number_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView {
+    build_numeric_row(plugin, title, path, ScalarEditKind::Number, inactive_reason)
+}
+
+fn build_numeric_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    kind: ScalarEditKind,
+    inactive_reason: Option<String>,
+) -> ConfigRowView {
+    let value = get_value_at_path(&plugin.draft_config, &path)
+        .cloned()
+        .unwrap_or_else(|| JsonValue::Number(JsonNumber::from(0)));
+    let default = get_value_at_path(&plugin.default_config, &path)
+        .cloned()
+        .unwrap_or_else(|| JsonValue::Number(JsonNumber::from(0)));
+    build_config_row(
+        plugin,
+        title,
+        path.clone(),
+        Vec::new(),
+        ConfigRowEditor::Scalar {
+            path: path.clone(),
+            kind,
+        },
+        format_value_with_brackets(&path, &value),
+        format_default_value(&path, &default),
+        None,
+        None,
+        inactive_reason,
+        path_description(plugin, &path),
+        path_constraints(plugin, &path),
+    )
+}
+
+fn build_string_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView {
+    let value = get_value_at_path(&plugin.draft_config, &path)
+        .cloned()
+        .unwrap_or_else(|| JsonValue::String(String::new()));
+    let default = get_value_at_path(&plugin.default_config, &path)
+        .cloned()
+        .unwrap_or_else(|| JsonValue::String(String::new()));
+    build_config_row(
+        plugin,
+        title,
+        path.clone(),
+        Vec::new(),
+        ConfigRowEditor::Scalar {
+            path: path.clone(),
+            kind: ScalarEditKind::String,
+        },
+        format_value_with_brackets(&path, &value),
+        format_default_value(&path, &default),
+        None,
+        None,
+        inactive_reason,
+        path_description(plugin, &path),
+        path_constraints(plugin, &path),
+    )
+}
+
+fn build_nullable_string_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView {
+    let value = get_value_at_path(&plugin.draft_config, &path)
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let default = get_value_at_path(&plugin.default_config, &path)
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    build_config_row(
+        plugin,
+        title,
+        path.clone(),
+        Vec::new(),
+        ConfigRowEditor::NullableString { path: path.clone() },
+        format_nullable_value_with_selector(&path, &value),
+        format_default_nullable_value(&default),
+        None,
+        None,
+        inactive_reason,
+        path_description(plugin, &path),
+        path_constraints(plugin, &path),
+    )
+}
+
+fn build_enum_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView {
+    let schema = plugin
+        .schema
+        .as_ref()
+        .and_then(|schema| schema_for_path(schema, schema, &plugin.draft_config, &path));
+    let variants = schema
+        .as_ref()
+        .and_then(|schema| schema.get("enum"))
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let value = get_value_at_path(&plugin.draft_config, &path)
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let default = get_value_at_path(&plugin.default_config, &path)
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    build_config_row(
+        plugin,
+        title,
+        path.clone(),
+        Vec::new(),
+        ConfigRowEditor::Enum {
+            path: path.clone(),
+            variants,
+        },
+        format!("[ {} ▾ ]", preview_value(&value)),
+        preview_value(&default),
+        None,
+        None,
+        inactive_reason,
+        path_description(plugin, &path),
+        path_constraints(plugin, &path),
+    )
+}
+
+fn build_pair_integer_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    left_path: ConfigPath,
+    right_path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView {
+    let left_value = get_value_at_path(&plugin.draft_config, &left_path)
+        .cloned()
+        .unwrap_or_else(|| JsonValue::Number(JsonNumber::from(0)));
+    let right_value = get_value_at_path(&plugin.draft_config, &right_path)
+        .cloned()
+        .unwrap_or_else(|| JsonValue::Number(JsonNumber::from(0)));
+    let left_default = get_value_at_path(&plugin.default_config, &left_path)
+        .cloned()
+        .unwrap_or_else(|| JsonValue::Number(JsonNumber::from(0)));
+    let right_default = get_value_at_path(&plugin.default_config, &right_path)
+        .cloned()
+        .unwrap_or_else(|| JsonValue::Number(JsonNumber::from(0)));
+    build_config_row(
+        plugin,
+        title,
+        left_path.clone(),
+        vec![right_path.clone()],
+        ConfigRowEditor::PairInteger {
+            left_path: left_path.clone(),
+            right_path: right_path.clone(),
+        },
+        format_value_with_brackets(&left_path, &left_value),
+        format_default_value(&left_path, &left_default),
+        Some(format_value_with_brackets(&right_path, &right_value)),
+        Some(format_default_value(&right_path, &right_default)),
+        inactive_reason,
+        path_description(plugin, &left_path),
+        pair_constraints(plugin, &left_path, &right_path),
+    )
+}
+
+fn build_structured_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView {
+    let value = get_value_at_path(&plugin.draft_config, &path)
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let default = get_value_at_path(&plugin.default_config, &path)
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    build_config_row(
+        plugin,
+        title,
+        path.clone(),
+        Vec::new(),
+        ConfigRowEditor::Structured { path: path.clone() },
+        structured_preview(&value),
+        structured_preview(&default),
+        None,
+        None,
+        inactive_reason,
+        path_description(plugin, &path),
+        path_constraints(plugin, &path),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_config_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    primary_path: ConfigPath,
+    additional_paths: Vec<ConfigPath>,
+    editor: ConfigRowEditor,
+    value_display: String,
+    default_display: String,
+    secondary_value_display: Option<String>,
+    secondary_default_display: Option<String>,
+    inactive_reason: Option<String>,
+    description: Option<String>,
+    constraints: Vec<String>,
+) -> ConfigRowView {
+    let all_paths = std::iter::once(&primary_path)
+        .chain(additional_paths.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    let diagnostics = plugin
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            all_paths
+                .iter()
+                .any(|path| path_is_prefix_of(path.as_slice(), diagnostic.path.as_slice()))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let dirty = all_paths
+        .iter()
+        .any(|path| value_changed_at_path(&plugin.saved_config, &plugin.draft_config, path));
+    let override_count = all_paths
+        .iter()
+        .filter(|path| path_present_in_value(&plugin.draft_override, path.as_slice()))
+        .count();
+    let state = if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+    {
+        ConfigRowState::Error
+    } else if dirty {
+        ConfigRowState::Dirty
+    } else if inactive_reason.is_some() {
+        ConfigRowState::Inactive
+    } else if override_count > 0 {
+        ConfigRowState::Override
+    } else {
+        ConfigRowState::Default
+    };
+    ConfigRowView {
+        title: title.to_owned(),
+        primary_path,
+        additional_paths,
+        editor,
+        description,
+        constraints,
+        diagnostics,
+        value_display,
+        default_display,
+        secondary_value_display,
+        secondary_default_display,
+        state,
+        inactive_reason,
+    }
+}
+
+fn value_changed_at_path(before: &JsonValue, after: &JsonValue, path: &ConfigPath) -> bool {
+    get_value_at_path(before, path) != get_value_at_path(after, path)
+}
+
+fn override_leaf_count(value: &JsonValue) -> usize {
+    match value {
+        JsonValue::Null => 0,
+        JsonValue::Object(object) => object.values().map(override_leaf_count).sum(),
+        JsonValue::Array(items) => {
+            if items.is_empty() {
+                1
+            } else {
+                items.iter().map(override_leaf_count).sum()
+            }
+        }
+        _ => 1,
+    }
+}
+
+fn title_for_config_path(
+    plugin: &PluginWorkbenchPlugin,
+    path: &ConfigPath,
+    fallback: &str,
+) -> String {
+    plugin
+        .schema
+        .as_ref()
+        .and_then(|schema| schema_for_path(schema, schema, &plugin.draft_config, path))
+        .as_ref()
+        .map(|schema| title_for_schema_or_key(schema, fallback))
+        .unwrap_or_else(|| title_from_key(fallback))
+}
+
+fn path_description(plugin: &PluginWorkbenchPlugin, path: &ConfigPath) -> Option<String> {
+    plugin
+        .schema
+        .as_ref()
+        .and_then(|schema| schema_for_path(schema, schema, &plugin.draft_config, path))
+        .and_then(|schema| {
+            schema
+                .get("description")
+                .and_then(JsonValue::as_str)
+                .map(str::to_owned)
+        })
+}
+
+fn path_constraints(plugin: &PluginWorkbenchPlugin, path: &ConfigPath) -> Vec<String> {
+    plugin
+        .schema
+        .as_ref()
+        .and_then(|schema| schema_for_path(schema, schema, &plugin.draft_config, path))
+        .map(|schema| schema_constraints(&schema))
+        .unwrap_or_default()
+}
+
+fn pair_constraints(
+    plugin: &PluginWorkbenchPlugin,
+    left_path: &ConfigPath,
+    right_path: &ConfigPath,
+) -> Vec<String> {
+    let mut constraints = path_constraints(plugin, left_path);
+    constraints.extend(path_constraints(plugin, right_path));
+    constraints.sort();
+    constraints.dedup();
+    constraints
+}
+
+fn format_bool_checkbox(value: bool) -> String {
+    if value {
+        "[x]".to_owned()
+    } else {
+        "[ ]".to_owned()
+    }
+}
+
+fn format_value_with_brackets(path: &ConfigPath, value: &JsonValue) -> String {
+    match value {
+        JsonValue::Bool(value) => format_bool_checkbox(*value),
+        JsonValue::String(text) => format!("[ {} ]", clean(truncate_text(text, 28))),
+        JsonValue::Number(number) => format!("[ {} ]", format_number_with_unit(path, number)),
+        JsonValue::Null => "[ null ]".to_owned(),
+        JsonValue::Array(_) | JsonValue::Object(_) => format!("[ {} ]", structured_preview(value)),
+    }
+}
+
+fn format_default_value(path: &ConfigPath, value: &JsonValue) -> String {
+    match value {
+        JsonValue::Bool(value) => value.to_string(),
+        JsonValue::String(text) => clean(truncate_text(text, 28)),
+        JsonValue::Number(number) => format_number_with_unit(path, number),
+        JsonValue::Null => "Not set".to_owned(),
+        JsonValue::Array(_) | JsonValue::Object(_) => structured_preview(value),
+    }
+}
+
+fn format_nullable_value_with_selector(path: &ConfigPath, value: &JsonValue) -> String {
+    match value {
+        JsonValue::Null => "[ Not set ▾ ]".to_owned(),
+        JsonValue::String(text) => format!(
+            "[ {} ▾ ] {}",
+            nullable_mode_label(path),
+            clean(truncate_text(text, 24))
+        ),
+        _ => format!("[ {} ]", preview_value(value)),
+    }
+}
+
+fn format_default_nullable_value(value: &JsonValue) -> String {
+    match value {
+        JsonValue::Null => "Not set".to_owned(),
+        JsonValue::String(text) => clean(truncate_text(text, 28)),
+        _ => preview_value(value),
+    }
+}
+
+fn nullable_mode_label(path: &ConfigPath) -> &'static str {
+    match path.last() {
+        Some(PathSegment::Key(key)) if key == "executable_path" => "Custom path",
+        Some(PathSegment::Key(key)) if key == "for_selector" => "CSS selector",
+        _ => "Custom value",
+    }
+}
+
+fn format_number_with_unit(path: &ConfigPath, number: &JsonNumber) -> String {
+    let Some(last) = path.last() else {
+        return number.to_string();
+    };
+    let PathSegment::Key(key) = last else {
+        return number.to_string();
+    };
+    if key.ends_with("_ms") {
+        return format!("{} ms", number);
+    }
+    if key.ends_with("_secs") {
+        return format!("{} sec", number);
+    }
+    if key.ends_with("_chars") {
+        return format!("{} ch", number);
+    }
+    if key.ends_with("_bytes") {
+        return format_bytes_summary(number.as_u64().unwrap_or_default());
+    }
+    number.to_string()
+}
+
+fn format_bytes_summary(bytes: u64) -> String {
+    const MIB: u64 = 1024 * 1024;
+    if bytes >= MIB && bytes % MIB == 0 {
+        format!("{} MiB", bytes / MIB)
+    } else if bytes >= MIB {
+        format!("{:.1} MiB", bytes as f64 / MIB as f64)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
+fn compact_duration_summary(value: u64, suffix: &str, label: &str) -> String {
+    if label.is_empty() {
+        format!("{value}{suffix}")
+    } else {
+        format!("{value}{suffix} {label}")
     }
 }
 
@@ -1836,21 +5167,40 @@ fn next_config_filter(filter: PluginConfigFilter) -> PluginConfigFilter {
     }
 }
 
-fn next_config_focus(focus: PluginConfigFocus) -> PluginConfigFocus {
-    match focus {
-        PluginConfigFocus::Structure => PluginConfigFocus::Editor,
-        PluginConfigFocus::Editor => PluginConfigFocus::FieldInfo,
-        PluginConfigFocus::FieldInfo => PluginConfigFocus::Diagnostics,
-        PluginConfigFocus::Diagnostics => PluginConfigFocus::Structure,
+fn next_config_focus(focus: PluginConfigFocus, compact: bool) -> PluginConfigFocus {
+    if compact {
+        match focus {
+            PluginConfigFocus::Toolbar => PluginConfigFocus::Structure,
+            PluginConfigFocus::Structure => PluginConfigFocus::Editor,
+            _ => PluginConfigFocus::Toolbar,
+        }
+    } else {
+        match focus {
+            PluginConfigFocus::Toolbar => PluginConfigFocus::Structure,
+            PluginConfigFocus::Structure => PluginConfigFocus::Editor,
+            PluginConfigFocus::Editor => PluginConfigFocus::FieldInfo,
+            PluginConfigFocus::FieldInfo => PluginConfigFocus::Diagnostics,
+            PluginConfigFocus::Diagnostics => PluginConfigFocus::Structure,
+        }
     }
 }
 
-fn previous_config_focus(focus: PluginConfigFocus) -> PluginConfigFocus {
-    match focus {
-        PluginConfigFocus::Structure => PluginConfigFocus::Diagnostics,
-        PluginConfigFocus::Editor => PluginConfigFocus::Structure,
-        PluginConfigFocus::FieldInfo => PluginConfigFocus::Editor,
-        PluginConfigFocus::Diagnostics => PluginConfigFocus::FieldInfo,
+fn previous_config_focus(focus: PluginConfigFocus, compact: bool) -> PluginConfigFocus {
+    if compact {
+        match focus {
+            PluginConfigFocus::Toolbar => PluginConfigFocus::Editor,
+            PluginConfigFocus::Editor => PluginConfigFocus::Structure,
+            PluginConfigFocus::Structure => PluginConfigFocus::Toolbar,
+            _ => PluginConfigFocus::Editor,
+        }
+    } else {
+        match focus {
+            PluginConfigFocus::Toolbar => PluginConfigFocus::Diagnostics,
+            PluginConfigFocus::Structure => PluginConfigFocus::Diagnostics,
+            PluginConfigFocus::Editor => PluginConfigFocus::Structure,
+            PluginConfigFocus::FieldInfo => PluginConfigFocus::Editor,
+            PluginConfigFocus::Diagnostics => PluginConfigFocus::FieldInfo,
+        }
     }
 }
 
@@ -2393,140 +5743,6 @@ fn format_is_valid(format: &str, text: &str) -> bool {
         "ipv6" => text.parse::<std::net::Ipv6Addr>().is_ok(),
         "uuid" => uuid::Uuid::parse_str(text).is_ok(),
         _ => true,
-    }
-}
-
-fn build_config_nodes(
-    schema: Option<&JsonValue>,
-    value: &JsonValue,
-    saved: &JsonValue,
-    diagnostics: &[ConfigDiagnostic],
-) -> Vec<ConfigNodeSummary> {
-    let mut nodes = Vec::new();
-    collect_config_nodes(
-        &mut nodes,
-        schema,
-        schema,
-        value,
-        saved,
-        diagnostics,
-        &Vec::new(),
-        0,
-        "Config".to_owned(),
-    );
-    nodes
-}
-
-#[allow(clippy::too_many_arguments)]
-fn collect_config_nodes(
-    nodes: &mut Vec<ConfigNodeSummary>,
-    root_schema: Option<&JsonValue>,
-    schema: Option<&JsonValue>,
-    value: &JsonValue,
-    saved: &JsonValue,
-    diagnostics: &[ConfigDiagnostic],
-    path: &ConfigPath,
-    depth: usize,
-    title: String,
-) {
-    let node_diags = diagnostics
-        .iter()
-        .filter(|diagnostic| diagnostic.path == *path)
-        .collect::<Vec<_>>();
-    nodes.push(ConfigNodeSummary {
-        path: path.clone(),
-        title,
-        kind: schema
-            .map(schema_kind_label)
-            .unwrap_or_else(|| json_kind_label(value).to_owned()),
-        preview: preview_value(value),
-        depth,
-        error_count: node_diags
-            .iter()
-            .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
-            .count(),
-        warning_count: node_diags
-            .iter()
-            .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Warning)
-            .count(),
-        dirty: saved != value,
-    });
-
-    match value {
-        JsonValue::Object(object) => {
-            let mut keys = object.keys().cloned().collect::<BTreeSet<_>>();
-            if let Some(schema) = schema
-                && let Some(required) = resolve_schema(root_schema.unwrap_or(schema), schema)
-                    .get("required")
-                    .and_then(JsonValue::as_array)
-            {
-                for field in required.iter().filter_map(JsonValue::as_str) {
-                    keys.insert(field.to_owned());
-                }
-            }
-            for key in keys {
-                let mut child_path = path.clone();
-                child_path.push(PathSegment::Key(key.clone()));
-                let child_value = object.get(key.as_str()).unwrap_or(&JsonValue::Null);
-                let child_saved = saved
-                    .as_object()
-                    .and_then(|object| object.get(key.as_str()))
-                    .unwrap_or(&JsonValue::Null);
-                let child_schema = match (root_schema, schema) {
-                    (Some(root), Some(schema)) => object_property_schema(schema, key.as_str())
-                        .or_else(|| {
-                            schema_for_path(root, root, value, path)
-                                .and_then(|schema| object_property_schema(&schema, key.as_str()))
-                        }),
-                    _ => None,
-                };
-                let title = child_schema
-                    .as_ref()
-                    .map(|schema| title_for_schema_or_key(schema, key.as_str()))
-                    .unwrap_or_else(|| title_from_key(key.as_str()));
-                collect_config_nodes(
-                    nodes,
-                    root_schema,
-                    child_schema.as_ref(),
-                    child_value,
-                    child_saved,
-                    diagnostics,
-                    &child_path,
-                    depth + 1,
-                    title,
-                );
-            }
-        }
-        JsonValue::Array(items) => {
-            for (index, child_value) in items.iter().enumerate() {
-                let mut child_path = path.clone();
-                child_path.push(PathSegment::Index(index));
-                let child_saved = saved
-                    .as_array()
-                    .and_then(|items| items.get(index))
-                    .unwrap_or(&JsonValue::Null);
-                let child_schema = match (root_schema, schema) {
-                    (Some(_), Some(schema)) => array_item_schema(schema, index),
-                    _ => None,
-                };
-                let title = child_schema
-                    .as_ref()
-                    .map(|schema| title_for_schema_or_key(schema, format!("Item {index}").as_str()))
-                    .unwrap_or_else(|| format!("Item {index}"));
-                collect_config_nodes(
-                    nodes,
-                    root_schema,
-                    child_schema.as_ref(),
-                    child_value,
-                    child_saved,
-                    diagnostics,
-                    &child_path,
-                    depth + 1,
-                    title,
-                );
-            }
-        }
-        _ => {}
     }
 }
 
@@ -3154,6 +6370,25 @@ fn parse_scalar_editor_value(kind: ScalarEditKind, input: &str) -> UiResult<Json
     }
 }
 
+fn parse_pair_integer_editor_values(input: &str) -> UiResult<(i64, i64)> {
+    let parts = input
+        .lines()
+        .flat_map(|line| line.split(','))
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts.len() != 2 {
+        return Err("expected two integer values".to_owned());
+    }
+    let left = parts[0]
+        .parse::<i64>()
+        .map_err(|error| format!("invalid first integer: {error}"))?;
+    let right = parts[1]
+        .parse::<i64>()
+        .map_err(|error| format!("invalid second integer: {error}"))?;
+    Ok((left, right))
+}
+
 fn select_named_choice(input: &str, choices: &[String]) -> UiResult<String> {
     let trimmed = input.trim();
     if let Ok(index) = trimmed.parse::<usize>()
@@ -3212,17 +6447,21 @@ fn format_branch_prompt(title: &str, branches: &[BranchChoice]) -> String {
     lines.join("\n")
 }
 
-fn field_prompt(schema: Option<&JsonValue>, node: &ConfigNodeSummary) -> String {
-    let mut parts = vec![format!("Path: {}", path_display(&node.path))];
-    if let Some(schema) = schema {
+fn field_prompt_for_row(schema: Option<&JsonValue>, row: &ConfigRowView) -> String {
+    let mut parts = vec![format!("Path: {}", path_display(&row.primary_path))];
+    if let Some(description) = row.description.as_deref() {
+        parts.push(description.to_owned());
+    } else if let Some(schema) = schema {
         if let Some(description) = schema.get("description").and_then(JsonValue::as_str) {
             parts.push(description.to_owned());
         }
+    }
+    if let Some(schema) = schema {
         if let Some(format) = schema.get("format").and_then(JsonValue::as_str) {
             parts.push(format!("format: {format}"));
         }
-        parts.extend(schema_constraints(schema));
     }
+    parts.extend(row.constraints.iter().cloned());
     parts.join("\n")
 }
 
@@ -3273,42 +6512,6 @@ fn plugin_header_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
                 .unwrap_or_else(|| "unavailable".to_owned())
         )),
     ])
-}
-
-fn plugin_overview_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
-    let manifest = plugin
-        .inspect
-        .as_ref()
-        .and_then(|inspect| inspect.manifest.as_ref());
-    let mut lines = plugin_header_text(plugin).lines;
-    if let Some(manifest) = manifest {
-        if let Some(description) = manifest.description.as_deref() {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Description",
-                Style::default().add_modifier(Modifier::BOLD),
-            )));
-            lines.push(Line::from(clean(description)));
-        }
-        if !manifest.authors.is_empty() {
-            lines.push(Line::from(format!(
-                "Authors: {}",
-                clean(manifest.authors.join(", "))
-            )));
-        }
-        if !manifest.transports.is_empty() {
-            let transports = manifest
-                .transports
-                .iter()
-                .map(|transport| format!("{transport:?}").to_ascii_lowercase())
-                .collect::<Vec<_>>();
-            lines.push(Line::from(format!(
-                "Manifest transports: {}",
-                transports.join(", ")
-            )));
-        }
-    }
-    Text::from(lines)
 }
 
 fn plugin_tools_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
@@ -3476,86 +6679,71 @@ fn plugin_logs_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
 fn plugin_diagnostics_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
     let mut diagnostics = plugin.diagnostics.clone();
     diagnostics.extend(plugin.runtime_diagnostics.clone());
-    diagnostics_text(diagnostics.as_slice())
+    diagnostics_text(diagnostics.as_slice(), false, 0)
 }
 
 fn config_editor_text(
     dialog: &PluginWorkbenchOverlay,
     plugin: &PluginWorkbenchPlugin,
 ) -> Text<'static> {
-    let selected = dialog.selected_node().or_else(|| plugin.nodes.first());
     let mut lines = Vec::new();
-    if let Some(node) = selected {
-        let value = get_value_at_path(&plugin.draft_config, &node.path).unwrap_or(&JsonValue::Null);
-        let schema = plugin.schema.as_ref().and_then(|schema| {
-            declared_schema_for_path(schema, schema, &plugin.draft_config, &node.path)
-        });
-        append_schema_editor_lines(
-            &mut lines,
-            plugin.schema.as_ref(),
-            schema.as_ref(),
-            value,
-            node.title.as_str(),
-            0,
-            96,
-            28,
-        );
+    if let Some(section) = dialog.selected_section() {
+        let highlight_selection = !plugin_uses_compact_config_layout(plugin)
+            || dialog.config_focus == PluginConfigFocus::Editor;
+        append_section_lines(&mut lines, dialog, plugin, section, 98, highlight_selection);
     } else {
-        lines.push(Line::from("No config nodes."));
+        lines.push(Line::from("No config section."));
     }
     Text::from(lines)
 }
 
 fn field_info_text(
     dialog: &PluginWorkbenchOverlay,
-    plugin: &PluginWorkbenchPlugin,
+    _plugin: &PluginWorkbenchPlugin,
 ) -> Text<'static> {
     let mut lines = Vec::new();
-    if let Some(node) = dialog.selected_node() {
-        let schema = plugin
-            .schema
-            .as_ref()
-            .and_then(|schema| schema_for_path(schema, schema, &plugin.draft_config, &node.path));
+    if let Some(row) = dialog.selected_row() {
         lines.push(Line::from(Span::styled(
-            node.title.clone(),
+            row.title.clone(),
             Style::default().add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
-        if let Some(schema) = schema.as_ref()
-            && let Some(description) = schema.get("description").and_then(JsonValue::as_str)
-        {
+        if let Some(description) = row.description.as_deref() {
             lines.push(Line::from(clean(description)));
             lines.push(Line::from(""));
         }
         lines.push(Line::from("Path"));
-        lines.push(Line::from(path_display(&node.path)));
-        lines.push(Line::from(""));
-        lines.push(Line::from("Type"));
-        lines.push(Line::from(node.kind.clone()));
-        if let Some(schema) = schema.as_ref() {
-            if let Some(default) = schema.get("default") {
-                lines.push(Line::from(""));
-                lines.push(Line::from("Default"));
-                lines.push(Line::from(preview_value(default)));
-            }
-            let constraints = schema_constraints(schema);
-            if !constraints.is_empty() {
-                lines.push(Line::from(""));
-                lines.push(Line::from("Constraints"));
-                lines.extend(constraints.into_iter().map(Line::from));
+        lines.push(Line::from(path_display(&row.primary_path)));
+        if !row.additional_paths.is_empty() {
+            for path in &row.additional_paths {
+                lines.push(Line::from(path_display(path)));
             }
         }
-        let diagnostics = plugin
-            .diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.path == node.path)
-            .collect::<Vec<_>>();
+        lines.push(Line::from(""));
+        lines.push(Line::from("Type"));
+        lines.push(Line::from(row_editor_kind_label(&row.editor)));
+        if let Some(reason) = row.inactive_reason.as_deref() {
+            lines.push(Line::from(""));
+            lines.push(Line::from("Inactive"));
+            lines.push(Line::from(clean(reason)));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from("Default"));
+        lines.push(Line::from(row.default_display.clone()));
+        if let Some(default) = row.secondary_default_display.as_deref() {
+            lines.push(Line::from(default.to_owned()));
+        }
+        if !row.constraints.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from("Constraints"));
+            lines.extend(row.constraints.iter().cloned().map(Line::from));
+        }
         lines.push(Line::from(""));
         lines.push(Line::from("Errors"));
-        if diagnostics.is_empty() {
+        if row.diagnostics.is_empty() {
             lines.push(Line::from("none"));
         } else {
-            for diagnostic in diagnostics {
+            for diagnostic in &row.diagnostics {
                 lines.push(Line::from(format!(
                     "{}: {}",
                     diagnostic_severity_label(diagnostic.severity),
@@ -3563,17 +6751,294 @@ fn field_info_text(
                 )));
             }
         }
+    } else if let Some(section) = dialog.selected_section() {
+        lines.push(Line::from(Span::styled(
+            section.title.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from("Path"));
+        lines.push(Line::from(path_display(&section.path)));
+        lines.push(Line::from(""));
+        lines.push(Line::from("State"));
+        lines.push(Line::from(if section.issue_count > 0 {
+            format!("{} issue(s)", section.issue_count)
+        } else if section.dirty {
+            "dirty".to_owned()
+        } else {
+            "clean".to_owned()
+        }));
     }
     Text::from(lines)
 }
 
-fn config_diagnostics_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
-    let mut diagnostics = plugin.diagnostics.clone();
-    diagnostics.extend(plugin.runtime_diagnostics.clone());
-    diagnostics_text(diagnostics.as_slice())
+fn append_section_lines(
+    lines: &mut Vec<Line<'static>>,
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+    section: &ConfigSectionView,
+    width: u16,
+    highlight_selection: bool,
+) {
+    match &section.body {
+        ConfigSectionBody::Overview {
+            cards,
+            lines: summary,
+        } => {
+            append_overview_section_lines(lines, cards.as_slice(), summary.as_slice(), width);
+        }
+        ConfigSectionBody::Form { notice, groups } => {
+            lines.push(Line::from(Span::styled(
+                section.title.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            )));
+            if let Some(notice) = notice.as_deref() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(clean(notice)));
+            }
+            for group in groups {
+                if !group
+                    .rows
+                    .iter()
+                    .any(|row| row_visible(row, dialog.config_view))
+                {
+                    continue;
+                }
+                lines.push(Line::from(""));
+                append_group_lines(
+                    lines,
+                    dialog,
+                    plugin,
+                    section,
+                    group,
+                    width,
+                    highlight_selection,
+                );
+            }
+        }
+    }
 }
 
-fn diagnostics_text(diagnostics: &[ConfigDiagnostic]) -> Text<'static> {
+fn append_overview_section_lines(
+    lines: &mut Vec<Line<'static>>,
+    cards: &[ConfigOverviewCard],
+    summary: &[String],
+    width: u16,
+) {
+    lines.push(Line::from(Span::styled(
+        "Overview".to_owned(),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        fixed_columns(&[("Section", 12), ("Summary", 68), ("State", 12)], width),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    for card in cards {
+        lines.push(Line::from(fixed_columns(
+            &[
+                (card.title.as_str(), 12),
+                (card.summary.as_str(), 68),
+                (card.issue_label.as_deref().unwrap_or(""), 12),
+            ],
+            width,
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Config".to_owned(),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    for line in summary {
+        lines.push(Line::from(clean(line)));
+    }
+}
+
+fn append_group_lines(
+    lines: &mut Vec<Line<'static>>,
+    dialog: &PluginWorkbenchOverlay,
+    _plugin: &PluginWorkbenchPlugin,
+    section: &ConfigSectionView,
+    group: &ConfigGroupView,
+    width: u16,
+    highlight_selection: bool,
+) {
+    lines.push(Line::from(Span::styled(
+        group.title.clone(),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    match group.layout {
+        ConfigGroupLayout::Standard => {
+            lines.push(Line::from(Span::styled(
+                fixed_columns(
+                    &[
+                        ("Setting", 24),
+                        ("Value", 26),
+                        ("Default", 22),
+                        ("State", 10),
+                    ],
+                    width,
+                ),
+                Style::default().add_modifier(Modifier::BOLD),
+            )));
+        }
+        ConfigGroupLayout::Pair {
+            left_label,
+            right_label,
+        } => {
+            lines.push(Line::from(Span::styled(
+                fixed_columns(
+                    &[
+                        ("Setting", 24),
+                        (left_label, 20),
+                        (right_label, 20),
+                        ("State", 10),
+                    ],
+                    width,
+                ),
+                Style::default().add_modifier(Modifier::BOLD),
+            )));
+        }
+    }
+    let mut visible_row_index = 0usize;
+    for group_cursor in section_form_groups(section) {
+        for row in &group_cursor.rows {
+            if !row_visible(row, dialog.config_view) {
+                continue;
+            }
+            let is_selected = dialog.selected_section == section_index_for_row(dialog, section)
+                && dialog.selected_node == visible_row_index;
+            if std::ptr::eq(group_cursor, group) {
+                let line = match group.layout {
+                    ConfigGroupLayout::Standard => fixed_columns(
+                        &[
+                            (row.title.as_str(), 24),
+                            (row.value_display.as_str(), 26),
+                            (row.default_display.as_str(), 22),
+                            (row.state.label(), 10),
+                        ],
+                        width,
+                    ),
+                    ConfigGroupLayout::Pair { .. } => fixed_columns(
+                        &[
+                            (row.title.as_str(), 24),
+                            (row.value_display.as_str(), 20),
+                            (
+                                row.secondary_value_display.as_deref().unwrap_or_default(),
+                                20,
+                            ),
+                            (row.state.label(), 10),
+                        ],
+                        width,
+                    ),
+                };
+                let style = if is_selected && highlight_selection {
+                    plugin_workbench_selection_highlight_style()
+                } else {
+                    Style::default()
+                };
+                lines.push(Line::from(Span::styled(clean(line), style)));
+            }
+            visible_row_index += 1;
+        }
+    }
+}
+
+fn section_form_groups(section: &ConfigSectionView) -> &[ConfigGroupView] {
+    match &section.body {
+        ConfigSectionBody::Form { groups, .. } => groups.as_slice(),
+        ConfigSectionBody::Overview { .. } => &[],
+    }
+}
+
+fn section_index_for_row(dialog: &PluginWorkbenchOverlay, section: &ConfigSectionView) -> usize {
+    dialog
+        .selected_plugin()
+        .and_then(|plugin| {
+            plugin
+                .sections
+                .iter()
+                .position(|candidate| candidate.key == section.key)
+        })
+        .unwrap_or_default()
+}
+
+fn row_editor_kind_label(editor: &ConfigRowEditor) -> &'static str {
+    match editor {
+        ConfigRowEditor::Bool { .. } => "boolean",
+        ConfigRowEditor::Scalar {
+            kind: ScalarEditKind::String,
+            ..
+        } => "string",
+        ConfigRowEditor::Scalar {
+            kind: ScalarEditKind::Number,
+            ..
+        } => "number",
+        ConfigRowEditor::Scalar {
+            kind: ScalarEditKind::Integer,
+            ..
+        } => "integer",
+        ConfigRowEditor::NullableString { .. } => "string or not set",
+        ConfigRowEditor::Enum { .. } => "enum",
+        ConfigRowEditor::PairInteger { .. } => "paired integer values",
+        ConfigRowEditor::Structured { .. } => "structured value",
+    }
+}
+
+fn pair_editor_labels(
+    left_path: &[PathSegment],
+    right_path: &[PathSegment],
+) -> (&'static str, &'static str) {
+    let left_last = left_path.last().and_then(path_segment_key_name);
+    let right_last = right_path.last().and_then(path_segment_key_name);
+    let left_has_defaults = left_path
+        .iter()
+        .filter_map(path_segment_key_name)
+        .any(|segment| segment == "defaults");
+    let right_has_limits = right_path
+        .iter()
+        .filter_map(path_segment_key_name)
+        .any(|segment| segment == "limits");
+    if left_has_defaults && right_has_limits {
+        return ("Value", "Limit");
+    }
+    if left_last.is_some_and(|name| name.starts_with("default"))
+        && right_last.is_some_and(|name| name.starts_with("max"))
+    {
+        return ("Value", "Max");
+    }
+    ("Value 1", "Value 2")
+}
+
+fn path_segment_key_name(segment: &PathSegment) -> Option<&str> {
+    match segment {
+        PathSegment::Key(key) => Some(key.as_str()),
+        PathSegment::Index(_) => None,
+    }
+}
+
+fn config_diagnostics_text(
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+) -> Text<'static> {
+    diagnostics_text(
+        plugin_all_diagnostics(plugin).as_slice(),
+        dialog.config_focus == PluginConfigFocus::Diagnostics && !dialog.show_diff,
+        dialog.selected_diagnostic,
+    )
+}
+
+fn plugin_all_diagnostics(plugin: &PluginWorkbenchPlugin) -> Vec<ConfigDiagnostic> {
+    let mut diagnostics = plugin.diagnostics.clone();
+    diagnostics.extend(plugin.runtime_diagnostics.clone());
+    diagnostics
+}
+
+fn diagnostics_text(
+    diagnostics: &[ConfigDiagnostic],
+    highlight_selection: bool,
+    selected_row: usize,
+) -> Text<'static> {
     let table_width = 112;
     let mut lines = Vec::new();
     if diagnostics.is_empty() {
@@ -3591,8 +7056,8 @@ fn diagnostics_text(diagnostics: &[ConfigDiagnostic]) -> Text<'static> {
             ),
             Style::default().add_modifier(Modifier::BOLD),
         )));
-        for diagnostic in diagnostics {
-            lines.push(Line::from(fixed_columns(
+        for (index, diagnostic) in diagnostics.iter().enumerate() {
+            let line = fixed_columns(
                 &[
                     (diagnostic_severity_label(diagnostic.severity), 10),
                     (diagnostic.source.as_str(), 10),
@@ -3600,13 +7065,22 @@ fn diagnostics_text(diagnostics: &[ConfigDiagnostic]) -> Text<'static> {
                     (diagnostic.message.as_str(), 80),
                 ],
                 table_width,
-            )));
+            );
+            let style = if highlight_selection && index == selected_row {
+                plugin_workbench_selection_highlight_style()
+            } else {
+                Style::default()
+            };
+            lines.push(Line::from(Span::styled(clean(line), style)));
         }
     }
     Text::from(lines)
 }
 
-fn config_diff_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
+fn config_diff_text(
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+) -> Text<'static> {
     let table_width = 116;
     let mut lines = Vec::new();
     if plugin.diff.is_empty() {
@@ -3619,8 +7093,8 @@ fn config_diff_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
             ),
             Style::default().add_modifier(Modifier::BOLD),
         )));
-        for row in &plugin.diff {
-            lines.push(Line::from(fixed_columns(
+        for (index, row) in plugin.diff.iter().enumerate() {
+            let line = fixed_columns(
                 &[
                     (path_display(&row.path).as_str(), 28),
                     (row.before.as_str(), 28),
@@ -3628,7 +7102,16 @@ fn config_diff_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
                     (row.summary.as_str(), 28),
                 ],
                 table_width,
-            )));
+            );
+            let style = if dialog.config_focus == PluginConfigFocus::Diagnostics
+                && dialog.show_diff
+                && index == dialog.selected_diff_row
+            {
+                plugin_workbench_selection_highlight_style()
+            } else {
+                Style::default()
+            };
+            lines.push(Line::from(Span::styled(clean(line), style)));
         }
     }
     Text::from(lines)
@@ -4291,22 +7774,73 @@ fn config_toolbar_text(
     plugin: &PluginWorkbenchPlugin,
     dialog: &PluginWorkbenchOverlay,
 ) -> Text<'static> {
-    let save_state = if plugin.dirty { "Unsaved" } else { "Saved" };
-    let bottom = if dialog.show_diff {
-        "Diff"
-    } else {
-        "Diagnostics"
-    };
+    let save_state = if plugin.dirty { "Dirty" } else { "Saved" };
     Text::from(vec![
         Line::from(format!(
-            "Config: {}        {}",
+            "Config: {} / {}",
             clean(plugin.config_status.label.as_str()),
             save_state
         )),
         Line::from(format!(
-            "[ Validate ] [ Insert Defaults ] [ Reset ] [ {bottom} ] [ Save ] [ Restart/Reload ]"
+            "Changed: {}                            Restart: Not required",
+            override_leaf_count(&plugin.draft_override),
+        )),
+        Line::from(format!(
+            "[ Validate ] [ Insert Defaults ] [ Reset All ] [ {} ] [ Save ] [ Restart ]",
+            if dialog.show_diff {
+                "Diff"
+            } else {
+                "Diagnostics"
+            }
         )),
     ])
+}
+
+fn config_focus_text(dialog: &PluginWorkbenchOverlay, plugin: &PluginWorkbenchPlugin) -> String {
+    let compact_layout = plugin_uses_compact_config_layout(plugin);
+    if dialog.config_focus == PluginConfigFocus::Diagnostics {
+        if dialog.show_diff {
+            if let Some(row) = plugin.diff.get(dialog.selected_diff_row) {
+                return format!(
+                    "Focus: {} · {} · Before {} · After {} · Enter jump",
+                    path_display(&row.path),
+                    row.summary,
+                    row.before,
+                    row.after
+                );
+            }
+        } else if let Some(diagnostic) =
+            plugin_all_diagnostics(plugin).get(dialog.selected_diagnostic)
+        {
+            return format!(
+                "Focus: {} · {} · {} · Enter jump",
+                path_display(&diagnostic.path),
+                diagnostic.field,
+                diagnostic.message
+            );
+        }
+    }
+    if let Some(row) = dialog.selected_row() {
+        let mut parts = vec![format!("Focus: {}", path_display(&row.primary_path))];
+        parts.push(title_for_config_path(
+            plugin,
+            &row.primary_path,
+            row.title.as_str(),
+        ));
+        parts.push(row_editor_kind_label(&row.editor).to_owned());
+        if !row.constraints.is_empty() {
+            parts.push(row.constraints.join(" · "));
+        }
+        if !compact_layout {
+            parts.push("Enter edit/open".to_owned());
+            parts.push("x actions".to_owned());
+        }
+        return parts.join(" · ");
+    }
+    if let Some(section) = dialog.selected_section() {
+        return format!("Focus: {} · {}", path_display(&section.path), section.title);
+    }
+    format!("Focus: / · {}", plugin.plugin_id)
 }
 
 fn plugin_workbench_summary(dialog: &PluginWorkbenchOverlay) -> String {
@@ -4339,6 +7873,91 @@ fn fixed_columns(columns: &[(&str, usize)], width: u16) -> String {
         out.push_str(clipped.as_str());
         let padding = size.saturating_sub(clipped.width());
         out.push_str(" ".repeat(padding).as_str());
+    }
+    out
+}
+
+fn pad_to_width(text: &str, width: usize) -> String {
+    let clipped = truncate_text(text, width);
+    let padding = width.saturating_sub(clipped.width());
+    format!("{clipped}{}", " ".repeat(padding))
+}
+
+fn wrap_prefixed_text(
+    text: &str,
+    first_prefix: &str,
+    rest_prefix: &str,
+    width: usize,
+) -> Vec<String> {
+    let available_first = width.saturating_sub(first_prefix.width()).max(1);
+    let available_rest = width.saturating_sub(rest_prefix.width()).max(1);
+    let mut lines = Vec::new();
+    let mut prefix = first_prefix;
+    let mut available = available_first;
+    let mut current = String::new();
+    let mut current_width = 0usize;
+
+    for word in text.split_whitespace() {
+        let mut remaining = word.to_owned();
+        loop {
+            let room = if current.is_empty() {
+                available
+            } else {
+                available.saturating_sub(current_width + 1)
+            };
+            if room == 0 {
+                lines.push(format!("{prefix}{current}"));
+                prefix = rest_prefix;
+                available = available_rest;
+                current.clear();
+                current_width = 0;
+                continue;
+            }
+            if remaining.width() <= room {
+                if !current.is_empty() {
+                    current.push(' ');
+                    current_width += 1;
+                }
+                current.push_str(remaining.as_str());
+                current_width += remaining.width();
+                break;
+            }
+
+            let chunk = take_width_prefix(remaining.as_str(), room);
+            if chunk.is_empty() {
+                break;
+            }
+            if !current.is_empty() {
+                lines.push(format!("{prefix}{current}"));
+                prefix = rest_prefix;
+                current.clear();
+                current_width = 0;
+            }
+            lines.push(format!("{prefix}{chunk}"));
+            let consumed = chunk.len();
+            remaining = remaining[consumed..].to_owned();
+            prefix = rest_prefix;
+            available = available_rest;
+        }
+    }
+
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(format!("{prefix}{current}"));
+    }
+
+    lines
+}
+
+fn take_width_prefix(text: &str, max_width: usize) -> String {
+    let mut out = String::new();
+    let mut width = 0usize;
+    for ch in text.chars() {
+        let ch_width = ch.width().unwrap_or_default();
+        if width + ch_width > max_width {
+            break;
+        }
+        out.push(ch);
+        width += ch_width;
     }
     out
 }
@@ -4386,10 +8005,11 @@ fn plugin_config_record_value(plugin: &PluginWorkbenchPlugin) -> JsonValue {
 
 fn move_selected_config_node(dialog: &mut PluginWorkbenchOverlay, delta: isize) {
     let item_count = dialog
-        .selected_plugin()
-        .map(|plugin| plugin.nodes.len())
+        .selected_section()
+        .map(|section| section_row_count(section, dialog.config_view))
         .unwrap_or_default();
     move_index(&mut dialog.selected_node, item_count, delta);
+    dialog.clamp_selection();
 }
 
 fn move_detail_scroll(dialog: &mut PluginWorkbenchOverlay, delta: isize) {
@@ -4572,18 +8192,42 @@ mod tests {
         assert_eq!(value["endpoint"], json!("https://docs.local"));
         assert_eq!(value["limits"]["timeoutMs"], json!(5000));
         assert_eq!(value["limits"]["enabled"], json!(true));
-        let nodes = build_config_nodes(Some(&schema), &value, &value, &[]);
+        let mut plugin = PluginWorkbenchPlugin {
+            plugin_id: "fixture".to_owned(),
+            visible_tool: "fixture".to_owned(),
+            version: "0.1.0".to_owned(),
+            transport: "static".to_owned(),
+            tools: Vec::new(),
+            commands: Vec::new(),
+            config_status: PluginConfigStatus {
+                kind: PluginConfigStatusKind::Valid,
+                label: "Valid".to_owned(),
+            },
+            status: agena::plugin::status::PluginStatus::initial("fixture", "static"),
+            inspect: None,
+            configured_plugin_value: None,
+            saved_override: JsonValue::Null,
+            draft_override: JsonValue::Null,
+            default_config: value.clone(),
+            saved_config: value.clone(),
+            draft_config: value.clone(),
+            schema: Some(schema.clone()),
+            schema_missing: false,
+            diagnostics: Vec::new(),
+            runtime_diagnostics: Vec::new(),
+            diff: Vec::new(),
+            sections: Vec::new(),
+            logs: Vec::new(),
+            dirty: false,
+            branch_drafts: BTreeMap::new(),
+        };
+        plugin.sections = build_generic_config_sections(&plugin);
         assert!(
-            nodes
+            plugin
+                .sections
                 .iter()
-                .any(|node| node.path == vec![PathSegment::Key("endpoint".to_owned())])
+                .any(|section| section.title == "Limits")
         );
-        assert!(nodes.iter().any(|node| node.path
-            == vec![
-                PathSegment::Key("limits".to_owned()),
-                PathSegment::Key("timeoutMs".to_owned())
-            ]));
-        assert!(nodes.iter().all(|node| !node.dirty));
     }
 
     #[test]
@@ -4674,9 +8318,9 @@ mod tests {
         assert_eq!(plugin.config_status.kind, PluginConfigStatusKind::Valid);
         assert!(
             plugin
-                .nodes
+                .sections
                 .iter()
-                .any(|node| node.path == vec![PathSegment::Key("enabled".to_owned())])
+                .any(|section| section.title == "Enabled" || section.title == "Limit")
         );
     }
 
@@ -4713,21 +8357,30 @@ mod tests {
     #[test]
     fn config_focus_navigation_stays_inside_config_tab() {
         assert_eq!(
-            next_config_focus(PluginConfigFocus::Structure),
-            PluginConfigFocus::Editor
-        );
-        assert_eq!(
-            next_config_focus(PluginConfigFocus::Editor),
-            PluginConfigFocus::FieldInfo
-        );
-        assert_eq!(
-            previous_config_focus(PluginConfigFocus::Editor),
+            next_config_focus(PluginConfigFocus::Toolbar, true),
             PluginConfigFocus::Structure
         );
         assert_eq!(
-            PluginDetailTab::Overview.move_by(1),
-            PluginDetailTab::Config
+            next_config_focus(PluginConfigFocus::Structure, true),
+            PluginConfigFocus::Editor
         );
+        assert_eq!(
+            previous_config_focus(PluginConfigFocus::Structure, true),
+            PluginConfigFocus::Toolbar
+        );
+        assert_eq!(
+            next_config_focus(PluginConfigFocus::Structure, false),
+            PluginConfigFocus::Editor
+        );
+        assert_eq!(
+            next_config_focus(PluginConfigFocus::Editor, false),
+            PluginConfigFocus::FieldInfo
+        );
+        assert_eq!(
+            previous_config_focus(PluginConfigFocus::Editor, false),
+            PluginConfigFocus::Structure
+        );
+        assert_eq!(PluginDetailTab::Config.move_by(1), PluginDetailTab::Tools);
     }
 
     #[test]
@@ -4795,11 +8448,18 @@ mod tests {
             visible_plugins: vec![0],
             selected_plugin: 0,
             detail_tab: PluginDetailTab::Config,
+            config_view: PluginConfigView::Effective,
             config_focus: PluginConfigFocus::Structure,
+            selected_toolbar_action: 0,
+            selected_section: 2,
             selected_node: 0,
+            selected_diagnostic: 0,
+            selected_diff_row: 0,
             config_scroll: 0,
             diagnostics_scroll: 0,
             show_diff: false,
+            drilldown: None,
+            actions: None,
             editor: None,
         };
 
@@ -4818,7 +8478,7 @@ mod tests {
             &dialog,
             dialog.selected_plugin().unwrap(),
         ));
-        assert!(structure.contains("Config"));
+        assert!(structure.contains("Overview"));
         assert!(structure.contains("Endpoint"));
         assert!(structure.contains("Limits"));
 
@@ -4826,15 +8486,237 @@ mod tests {
             &dialog,
             dialog.selected_plugin().unwrap(),
         ));
-        assert!(editor.contains("Object editor"));
-        assert!(editor.contains("Endpoint"));
         assert!(editor.contains("Limits"));
-        assert!(editor.contains("[ Add field ]"));
+        assert!(editor.contains("Timeout"));
+        assert!(editor.contains("Enabled"));
 
         let info = text_to_string(field_info_text(&dialog, dialog.selected_plugin().unwrap()));
         assert!(info.contains("Path"));
-        assert!(info.contains("/"));
+        assert!(info.contains("/limits"));
         assert!(info.contains("Type"));
+    }
+
+    #[test]
+    fn agena_web_schema_compiles_to_partitioned_section_editor() {
+        let schema = json!({
+            "type": "object",
+            "default": {
+                "fetch": {
+                    "enabled": true,
+                    "request": {
+                        "delay_ms": 400,
+                        "timeout_secs": 30,
+                        "max_body_bytes": 5242880,
+                        "respect_robots_txt": true
+                    },
+                    "cache": {
+                        "ttl_secs": 900,
+                        "capacity": 128
+                    }
+                },
+                "crawl": {
+                    "defaults": {
+                        "max_pages": 10,
+                        "max_depth": 1,
+                        "same_host_only": true
+                    },
+                    "limits": {
+                        "max_pages": 100,
+                        "max_depth": 4
+                    },
+                    "indexing": {
+                        "document_cache_ttl_secs": 86400,
+                        "chunk_chars": 1800,
+                        "near_duplicate_hamming_distance": 3
+                    }
+                },
+                "search": {
+                    "default_limit": 5,
+                    "max_limit": 20
+                },
+                "store": {
+                    "retention": {
+                        "max_documents": 200,
+                        "max_bytes": 104857600
+                    },
+                    "listing": {
+                        "default_limit": 20,
+                        "max_limit": 100
+                    }
+                },
+                "browser": {
+                    "enabled": false,
+                    "executable_path": null,
+                    "wait": {
+                        "for_network_idle": true,
+                        "timeout_secs": 10,
+                        "for_selector": null,
+                        "delay_ms": 0
+                    }
+                }
+            },
+            "properties": {
+                "fetch": {
+                    "type": "object",
+                    "title": "Fetch",
+                    "properties": {
+                        "enabled": { "type": "boolean", "title": "Enabled" },
+                        "request": {
+                            "type": "object",
+                            "title": "Request",
+                            "properties": {
+                                "delay_ms": { "type": "integer", "title": "Delay" },
+                                "timeout_secs": { "type": "integer", "title": "Timeout" },
+                                "max_body_bytes": { "type": "integer", "title": "Max Body Size" },
+                                "respect_robots_txt": { "type": "boolean", "title": "Respect robots.txt" }
+                            }
+                        },
+                        "cache": {
+                            "type": "object",
+                            "title": "Cache",
+                            "properties": {
+                                "ttl_secs": { "type": "integer", "title": "TTL" },
+                                "capacity": { "type": "integer", "title": "Capacity" }
+                            }
+                        }
+                    }
+                },
+                "crawl": {
+                    "type": "object",
+                    "title": "Crawl",
+                    "properties": {
+                        "defaults": {
+                            "type": "object",
+                            "properties": {
+                                "max_pages": { "type": "integer", "title": "Max pages" },
+                                "max_depth": { "type": "integer", "title": "Max depth" },
+                                "same_host_only": { "type": "boolean", "title": "Same host only" }
+                            }
+                        },
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "max_pages": { "type": "integer", "title": "Max pages limit" },
+                                "max_depth": { "type": "integer", "title": "Max depth limit" }
+                            }
+                        },
+                        "indexing": {
+                            "type": "object",
+                            "title": "Indexing",
+                            "properties": {
+                                "document_cache_ttl_secs": { "type": "integer", "title": "Document cache TTL" },
+                                "chunk_chars": { "type": "integer", "title": "Chunk size" },
+                                "near_duplicate_hamming_distance": { "type": "integer", "title": "Near-duplicate distance" }
+                            }
+                        }
+                    }
+                },
+                "search": {
+                    "type": "object",
+                    "title": "Search",
+                    "properties": {
+                        "default_limit": { "type": "integer", "title": "Default limit" },
+                        "max_limit": { "type": "integer", "title": "Max limit" }
+                    }
+                },
+                "store": {
+                    "type": "object",
+                    "title": "Store",
+                    "properties": {
+                        "retention": {
+                            "type": "object",
+                            "title": "Retention",
+                            "properties": {
+                                "max_documents": { "type": "integer", "title": "Max documents" },
+                                "max_bytes": { "type": "integer", "title": "Max bytes" }
+                            }
+                        },
+                        "listing": {
+                            "type": "object",
+                            "title": "Listing",
+                            "properties": {
+                                "default_limit": { "type": "integer", "title": "Default limit" },
+                                "max_limit": { "type": "integer", "title": "Max limit" }
+                            }
+                        }
+                    }
+                },
+                "browser": {
+                    "type": "object",
+                    "title": "Browser",
+                    "properties": {
+                        "enabled": { "type": "boolean", "title": "Enabled" },
+                        "executable_path": { "type": ["string", "null"], "title": "Executable path" },
+                        "wait": {
+                            "type": "object",
+                            "title": "Wait",
+                            "properties": {
+                                "for_network_idle": { "type": "boolean", "title": "Network idle" },
+                                "timeout_secs": { "type": "integer", "title": "Timeout" },
+                                "for_selector": { "type": ["string", "null"], "title": "Selector" },
+                                "delay_ms": { "type": "integer", "title": "Extra delay" }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        let manifest = agena::plugin::PluginManifest::builder("agena.web", "1.0.0")
+            .config_schema(schema)
+            .build();
+        let status = agena::plugin::status::PluginStatus::initial("agena.web", "static");
+        let inspect = agena::plugin::PluginInspect {
+            status: status.clone(),
+            manifest: Some(manifest),
+            authority: None,
+            configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
+                JsonValue::Null,
+            )),
+        };
+        let sources = crate::backend::ConfigJsonSources {
+            config_path: std::path::PathBuf::from("config.json"),
+            config_found: false,
+            file: json!({}),
+            effective: json!({}),
+        };
+        let plugin =
+            build_plugin_workbench_plugin(&sources, "en-US", status, Some(inspect), Vec::new());
+
+        let section_titles = plugin
+            .sections
+            .iter()
+            .map(|section| section.title.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            section_titles,
+            vec!["Overview", "Fetch", "Crawl", "Search", "Store", "Browser"]
+        );
+
+        let fetch_section = &plugin.sections[1];
+        let fetch_groups = section_form_groups(fetch_section)
+            .iter()
+            .map(|group| group.title.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(fetch_groups, vec!["Fetch", "Request", "Cache"]);
+
+        let crawl_section = &plugin.sections[2];
+        let crawl_groups = section_form_groups(crawl_section);
+        assert_eq!(crawl_groups[0].title, "Crawl Range");
+        assert_eq!(
+            crawl_groups[0].layout,
+            ConfigGroupLayout::Pair {
+                left_label: "Value",
+                right_label: "Limit"
+            }
+        );
+        assert_eq!(crawl_groups[1].title, "Indexing");
+
+        let browser_section = &plugin.sections[5];
+        let browser_groups = section_form_groups(browser_section);
+        assert_eq!(browser_groups[0].title, "Browser");
+        assert_eq!(browser_groups[1].title, "Wait");
+        assert!(browser_groups[0].rows[1].value_display.contains("Not set"));
+        assert!(browser_groups[1].rows[2].value_display.contains("Not set"));
     }
 
     fn text_to_string(text: Text<'static>) -> String {

@@ -47,18 +47,12 @@ pub fn set_schema_metadata(
     if title.is_none() && description.is_none() {
         return;
     }
-    let resolved_pointer = resolve_schema_pointer(schema, pointer)
-        .unwrap_or_else(|| panic!("schema pointer `{pointer}` not found"));
-    let target = if resolved_pointer.is_empty() {
-        schema
-    } else {
-        schema
-            .pointer_mut(resolved_pointer.as_str())
-            .unwrap_or_else(|| panic!("schema pointer `{pointer}` not found"))
+    let Some(resolved_pointer) = resolve_schema_pointer(schema, pointer) else {
+        return;
     };
-    let object = target
-        .as_object_mut()
-        .unwrap_or_else(|| panic!("schema pointer `{pointer}` does not reference an object"));
+    let Some(object) = ensure_schema_object_at_pointer(schema, resolved_pointer.as_str()) else {
+        return;
+    };
     if let Some(title) = title {
         object.insert(
             "title".to_string(),
@@ -70,6 +64,29 @@ pub fn set_schema_metadata(
             "description".to_string(),
             serde_json::Value::String(description.to_owned()),
         );
+    }
+}
+
+fn ensure_schema_object_at_pointer<'a>(
+    schema: &'a mut serde_json::Value,
+    pointer: &str,
+) -> Option<&'a mut serde_json::Map<String, serde_json::Value>> {
+    let target = if pointer.is_empty() {
+        schema
+    } else {
+        schema.pointer_mut(pointer)?
+    };
+    match target {
+        serde_json::Value::Object(object) => Some(object),
+        serde_json::Value::Bool(true) => {
+            *target = serde_json::Value::Object(serde_json::Map::new());
+            target.as_object_mut()
+        }
+        serde_json::Value::Bool(false) => {
+            *target = serde_json::json!({ "not": {} });
+            target.as_object_mut()
+        }
+        _ => None,
     }
 }
 
@@ -267,5 +284,73 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("Runtime toggle")
         );
+    }
+
+    #[test]
+    fn set_schema_metadata_converts_boolean_true_schema_to_object() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "value": true
+            }
+        });
+        set_schema_metadata(
+            &mut schema,
+            "/properties/value",
+            Some("Value"),
+            Some("Arbitrary JSON value"),
+        );
+        let value = schema.pointer("/properties/value").unwrap();
+        assert!(value.is_object());
+        assert_eq!(
+            value.get("title").and_then(serde_json::Value::as_str),
+            Some("Value")
+        );
+        assert_eq!(
+            value.get("description").and_then(serde_json::Value::as_str),
+            Some("Arbitrary JSON value")
+        );
+    }
+
+    #[test]
+    fn set_schema_metadata_converts_boolean_false_schema_to_object() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "value": false
+            }
+        });
+        set_schema_metadata(
+            &mut schema,
+            "/properties/value",
+            Some("Value"),
+            Some("Disabled value"),
+        );
+        let value = schema.pointer("/properties/value").unwrap();
+        assert!(value.is_object());
+        assert_eq!(value.get("not"), Some(&serde_json::json!({})));
+        assert_eq!(
+            value.get("title").and_then(serde_json::Value::as_str),
+            Some("Value")
+        );
+        assert_eq!(
+            value.get("description").and_then(serde_json::Value::as_str),
+            Some("Disabled value")
+        );
+    }
+
+    #[test]
+    fn set_schema_metadata_ignores_missing_pointer() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {}
+        });
+        set_schema_metadata(
+            &mut schema,
+            "/properties/missing",
+            Some("Missing"),
+            Some("Missing description"),
+        );
+        assert!(schema.pointer("/properties/missing").is_none());
     }
 }

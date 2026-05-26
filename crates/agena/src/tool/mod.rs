@@ -55,8 +55,8 @@ use crate::plugin::{
 };
 use crate::plugins::provided::{
     code as provided_code, cron as provided_cron, fs as provided_fs, lsp as provided_lsp, mcp,
-    router as in_process_router, settings as provided_settings, shell as provided_shell, skills,
-    workflow as provided_workflow,
+    router as in_process_router, schema_lab as provided_schema_lab, settings as provided_settings,
+    shell as provided_shell, skills, workflow as provided_workflow,
 };
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
@@ -138,6 +138,14 @@ pub fn workflow_plugin_id() -> &'static str {
 
 pub fn new_workflow_plugin() -> impl crate::plugin::sdk::Plugin {
     provided_workflow::new_plugin()
+}
+
+pub fn schema_lab_plugin_id() -> &'static str {
+    provided_schema_lab::SCHEMA_LAB_PLUGIN_ID
+}
+
+pub fn new_schema_lab_plugin() -> impl crate::plugin::sdk::Plugin {
+    provided_schema_lab::SchemaLabPlugin::new()
 }
 
 pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<PluginHost>, String> {
@@ -2391,6 +2399,7 @@ mod tests {
         let settings_id = super::settings_plugin_id().to_string();
         let shell_id = super::shell_plugin_id().to_string();
         let workflow_id = super::workflow_plugin_id().to_string();
+        let schema_lab_id = super::schema_lab_plugin_id().to_string();
         let web_id = crate::web::web_plugin_id().to_string();
         let mut list = BTreeMap::new();
         for id in [
@@ -2402,6 +2411,7 @@ mod tests {
             &settings_id,
             &shell_id,
             &workflow_id,
+            &schema_lab_id,
             &web_id,
         ] {
             let config = if id == &workflow_id {
@@ -2429,6 +2439,7 @@ mod tests {
                 .register_static(settings_id, super::new_settings_plugin())
                 .register_static(shell_id, super::new_shell_plugin())
                 .register_static(workflow_id, super::new_workflow_plugin())
+                .register_static(schema_lab_id, super::new_schema_lab_plugin())
                 .register_static(web_id, crate::web::new_web_plugin())
                 .register_static("fixture", FixturePlugin)
                 .build()
@@ -2448,6 +2459,7 @@ mod tests {
         let settings_id = super::settings_plugin_id().to_string();
         let shell_id = super::shell_plugin_id().to_string();
         let workflow_id = super::workflow_plugin_id().to_string();
+        let schema_lab_id = super::schema_lab_plugin_id().to_string();
         let web_id = crate::web::web_plugin_id().to_string();
         let mut list = BTreeMap::new();
         for id in [
@@ -2459,6 +2471,7 @@ mod tests {
             &settings_id,
             &shell_id,
             &workflow_id,
+            &schema_lab_id,
             &web_id,
         ] {
             let config = if id == &workflow_id {
@@ -2485,6 +2498,7 @@ mod tests {
                 .register_static(settings_id, super::new_settings_plugin())
                 .register_static(shell_id, super::new_shell_plugin())
                 .register_static(workflow_id, super::new_workflow_plugin())
+                .register_static(schema_lab_id, super::new_schema_lab_plugin())
                 .register_static(web_id, crate::web::new_web_plugin())
                 .build()
                 .await

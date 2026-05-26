@@ -1,8 +1,9 @@
 use crate::agent::Agent;
-use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
-use crate::plugin::sdk::ToolTag;
+use crate::plugin::registry::RegisteredTool;
+use crate::plugin::sdk::{PluginManifest, ToolTag};
 
 use crate::plugin::sdk::Plugin;
+use crate::plugins::provided::code as provided_code;
 use crate::plugins::provided::{
     cron as provided_cron, fs as provided_fs, lsp as provided_lsp, settings as provided_settings,
     shell as provided_shell, workflow as provided_workflow,
@@ -53,7 +54,7 @@ impl ToolCatalog {
     pub fn availability_for_definition(
         &self,
         agent: &Agent,
-        tool: &RegistryPluginEntry,
+        tool: &RegisteredTool,
     ) -> ToolAvailability {
         let enabled = self.is_tool_enabled(tool);
         let reason = if agent.disable {
@@ -76,15 +77,14 @@ impl ToolCatalog {
         }
     }
 
-    pub fn tools(&self) -> Vec<RegistryPluginEntry> {
-        tool_decls()
+    pub fn tools(&self) -> Vec<RegisteredTool> {
+        tool_entries()
             .into_iter()
-            .map(|decl| RegistryPluginEntry::new(decl.name.clone(), decl))
             .filter(|tool| self.is_tool_enabled(tool))
             .collect()
     }
 
-    pub fn is_tool_enabled(&self, tool: &RegistryPluginEntry) -> bool {
+    pub fn is_tool_enabled(&self, tool: &RegisteredTool) -> bool {
         self.are_tags_enabled(&tool.effective_tags())
     }
 
@@ -97,14 +97,29 @@ impl ToolCatalog {
     }
 }
 
-fn tool_decls() -> Vec<crate::plugin::sdk::PluginToolDecl> {
-    let mut decls = Vec::new();
-    decls.extend(provided_lsp::LspPlugin::new().manifest().entries);
-    decls.extend(provided_cron::CronPlugin::new().manifest().entries);
-    decls.extend(provided_fs::new_plugin().manifest().entries);
-    decls.extend(provided_settings::SettingsPlugin::new().manifest().entries);
-    decls.extend(provided_shell::new_plugin().manifest().entries);
-    decls.extend(crate::web::new_web_plugin().manifest().entries);
-    decls.extend(provided_workflow::new_plugin().manifest().entries);
-    decls
+fn tool_entries() -> Vec<RegisteredTool> {
+    let mut entries = Vec::new();
+    extend_manifest_entries(&mut entries, provided_code::new_plugin().manifest());
+    extend_manifest_entries(&mut entries, provided_lsp::LspPlugin::new().manifest());
+    extend_manifest_entries(&mut entries, provided_cron::CronPlugin::new().manifest());
+    extend_manifest_entries(&mut entries, provided_fs::new_plugin().manifest());
+    extend_manifest_entries(
+        &mut entries,
+        provided_settings::SettingsPlugin::new().manifest(),
+    );
+    extend_manifest_entries(&mut entries, provided_shell::new_plugin().manifest());
+    extend_manifest_entries(&mut entries, crate::web::new_web_plugin().manifest());
+    extend_manifest_entries(&mut entries, crate::memory::new_memory_plugin().manifest());
+    extend_manifest_entries(&mut entries, provided_workflow::new_plugin().manifest());
+    entries
+}
+
+fn extend_manifest_entries(entries: &mut Vec<RegisteredTool>, manifest: PluginManifest) {
+    let plugin_name = manifest.name;
+    entries.extend(
+        manifest
+            .tools
+            .into_iter()
+            .map(|decl| RegisteredTool::new(plugin_name.clone(), decl)),
+    );
 }

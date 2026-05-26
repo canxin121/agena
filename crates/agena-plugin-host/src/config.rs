@@ -12,7 +12,7 @@ pub use crate::quota::QuotaConfig;
 /// Top-level `plugins` config object, parsed from agena's JSON config layer.
 ///
 /// The host only owns transport, policy and lifecycle fields. Plugin-specific
-/// configuration lives in [`PluginEntry::config`] as JSON and is validated
+/// configuration lives in [`ConfiguredPlugin::config`] as JSON and is validated
 /// against the plugin manifest at load time.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -22,7 +22,7 @@ pub struct PluginsConfig {
     #[serde(default, skip_serializing_if = "PluginPolicyConfig::is_default")]
     pub policy: PluginPolicyConfig,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub list: BTreeMap<String, PluginEntry>,
+    pub list: BTreeMap<String, ConfiguredPlugin>,
 }
 
 impl Default for PluginsConfig {
@@ -44,7 +44,7 @@ pub struct PluginHostConfig {
     #[serde(default, skip_serializing_if = "QuotaConfig::is_unlimited_ref")]
     pub default_quota: QuotaConfig,
     /// Optional per-plugin overrides, keyed by plugin id. A plugin without an
-    /// entry here uses `default_quota`.
+    /// override here uses `default_quota`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub quotas: BTreeMap<String, QuotaConfig>,
     /// `key_id -> hex-encoded ed25519 public key`. Signed package/artifact
@@ -153,11 +153,11 @@ pub struct PluginSignature {
     pub signature: String,
 }
 
-/// One entry under `plugins.list.<id>`. The host knows how to load the
-/// `package`; `config` is plugin-owned JSON.
+/// One configured plugin under `plugins.list.<id>`. The host knows how to
+/// load the `package`; `config` is plugin-owned JSON.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct PluginEntry {
+pub struct ConfiguredPlugin {
     #[serde(default = "default_plugin_enabled")]
     pub enabled: bool,
     pub package: PluginPackage,
@@ -167,7 +167,7 @@ pub struct PluginEntry {
     pub timeouts: TimeoutsConfig,
 }
 
-impl Default for PluginEntry {
+impl Default for ConfiguredPlugin {
     fn default() -> Self {
         Self {
             enabled: true,
@@ -229,7 +229,7 @@ pub enum PluginPackage {
     },
 }
 
-impl PluginEntry {
+impl ConfiguredPlugin {
     pub fn static_config(config: serde_json::Value) -> Self {
         Self {
             enabled: true,

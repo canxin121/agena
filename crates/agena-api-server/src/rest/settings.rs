@@ -38,14 +38,14 @@ pub async fn list_settings(
         }
         ConfigSettingsSource::Effective => {
             let value = resolved_config_json(&resolution.config)?;
-            let entries =
+            let items =
                 list_json_path(&value, path.as_deref(), input.recursive).map_err(settings_error)?;
             ConfigSettingsListResponse {
                 config_path: resolution.meta.config_path.clone(),
                 config_found: resolution.meta.config_found,
                 source: ConfigSettingsSource::Effective,
                 path,
-                entries,
+                items,
             }
         }
     };

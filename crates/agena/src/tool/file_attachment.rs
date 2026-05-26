@@ -4,8 +4,8 @@ use std::path::Path;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use mime_guess::MimeGuess;
 
-use crate::entry::payload::ReadAttachmentOutput;
 use crate::message::{AttachmentItem, AttachmentKind, AttachmentSource};
+use crate::tool::payload::ReadAttachmentOutput;
 
 use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 

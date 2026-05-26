@@ -6,7 +6,7 @@ use strum::Display;
 use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, AttachmentKind, CronCreateToolInput,
     CronDeleteToolInput, CronListToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
-    ExitPlanModeToolInput, ExitWorktreeToolInput, FileChangeEntry, GlobToolInput, GrepToolInput,
+    ExitPlanModeToolInput, ExitWorktreeToolInput, FileChangeRecord, GlobToolInput, GrepToolInput,
     LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput,
     MonitorEvent, MonitorStatus, MonitorToolInput, NotebookEditToolInput, ReadToolInput,
     ScheduleWakeupToolInput, ShellCommandInput, StructuredObject, TodoItem, TodoWriteToolInput,
@@ -89,16 +89,8 @@ impl ToolPayloadInput {
             _ => serde_json::Map::new(),
         };
         object.remove("tool");
-        let name = match grouped_invocation_for_tool(tool_name, &mut object) {
-            Some((entry, action)) => {
-                object.insert(
-                    "action".to_string(),
-                    serde_json::Value::String(action.to_string()),
-                );
-                entry.to_string()
-            }
-            None => tool_name.to_string(),
-        };
+        let name = invocation_name_for_payload_tool(tool_name, &mut object)
+            .unwrap_or_else(|| tool_name.to_string());
         let payload =
             StructuredObject::try_from(serde_json::Value::Object(object)).unwrap_or_default();
         ToolInvocation::new(name, payload)
@@ -115,12 +107,9 @@ impl ToolPayloadInput {
             serde_json::Value::Null => serde_json::Map::new(),
             _ => return None,
         };
-        let name = canonical_tool_payload_name(invocation.name.as_str());
-        let payload_name = grouped_tool_payload_name(name, &mut object).unwrap_or(name);
-        object.insert(
-            "tool".to_string(),
-            serde_json::Value::String(payload_name.into()),
-        );
+        let payload_name = payload_name_for_invocation(invocation.name.as_str(), &mut object)
+            .unwrap_or_else(|| canonical_tool_payload_name(invocation.name.as_str()).to_string());
+        object.insert("tool".to_string(), serde_json::Value::String(payload_name));
         serde_json::from_value(serde_json::Value::Object(object)).ok()
     }
 }
@@ -165,7 +154,7 @@ pub enum ToolPayloadOutput {
     ApplyPatch {
         operation_id: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        changes: Vec<FileChangeEntry>,
+        changes: Vec<FileChangeRecord>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         before_hash: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -380,10 +369,9 @@ impl ToolPayloadOutput {
             serde_json::Value::Null => serde_json::Map::new(),
             _ => return None,
         };
-        object.insert(
-            "tool".to_string(),
-            serde_json::Value::String(canonical_tool_payload_name(tool_name).into()),
-        );
+        let payload_name = payload_name_for_output_tool(tool_name)
+            .unwrap_or_else(|| canonical_tool_payload_name(tool_name).to_string());
+        object.insert("tool".to_string(), serde_json::Value::String(payload_name));
         serde_json::from_value(serde_json::Value::Object(object)).ok()
     }
 }
@@ -392,63 +380,77 @@ fn canonical_tool_payload_name(name: &str) -> &str {
     name.rsplit('/').next().unwrap_or(name)
 }
 
-const DIRECT_GROUPED_TOOL_MAPPINGS: &[(&str, &str, &str)] = &[
-    ("read", "fs", "read"),
-    ("glob", "fs", "glob"),
-    ("grep", "fs", "grep"),
-    ("apply_patch", "fs", "apply_patch"),
-    ("notebook_edit", "fs", "notebook_edit"),
-    ("web_fetch", "web", "fetch"),
-    ("web_search", "web", "search"),
-    ("task", "task", "run"),
-    ("tool_search", "tools", "search"),
-    ("todo_write", "todo", "write"),
-    ("ask_user", "user", "request_input"),
-    ("enter_plan_mode", "plan", "enter"),
-    ("exit_plan_mode", "plan", "exit"),
-    ("exit_worktree", "worktree", "exit"),
-    ("cron_create", "schedule", "create"),
-    ("cron_list", "schedule", "list"),
-    ("cron_delete", "schedule", "delete"),
-    ("schedule_wakeup", "schedule", "wakeup"),
-    ("lsp_definition", "lsp", "definition"),
-    ("lsp_references", "lsp", "references"),
-    ("lsp_hover", "lsp", "hover"),
-    ("lsp_diagnostics", "lsp", "diagnostics"),
+const DIRECT_GROUPED_TOOL_MAPPINGS: &[(&str, &str, &str, &str)] = &[
+    ("read", "agena.fs", "fs", "read"),
+    ("glob", "agena.fs", "fs", "glob"),
+    ("grep", "agena.fs", "fs", "grep"),
+    ("apply_patch", "agena.fs", "fs", "apply_patch"),
+    ("notebook_edit", "agena.fs", "fs", "notebook_edit"),
+    ("task", "agena.workflow", "task", "run"),
+    ("tool_search", "agena.workflow", "tools", "search"),
+    ("todo_write", "agena.workflow", "todo", "write"),
+    ("ask_user", "agena.workflow", "user", "request_input"),
+    ("enter_plan_mode", "agena.workflow", "plan", "enter"),
+    ("exit_plan_mode", "agena.workflow", "plan", "exit"),
+    ("exit_worktree", "agena.workflow", "worktree", "exit"),
+    ("cron_create", "agena.cron", "schedule", "create"),
+    ("cron_list", "agena.cron", "schedule", "list"),
+    ("cron_delete", "agena.cron", "schedule", "delete"),
+    ("schedule_wakeup", "agena.cron", "schedule", "wakeup"),
+    ("lsp_definition", "agena.lsp", "lsp", "definition"),
+    ("lsp_references", "agena.lsp", "lsp", "references"),
+    ("lsp_hover", "agena.lsp", "lsp", "hover"),
+    ("lsp_diagnostics", "agena.lsp", "lsp", "diagnostics"),
 ];
 
-fn grouped_mapping_for_tool(tool: &str) -> Option<(&'static str, &'static str)> {
+fn exposed_tool_name(plugin: &str, tool: &str) -> String {
+    format!("{plugin}/{tool}")
+}
+
+fn grouped_mapping_for_tool(tool: &str) -> Option<(&'static str, &'static str, &'static str)> {
     DIRECT_GROUPED_TOOL_MAPPINGS
         .iter()
-        .find(|(name, _, _)| *name == tool)
-        .map(|(_, entry, action)| (*entry, *action))
+        .find(|(name, _, _, _)| *name == tool)
+        .map(|(_, plugin, entry, action)| (*plugin, *entry, *action))
 }
 
 fn tool_name_for_grouped_mapping(entry: &str, action: &str) -> Option<&'static str> {
     DIRECT_GROUPED_TOOL_MAPPINGS
         .iter()
-        .find(|(_, mapped_entry, mapped_action)| *mapped_entry == entry && *mapped_action == action)
-        .map(|(tool, _, _)| *tool)
+        .find(|(_, _, mapped_entry, mapped_action)| {
+            *mapped_entry == entry && *mapped_action == action
+        })
+        .map(|(tool, _, _, _)| *tool)
 }
 
-fn grouped_invocation_for_tool(
+fn invocation_name_for_payload_tool(
     tool: &str,
     input: &mut serde_json::Map<String, serde_json::Value>,
-) -> Option<(&'static str, &'static str)> {
+) -> Option<String> {
     Some(match tool {
+        "web_fetch" => exposed_tool_name("agena.web", "fetch"),
+        "web_search" => exposed_tool_name("agena.web", "search"),
         "bash" => {
             input.insert(
                 "shell".to_string(),
                 serde_json::Value::String("bash".to_string()),
             );
-            ("shell", "exec")
+            input.insert(
+                "action".to_string(),
+                serde_json::Value::String("exec".to_string()),
+            );
+            exposed_tool_name("agena.shell", "shell")
         }
         "powershell" => {
             input.insert(
                 "shell".to_string(),
                 serde_json::Value::String("powershell".to_string()),
             );
-            ("shell", "exec")
+            input.insert(
+                "action".to_string(),
+                serde_json::Value::String("exec".to_string()),
+            );
+            exposed_tool_name("agena.shell", "shell")
         }
         "monitor" => {
             let command = match input.get("action").and_then(serde_json::Value::as_str) {
@@ -461,16 +463,12 @@ fn grouped_invocation_for_tool(
             if command != "monitor" {
                 input.remove("action");
             }
-            ("shell", command)
+            input.insert(
+                "action".to_string(),
+                serde_json::Value::String(command.to_string()),
+            );
+            exposed_tool_name("agena.shell", "shell")
         }
-        "web_fetch" => ("web", "fetch"),
-        "web_search" => ("web", "search"),
-        "task" => ("task", "run"),
-        "tool_search" => ("tools", "search"),
-        "todo_write" => ("todo", "write"),
-        "ask_user" => ("user", "request_input"),
-        "enter_plan_mode" => ("plan", "enter"),
-        "exit_plan_mode" => ("plan", "exit"),
         "enter_worktree" => {
             let name = input
                 .remove("name")
@@ -496,10 +494,34 @@ fn grouped_invocation_for_tool(
                     }
                 }
             }
-            ("worktree", "enter")
+            input.insert(
+                "action".to_string(),
+                serde_json::Value::String("enter".to_string()),
+            );
+            exposed_tool_name("agena.workflow", "worktree")
         }
-        _ => grouped_mapping_for_tool(tool)?,
+        _ => {
+            let (plugin, entry, action) = grouped_mapping_for_tool(tool)?;
+            input.insert(
+                "action".to_string(),
+                serde_json::Value::String(action.to_string()),
+            );
+            exposed_tool_name(plugin, entry)
+        }
     })
+}
+
+fn payload_name_for_invocation(
+    invocation_name: &str,
+    input: &mut serde_json::Map<String, serde_json::Value>,
+) -> Option<String> {
+    match invocation_name {
+        "agena.web/fetch" | "web_fetch" => return Some("web_fetch".to_string()),
+        "agena.web/search" | "web_search" => return Some("web_search".to_string()),
+        _ => {}
+    }
+    let entry = canonical_tool_payload_name(invocation_name);
+    grouped_tool_payload_name(entry, input).map(str::to_string)
 }
 
 fn grouped_tool_payload_name(
@@ -572,4 +594,22 @@ fn grouped_tool_payload_name(
         _ => {}
     }
     Some(tool)
+}
+
+fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
+    match tool_name {
+        "agena.web/fetch" | "web_fetch" | "fetch" => Some("web_fetch".to_string()),
+        "agena.web/search" | "web_search" | "search" => Some("web_search".to_string()),
+        "agena.shell/shell" | "shell" => None,
+        "agena.fs/fs" | "fs" => None,
+        "agena.workflow/task" | "task" => Some("task".to_string()),
+        "agena.workflow/tools" | "tools" => Some("tool_search".to_string()),
+        "agena.workflow/todo" | "todo" => Some("todo_write".to_string()),
+        "agena.workflow/user" | "user" => Some("ask_user".to_string()),
+        "agena.workflow/plan" | "plan" => None,
+        "agena.workflow/worktree" | "worktree" => None,
+        "agena.cron/schedule" | "schedule" => None,
+        "agena.lsp/lsp" | "lsp" => None,
+        _ => None,
+    }
 }

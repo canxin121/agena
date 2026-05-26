@@ -10,7 +10,7 @@ use agena::{
     config::ProviderProtocolPathsConfig,
     message::{Message, MessageMetadata, MessagePart, MessageStatus, MessageUsage},
     model::ModelRef,
-    model_catalog::ModelCatalogEntrySourceKind,
+    model_catalog::ModelCatalogSnapshotSourceKind,
     runtime::{
         RuntimeBackgroundTask, RuntimeBackgroundTaskKind, RuntimeBackgroundTaskOrigin,
         RuntimeBackgroundTaskStatus,
@@ -39,7 +39,7 @@ pub struct RuntimeSessionCacheResource {
     pub max_sessions: usize,
     pub ttl_secs: u64,
     pub max_bytes: usize,
-    pub entry_count: usize,
+    pub session_count: usize,
     pub total_bytes: usize,
     pub hits: u64,
     pub misses: u64,
@@ -282,10 +282,10 @@ pub struct ModelCatalogResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_refresh_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_successful_source: Option<ModelCatalogEntrySourceKind>,
+    pub last_successful_source: Option<ModelCatalogSnapshotSourceKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
-    pub entry_count: usize,
+    pub model_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -296,7 +296,7 @@ pub enum ModelCatalogSourceKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelCatalogEntryResource {
+pub struct CatalogModelResource {
     pub model_id: String,
     pub source: ModelCatalogSourceKind,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -821,11 +821,11 @@ pub struct RewindCheckpointResource {
     pub schema: u32,
     pub at_ms: i64,
     pub target_message_id: i64,
-    pub dropped: Vec<RewindCheckpointEntryResource>,
+    pub dropped: Vec<RewindCheckpointRecordResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RewindCheckpointEntryResource {
+pub struct RewindCheckpointRecordResource {
     pub message_id: i64,
     pub role: String,
     pub preview: String,
@@ -842,8 +842,8 @@ impl From<agena::session::RewindCheckpoint> for RewindCheckpointResource {
     }
 }
 
-impl From<agena::session::RewindCheckpointEntry> for RewindCheckpointEntryResource {
-    fn from(value: agena::session::RewindCheckpointEntry) -> Self {
+impl From<agena::session::RewindCheckpointRecord> for RewindCheckpointRecordResource {
+    fn from(value: agena::session::RewindCheckpointRecord) -> Self {
         Self {
             message_id: value.message_id,
             role: value.role,

@@ -42,7 +42,7 @@ pub use history::ProjectedMessageHeader;
 /// Audit-only payload carried by `RewindCheckpoint` system notices.
 /// Exposed publicly so callers of `SessionManager::list_rewind_checkpoints`
 /// can name the return type.
-pub use history::{RewindCheckpoint, RewindCheckpointEntry};
+pub use history::{RewindCheckpoint, RewindCheckpointRecord};
 
 pub const EFFECTIVE_CONTEXT_WINDOW_PERCENT: u32 = 95;
 pub const AUTO_COMPACTION_CONTEXT_WINDOW_PERCENT: u32 = 90;

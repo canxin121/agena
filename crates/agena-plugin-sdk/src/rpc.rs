@@ -139,7 +139,6 @@ pub mod method {
     pub const HOOK_AUTH: &str = "hooks/auth";
     pub const HOOK_PROVIDER_LIST: &str = "hooks/provider.list";
     pub const HOOK_PERMISSION_ASK: &str = "hooks/permission.ask_permission";
-    pub const HOOK_PERMISSION_ASK_LEGACY: &str = "hooks/permission.ask";
     pub const HOOK_NOTIFICATION: &str = "hooks/notification";
     pub const HOOK_COMMAND_BEFORE: &str = "hooks/command.execute.before";
     pub const HOOK_SHELL_ENV: &str = "hooks/shell.env";
@@ -161,7 +160,6 @@ pub mod method {
     pub const HOST_EVENT_SUBSCRIBE: &str = "host/event.subscribe";
     pub const HOST_EVENT_UNSUBSCRIBE: &str = "host/event.unsubscribe";
     pub const HOST_PERMISSION_ASK: &str = "host/permission.ask_permission";
-    pub const HOST_PERMISSION_ASK_LEGACY: &str = "host/permission.ask";
     pub const HOST_PERMISSION_CHECK_PATH: &str = "host/permission.check_path";
     pub const HOST_PERMISSION_CHECK_NETWORK: &str = "host/permission.check_network";
     pub const HOST_CONFIG_READ: &str = "host/config.read";
@@ -179,10 +177,10 @@ pub mod method {
     pub const HOST_MONITOR_LIST: &str = "host/monitor.list";
     pub const HOST_MONITOR_READ: &str = "host/monitor.read";
     pub const HOST_MONITOR_STOP: &str = "host/monitor.stop";
-    pub const HOST_ENTRY_REGISTER: &str = "host/entry.register";
-    pub const HOST_ENTRY_UPDATE: &str = "host/entry.update";
-    pub const HOST_ENTRY_REMOVE: &str = "host/entry.remove";
-    pub const HOST_ENTRY_LIST: &str = "host/entry.list";
+    pub const HOST_TOOL_REGISTRY_REGISTER: &str = "host/tool.registry.register";
+    pub const HOST_TOOL_REGISTRY_UPDATE: &str = "host/tool.registry.update";
+    pub const HOST_TOOL_REGISTRY_REMOVE: &str = "host/tool.registry.remove";
+    pub const HOST_TOOL_REGISTRY_LIST: &str = "host/tool.registry.list";
     pub const HOST_STORAGE_GET: &str = "host/storage.get";
     pub const HOST_STORAGE_SET: &str = "host/storage.set";
     pub const HOST_STORAGE_DELETE: &str = "host/storage.delete";

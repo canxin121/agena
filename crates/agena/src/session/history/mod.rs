@@ -9,7 +9,7 @@ pub(crate) use event::{
     RunStarted, SystemNoticeAppended, SystemNoticeKind, ToolCallCompleted, ToolCallIssued,
     UserMessageAppended,
 };
-pub use event::{RewindCheckpoint, RewindCheckpointEntry};
+pub use event::{RewindCheckpoint, RewindCheckpointRecord};
 pub(crate) use run_buffer::{MessageIdAllocator, RunBuffer, SequentialIdAllocator};
 pub use store::ProjectedMessageHeader;
 pub(crate) use store::SessionHistoryStore;

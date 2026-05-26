@@ -889,7 +889,7 @@ fn render_operation_blocks(
 }
 
 fn render_file_changes(
-    changes: &[agena::message::FileChangeEntry],
+    changes: &[agena::message::FileChangeRecord],
     out: &mut Vec<RenderedLine>,
     width: u16,
     i18n: &I18n,

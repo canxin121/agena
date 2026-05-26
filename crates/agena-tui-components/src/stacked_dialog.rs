@@ -124,14 +124,14 @@ impl StackedDialogSectionHeight {
         }
     }
 
-    fn resolve_list_panel(self, entry_count: usize) -> u16 {
+    fn resolve_list_panel(self, item_count: usize) -> u16 {
         match self {
             Self::Fixed(height) => height,
             Self::AutoList {
                 lines_per_item,
                 min_body,
                 max_body,
-            } => list_panel_height(entry_count, lines_per_item, min_body, max_body),
+            } => list_panel_height(item_count, lines_per_item, min_body, max_body),
             Self::AutoText { .. } | Self::AutoEditor { .. } => 0,
         }
     }

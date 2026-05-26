@@ -30,7 +30,7 @@ pub struct PluginUiInvokeToolRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct PluginLogListResponse {
     pub plugin_id: String,
-    pub entries: Vec<agena::plugin::PluginLogEntry>,
+    pub logs: Vec<agena::plugin::PluginLogRecord>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

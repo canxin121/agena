@@ -74,10 +74,11 @@ RuntimeConfigRegistry        PluginHostBuilder
 
 Tool 的模型可见名称由 tool registry 决定：
 
-- 如果名称没有冲突，暴露为 tool 原名。
-- 如果和已有 tool 名称冲突，暴露为 `plugin_id/tool_name`。
+- 模型可见名称始终是 `plugin_name/tool_name`。
+- `plugin_name` 来自 manifest `name`，可以包含 `.` 等普通命名字符，但不能包含 `/`。
+- `tool_name` 是 manifest `tools[*].name`，也不能包含 `/`。
 
-这个规则让 plugin 可以安全地提供通用名称，同时避免覆盖其他 plugin 的能力。
+因此 `agena.web` 的 `fetch` tool 暴露为 `agena.web/fetch`，不会再出现 `agena.web/web.fetch` 或裸 `web` 这种名字。
 
 ## Tool 说明模式和 Help
 
@@ -149,24 +150,24 @@ Runtime build 注册：
 
 | Tool | Action |
 | --- | --- |
-| `fs` | `read`, `glob`, `grep`, `apply_patch`, `notebook_edit` |
-| `shell` | `exec`, `monitor_start`, `monitor_list`, `monitor_read`, `monitor_stop` |
-| `web` | `fetch`, `crawl`, `search`, `query`, `get`, `list` |
-| `code` | `search_ast`, `syntax_tree` |
-| `lsp` | `servers`, `definition`, `references`, `hover`, `diagnostics` |
-| `memory` | `search`, `get`, `list`, `write`, `delete` |
-| `settings` | `get`, `list`, `validate`, `set`, `delete`, `patch` |
-| `schedule` | `list`, `create`, `delete`, `wakeup` |
-| `workflow` | `init`, `review`, `security_review` |
-| `tools` | `search`, `help` |
-| `task` | `run` |
-| `agent` | `switch`, `restore` |
-| `todo` | `write` |
-| `session` | `get`, `rename` |
-| `goal` | `get`, `create`, `clear`, `complete` |
-| `user` | `request_input` |
-| `plan` | `enter`, `exit` |
-| `worktree` | `enter`, `exit` |
+| `agena.fs/fs` | `read`, `glob`, `grep`, `apply_patch`, `notebook_edit` |
+| `agena.shell/shell` | `exec`, `monitor_start`, `monitor_list`, `monitor_read`, `monitor_stop` |
+| `agena.web/fetch`, `agena.web/search`, `agena.web/crawl`, `agena.web/query`, `agena.web/get`, `agena.web/list` | Direct web fetch/search/crawl/index actions |
+| `agena.code/code` | `search_ast`, `syntax_tree` |
+| `agena.lsp/lsp` | `servers`, `definition`, `references`, `hover`, `diagnostics` |
+| `agena.memory/memory` | `search`, `get`, `list`, `write`, `delete` |
+| `agena.settings/settings` | `get`, `list`, `validate`, `set`, `delete`, `patch` |
+| `agena.cron/schedule` | `list`, `create`, `delete`, `wakeup` |
+| `agena.workflow/workflow` | `init`, `review`, `security_review` |
+| `agena.workflow/tools` | `search`, `help` |
+| `agena.workflow/task` | `run` |
+| `agena.workflow/agent` | `switch`, `restore` |
+| `agena.workflow/todo` | `write` |
+| `agena.workflow/session` | `get`, `rename` |
+| `agena.workflow/goal` | `get`, `create`, `clear`, `complete` |
+| `agena.workflow/user` | `request_input` |
+| `agena.workflow/plan` | `enter`, `exit` |
+| `agena.workflow/worktree` | `enter`, `exit` |
 
 这些入口现在统一使用扁平 `{"action": "...", ...}` 形状。当前内置 static plugin 倾向把同域动作尽量收进一个顶层 tool，再通过 action 区分读、写、调度或交互行为。
 
@@ -349,7 +350,7 @@ Static plugin config override：
 }
 ```
 
-`PluginHostBuilder::register_static` 只注册可用的 in-process factory；是否加载由 active config 中的 `plugins.list.<id>` 决定。内建能力没有特殊配置通道，实际配置写在对应 static plugin entry 的 `config` 中。
+`PluginHostBuilder::register_static` 只注册可用的 in-process factory；是否加载由 active config 中的 `plugins.list.<id>` 决定。内建能力没有特殊配置通道，实际配置写在对应 static plugin config 的 `config` 中。
 
 ## `plugins` 字段
 
@@ -553,7 +554,8 @@ Manifest 包含：
 - `authors`
 - `transports`
 - `hooks`
-- `entries`
+- `tools`
+- `commands`
 - `plugin_capabilities`
 - `ui`
 - `config_schema`
@@ -632,11 +634,12 @@ Manifest 的 UI surface 明确拆成两个宿主面：
 | `ui.tui.statusline_segments` | TUI | 静态状态栏片段。也可以继续通过 `host/ui.statusline.*` 动态贡献和删除。 |
 | `ui.tui.themes` | TUI | TUI theme palette。也可以通过 theme host callback 动态注册。 |
 | `ui.tui.content_blocks` | TUI | TUI 文本块，当前默认位置是 `composer_footer`。 |
-| `ui.studio.commands` | Studio Web/Desktop | Command Palette 和 slash command 可发现的 plugin commands。 |
 | `ui.studio.controls` | Studio Web/Desktop | Plugin detail panel 等位置上的按钮、选择器、开关、文本和数字 controls。 |
 | `ui.studio.views` | Studio Web/Desktop | Plugin detail 或其他 Studio 位置可渲染的 markdown/link/control 组合视图。 |
 
-TUI 和 Studio 的 UI contribution 类型不同，是有意的边界：TUI 只处理可在终端稳定渲染的状态栏、主题和文本块；Studio 可以渲染 command palette、controls、views，并把用户操作映射为统一的 `PluginUiAction`。
+Manifest 顶层 `commands` 是 Command Palette 和 slash command 可发现的 plugin commands。它不是 `ui.studio` 的子字段，因为 command 是 plugin 的独立能力描述；Studio/TUI 可以各自决定如何展示。
+
+TUI 和 Studio 的 UI contribution 类型不同，是有意的边界：TUI 只处理可在终端稳定渲染的状态栏、主题和文本块；Studio 可以渲染 manifest commands、controls、views，并把用户操作映射为统一的 `PluginUiAction`。
 
 Studio control 的 `kind` 当前支持：
 
@@ -687,7 +690,7 @@ fn manifest() -> PluginManifest {
             priority: 10,
             color: None,
         })
-        .studio_command(PluginStudioCommand {
+        .command(PluginStudioCommand {
             id: "summarize-workspace".into(),
             title: "Summarize workspace".into(),
             description: "Run the project helper summary tool.".into(),
@@ -783,7 +786,7 @@ Plugin 调用 host callback 前必须在 manifest 中声明对应 capability。H
 | `WorktreeRegistry` | 访问 worktree registry |
 | `LspRegistry` | 访问 LSP registry |
 | `McpRegistry` | 管理或查看 MCP server |
-| `EntryRegistry` | 动态注册或注销 tools |
+| `ToolRegistry` | 动态注册或注销 tools |
 | `AgentRegistry` | 注册或读取 agent profiles |
 | `HookRegistry` | 动态注册 hook |
 | `PluginStorage` | 使用 plugin-scoped storage |
@@ -1107,7 +1110,7 @@ Studio/backend API：
 
 1. 选择 transport。
 2. 使用 `agena-plugin-sdk` 实现 `Plugin` trait。
-3. 在 `manifest()` 中声明 hooks、entries、capabilities 和 config schema。
+3. 在 `manifest()` 中声明 hooks、tools、commands、capabilities 和 config schema。
 4. 在 `tool_invoke` 或相关 hook 方法中实现行为。
 5. 按 transport 导出 plugin。
 6. 在 `config.json` 的 `plugins.list.<id>` 中配置。
@@ -1142,7 +1145,7 @@ Runtime reload 会重建 runtime snapshot 和 plugin host。对配置完全一�
 
 - plugin id 变化。
 - kind 变化。
-- package/config/timeouts/env/restart 等 plugin entry 变化。
+- package/config/timeouts/env/restart 等 plugin config 变化。
 - trusted key、signature、hash 等校验信息变化。
 
 加载失败的 plugin 不会阻止整个 host 构建。Host 会记录 failed status 和 error log，其他 plugin 仍可继续运行。
@@ -1158,7 +1161,7 @@ Runtime reload 会重建 runtime snapshot 和 plugin host。对配置完全一�
 - Plugin trait and SDK runtime surface: `crates/agena-plugin-sdk/src/plugin.rs`
 - Host callbacks: `crates/agena-plugin-sdk/src/host_api.rs`
 - Static plugin registration: `crates/agena/src/config/registry.rs`
-- Provided tool ids and bridge: `crates/agena/src/entry/mod.rs`
+- Provided tool ids and bridge: `crates/agena/src/tool/mod.rs`
 - Provided plugins: `crates/agena/src/plugins/provided/`
 - MCP plugin bridge: `crates/agena/src/plugins/provided/mcp.rs`
 - Plugin storage/secrets: `crates/agena/src/plugins/storage.rs`

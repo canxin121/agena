@@ -485,11 +485,11 @@ impl AmazonBedrockAdapter {
     }
 
     fn anthropic_tools(
-        tools: &[crate::plugin::registry::PluginEntry],
-    ) -> Vec<BedrockAnthropicEntryDefinition> {
+        tools: &[crate::plugin::registry::RegisteredTool],
+    ) -> Vec<BedrockAnthropicToolDefinition> {
         tools
             .iter()
-            .map(|tool| BedrockAnthropicEntryDefinition {
+            .map(|tool| BedrockAnthropicToolDefinition {
                 name: tool.exposed_name.clone(),
                 description: tool.description_text().to_string(),
                 input_schema: tool.sanitized_input_schema(),
@@ -654,7 +654,7 @@ impl AmazonBedrockAdapter {
 
     fn apply_anthropic_prompt_cache_hints(
         system: &mut [BedrockAnthropicTextBlock],
-        tools: &mut [BedrockAnthropicEntryDefinition],
+        tools: &mut [BedrockAnthropicToolDefinition],
         messages: &mut [BedrockAnthropicMessage],
     ) {
         if let Some(block) = system.last_mut() {
@@ -1855,7 +1855,7 @@ struct BedrockAnthropicMessagesRequest {
     system: Option<Vec<BedrockAnthropicTextBlock>>,
     messages: Vec<BedrockAnthropicMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<BedrockAnthropicEntryDefinition>>,
+    tools: Option<Vec<BedrockAnthropicToolDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking: Option<BedrockAnthropicThinkingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1877,7 +1877,7 @@ enum BedrockAnthropicThinkingConfig {
 }
 
 #[derive(Debug, Serialize)]
-struct BedrockAnthropicEntryDefinition {
+struct BedrockAnthropicToolDefinition {
     name: String,
     description: String,
     input_schema: Value,

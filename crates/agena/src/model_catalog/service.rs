@@ -82,14 +82,14 @@ impl ModelCatalogService {
         self.store
             .write_cached_official(&CachedOfficialCatalog {
                 fetched_at_unix_ms,
-                source: ModelCatalogEntrySourceKind::Generated,
+                source: ModelCatalogSnapshotSourceKind::Generated,
                 document: document.clone(),
             })
             .await?;
 
         let mut snapshot = self.snapshot();
         snapshot.official = document;
-        snapshot.last_successful_source = Some(ModelCatalogEntrySourceKind::Generated);
+        snapshot.last_successful_source = Some(ModelCatalogSnapshotSourceKind::Generated);
         snapshot.last_refresh_at = DateTime::<Utc>::from_timestamp_millis(fetched_at_unix_ms);
         snapshot.last_error = warnings;
         self.replace_snapshot(snapshot.clone());
@@ -293,7 +293,7 @@ mod tests {
 
         let cached = CachedOfficialCatalog {
             fetched_at_unix_ms: now_unix_ms(),
-            source: ModelCatalogEntrySourceKind::Generated,
+            source: ModelCatalogSnapshotSourceKind::Generated,
             document: ModelCatalogDocument {
                 models: BTreeMap::from([(
                     "cached-model".to_owned(),

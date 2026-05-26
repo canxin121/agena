@@ -155,7 +155,7 @@ type: {{user, feedback, project, reference}}
 {{memory content — for feedback/project types, structure as: rule/fact, then **Why:** and **How to apply:** lines}}
 ```
 
-**Step 2** — add a pointer to that file in `MEMORY.md`. `MEMORY.md` is an index, not a memory — each entry should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. It has no frontmatter. Never write memory content directly into `MEMORY.md`.
+**Step 2** — add a pointer to that file in `MEMORY.md`. `MEMORY.md` is an index, not a memory — each record should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. It has no frontmatter. Never write memory content directly into `MEMORY.md`.
 
 - `MEMORY.md` is always loaded into your conversation context — lines after 200 will be truncated, so keep the index concise
 - Keep the name, description, and type fields in memory files up-to-date with the content
@@ -192,6 +192,6 @@ A memory that summarizes repo state (activity logs, architecture snapshots) is f
     };
 
     format!(
-        "# auto memory\n\nYou have a persistent, file-based memory system at `{mem_dir_display}`. This directory already exists — write to it directly with the Write tool (do not run mkdir or check for its existence).\n\nYou should build up this memory system over time so that future conversations can have a complete picture of who the user is, how they'd like to collaborate with you, what behaviors to avoid or repeat, and the context behind the work the user gives you.\n\nIf the user explicitly asks you to remember something, save it immediately as whichever type fits best. If they ask you to forget something, find and remove the relevant entry.\n\n{types_section}\n\n{entrypoint_section}"
+        "# auto memory\n\nYou have a persistent, file-based memory system at `{mem_dir_display}`. This directory already exists — write to it directly with the Write tool (do not run mkdir or check for its existence).\n\nYou should build up this memory system over time so that future conversations can have a complete picture of who the user is, how they'd like to collaborate with you, what behaviors to avoid or repeat, and the context behind the work the user gives you.\n\nIf the user explicitly asks you to remember something, save it immediately as whichever type fits best. If they ask you to forget something, find and remove the relevant record.\n\n{types_section}\n\n{entrypoint_section}"
     )
 }

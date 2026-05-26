@@ -82,7 +82,7 @@ impl ReasoningPart {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct FileChangeEntry {
+pub struct FileChangeRecord {
     pub path: String,
     pub kind: FileChangeKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]

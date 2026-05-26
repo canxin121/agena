@@ -82,7 +82,7 @@ impl StorageLocator {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct StoredEntry {
+pub struct StoredRecord {
     pub namespace: String,
     pub key: String,
 }
@@ -112,7 +112,7 @@ pub trait PluginStorage: Send + Sync {
         locator: &StorageLocator,
         namespace: Option<&str>,
         prefix: Option<&str>,
-    ) -> Result<Vec<StoredEntry>, PluginStorageError>;
+    ) -> Result<Vec<StoredRecord>, PluginStorageError>;
 }
 
 pub trait PluginSecretStore: Send + Sync {
@@ -383,12 +383,12 @@ impl PluginStorage for FilePluginStorage {
         locator: &StorageLocator,
         namespace: Option<&str>,
         prefix: Option<&str>,
-    ) -> Result<Vec<StoredEntry>, PluginStorageError> {
+    ) -> Result<Vec<StoredRecord>, PluginStorageError> {
         let dir = storage_scope_dir(&self.root, locator)?;
         if !dir.exists() {
             return Ok(Vec::new());
         }
-        let mut entries: Vec<StoredEntry> = Vec::new();
+        let mut entries: Vec<StoredRecord> = Vec::new();
         for ns_entry in fs::read_dir(&dir)? {
             let ns_entry = ns_entry?;
             let path = ns_entry.path();
@@ -414,7 +414,7 @@ impl PluginStorage for FilePluginStorage {
                 {
                     continue;
                 }
-                entries.push(StoredEntry {
+                entries.push(StoredRecord {
                     namespace: stem.to_string(),
                     key: key.clone(),
                 });

@@ -12,7 +12,7 @@ pub use part::{
     AskUserToolInput, AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource,
     ClearGoalToolInput, CreateGoalToolInput, CronCreateToolInput, CronDeleteToolInput,
     CronListToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, ErrorPart, ExecutionStatus,
-    ExitPlanModeToolInput, ExitWorktreeToolInput, FileChangeEntry, FileChangeKind,
+    ExitPlanModeToolInput, ExitWorktreeToolInput, FileChangeKind, FileChangeRecord,
     FilesystemAccess, FilesystemEffect, GetGoalToolInput, GlobToolInput, GrepToolInput,
     InteractiveRequestPart, LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput,
     LspPositionToolInput, LspReferencesToolInput, MessagePart, ModelVisibleOutput, MonitorEvent,

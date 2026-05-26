@@ -25,7 +25,7 @@ pub(crate) struct ChatCompletionRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<ChatEntryDefinition>>,
+    pub tools: Option<Vec<ChatToolDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -153,7 +153,7 @@ pub(crate) struct ChatFunctionCallRequest {
 // ─── Tool definition ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
-pub(crate) struct ChatEntryDefinition {
+pub(crate) struct ChatToolDefinition {
     #[serde(rename = "type")]
     pub kind: String,
     pub function: ChatFunctionDefinition,
@@ -169,11 +169,11 @@ pub(crate) struct ChatFunctionDefinition {
 }
 
 pub(crate) fn tools_to_chat_definitions(
-    tools: &[crate::plugin::registry::PluginEntry],
-) -> Vec<ChatEntryDefinition> {
+    tools: &[crate::plugin::registry::RegisteredTool],
+) -> Vec<ChatToolDefinition> {
     tools
         .iter()
-        .map(|tool| ChatEntryDefinition {
+        .map(|tool| ChatToolDefinition {
             kind: "function".to_owned(),
             function: ChatFunctionDefinition {
                 name: tool.exposed_name.clone(),

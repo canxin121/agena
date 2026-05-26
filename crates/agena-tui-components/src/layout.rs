@@ -155,17 +155,17 @@ pub fn optional_overlay_text_height(text: &str, width: u16, min_body: u16, max_b
 }
 
 pub fn list_panel_height(
-    entry_count: usize,
-    lines_per_entry: u16,
+    item_count: usize,
+    lines_per_item: u16,
     min_body: u16,
     max_body: u16,
 ) -> u16 {
-    let natural_lines = u16::try_from(entry_count)
+    let natural_lines = u16::try_from(item_count)
         .unwrap_or(u16::MAX)
-        .saturating_mul(lines_per_entry)
+        .saturating_mul(lines_per_item)
         .max(1);
     let relaxed_min_body =
-        min_body.min(natural_lines.saturating_add(lines_per_entry.saturating_sub(1)));
+        min_body.min(natural_lines.saturating_add(lines_per_item.saturating_sub(1)));
     let lines = natural_lines.clamp(relaxed_min_body, max_body);
     lines.saturating_add(2)
 }

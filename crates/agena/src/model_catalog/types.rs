@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ModelCatalogEntrySourceKind {
+pub enum ModelCatalogSnapshotSourceKind {
     Generated,
     Cache,
 }
@@ -149,7 +149,7 @@ pub struct ModelCatalogDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ModelCatalogEntryRecord {
+pub struct CatalogModelRecord {
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
@@ -203,7 +203,7 @@ pub struct ModelCatalogEntryRecord {
     pub capabilities: ModelCapabilityPatch,
 }
 
-impl ModelCatalogEntryRecord {
+impl CatalogModelRecord {
     pub fn definition(&self) -> CatalogModelDefinition {
         CatalogModelDefinition {
             lifecycle: self.lifecycle,
@@ -254,7 +254,7 @@ pub struct ModelCatalogSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_refresh_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_successful_source: Option<ModelCatalogEntrySourceKind>,
+    pub last_successful_source: Option<ModelCatalogSnapshotSourceKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
     #[serde(default)]
@@ -266,22 +266,22 @@ impl ModelCatalogSnapshot {
         self.official.model_record()
     }
 
-    pub fn entries(&self) -> Vec<ModelCatalogEntryRecord> {
-        let mut entries = Vec::new();
+    pub fn models(&self) -> Vec<CatalogModelRecord> {
+        let mut models = Vec::new();
         let official = self.official.model_record();
 
         for (model_id, definition) in &official.models {
-            entries.push(Self::entry_record(model_id.as_str(), definition));
+            models.push(Self::model_record(model_id.as_str(), definition));
         }
-        entries.sort_by(|left, right| left.model_id.cmp(&right.model_id));
-        entries
+        models.sort_by(|left, right| left.model_id.cmp(&right.model_id));
+        models
     }
 
-    pub(super) fn entry_record(
+    pub(super) fn model_record(
         model_id: &str,
         definition: &CatalogModelDefinition,
-    ) -> ModelCatalogEntryRecord {
-        ModelCatalogEntryRecord {
+    ) -> CatalogModelRecord {
+        CatalogModelRecord {
             model_id: model_id.to_owned(),
             display_name: definition.display_name.clone(),
             origin: definition.origin.clone(),
@@ -322,7 +322,7 @@ impl ModelCatalogSnapshot {
             last_refresh_at: self.last_refresh_at,
             last_successful_source: self.last_successful_source,
             last_error: self.last_error.clone(),
-            entries: self.entries(),
+            models: self.models(),
         }
     }
 }
@@ -337,10 +337,10 @@ pub struct ModelCatalogResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_refresh_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_successful_source: Option<ModelCatalogEntrySourceKind>,
+    pub last_successful_source: Option<ModelCatalogSnapshotSourceKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
-    pub entries: Vec<ModelCatalogEntryRecord>,
+    pub models: Vec<CatalogModelRecord>,
 }
 
 impl Default for ModelCatalogConfig {
@@ -363,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_runtime_views_expose_only_official_entries() {
+    fn snapshot_runtime_views_expose_only_official_models() {
         let snapshot = ModelCatalogSnapshot {
             official: ModelCatalogDocument {
                 models: BTreeMap::from([("official-model".to_owned(), definition("Official"))]),
@@ -375,9 +375,9 @@ mod tests {
         assert!(merged.models.contains_key("official-model"));
         assert!(merged.appendable_model_ids.is_empty());
 
-        let entries = snapshot.entries();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].model_id, "official-model");
+        let models = snapshot.models();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].model_id, "official-model");
 
         let model_ids = snapshot.model_ids();
         assert_eq!(model_ids, vec!["official-model".to_owned()]);

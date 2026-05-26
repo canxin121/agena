@@ -1,7 +1,7 @@
 use super::*;
 
 pub async fn list_plugins(State(state): State<AppState>) -> Result<impl IntoResponse, ServerError> {
-    Ok(entries_json(
+    Ok(items_json(
         state
             .runtime()
             .current_snapshot()
@@ -103,7 +103,7 @@ pub async fn list_plugin_logs(
     }
     Ok(Json(PluginLogListResponse {
         plugin_id: plugin_id.clone(),
-        entries: plugin_manager.plugin_logs(
+        logs: plugin_manager.plugin_logs(
             plugin_id.as_str(),
             query.after_seq,
             query.limit.unwrap_or(50),
@@ -142,8 +142,8 @@ fn invoke_plugin_tool_for_ui(
     let snapshot = state.runtime().current_snapshot();
     let host = snapshot.plugin_manager();
     let entry = match plugin_id {
-        Some(plugin_id) => host.resolve_entry_for_plugin_tool(plugin_id, tool_name),
-        None => host.lookup_entry(tool_name),
+        Some(plugin_id) => host.resolve_registered_tool_for_plugin_tool(plugin_id, tool_name),
+        None => host.lookup_tool(tool_name),
     }
     .ok_or_else(|| {
         let prefix = plugin_id

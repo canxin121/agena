@@ -29,8 +29,35 @@ pub(crate) const MCP_PLUGIN_ID: &str = "agena.mcp";
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct McpConfig {
+    pub runtime: McpRuntimeConfig,
     /// Map of `<server_name> -> <transport spec>`.
     pub servers: BTreeMap<String, McpServerConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct McpRuntimeConfig {
+    pub token_store: McpTokenStoreConfig,
+}
+
+impl Default for McpRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            token_store: McpTokenStoreConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct McpTokenStoreConfig {
+    pub enabled: bool,
+}
+
+impl Default for McpTokenStoreConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -38,23 +65,42 @@ pub(crate) struct McpConfig {
 pub(crate) enum McpServerConfig {
     /// Spawn a child process and exchange newline-delimited JSON over
     /// its stdin/stdout (the typical MCP server style).
-    Stdio {
-        command: String,
-        #[serde(default)]
-        args: Vec<String>,
-        #[serde(default)]
-        env: BTreeMap<String, String>,
-        #[serde(default)]
-        cwd: Option<PathBuf>,
-    },
+    Stdio { process: McpStdioProcessConfig },
     /// Connect to a streamable HTTP MCP server.
     Http {
-        url: String,
-        #[serde(default)]
-        headers: BTreeMap<String, String>,
+        endpoint: McpHttpEndpointConfig,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         auth: Option<McpHttpAuthConfig>,
     },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct McpStdioProcessConfig {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct McpHttpEndpointConfig {
+    pub url: String,
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+}
+
+impl Default for McpHttpEndpointConfig {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            headers: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -73,14 +119,35 @@ pub(crate) enum McpHttpAuthConfig {
 pub(crate) fn config_from_plugins(
     plugins: &crate::plugin::PluginsConfig,
 ) -> Result<McpConfig, String> {
-    let Some(entry) = plugins.list.get(MCP_PLUGIN_ID) else {
+    let Some(configured_plugin) = plugins.list.get(MCP_PLUGIN_ID) else {
         return Ok(McpConfig::default());
     };
-    if entry.disabled() || entry.config().is_null() {
+    if configured_plugin.disabled()
+        || !matches!(
+            configured_plugin.package,
+            crate::plugin::PluginPackage::Static { .. }
+        )
+    {
         return Ok(McpConfig::default());
     }
-    serde_json::from_value(entry.config().clone())
+    if configured_plugin.config().is_null() {
+        return Ok(McpConfig::default());
+    }
+    serde_json::from_value(configured_plugin.config().clone())
         .map_err(|err| format!("plugins.list.\"{MCP_PLUGIN_ID}\".config: {err}"))
+}
+
+pub(crate) fn static_bridge_enabled(plugins: &crate::plugin::PluginsConfig) -> bool {
+    plugins
+        .list
+        .get(MCP_PLUGIN_ID)
+        .is_some_and(|configured_plugin| {
+            !configured_plugin.disabled()
+                && matches!(
+                    configured_plugin.package,
+                    crate::plugin::PluginPackage::Static { .. }
+                )
+        })
 }
 
 pub(crate) async fn build_manager(config: &McpConfig) -> Arc<McpConnectionManager> {
@@ -89,42 +156,45 @@ pub(crate) async fn build_manager(config: &McpConfig) -> Arc<McpConnectionManage
         crate::provider::CODEX_PACKAGE_VERSION,
     );
 
-    match FileTokenStore::open_default() {
-        Ok(store) => {
-            manager.set_token_store(Arc::new(store) as Arc<dyn TokenStore>);
-        }
-        Err(err) => {
-            tracing::warn!(
-                target: "agena::mcp",
-                "failed to open default token store: {err}"
-            );
+    if config.runtime.token_store.enabled {
+        match FileTokenStore::open_default() {
+            Ok(store) => {
+                manager.set_token_store(Arc::new(store) as Arc<dyn TokenStore>);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "agena::mcp",
+                    "failed to open default token store: {err}"
+                );
+            }
         }
     }
 
     let manager = Arc::new(manager);
-    for (name, entry) in &config.servers {
+    for (name, server_config) in &config.servers {
         let manager = manager.clone();
         let name = name.clone();
-        let spec = match entry {
-            McpServerConfig::Stdio {
-                command,
-                args,
-                env,
-                cwd,
-            } => ServerSpec::Stdio {
-                command: command.clone(),
-                args: args.clone(),
-                env: env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-                cwd: cwd.clone(),
+        let spec = match server_config {
+            McpServerConfig::Stdio { process } => ServerSpec::Stdio {
+                command: process.command.clone(),
+                args: process.args.clone(),
+                env: process
+                    .env
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                cwd: process.cwd.clone(),
             },
-            McpServerConfig::Http { url, headers, auth } => {
-                let Some(parsed) = parse_mcp_server_url(name.as_str(), url.as_str()) else {
+            McpServerConfig::Http { endpoint, auth } => {
+                let Some(parsed) = parse_mcp_server_url(name.as_str(), endpoint.url.as_str())
+                else {
                     continue;
                 };
                 let auth = map_mcp_auth(auth.as_ref());
                 ServerSpec::Http {
                     url: parsed,
-                    headers: headers
+                    headers: endpoint
+                        .headers
                         .iter()
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect(),
@@ -177,6 +247,105 @@ pub(crate) struct McpPlugin {
     manager: Arc<McpConnectionManager>,
 }
 
+fn mcp_config_schema() -> Value {
+    let mut schema = crate::tool::definition::json_schema_for_with_default(McpConfig::default());
+    for (pointer, title, description) in [
+        (
+            "",
+            "MCP Plugin Config",
+            "Runtime settings and named server definitions for the agena.mcp bridge.",
+        ),
+        (
+            "/properties/runtime",
+            "Runtime",
+            "Bridge-level settings that apply to all MCP servers.",
+        ),
+        (
+            "/properties/runtime/properties/token_store",
+            "Token Store",
+            "Controls whether the default MCP token store is available for bearer-from-store authentication.",
+        ),
+        (
+            "/properties/runtime/properties/token_store/properties/enabled",
+            "Enabled",
+            "Opens the default token store so MCP HTTP servers can resolve tokens at connect time.",
+        ),
+        (
+            "/properties/servers",
+            "Servers",
+            "Named MCP server definitions keyed by server identifier.",
+        ),
+        (
+            "/properties/servers/additionalProperties",
+            "Server",
+            "A single MCP server transport definition.",
+        ),
+        (
+            "/properties/servers/additionalProperties/oneOf/0",
+            "Stdio Server",
+            "Launches an MCP server as a child process and communicates over stdio.",
+        ),
+        (
+            "/properties/servers/additionalProperties/oneOf/0/properties/process",
+            "Process",
+            "Command, arguments, environment, and working directory for the stdio MCP server.",
+        ),
+        (
+            "/properties/servers/additionalProperties/oneOf/0/properties/process/properties/command",
+            "Command",
+            "Executable used to launch the stdio MCP server.",
+        ),
+        (
+            "/properties/servers/additionalProperties/oneOf/0/properties/process/properties/args",
+            "Arguments",
+            "Command-line arguments passed to the stdio MCP server.",
+        ),
+        (
+            "/properties/servers/additionalProperties/oneOf/0/properties/process/properties/env",
+            "Environment",
+            "Environment variables injected into the stdio MCP server process.",
+        ),
+        (
+            "/properties/servers/additionalProperties/oneOf/0/properties/process/properties/cwd",
+            "Working Directory",
+            "Working directory used when starting the stdio MCP server process.",
+        ),
+        (
+            "/properties/servers/additionalProperties/oneOf/1",
+            "HTTP Server",
+            "Connects to a streamable HTTP MCP server.",
+        ),
+        (
+            "/properties/servers/additionalProperties/oneOf/1/properties/endpoint",
+            "Endpoint",
+            "HTTP endpoint and headers used to connect to the MCP server.",
+        ),
+        (
+            "/properties/servers/additionalProperties/oneOf/1/properties/endpoint/properties/url",
+            "URL",
+            "Base URL for the HTTP MCP server.",
+        ),
+        (
+            "/properties/servers/additionalProperties/oneOf/1/properties/endpoint/properties/headers",
+            "Headers",
+            "Static HTTP headers attached to each request to this MCP server.",
+        ),
+        (
+            "/properties/servers/additionalProperties/oneOf/1/properties/auth",
+            "Authentication",
+            "Optional authentication strategy used for the HTTP MCP server.",
+        ),
+    ] {
+        crate::tool::definition::set_schema_metadata(
+            &mut schema,
+            pointer,
+            Some(title),
+            Some(description),
+        );
+    }
+    schema
+}
+
 impl McpPlugin {
     pub(crate) fn new(manager: Arc<McpConnectionManager>) -> Self {
         Self { manager }
@@ -223,7 +392,7 @@ impl Plugin for McpPlugin {
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
         let target = target_from_invocation(input.tool_name.as_str(), input.input)?;
         match target {
-            McpEntryTarget::Tool {
+            McpToolTarget::Tool {
                 server,
                 tool,
                 arguments,
@@ -237,13 +406,13 @@ impl Plugin for McpPlugin {
                     })?;
                 invoke_tool_output(&server, &tool, result)
             }
-            McpEntryTarget::ListResources { server } => {
+            McpToolTarget::ListResources { server } => {
                 let result = self.manager.list_resources(&server).await.map_err(|err| {
                     PluginError::new(format!("mcp:{server}:resources:list failed: {err}"))
                 })?;
                 list_resources_output(&server, result)
             }
-            McpEntryTarget::ReadResource { server } => {
+            McpToolTarget::ReadResource { server } => {
                 let result = self
                     .manager
                     .read_resource(&server.server, server.uri.as_str())
@@ -256,13 +425,13 @@ impl Plugin for McpPlugin {
                     })?;
                 read_resource_output(&server.server, server.uri.as_str(), result)
             }
-            McpEntryTarget::ListPrompts { server } => {
+            McpToolTarget::ListPrompts { server } => {
                 let result = self.manager.list_prompts(&server).await.map_err(|err| {
                     PluginError::new(format!("mcp:{server}:prompts:list failed: {err}"))
                 })?;
                 list_prompts_output(&server, result)
             }
-            McpEntryTarget::GetPrompt { server } => {
+            McpToolTarget::GetPrompt { server } => {
                 let server_name = server.server;
                 let prompt_name = server.name;
                 let result = self
@@ -296,7 +465,7 @@ impl Plugin for McpPlugin {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum McpEntryTarget {
+pub(super) enum McpToolTarget {
     Tool {
         server: String,
         tool: String,
@@ -316,7 +485,7 @@ pub(super) enum McpEntryTarget {
     },
 }
 
-impl McpEntryTarget {
+impl McpToolTarget {
     fn server_name(&self) -> &str {
         match self {
             Self::Tool { server, .. }
@@ -330,7 +499,7 @@ impl McpEntryTarget {
 
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    entry = "mcp",
+    tool = "mcp",
     description = "MCP bridge command. Use action `list_resources`, `read_resource`, `list_prompts`, `get_prompt`, or `call` to access capabilities exposed by configured MCP servers.",
     summary = "Read MCP resources or prompt templates, or call discovered MCP tools.",
     help = "Use action `list_resources`, `read_resource`, `list_prompts`, `get_prompt`, or `call`. MCP prompts here are server-provided prompt templates/messages, not Agena chat prompts or permission prompts.",
@@ -381,32 +550,32 @@ struct CallToolInput {
     arguments: Option<Value>,
 }
 
-pub(super) fn target_from_invocation(entry: &str, input: Value) -> SdkResult<McpEntryTarget> {
-    let (action, args) = McpToolInput::resolve_entry(entry, input)?;
+pub(super) fn target_from_invocation(tool: &str, input: Value) -> SdkResult<McpToolTarget> {
+    let (action, args) = McpToolInput::resolve_tool(tool, input)?;
     match action.as_str() {
         "list_resources" => {
             let args: McpServerInput = serde_json::from_value(args)?;
-            Ok(McpEntryTarget::ListResources {
+            Ok(McpToolTarget::ListResources {
                 server: args.server,
             })
         }
         "read_resource" => {
             let args: ReadResourceInput = serde_json::from_value(args)?;
-            Ok(McpEntryTarget::ReadResource { server: args })
+            Ok(McpToolTarget::ReadResource { server: args })
         }
         "list_prompts" => {
             let args: McpServerInput = serde_json::from_value(args)?;
-            Ok(McpEntryTarget::ListPrompts {
+            Ok(McpToolTarget::ListPrompts {
                 server: args.server,
             })
         }
         "get_prompt" => {
             let args: GetPromptInput = serde_json::from_value(args)?;
-            Ok(McpEntryTarget::GetPrompt { server: args })
+            Ok(McpToolTarget::GetPrompt { server: args })
         }
         "call" => {
             let args: CallToolInput = serde_json::from_value(args)?;
-            Ok(McpEntryTarget::Tool {
+            Ok(McpToolTarget::Tool {
                 server: args.server,
                 tool: args.name,
                 arguments: empty_object_to_none(args.arguments),
@@ -423,15 +592,15 @@ fn manifest_from_snapshot(
     tools: Vec<(String, ToolDescriptor)>,
     network_access: &BTreeMap<String, NetworkAccessSpec>,
 ) -> PluginManifest {
-    let mut entries = Vec::new();
+    let mut tool_decls = Vec::new();
     if !servers.is_empty() || !tools.is_empty() {
-        entries.push(mcp_decl(&servers, &tools, !network_access.is_empty()));
+        tool_decls.push(mcp_decl(&servers, &tools, !network_access.is_empty()));
     }
-    PluginManifest::builder("agena-mcp", env!("CARGO_PKG_VERSION"))
+    PluginManifest::builder(MCP_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
         .description("Agena MCP bridge exposed as hierarchical plugin commands.")
         .hooks(HookSubscription::TOOL_INVOKE)
-        .config_schema(crate::entry::definition::json_schema_for::<McpConfig>())
-        .tools(entries)
+        .config_schema(mcp_config_schema())
+        .tools(tool_decls)
         .build()
 }
 
@@ -453,7 +622,7 @@ fn mcp_decl(
 ) -> PluginToolDecl {
     let server_count = servers.len();
     let tool_count = tools.len();
-    let entry = McpToolInput::tool_decl()
+    let tool_decl = McpToolInput::tool_decl()
     .description(format!(
         "MCP command for {server_count} configured server(s) and {tool_count} discovered tool(s). Set action to list_resources, read_resource, list_prompts, get_prompt, or call. MCP prompts are server-provided prompt templates/messages, not Agena chat prompts."
     ))
@@ -462,7 +631,7 @@ fn mcp_decl(
     ))
     .help(mcp_help(servers, tools))
     .tags([ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Mcp]);
-    maybe_network_tag(entry, has_network_servers)
+    maybe_network_tag(tool_decl, has_network_servers)
 }
 
 fn mcp_help(servers: &[String], tools: &[(String, ToolDescriptor)]) -> String {
@@ -490,11 +659,11 @@ fn mcp_help(servers: &[String], tools: &[(String, ToolDescriptor)]) -> String {
     lines.join("\n")
 }
 
-fn maybe_network_tag(entry: PluginToolDecl, has_network_servers: bool) -> PluginToolDecl {
+fn maybe_network_tag(tool_decl: PluginToolDecl, has_network_servers: bool) -> PluginToolDecl {
     if has_network_servers {
-        entry.tag(ToolTag::Network)
+        tool_decl.tag(ToolTag::Network)
     } else {
-        entry
+        tool_decl
     }
 }
 
@@ -819,6 +988,7 @@ mod tests {
     };
 
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn mcp_invocation_routes_hierarchical_commands() {
@@ -833,7 +1003,7 @@ mod tests {
                 })
             )
             .expect("mcp tool target"),
-            McpEntryTarget::Tool {
+            McpToolTarget::Tool {
                 server: "docs".to_string(),
                 tool: "search".to_string(),
                 arguments: Some(serde_json::json!({ "q": "rust" })),
@@ -848,7 +1018,7 @@ mod tests {
                 })
             )
             .expect("mcp resources list target"),
-            McpEntryTarget::ListResources {
+            McpToolTarget::ListResources {
                 server: "docs".to_string()
             }
         );
@@ -862,7 +1032,7 @@ mod tests {
                 })
             )
             .expect("mcp resources read target"),
-            McpEntryTarget::ReadResource {
+            McpToolTarget::ReadResource {
                 server: ReadResourceInput {
                     server: "docs".to_string(),
                     uri: "file:///README.md".to_string(),
@@ -878,7 +1048,7 @@ mod tests {
                 })
             )
             .expect("mcp prompts list target"),
-            McpEntryTarget::ListPrompts {
+            McpToolTarget::ListPrompts {
                 server: "docs".to_string()
             }
         );
@@ -892,7 +1062,7 @@ mod tests {
                 })
             )
             .expect("mcp prompts get target"),
-            McpEntryTarget::GetPrompt {
+            McpToolTarget::GetPrompt {
                 server: GetPromptInput {
                     server: "docs".to_string(),
                     name: "summarize".to_string(),
@@ -915,6 +1085,85 @@ mod tests {
     }
 
     #[test]
+    fn nested_mcp_config_parses() {
+        let config: McpConfig = serde_json::from_value(json!({
+            "runtime": {
+                "token_store": {
+                    "enabled": false
+                }
+            },
+            "servers": {
+                "docs": {
+                    "transport": "http",
+                    "endpoint": {
+                        "url": "https://example.com/mcp",
+                        "headers": {
+                            "x-client": "agena"
+                        }
+                    },
+                    "auth": {
+                        "kind": "bearer_from_env",
+                        "env": "MCP_TOKEN"
+                    }
+                },
+                "local": {
+                    "transport": "stdio",
+                    "process": {
+                        "command": "npx",
+                        "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+                        "cwd": "/tmp/mcp"
+                    }
+                }
+            }
+        }))
+        .expect("nested mcp config should parse");
+
+        assert!(!config.runtime.token_store.enabled);
+        match config.servers.get("docs").expect("http server") {
+            McpServerConfig::Http { endpoint, auth } => {
+                assert_eq!(endpoint.url, "https://example.com/mcp");
+                assert_eq!(
+                    endpoint.headers.get("x-client").map(String::as_str),
+                    Some("agena")
+                );
+                assert!(matches!(
+                    auth,
+                    Some(McpHttpAuthConfig::BearerFromEnv { env }) if env == "MCP_TOKEN"
+                ));
+            }
+            other => panic!("unexpected config: {other:?}"),
+        }
+        match config.servers.get("local").expect("stdio server") {
+            McpServerConfig::Stdio { process } => {
+                assert_eq!(process.command, "npx");
+                assert_eq!(
+                    process
+                        .cwd
+                        .as_ref()
+                        .map(|path| path.to_string_lossy().to_string()),
+                    Some("/tmp/mcp".to_string())
+                );
+            }
+            other => panic!("unexpected config: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_mcp_http_shape_is_rejected() {
+        let err = serde_json::from_value::<McpConfig>(json!({
+            "servers": {
+                "docs": {
+                    "transport": "http",
+                    "url": "https://example.com/mcp"
+                }
+            }
+        }))
+        .expect_err("legacy mcp config should fail");
+
+        assert!(err.to_string().contains("unknown field `url`"));
+    }
+
+    #[test]
     fn mcp_manifest_includes_hierarchical_entries() {
         let manifest = manifest_from_snapshot(
             vec!["docs".to_string()],
@@ -929,9 +1178,9 @@ mod tests {
             &BTreeMap::new(),
         );
         let names = manifest
-            .entries
+            .tools
             .iter()
-            .map(|entry| entry.name.as_str())
+            .map(|tool_decl| tool_decl.name.as_str())
             .collect::<BTreeSet<_>>();
 
         assert_eq!(names, BTreeSet::from(["mcp"]));
@@ -969,10 +1218,10 @@ mod tests {
             &network_access,
         );
 
-        assert_eq!(manifest.entries.len(), 1);
-        for entry in &manifest.entries {
-            assert!(entry.network_access.is_empty());
-            assert!(entry.tags.iter().any(|tag| tag == &ToolTag::Network));
+        assert_eq!(manifest.tools.len(), 1);
+        for tool_decl in &manifest.tools {
+            assert!(tool_decl.network_access.is_empty());
+            assert!(tool_decl.tags.iter().any(|tag| tag == &ToolTag::Network));
         }
     }
 

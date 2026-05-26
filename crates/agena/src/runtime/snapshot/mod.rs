@@ -200,17 +200,12 @@ impl RuntimeSnapshot {
         let mcp_config =
             crate::plugins::provided::mcp::config_from_plugins(&resolution.config.plugins)
                 .map_err(AppError::Config)?;
-        let mcp_plugin_enabled = resolution
-            .config
-            .plugins
-            .list
-            .get(crate::tool::mcp_plugin_id())
-            .is_some_and(|entry| !entry.disabled());
-        let mcp_manager = if mcp_plugin_enabled {
-            Some(crate::plugins::provided::mcp::build_manager(&mcp_config).await)
-        } else {
-            None
-        };
+        let mcp_manager =
+            if crate::plugins::provided::mcp::static_bridge_enabled(&resolution.config.plugins) {
+                Some(crate::plugins::provided::mcp::build_manager(&mcp_config).await)
+            } else {
+                None
+            };
         let plugins = if let Some(prev) = previous.as_ref() {
             let prev_host = prev.plugin_manager();
             let prev_cfg = prev.config_resolution().config.plugins.clone();

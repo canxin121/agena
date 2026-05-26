@@ -16,7 +16,7 @@ use crate::message::{
     StructuredObject, TimeRange, ToolInvocation,
 };
 use crate::model::ModelRef;
-use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
+use crate::plugin::registry::RegisteredTool;
 use crate::provider::{
     CompletionFinishReason, CompletionRequest, CompletionStreamEvent, ProviderRegistry,
 };
@@ -950,7 +950,7 @@ struct PendingToolCall {
     arguments_json: String,
     /// History-side call identifier propagated to `RunBuffer`. Set the first
     /// time the part is materialized and reused for every subsequent argument
-    /// fragment so chunks land on the right tool entry.
+    /// fragment so chunks land on the right tool.
     history_call_id: Option<ToolCallId>,
 }
 
@@ -960,7 +960,7 @@ fn tool_execution_title(name: Option<&str>) -> String {
 
 fn placeholder_tool_invocation(
     name: Option<&str>,
-    available_tools: &[RegistryPluginEntry],
+    available_tools: &[RegisteredTool],
 ) -> ToolInvocation {
     let requested_name = name
         .map(str::trim)
@@ -983,7 +983,7 @@ fn placeholder_tool_invocation(
 pub(crate) fn parse_tool_invocation(
     name: &str,
     arguments_json: &str,
-    available_tools: &[RegistryPluginEntry],
+    available_tools: &[RegisteredTool],
 ) -> Result<ToolInvocation, AppError> {
     let trimmed_name = name.trim();
     let tool = available_tools
@@ -998,7 +998,7 @@ pub(crate) fn parse_tool_invocation(
 }
 
 fn tool_invocation_for_definition(
-    tool: &RegistryPluginEntry,
+    tool: &RegisteredTool,
     input: StructuredObject,
 ) -> ToolInvocation {
     ToolInvocation {

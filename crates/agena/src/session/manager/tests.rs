@@ -34,6 +34,26 @@ use crate::session::{ContextGovernor, ContextPolicy};
 use super::*;
 use crate::session::cache::SessionCachePolicy;
 
+const FS_TOOL: &str = "agena.fs/fs";
+const SHELL_TOOL: &str = "agena.shell/shell";
+const WEB_FETCH_TOOL: &str = "agena.web/fetch";
+const WEB_QUERY_TOOL: &str = "agena.web/query";
+const TOOLS_TOOL: &str = "agena.workflow/tools";
+const TODO_TOOL: &str = "agena.workflow/todo";
+const USER_TOOL: &str = "agena.workflow/user";
+const PLAN_TOOL: &str = "agena.workflow/plan";
+const WORKTREE_TOOL: &str = "agena.workflow/worktree";
+const TASK_TOOL: &str = "agena.workflow/task";
+const LSP_TOOL: &str = "agena.lsp/lsp";
+const WORKFLOW_TOOL: &str = "agena.workflow/workflow";
+const AGENT_TOOL: &str = "agena.workflow/agent";
+const SESSION_TOOL: &str = "agena.workflow/session";
+const GOAL_TOOL: &str = "agena.workflow/goal";
+const SETTINGS_TOOL: &str = "agena.settings/settings";
+const SCHEDULE_TOOL: &str = "agena.cron/schedule";
+const STREAM_FIXTURE_PLUGIN: &str = "streaming-fixture";
+const STREAM_FIXTURE_TOOL: &str = "streaming-fixture/stream_fixture_count";
+
 struct TempWorkspace {
     root: std::path::PathBuf,
 }
@@ -404,7 +424,7 @@ impl ModelRuntime for ScriptedProvider {
                     model: scripted_model_id(),
                     stream_key: "call_todo_1".to_string(),
                     id: Some("call_todo_1".to_string()),
-                    name: Some("todo".to_string()),
+                    name: Some(TODO_TOOL.to_string()),
                     arguments_delta: serde_json::json!({
                         "action": "write",
                         "items": TodoWriteToolInput {
@@ -451,7 +471,7 @@ impl ModelRuntime for ScriptedProvider {
                     model: scripted_model_id(),
                     stream_key: "call_web_1".to_string(),
                     id: Some("call_web_1".to_string()),
-                    name: Some("web".to_string()),
+                    name: Some("agena.web/unsupported".to_string()),
                     arguments_delta: serde_json::json!({}).to_string(),
                 }),
                 Ok(CompletionStreamEvent::Completed {
@@ -488,7 +508,7 @@ impl ModelRuntime for ScriptedProvider {
                     model: scripted_model_id(),
                     stream_key: "call_stream_tool_1".to_string(),
                     id: Some("call_stream_tool_1".to_string()),
-                    name: Some("stream_fixture_count".to_string()),
+                    name: Some(STREAM_FIXTURE_TOOL.to_string()),
                     arguments_delta: serde_json::json!({ "n": 5 }).to_string(),
                 }),
                 Ok(CompletionStreamEvent::Completed {
@@ -525,7 +545,7 @@ impl ModelRuntime for ScriptedProvider {
                     model: scripted_model_id(),
                     stream_key: "call_apply_patch_1".to_string(),
                     id: Some("call_apply_patch_1".to_string()),
-                    name: Some("fs".to_string()),
+                    name: Some(FS_TOOL.to_string()),
                     arguments_delta: serde_json::json!({
                         "action": "apply_patch",
                         "patch": ApplyPatchToolInput {
@@ -550,7 +570,7 @@ impl ModelRuntime for ScriptedProvider {
                     model: scripted_model_id(),
                     stream_key: "call_ask_user_1".to_string(),
                     id: Some("call_ask_user_1".to_string()),
-                    name: Some("user".to_string()),
+                    name: Some(USER_TOOL.to_string()),
                     arguments_delta: serde_json::json!({
                         "action": "request_input",
                         "questions": AskUserToolInput {
@@ -611,7 +631,7 @@ impl ModelRuntime for ScriptedProvider {
                         model: scripted_model_id(),
                         stream_key: "call_apply_patch_1".to_string(),
                         id: Some("call_apply_patch_1".to_string()),
-                        name: Some("fs".to_string()),
+                        name: Some(FS_TOOL.to_string()),
                         arguments_delta: serde_json::json!({
                             "action": "apply_patch",
                             "patch": ApplyPatchToolInput {
@@ -792,7 +812,7 @@ async fn build_session_start_plugin_host(
     let mut list = BTreeMap::new();
     list.insert(
         "fixture".to_string(),
-        crate::plugin::PluginEntry::static_default(),
+        crate::plugin::ConfiguredPlugin::static_default(),
     );
     let config = crate::plugin::PluginsConfig {
         host: Default::default(),
@@ -817,7 +837,7 @@ async fn build_session_end_plugin_host(
     let mut list = BTreeMap::new();
     list.insert(
         "fixture".to_string(),
-        crate::plugin::PluginEntry::static_default(),
+        crate::plugin::ConfiguredPlugin::static_default(),
     );
     let config = crate::plugin::PluginsConfig {
         host: Default::default(),
@@ -844,8 +864,8 @@ async fn build_streaming_plugin_host(
     let finish = Arc::new(tokio::sync::Semaphore::new(0));
     let mut list = BTreeMap::new();
     list.insert(
-        "fixture".to_string(),
-        crate::plugin::PluginEntry::static_default(),
+        STREAM_FIXTURE_PLUGIN.to_string(),
+        crate::plugin::ConfiguredPlugin::static_default(),
     );
     let config = crate::plugin::PluginsConfig {
         host: Default::default(),
@@ -855,7 +875,7 @@ async fn build_streaming_plugin_host(
     let host = crate::plugin::PluginHostBuilder::new(workspace_root, "test")
         .with_config(config)
         .register_static(
-            "fixture",
+            STREAM_FIXTURE_PLUGIN,
             StreamingFixturePlugin {
                 chunk_sent: Arc::clone(&chunk_sent),
                 finish: Arc::clone(&finish),
@@ -1991,7 +2011,7 @@ fn blocked_permission_survives_restart_and_reply_continues() {
         let workspace = TempWorkspace::new();
         let db = open_temp_database(&workspace.root, "permission-resume.db").await;
         let tool_policy =
-            ToolPermissionPolicy::allow_all().with_tool_mode("todo", PermissionMode::Ask);
+            ToolPermissionPolicy::allow_all().with_tool_mode(TODO_TOOL, PermissionMode::Ask);
         let first = build_manager_with_provider_on_db(
             &workspace.root,
             db.clone(),
@@ -2081,7 +2101,7 @@ fn duplicate_permission_reply_is_idempotent() {
             &workspace.root,
             db,
             PermissionPolicy::allow_all(),
-            ToolPermissionPolicy::allow_all().with_tool_mode("todo", PermissionMode::Ask),
+            ToolPermissionPolicy::allow_all().with_tool_mode(TODO_TOOL, PermissionMode::Ask),
             SessionManagerConfig::default(),
             ContextPolicy::default(),
             ScriptedProvider,
@@ -2176,7 +2196,7 @@ fn duplicate_user_input_reply_is_idempotent() {
             .await
             .expect("message ids should reserve");
         let invocation = ToolInvocation::new(
-            "user",
+            USER_TOOL,
             crate::message::StructuredObject::try_from(serde_json::json!({
                 "action": "request_input",
                 "questions": [],
@@ -2340,7 +2360,7 @@ fn replied_host_user_input_survives_restart_and_restores_answer_from_history() {
             MessageStatus::Pending,
             vec![PartContent::Operation(OperationPart::pending(
                 1,
-                ToolInvocation::new("todo", todo_input),
+                ToolInvocation::new(TODO_TOOL, todo_input),
                 "todo",
                 TimeRange::default(),
             ))],
@@ -2447,7 +2467,7 @@ fn concurrent_permission_replies_for_distinct_requests_are_serialized() {
             &workspace.root,
             db,
             PermissionPolicy::allow_all(),
-            ToolPermissionPolicy::allow_all().with_tool_mode("todo", PermissionMode::Ask),
+            ToolPermissionPolicy::allow_all().with_tool_mode(TODO_TOOL, PermissionMode::Ask),
             SessionManagerConfig::default(),
             ContextPolicy::default(),
             ScriptedProvider,
@@ -2496,13 +2516,13 @@ fn concurrent_permission_replies_for_distinct_requests_are_serialized() {
             vec![
                 PartContent::Operation(OperationPart::pending(
                     1,
-                    ToolInvocation::new("todo", todo_input_one),
+                    ToolInvocation::new(TODO_TOOL, todo_input_one),
                     "todo",
                     TimeRange::default(),
                 )),
                 PartContent::Operation(OperationPart::pending(
                     2,
-                    ToolInvocation::new("todo", todo_input_two),
+                    ToolInvocation::new(TODO_TOOL, todo_input_two),
                     "todo",
                     TimeRange::default(),
                 )),
@@ -2533,10 +2553,10 @@ fn concurrent_permission_replies_for_distinct_requests_are_serialized() {
             .await
             .expect("manual pending tools should persist through history");
         let pending_action = PermissionAction::Tool {
-            tool_name: "todo".to_string(),
+            tool_name: TODO_TOOL.to_string(),
             qualifier: None,
         };
-        let pending_reason = "tool 'todo' requires confirmation by policy".to_string();
+        let pending_reason = format!("tool '{TODO_TOOL}' requires confirmation by policy");
         let pending_trace = vec![crate::permission::DecisionTraceStep {
             source_kind: crate::permission::PolicySourceKind::StaticPolicy,
             summary: pending_reason.clone(),
@@ -3745,7 +3765,7 @@ mod runtime_builtin_tool_tests {
                 .lsp_registry()
                 .ok_or_else(|| crate::plugin::PluginError::new("lsp registry not configured"))?;
             let pairs = registry.collect_diagnostics().await;
-            let mut entries = Vec::new();
+            let mut diagnostics_out = Vec::new();
             for (uri, diagnostics) in pairs {
                 if let Some(filter) = req.uri.as_ref()
                     && filter != &uri
@@ -3753,7 +3773,7 @@ mod runtime_builtin_tool_tests {
                     continue;
                 }
                 for diagnostic in diagnostics {
-                    entries.push(HostLspDiagnostic {
+                    diagnostics_out.push(HostLspDiagnostic {
                         uri: uri.clone(),
                         severity: diagnostic
                             .severity
@@ -3779,7 +3799,9 @@ mod runtime_builtin_tool_tests {
                     });
                 }
             }
-            Ok(HostLspListDiagnosticsResponse { entries })
+            Ok(HostLspListDiagnosticsResponse {
+                diagnostics: diagnostics_out,
+            })
         }
 
         async fn enter_plan_mode(
@@ -4017,7 +4039,17 @@ mod runtime_builtin_tool_tests {
         std::fs::write(
             root.join("config.json"),
             serde_json::to_string_pretty(&serde_json::json!({
-                "default": { "agent": "build" }
+                "agents": {
+                    "default": "build",
+                    "build": {
+                        "description": "Build agent",
+                        "prompt": "Run build checks."
+                    },
+                    "planner": {
+                        "description": "Planning agent",
+                        "prompt": "Plan the next steps."
+                    }
+                }
             }))
             .expect("serialize config"),
         )
@@ -4468,10 +4500,10 @@ while True:
             let events = if completed_or_failed_operation_count(&request, &["call_tools_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_tools_1",
-                    "tools",
+                    TOOLS_TOOL,
                     serde_json::json!({
                         "action": "help",
-                        "tool": "plan",
+                        "tool": PLAN_TOOL,
                         "include_schema": false
                     })
                     .to_string(),
@@ -4479,13 +4511,13 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_plan_enter_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_plan_enter_1",
-                    "plan",
+                    PLAN_TOOL,
                     serde_json::json!({ "action": "enter" }).to_string(),
                 )])
             } else if completed_or_failed_operation_count(&request, &["call_plan_glob_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_plan_glob_1",
-                    "fs",
+                    FS_TOOL,
                     serde_json::json!({
                         "action": "glob",
                         "pattern": "*.md",
@@ -4510,7 +4542,7 @@ while True:
                     });
                 scripted_tool_call_events(vec![(
                     "call_plan_patch_1",
-                    "fs",
+                    FS_TOOL,
                     serde_json::json!({
                         "action": "apply_patch",
                         "patch": format!(
@@ -4522,14 +4554,14 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_plan_exit_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_plan_exit_1",
-                    "plan",
+                    PLAN_TOOL,
                     serde_json::json!({ "action": "exit" }).to_string(),
                 )])
             } else if completed_or_failed_operation_count(&request, &["call_worktree_enter_1"]) == 0
             {
                 scripted_tool_call_events(vec![(
                     "call_worktree_enter_1",
-                    "worktree",
+                    WORKTREE_TOOL,
                     serde_json::json!({
                         "action": "enter",
                         "target": "new",
@@ -4540,7 +4572,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_fs_patch_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_fs_patch_1",
-                    "fs",
+                    FS_TOOL,
                     serde_json::json!({
                         "action": "apply_patch",
                         "patch": "*** Begin Patch\n*** Update File: notes.txt\n@@\n-base line\n+base line\n+branch-only change\n*** End Patch"
@@ -4550,7 +4582,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_fs_glob_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_fs_glob_1",
-                    "fs",
+                    FS_TOOL,
                     serde_json::json!({
                         "action": "glob",
                         "pattern": "*.txt"
@@ -4560,7 +4592,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_fs_grep_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_fs_grep_1",
-                    "fs",
+                    FS_TOOL,
                     serde_json::json!({
                         "action": "grep",
                         "pattern": "branch-only",
@@ -4572,7 +4604,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_nb_edit_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_nb_edit_1",
-                    "fs",
+                    FS_TOOL,
                     serde_json::json!({
                         "action": "notebook_edit",
                         "notebook_path": "demo.ipynb",
@@ -4585,7 +4617,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_fs_read_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_fs_read_1",
-                    "fs",
+                    FS_TOOL,
                     serde_json::json!({
                         "action": "read",
                         "file_path": "notes.txt"
@@ -4596,7 +4628,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_worktree_exit_1",
-                    "worktree",
+                    WORKTREE_TOOL,
                     serde_json::json!({
                         "action": "exit",
                         "exit_action": "remove",
@@ -4756,10 +4788,10 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_tools_shell_1",
-                    "tools",
+                    TOOLS_TOOL,
                     serde_json::json!({
                         "action": "help",
-                        "tool": "shell",
+                        "tool": SHELL_TOOL,
                         "include_schema": false
                     })
                     .to_string(),
@@ -4767,7 +4799,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_shell_exec_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_shell_exec_1",
-                    "shell",
+                    SHELL_TOOL,
                     serde_json::json!({
                         "action": "exec",
                         "shell": "bash",
@@ -4785,7 +4817,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_shell_powershell_1",
-                    "shell",
+                    SHELL_TOOL,
                     serde_json::json!({
                         "action": "exec",
                         "shell": "powershell",
@@ -4800,7 +4832,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_monitor_start_1",
-                    "shell",
+                    SHELL_TOOL,
                     serde_json::json!({
                         "action": "monitor_start",
                         "command": monitor_command,
@@ -4816,7 +4848,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_monitor_list_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_monitor_list_1",
-                    "shell",
+                    SHELL_TOOL,
                     serde_json::json!({
                         "action": "monitor_list"
                     })
@@ -4835,7 +4867,7 @@ while True:
                     });
                 scripted_tool_call_events(vec![(
                     "call_monitor_read_1",
-                    "shell",
+                    SHELL_TOOL,
                     serde_json::json!({
                         "action": "monitor_read",
                         "monitor_id": monitor_id,
@@ -4857,7 +4889,7 @@ while True:
                     });
                 scripted_tool_call_events(vec![(
                     "call_monitor_stop_1",
-                    "shell",
+                    SHELL_TOOL,
                     serde_json::json!({
                         "action": "monitor_stop",
                         "monitor_id": monitor_id
@@ -5043,9 +5075,8 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_web_fetch_1",
-                    "web",
+                    WEB_FETCH_TOOL,
                     serde_json::json!({
-                        "action": "fetch",
                         "url": self.fetch_url
                     })
                     .to_string(),
@@ -5053,9 +5084,8 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_web_fetch_2"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_web_fetch_2",
-                    "web",
+                    WEB_FETCH_TOOL,
                     serde_json::json!({
-                        "action": "fetch",
                         "url": self.fetch_url
                     })
                     .to_string(),
@@ -5063,9 +5093,8 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_web_search_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_web_search_1",
-                    "web",
+                    WEB_QUERY_TOOL,
                     serde_json::json!({
-                        "action": "query",
                         "query": "runtime web",
                         "allowed_domains": ["127.0.0.1"],
                         "max_results": 5
@@ -5247,10 +5276,10 @@ while True:
                     {
                         scripted_tool_call_events(vec![(
                             "call_subtask_fs_read_1",
-                            "fs",
+                            FS_TOOL,
                             serde_json::json!({
                                 "action": "read",
-                                "path": "SUBTASK.md"
+                                "file_path": "SUBTASK.md"
                             })
                             .to_string(),
                         )])
@@ -5264,10 +5293,10 @@ while True:
                 if completed_or_failed_operation_count(&request, &["call_tools_task_1"]) == 0 {
                     scripted_tool_call_events(vec![(
                         "call_tools_task_1",
-                        "tools",
+                        TOOLS_TOOL,
                         serde_json::json!({
                             "action": "help",
-                            "tool": "task",
+                            "tool": TASK_TOOL,
                             "include_schema": false
                         })
                         .to_string(),
@@ -5275,7 +5304,7 @@ while True:
                 } else if completed_or_failed_operation_count(&request, &["call_task_run_1"]) == 0 {
                     scripted_tool_call_events(vec![(
                         "call_task_run_1",
-                        "task",
+                        TASK_TOOL,
                         serde_json::json!({
                             "action": "run",
                             "description": "inspect delegated note",
@@ -5440,7 +5469,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_lsp_servers_1",
-                    "lsp",
+                    LSP_TOOL,
                     serde_json::json!({
                         "action": "servers"
                     })
@@ -5450,7 +5479,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_lsp_definition_1",
-                    "lsp",
+                    LSP_TOOL,
                     serde_json::json!({
                         "action": "definition",
                         "file_path": "src/lib.rs",
@@ -5463,7 +5492,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_lsp_references_1",
-                    "lsp",
+                    LSP_TOOL,
                     serde_json::json!({
                         "action": "references",
                         "file_path": "src/lib.rs",
@@ -5476,7 +5505,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_lsp_hover_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_lsp_hover_1",
-                    "lsp",
+                    LSP_TOOL,
                     serde_json::json!({
                         "action": "hover",
                         "file_path": "src/lib.rs",
@@ -5490,7 +5519,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_lsp_diagnostics_1",
-                    "lsp",
+                    LSP_TOOL,
                     serde_json::json!({
                         "action": "diagnostics",
                         "file_path": "src/lib.rs"
@@ -5676,7 +5705,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_workflow_review_1",
-                    "workflow",
+                    WORKFLOW_TOOL,
                     serde_json::json!({
                         "action": "review",
                         "args": "auth handlers"
@@ -5687,7 +5716,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_agent_restore_1",
-                    "agent",
+                    AGENT_TOOL,
                     serde_json::json!({
                         "action": "restore"
                     })
@@ -5697,7 +5726,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_session_rename_1",
-                    "session",
+                    SESSION_TOOL,
                     serde_json::json!({
                         "action": "rename",
                         "title": "runtime-mutation-renamed"
@@ -5707,7 +5736,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_goal_create_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_goal_create_1",
-                    "goal",
+                    GOAL_TOOL,
                     serde_json::json!({
                         "action": "create",
                         "objective": "Close runtime mutation coverage"
@@ -5718,7 +5747,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_goal_complete_1",
-                    "goal",
+                    GOAL_TOOL,
                     serde_json::json!({
                         "action": "complete"
                     })
@@ -5727,7 +5756,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_goal_clear_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_goal_clear_1",
-                    "goal",
+                    GOAL_TOOL,
                     serde_json::json!({
                         "action": "clear"
                     })
@@ -5740,7 +5769,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_workflow_security_review_1",
-                    "workflow",
+                    WORKFLOW_TOOL,
                     serde_json::json!({
                         "action": "security_review",
                         "args": "auth layer"
@@ -5751,7 +5780,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_agent_restore_2",
-                    "agent",
+                    AGENT_TOOL,
                     serde_json::json!({
                         "action": "restore"
                     })
@@ -5760,7 +5789,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_agent_switch_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_agent_switch_1",
-                    "agent",
+                    AGENT_TOOL,
                     serde_json::json!({
                         "action": "switch",
                         "agent": "planner",
@@ -5772,7 +5801,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_agent_restore_3",
-                    "agent",
+                    AGENT_TOOL,
                     serde_json::json!({
                         "action": "restore"
                     })
@@ -6109,7 +6138,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_workflow_init_1",
-                    "workflow",
+                    WORKFLOW_TOOL,
                     serde_json::json!({
                         "action": "init",
                         "args": "backend service"
@@ -6119,10 +6148,10 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_tools_help_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_tools_help_1",
-                    "tools",
+                    TOOLS_TOOL,
                     serde_json::json!({
                         "action": "help",
-                        "tool": "settings",
+                        "tool": SETTINGS_TOOL,
                         "include_schema": true
                     })
                     .to_string(),
@@ -6130,7 +6159,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_session_get_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_session_get_1",
-                    "session",
+                    SESSION_TOOL,
                     serde_json::json!({
                         "action": "get"
                     })
@@ -6139,7 +6168,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_goal_get_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_goal_get_1",
-                    "goal",
+                    GOAL_TOOL,
                     serde_json::json!({
                         "action": "get"
                     })
@@ -6148,7 +6177,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_user_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_user_1",
-                    "user",
+                    USER_TOOL,
                     serde_json::json!({
                         "action": "request_input",
                         "questions": [{
@@ -6174,7 +6203,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_todo_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_todo_1",
-                    "todo",
+                    TODO_TOOL,
                     serde_json::json!({
                         "action": "write",
                         "items": [
@@ -6195,7 +6224,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_settings_get_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_settings_get_1",
-                    "settings",
+                    SETTINGS_TOOL,
                     serde_json::json!({
                         "action": "get",
                         "path": "agents.default",
@@ -6206,7 +6235,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_settings_set_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_settings_set_1",
-                    "settings",
+                    SETTINGS_TOOL,
                     serde_json::json!({
                         "action": "set",
                         "path": "agents.default",
@@ -6220,7 +6249,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_settings_validate_1",
-                    "settings",
+                    SETTINGS_TOOL,
                     serde_json::json!({
                         "action": "validate"
                     })
@@ -6230,7 +6259,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_schedule_list_1",
-                    "schedule",
+                    SCHEDULE_TOOL,
                     serde_json::json!({
                         "action": "list"
                     })
@@ -6241,7 +6270,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_schedule_wakeup_1",
-                    "schedule",
+                    SCHEDULE_TOOL,
                     serde_json::json!({
                         "action": "wakeup",
                         "delay_seconds": 60,
@@ -6255,7 +6284,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_schedule_create_1",
-                    "schedule",
+                    SCHEDULE_TOOL,
                     serde_json::json!({
                         "action": "create",
                         "expression": "0 0 * * * *",
@@ -6268,7 +6297,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_schedule_list_2",
-                    "schedule",
+                    SCHEDULE_TOOL,
                     serde_json::json!({
                         "action": "list"
                     })
@@ -6289,7 +6318,7 @@ while True:
                     });
                 scripted_tool_call_events(vec![(
                     "call_schedule_delete_1",
-                    "schedule",
+                    SCHEDULE_TOOL,
                     serde_json::json!({
                         "action": "delete",
                         "id": schedule_id
@@ -6403,7 +6432,7 @@ while True:
                 })
                 .expect("tools help output should exist");
             assert!(
-                tools_help_text.contains("Tool: settings"),
+                tools_help_text.contains("Tool: agena.settings/settings"),
                 "tools help should describe the settings tool"
             );
             assert!(
@@ -6458,7 +6487,7 @@ while True:
             .expect("config.json should stay valid");
             assert_eq!(
                 config_json
-                    .pointer("/default/agent")
+                    .pointer("/agents/default")
                     .and_then(serde_json::Value::as_str),
                 Some("planner"),
                 "settings set should persist the updated config file"

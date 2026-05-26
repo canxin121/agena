@@ -89,7 +89,7 @@ pub struct ConfigSettingsReadResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ConfigSettingsListEntry {
+pub struct ConfigSettingsListItem {
     pub path: String,
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -103,7 +103,7 @@ pub struct ConfigSettingsListResponse {
     pub source: ConfigSettingsSource,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-    pub entries: Vec<ConfigSettingsListEntry>,
+    pub items: Vec<ConfigSettingsListItem>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -255,7 +255,7 @@ pub fn list_json_path(
     value: &JsonValue,
     path: Option<&str>,
     recursive: bool,
-) -> Result<Vec<ConfigSettingsListEntry>, ConfigError> {
+) -> Result<Vec<ConfigSettingsListItem>, ConfigError> {
     let base = path.map(str::trim).filter(|path| !path.is_empty());
     let target = get_json_path(value, base)?;
     let base_segments = match base {
@@ -268,7 +268,7 @@ pub fn list_json_path(
 }
 
 fn collect_list_entries(
-    entries: &mut Vec<ConfigSettingsListEntry>,
+    entries: &mut Vec<ConfigSettingsListItem>,
     base: &[String],
     value: &JsonValue,
     recursive: bool,
@@ -278,7 +278,7 @@ fn collect_list_entries(
             for (key, child) in object {
                 let mut child_path = base.to_vec();
                 child_path.push(key.clone());
-                entries.push(ConfigSettingsListEntry {
+                entries.push(ConfigSettingsListItem {
                     path: format_settings_path(&child_path),
                     kind: json_kind(child).to_string(),
                     value: scalar_json_value(child),
@@ -292,7 +292,7 @@ fn collect_list_entries(
             for (index, child) in items.iter().enumerate() {
                 let mut child_path = base.to_vec();
                 child_path.push(index.to_string());
-                entries.push(ConfigSettingsListEntry {
+                entries.push(ConfigSettingsListItem {
                     path: format_settings_path(&child_path),
                     kind: json_kind(child).to_string(),
                     value: scalar_json_value(child),
@@ -303,7 +303,7 @@ fn collect_list_entries(
             }
         }
         other => {
-            entries.push(ConfigSettingsListEntry {
+            entries.push(ConfigSettingsListItem {
                 path: format_settings_path(base),
                 kind: json_kind(other).to_string(),
                 value: Some(other.clone()),
@@ -369,13 +369,13 @@ pub fn list_file_settings(
 ) -> Result<ConfigSettingsListResponse, ConfigError> {
     let config_path = config_path.into();
     let (config_found, file_value) = read_or_create_doc(&config_path)?;
-    let entries = list_json_path(&file_value, input.target.path.as_deref(), input.recursive)?;
+    let items = list_json_path(&file_value, input.target.path.as_deref(), input.recursive)?;
     Ok(ConfigSettingsListResponse {
         config_path,
         config_found,
         source: ConfigSettingsSource::File,
         path: input.target.path,
-        entries,
+        items,
     })
 }
 
@@ -391,12 +391,6 @@ pub fn set_file_setting_with_env(
     input: ConfigSettingsSetInput,
     env: &dyn ConfigEnvironment,
 ) -> Result<ConfigSettingsEditResponse, ConfigError> {
-    if input.value.is_null() {
-        return Err(ConfigError::Validation(
-            "settings_set cannot write null; use settings_delete or settings_patch null entries"
-                .to_owned(),
-        ));
-    }
     let config_path = config_path.into();
     let segments = required_path_segments(&input.path)?;
     let (config_found, mut doc) = read_or_create_doc(&config_path)?;

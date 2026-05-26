@@ -349,7 +349,7 @@ Settings API 操作当前 runtime 使用的 `config.json`。读接口可以读 r
 | Method | Path                         | 说明                                                                      |
 | ------ | ---------------------------- | ------------------------------------------------------------------------- |
 | GET    | `/api/v1/settings`           | 读取一个 setting。query: `path`、`source=effective|file`                   |
-| GET    | `/api/v1/settings/entries`   | 列出 setting entries。query: `path`、`source=effective|file`、`recursive` |
+| GET    | `/api/v1/settings/entries`   | 列出 setting 条目。query: `path`、`source=effective|file`、`recursive` |
 | PUT    | `/api/v1/settings`           | 设置一个 JSON path 的值                                                   |
 | PATCH  | `/api/v1/settings`           | 深度合并一个 JSON object 到目标 JSON object；`null` 表示删除 key          |
 | DELETE | `/api/v1/settings`           | 删除一个 JSON path。query: `path`、`dry_run`、`validate`、`reload`         |
@@ -466,7 +466,7 @@ Path 使用点分语法。带点的 object key 用引号包起来，例如 `plug
 }
 ```
 
-`POST /api/v1/plugins/{plugin_id}/ui/actions/{action_id}` 执行 manifest 中 `ui.studio.commands`、`ui.studio.controls` 或 `ui.studio.views[*].controls` 对应的 action。请求 body 可传：
+`POST /api/v1/plugins/{plugin_id}/ui/actions/{action_id}` 执行 manifest 顶层 `commands`、`ui.studio.controls` 或 `ui.studio.views[*].controls` 对应的 action。请求 body 可传：
 
 ```json
 {
@@ -717,7 +717,7 @@ Model catalog list response:
 }
 ```
 
-`items` 只包含官方 catalog 条目。Model catalog 不再保存 default model；默认 provider/adapter/model/agent 应写入配置文件的 `[execution]`。官方 catalog 主要来自公开 online sources，再叠加 live provider model lists；catalog 会把 thinking 和 speed modes 保留在同一个 model entry 下，不会展开成新的模型 id。
+`items` 只包含官方 catalog 条目。Model catalog 不再保存 default model；默认 provider/adapter/model/agent 应写入配置文件的 `[execution]`。官方 catalog 主要来自公开 online sources，再叠加 live provider model lists；catalog 会把 thinking 和 speed modes 保留在同一个 model record 下，不会展开成新的模型 id。
 
 ### Workspaces
 

@@ -315,11 +315,11 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
         // Update config
         let config_path = req.config_path.clone();
         let mut document = read_or_create_doc(&config_path)?;
-        let already_present = plugin_entry_exists(&document, &plugin.id);
+        let already_present = plugin_config_exists(&document, &plugin.id);
         if already_present && !req.force {
             return Err(MarketplaceError::AlreadyInstalled(plugin.id.clone()));
         }
-        write_plugin_entry(&mut document, &plugin.id, &version, &artifact_path)?;
+        write_plugin_config(&mut document, &plugin.id, &version, &artifact_path)?;
         if !req.dry_run {
             write_config_doc(&config_path, &document)?;
         }
@@ -392,7 +392,7 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
             .remove(plugin_id)
             .ok_or_else(|| MarketplaceError::Config(format!("`{plugin_id}` is not installed")))?;
         let mut document = read_or_create_doc(&record.config_path)?;
-        remove_plugin_entry(&mut document, plugin_id);
+        remove_plugin_config(&mut document, plugin_id);
         write_config_doc(&record.config_path, &document)?;
         let plugin_dir = self.cache.plugin_dir(plugin_id, &record.version);
         if plugin_dir.exists() {
@@ -835,7 +835,7 @@ fn ensure_plugins_list_object(
     ensure_object(list, "plugins.list")
 }
 
-fn plugin_entry_exists(doc: &JsonValue, plugin_id: &str) -> bool {
+fn plugin_config_exists(doc: &JsonValue, plugin_id: &str) -> bool {
     doc.get("plugins")
         .and_then(JsonValue::as_object)
         .and_then(|plugins| plugins.get("list"))
@@ -844,7 +844,7 @@ fn plugin_entry_exists(doc: &JsonValue, plugin_id: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn write_plugin_entry(
+fn write_plugin_config(
     doc: &mut JsonValue,
     plugin_id: &str,
     version: &PluginVersion,
@@ -901,16 +901,16 @@ fn write_plugin_entry(
             package.insert("url".to_string(), JsonValue::from(version.url.as_str()));
         }
     }
-    let mut entry = JsonMap::new();
-    entry.insert("package".to_string(), JsonValue::Object(package));
+    let mut plugin_config = JsonMap::new();
+    plugin_config.insert("package".to_string(), JsonValue::Object(package));
     if !version.config.is_null() {
-        entry.insert("config".to_string(), version.config.clone());
+        plugin_config.insert("config".to_string(), version.config.clone());
     }
-    list.insert(plugin_id.to_string(), JsonValue::Object(entry));
+    list.insert(plugin_id.to_string(), JsonValue::Object(plugin_config));
     Ok(())
 }
 
-fn remove_plugin_entry(doc: &mut JsonValue, plugin_id: &str) {
+fn remove_plugin_config(doc: &mut JsonValue, plugin_id: &str) {
     if let Some(plugins) = doc.get_mut("plugins").and_then(JsonValue::as_object_mut)
         && let Some(list) = plugins.get_mut("list").and_then(JsonValue::as_object_mut)
     {
@@ -946,28 +946,31 @@ mod tests {
     }
 
     #[test]
-    fn write_plugin_entry_uses_json_package_and_config() {
+    fn write_plugin_config_uses_json_package_and_config() {
         let mut doc = serde_json::json!({});
-        write_plugin_entry(
+        write_plugin_config(
             &mut doc,
             "echo",
             &stdio_version(),
             Path::new("/tmp/echo-plugin"),
         )
-        .expect("plugin entry should be written");
+        .expect("plugin config should be written");
 
-        let entry = &doc["plugins"]["list"]["echo"];
-        assert_eq!(entry["package"]["kind"], "stdio");
-        assert_eq!(entry["package"]["command"], "node");
-        assert_eq!(entry["package"]["args"], serde_json::json!(["./echo.js"]));
-        assert_eq!(entry["package"]["env"]["LOG_LEVEL"], "debug");
-        assert_eq!(entry["package"]["sha256"], "abc123");
-        assert_eq!(entry["config"]["uppercase"], true);
-        assert!(entry["config"]["nested"]["nullable"].is_null());
+        let plugin_config = &doc["plugins"]["list"]["echo"];
+        assert_eq!(plugin_config["package"]["kind"], "stdio");
+        assert_eq!(plugin_config["package"]["command"], "node");
+        assert_eq!(
+            plugin_config["package"]["args"],
+            serde_json::json!(["./echo.js"])
+        );
+        assert_eq!(plugin_config["package"]["env"]["LOG_LEVEL"], "debug");
+        assert_eq!(plugin_config["package"]["sha256"], "abc123");
+        assert_eq!(plugin_config["config"]["uppercase"], true);
+        assert!(plugin_config["config"]["nested"]["nullable"].is_null());
     }
 
     #[test]
-    fn remove_plugin_entry_removes_only_target_entry() {
+    fn remove_plugin_config_removes_only_target_plugin() {
         let mut doc = serde_json::json!({
             "plugins": {
                 "list": {
@@ -977,10 +980,10 @@ mod tests {
             }
         });
 
-        remove_plugin_entry(&mut doc, "echo");
+        remove_plugin_config(&mut doc, "echo");
 
-        assert!(!plugin_entry_exists(&doc, "echo"));
-        assert!(plugin_entry_exists(&doc, "other"));
+        assert!(!plugin_config_exists(&doc, "echo"));
+        assert!(plugin_config_exists(&doc, "other"));
     }
 }
 

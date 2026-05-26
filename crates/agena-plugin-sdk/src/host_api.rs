@@ -33,7 +33,7 @@ pub trait HostClient: Send + Sync + 'static {
 
     /// Evaluate the current path permission policy for a plugin-internal path
     /// access. The host returns `Prompt` when the same access would require an
-    /// interactive permission request in the normal entry flow; plugins should
+    /// interactive permission request in the normal tool flow; plugins should
     /// only proceed on `Allow`.
     async fn check_path_permission(
         &self,
@@ -172,33 +172,27 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Dynamic tool registry — register a new entry owned by this plugin.
-    async fn entry_register(
+    /// Dynamic tool registry — register a new tool owned by this plugin.
+    async fn register_tool(
         &self,
-        _req: HostEntryRegisterRequest,
-    ) -> Result<HostEntryMutationResponse> {
+        _req: HostToolRegisterRequest,
+    ) -> Result<HostToolMutationResponse> {
         Err(unavailable())
     }
 
-    /// Dynamic tool registry — replace the decl of an existing entry owned by
-    /// this plugin (matched by `entry.name`).
-    async fn entry_update(
-        &self,
-        _req: HostEntryUpdateRequest,
-    ) -> Result<HostEntryMutationResponse> {
+    /// Dynamic tool registry — replace the decl of an existing tool owned by
+    /// this plugin (matched by `tool.name`).
+    async fn update_tool(&self, _req: HostToolUpdateRequest) -> Result<HostToolMutationResponse> {
         Err(unavailable())
     }
 
-    /// Dynamic tool registry — remove an entry owned by this plugin.
-    async fn entry_remove(
-        &self,
-        _req: HostEntryRemoveRequest,
-    ) -> Result<HostEntryMutationResponse> {
+    /// Dynamic tool registry — remove a tool owned by this plugin.
+    async fn remove_tool(&self, _req: HostToolRemoveRequest) -> Result<HostToolMutationResponse> {
         Err(unavailable())
     }
 
-    /// Dynamic tool registry — list all entries known to the plugin host.
-    async fn entry_list(&self) -> Result<HostEntryListResponse> {
+    /// Dynamic tool registry — list all registered tools known to the plugin host.
+    async fn list_registered_tools(&self) -> Result<HostRegisteredToolListResponse> {
         Err(unavailable())
     }
 
@@ -424,11 +418,11 @@ pub struct HostCallbackContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_root: Option<String>,
     /// When the active host call originated from a `tool_invoke`, this holds
-    /// the plugin-original tool name. Used for per-entry capability scoping
-    /// so that capabilities declared by entry A do not implicitly authorize
-    /// host calls coming back through entry B.
+    /// the plugin-original tool name. Used for per-tool capability scoping
+    /// so that capabilities declared by tool A do not implicitly authorize
+    /// host calls coming back through tool B.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub entry_name: Option<String>,
+    pub tool_name: Option<String>,
 }
 
 tokio::task_local! {
@@ -452,8 +446,8 @@ where
     if let Some(workspace_root) = patch.workspace_root {
         current.workspace_root = Some(workspace_root);
     }
-    if let Some(entry_name) = patch.entry_name {
-        current.entry_name = Some(entry_name);
+    if let Some(tool_name) = patch.tool_name {
+        current.tool_name = Some(tool_name);
     }
     HOST_CALLBACK_CONTEXT.scope(current, fut).await
 }
@@ -868,44 +862,44 @@ pub struct MonitorStopRequest {
 // ---------------- tool registry ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostEntryRegisterRequest {
-    pub entry: PluginToolDecl,
+pub struct HostToolRegisterRequest {
+    pub tool: PluginToolDecl,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostEntryUpdateRequest {
-    pub entry: PluginToolDecl,
+pub struct HostToolUpdateRequest {
+    pub tool: PluginToolDecl,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostEntryRemoveRequest {
+pub struct HostToolRemoveRequest {
     pub name: String,
     #[serde(default)]
     pub exposed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostEntryMutationResponse {
+pub struct HostToolMutationResponse {
     pub generation: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exposed_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub entry: Option<PluginToolDecl>,
+    pub tool: Option<PluginToolDecl>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostEntryDescriptor {
+pub struct HostRegisteredToolDescriptor {
     pub plugin_id: String,
     pub original_name: String,
     pub exposed_name: String,
-    pub entry: PluginToolDecl,
+    pub tool: PluginToolDecl,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostEntryListResponse {
+pub struct HostRegisteredToolListResponse {
     pub generation: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entries: Vec<HostEntryDescriptor>,
+    pub tools: Vec<HostRegisteredToolDescriptor>,
 }
 
 // ---------------- plugin storage ----------------
@@ -979,11 +973,11 @@ pub struct HostStorageListRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HostStorageListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entries: Vec<HostStorageEntry>,
+    pub records: Vec<HostStorageRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostStorageEntry {
+pub struct HostStorageRecord {
     pub namespace: String,
     pub key: String,
 }
@@ -1040,7 +1034,7 @@ pub struct HostPluginStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HostPluginStatusListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entries: Vec<HostPluginStatus>,
+    pub statuses: Vec<HostPluginStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1081,7 +1075,7 @@ pub struct HostLspListDiagnosticsRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HostLspListDiagnosticsResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entries: Vec<HostLspDiagnostic>,
+    pub diagnostics: Vec<HostLspDiagnostic>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1104,11 +1098,11 @@ pub struct HostLspDiagnostic {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HostPlanListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entries: Vec<HostPlanEntry>,
+    pub plans: Vec<HostPlanSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostPlanEntry {
+pub struct HostPlanSummary {
     pub session_id: i64,
     pub slug: String,
     pub file_path: String,
@@ -1123,7 +1117,7 @@ pub struct HostPlanGetRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HostPlanGetResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub entry: Option<HostPlanEntry>,
+    pub plan: Option<HostPlanSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
 }
@@ -1131,11 +1125,11 @@ pub struct HostPlanGetResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HostWorktreeListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entries: Vec<HostWorktreeEntry>,
+    pub worktrees: Vec<HostWorktreeSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostWorktreeEntry {
+pub struct HostWorktreeSummary {
     pub session_id: i64,
     pub path: String,
     pub branch: String,
@@ -1421,11 +1415,11 @@ pub struct HostAgentRestoreResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HostHookListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entries: Vec<HostHookEntry>,
+    pub hooks: Vec<HostHookRegistration>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostHookEntry {
+pub struct HostHookRegistration {
     pub plugin_id: String,
     pub hooks: Vec<String>,
 }

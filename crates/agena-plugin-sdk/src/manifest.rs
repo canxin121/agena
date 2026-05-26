@@ -21,10 +21,12 @@ pub struct PluginManifest {
     #[serde(default)]
     pub hooks: HookSubscription,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entries: Vec<PluginToolDecl>,
+    pub tools: Vec<PluginToolDecl>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<PluginStudioCommand>,
     /// Plugin-level host capabilities. Useful for plugins that need to
-    /// call host APIs without exposing any tool entry. These are merged
-    /// into the effective capability set alongside the per-entry
+    /// call host APIs without exposing any model-visible tool. These are merged
+    /// into the effective capability set alongside the per-tool
     /// declarations.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugin_capabilities: Vec<HostCapability>,
@@ -200,30 +202,30 @@ pub struct PluginToolDecl {
     #[serde(default)]
     pub input_schema: serde_json::Value,
     /// Declarative path-permission specs. The host extracts paths from the
-    /// entry input via JSONPath before invocation and audits them as
+    /// tool input via JSONPath before invocation and audits them as
     /// [`PathKind`]. Use [`Plugin::permission_paths`] for paths that can only
     /// be derived dynamically.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_paths: Vec<InputPathSpec>,
     /// Declarative network-permission specs. The host extracts hosts/URLs from
-    /// the entry input via JSONPath before invocation and audits them as
+    /// the tool input via JSONPath before invocation and audits them as
     /// outbound connect targets. Use [`Plugin::permission_networks`] for
     /// targets that can only be derived dynamically.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_networks: Vec<InputNetworkSpec>,
-    /// Static local filesystem targets used by this entry regardless of input.
+    /// Static local filesystem targets used by this tool regardless of input.
     /// Use this for fixed workspace paths like `.agena/plans`; use
     /// [`Plugin::permission_paths`] for targets that can only be derived
     /// dynamically.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub path_access: Vec<PathAccessSpec>,
-    /// Static outbound network targets used by this entry regardless of input.
+    /// Static outbound network targets used by this tool regardless of input.
     /// Typical values are URLs (`https://api.example.com/search`) or
     /// `host:port` patterns (`api.example.com:443`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub network_access: Vec<NetworkAccessSpec>,
     /// Host-policy tags used to derive the tool default permission when the
-    /// entry does not have an exact tool rule. Hosts also use canonical tags
+    /// tool does not have an exact tool rule. Hosts also use canonical tags
     /// such as `read_only`, `task`, `network`, and `filesystem_write` to drive
     /// catalog filtering, plan-mode defaults, and other runtime policy.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -328,7 +330,7 @@ pub enum HostCapability {
     PlanRegistry,
     WorktreeRegistry,
     LspRegistry,
-    EntryRegistry,
+    ToolRegistry,
     PluginStorage,
     PluginSecrets,
     PluginStatus,
@@ -378,8 +380,6 @@ impl PluginTuiUiContributions {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PluginStudioUiContributions {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub commands: Vec<PluginStudioCommand>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub controls: Vec<PluginStudioControl>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub views: Vec<PluginStudioView>,
@@ -387,7 +387,7 @@ pub struct PluginStudioUiContributions {
 
 impl PluginStudioUiContributions {
     pub fn is_empty(&self) -> bool {
-        self.commands.is_empty() && self.controls.is_empty() && self.views.is_empty()
+        self.controls.is_empty() && self.views.is_empty()
     }
 }
 
@@ -540,7 +540,7 @@ fn default_studio_view_kind() -> String {
 
 /// Single declarative path extraction rule. `jsonpath` is a subset:
 /// dot-paths (`$.path`, `$.files[*].path`). The host extracts each match
-/// from the entry input JSON, classifies it under [`PathKind`], and runs it
+/// from the tool input JSON, classifies it under [`PathKind`], and runs it
 /// through the permission auditor before the tool body executes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InputPathSpec {
@@ -761,10 +761,6 @@ fn hook_subscription_for_name(name: &str) -> Option<HookSubscription> {
     HOOK_NAMES
         .iter()
         .find_map(|(hook_name, flag)| (*hook_name == name).then_some(*flag))
-        .or(match name {
-            "permission.ask" | "permission_request" => Some(HookSubscription::PERMISSION_ASK),
-            _ => None,
-        })
 }
 
 /// Builder for ergonomic manifest construction inside `Plugin::manifest`.
@@ -783,7 +779,8 @@ impl PluginManifest {
                 authors: Vec::new(),
                 transports: Vec::new(),
                 hooks: HookSubscription::INIT | HookSubscription::SHUTDOWN,
-                entries: Vec::new(),
+                tools: Vec::new(),
+                commands: Vec::new(),
                 plugin_capabilities: Vec::new(),
                 ui: PluginUiContributions::default(),
                 config_schema: None,
@@ -815,12 +812,22 @@ impl PluginManifestBuilder {
     }
 
     pub fn tool(mut self, tool: PluginToolDecl) -> Self {
-        self.inner.entries.push(tool);
+        self.inner.tools.push(tool);
         self
     }
 
     pub fn tools(mut self, tools: impl IntoIterator<Item = PluginToolDecl>) -> Self {
-        self.inner.entries.extend(tools);
+        self.inner.tools.extend(tools);
+        self
+    }
+
+    pub fn command(mut self, command: PluginStudioCommand) -> Self {
+        self.inner.commands.push(command);
+        self
+    }
+
+    pub fn commands(mut self, commands: impl IntoIterator<Item = PluginStudioCommand>) -> Self {
+        self.inner.commands.extend(commands);
         self
     }
 
@@ -882,11 +889,6 @@ impl PluginManifestBuilder {
 
     pub fn tui_content_block(mut self, block: PluginTuiContentBlock) -> Self {
         self.inner.ui.tui.content_blocks.push(block);
-        self
-    }
-
-    pub fn studio_command(mut self, command: PluginStudioCommand) -> Self {
-        self.inner.ui.studio.commands.push(command);
         self
     }
 

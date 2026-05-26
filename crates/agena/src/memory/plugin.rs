@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::memory::{
-    MemoryEntry, MemoryError, MemoryIndex, MemorySearchDocument, MemoryStore, MemoryType, NewMemory,
+    MemoryError, MemoryIndex, MemoryRecord, MemorySearchDocument, MemoryStore, MemoryType,
+    NewMemory,
 };
 use crate::plugin::sdk::host_api::HostClient;
 use crate::plugin::sdk::{
@@ -67,6 +68,60 @@ impl Default for MemoryRetrievalConfig {
     }
 }
 
+fn memory_config_schema() -> serde_json::Value {
+    let mut schema = crate::tool::definition::json_schema_for_with_default(MemoryConfig::default());
+    for (pointer, title, description) in [
+        (
+            "",
+            "Memory Plugin Config",
+            "Controls project instruction injection and memory retrieval defaults for agena.memory.",
+        ),
+        (
+            "/properties/project_instructions",
+            "Project Instructions",
+            "Controls whether project instruction memories are injected into the chat system prompt.",
+        ),
+        (
+            "/properties/project_instructions/properties/enabled",
+            "Enabled",
+            "Allows project instruction memories to be injected into conversations.",
+        ),
+        (
+            "/properties/project_instructions/properties/include_global",
+            "Include Global",
+            "Also includes global instruction memories when building the project instruction prompt.",
+        ),
+        (
+            "/properties/retrieval",
+            "Retrieval",
+            "Defaults for agena.memory/memory search behavior.",
+        ),
+        (
+            "/properties/retrieval/properties/enabled",
+            "Enabled",
+            "Allows memory search results to be retrieved automatically.",
+        ),
+        (
+            "/properties/retrieval/properties/limit",
+            "Default Limit",
+            "Default number of memory results returned when a search call omits limit.",
+        ),
+        (
+            "/properties/retrieval/properties/min_query_chars",
+            "Minimum Query Characters",
+            "Shortest query length required before automatic retrieval runs.",
+        ),
+    ] {
+        crate::tool::definition::set_schema_metadata(
+            &mut schema,
+            pointer,
+            Some(title),
+            Some(description),
+        );
+    }
+    schema
+}
+
 pub struct MemoryPlugin {
     config: OnceLock<MemoryConfig>,
     workspace_root: OnceLock<PathBuf>,
@@ -75,7 +130,7 @@ pub struct MemoryPlugin {
 
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    entry = "memory",
+    tool = "memory",
     description = "Persistent memory command. Use action `search`, `get`, `list`, `write`, or `delete` to manage durable user/project memory.",
     summary = "Search, inspect, and update durable memory records.",
     help = "Use action `search` to find relevant memories, `get` to read one record, `list` to inspect the catalog, `write` to create or replace a memory file, and `delete` to remove an obsolete memory.",
@@ -396,7 +451,7 @@ impl Plugin for MemoryPlugin {
                     | HookSubscription::CHAT_SYSTEM_TRANSFORM
                     | HookSubscription::CHAT_MESSAGES_TRANSFORM,
             )
-            .config_schema(crate::entry::definition::json_schema_for::<MemoryConfig>())
+            .config_schema(memory_config_schema())
             .tool(memory_decl())
             .build()
     }
@@ -553,7 +608,7 @@ fn memory_error_to_plugin(err: MemoryError) -> PluginError {
     PluginError::new(err.to_string())
 }
 
-fn memory_document_from_entry(entry: MemoryEntry) -> MemorySearchDocument {
+fn memory_document_from_entry(entry: MemoryRecord) -> MemorySearchDocument {
     let id = entry.file_name.trim_end_matches(".md").to_string();
     let name = memory_name(&entry);
     let description = memory_description(&entry);
@@ -566,7 +621,7 @@ fn memory_document_from_entry(entry: MemoryEntry) -> MemorySearchDocument {
     MemorySearchDocument::new(id, name, description, memory_type, body, path)
 }
 
-fn memory_record_output(entry: &MemoryEntry) -> MemoryRecordOutput {
+fn memory_record_output(entry: &MemoryRecord) -> MemoryRecordOutput {
     MemoryRecordOutput {
         name: memory_name(entry),
         description: memory_description(entry),
@@ -579,7 +634,7 @@ fn memory_record_output(entry: &MemoryEntry) -> MemoryRecordOutput {
     }
 }
 
-fn memory_name(entry: &MemoryEntry) -> String {
+fn memory_name(entry: &MemoryRecord) -> String {
     if entry.frontmatter.name.trim().is_empty() {
         entry.file_name.trim_end_matches(".md").to_string()
     } else {
@@ -587,7 +642,7 @@ fn memory_name(entry: &MemoryEntry) -> String {
     }
 }
 
-fn memory_description(entry: &MemoryEntry) -> String {
+fn memory_description(entry: &MemoryRecord) -> String {
     if entry.frontmatter.description.trim().is_empty() {
         first_line(entry.body.as_str())
     } else {
@@ -604,7 +659,7 @@ fn first_line(content: &str) -> String {
         .to_string()
 }
 
-fn format_memory_entry(entry: &MemoryEntry) -> String {
+fn format_memory_entry(entry: &MemoryRecord) -> String {
     let mut lines = vec![format!("Name: {}", memory_name(entry))];
     if let Some(memory_type) = entry.frontmatter.r#type {
         lines.push(format!("Type: {}", memory_type.label()));

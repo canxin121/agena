@@ -807,8 +807,8 @@ impl App {
             Route::Timeline(dialog) => {
                 self.render_timeline_overlay(frame, area, dialog, SurfaceMode::Route);
             }
-            Route::PluginInspector(dialog) => {
-                self.render_plugin_inspector_overlay(frame, area, dialog, SurfaceMode::Route);
+            Route::PluginWorkbench(dialog) => {
+                self.render_plugin_workbench(frame, area, dialog, SurfaceMode::Route);
             }
             Route::ProviderStudio(dialog) => {
                 self.render_provider_studio_overlay(frame, area, dialog, SurfaceMode::Route);
@@ -1416,82 +1416,6 @@ impl App {
         );
     }
 
-    fn render_plugin_inspector_overlay(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        dialog: &PluginInspectorOverlay,
-        surface: SurfaceMode,
-    ) {
-        let loading_message =
-            sanitize_display_text(ui_text::t(&self.i18n, "overlay-picker-loading"));
-        let spec = SearchPanelsDialogSpec::new(
-            122,
-            ui_text::t(&self.i18n, "overlay-plugins-list").into(),
-            1,
-            (4, 10),
-            34,
-            48,
-            loading_message.clone().into(),
-            selection_highlight_style(),
-            ">> ".into(),
-        );
-        render_search_panels_dialog(
-            frame,
-            area,
-            surface,
-            dialog,
-            &spec,
-            |item| {
-                let style = match item.state {
-                    agena::plugin::status::PluginRunState::Running => {
-                        Style::default().fg(Color::Green)
-                    }
-                    agena::plugin::status::PluginRunState::Restarting => {
-                        Style::default().fg(Color::Magenta)
-                    }
-                    agena::plugin::status::PluginRunState::Failed => {
-                        Style::default().fg(Color::Red)
-                    }
-                    agena::plugin::status::PluginRunState::Stopped => {
-                        Style::default().fg(Color::DarkGray)
-                    }
-                };
-                ListItem::new(Line::from(Span::styled(
-                    sanitize_display_text(item.summary.as_str()),
-                    style,
-                )))
-            },
-            |state| {
-                let (detail, logs) = match state {
-                    SearchPanelsDialogState::Loading { message }
-                    | SearchPanelsDialogState::Empty { message } => (
-                        Text::from(sanitize_display_text(message)),
-                        Text::from(sanitize_display_text(message)),
-                    ),
-                    SearchPanelsDialogState::Selected(item) => (
-                        item.detail_body.clone(),
-                        Text::from(sanitize_display_text(item.logs.as_str())),
-                    ),
-                };
-                vec![
-                    WorkbenchTextSection::new(
-                        ui_text::t(&self.i18n, "overlay-plugins-detail").into(),
-                        detail,
-                        3,
-                        7,
-                    ),
-                    WorkbenchTextSection::new(
-                        ui_text::t(&self.i18n, "overlay-plugins-logs").into(),
-                        logs,
-                        3,
-                        7,
-                    ),
-                ]
-            },
-        );
-    }
-
     fn render_settings_studio_overlay(
         &self,
         frame: &mut Frame,
@@ -2045,14 +1969,14 @@ impl App {
             PermissionStudioSectionId::NetworkRules => {
                 ("Domain".to_string(), "Connect".to_string())
             }
-            PermissionStudioSectionId::EntryTags => ("Tag".to_string(), "Access".to_string()),
-            PermissionStudioSectionId::EntryNames => ("Name".to_string(), "Access".to_string()),
-            PermissionStudioSectionId::EntryCommandRules => {
-                ("Entry".to_string(), "Access".to_string())
+            PermissionStudioSectionId::ToolTags => ("Tag".to_string(), "Access".to_string()),
+            PermissionStudioSectionId::ToolNames => ("Name".to_string(), "Access".to_string()),
+            PermissionStudioSectionId::ToolCommandRules => {
+                ("Tool".to_string(), "Access".to_string())
             }
             PermissionStudioSectionId::RootPath
             | PermissionStudioSectionId::RootNetwork
-            | PermissionStudioSectionId::RootEntries => ("Item".to_string(), "Summary".to_string()),
+            | PermissionStudioSectionId::RootTools => ("Item".to_string(), "Summary".to_string()),
         }
     }
 
@@ -2085,12 +2009,12 @@ impl App {
             | PermissionStudioSectionId::NetworkZones
             | PermissionStudioSectionId::RootPath
             | PermissionStudioSectionId::RootNetwork
-            | PermissionStudioSectionId::RootEntries => Vec::new(),
+            | PermissionStudioSectionId::RootTools => Vec::new(),
             PermissionStudioSectionId::PathRules
             | PermissionStudioSectionId::NetworkRules
-            | PermissionStudioSectionId::EntryTags
-            | PermissionStudioSectionId::EntryNames
-            | PermissionStudioSectionId::EntryCommandRules => vec![
+            | PermissionStudioSectionId::ToolTags
+            | PermissionStudioSectionId::ToolNames
+            | PermissionStudioSectionId::ToolCommandRules => vec![
                 (ui_text::t(&self.i18n, "value-add"), accent),
                 (ui_text::t(&self.i18n, "value-edit"), accent),
                 (ui_text::t(&self.i18n, "value-duplicate"), accent),
@@ -2521,7 +2445,7 @@ impl App {
                 "start" => dialog.offset.saturating_add(1) as i64,
                 "end" => dialog.offset.saturating_add(dialog.workbench.list.items.len()) as i64,
                 "total" => dialog.total as i64,
-                "count" => dialog.summary.entry_count as i64,
+                "count" => dialog.summary.model_count as i64,
             ),
         );
 

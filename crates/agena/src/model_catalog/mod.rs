@@ -29,9 +29,9 @@ pub use service::ModelCatalogService;
 pub use store::ModelCatalogStore;
 pub(crate) use types::CatalogDefinitionSourcePriority;
 pub use types::{
-    CatalogModelDefinition, ModelCatalogConfig, ModelCatalogDocument, ModelCatalogEntryRecord,
-    ModelCatalogEntrySourceKind, ModelCatalogProviderRecord, ModelCatalogResponse,
-    ModelCatalogSnapshot,
+    CatalogModelDefinition, CatalogModelRecord, ModelCatalogConfig, ModelCatalogDocument,
+    ModelCatalogProviderRecord, ModelCatalogResponse, ModelCatalogSnapshot,
+    ModelCatalogSnapshotSourceKind,
 };
 
 use crate::{
@@ -61,18 +61,18 @@ fn now_unix_ms() -> i64 {
         .unwrap_or_default()
 }
 
-fn format_catalog_source(source: ModelCatalogEntrySourceKind) -> String {
+fn format_catalog_source(source: ModelCatalogSnapshotSourceKind) -> String {
     match source {
-        ModelCatalogEntrySourceKind::Generated => "generated",
-        ModelCatalogEntrySourceKind::Cache => "cache",
+        ModelCatalogSnapshotSourceKind::Generated => "generated",
+        ModelCatalogSnapshotSourceKind::Cache => "cache",
     }
     .to_owned()
 }
 
-fn parse_catalog_source(value: &str) -> Result<ModelCatalogEntrySourceKind, AppError> {
+fn parse_catalog_source(value: &str) -> Result<ModelCatalogSnapshotSourceKind, AppError> {
     match value {
-        "generated" => Ok(ModelCatalogEntrySourceKind::Generated),
-        "cache" => Ok(ModelCatalogEntrySourceKind::Cache),
+        "generated" => Ok(ModelCatalogSnapshotSourceKind::Generated),
+        "cache" => Ok(ModelCatalogSnapshotSourceKind::Cache),
         other => Err(AppError::Config(format!(
             "invalid model catalog cache source `{other}`"
         ))),

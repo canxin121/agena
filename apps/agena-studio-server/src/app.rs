@@ -83,15 +83,15 @@ struct DiagnosticsQuery {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DiagnosticPathEntry {
+struct DiagnosticPathRecord {
     path: String,
     exists: bool,
 }
 
-fn diag_entry(path: PathBuf) -> DiagnosticPathEntry {
+fn diag_entry(path: PathBuf) -> DiagnosticPathRecord {
     let text = path.to_string_lossy().into_owned();
     let exists = std::fs::metadata(&path).is_ok();
-    DiagnosticPathEntry { path: text, exists }
+    DiagnosticPathRecord { path: text, exists }
 }
 
 async fn agena_studio_diagnostics(

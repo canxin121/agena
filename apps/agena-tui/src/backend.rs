@@ -190,7 +190,7 @@ use agena_api::{
 use agena_api_server::{
     dispatch,
     local_api::{
-        ModelCatalogEntryResource, ModelCatalogListResponse,
+        CatalogModelResource, ModelCatalogListResponse,
         ModelCatalogResponse as LocalModelCatalogResponse, ModelCatalogSourceKind, normalize_limit,
     },
     state::AppState,
@@ -2378,7 +2378,7 @@ impl Backend {
             .context("failed to list provider models")
     }
 
-    pub fn list_model_catalog_entries(
+    pub fn list_model_catalog_models(
         &self,
         query: &str,
         offset: usize,
@@ -2387,13 +2387,13 @@ impl Backend {
         let snapshot = self.runtime.current_snapshot();
         let catalog = snapshot.model_catalog_response();
         let summary = local_model_catalog_summary(&catalog);
-        let entries = local_model_catalog_entry_resources(&catalog);
+        let models = local_model_catalog_models(&catalog);
         let search = query.trim().to_lowercase();
         let available_origins = {
-            let mut origins = entries
+            let mut origins = models
                 .iter()
-                .filter_map(|entry| {
-                    let origin = entry.origin.clone().unwrap_or_default();
+                .filter_map(|model| {
+                    let origin = model.origin.clone().unwrap_or_default();
                     let trimmed = origin.trim();
                     (!trimmed.is_empty()).then(|| trimmed.to_owned())
                 })
@@ -2403,10 +2403,10 @@ impl Backend {
             origins.sort();
             origins
         };
-        let filtered = entries
+        let filtered = models
             .into_iter()
-            .filter(|entry| {
-                search.is_empty() || local_model_catalog_entry_search_text(entry).contains(&search)
+            .filter(|model| {
+                search.is_empty() || local_model_catalog_model_search_text(model).contains(&search)
             })
             .collect::<Vec<_>>();
         let total = filtered.len();
@@ -2426,10 +2426,7 @@ impl Backend {
         })
     }
 
-    pub fn lookup_model_catalog_entries(
-        &self,
-        model_ids: &[String],
-    ) -> Vec<ModelCatalogEntryResource> {
+    pub fn lookup_model_catalog_models(&self, model_ids: &[String]) -> Vec<CatalogModelResource> {
         let requested = model_ids
             .iter()
             .flat_map(|model_id| {
@@ -2447,9 +2444,9 @@ impl Backend {
             .collect::<std::collections::BTreeSet<_>>();
         let snapshot = self.runtime.current_snapshot();
         let catalog = snapshot.model_catalog_response();
-        local_model_catalog_entry_resources(&catalog)
+        local_model_catalog_models(&catalog)
             .into_iter()
-            .filter(|entry| requested.contains(entry.model_id.as_str()))
+            .filter(|model| requested.contains(model.model_id.as_str()))
             .collect()
     }
 
@@ -2582,7 +2579,7 @@ impl Backend {
             .validate_for_adapters_for_save(&effective_adapter_ids)
             .map_err(ProviderStudioSaveError::Validation)?;
 
-        let catalog_entries = self.lookup_model_catalog_entries(
+        let catalog_entries = self.lookup_model_catalog_models(
             &adapter_model_lists
                 .iter()
                 .flat_map(|adapter_models| {
@@ -2738,7 +2735,7 @@ impl Backend {
         draft
             .validate_for_adapters_for_save(&effective_adapter_ids)
             .map_err(ProviderStudioSaveError::Validation)?;
-        let catalog_entries = self.lookup_model_catalog_entries(
+        let catalog_entries = self.lookup_model_catalog_models(
             &adapter_models
                 .models
                 .iter()
@@ -2765,7 +2762,7 @@ impl Backend {
             .models
             .iter()
             .filter(|model| {
-                preferred_catalog_entry_for_provider_model(&catalog_entries, model).is_some()
+                preferred_catalog_model_for_provider_model(&catalog_entries, model).is_some()
             })
             .count();
         let provider_patch = build_provider_patch_value_for_save(
@@ -2817,7 +2814,7 @@ impl Backend {
             .validate_for_adapters_for_save(&effective_adapter_ids)
             .map_err(ProviderStudioSaveError::Validation)?;
         let catalog_entries =
-            self.lookup_model_catalog_entries(&[catalog_lookup_id_for_model_id(model_id)]);
+            self.lookup_model_catalog_models(&[catalog_lookup_id_for_model_id(model_id)]);
         let model_value = provider_model_json_for_model_id_with_draft(
             &draft,
             adapter_id,
@@ -2885,7 +2882,7 @@ impl Backend {
             }
         }
 
-        let catalog_entries = self.lookup_model_catalog_entries(
+        let catalog_entries = self.lookup_model_catalog_models(
             &[model_id.to_owned()]
                 .into_iter()
                 .chain(provider_model.map(catalog_lookup_id_for_provider_model))
@@ -3742,19 +3739,19 @@ impl Backend {
         plugin_id: &str,
         after_seq: Option<u64>,
         limit: usize,
-    ) -> Vec<agena::plugin::PluginLogEntry> {
+    ) -> Vec<agena::plugin::PluginLogRecord> {
         self.runtime
             .current_snapshot()
             .plugin_manager()
             .plugin_logs(plugin_id, after_seq, limit)
     }
 
-    pub fn runtime_entry_rows(&self) -> Vec<InspectorRow> {
+    pub fn runtime_tool_rows(&self) -> Vec<InspectorRow> {
         let mut rows = self
             .runtime
             .current_snapshot()
             .plugin_manager()
-            .entry_entries()
+            .registered_tools()
             .into_iter()
             .map(|entry| InspectorRow {
                 label: entry.exposed_name,
@@ -3942,15 +3939,15 @@ impl Backend {
         parse_worktree_payload(output.payload)
     }
 
-    pub fn runtime_entry_exists(&self, name: &str) -> bool {
+    pub fn runtime_tool_exists(&self, name: &str) -> bool {
         self.runtime
             .current_snapshot()
             .plugin_manager()
-            .lookup_entry(name)
+            .lookup_tool(name)
             .is_some()
     }
 
-    pub fn runtime_entry_prompt(&self, session_id: i64, name: &str, args: &str) -> Result<String> {
+    pub fn runtime_tool_prompt(&self, session_id: i64, name: &str, args: &str) -> Result<String> {
         let manager = self.session_manager()?;
         let invocation = ToolInvocation::new(
             name.to_string(),
@@ -4607,23 +4604,23 @@ fn local_model_catalog_summary(
         last_refresh_at: catalog.last_refresh_at,
         last_successful_source: catalog.last_successful_source,
         last_error: catalog.last_error.clone(),
-        entry_count: catalog.entries.len(),
+        model_count: catalog.models.len(),
     }
 }
 
-fn local_model_catalog_entry_resources(
+fn local_model_catalog_models(
     catalog: &agena::model_catalog::ModelCatalogResponse,
-) -> Vec<ModelCatalogEntryResource> {
+) -> Vec<CatalogModelResource> {
     catalog
-        .entries
+        .models
         .iter()
         .cloned()
-        .map(|entry| ModelCatalogEntryResource::from_record(entry, catalog.last_successful_source))
+        .map(|model| CatalogModelResource::from_record(model, catalog.last_successful_source))
         .collect()
 }
 
-fn local_model_catalog_entry_search_text(entry: &ModelCatalogEntryResource) -> String {
-    let thinking_mode_text = entry
+fn local_model_catalog_model_search_text(model: &CatalogModelResource) -> String {
+    let thinking_mode_text = model
         .thinking_modes
         .iter()
         .flat_map(|(name, mode)| {
@@ -4639,7 +4636,7 @@ fn local_model_catalog_entry_search_text(entry: &ModelCatalogEntryResource) -> S
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let speed_mode_text = entry
+    let speed_mode_text = model
         .speed_modes
         .iter()
         .flat_map(|(name, mode)| {
@@ -4655,28 +4652,28 @@ fn local_model_catalog_entry_search_text(entry: &ModelCatalogEntryResource) -> S
         .join("\n");
 
     [
-        entry.model_id.clone(),
-        entry.display_name.clone().unwrap_or_default(),
-        entry.origin.clone().unwrap_or_default(),
-        entry.description.clone().unwrap_or_default(),
-        entry
+        model.model_id.clone(),
+        model.display_name.clone().unwrap_or_default(),
+        model.origin.clone().unwrap_or_default(),
+        model.description.clone().unwrap_or_default(),
+        model
             .context_window_tokens
             .map(|value| value.to_string())
             .unwrap_or_default(),
-        entry
+        model
             .max_input_tokens
             .map(|value| value.to_string())
             .unwrap_or_default(),
-        entry
+        model
             .max_output_tokens
             .map(|value| value.to_string())
             .unwrap_or_default(),
-        match entry.source {
+        match model.source {
             ModelCatalogSourceKind::Generated => "generated".to_owned(),
             ModelCatalogSourceKind::Cache => "cache".to_owned(),
         },
-        entry.source_label.clone().unwrap_or_default(),
-        entry
+        model.source_label.clone().unwrap_or_default(),
+        model
             .lifecycle
             .map(|value| match value {
                 agena::model::ModelLifecycle::Active => "active",
@@ -4698,38 +4695,38 @@ fn local_model_catalog_entry_search_text(entry: &ModelCatalogEntryResource) -> S
     .to_lowercase()
 }
 
-fn preferred_catalog_entry_for_model_id<'a>(
-    entries: &'a [ModelCatalogEntryResource],
+fn preferred_catalog_model_for_model_id<'a>(
+    models: &'a [CatalogModelResource],
     model_id: &str,
-) -> Option<&'a ModelCatalogEntryResource> {
-    preferred_catalog_entry_for_lookup_ids(entries, &[model_id.to_owned()])
+) -> Option<&'a CatalogModelResource> {
+    preferred_catalog_model_for_lookup_ids(models, &[model_id.to_owned()])
 }
 
-fn preferred_catalog_entry_for_lookup_ids<'a>(
-    entries: &'a [ModelCatalogEntryResource],
+fn preferred_catalog_model_for_lookup_ids<'a>(
+    models: &'a [CatalogModelResource],
     model_ids: &[String],
-) -> Option<&'a ModelCatalogEntryResource> {
+) -> Option<&'a CatalogModelResource> {
     let lookup_ids = model_ids
         .iter()
         .map(|model_id| model_id.trim())
         .filter(|model_id| !model_id.is_empty())
         .collect::<Vec<_>>();
-    entries
+    models
         .iter()
-        .filter(|entry| {
+        .filter(|model| {
             lookup_ids
                 .iter()
-                .any(|model_id| entry.model_id == *model_id)
+                .any(|model_id| model.model_id == *model_id)
         })
-        .min_by_key(|entry| entry.model_id.as_str())
+        .min_by_key(|model| model.model_id.as_str())
 }
 
-fn preferred_catalog_entry_for_provider_model<'a>(
-    entries: &'a [ModelCatalogEntryResource],
+fn preferred_catalog_model_for_provider_model<'a>(
+    models: &'a [CatalogModelResource],
     provider_model: &ProviderModel,
-) -> Option<&'a ModelCatalogEntryResource> {
-    preferred_catalog_entry_for_lookup_ids(
-        entries,
+) -> Option<&'a CatalogModelResource> {
+    preferred_catalog_model_for_lookup_ids(
+        models,
         &[
             provider_model.id.to_string(),
             catalog_lookup_id_for_provider_model(provider_model),
@@ -4751,7 +4748,7 @@ fn catalog_lookup_id_for_provider_model(provider_model: &ProviderModel) -> Strin
 }
 
 fn provider_model_json_for_model_id(
-    catalog_entries: &[ModelCatalogEntryResource],
+    catalog_entries: &[CatalogModelResource],
     model_id: &str,
     provider_model: Option<&ProviderModel>,
 ) -> JsonValue {
@@ -4765,7 +4762,7 @@ fn provider_model_json_for_model_id(
 fn provider_model_json_for_model_id_with_draft(
     draft: &ProviderConfigDraft,
     adapter_id: &str,
-    catalog_entries: &[ModelCatalogEntryResource],
+    catalog_entries: &[CatalogModelResource],
     model_id: &str,
     provider_model: Option<&ProviderModel>,
 ) -> JsonValue {
@@ -4777,22 +4774,22 @@ fn provider_model_json_for_model_id_with_draft(
 }
 
 fn provider_model_overlay_for_model_id(
-    catalog_entries: &[ModelCatalogEntryResource],
+    catalog_entries: &[CatalogModelResource],
     model_id: &str,
     provider_model: Option<&ProviderModel>,
 ) -> ProviderModelOverlay {
-    preferred_catalog_entry_for_model_id(catalog_entries, model_id)
+    preferred_catalog_model_for_model_id(catalog_entries, model_id)
         .or_else(|| {
             let lookup_id = catalog_lookup_id_for_model_id(model_id);
             (lookup_id != model_id)
-                .then(|| preferred_catalog_entry_for_model_id(catalog_entries, lookup_id.as_str()))
+                .then(|| preferred_catalog_model_for_model_id(catalog_entries, lookup_id.as_str()))
                 .flatten()
         })
-        .map(catalog_entry_to_provider_model_overlay)
+        .map(catalog_model_to_provider_model_overlay)
         .or_else(|| {
             provider_model.and_then(|provider_model| {
-                preferred_catalog_entry_for_provider_model(catalog_entries, provider_model)
-                    .map(catalog_entry_to_provider_model_overlay)
+                preferred_catalog_model_for_provider_model(catalog_entries, provider_model)
+                    .map(catalog_model_to_provider_model_overlay)
                     .or_else(|| Some(provider_model_to_provider_model_overlay(provider_model)))
             })
         })
@@ -4816,41 +4813,37 @@ fn provider_model_overlay_to_json(overlay: ProviderModelOverlay) -> JsonValue {
     }
 }
 
-fn catalog_entry_to_provider_model_overlay(
-    entry: &ModelCatalogEntryResource,
-) -> ProviderModelOverlay {
-    provider_model_overlay_from_catalog_definition(&catalog_entry_to_catalog_definition(entry))
+fn catalog_model_to_provider_model_overlay(model: &CatalogModelResource) -> ProviderModelOverlay {
+    provider_model_overlay_from_catalog_definition(&catalog_model_to_catalog_definition(model))
 }
 
-fn catalog_entry_to_catalog_definition(
-    entry: &ModelCatalogEntryResource,
-) -> CatalogModelDefinition {
+fn catalog_model_to_catalog_definition(model: &CatalogModelResource) -> CatalogModelDefinition {
     let mut definition = CatalogModelDefinition::default();
-    definition.lifecycle = entry.lifecycle;
-    definition.context_window_tokens = entry.context_window_tokens;
-    definition.max_input_tokens = entry.max_input_tokens;
-    definition.max_output_tokens = entry.max_output_tokens;
-    definition.description = entry.description.clone();
-    definition.knowledge_cutoff = entry.knowledge_cutoff.clone();
-    definition.release_date = entry.release_date.clone();
-    definition.last_updated = entry.last_updated.clone();
-    definition.open_weights = entry.open_weights;
-    definition.default_thinking_mode = entry.default_thinking_mode.clone();
-    definition.supports_parallel_tool_calls = entry.supports_parallel_tool_calls;
-    definition.supports_verbosity = entry.supports_verbosity;
-    definition.default_verbosity = entry.default_verbosity.clone();
-    definition.default_temperature = entry.default_temperature.clone();
-    definition.default_top_p = entry.default_top_p.clone();
-    definition.default_top_k = entry.default_top_k;
-    definition.assistant_reasoning_interleaved = entry.assistant_reasoning_interleaved;
-    definition.assistant_reasoning_field = entry.assistant_reasoning_field.clone();
-    definition.output_modalities = entry.output_modalities.clone();
-    definition.pricing = entry.pricing.clone();
-    definition.display_name = entry.display_name.clone();
-    definition.origin = entry.origin.clone();
-    definition.thinking_modes = entry.thinking_modes.clone();
-    definition.speed_modes = entry.speed_modes.clone();
-    definition.capabilities = sanitized_catalog_capability_patch(&entry.capabilities);
+    definition.lifecycle = model.lifecycle;
+    definition.context_window_tokens = model.context_window_tokens;
+    definition.max_input_tokens = model.max_input_tokens;
+    definition.max_output_tokens = model.max_output_tokens;
+    definition.description = model.description.clone();
+    definition.knowledge_cutoff = model.knowledge_cutoff.clone();
+    definition.release_date = model.release_date.clone();
+    definition.last_updated = model.last_updated.clone();
+    definition.open_weights = model.open_weights;
+    definition.default_thinking_mode = model.default_thinking_mode.clone();
+    definition.supports_parallel_tool_calls = model.supports_parallel_tool_calls;
+    definition.supports_verbosity = model.supports_verbosity;
+    definition.default_verbosity = model.default_verbosity.clone();
+    definition.default_temperature = model.default_temperature.clone();
+    definition.default_top_p = model.default_top_p.clone();
+    definition.default_top_k = model.default_top_k;
+    definition.assistant_reasoning_interleaved = model.assistant_reasoning_interleaved;
+    definition.assistant_reasoning_field = model.assistant_reasoning_field.clone();
+    definition.output_modalities = model.output_modalities.clone();
+    definition.pricing = model.pricing.clone();
+    definition.display_name = model.display_name.clone();
+    definition.origin = model.origin.clone();
+    definition.thinking_modes = model.thinking_modes.clone();
+    definition.speed_modes = model.speed_modes.clone();
+    definition.capabilities = sanitized_catalog_capability_patch(&model.capabilities);
     definition
 }
 
@@ -5310,7 +5303,7 @@ fn detect_mime(path: &Path, bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena::{config::LoadConfigRequest, memory, tracing as tracing_config};
+    use agena::{config::LoadConfigRequest, memory, tracing as tracing_config, web};
     use std::{collections::BTreeSet, sync::Arc};
     use tempfile::tempdir;
 
@@ -5411,10 +5404,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn plugin_statuses_include_all_builtin_runtime_plugins() {
+    async fn plugin_statuses_include_bundled_plugins_from_effective_config() {
         let temp = tempdir().expect("temp workspace");
         let config_path = temp.path().join("config.json");
-        fs::write(&config_path, "{}").expect("write empty config");
+        fs::write(&config_path, b"{}\n").expect("write empty json config");
+        let required = BTreeSet::from([
+            tool::skills_plugin_id().to_string(),
+            tool::lsp_plugin_id().to_string(),
+            tool::cron_plugin_id().to_string(),
+            tool::code_plugin_id().to_string(),
+            tool::fs_plugin_id().to_string(),
+            tool::settings_plugin_id().to_string(),
+            tool::shell_plugin_id().to_string(),
+            web::web_plugin_id().to_string(),
+            tool::workflow_plugin_id().to_string(),
+            memory::memory_plugin_id().to_string(),
+            tool::mcp_plugin_id().to_string(),
+        ]);
         let db = tracing_config::connect_database("sqlite::memory:", &Default::default())
             .await
             .expect("connect sqlite");
@@ -5435,23 +5441,24 @@ mod tests {
             .into_iter()
             .map(|status| status.plugin_id)
             .collect::<BTreeSet<_>>();
-
-        let required = BTreeSet::from([
-            tool::skills_plugin_id().to_string(),
-            tool::lsp_plugin_id().to_string(),
-            tool::cron_plugin_id().to_string(),
-            tool::fs_plugin_id().to_string(),
-            tool::settings_plugin_id().to_string(),
-            tool::shell_plugin_id().to_string(),
-            tool::web_plugin_id().to_string(),
-            tool::workflow_plugin_id().to_string(),
-            memory::memory_plugin_id().to_string(),
-        ]);
+        let sources = backend
+            .config_json_sources()
+            .expect("effective config sources should serialize");
+        let effective_plugins =
+            agena::config::get_json_path(&sources.effective, Some("plugins.list"))
+                .expect("effective plugins.list should exist");
+        let effective_plugins = effective_plugins
+            .as_object()
+            .expect("effective plugins.list should be an object");
 
         for plugin_id in required {
             assert!(
                 loaded.contains(plugin_id.as_str()),
-                "missing builtin runtime plugin {plugin_id}; loaded={loaded:?}"
+                "missing bundled runtime plugin {plugin_id}; loaded={loaded:?}"
+            );
+            assert!(
+                effective_plugins.contains_key(plugin_id.as_str()),
+                "missing bundled effective plugin config {plugin_id}; plugins={effective_plugins:?}"
             );
         }
     }

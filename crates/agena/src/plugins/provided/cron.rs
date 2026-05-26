@@ -1,6 +1,6 @@
 //! `agena.cron` plugin: schedules cron and one-shot wakeup jobs.
 //!
-//! The model-visible schedule entries execute through the same plugin-entry
+//! The model-visible schedule tools execute through the same plugin tool
 //! surface as every other tool.
 
 use std::sync::{Arc, RwLock};
@@ -26,7 +26,7 @@ pub(crate) struct CronPlugin {
 
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    entry = "schedule",
+    tool = "schedule",
     description = "Schedule command. Set action to list, create, delete, or wakeup.",
     summary = "List, create, delete, or trigger scheduled work.",
     help = "Use action `list` to inspect registered cron jobs and one-shot wakeups, `create` for cron jobs, `delete` to remove a scheduled job, and `wakeup` for a one-shot wakeup.",
@@ -77,9 +77,10 @@ impl CronPlugin {
 #[async_trait]
 impl Plugin for CronPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder("agena-cron", env!("CARGO_PKG_VERSION"))
+        PluginManifest::builder(CRON_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
             .description("Cron-style and one-shot wakeup scheduling tools.")
             .hooks(HookSubscription::TOOL_INVOKE)
+            .config_schema(crate::tool::definition::empty_config_schema())
             .tool(schedule_decl())
             .build()
     }
@@ -95,7 +96,7 @@ impl Plugin for CronPlugin {
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
         let _ = self.host()?;
         let (tool_name, tool_input) =
-            ScheduleToolInput::resolve_entry(input.tool_name.as_str(), input.input)?;
+            ScheduleToolInput::resolve_tool(input.tool_name.as_str(), input.input)?;
         router::invoke_tool(&tool_name, tool_input, input.session_id, input.call_id)
     }
 }

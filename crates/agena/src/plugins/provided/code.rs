@@ -35,7 +35,7 @@ impl Default for CodeLanguage {
 
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    entry = "code",
+    tool = "code",
     description = "Structured code inspection command. Use action `search_ast` for AST-aware pattern matching or `syntax_tree` to inspect the parsed syntax tree.",
     summary = "Search code structurally with ast-grep and inspect syntax trees.",
     help = "Use action `search_ast` with a Rust pattern like `if $COND { $BODY }` or `foo($ARGS)` to find structural matches. Use action `syntax_tree` to inspect the named syntax nodes for a Rust source file.",
@@ -143,9 +143,10 @@ impl LanguageExt for RustLanguage {
 #[async_trait]
 impl Plugin for CodePlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder("agena-code", env!("CARGO_PKG_VERSION"))
+        PluginManifest::builder(CODE_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
             .description("Structured code search and syntax inspection tools.")
             .hooks(HookSubscription::TOOL_INVOKE)
+            .config_schema(crate::tool::definition::empty_config_schema())
             .tool(code_decl())
             .build()
     }

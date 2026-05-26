@@ -2,9 +2,8 @@
 //! todo_write, create_goal, get_goal, update_goal, ask_user, enter_plan_mode,
 //! exit_plan_mode, enter_worktree, exit_worktree).
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
-use crate::entry::{ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ask_user};
 use crate::message::{
     AgentRestoreToolInput, AgentSwitchToolInput, AskUserToolInput, ClearGoalToolInput,
     CreateGoalToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput,
@@ -27,38 +26,113 @@ use crate::plugin::sdk::{
     ToolInvokeInput, ToolInvokeOutput, ToolTag,
 };
 use crate::search::tool_catalog::{ToolCatalogDocument, search_tool_catalog};
+use crate::tool::{ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ask_user};
 use agena_macros::StaticToolSurface;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub(crate) const WORKFLOW_PLUGIN_ID: &str = "agena.workflow";
-const DEFAULT_TOOL_SEARCH_LIMIT: usize = 8;
-const MAX_TOOL_SEARCH_LIMIT: usize = 25;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(default, deny_unknown_fields)]
-struct WorkflowPluginOptions {
-    tool_search: WorkflowToolSearchOptions,
+struct WorkflowPluginConfig {
+    tool_catalog: WorkflowToolCatalogConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-struct WorkflowToolSearchOptions {
-    url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    api_key: Option<String>,
-    index: String,
+struct WorkflowToolCatalogConfig {
+    search: WorkflowToolCatalogSearchConfig,
+    help: WorkflowToolCatalogHelpConfig,
 }
 
-impl Default for WorkflowToolSearchOptions {
+impl Default for WorkflowToolCatalogConfig {
     fn default() -> Self {
         Self {
-            url: String::new(),
-            api_key: None,
-            index: "agena_tool_catalog".to_string(),
+            search: WorkflowToolCatalogSearchConfig::default(),
+            help: WorkflowToolCatalogHelpConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+struct WorkflowToolCatalogSearchConfig {
+    default_limit: u32,
+    max_limit: u32,
+}
+
+impl Default for WorkflowToolCatalogSearchConfig {
+    fn default() -> Self {
+        Self {
+            default_limit: 8,
+            max_limit: 25,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+struct WorkflowToolCatalogHelpConfig {
+    include_schema_by_default: bool,
+}
+
+impl Default for WorkflowToolCatalogHelpConfig {
+    fn default() -> Self {
+        Self {
+            include_schema_by_default: true,
+        }
+    }
+}
+
+fn workflow_config_schema() -> serde_json::Value {
+    let mut schema =
+        crate::tool::definition::json_schema_for_with_default(WorkflowPluginConfig::default());
+    for (pointer, title, description) in [
+        (
+            "",
+            "Workflow Plugin Config",
+            "Defaults for workflow catalog search and tool help rendering.",
+        ),
+        (
+            "/properties/tool_catalog",
+            "Tool Catalog",
+            "Controls how the workflow plugin previews and searches the registered tool catalog.",
+        ),
+        (
+            "/properties/tool_catalog/properties/search",
+            "Search",
+            "Default search behavior for agena.workflow/tools with action=search.",
+        ),
+        (
+            "/properties/tool_catalog/properties/search/properties/default_limit",
+            "Default Limit",
+            "Number of tool search results returned when the caller omits limit.",
+        ),
+        (
+            "/properties/tool_catalog/properties/search/properties/max_limit",
+            "Max Limit",
+            "Upper bound enforced for tool catalog search results.",
+        ),
+        (
+            "/properties/tool_catalog/properties/help",
+            "Help",
+            "Defaults for agena.workflow/tools with action=help.",
+        ),
+        (
+            "/properties/tool_catalog/properties/help/properties/include_schema_by_default",
+            "Include Schema by Default",
+            "When enabled, tool help includes the registered input schema unless the caller opts out.",
+        ),
+    ] {
+        crate::tool::definition::set_schema_metadata(
+            &mut schema,
+            pointer,
+            Some(title),
+            Some(description),
+        );
+    }
+    schema
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
@@ -66,8 +140,8 @@ struct CompleteGoalToolInput {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    entry = "workflow",
-    description = "Workflow scaffold command. Use action `init`, `review`, or `security_review` to generate reusable workflow instructions; this entry does not execute shell or filesystem actions by itself.",
+    tool = "workflow",
+    description = "Workflow scaffold command. Use action `init`, `review`, or `security_review` to generate reusable workflow instructions; this tool does not execute shell or filesystem actions by itself.",
     tags(ToolTag::ReadOnly),
     host_capabilities(HostCapability::AgentRegistry),
     concurrency_safe = true
@@ -93,8 +167,8 @@ enum WorkflowToolInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    entry = "tools",
-    description = "Tool catalog command. Use action `search` to find tools or `help` to fetch detailed usage for a tool. This entry does not execute the target tool for you.",
+    tool = "tools",
+    description = "Tool catalog command. Use action `search` to find tools or `help` to fetch detailed usage for a tool. This tool does not execute the target tool for you.",
     summary = "Search tools or fetch detailed tool help.",
     help = "Use action `search` with `query` and optional `limit` to discover tools. Use action `help` with `tool` to retrieve the full registered help text and input schema for any model-visible tool. To actually run a tool, call that tool directly after reading its help.",
     tags(ToolTag::ReadOnly, ToolTag::Discovery),
@@ -119,18 +193,14 @@ enum ToolsToolInput {
 #[serde(deny_unknown_fields)]
 struct ToolsHelpInput {
     pub tool: String,
-    #[serde(default = "default_include_schema")]
-    pub include_schema: bool,
-}
-
-fn default_include_schema() -> bool {
-    true
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_schema: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    entry = "agent",
-    description = "Runtime agent profile command. Use action `switch` to change the current session's active agent profile or `restore` to bring back a saved profile. This entry does not spawn delegated subagent work; use `task` for that.",
+    tool = "agent",
+    description = "Runtime agent profile command. Use action `switch` to change the current session's active agent profile or `restore` to bring back a saved profile. This tool does not spawn delegated subagent work; use `task` for that.",
     host_capabilities(HostCapability::AgentRegistry),
     concurrency_safe = false
 )]
@@ -150,7 +220,7 @@ enum AgentToolInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    entry = "todo",
+    tool = "todo",
     description = "Todo command. Use action `write` to replace the session todo list.",
     tags(ToolTag::Mutating, ToolTag::Planning),
     concurrency_safe = false
@@ -166,14 +236,14 @@ enum TodoToolInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    entry = "task",
-    description = "Delegated subagent task command. Use action `run` to create or resume a typed child task session for explore, implement, or verify work. This entry launches/resumes a separate task session; it does not switch the current runtime agent profile.",
+    tool = "task",
+    description = "Delegated subagent task command. Use action `run` to create or resume a typed child task session for explore, implement, or verify work. This tool launches or resumes a separate task session; it does not switch the current runtime agent profile.",
     tags(ToolTag::Task, ToolTag::Subtask),
     host_capabilities(HostCapability::SpawnSubtask),
     concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
-enum TaskEntryToolInput {
+enum TaskToolActionInput {
     #[tool(exec = "run")]
     Run {
         #[serde(flatten)]
@@ -188,8 +258,8 @@ struct SessionRenameToolInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    entry = "session",
-    description = "Session metadata command. Use action `get` to inspect the current session metadata or `rename` to update the session title. This entry does not read chat history or execute workflow actions.",
+    tool = "session",
+    description = "Session metadata command. Use action `get` to inspect the current session metadata or `rename` to update the session title. This tool does not read chat history or execute workflow actions.",
     tags(ToolTag::ReadOnly, ToolTag::Mutating),
     host_capabilities(HostCapability::SessionRegistry),
     concurrency_safe = false
@@ -207,7 +277,7 @@ enum SessionToolInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    entry = "goal",
+    tool = "goal",
     description = "Goal command. Use action `get`, `create`, `clear`, or `complete`. Use `complete` only once the objective is actually finished.",
     tags(ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Goal),
     host_capabilities(HostCapability::GoalRegistry),
@@ -239,7 +309,7 @@ enum GoalToolInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    entry = "user",
+    tool = "user",
     description = "User interaction command. Use action `request_input` to request structured short answers.",
     tags(ToolTag::ReadOnly, ToolTag::Interactive),
     host_capabilities(HostCapability::AskUser),
@@ -253,7 +323,7 @@ enum UserToolInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    entry = "plan",
+    tool = "plan",
     description = "Plan mode command. Use action `enter` or `exit`; `enter` allocates a plan markdown file under .agena/plans/ and `exit` asks the user to approve the plan.",
     tags(ToolTag::ReadOnly, ToolTag::Planning, ToolTag::FilesystemWrite),
     host_capabilities(HostCapability::PlanRegistry, HostCapability::AgentRegistry),
@@ -275,7 +345,7 @@ enum PlanToolInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    entry = "worktree",
+    tool = "worktree",
     description = "Worktree command. Use action `enter` or `exit`; `enter` uses `target = new|existing` to create or attach to a git worktree and `exit` uses enum `exit_action = keep|remove`.",
     tags(ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Worktree),
     host_capabilities(HostCapability::WorktreeRegistry),
@@ -386,12 +456,14 @@ fn goal_status_label(status: HostGoalStatus) -> &'static str {
 
 pub(crate) struct WorkflowPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
+    config: OnceLock<WorkflowPluginConfig>,
 }
 
 impl WorkflowPlugin {
     pub(crate) fn new() -> Self {
         Self {
             host: RwLock::new(None),
+            config: OnceLock::new(),
         }
     }
 
@@ -414,6 +486,12 @@ impl WorkflowPlugin {
         } else {
             format!("{body}\n\nUser arguments:\n{args}")
         }
+    }
+
+    fn config(&self) -> SdkResult<&WorkflowPluginConfig> {
+        self.config
+            .get()
+            .ok_or_else(|| PluginError::new("workflow plugin invoked before init"))
     }
 
     async fn invoke_provided_workflow(
@@ -846,10 +924,11 @@ impl WorkflowPlugin {
                 "tools search requires a non-empty query",
             ));
         }
+        let config = self.config()?;
         let limit = input
             .limit
-            .unwrap_or(DEFAULT_TOOL_SEARCH_LIMIT as u32)
-            .clamp(1, MAX_TOOL_SEARCH_LIMIT as u32) as usize;
+            .unwrap_or(config.tool_catalog.search.default_limit)
+            .clamp(1, config.tool_catalog.search.max_limit) as usize;
         let host = self.host()?;
         let catalog = host
             .list_tools()
@@ -897,6 +976,7 @@ impl WorkflowPlugin {
                 "tools help requires a non-empty tool name",
             ));
         }
+        let config = self.config()?;
         let tools = self.host()?.list_tools().await?;
         let mut exact = None;
         let mut case_insensitive = None;
@@ -946,7 +1026,9 @@ impl WorkflowPlugin {
             lines.push("Help:".to_string());
             lines.push(help.to_string());
         }
-        if input.include_schema
+        if input
+            .include_schema
+            .unwrap_or(config.tool_catalog.help.include_schema_by_default)
             && let Some(schema) = descriptor.input_schema.as_ref()
         {
             lines.push("Input schema:".to_string());
@@ -970,24 +1052,25 @@ pub(crate) fn new_plugin() -> WorkflowPlugin {
 #[async_trait]
 impl Plugin for WorkflowPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder("agena-workflow", env!("CARGO_PKG_VERSION"))
+        PluginManifest::builder(WORKFLOW_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
             .description("Workflow orchestration tools.")
             .hooks(HookSubscription::TOOL_INVOKE | HookSubscription::AGENT_STOP)
             .plugin_capability(HostCapability::AgentRegistry)
-            .tools(entries())
-            .config_schema(crate::entry::definition::json_schema_for::<
-                WorkflowPluginOptions,
-            >())
+            .tools(tools())
+            .config_schema(workflow_config_schema())
             .build()
     }
 
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
-        let _config = if ctx.config.is_null() {
-            WorkflowPluginOptions::default()
+        let config = if ctx.config.is_null() {
+            WorkflowPluginConfig::default()
         } else {
             serde_json::from_value(ctx.config)
                 .map_err(|err| PluginError::new(format!("invalid workflow config: {err}")))?
         };
+        self.config
+            .set(config)
+            .map_err(|_| PluginError::new("workflow plugin config already initialized"))?;
         *self
             .host
             .write()
@@ -999,7 +1082,7 @@ impl Plugin for WorkflowPlugin {
         match input.tool_name.as_str() {
             "task" => {
                 let (action, action_input) =
-                    TaskEntryToolInput::resolve_entry("task", input.input)?;
+                    TaskToolActionInput::resolve_tool("task", input.input)?;
                 match action.as_str() {
                     "run" => {
                         self.invoke_task(
@@ -1014,7 +1097,7 @@ impl Plugin for WorkflowPlugin {
                 }
             }
             "tools" => {
-                let (action, action_input) = ToolsToolInput::resolve_entry("tools", input.input)?;
+                let (action, action_input) = ToolsToolInput::resolve_tool("tools", input.input)?;
                 match action.as_str() {
                     "search" => {
                         self.invoke_tool_search(
@@ -1036,7 +1119,7 @@ impl Plugin for WorkflowPlugin {
                 }
             }
             "agent" => {
-                let (action, action_input) = AgentToolInput::resolve_entry("agent", input.input)?;
+                let (action, action_input) = AgentToolInput::resolve_tool("agent", input.input)?;
                 match action.as_str() {
                     "switch" => {
                         self.invoke_agent_switch(
@@ -1058,7 +1141,7 @@ impl Plugin for WorkflowPlugin {
                 }
             }
             "todo" => {
-                let (action, action_input) = TodoToolInput::resolve_entry("todo", input.input)?;
+                let (action, action_input) = TodoToolInput::resolve_tool("todo", input.input)?;
                 match action.as_str() {
                     "write" => {
                         let args: TodoWriteToolInput = serde_json::from_value(action_input)
@@ -1076,7 +1159,7 @@ impl Plugin for WorkflowPlugin {
             }
             "session" => {
                 let (action, action_input) =
-                    SessionToolInput::resolve_entry(input.tool_name.as_str(), input.input)?;
+                    SessionToolInput::resolve_tool(input.tool_name.as_str(), input.input)?;
                 match action.as_str() {
                     "get" => self.invoke_get_session().await,
                     "rename" => {
@@ -1093,7 +1176,7 @@ impl Plugin for WorkflowPlugin {
             }
             "goal" => {
                 let (action, action_input) =
-                    GoalToolInput::resolve_entry(input.tool_name.as_str(), input.input)?;
+                    GoalToolInput::resolve_tool(input.tool_name.as_str(), input.input)?;
                 match action.as_str() {
                     "get" => {
                         self.invoke_get_goal(
@@ -1129,7 +1212,7 @@ impl Plugin for WorkflowPlugin {
                 }
             }
             "user" => {
-                let (action, action_input) = UserToolInput::resolve_entry("user", input.input)?;
+                let (action, action_input) = UserToolInput::resolve_tool("user", input.input)?;
                 match action.as_str() {
                     "request_input" => {
                         self.invoke_ask_user(
@@ -1144,7 +1227,7 @@ impl Plugin for WorkflowPlugin {
                 }
             }
             "plan" => {
-                let (action, _action_input) = PlanToolInput::resolve_entry("plan", input.input)?;
+                let (action, _action_input) = PlanToolInput::resolve_tool("plan", input.input)?;
                 match action.as_str() {
                     "enter" => {
                         let switch = self
@@ -1183,7 +1266,7 @@ impl Plugin for WorkflowPlugin {
             }
             "worktree" => {
                 let (action, action_input) =
-                    WorktreeToolInput::resolve_entry("worktree", input.input)?;
+                    WorktreeToolInput::resolve_tool("worktree", input.input)?;
                 match action.as_str() {
                     "enter" => {
                         let args = parse_worktree_enter_input(action_input)?;
@@ -1210,7 +1293,7 @@ impl Plugin for WorkflowPlugin {
             }
             "workflow" => {
                 let (action, action_input) =
-                    WorkflowToolInput::resolve_entry("workflow", input.input)?;
+                    WorkflowToolInput::resolve_tool("workflow", input.input)?;
                 match action.as_str() {
                     "init" => {
                         self.invoke_provided_workflow(
@@ -1257,7 +1340,7 @@ impl Plugin for WorkflowPlugin {
         match tool_name {
             "worktree" => {
                 let (action, action_input) =
-                    WorktreeToolInput::resolve_entry("worktree", input.clone())?;
+                    WorktreeToolInput::resolve_tool("worktree", input.clone())?;
                 if action != "enter" {
                     return Ok(Vec::new());
                 }
@@ -1322,11 +1405,11 @@ fn tags_summary(tags: &[String]) -> String {
     tags.join(", ")
 }
 
-fn entries() -> Vec<PluginToolDecl> {
+fn tools() -> Vec<PluginToolDecl> {
     vec![
         WorkflowToolInput::tool_decl(),
         ToolsToolInput::tool_decl(),
-        TaskEntryToolInput::tool_decl(),
+        TaskToolActionInput::tool_decl(),
         AgentToolInput::tool_decl(),
         TodoToolInput::tool_decl(),
         SessionToolInput::tool_decl(),
@@ -1343,10 +1426,11 @@ fn entries() -> Vec<PluginToolDecl> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn tools_search_rejects_unknown_fields() {
-        let err = ToolsToolInput::resolve_entry(
+        let err = ToolsToolInput::resolve_tool(
             "tools",
             serde_json::json!({
                 "action": "search",
@@ -1356,5 +1440,37 @@ mod tests {
         )
         .expect_err("tools search should reject unknown fields");
         assert!(err.to_string().contains("unknown field `backend`"));
+    }
+
+    #[test]
+    fn workflow_plugin_config_accepts_nested_tool_catalog_defaults() {
+        let config: WorkflowPluginConfig = serde_json::from_value(json!({
+            "tool_catalog": {
+                "search": {
+                    "default_limit": 6,
+                    "max_limit": 30
+                },
+                "help": {
+                    "include_schema_by_default": false
+                }
+            }
+        }))
+        .expect("workflow config should parse");
+
+        assert_eq!(config.tool_catalog.search.default_limit, 6);
+        assert_eq!(config.tool_catalog.search.max_limit, 30);
+        assert!(!config.tool_catalog.help.include_schema_by_default);
+    }
+
+    #[test]
+    fn workflow_plugin_config_rejects_legacy_tool_search_shape() {
+        let err = serde_json::from_value::<WorkflowPluginConfig>(json!({
+            "tool_search": {
+                "url": "https://example.com/catalog"
+            }
+        }))
+        .expect_err("legacy workflow config should fail");
+
+        assert!(err.to_string().contains("unknown field `tool_search`"));
     }
 }

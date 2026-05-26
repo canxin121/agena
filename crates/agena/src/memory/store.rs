@@ -4,7 +4,7 @@
 //! the workspace's memory directory and an index line into `MEMORY.md`. This
 //! module gives the rest of agena (TUI / CLI / future `/memory` slash
 //! command) a typed handle on those files: list everything, read a single
-//! entry, append a new one, forget by name.
+//! record, append a new one, forget by name.
 
 use std::fs;
 use std::io;
@@ -52,7 +52,7 @@ pub struct MemoryFrontmatter {
 }
 
 #[derive(Debug, Clone)]
-pub struct MemoryEntry {
+pub struct MemoryRecord {
     pub file_name: String,
     pub path: PathBuf,
     pub frontmatter: MemoryFrontmatter,
@@ -100,8 +100,8 @@ impl MemoryStore {
 
     /// Read all memory files in the directory (excluding the `MEMORY.md`
     /// index). Files that fail to parse are logged and skipped — a single
-    /// malformed entry must not prevent the rest from loading.
-    pub fn list(&self) -> MemoryResult<Vec<MemoryEntry>> {
+    /// malformed record must not prevent the rest from loading.
+    pub fn list(&self) -> MemoryResult<Vec<MemoryRecord>> {
         if !self.dir.exists() {
             return Ok(Vec::new());
         }
@@ -127,7 +127,7 @@ impl MemoryStore {
         Ok(entries)
     }
 
-    pub fn get(&self, name: &str) -> MemoryResult<MemoryEntry> {
+    pub fn get(&self, name: &str) -> MemoryResult<MemoryRecord> {
         let path = self.resolve_path(name);
         if !path.exists() {
             return Err(MemoryError::NotFound(name.to_string()));
@@ -170,11 +170,11 @@ impl MemoryStore {
         Ok(())
     }
 
-    /// Write a new memory file and append a one-line entry to `MEMORY.md`.
+    /// Write a new memory file and append a one-line record to `MEMORY.md`.
     /// Overwrites any existing file with the same name. Does not
     /// deduplicate the index line — callers should run [`list`] first if
     /// they care about uniqueness.
-    pub fn save(&self, entry: NewMemory) -> MemoryResult<MemoryEntry> {
+    pub fn save(&self, entry: NewMemory) -> MemoryResult<MemoryRecord> {
         self.ensure_exists()?;
         let file_name = format!("{}.md", entry.name.trim());
         let path = self.dir.join(&file_name);
@@ -228,7 +228,7 @@ pub struct NewMemory {
     pub index_line: Option<String>,
 }
 
-fn read_entry(path: &Path) -> MemoryResult<MemoryEntry> {
+fn read_entry(path: &Path) -> MemoryResult<MemoryRecord> {
     let raw = fs::read_to_string(path)?;
     let (frontmatter, body) = parse_frontmatter(&raw, path)?;
     let file_name = path
@@ -236,7 +236,7 @@ fn read_entry(path: &Path) -> MemoryResult<MemoryEntry> {
         .and_then(|s| s.to_str())
         .unwrap_or_default()
         .to_string();
-    Ok(MemoryEntry {
+    Ok(MemoryRecord {
         file_name,
         path: path.to_path_buf(),
         frontmatter,

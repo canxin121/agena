@@ -270,7 +270,7 @@ fn generate_slug() -> String {
 // Public lifecycle API used by TUI / CLI / `/worktrees` slash command.
 // ---------------------------------------------------------------------------
 
-/// One entry in the in-memory session → worktree map.
+/// One record in the in-memory session → worktree map.
 #[derive(Debug, Clone)]
 pub struct ActiveWorktree {
     pub session_id: i64,
@@ -279,7 +279,7 @@ pub struct ActiveWorktree {
     pub created_here: bool,
 }
 
-/// One entry from the on-disk `.agena/worktrees/` scan, cross-referenced
+/// One record from the on-disk `.agena/worktrees/` scan, cross-referenced
 /// against the registry and `git worktree list`.
 #[derive(Debug, Clone)]
 pub struct ManagedWorktree {

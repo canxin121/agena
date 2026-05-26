@@ -152,7 +152,7 @@ fn find_browser_executable(configured: Option<&Path>) -> Result<PathBuf, CrawlEr
             return Ok(path.to_path_buf());
         }
         return Err(CrawlError::InvalidInput(format!(
-            "configured web.browser_executable_path '{}' is not executable",
+            "configured web.browser.executable_path '{}' is not executable",
             path.display()
         )));
     }
@@ -171,7 +171,7 @@ fn find_browser_executable(configured: Option<&Path>) -> Result<PathBuf, CrawlEr
     }
 
     Err(CrawlError::InvalidInput(
-        "local browser rendering requires Chrome/Chromium; set web.browser_executable_path or AGENA_CHROME_PATH".to_string(),
+        "local browser rendering requires Chrome/Chromium; set web.browser.executable_path or AGENA_CHROME_PATH".to_string(),
     ))
 }
 

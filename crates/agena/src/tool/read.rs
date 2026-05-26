@@ -53,7 +53,7 @@ pub(super) fn execute(
             .insert("offset".to_string(), offset.to_string());
         view.metadata.insert("limit".to_string(), limit.to_string());
         view.metadata
-            .insert("entry_count".to_string(), count.to_string());
+            .insert("item_count".to_string(), count.to_string());
         view.metadata
             .insert("truncated".to_string(), truncated.to_string());
         return Ok(ToolPayloadExecution::new(output, view));

@@ -24,6 +24,7 @@ imagesize = { workspace = true }
 indexmap = { workspace = true }
 mime_guess = { workspace = true }
 ratatui = { workspace = true }
+regex = { workspace = true }
 sea-orm = { workspace = true, features = ["sqlx-sqlite", "runtime-tokio-rustls"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

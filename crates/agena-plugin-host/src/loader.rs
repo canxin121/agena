@@ -1,5 +1,7 @@
 //! Loader for one configured plugin.
 
+use regex::Regex;
+use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -360,7 +362,7 @@ fn has_trusted_signature(
 fn validate_manifest_config(
     plugin_id: &str,
     manifest: &PluginManifest,
-    config: &serde_json::Value,
+    config: &JsonValue,
 ) -> Result<(), HostError> {
     if config.is_null() {
         return Ok(());
@@ -368,7 +370,7 @@ fn validate_manifest_config(
     let Some(schema) = manifest.config_schema.as_ref() else {
         return Ok(());
     };
-    validate_schema_value("$", schema, config).map_err(|message| {
+    validate_schema_value("$", schema, schema, config).map_err(|message| {
         HostError::Config(format!(
             "plugin `{plugin_id}` config does not match manifest schema: {message}"
         ))
@@ -377,19 +379,42 @@ fn validate_manifest_config(
 
 fn validate_schema_value(
     path: &str,
-    schema: &serde_json::Value,
-    value: &serde_json::Value,
+    root: &JsonValue,
+    schema: &JsonValue,
+    value: &JsonValue,
 ) -> Result<(), String> {
+    let schema = flatten_schema_for_validation(root, schema);
     match schema {
-        serde_json::Value::Bool(true) => return Ok(()),
-        serde_json::Value::Bool(false) => {
+        JsonValue::Bool(true) => return Ok(()),
+        JsonValue::Bool(false) => {
             return Err(format!("{path}: schema rejects this value"));
         }
-        serde_json::Value::Object(_) => {}
+        JsonValue::Object(_) => {}
         _ => return Ok(()),
     }
 
     let schema_obj = schema.as_object().expect("object already checked");
+
+    if let Some(any_of) = schema_obj.get("anyOf").and_then(JsonValue::as_array) {
+        let matching = any_of
+            .iter()
+            .find(|branch| schema_matches(root, branch, value))
+            .ok_or_else(|| format!("{path}: value must match at least one allowed shape"))?;
+        validate_schema_value(path, root, matching, value)?;
+    }
+
+    if let Some(one_of) = schema_obj.get("oneOf").and_then(JsonValue::as_array) {
+        let matching = one_of
+            .iter()
+            .filter(|branch| schema_matches(root, branch, value))
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return Err(format!(
+                "{path}: value must match exactly one allowed shape"
+            ));
+        }
+        validate_schema_value(path, root, matching[0], value)?;
+    }
 
     if let Some(expected) = schema_obj.get("const")
         && expected != value
@@ -409,6 +434,17 @@ fn validate_schema_value(
         validate_schema_type(path, expected_type, value)?;
     }
 
+    if let Some(if_schema) = schema_obj.get("if") {
+        let target = if schema_matches(root, if_schema, value) {
+            schema_obj.get("then")
+        } else {
+            schema_obj.get("else")
+        };
+        if let Some(target_schema) = target {
+            validate_schema_value(path, root, target_schema, value)?;
+        }
+    }
+
     if let Some(required) = schema_obj.get("required").and_then(|v| v.as_array()) {
         let object = value
             .as_object()
@@ -423,63 +459,351 @@ fn validate_schema_value(
         }
     }
 
-    if let Some(properties) = schema_obj.get("properties").and_then(|v| v.as_object())
-        && let Some(object) = value.as_object()
-    {
-        for (key, subschema) in properties {
-            if let Some(child) = object.get(key) {
-                validate_schema_value(&format!("{path}.{key}"), subschema, child)?;
-            }
-        }
+    if let Some(object) = value.as_object() {
+        validate_object_schema(path, root, &schema, schema_obj, object)?;
     }
 
-    if let Some(additional) = schema_obj.get("additionalProperties")
-        && let Some(object) = value.as_object()
-    {
-        let properties = schema_obj.get("properties").and_then(|v| v.as_object());
-        for (key, child) in object {
-            if properties.is_some_and(|props| props.contains_key(key)) {
-                continue;
-            }
-            match additional {
-                serde_json::Value::Bool(true) => {}
-                serde_json::Value::Bool(false) => {
-                    return Err(format!("{path}: unexpected property '{key}'"));
-                }
-                other => validate_schema_value(&format!("{path}.{key}"), other, child)?,
-            }
-        }
+    if let Some(items) = value.as_array() {
+        validate_array_schema(path, root, &schema, schema_obj, items)?;
     }
 
-    if let Some(item_schema) = schema_obj.get("items")
-        && let Some(items) = value.as_array()
-    {
-        for (index, item) in items.iter().enumerate() {
-            validate_schema_value(&format!("{path}[{index}]"), item_schema, item)?;
-        }
+    if let Some(text) = value.as_str() {
+        validate_string_schema(path, schema_obj, text)?;
     }
 
-    if let Some(min_length) = schema_obj.get("minLength").and_then(|v| v.as_u64())
-        && let Some(text) = value.as_str()
-        && text.chars().count() < min_length as usize
-    {
-        return Err(format!(
-            "{path}: string is shorter than minLength {}",
-            min_length
-        ));
+    if let Some(number) = value.as_f64() {
+        validate_number_schema(path, schema_obj, number)?;
     }
 
     Ok(())
 }
 
-fn validate_schema_type(
+fn validate_object_schema(
     path: &str,
-    expected: &serde_json::Value,
-    value: &serde_json::Value,
+    root: &JsonValue,
+    schema: &JsonValue,
+    schema_object: &JsonMap<String, JsonValue>,
+    value: &JsonMap<String, JsonValue>,
 ) -> Result<(), String> {
+    if let Some(min_properties) = schema_object
+        .get("minProperties")
+        .and_then(JsonValue::as_u64)
+        && value.len() < min_properties as usize
+    {
+        return Err(format!(
+            "{path}: object must contain at least {min_properties} field(s)"
+        ));
+    }
+    if let Some(max_properties) = schema_object
+        .get("maxProperties")
+        .and_then(JsonValue::as_u64)
+        && value.len() > max_properties as usize
+    {
+        return Err(format!(
+            "{path}: object must contain at most {max_properties} field(s)"
+        ));
+    }
+    if let Some(property_names_schema) = schema_object.get("propertyNames") {
+        for key in value.keys() {
+            validate_schema_value(
+                format!("{path}.{key}").as_str(),
+                root,
+                property_names_schema,
+                &JsonValue::String(key.clone()),
+            )?;
+        }
+    }
+    for (key, child_value) in value {
+        let child_path = format!("{path}.{key}");
+        if let Some(child_schema) = object_property_schema(root, schema, key) {
+            validate_schema_value(&child_path, root, &child_schema, child_value)?;
+        } else if schema_object.get("additionalProperties") == Some(&JsonValue::Bool(false)) {
+            return Err(format!("{path}: unexpected property '{key}'"));
+        } else if let Some(additional) = schema_object.get("additionalProperties")
+            && !matches!(additional, JsonValue::Bool(true))
+        {
+            validate_schema_value(&child_path, root, additional, child_value)?;
+        }
+    }
+    if let Some(dependencies) = schema_object
+        .get("dependentRequired")
+        .and_then(JsonValue::as_object)
+    {
+        for (trigger, required_fields) in dependencies {
+            if !value.contains_key(trigger) {
+                continue;
+            }
+            for required in required_fields
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(JsonValue::as_str)
+            {
+                if !value.contains_key(required) {
+                    return Err(format!(
+                        "{path}: missing required property '{required}' because '{trigger}' is set"
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(dependencies) = schema_object
+        .get("dependentSchemas")
+        .and_then(JsonValue::as_object)
+    {
+        for (trigger, dependency_schema) in dependencies {
+            if value.contains_key(trigger) {
+                validate_schema_value(
+                    path,
+                    root,
+                    dependency_schema,
+                    &JsonValue::Object(value.clone()),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_array_schema(
+    path: &str,
+    root: &JsonValue,
+    schema: &JsonValue,
+    schema_object: &JsonMap<String, JsonValue>,
+    value: &[JsonValue],
+) -> Result<(), String> {
+    if let Some(min_items) = schema_object.get("minItems").and_then(JsonValue::as_u64)
+        && value.len() < min_items as usize
+    {
+        return Err(format!(
+            "{path}: array must contain at least {min_items} item(s)"
+        ));
+    }
+    if let Some(max_items) = schema_object.get("maxItems").and_then(JsonValue::as_u64)
+        && value.len() > max_items as usize
+    {
+        return Err(format!(
+            "{path}: array must contain at most {max_items} item(s)"
+        ));
+    }
+    if schema_object
+        .get("uniqueItems")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false)
+    {
+        let mut seen = std::collections::BTreeSet::new();
+        for item in value {
+            if !seen.insert(item.to_string()) {
+                return Err(format!("{path}: array contains duplicate items"));
+            }
+        }
+    }
+    if let Some(contains_schema) = schema_object.get("contains") {
+        let matches = value
+            .iter()
+            .filter(|item| schema_matches(root, contains_schema, item))
+            .count();
+        let min_contains = schema_object
+            .get("minContains")
+            .and_then(JsonValue::as_u64)
+            .unwrap_or(1);
+        let max_contains = schema_object.get("maxContains").and_then(JsonValue::as_u64);
+        if matches < min_contains as usize {
+            return Err(format!(
+                "{path}: array must contain at least {min_contains} matching item(s)"
+            ));
+        }
+        if let Some(max_contains) = max_contains
+            && matches > max_contains as usize
+        {
+            return Err(format!(
+                "{path}: array must contain at most {max_contains} matching item(s)"
+            ));
+        }
+    }
+    for (index, item) in value.iter().enumerate() {
+        if let Some(item_schema) = array_item_schema(root, schema, index) {
+            validate_schema_value(
+                format!("{path}[{index}]").as_str(),
+                root,
+                &item_schema,
+                item,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_string_schema(
+    path: &str,
+    schema_object: &JsonMap<String, JsonValue>,
+    text: &str,
+) -> Result<(), String> {
+    if let Some(min_length) = schema_object.get("minLength").and_then(JsonValue::as_u64)
+        && text.chars().count() < min_length as usize
+    {
+        return Err(format!(
+            "{path}: string is shorter than minLength {min_length}"
+        ));
+    }
+    if let Some(max_length) = schema_object.get("maxLength").and_then(JsonValue::as_u64)
+        && text.chars().count() > max_length as usize
+    {
+        return Err(format!(
+            "{path}: string is longer than maxLength {max_length}"
+        ));
+    }
+    if let Some(format) = schema_object.get("format").and_then(JsonValue::as_str)
+        && !format_is_valid(format, text)
+    {
+        return Err(format!("{path}: string must match format {format}"));
+    }
+    if let Some(pattern) = schema_object.get("pattern").and_then(JsonValue::as_str)
+        && !pattern_key_matches(pattern, text)
+    {
+        return Err(format!("{path}: string must match pattern {pattern}"));
+    }
+    Ok(())
+}
+
+fn validate_number_schema(
+    path: &str,
+    schema_object: &JsonMap<String, JsonValue>,
+    number: f64,
+) -> Result<(), String> {
+    if let Some(minimum) = schema_object.get("minimum").and_then(JsonValue::as_f64)
+        && number < minimum
+    {
+        return Err(format!("{path}: value must be >= {minimum}"));
+    }
+    if let Some(maximum) = schema_object.get("maximum").and_then(JsonValue::as_f64)
+        && number > maximum
+    {
+        return Err(format!("{path}: value must be <= {maximum}"));
+    }
+    if let Some(minimum) = schema_object
+        .get("exclusiveMinimum")
+        .and_then(JsonValue::as_f64)
+        && number <= minimum
+    {
+        return Err(format!("{path}: value must be > {minimum}"));
+    }
+    if let Some(maximum) = schema_object
+        .get("exclusiveMaximum")
+        .and_then(JsonValue::as_f64)
+        && number >= maximum
+    {
+        return Err(format!("{path}: value must be < {maximum}"));
+    }
+    if let Some(multiple_of) = schema_object.get("multipleOf").and_then(JsonValue::as_f64)
+        && multiple_of > 0.0
+    {
+        let quotient = number / multiple_of;
+        if (quotient - quotient.round()).abs() > f64::EPSILON {
+            return Err(format!("{path}: value must be a multiple of {multiple_of}"));
+        }
+    }
+    Ok(())
+}
+
+fn schema_matches(root: &JsonValue, schema: &JsonValue, value: &JsonValue) -> bool {
+    validate_schema_value("$match", root, schema, value).is_ok()
+}
+
+fn resolve_schema<'a>(root: &'a JsonValue, schema: &'a JsonValue) -> &'a JsonValue {
+    let Some(reference) = schema.get("$ref").and_then(JsonValue::as_str) else {
+        return schema;
+    };
+    if !reference.starts_with("#/") {
+        return schema;
+    }
+    let mut cursor = root;
+    for segment in reference.trim_start_matches("#/").split('/') {
+        let segment = segment.replace("~1", "/").replace("~0", "~");
+        let Some(next) = cursor.get(segment.as_str()) else {
+            return schema;
+        };
+        cursor = next;
+    }
+    cursor
+}
+
+fn merge_schema_overlay(target: &mut JsonValue, overlay: &JsonValue) {
+    match (target, overlay) {
+        (JsonValue::Object(target), JsonValue::Object(overlay)) => {
+            for (key, overlay_value) in overlay {
+                match target.get_mut(key) {
+                    Some(target_value) => merge_schema_overlay(target_value, overlay_value),
+                    None => {
+                        target.insert(key.clone(), overlay_value.clone());
+                    }
+                }
+            }
+        }
+        (target, overlay) => *target = overlay.clone(),
+    }
+}
+
+fn merge_all_of(root: &JsonValue, items: &[JsonValue]) -> JsonValue {
+    let mut merged = JsonValue::Object(JsonMap::new());
+    for item in items {
+        let flattened = flatten_schema_for_validation(root, item);
+        merge_schema_overlay(&mut merged, &flattened);
+    }
+    merged
+}
+
+fn flatten_schema_for_validation(root: &JsonValue, schema: &JsonValue) -> JsonValue {
+    let schema = resolve_schema(root, schema);
+    let mut flattened = schema.clone();
+    let Some(all_of) = schema.get("allOf").and_then(JsonValue::as_array) else {
+        return flattened;
+    };
+    if let Some(object) = flattened.as_object_mut() {
+        object.remove("allOf");
+    }
+    let merged = merge_all_of(root, all_of);
+    merge_schema_overlay(&mut flattened, &merged);
+    flattened
+}
+
+fn object_property_schema(root: &JsonValue, schema: &JsonValue, key: &str) -> Option<JsonValue> {
+    let schema = resolve_schema(root, schema);
+    if let Some(properties) = schema.get("properties").and_then(JsonValue::as_object)
+        && let Some(child) = properties.get(key)
+    {
+        return Some(child.clone());
+    }
+    if let Some(patterns) = schema
+        .get("patternProperties")
+        .and_then(JsonValue::as_object)
+    {
+        for (pattern, child) in patterns {
+            if pattern_key_matches(pattern, key) {
+                return Some(child.clone());
+            }
+        }
+    }
+    match schema.get("additionalProperties") {
+        Some(JsonValue::Object(object)) => Some(JsonValue::Object(object.clone())),
+        _ => None,
+    }
+}
+
+fn array_item_schema(root: &JsonValue, schema: &JsonValue, index: usize) -> Option<JsonValue> {
+    let schema = resolve_schema(root, schema);
+    if let Some(prefix) = schema.get("prefixItems").and_then(JsonValue::as_array)
+        && let Some(item) = prefix.get(index)
+    {
+        return Some(item.clone());
+    }
+    schema.get("items").cloned()
+}
+
+fn validate_schema_type(path: &str, expected: &JsonValue, value: &JsonValue) -> Result<(), String> {
     let matches = match expected {
-        serde_json::Value::String(kind) => value_matches_type(kind, value),
-        serde_json::Value::Array(kinds) => kinds
+        JsonValue::String(kind) => value_matches_type(kind, value),
+        JsonValue::Array(kinds) => kinds
             .iter()
             .filter_map(|kind| kind.as_str())
             .any(|kind| value_matches_type(kind, value)),
@@ -492,7 +816,7 @@ fn validate_schema_type(
     }
 }
 
-fn value_matches_type(kind: &str, value: &serde_json::Value) -> bool {
+fn value_matches_type(kind: &str, value: &JsonValue) -> bool {
     match kind {
         "object" => value.is_object(),
         "array" => value.is_array(),
@@ -502,6 +826,149 @@ fn value_matches_type(kind: &str, value: &serde_json::Value) -> bool {
         "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
         "number" => value.is_number(),
         _ => true,
+    }
+}
+
+fn format_is_valid(format: &str, text: &str) -> bool {
+    match format {
+        "uri" | "url" => url::Url::parse(text).is_ok(),
+        "email" => text.contains('@') && text.split('@').all(|part| !part.is_empty()),
+        "hostname" => !text.trim().is_empty() && !text.contains('/'),
+        "ipv4" => text.parse::<std::net::Ipv4Addr>().is_ok(),
+        "ipv6" => text.parse::<std::net::Ipv6Addr>().is_ok(),
+        "uuid" => uuid::Uuid::parse_str(text).is_ok(),
+        _ => true,
+    }
+}
+
+fn pattern_key_matches(pattern: &str, key: &str) -> bool {
+    Regex::new(pattern)
+        .map(|regex| regex.is_match(key))
+        .unwrap_or_else(|_| key.contains(pattern.trim_matches('*')))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn validate_schema_value_accepts_pattern_properties_with_additional_properties_false() {
+        let schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "propertyNames": {
+                        "type": "string",
+                        "pattern": "^x-[a-z0-9-]+$"
+                    },
+                    "patternProperties": {
+                        "^x-[a-z0-9-]+$": { "type": "string" }
+                    },
+                    "additionalProperties": false
+                }
+            }
+        });
+        let value = json!({
+            "headers": {
+                "x-demo": "true",
+                "x-region": "apac"
+            }
+        });
+
+        let result = validate_schema_value("$", &schema, &schema, &value);
+
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn validate_schema_value_accepts_all_of_merged_object_properties() {
+        let schema = json!({
+            "type": "object",
+            "allOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "mode": { "type": "string", "enum": ["manual", "scheduled"] }
+                    },
+                    "required": ["mode"],
+                    "additionalProperties": false
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "cron": { "type": "string", "minLength": 1 }
+                    },
+                    "additionalProperties": false
+                }
+            ],
+            "if": {
+                "properties": { "mode": { "const": "scheduled" } },
+                "required": ["mode"]
+            },
+            "then": {
+                "required": ["cron"]
+            }
+        });
+        let value = json!({
+            "mode": "scheduled",
+            "cron": "0 * * * *"
+        });
+
+        let result = validate_schema_value("$", &schema, &schema, &value);
+
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn validate_schema_value_accepts_nested_map_object_list_structure() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "region_policies": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "priority": {
+                                "type": "integer",
+                                "minimum": 1
+                            },
+                            "labels": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string",
+                                    "enum": ["edge", "beta", "internal"]
+                                },
+                                "contains": { "const": "edge" }
+                            }
+                        },
+                        "required": ["priority", "labels"],
+                        "additionalProperties": false
+                    }
+                }
+            },
+            "required": ["region_policies"],
+            "additionalProperties": false
+        });
+        let value = json!({
+            "region_policies": {
+                "apac": {
+                    "priority": 3,
+                    "labels": ["edge", "beta"]
+                },
+                "eu-west": {
+                    "priority": 2,
+                    "labels": ["edge", "internal"]
+                }
+            }
+        });
+
+        let result = validate_schema_value("$", &schema, &schema, &value);
+
+        assert!(result.is_ok(), "{result:?}");
     }
 }
 

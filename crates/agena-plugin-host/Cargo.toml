@@ -16,6 +16,7 @@ tracing = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls"] }
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true }
+regex = { workspace = true }
 dashmap = { workspace = true }
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }

@@ -189,13 +189,13 @@ fn schema_lab_config_schema() -> JsonValue {
     "identity": {
       "fixture_kind": "schema_lab",
       "display_name": "Schema Lab",
+      "profile_slug": "schema-lab",
       "owner_email": "ops@example.com",
       "documentation_url": "https://docs.example.com/schema-lab",
       "hostname": "schema-lab.local",
       "instance_uuid": "123e4567-e89b-12d3-a456-426614174000",
       "notes": "This built-in fixture exists to stress the structured config editor with deep, mixed JSON Schema constructs.",
-      "tags": ["primary", "docs", "demo"],
-      "legacy_profile_id": 7
+      "tags": ["primary", "docs", "demo"]
     },
     "transport": {
       "kind": "http",
@@ -275,10 +275,70 @@ fn schema_lab_config_schema() -> JsonValue {
         "priority": 3,
         "ephemeral": false,
         "comment": null
+      },
+      "region_policies": {
+        "apac": {
+          "priority": 1,
+          "labels": ["edge", "gpu"]
+        },
+        "eu-west": {
+          "priority": 2,
+          "labels": ["core"]
+        }
       }
+    },
+    "collection_mesh": {
+      "list_routes": [
+        {
+          "name": "alpha",
+          "buckets": {
+            "edge": {
+              "enabled": true,
+              "labels": ["core", "gpu"],
+              "weights": [2, 4, 8]
+            },
+            "cold": {
+              "enabled": false,
+              "labels": ["cold"],
+              "weights": [1]
+            }
+          }
+        },
+        {
+          "name": "beta",
+          "buckets": {
+            "archive": {
+              "enabled": true,
+              "labels": ["core"],
+              "weights": [3, 6]
+            }
+          }
+        }
+      ],
+      "bucket_steps": {
+        "priority": [
+          { "kind": "delay", "ms": 120 },
+          { "kind": "label", "value": "fast-lane" }
+        ],
+        "fallback": [
+          { "kind": "toggle", "enabled": true },
+          { "kind": "script", "code": "return input;" }
+        ]
+      },
+      "matrix_rows": [
+        [
+          { "key": "cpu", "value": 2 },
+          { "key": "mem", "value": 8 }
+        ],
+        [
+          { "key": "cpu", "value": 4 },
+          { "key": "mem", "value": 16 }
+        ]
+      ]
     },
     "tuples": {
       "command": ["npx", "@agena/mcp-demo", ["--port", "7788"]],
+      "command_with_tail": ["node", "worker.mjs", "--watch", "--json"],
       "coordinates": [12.5, 48.1, "warehouse-a"],
       "fallback_pair": [
         null,
@@ -315,7 +375,13 @@ fn schema_lab_config_schema() -> JsonValue {
           "enabled": true
         },
         3
-      ]
+      ],
+      "enabled_regions": ["apac", "eu-west"],
+      "audit": {
+        "enabled": true,
+        "webhook": "https://hooks.example.com/schema-lab",
+        "secret_ref": "secret://schema-lab/audit"
+      }
     },
     "deep_nesting": {
       "level1": {
@@ -545,10 +611,15 @@ fn schema_lab_config_schema() -> JsonValue {
       "description": "Top-level string, enum, const, formatted string, deprecated, and array fields.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["fixture_kind", "display_name", "owner_email", "documentation_url", "hostname", "instance_uuid", "notes", "tags"],
+      "required": ["fixture_kind", "display_name", "profile_slug", "owner_email", "documentation_url", "hostname", "instance_uuid", "notes", "tags"],
       "properties": {
         "fixture_kind": { "title": "Fixture Kind", "const": "schema_lab", "readOnly": true },
         "display_name": { "title": "Display Name", "type": "string", "minLength": 3, "maxLength": 40 },
+        "profile_slug": {
+          "title": "Profile Slug",
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
         "owner_email": { "title": "Owner Email", "type": "string", "format": "email" },
         "documentation_url": { "title": "Documentation URL", "type": "string", "format": "uri" },
         "hostname": { "title": "Hostname", "type": "string", "format": "hostname" },
@@ -673,7 +744,7 @@ fn schema_lab_config_schema() -> JsonValue {
       "description": "Pattern-key maps, typed additionalProperties, and heterogeneous metadata values.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["headers", "feature_flags", "named_limits", "metadata"],
+      "required": ["headers", "feature_flags", "named_limits", "metadata", "region_policies"],
       "properties": {
         "headers": {
           "title": "Headers",
@@ -705,6 +776,155 @@ fn schema_lab_config_schema() -> JsonValue {
               { "type": "null" }
             ]
           }
+        },
+        "region_policies": {
+          "title": "Region Policies",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["priority", "labels"],
+            "properties": {
+              "priority": { "type": "integer", "minimum": 1, "title": "Priority" },
+              "labels": {
+                "title": "Labels",
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": ["edge", "core", "cold", "gpu"]
+                },
+                "uniqueItems": true,
+                "minItems": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "collection_mesh": {
+      "title": "Collection Mesh",
+      "description": "Cross-nested collections covering list-of-map-of-object-of-list, map-of-array-of-union, and array-of-array-of-object layouts.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["list_routes", "bucket_steps", "matrix_rows"],
+      "properties": {
+        "list_routes": {
+          "title": "List Routes",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "buckets"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "title": "Name"
+              },
+              "buckets": {
+                "title": "Buckets",
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["enabled", "labels", "weights"],
+                  "properties": {
+                    "enabled": { "type": "boolean", "title": "Enabled" },
+                    "labels": {
+                      "title": "Labels",
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": ["core", "gpu", "cold", "edge", "archive"]
+                      },
+                      "uniqueItems": true,
+                      "minItems": 1
+                    },
+                    "weights": {
+                      "title": "Weights",
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "minItems": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "bucket_steps": {
+          "title": "Bucket Steps",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "oneOf": [
+                {
+                  "title": "Delay Step",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "ms"],
+                  "properties": {
+                    "kind": { "const": "delay", "title": "Kind" },
+                    "ms": { "type": "integer", "minimum": 1, "title": "Delay" }
+                  }
+                },
+                {
+                  "title": "Label Step",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "value"],
+                  "properties": {
+                    "kind": { "const": "label", "title": "Kind" },
+                    "value": { "type": "string", "minLength": 1, "title": "Value" }
+                  }
+                },
+                {
+                  "title": "Toggle Step",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "enabled"],
+                  "properties": {
+                    "kind": { "const": "toggle", "title": "Kind" },
+                    "enabled": { "type": "boolean", "title": "Enabled" }
+                  }
+                },
+                {
+                  "title": "Script Step",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "code"],
+                  "properties": {
+                    "kind": { "const": "script", "title": "Kind" },
+                    "code": { "type": "string", "minLength": 1, "title": "Code" }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "matrix_rows": {
+          "title": "Matrix Rows",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["key", "value"],
+              "properties": {
+                "key": { "type": "string", "minLength": 1, "title": "Key" },
+                "value": { "type": "integer", "minimum": 0, "title": "Value" }
+              }
+            }
+          }
         }
       }
     },
@@ -713,7 +933,7 @@ fn schema_lab_config_schema() -> JsonValue {
       "description": "Prefix-item tuples containing strings, arrays, numbers, nulls, and nested refs.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["command", "coordinates", "fallback_pair"],
+      "required": ["command", "command_with_tail", "coordinates", "fallback_pair"],
       "properties": {
         "command": {
           "title": "Command Tuple",
@@ -726,6 +946,16 @@ fn schema_lab_config_schema() -> JsonValue {
           "items": false,
           "minItems": 3,
           "maxItems": 3
+        },
+        "command_with_tail": {
+          "title": "Command With Tail",
+          "type": "array",
+          "prefixItems": [
+            { "type": "string", "title": "Runtime" },
+            { "type": "string", "title": "Entry" }
+          ],
+          "items": { "type": "string", "title": "Extra Arg" },
+          "minItems": 2
         },
         "coordinates": {
           "title": "Coordinates",
@@ -763,7 +993,7 @@ fn schema_lab_config_schema() -> JsonValue {
       "description": "Union-heavy section covering generic payloads, one-of targets, all-of policies, conditional requirements, and mixed arrays.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["generic_payload", "notification_target", "retention_policy", "rollout", "option_matrix"],
+      "required": ["generic_payload", "notification_target", "retention_policy", "rollout", "option_matrix", "enabled_regions", "audit"],
       "properties": {
         "generic_payload": {
           "title": "Generic Payload",
@@ -826,6 +1056,42 @@ fn schema_lab_config_schema() -> JsonValue {
               },
               { "type": "integer" }
             ]
+          }
+        },
+        "enabled_regions": {
+          "title": "Enabled Regions",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["us-east", "eu-west", "apac", "internal"]
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "audit": {
+          "title": "Audit",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled"],
+          "properties": {
+            "enabled": { "type": "boolean", "title": "Enabled" },
+            "webhook": { "type": "string", "format": "uri", "title": "Webhook" },
+            "secret_ref": { "type": "string", "minLength": 1, "title": "Secret Reference" }
+          },
+          "dependentRequired": {
+            "webhook": ["secret_ref"]
+          },
+          "dependentSchemas": {
+            "enabled": {
+              "if": {
+                "properties": {
+                  "enabled": { "const": true }
+                }
+              },
+              "then": {
+                "required": ["webhook", "secret_ref"]
+              }
+            }
           }
         }
       }
@@ -944,11 +1210,42 @@ mod tests {
             "limits",
             "pipelines",
             "maps",
+            "collection_mesh",
             "tuples",
             "experiments",
             "deep_nesting",
         ] {
             assert!(properties.contains_key(key), "missing root section {key}");
         }
+        let identity = properties
+            .get("identity")
+            .and_then(|value| value.get("properties"))
+            .and_then(JsonValue::as_object)
+            .expect("identity properties");
+        assert!(identity.contains_key("profile_slug"));
+
+        let maps = properties
+            .get("maps")
+            .and_then(|value| value.get("properties"))
+            .and_then(JsonValue::as_object)
+            .expect("maps properties");
+        assert!(maps.contains_key("region_policies"));
+
+        let collection_mesh = properties
+            .get("collection_mesh")
+            .and_then(|value| value.get("properties"))
+            .and_then(JsonValue::as_object)
+            .expect("collection_mesh properties");
+        assert!(collection_mesh.contains_key("list_routes"));
+        assert!(collection_mesh.contains_key("bucket_steps"));
+        assert!(collection_mesh.contains_key("matrix_rows"));
+
+        let experiments = properties
+            .get("experiments")
+            .and_then(|value| value.get("properties"))
+            .and_then(JsonValue::as_object)
+            .expect("experiments properties");
+        assert!(experiments.contains_key("enabled_regions"));
+        assert!(experiments.contains_key("audit"));
     }
 }

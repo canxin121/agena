@@ -1,13 +1,18 @@
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
 use crate::{
+    config::ProviderConfigCredentialStore,
     error::AppError,
     provider::{
-        auth::{AuthData, refresh_atomgit_token, refresh_gitlab_token},
+        auth::{AuthData, AuthStore, refresh_gitlab_token},
         utils,
     },
 };
@@ -27,7 +32,6 @@ pub enum AuthRefreshStrategy {
     ReloadFromStore,
     OpenAiOAuth,
     GitlabOAuth { instance_url: String },
-    AtomGitOAuth,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -73,6 +77,7 @@ enum CredentialSource {
         auth: Arc<Mutex<AuthData>>,
         selector: AuthSecretSelector,
         refresh: AuthRefreshStrategy,
+        config_path: Option<PathBuf>,
     },
     GoogleAdc {
         provider_id: String,
@@ -142,6 +147,27 @@ impl ManagedCredential {
                 auth,
                 selector,
                 refresh,
+                config_path: None,
+            },
+        )
+    }
+
+    pub fn auth_data_shared_with_store(
+        label: impl Into<String>,
+        provider_id: impl Into<String>,
+        auth: Arc<Mutex<AuthData>>,
+        selector: AuthSecretSelector,
+        refresh: AuthRefreshStrategy,
+        config_path: impl Into<PathBuf>,
+    ) -> Self {
+        Self::new(
+            label.into(),
+            CredentialSource::AuthData {
+                provider_id: provider_id.into(),
+                auth,
+                selector,
+                refresh,
+                config_path: Some(config_path.into()),
             },
         )
     }
@@ -282,6 +308,7 @@ impl CredentialSource {
                 auth,
                 selector,
                 refresh,
+                config_path: _,
             } => {
                 let mut scope = format!(
                     "auth_data:{provider_id}:{}:{}",
@@ -341,12 +368,14 @@ impl CredentialSource {
                 auth,
                 selector,
                 refresh,
+                config_path,
             } => {
                 resolve_inline_auth_credential(
                     auth.as_ref(),
                     provider_id.as_str(),
                     *selector,
                     refresh,
+                    config_path.as_deref(),
                     force_refresh,
                 )
                 .await
@@ -536,7 +565,6 @@ fn auth_refresh_strategy_key(strategy: &AuthRefreshStrategy) -> String {
         AuthRefreshStrategy::GitlabOAuth { instance_url } => {
             format!("gitlab_oauth:{}", instance_url.trim_end_matches('/'))
         }
-        AuthRefreshStrategy::AtomGitOAuth => "atomgit_oauth".to_owned(),
     }
 }
 
@@ -588,15 +616,22 @@ async fn resolve_inline_auth_credential(
     provider_id: &str,
     selector: AuthSecretSelector,
     refresh: &AuthRefreshStrategy,
+    config_path: Option<&Path>,
     force_refresh: bool,
 ) -> Result<CachedCredential, AppError> {
-    let current = auth.lock().await.clone();
+    let mut current = auth.lock().await.clone();
+    if let Some(config_path) = config_path
+        && let Some(stored) = load_auth_data_from_store(config_path, provider_id)?
+    {
+        if stored != current {
+            *auth.lock().await = stored.clone();
+        }
+        current = stored;
+    }
     let selected = select_auth_secret(&current, selector, provider_id);
     let now_ms = chrono::Utc::now().timestamp_millis();
     let should_refresh = match refresh {
-        AuthRefreshStrategy::GitlabOAuth { .. }
-        | AuthRefreshStrategy::OpenAiOAuth
-        | AuthRefreshStrategy::AtomGitOAuth => {
+        AuthRefreshStrategy::GitlabOAuth { .. } | AuthRefreshStrategy::OpenAiOAuth => {
             oauth_refresh_token(&current).is_some()
                 && match selected.as_ref() {
                     Ok(selected) => force_refresh || !selected.is_fresh(now_ms),
@@ -635,7 +670,7 @@ async fn resolve_inline_auth_credential(
                 enterprise_url,
                 user,
             };
-            *auth.lock().await = updated.clone();
+            write_auth_data(auth, provider_id, config_path, updated.clone()).await?;
             select_auth_secret(&updated, selector, provider_id)
         }
         AuthRefreshStrategy::GitlabOAuth { instance_url } => {
@@ -662,37 +697,39 @@ async fn resolve_inline_auth_credential(
                 enterprise_url,
                 user,
             };
-            *auth.lock().await = updated.clone();
-            select_auth_secret(&updated, selector, provider_id)
-        }
-        AuthRefreshStrategy::AtomGitOAuth => {
-            let AuthData::OAuth {
-                issuer,
-                refresh: refresh_token,
-                account_id,
-                enterprise_url,
-                user,
-                ..
-            } = current
-            else {
-                return selected;
-            };
-
-            let refreshed = refresh_atomgit_token(refresh_token.as_str()).await?;
-            let updated = AuthData::OAuth {
-                issuer,
-                refresh: refreshed.refresh,
-                access: refreshed.access,
-                expires_at_ms: refreshed.expires_at_ms,
-                account_id: refreshed.account_id.or(account_id),
-                enterprise_url,
-                user: refreshed.user.or(user),
-            };
-            *auth.lock().await = updated.clone();
+            write_auth_data(auth, provider_id, config_path, updated.clone()).await?;
             select_auth_secret(&updated, selector, provider_id)
         }
         AuthRefreshStrategy::None | AuthRefreshStrategy::ReloadFromStore => selected,
     }
+}
+
+fn load_auth_data_from_store(
+    config_path: &Path,
+    provider_id: &str,
+) -> Result<Option<AuthData>, AppError> {
+    ProviderConfigCredentialStore::new(config_path.to_path_buf()).get(provider_id)
+}
+
+fn persist_auth_data_to_store(
+    config_path: &Path,
+    provider_id: &str,
+    auth: &AuthData,
+) -> Result<(), AppError> {
+    ProviderConfigCredentialStore::new(config_path.to_path_buf()).set(provider_id, auth.clone())
+}
+
+async fn write_auth_data(
+    auth: &Mutex<AuthData>,
+    provider_id: &str,
+    config_path: Option<&Path>,
+    updated: AuthData,
+) -> Result<(), AppError> {
+    if let Some(config_path) = config_path {
+        persist_auth_data_to_store(config_path, provider_id, &updated)?;
+    }
+    *auth.lock().await = updated;
+    Ok(())
 }
 
 fn oauth_refresh_token(auth: &AuthData) -> Option<&str> {
@@ -816,4 +853,161 @@ fn normalize_optional_text(value: String) -> Option<String> {
 
 fn normalize_expires_at_ms(value: i64) -> Option<i64> {
     (value > 0).then_some(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::auth::CredentialIssuer;
+    use std::fs;
+
+    fn write_provider_config(path: &Path, provider_id: &str, body: &str) {
+        fs::write(
+            path,
+            format!(
+                "{{\n  \"providers\": {{\n    \"default\": \"{provider_id}\",\n    \"{provider_id}\": {body}\n  }}\n}}\n"
+            ),
+        )
+        .expect("write provider config");
+    }
+
+    fn oauth_auth(
+        issuer: CredentialIssuer,
+        refresh: &str,
+        access: &str,
+        expires_at_ms: i64,
+        enterprise_url: Option<&str>,
+    ) -> AuthData {
+        AuthData::OAuth {
+            issuer: Some(issuer),
+            refresh: refresh.to_owned(),
+            access: access.to_owned(),
+            expires_at_ms,
+            account_id: Some("acct_123".to_owned()),
+            enterprise_url: enterprise_url.map(str::to_owned),
+            user: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn reload_from_store_uses_latest_saved_credential() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config_path = temp.path().join("config.json");
+        write_provider_config(
+            config_path.as_path(),
+            "github-copilot",
+            r#"{
+      "defaults": {
+        "adapter": "openai",
+        "model": "gpt-4o-mini"
+      },
+      "auth": {
+        "mode": "credential",
+        "issuer": "github_copilot"
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true
+        }
+      }
+    }"#,
+        );
+        let store = ProviderConfigCredentialStore::new(config_path.clone());
+
+        let current = oauth_auth(
+            CredentialIssuer::GithubCopilot,
+            "old-refresh",
+            "old-access",
+            0,
+            Some("github.com"),
+        );
+        store
+            .set("github-copilot", current.clone())
+            .expect("seed initial credential");
+
+        let shared = Arc::new(Mutex::new(current));
+        let credential = ManagedCredential::auth_data_shared_with_store(
+            "copilot bearer",
+            "github-copilot",
+            shared.clone(),
+            AuthSecretSelector::RefreshOrAccess,
+            AuthRefreshStrategy::ReloadFromStore,
+            config_path.clone(),
+        );
+
+        let updated = oauth_auth(
+            CredentialIssuer::GithubCopilot,
+            "new-refresh",
+            "new-access",
+            0,
+            Some("enterprise.example.com"),
+        );
+        store
+            .set("github-copilot", updated.clone())
+            .expect("persist updated credential");
+
+        let resolved = credential.resolve().await.expect("resolve reloaded token");
+        assert_eq!(resolved, "new-refresh");
+        assert_eq!(*shared.lock().await, updated);
+    }
+
+    #[tokio::test]
+    async fn oauth_resolution_prefers_fresh_store_value_before_refreshing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config_path = temp.path().join("config.json");
+        write_provider_config(
+            config_path.as_path(),
+            "openai_chatgpt",
+            r#"{
+      "defaults": {
+        "adapter": "openai",
+        "model": "gpt-5.3-codex"
+      },
+      "auth": {
+        "mode": "credential",
+        "issuer": "openai_chatgpt"
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "backend": "chatgpt_codex"
+        }
+      }
+    }"#,
+        );
+        let store = ProviderConfigCredentialStore::new(config_path.clone());
+        let now_ms = chrono::Utc::now().timestamp_millis();
+
+        let stale = oauth_auth(
+            CredentialIssuer::OpenaiChatgpt,
+            "stale-refresh",
+            "stale-access",
+            now_ms - 1_000,
+            None,
+        );
+        let fresh = oauth_auth(
+            CredentialIssuer::OpenaiChatgpt,
+            "fresh-refresh",
+            "fresh-access",
+            now_ms + 10 * 60 * 1_000,
+            None,
+        );
+        store
+            .set("openai_chatgpt", fresh.clone())
+            .expect("persist fresh credential");
+
+        let shared = Arc::new(Mutex::new(stale));
+        let credential = ManagedCredential::auth_data_shared_with_store(
+            "openai api_key",
+            "openai_chatgpt",
+            shared.clone(),
+            AuthSecretSelector::AccessOrApiKey,
+            AuthRefreshStrategy::OpenAiOAuth,
+            config_path,
+        );
+
+        let resolved = credential.resolve().await.expect("resolve stored access");
+        assert_eq!(resolved, "fresh-access");
+        assert_eq!(*shared.lock().await, fresh);
+    }
 }

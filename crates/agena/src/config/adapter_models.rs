@@ -5,13 +5,10 @@ use crate::error::AppError;
 use super::{
     AnthropicProviderOptions, ConfigEnvironment, ConfigError, GeminiProviderOptions,
     HttpProviderAdapterConfig, OpenAiApiModeConfig, OpenAiBackendConfig, OpenAiProviderOptions,
-    ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
-    ProviderCredentialAuthConfig, ProviderGitlabAuthConfig, ProviderProtocolPathsConfig,
-    ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig, StreamTransportMode,
-    list_provider_adapter_models,
+    ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig, ProviderGitlabAuthConfig,
+    ProviderProtocolPathsConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
+    ResolvedProviderConfig, StreamTransportMode, list_provider_adapter_models,
 };
-use crate::provider::auth::{AuthData, CredentialIssuer};
-
 pub const HTTP_ADAPTER_MODEL_LIST_ADAPTER_IDS: [&str; 3] = ["openai", "anthropic", "gemini"];
 
 #[derive(Debug, Clone)]
@@ -68,39 +65,6 @@ pub fn draft_gitlab_provider_adapter_models_target(
             api_key: optional_trimmed(api_key).map(ToOwned::to_owned),
             api_key_env: optional_trimmed(api_key_env).map(ToOwned::to_owned),
             credential: None,
-            instance_url: None,
-            ai_gateway_url: None,
-            ai_gateway_headers: BTreeMap::new(),
-            feature_flags: BTreeMap::new(),
-        }),
-        adapters: default_http_adapter_model_list_adapters(adapter_ids.as_slice())?,
-    })
-}
-
-pub fn draft_atomgit_provider_adapter_models_target(
-    provider_id: Option<&str>,
-    credential: AuthData,
-    adapter_ids: &[String],
-) -> Result<ProviderAdapterModelsTarget, ConfigError> {
-    let adapter_ids = required_adapter_ids(
-        adapter_ids,
-        "draft atomgit adapter model listing requires explicit adapter_ids",
-    )?;
-    for adapter_id in &adapter_ids {
-        if adapter_id != "openai" {
-            return Err(ConfigError::Validation(format!(
-                "draft atomgit adapter model listing only supports `openai`; unsupported `{adapter_id}`"
-            )));
-        }
-    }
-    Ok(ProviderAdapterModelsTarget {
-        provider_id: optional_trimmed(provider_id).unwrap_or("draft").to_owned(),
-        auth: ProviderAuthConfig::Credential(ProviderCredentialAuthConfig {
-            issuer: CredentialIssuer::AtomGit,
-            credential: Some(credential.with_issuer(CredentialIssuer::AtomGit)),
-            base_url: None,
-            protocol_paths: ProviderProtocolPathsConfig::default(),
-            service_key_env: None,
             instance_url: None,
             ai_gateway_url: None,
             ai_gateway_headers: BTreeMap::new(),

@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     config::{NativeToolFreshness, ProviderNativeToolKind, ProviderNativeToolRoute},
-    error::{AppError, ProviderErrorKind},
+    error::AppError,
     message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, MessageUsage},
     model::{
         CapabilitySupport, ModelCapabilities, ModelId, ModelMetadata, ModelThinkingMode, ProviderId,
@@ -24,7 +24,7 @@ use crate::{
             self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions,
             tools_to_chat_definitions,
         },
-        prompt_cache, should_retry_credential, sse, utils, wire_message,
+        prompt_cache, sse, utils, wire_message,
     },
     role::Role,
 };
@@ -32,7 +32,6 @@ use crate::{
 const CHATGPT_CODEX_ORIGINATOR: &str = crate::provider::CODEX_ORIGINATOR;
 const CHATGPT_CODEX_USER_AGENT: &str = crate::provider::CODEX_USER_AGENT;
 const DEFAULT_COPILOT_BASE_URL: &str = "https://api.githubcopilot.com";
-const ATOMGIT_CODING_PLAN_MODELS_URL: &str = "https://api.gitcode.com/api/v5/coding-plan/models-v2";
 const ADAPTER_KIND: &str = "openai";
 
 #[derive(Clone)]
@@ -55,7 +54,6 @@ pub struct OpenAiAdapter {
     stream_mode: OpenAiStreamMode,
     realtime_ws_url: Option<String>,
     top_level_prompt_cache_override: Option<bool>,
-    atomgit_coding_plan_models: bool,
 }
 
 #[derive(Debug, Default)]
@@ -159,7 +157,6 @@ impl OpenAiAdapter {
             stream_mode: OpenAiStreamMode::Sse,
             realtime_ws_url: None,
             top_level_prompt_cache_override: None,
-            atomgit_coding_plan_models: false,
         }
     }
 
@@ -195,11 +192,6 @@ impl OpenAiAdapter {
 
     pub fn with_models_url(mut self, models_url: Option<String>) -> Self {
         self.models_url = models_url.and_then(|value| utils::normalize_optional_text(Some(value)));
-        self
-    }
-
-    pub fn with_atomgit_coding_plan_models(mut self, enabled: bool) -> Self {
-        self.atomgit_coding_plan_models = enabled;
         self
     }
 
@@ -272,139 +264,6 @@ impl OpenAiAdapter {
                 "{}/models",
                 self.prompt_cache_base_url().trim_end_matches('/')
             )
-        }))
-    }
-
-    fn atomgit_coding_plan_models_endpoint(
-        &self,
-        plan_type: AtomGitCodingPlanType,
-    ) -> Result<String, AppError> {
-        let base = self
-            .models_url
-            .clone()
-            .unwrap_or_else(|| ATOMGIT_CODING_PLAN_MODELS_URL.to_owned());
-        let mut endpoint = url::Url::parse(base.as_str()).map_err(|err| {
-            AppError::Config(format!("atomgit coding plan models url is invalid: {err}"))
-        })?;
-        let existing = endpoint
-            .query_pairs()
-            .filter(|(key, _)| key != "plan_type")
-            .map(|(key, value)| (key.into_owned(), value.into_owned()))
-            .collect::<Vec<_>>();
-        {
-            let mut query = endpoint.query_pairs_mut();
-            query.clear();
-            for (key, value) in existing {
-                query.append_pair(key.as_str(), value.as_str());
-            }
-            query.append_pair("plan_type", plan_type.as_str());
-        }
-        Ok(endpoint.to_string())
-    }
-
-    fn atomgit_coding_plan_claim_endpoint(&self) -> Result<String, AppError> {
-        let base = self
-            .models_url
-            .clone()
-            .unwrap_or_else(|| ATOMGIT_CODING_PLAN_MODELS_URL.to_owned());
-        let mut endpoint = url::Url::parse(base.as_str()).map_err(|err| {
-            AppError::Config(format!("atomgit coding plan models url is invalid: {err}"))
-        })?;
-        let path = endpoint.path().trim_end_matches('/');
-        let claim_path = path
-            .strip_suffix("/models-v2")
-            .map(|prefix| format!("{prefix}/claim-v2"))
-            .unwrap_or_else(|| "/api/v5/coding-plan/claim-v2".to_owned());
-        endpoint.set_path(claim_path.as_str());
-        endpoint.set_query(None);
-        Ok(endpoint.to_string())
-    }
-
-    async fn atomgit_coding_plan_model_response(&self) -> Result<reqwest::Response, AppError> {
-        let mut force_refresh = false;
-        loop {
-            let api_key = if force_refresh {
-                self.api_key.force_refresh().await?
-            } else {
-                self.api_key.resolve().await?
-            };
-            let headers = self.auth_headers(RequestHeaderContext::none(), api_key.as_str());
-            let plan_type = self.atomgit_claim_coding_plan_type(headers.clone()).await?;
-            let endpoint = self.atomgit_coding_plan_models_endpoint(plan_type)?;
-            utils::adapter_log_http_request_json(
-                self.id.as_str(),
-                ADAPTER_KIND,
-                "list_models",
-                "GET",
-                endpoint.as_str(),
-                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
-                None,
-            );
-            let response =
-                utils::apply_resolved_request_headers(self.client.get(endpoint.as_str()), &headers)
-                    .send()
-                    .await?;
-            if !force_refresh && should_retry_credential(response.status()) {
-                force_refresh = true;
-                continue;
-            }
-            return Ok(response);
-        }
-    }
-
-    async fn atomgit_claim_coding_plan_type(
-        &self,
-        headers: BTreeMap<String, String>,
-    ) -> Result<AtomGitCodingPlanType, AppError> {
-        let endpoint = self.atomgit_coding_plan_claim_endpoint()?;
-        let mut last_message = String::new();
-        for &plan_type in AtomGitCodingPlanType::CASCADE_ORDER {
-            let body = serde_json::json!({ "plan_type": plan_type.as_str() });
-            utils::adapter_log_http_request_json(
-                self.id.as_str(),
-                ADAPTER_KIND,
-                "coding_plan_claim",
-                "POST",
-                endpoint.as_str(),
-                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
-                Some(&body),
-            );
-            let response = utils::apply_resolved_request_headers(
-                self.client.post(endpoint.as_str()),
-                &headers,
-            )
-            .json(&body)
-            .send()
-            .await?;
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            if !status.is_success() {
-                return Err(AppError::HttpStatus {
-                    provider: self.id.to_string(),
-                    status,
-                    body: format!("coding-plan/claim-v2 {}: {}", plan_type.as_str(), text),
-                    kind: ProviderErrorKind::ApiError,
-                    retryable: false,
-                });
-            }
-            let claim: AtomGitCodingPlanClaimResponse =
-                serde_json::from_str(text.as_str()).map_err(AppError::from)?;
-            if claim.duplicate {
-                return Ok(AtomGitCodingPlanType::Max);
-            }
-            if claim.success {
-                return Ok(plan_type);
-            }
-            last_message = if claim.message.trim().is_empty() {
-                format!("{} claim refused", plan_type.as_str())
-            } else {
-                format!("{}: {}", plan_type.as_str(), claim.message.trim())
-            };
-        }
-        Err(AppError::Provider(if last_message.is_empty() {
-            "atomgit coding plan claim failed at every tier".to_owned()
-        } else {
-            format!("atomgit coding plan claim failed at every tier: {last_message}")
         }))
     }
 
@@ -2524,25 +2383,21 @@ impl ModelRuntime for OpenAiAdapter {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        let response = if self.atomgit_coding_plan_models {
-            self.atomgit_coding_plan_model_response().await?
-        } else {
-            let endpoint = self.model_endpoint()?;
-            utils::send_with_credential_refresh(&self.api_key, |api_key| {
-                let headers = self.auth_headers(RequestHeaderContext::none(), api_key);
-                utils::adapter_log_http_request_json(
-                    self.id.as_str(),
-                    ADAPTER_KIND,
-                    "list_models",
-                    "GET",
-                    endpoint.as_str(),
-                    headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
-                    None,
-                );
-                utils::apply_resolved_request_headers(self.client.get(endpoint.as_str()), &headers)
-            })
-            .await?
-        };
+        let endpoint = self.model_endpoint()?;
+        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+            let headers = self.auth_headers(RequestHeaderContext::none(), api_key);
+            utils::adapter_log_http_request_json(
+                self.id.as_str(),
+                ADAPTER_KIND,
+                "list_models",
+                "GET",
+                endpoint.as_str(),
+                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                None,
+            );
+            utils::apply_resolved_request_headers(self.client.get(endpoint.as_str()), &headers)
+        })
+        .await?;
 
         let payload: OpenAiModelListResponse = utils::parse_json_response_logged(
             self.id.as_str(),
@@ -3243,7 +3098,6 @@ enum DashscopeReasoningProfile {
 #[serde(untagged)]
 enum OpenAiModelListResponse {
     Wrapped { data: Vec<OpenAiModel> },
-    AtomGitCodingPlan(Vec<AtomGitCodingPlanModel>),
     Bare(Vec<OpenAiModel>),
 }
 
@@ -3251,42 +3105,9 @@ impl OpenAiModelListResponse {
     fn into_items(self) -> Vec<OpenAiModel> {
         match self {
             Self::Wrapped { data } => data,
-            Self::AtomGitCodingPlan(data) => data
-                .into_iter()
-                .filter_map(AtomGitCodingPlanModel::into_openai_model)
-                .collect(),
             Self::Bare(data) => data,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AtomGitCodingPlanType {
-    Max,
-    Pro,
-    Lite,
-}
-
-impl AtomGitCodingPlanType {
-    const CASCADE_ORDER: &'static [Self] = &[Self::Max, Self::Pro, Self::Lite];
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Max => "Max",
-            Self::Pro => "Pro",
-            Self::Lite => "Lite",
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct AtomGitCodingPlanClaimResponse {
-    #[serde(default)]
-    success: bool,
-    #[serde(default)]
-    duplicate: bool,
-    #[serde(default)]
-    message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3296,11 +3117,11 @@ struct OpenAiModel {
     display_name: Option<String>,
     #[serde(default)]
     name: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "context_length")]
     context_window_tokens: Option<u64>,
-    #[serde(default)]
+    #[serde(default, alias = "input_token_limit")]
     max_input_tokens: Option<u64>,
-    #[serde(default)]
+    #[serde(default, alias = "max_completion_tokens")]
     max_output_tokens: Option<u64>,
 }
 
@@ -3319,33 +3140,6 @@ impl OpenAiModel {
         }
 
         metadata
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct AtomGitCodingPlanModel {
-    display_model_name: String,
-    #[serde(default)]
-    context_window: Option<u64>,
-    #[serde(default)]
-    plan_available: bool,
-}
-
-impl AtomGitCodingPlanModel {
-    fn into_openai_model(self) -> Option<OpenAiModel> {
-        let model_name = self.display_model_name.trim();
-        if !self.plan_available || model_name.is_empty() {
-            return None;
-        }
-
-        Some(OpenAiModel {
-            id: model_name.to_owned(),
-            display_name: Some(model_name.to_owned()),
-            name: Some(model_name.to_owned()),
-            context_window_tokens: self.context_window,
-            max_input_tokens: None,
-            max_output_tokens: None,
-        })
     }
 }
 
@@ -3542,26 +3336,5 @@ mod tests {
         assert_eq!(metadata.limits.context_window_tokens, Some(262_144));
         assert_eq!(metadata.limits.max_input_tokens, Some(260_000));
         assert_eq!(metadata.limits.max_output_tokens, Some(64_000));
-    }
-
-    #[test]
-    fn atomgit_coding_plan_preserves_context_window() {
-        let payload = r#"[
-            {
-                "display_model_name": "deepseek-v4-flash",
-                "context_window": 128000,
-                "plan_available": true
-            }
-        ]"#;
-
-        let parsed: OpenAiModelListResponse =
-            serde_json::from_str(payload).expect("parse atomgit coding plan models");
-        let models = parsed.into_items();
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].id, "deepseek-v4-flash");
-        assert_eq!(
-            models[0].metadata().limits.context_window_tokens,
-            Some(128_000)
-        );
     }
 }

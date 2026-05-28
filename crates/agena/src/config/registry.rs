@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -17,25 +17,19 @@ use crate::{
         AuthSecretSelector, CatalogedModelsProvider, GeminiAdapter, GitlabProvider,
         GitlabProviderConfig, ManagedCredential, ModelCapabilities, ModelId, ModelMetadata,
         ModelRuntime, ModelSpeedMode, ModelThinkingMode, MultiAdapterProvider, OllamaAdapter,
-        OpenAiAdapter, OpenAiApiMode, PromptCacheShape, ProviderModelRoute, ProviderRegistry,
-        StreamResumePolicy, auth::AuthData, parse_sap_ai_core_service_key,
+        OpenAiAdapter, PromptCacheShape, ProviderModelRoute, ProviderRegistry, StreamResumePolicy,
+        auth::AuthData, parse_sap_ai_core_service_key,
     },
 };
 
 use super::raw::parse_adapter_model_ref;
 use super::{
-    ConfigEnvironment, ConfigError, HttpProviderAdapterConfig, OpenAiApiModeConfig,
-    ProcessEnvironment, ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
+    ConfigEnvironment, ConfigError, HttpProviderAdapterConfig, ProcessEnvironment,
+    ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
     ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig, ProviderModelDiscoveryConfig,
     ProviderProtocolPathsConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
     ResolvedProviderConfig,
 };
-
-const ATOMGIT_GATEWAY_ROOT: &str = "https://api-ai.gitcode.com";
-const ATOMGIT_LLM_BASE_URL: &str = "https://api-ai.gitcode.com/v1";
-// AtomGit's LLM gateway is OpenAI-compatible for inference, but model
-// catalogue lookup is served by the CodingPlan API.
-const ATOMGIT_CODING_PLAN_MODELS_URL: &str = "https://api.gitcode.com/api/v5/coding-plan/models-v2";
 const LIST_MODELS_DEFAULT_MODEL_ID: &str = "__list_models__";
 
 #[derive(Debug, Clone)]
@@ -216,6 +210,15 @@ impl ResolvedConfig {
         catalog: Option<&ModelCatalogSnapshot>,
         env: &dyn ConfigEnvironment,
     ) -> Result<ProviderRegistry, ConfigError> {
+        self.build_provider_registry_with_catalog_and_env_and_config_path(catalog, env, None)
+    }
+
+    pub fn build_provider_registry_with_catalog_and_env_and_config_path(
+        &self,
+        catalog: Option<&ModelCatalogSnapshot>,
+        env: &dyn ConfigEnvironment,
+        config_path: Option<&Path>,
+    ) -> Result<ProviderRegistry, ConfigError> {
         let client = self.build_provider_http_client()?;
         let mut registry = ProviderRegistry::with_runtime_config(self.provider_runtime_config());
 
@@ -224,8 +227,14 @@ impl ResolvedConfig {
                 continue;
             }
 
-            let provider =
-                build_provider(provider_id.as_str(), resolved, client.clone(), env, catalog)?;
+            let provider = build_provider(
+                provider_id.as_str(),
+                resolved,
+                client.clone(),
+                env,
+                catalog,
+                config_path,
+            )?;
             registry.register_arc(provider);
         }
 
@@ -247,7 +256,13 @@ impl super::ConfigResolution {
         plugins: &PluginHost,
         catalog: Option<&ModelCatalogSnapshot>,
     ) -> Result<ProviderRegistry, ConfigError> {
-        let mut registry = self.config.build_provider_registry_with_catalog(catalog)?;
+        let mut registry = self
+            .config
+            .build_provider_registry_with_catalog_and_env_and_config_path(
+                catalog,
+                &ProcessEnvironment,
+                Some(self.meta.config_path.as_path()),
+            )?;
         if plugins.is_empty() {
             return Ok(registry);
         }
@@ -344,6 +359,7 @@ fn build_provider(
     client: reqwest::Client,
     env: &dyn ConfigEnvironment,
     catalog: Option<&ModelCatalogSnapshot>,
+    config_path: Option<&Path>,
 ) -> Result<Arc<dyn ModelRuntime>, ConfigError> {
     let adapter_defaults = resolve_adapter_default_models(provider_id, resolved)?;
     let adapters = resolved
@@ -364,6 +380,7 @@ fn build_provider(
                     &resolved.auth,
                     client.clone(),
                     env,
+                    config_path,
                 )?,
             ))
         })
@@ -439,6 +456,7 @@ fn build_adapter_provider(
     auth: &ProviderAuthConfig,
     client: reqwest::Client,
     env: &dyn ConfigEnvironment,
+    config_path: Option<&Path>,
 ) -> Result<Arc<dyn ModelRuntime>, ConfigError> {
     let runtime_provider_id = runtime_adapter_provider_id(provider_id, adapter_id);
     let provider: Arc<dyn ModelRuntime> = match &config.definition {
@@ -455,7 +473,7 @@ fn build_adapter_provider(
             ProviderAuthConfig::Gitlab(config) => Arc::new(GitlabRoutedAdapter {
                 inner: Arc::new(GitlabProvider::from_managed_token_with_config(
                     client,
-                    gitlab_auth_managed_credential(provider_id, auth, env)?.credential,
+                    gitlab_auth_managed_credential(provider_id, auth, env, config_path)?.credential,
                     gitlab_runtime_config(config, adapter_default_model),
                 )?),
                 backend: GitlabRoutedBackend::OpenAi,
@@ -476,6 +494,7 @@ fn build_adapter_provider(
                                 instance_url: gitlab_credential_instance_url(credential_auth),
                             },
                             env,
+                            config_path,
                         )?
                         .credential,
                         gitlab_credential_runtime_config(credential_auth, adapter_default_model),
@@ -536,6 +555,7 @@ fn build_adapter_provider(
                         AuthSecretSelector::AccessOrApiKey,
                         AuthRefreshStrategy::OpenAiOAuth,
                         env,
+                        config_path,
                     )?;
                     let mut provider = OpenAiAdapter::new_managed_with_id(
                         runtime_provider_id.as_str(),
@@ -575,6 +595,7 @@ fn build_adapter_provider(
                         AuthSecretSelector::RefreshOrAccess,
                         AuthRefreshStrategy::ReloadFromStore,
                         env,
+                        config_path,
                     )?;
                     let mut provider = OpenAiAdapter::new_managed_with_id(
                         runtime_provider_id.as_str(),
@@ -605,57 +626,6 @@ fn build_adapter_provider(
                     if let Some(auth_data) = credential.auth_data {
                         provider = provider.with_auth_data(auth_data);
                     }
-                    Arc::new(provider)
-                }
-                crate::provider::auth::CredentialIssuer::AtomGit => {
-                    let credential = require_provider_auth_credential(
-                        provider_id,
-                        "api_key",
-                        auth,
-                        AuthSecretSelector::AccessOrApiKey,
-                        AuthRefreshStrategy::AtomGitOAuth,
-                        env,
-                    )?;
-                    let mut provider = OpenAiAdapter::new_managed_with_id(
-                        runtime_provider_id.as_str(),
-                        client,
-                        credential.credential,
-                        ATOMGIT_LLM_BASE_URL.to_owned(),
-                        adapter_default_model.to_owned(),
-                    )
-                    .with_backend(adapter.options.backend.into())
-                    .with_auth_header(
-                        adapter.options.auth_header.clone(),
-                        adapter.options.auth_scheme.clone(),
-                    )
-                    .with_extra_headers(http_adapter_extra_headers(
-                        adapter,
-                        Some(http_adapter_default_user_agent(
-                            auth,
-                            HttpAdapterKind::OpenAi,
-                            adapter_default_model,
-                        )),
-                    ))
-                    .with_api_mode(atomgit_openai_api_mode(
-                        adapter.options.api_mode,
-                        adapter.options.api_mode_explicit,
-                    ))
-                    .with_api_mode_explicit(adapter.options.api_mode_explicit)
-                    .with_stream_mode(adapter.options.stream_mode.into())
-                    .with_models_url(atomgit_model_listing_url(
-                        adapter.options.models_url.clone(),
-                    ))
-                    .with_atomgit_coding_plan_models(adapter.options.models_url.is_none())
-                    .with_realtime_ws_url(adapter.options.realtime_ws_url.clone());
-
-                    if let Some(family) = adapter.options.capability_family {
-                        provider = provider.with_capability_family(family.into());
-                    }
-
-                    if let Some(auth_data) = credential.auth_data {
-                        provider = provider.with_auth_data(auth_data);
-                    }
-
                     Arc::new(provider)
                 }
                 crate::provider::auth::CredentialIssuer::GoogleAdc
@@ -720,7 +690,7 @@ fn build_adapter_provider(
             ProviderAuthConfig::Gitlab(config) => Arc::new(GitlabRoutedAdapter {
                 inner: Arc::new(GitlabProvider::from_managed_token_with_config(
                     client,
-                    gitlab_auth_managed_credential(provider_id, auth, env)?.credential,
+                    gitlab_auth_managed_credential(provider_id, auth, env, config_path)?.credential,
                     gitlab_runtime_config(config, adapter_default_model),
                 )?),
                 backend: GitlabRoutedBackend::Anthropic,
@@ -741,6 +711,7 @@ fn build_adapter_provider(
                                 instance_url: gitlab_credential_instance_url(credential_auth),
                             },
                             env,
+                            config_path,
                         )?
                         .credential,
                         gitlab_credential_runtime_config(credential_auth, adapter_default_model),
@@ -762,6 +733,7 @@ fn build_adapter_provider(
                     AuthSecretSelector::RefreshOrAccess,
                     AuthRefreshStrategy::ReloadFromStore,
                     env,
+                    config_path,
                 )?;
                 let base_url = copilot_base_url(credential.auth_data.as_ref(), None)
                     .unwrap_or_else(|| "https://api.githubcopilot.com".to_owned());
@@ -879,7 +851,7 @@ fn build_adapter_provider(
             };
             let credential = match auth {
                 ProviderAuthConfig::Gitlab(_) => {
-                    gitlab_auth_managed_credential(provider_id, auth, env)?.credential
+                    gitlab_auth_managed_credential(provider_id, auth, env, config_path)?.credential
                 }
                 ProviderAuthConfig::Api(api) => {
                     if api_auth_has_direct_source(api, env) {
@@ -904,6 +876,7 @@ fn build_adapter_provider(
                                 .unwrap_or_else(|| "https://gitlab.com".to_owned()),
                         },
                         env,
+                        config_path,
                     )?
                     .credential
                 }
@@ -978,6 +951,7 @@ pub async fn list_provider_adapter_models(
             auth,
             client.clone(),
             env,
+            None,
         ) {
             Ok(provider) => provider,
             Err(err) => {
@@ -1173,9 +1147,6 @@ fn credential_user_agent(auth: &ProviderAuthConfig, default_model: &str) -> Opti
     };
 
     match config.issuer {
-        crate::provider::auth::CredentialIssuer::AtomGit => {
-            Some(crate::provider::ATOMCODE_USER_AGENT.to_owned())
-        }
         crate::provider::auth::CredentialIssuer::OpenaiChatgpt => {
             Some(crate::provider::CODEX_USER_AGENT.to_owned())
         }
@@ -1201,25 +1172,6 @@ fn resolve_http_adapter_base_url(
     }
 }
 
-fn atomgit_model_listing_url(configured: Option<String>) -> Option<String> {
-    let configured = configured.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_owned())
-    });
-    Some(configured.unwrap_or_else(|| ATOMGIT_CODING_PLAN_MODELS_URL.to_owned()))
-}
-
-fn atomgit_openai_api_mode(configured: OpenAiApiModeConfig, explicit: bool) -> OpenAiApiMode {
-    if explicit {
-        return configured.into();
-    }
-
-    // AtomCode sends AtomGit LLM traffic through the OpenAI-compatible
-    // Chat Completions endpoint. Keep custom explicit overrides possible,
-    // but make the credential-backed default match that gateway contract.
-    OpenAiApiMode::Chat
-}
-
 fn provider_endpoint_root<'a>(
     auth: &'a ProviderAuthConfig,
     provider_id: &str,
@@ -1242,11 +1194,6 @@ fn provider_endpoint_root<'a>(
                     .expect("guard ensures credential base_url exists"),
                 &config.protocol_paths,
             ))
-        }
-        ProviderAuthConfig::Credential(config)
-            if config.issuer == crate::provider::auth::CredentialIssuer::AtomGit =>
-        {
-            Ok((ATOMGIT_GATEWAY_ROOT, &config.protocol_paths))
         }
         _ => Err(ConfigError::InvalidProviderConfig {
             provider_id: provider_id.to_owned(),
@@ -1400,6 +1347,7 @@ fn gitlab_auth_managed_credential(
     provider_id: &str,
     auth: &ProviderAuthConfig,
     env: &dyn ConfigEnvironment,
+    config_path: Option<&Path>,
 ) -> Result<ResolvedManagedCredential, ConfigError> {
     let config = gitlab_auth(auth, provider_id)?;
 
@@ -1448,8 +1396,18 @@ fn gitlab_auth_managed_credential(
 
     if let Some(auth_data) = config.credential.clone() {
         let auth_data = Arc::new(Mutex::new(auth_data));
-        return Ok(ResolvedManagedCredential {
-            credential: ManagedCredential::auth_data_shared(
+        let credential = match config_path {
+            Some(config_path) => ManagedCredential::auth_data_shared_with_store(
+                format!("{provider_id} api_key"),
+                provider_id.to_owned(),
+                auth_data.clone(),
+                AuthSecretSelector::AccessOrApiKey,
+                AuthRefreshStrategy::GitlabOAuth {
+                    instance_url: gitlab_instance_url(config),
+                },
+                config_path.to_path_buf(),
+            ),
+            None => ManagedCredential::auth_data_shared(
                 format!("{provider_id} api_key"),
                 provider_id.to_owned(),
                 auth_data.clone(),
@@ -1458,6 +1416,9 @@ fn gitlab_auth_managed_credential(
                     instance_url: gitlab_instance_url(config),
                 },
             ),
+        };
+        return Ok(ResolvedManagedCredential {
+            credential,
             auth_data: Some(auth_data),
         });
     }
@@ -1649,6 +1610,7 @@ fn require_provider_auth_credential(
     selector: AuthSecretSelector,
     refresh: AuthRefreshStrategy,
     _env: &dyn ConfigEnvironment,
+    config_path: Option<&Path>,
 ) -> Result<ResolvedManagedCredential, ConfigError> {
     let ProviderAuthConfig::Credential(config) = auth else {
         return Err(ConfigError::InvalidProviderConfig {
@@ -1667,14 +1629,25 @@ fn require_provider_auth_credential(
         }
 
         let auth_data = Arc::new(Mutex::new(auth_data));
-        return Ok(ResolvedManagedCredential {
-            credential: ManagedCredential::auth_data_shared(
+        let credential = match config_path {
+            Some(config_path) => ManagedCredential::auth_data_shared_with_store(
+                format!("{provider_id} {field}"),
+                provider_id.to_owned(),
+                auth_data.clone(),
+                selector,
+                refresh,
+                config_path.to_path_buf(),
+            ),
+            None => ManagedCredential::auth_data_shared(
                 format!("{provider_id} {field}"),
                 provider_id.to_owned(),
                 auth_data.clone(),
                 selector,
                 refresh,
             ),
+        };
+        return Ok(ResolvedManagedCredential {
+            credential,
             auth_data: Some(auth_data),
         });
     }

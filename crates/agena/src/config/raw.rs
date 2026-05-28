@@ -1960,7 +1960,6 @@ fn validate_provider_auth<'a>(
                         Some(ProviderCapabilityFamilyConfig::Gemini)
                     ) => {}
                 (CredentialIssuer::SapAiCore, _) => {}
-                (CredentialIssuer::AtomGit, super::OpenAiBackendConfig::Api) => {}
                 _ => {
                     return Err(ConfigError::InvalidProviderConfig {
                         provider_id: provider_id.to_owned(),
@@ -2039,7 +2038,6 @@ fn issuer_label(issuer: CredentialIssuer) -> &'static str {
         CredentialIssuer::Gitlab => "gitlab",
         CredentialIssuer::GoogleAdc => "google_adc",
         CredentialIssuer::SapAiCore => "sap_ai_core",
-        CredentialIssuer::AtomGit => "atomgit",
     }
 }
 

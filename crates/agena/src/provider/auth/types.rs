@@ -9,17 +9,11 @@ pub enum CredentialIssuer {
     Gitlab,
     GoogleAdc,
     SapAiCore,
-    #[serde(rename = "atomgit")]
-    AtomGit,
 }
 
 impl CredentialIssuer {
     pub fn uses_http_endpoint(self) -> bool {
         matches!(self, Self::GoogleAdc | Self::SapAiCore)
-    }
-
-    pub fn supports_saved_model_listing(self) -> bool {
-        self.uses_http_endpoint() || matches!(self, Self::AtomGit)
     }
 
     pub fn requires_service_key_env(self) -> bool {

@@ -10,7 +10,6 @@ const DEFAULT_PROVIDER_RETRY_MAX_DELAY_MS: u64 = 2_000;
 const DEFAULT_PROVIDER_STREAM_REPLAY_MAX_RETRIES: u32 = 5;
 const DEFAULT_PROVIDER_STREAM_REPLAY_MAX_EVENTS: usize = 2048;
 
-pub const ATOMCODE_USER_AGENT: &str = "atomcode/4.18.1";
 pub const CLAUDE_CODE_USER_AGENT: &str = "claude-code/2.1.145";
 pub const CLAUDE_CODE_API_USER_AGENT: &str = "claude-cli/2.1.145 (external, cli)";
 pub const CODEX_ORIGINATOR: &str = "codex_cli_rs";

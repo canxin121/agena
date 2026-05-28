@@ -43,16 +43,15 @@ pub use types::{
 
 pub use adapter_models::{
     HTTP_ADAPTER_MODEL_LIST_ADAPTER_IDS, ProviderAdapterModelsListing, ProviderAdapterModelsTarget,
-    draft_atomgit_provider_adapter_models_target, draft_gitlab_provider_adapter_models_target,
-    draft_provider_adapter_models_target, list_provider_adapter_models_with_config,
-    saved_provider_adapter_models_target,
+    draft_gitlab_provider_adapter_models_target, draft_provider_adapter_models_target,
+    list_provider_adapter_models_with_config, saved_provider_adapter_models_target,
 };
 pub use credential_store::{
     ProviderAuthTargetError, ProviderConfigCredentialStore, ProviderDeviceAuthTarget,
     ProviderOAuthTarget, provider_auth_data, provider_gitlab_instance_url,
-    provider_has_gitlab_adapter, provider_supports_api_key_write, provider_supports_atomgit_oauth,
-    provider_supports_copilot_device, provider_supports_openai_oauth,
-    resolve_provider_device_auth_target, resolve_provider_oauth_target,
+    provider_has_gitlab_adapter, provider_supports_api_key_write, provider_supports_copilot_device,
+    provider_supports_openai_oauth, resolve_provider_device_auth_target,
+    resolve_provider_oauth_target,
 };
 pub use edit::{
     ConfigSettingsDeleteInput, ConfigSettingsEditOptions, ConfigSettingsEditResponse,

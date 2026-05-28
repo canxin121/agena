@@ -39,6 +39,7 @@ pub(super) struct PluginWorkbenchOverlay {
     selected_toolbar_action: usize,
     selected_section: usize,
     selected_node: usize,
+    selected_cell: ConfigRowCell,
     selected_diagnostic: usize,
     selected_diff_row: usize,
     config_scroll: usize,
@@ -253,6 +254,16 @@ enum ConfigGroupLayout {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigRowCell {
+    Type,
+    Value,
+    SecondaryValue,
+    Default,
+    Action,
+    State,
+}
+
 #[derive(Debug, Clone)]
 struct ConfigRowView {
     title: String,
@@ -261,16 +272,43 @@ struct ConfigRowView {
     editor: ConfigRowEditor,
     description: Option<String>,
     constraints: Vec<String>,
+    type_display: String,
+    type_mode: ConfigRowTypeMode,
     value_display: String,
     default_display: String,
     secondary_value_display: Option<String>,
+    action_display: Option<String>,
     state: ConfigRowState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigRowTypeMode {
+    Fixed,
+    SelectType,
+    SelectShape,
+}
+
+impl ConfigRowTypeMode {
+    fn is_switchable(self) -> bool {
+        !matches!(self, Self::Fixed)
+    }
+
+    fn action_label(self) -> &'static str {
+        match self {
+            Self::Fixed => "Type",
+            Self::SelectType => "Choose Type",
+            Self::SelectShape => "Choose Shape",
+        }
+    }
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 enum ConfigRowEditor {
     Bool {
+        path: ConfigPath,
+    },
+    Null {
         path: ConfigPath,
     },
     ReadOnly {
@@ -369,12 +407,14 @@ struct PluginConfigDrilldownOverlay {
     title: String,
     groups: Vec<ConfigGroupView>,
     selected_row: usize,
+    selected_cell: ConfigRowCell,
 }
 
 #[derive(Debug, Clone)]
 struct PluginConfigActionOverlay {
     title: String,
     subject: String,
+    footer: String,
     actions: Vec<PluginConfigActionItem>,
     selected_action: usize,
 }
@@ -410,42 +450,22 @@ enum PluginConfigSelectionValue {
     Named(String),
     Branch(BranchChoice),
     Json(JsonValue),
-    NullableMode(NullableStringMode),
 }
 
 #[derive(Debug, Clone)]
 enum PluginConfigSelectionAction {
-    SelectType {
-        plugin_id: String,
-        path: ConfigPath,
-    },
-    SelectBranch {
-        plugin_id: String,
-        path: ConfigPath,
-    },
-    SelectEnum {
-        plugin_id: String,
-        path: ConfigPath,
-    },
-    SelectMultiEnum {
-        plugin_id: String,
-        path: ConfigPath,
-    },
-    SelectNullableStringMode {
-        plugin_id: String,
-        path: ConfigPath,
-        current_text: String,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NullableStringMode {
-    NotSet,
-    Custom,
+    SelectType { plugin_id: String, path: ConfigPath },
+    SelectBranch { plugin_id: String, path: ConfigPath },
+    SelectEnum { plugin_id: String, path: ConfigPath },
+    SelectMultiEnum { plugin_id: String, path: ConfigPath },
 }
 
 #[derive(Debug, Clone)]
 enum PluginConfigAction {
+    SelectType {
+        plugin_id: String,
+        path: ConfigPath,
+    },
     AppendArrayItem {
         plugin_id: String,
         path: ConfigPath,
@@ -526,6 +546,7 @@ enum ScalarEditKind {
 
 #[derive(Debug, Clone)]
 struct BranchChoice {
+    id: String,
     label: String,
     schema: JsonValue,
 }
@@ -585,6 +606,17 @@ impl PluginWorkbenchOverlay {
         } else {
             self.selected_node = self.selected_node.min(row_count.saturating_sub(1));
         }
+        self.selected_cell = self
+            .selected_section()
+            .map(|section| {
+                section_selected_row_cell(
+                    section,
+                    self.config_view,
+                    self.selected_node,
+                    self.selected_cell,
+                )
+            })
+            .unwrap_or(ConfigRowCell::Value);
         let diagnostic_count = self
             .selected_plugin()
             .map(plugin_all_diagnostics)
@@ -637,6 +669,10 @@ impl PluginWorkbenchOverlay {
         self.selected_toolbar_action = self
             .selected_toolbar_action
             .min(COMPACT_TOOLBAR_ACTIONS.len().saturating_sub(1));
+        for overlay in &mut self.drilldown_stack {
+            overlay.selected_cell =
+                drilldown_selected_row_cell(overlay, self.config_view, overlay.selected_cell);
+        }
     }
 }
 
@@ -686,6 +722,7 @@ impl App {
             selected_toolbar_action: 0,
             selected_section: 0,
             selected_node: 0,
+            selected_cell: ConfigRowCell::Value,
             selected_diagnostic: 0,
             selected_diff_row: 0,
             config_scroll: 0,
@@ -716,6 +753,7 @@ impl App {
                 refreshed.config_view = dialog.config_view;
                 refreshed.config_focus = dialog.config_focus;
                 refreshed.selected_toolbar_action = dialog.selected_toolbar_action;
+                refreshed.selected_cell = dialog.selected_cell;
                 refreshed.show_diff = dialog.show_diff;
                 refreshed.drilldown_stack =
                     rebuild_drilldown_stack(&refreshed, dialog.drilldown_stack.as_slice());
@@ -777,6 +815,7 @@ impl App {
         refreshed.config_view = dialog.config_view;
         refreshed.config_focus = dialog.config_focus;
         refreshed.selected_toolbar_action = dialog.selected_toolbar_action;
+        refreshed.selected_cell = dialog.selected_cell;
         refreshed.show_diff = dialog.show_diff;
         refreshed.selected_diagnostic = dialog.selected_diagnostic;
         refreshed.selected_diff_row = dialog.selected_diff_row;
@@ -1062,12 +1101,15 @@ impl App {
                 KeyCode::Left | KeyCode::Char('h')
                     if dialog.config_focus == PluginConfigFocus::Editor =>
                 {
-                    dialog.config_focus = PluginConfigFocus::Structure;
+                    if !self.move_selected_main_config_cell(dialog, -1) {
+                        dialog.config_focus = PluginConfigFocus::Structure;
+                    }
                     return false;
                 }
                 KeyCode::Right | KeyCode::Char('l')
                     if dialog.config_focus == PluginConfigFocus::Editor =>
                 {
+                    self.move_selected_main_config_cell(dialog, 1);
                     return false;
                 }
                 KeyCode::Up | KeyCode::Char('k')
@@ -1346,6 +1388,7 @@ impl App {
         let Some(overlay_snapshot) = dialog.current_drilldown().cloned() else {
             return false;
         };
+        let view = dialog.config_view;
         match key.code {
             KeyCode::Esc => {
                 dialog.drilldown_stack.pop();
@@ -1357,6 +1400,8 @@ impl App {
                     return false;
                 };
                 move_index(&mut overlay.selected_row, count, -1);
+                overlay.selected_cell =
+                    drilldown_selected_row_cell(overlay, view, overlay.selected_cell);
                 false
             }
             KeyCode::Down | KeyCode::Char('j') => {
@@ -1365,6 +1410,8 @@ impl App {
                     return false;
                 };
                 move_index(&mut overlay.selected_row, count, 1);
+                overlay.selected_cell =
+                    drilldown_selected_row_cell(overlay, view, overlay.selected_cell);
                 false
             }
             KeyCode::PageUp => {
@@ -1378,6 +1425,8 @@ impl App {
                     -1,
                     CONFIG_EDITOR_PAGE_SIZE,
                 );
+                overlay.selected_cell =
+                    drilldown_selected_row_cell(overlay, view, overlay.selected_cell);
                 false
             }
             KeyCode::PageDown => {
@@ -1386,6 +1435,8 @@ impl App {
                     return false;
                 };
                 move_index_page(&mut overlay.selected_row, count, 1, CONFIG_EDITOR_PAGE_SIZE);
+                overlay.selected_cell =
+                    drilldown_selected_row_cell(overlay, view, overlay.selected_cell);
                 false
             }
             KeyCode::Home => {
@@ -1393,6 +1444,8 @@ impl App {
                     return false;
                 };
                 overlay.selected_row = 0;
+                overlay.selected_cell =
+                    drilldown_selected_row_cell(overlay, view, overlay.selected_cell);
                 false
             }
             KeyCode::End => {
@@ -1401,6 +1454,16 @@ impl App {
                     return false;
                 };
                 overlay.selected_row = count.saturating_sub(1);
+                overlay.selected_cell =
+                    drilldown_selected_row_cell(overlay, view, overlay.selected_cell);
+                false
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                self.move_selected_drilldown_cell(dialog, -1);
+                false
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                self.move_selected_drilldown_cell(dialog, 1);
                 false
             }
             KeyCode::Char('a') | KeyCode::Char('A') => {
@@ -1413,6 +1476,10 @@ impl App {
             }
             KeyCode::Char('x') | KeyCode::Char('X') => {
                 self.open_selected_config_actions(dialog);
+                false
+            }
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                self.open_config_type_selector(dialog);
                 false
             }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1428,6 +1495,17 @@ impl App {
     }
 
     fn save_selected_plugin_config(&mut self, dialog: &mut PluginWorkbenchOverlay) {
+        let save_block = {
+            let Some(plugin) = dialog.selected_plugin_mut() else {
+                return;
+            };
+            recompute_plugin_config_state(plugin);
+            plugin_save_block_reason(plugin)
+        };
+        if let Some(reason) = save_block {
+            self.flash_error(reason);
+            return;
+        }
         let Some(plugin) = dialog.selected_plugin().cloned() else {
             return;
         };
@@ -1439,7 +1517,7 @@ impl App {
             ));
             return;
         };
-        plugin_object.insert("config".to_owned(), plugin.draft_config.clone());
+        plugin_object.insert("config".to_owned(), persisted_plugin_config_value(&plugin));
         let path = format!(
             "plugins.list.{}",
             quote_settings_segment(plugin.plugin_id.as_str())
@@ -1489,6 +1567,7 @@ impl App {
         if plugin.draft_config == before {
             self.flash_info("no missing defaults to insert".to_owned());
         } else {
+            clear_branch_drafts_for_structural_change(plugin);
             recompute_plugin_config_state(plugin);
             self.flash_success(format!("inserted defaults for {}", plugin.plugin_id));
         }
@@ -1549,21 +1628,20 @@ impl App {
         else {
             return;
         };
-        let changed = if let Some(plugin) = dialog.selected_plugin_mut() {
-            let mut changed = false;
-            for path in row_paths(&row) {
-                changed |= reset_effective_value_at_path(
-                    &mut plugin.draft_config,
-                    &plugin.default_config,
-                    path.as_slice(),
-                );
-            }
-            if changed {
+        let (changed, blocked) = if let Some(plugin) = dialog.selected_plugin_mut() {
+            let outcome = apply_reset_paths(
+                &mut plugin.draft_config,
+                &plugin.default_config,
+                plugin.schema.as_ref(),
+                &row_paths(&row).into_iter().cloned().collect::<Vec<_>>(),
+            );
+            if outcome.changed {
+                clear_branch_drafts_for_structural_change(plugin);
                 recompute_plugin_config_state(plugin);
             }
-            changed
+            (outcome.changed, outcome.blocked)
         } else {
-            false
+            (false, Vec::new())
         };
         if changed {
             select_config_path(
@@ -1571,6 +1649,9 @@ impl App {
                 selected_plugin_id.as_str(),
                 row.primary_path.as_slice(),
             );
+        }
+        if let Some(message) = reset_paths_warning_message(blocked.as_slice()) {
+            self.flash_warning(message);
         }
     }
 
@@ -1582,7 +1663,30 @@ impl App {
             .plugins
             .iter()
             .find(|plugin| plugin.plugin_id == context.plugin_id);
+        let primary_action = plugin.and_then(|plugin| {
+            config_row_primary_action(
+                plugin,
+                &context.row.editor,
+                context.row.primary_path.as_slice(),
+                context.row.additional_paths.as_slice(),
+            )
+        });
         let mut actions = Vec::new();
+        if context.row.type_mode.is_switchable() {
+            let description = if context.row.type_mode == ConfigRowTypeMode::SelectShape {
+                format!("Switch the active shape for {}.", context.row.title)
+            } else {
+                format!("Switch the active type for {}.", context.row.title)
+            };
+            actions.push(PluginConfigActionItem {
+                label: context.row.type_mode.action_label().to_owned(),
+                description,
+                action: PluginConfigAction::SelectType {
+                    plugin_id: context.plugin_id.clone(),
+                    path: context.row.primary_path.clone(),
+                },
+            });
+        }
         if let Some(plugin) = plugin
             && let ConfigRowEditor::Structured { path } = &context.row.editor
             && let Some(value) = get_value_at_path(&plugin.draft_config, path)
@@ -1597,7 +1701,10 @@ impl App {
                     },
                 });
             }
-            if value.is_object() {
+            if value.is_object()
+                && object_add_field_block_reason(plugin.schema.as_ref(), &plugin.draft_config, path)
+                    .is_none()
+            {
                 actions.push(PluginConfigActionItem {
                     label: "Add Field".to_owned(),
                     description: format!("Add a new field inside {}.", context.row.title),
@@ -1611,7 +1718,7 @@ impl App {
         if let Some(plugin) = plugin
             && let Some(info) = array_item_action_info(plugin, context.row.primary_path.as_slice())
         {
-            if info.can_insert {
+            if info.can_insert_before {
                 actions.push(PluginConfigActionItem {
                     label: "Insert Before".to_owned(),
                     description: "Insert a new default item before this array item.".to_owned(),
@@ -1620,6 +1727,8 @@ impl App {
                         path: context.row.primary_path.clone(),
                     },
                 });
+            }
+            if info.can_insert_after {
                 actions.push(PluginConfigActionItem {
                     label: "Insert After".to_owned(),
                     description: "Insert a new default item after this array item.".to_owned(),
@@ -1672,7 +1781,14 @@ impl App {
                 });
             }
         }
-        if path_key_info(context.row.primary_path.as_slice()).is_some() {
+        let rename_allowed = context.row.additional_paths.is_empty()
+            && match plugin {
+                Some(plugin) => {
+                    row_rename_action_allowed(plugin, context.row.primary_path.as_slice())
+                }
+                None => path_key_info(context.row.primary_path.as_slice()).is_some(),
+            };
+        if rename_allowed {
             actions.push(PluginConfigActionItem {
                 label: "Rename Field".to_owned(),
                 description: format!("Rename the key for {}.", context.row.title),
@@ -1707,11 +1823,18 @@ impl App {
                 focus_path: context.row.primary_path,
             },
         });
+        let selected_action =
+            prioritize_config_actions(actions.as_mut_slice(), context.cell, primary_action);
         dialog.actions = Some(PluginConfigActionOverlay {
-            title: "Field Actions".to_owned(),
+            title: if primary_action.is_some() {
+                "More Actions".to_owned()
+            } else {
+                "Field Actions".to_owned()
+            },
             subject: context.row.title,
+            footer: config_actions_overlay_footer(primary_action),
             actions,
-            selected_action: 0,
+            selected_action,
         });
     }
 
@@ -1724,6 +1847,11 @@ impl App {
             return;
         };
         match item.action {
+            PluginConfigAction::SelectType { plugin_id, path } => {
+                self.focus_config_path(dialog, plugin_id.as_str(), path.as_slice());
+                dialog.clamp_selection();
+                self.open_config_type_selector(dialog);
+            }
             PluginConfigAction::AppendArrayItem { plugin_id, path } => {
                 self.append_config_array_item(dialog, plugin_id.as_str(), path.as_slice());
             }
@@ -1804,30 +1932,32 @@ impl App {
         paths: &[ConfigPath],
         focus_path: &ConfigPath,
     ) {
-        let changed = if let Some(plugin) = dialog
+        let (changed, blocked) = if let Some(plugin) = dialog
             .plugins
             .iter_mut()
             .find(|plugin| plugin.plugin_id == plugin_id)
         {
-            let mut changed = false;
-            for path in paths {
-                changed |= reset_effective_value_at_path(
-                    &mut plugin.draft_config,
-                    &plugin.default_config,
-                    path.as_slice(),
-                );
-            }
-            if changed {
+            let outcome = apply_reset_paths(
+                &mut plugin.draft_config,
+                &plugin.default_config,
+                plugin.schema.as_ref(),
+                paths,
+            );
+            if outcome.changed {
+                clear_branch_drafts_for_structural_change(plugin);
                 recompute_plugin_config_state(plugin);
             }
-            changed
+            (outcome.changed, outcome.blocked)
         } else {
-            false
+            (false, Vec::new())
         };
         if changed {
             self.focus_config_path(dialog, plugin_id, focus_path.as_slice());
             dialog.drilldown_stack =
                 rebuild_drilldown_stack(dialog, dialog.drilldown_stack.as_slice());
+        }
+        if let Some(message) = reset_paths_warning_message(blocked.as_slice()) {
+            self.flash_warning(message);
         }
     }
 
@@ -1842,8 +1972,13 @@ impl App {
             .iter_mut()
             .find(|plugin| plugin.plugin_id == plugin_id)
         {
+            if !array_item_action_info(plugin, path).is_some_and(|info| info.can_duplicate) {
+                self.flash_warning("cannot duplicate this array item".to_owned());
+                return;
+            }
             let focus = duplicate_array_item_at_path(&mut plugin.draft_config, path);
             if focus.is_some() {
+                clear_branch_drafts_for_structural_change(plugin);
                 recompute_plugin_config_state(plugin);
             }
             focus
@@ -1876,6 +2011,7 @@ impl App {
                 after,
             );
             if focus.is_some() {
+                clear_branch_drafts_for_structural_change(plugin);
                 recompute_plugin_config_state(plugin);
             }
             focus
@@ -1886,6 +2022,7 @@ impl App {
             self.focus_config_path(dialog, plugin_id, focus.as_slice());
             dialog.drilldown_stack =
                 rebuild_drilldown_stack(dialog, dialog.drilldown_stack.as_slice());
+            self.maybe_open_type_selector_for_selected_row(dialog, plugin_id, focus.as_slice());
         } else {
             self.flash_warning("cannot insert an item at this array position".to_owned());
         }
@@ -1905,6 +2042,7 @@ impl App {
         {
             let focus = move_array_item_at_path(&mut plugin.draft_config, path, direction);
             if focus.is_some() {
+                clear_branch_drafts_for_structural_change(plugin);
                 recompute_plugin_config_state(plugin);
             }
             focus
@@ -1929,8 +2067,13 @@ impl App {
             .iter_mut()
             .find(|plugin| plugin.plugin_id == plugin_id)
         {
+            if !array_item_action_info(plugin, path).is_some_and(|info| info.can_remove) {
+                self.flash_warning("cannot remove this array item".to_owned());
+                return;
+            }
             let focus = remove_array_item_at_path(&mut plugin.draft_config, path);
             if focus.is_some() {
+                clear_branch_drafts_for_structural_change(plugin);
                 recompute_plugin_config_state(plugin);
             }
             focus
@@ -2065,10 +2208,16 @@ impl App {
         };
         let value = get_value_at_path(&plugin.draft_config, &path).unwrap_or(&JsonValue::Null);
         if value.is_object() {
+            if let Some(reason) =
+                object_add_field_block_reason(plugin.schema.as_ref(), &plugin.draft_config, &path)
+            {
+                self.flash_warning(reason);
+                return;
+            }
             dialog.editor = Some(EditorDialogState::new(
                 "Add Field".to_owned(),
                 format!(
-                    "Enter a field name for {}. The new value starts as a structured null; use `t` to choose another JSON type.",
+                    "Enter a field name for {}. If the schema allows multiple value types or shapes, the editor will prompt you after create.",
                     path_display(&path)
                 ),
                 "Enter create  Esc cancel".to_owned(),
@@ -2105,6 +2254,7 @@ impl App {
                 path,
             );
             if focus_path.is_some() {
+                clear_branch_drafts_for_structural_change(plugin);
                 recompute_plugin_config_state(plugin);
             }
             (plugin.plugin_id.clone(), focus_path, can_append)
@@ -2112,6 +2262,11 @@ impl App {
         if let Some(focus_path) = focus_path {
             self.focus_config_path(dialog, plugin_id.as_str(), focus_path.as_slice());
             dialog.clamp_selection();
+            self.maybe_open_type_selector_for_selected_row(
+                dialog,
+                plugin_id.as_str(),
+                focus_path.as_slice(),
+            );
         } else if !can_append {
             self.flash_warning("cannot add another item at this array position".to_owned());
         } else {
@@ -2119,14 +2274,90 @@ impl App {
         }
     }
 
+    fn move_selected_main_config_cell(
+        &mut self,
+        dialog: &mut PluginWorkbenchOverlay,
+        delta: isize,
+    ) -> bool {
+        let Some(section) = dialog.selected_section() else {
+            return false;
+        };
+        let Some(row) = section_row_at(section, dialog.config_view, dialog.selected_node) else {
+            return false;
+        };
+        let layout = section_group_for_row(section, dialog.config_view, dialog.selected_node)
+            .map(|group| group.layout)
+            .unwrap_or(ConfigGroupLayout::Standard);
+        let Some(next) = move_config_row_cell(row, layout, dialog.selected_cell, delta) else {
+            return false;
+        };
+        dialog.selected_cell = next;
+        true
+    }
+
+    fn move_selected_drilldown_cell(
+        &mut self,
+        dialog: &mut PluginWorkbenchOverlay,
+        delta: isize,
+    ) -> bool {
+        let Some(overlay_snapshot) = dialog.current_drilldown().cloned() else {
+            return false;
+        };
+        let Some(row) = drilldown_row_at(
+            &overlay_snapshot,
+            dialog.config_view,
+            overlay_snapshot.selected_row,
+        ) else {
+            return false;
+        };
+        let layout = drilldown_group_for_row(
+            &overlay_snapshot,
+            dialog.config_view,
+            overlay_snapshot.selected_row,
+        )
+        .map(|group| group.layout)
+        .unwrap_or(ConfigGroupLayout::Standard);
+        let Some(next) = move_config_row_cell(row, layout, overlay_snapshot.selected_cell, delta)
+        else {
+            return false;
+        };
+        let Some(overlay) = dialog.current_drilldown_mut() else {
+            return false;
+        };
+        overlay.selected_cell = next;
+        true
+    }
+
     fn open_config_type_selector(&mut self, dialog: &mut PluginWorkbenchOverlay) {
-        let Some(row) = dialog.selected_row().cloned() else {
+        let Some(context) = selected_config_row_context(dialog) else {
             return;
         };
-        let Some(plugin) = dialog.selected_plugin() else {
+        if dialog.current_drilldown().is_some() {
+            if let Some(overlay) = dialog.current_drilldown_mut() {
+                overlay.selected_cell = ConfigRowCell::Type;
+            }
+        } else {
+            dialog.selected_cell = ConfigRowCell::Type;
+        }
+        self.open_type_selector_for_row(dialog, context.plugin_id, context.row);
+    }
+
+    fn maybe_open_type_selector_for_selected_row(
+        &mut self,
+        dialog: &mut PluginWorkbenchOverlay,
+        plugin_id: &str,
+        path: &[PathSegment],
+    ) {
+        let Some(context) = selected_config_row_context(dialog) else {
             return;
         };
-        self.open_type_selector_for_row(dialog, plugin.plugin_id.clone(), row);
+        if context.plugin_id != plugin_id
+            || context.row.primary_path.as_slice() != path
+            || !context.row.type_mode.is_switchable()
+        {
+            return;
+        }
+        self.open_type_selector_for_row(dialog, context.plugin_id, context.row);
     }
 
     fn open_type_selector_for_row(
@@ -2135,6 +2366,13 @@ impl App {
         plugin_id: String,
         row: ConfigRowView,
     ) {
+        if dialog.current_drilldown().is_some() {
+            if let Some(overlay) = dialog.current_drilldown_mut() {
+                overlay.selected_cell = ConfigRowCell::Type;
+            }
+        } else {
+            dialog.selected_cell = ConfigRowCell::Type;
+        }
         let Some(plugin) = dialog
             .plugins
             .iter()
@@ -2164,25 +2402,34 @@ impl App {
             );
             return;
         }
-        let current_kind = get_value_at_path(&plugin.draft_config, &row.primary_path)
-            .map(json_kind_label)
-            .unwrap_or("null")
-            .to_owned();
-        let choices = schema
-            .as_ref()
-            .map(schema_type_choices)
-            .filter(|choices| !choices.is_empty())
-            .unwrap_or_else(|| {
-                vec![
-                    "string".to_owned(),
-                    "number".to_owned(),
-                    "integer".to_owned(),
-                    "boolean".to_owned(),
-                    "object".to_owned(),
-                    "array".to_owned(),
-                    "null".to_owned(),
-                ]
-            });
+        let current_value = get_value_at_path(&plugin.draft_config, &row.primary_path)
+            .cloned()
+            .unwrap_or(JsonValue::Null);
+        let choices = schema_type_selector_choices(schema.as_ref());
+        if choices.is_empty() {
+            self.flash_warning(format!("{} has no selectable schema type", row.title));
+            return;
+        }
+        if choices.len() == 1 {
+            let choice = choices[0].clone();
+            if value_matches_type(&current_value, choice.as_str()) {
+                self.flash_warning(format!("{} has a fixed schema type", row.title));
+                return;
+            }
+            let value = schema
+                .as_ref()
+                .map(|schema| {
+                    default_value_for_schema(schema, plugin.schema.as_ref().unwrap_or(schema))
+                })
+                .unwrap_or_else(|| JsonValue::Null);
+            self.set_config_value_at(
+                dialog,
+                plugin.plugin_id.clone(),
+                row.primary_path.clone(),
+                value,
+            );
+            return;
+        }
         self.open_named_selection_overlay(
             dialog,
             "Select Type".to_owned(),
@@ -2192,7 +2439,7 @@ impl App {
             choices
                 .into_iter()
                 .map(|choice| PluginConfigSelectionItem {
-                    checked: choice == current_kind,
+                    checked: value_matches_type(&current_value, choice.as_str()),
                     label: choice.clone(),
                     description: None,
                     value: PluginConfigSelectionValue::Named(choice),
@@ -2206,25 +2453,203 @@ impl App {
     }
 
     fn open_selected_config_value_editor(&mut self, dialog: &mut PluginWorkbenchOverlay) {
-        let Some(row) = dialog.selected_row().cloned() else {
+        let Some(context) = selected_config_row_context(dialog) else {
             return;
         };
-        let Some(plugin) = dialog.selected_plugin() else {
-            return;
-        };
-        self.open_row_editor(dialog, plugin.plugin_id.clone(), row);
+        self.open_row_cell_editor(
+            dialog,
+            context.plugin_id,
+            context.row,
+            context.layout,
+            context.cell,
+        );
     }
 
     fn open_drilldown_selected_row_editor(&mut self, dialog: &mut PluginWorkbenchOverlay) {
-        let Some(overlay) = dialog.current_drilldown() else {
+        self.open_selected_config_value_editor(dialog);
+    }
+
+    fn open_row_cell_editor(
+        &mut self,
+        dialog: &mut PluginWorkbenchOverlay,
+        plugin_id: String,
+        row: ConfigRowView,
+        layout: ConfigGroupLayout,
+        cell: ConfigRowCell,
+    ) {
+        let cell = normalize_config_row_cell(&row, layout, cell);
+        match cell {
+            ConfigRowCell::Default => {
+                if dialog.current_drilldown().is_some() {
+                    self.delete_drilldown_selected_row(dialog);
+                } else {
+                    self.delete_selected_config_node(dialog);
+                }
+                return;
+            }
+            ConfigRowCell::State => {
+                self.open_selected_config_actions(dialog);
+                return;
+            }
+            ConfigRowCell::Action => {
+                let Some(primary_action) = dialog
+                    .plugins
+                    .iter()
+                    .find(|plugin| plugin.plugin_id == plugin_id)
+                    .and_then(|plugin| {
+                        config_row_primary_action(
+                            plugin,
+                            &row.editor,
+                            row.primary_path.as_slice(),
+                            row.additional_paths.as_slice(),
+                        )
+                    })
+                else {
+                    self.open_selected_config_actions(dialog);
+                    return;
+                };
+                match primary_action {
+                    ConfigRowPrimaryAction::InsertAfter => {
+                        self.insert_array_item(
+                            dialog,
+                            plugin_id.as_str(),
+                            row.primary_path.as_slice(),
+                            true,
+                        );
+                    }
+                    ConfigRowPrimaryAction::Duplicate => {
+                        self.duplicate_array_item(
+                            dialog,
+                            plugin_id.as_str(),
+                            row.primary_path.as_slice(),
+                        );
+                    }
+                    ConfigRowPrimaryAction::MoveDown => {
+                        self.move_array_item(
+                            dialog,
+                            plugin_id.as_str(),
+                            row.primary_path.as_slice(),
+                            1,
+                        );
+                    }
+                    ConfigRowPrimaryAction::MoveUp => {
+                        self.move_array_item(
+                            dialog,
+                            plugin_id.as_str(),
+                            row.primary_path.as_slice(),
+                            -1,
+                        );
+                    }
+                    ConfigRowPrimaryAction::Remove => {
+                        self.remove_array_item(
+                            dialog,
+                            plugin_id.as_str(),
+                            row.primary_path.as_slice(),
+                        );
+                    }
+                    ConfigRowPrimaryAction::AddField | ConfigRowPrimaryAction::AddItem => {
+                        if let ConfigRowEditor::Structured { path } = row.editor.clone() {
+                            self.open_add_config_value_editor_for_path(dialog, plugin_id, path);
+                        }
+                    }
+                    ConfigRowPrimaryAction::Rename => {
+                        self.open_rename_field_editor(dialog, plugin_id, row.primary_path.clone());
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
+        if cell == ConfigRowCell::Type && row.type_mode.is_switchable() {
+            self.open_type_selector_for_row(dialog, plugin_id, row);
             return;
-        };
-        let Some(row) =
-            drilldown_row_at(overlay, dialog.config_view, overlay.selected_row).cloned()
+        }
+        if cell == ConfigRowCell::Value
+            && let ConfigRowEditor::NullableString { path } = row.editor.clone()
+        {
+            self.open_nullable_string_value_editor(dialog, plugin_id, row, path);
+            return;
+        }
+        if let ConfigRowEditor::PairInteger {
+            left_path,
+            right_path,
+        } = &row.editor
+        {
+            let (left_label, right_label) =
+                pair_editor_labels(left_path.as_slice(), right_path.as_slice());
+            let (path, label) = if cell == ConfigRowCell::SecondaryValue {
+                (right_path.clone(), right_label)
+            } else {
+                (left_path.clone(), left_label)
+            };
+            self.open_pair_integer_value_editor(dialog, plugin_id, row, path, label);
+            return;
+        }
+        self.open_row_editor(dialog, plugin_id, row);
+    }
+
+    fn open_nullable_string_value_editor(
+        &mut self,
+        dialog: &mut PluginWorkbenchOverlay,
+        plugin_id: String,
+        row: ConfigRowView,
+        path: ConfigPath,
+    ) {
+        let Some(plugin) = dialog
+            .plugins
+            .iter()
+            .find(|plugin| plugin.plugin_id == plugin_id)
         else {
             return;
         };
-        self.open_row_editor(dialog, overlay.plugin_id.clone(), row);
+        let current = get_value_at_path(&plugin.draft_config, &path)
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        dialog.editor = Some(EditorDialogState::new(
+            format!("Edit {}", row.title),
+            field_prompt_for_path(plugin, &path),
+            editor_save_footer(&self.i18n, false),
+            false,
+            Editor::from_text(current),
+            PluginConfigEditAction::SetNullableString {
+                plugin_id: plugin.plugin_id.clone(),
+                path,
+            },
+        ));
+    }
+
+    fn open_pair_integer_value_editor(
+        &mut self,
+        dialog: &mut PluginWorkbenchOverlay,
+        plugin_id: String,
+        row: ConfigRowView,
+        path: ConfigPath,
+        label: &str,
+    ) {
+        let Some(plugin) = dialog
+            .plugins
+            .iter()
+            .find(|plugin| plugin.plugin_id == plugin_id)
+        else {
+            return;
+        };
+        let current = get_value_at_path(&plugin.draft_config, &path)
+            .and_then(JsonValue::as_i64)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "0".to_owned());
+        dialog.editor = Some(EditorDialogState::new(
+            format!("Edit {} · {}", row.title, label),
+            field_prompt_for_path(plugin, &path),
+            "Enter save  Esc cancel".to_owned(),
+            false,
+            Editor::from_text(current),
+            PluginConfigEditAction::SetScalar {
+                plugin_id: plugin.plugin_id.clone(),
+                path,
+                kind: ScalarEditKind::Integer,
+            },
+        ));
     }
 
     fn open_row_editor(
@@ -2240,17 +2665,12 @@ impl App {
         else {
             return;
         };
-        match &row.editor {
+        match row.editor.clone() {
             ConfigRowEditor::Bool { path } => {
-                let current = get_value_at_path(&plugin.draft_config, path)
+                let current = get_value_at_path(&plugin.draft_config, &path)
                     .and_then(JsonValue::as_bool)
                     .unwrap_or(false);
-                self.set_config_value_at(
-                    dialog,
-                    plugin.plugin_id.clone(),
-                    path.clone(),
-                    json!(!current),
-                );
+                self.set_config_value_at(dialog, plugin.plugin_id.clone(), path, json!(!current));
                 return;
             }
             ConfigRowEditor::ReadOnly { .. } => {
@@ -2258,17 +2678,7 @@ impl App {
                 return;
             }
             ConfigRowEditor::NullableString { path } => {
-                let current = get_value_at_path(&plugin.draft_config, path)
-                    .and_then(JsonValue::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                self.open_nullable_string_selection_overlay(
-                    dialog,
-                    row.title.clone(),
-                    plugin.plugin_id.clone(),
-                    path.clone(),
-                    current,
-                );
+                self.open_nullable_string_value_editor(dialog, plugin.plugin_id.clone(), row, path);
                 return;
             }
             ConfigRowEditor::PairInteger {
@@ -2277,11 +2687,11 @@ impl App {
             } => {
                 let (left_label, right_label) =
                     pair_editor_labels(left_path.as_slice(), right_path.as_slice());
-                let left = get_value_at_path(&plugin.draft_config, left_path)
+                let left = get_value_at_path(&plugin.draft_config, &left_path)
                     .and_then(JsonValue::as_i64)
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "0".to_owned());
-                let right = get_value_at_path(&plugin.draft_config, right_path)
+                let right = get_value_at_path(&plugin.draft_config, &right_path)
                     .and_then(JsonValue::as_i64)
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "0".to_owned());
@@ -2296,8 +2706,8 @@ impl App {
                     Editor::from_text(format!("{left}\n{right}")),
                     PluginConfigEditAction::SetPairIntegers {
                         plugin_id: plugin.plugin_id.clone(),
-                        left_path: left_path.clone(),
-                        right_path: right_path.clone(),
+                        left_path,
+                        right_path,
                     },
                 ));
                 return;
@@ -2306,13 +2716,13 @@ impl App {
                 self.open_structured_row_drilldown(
                     dialog,
                     plugin.plugin_id.clone(),
-                    path.clone(),
+                    path,
                     row.title.clone(),
                 );
                 return;
             }
             ConfigRowEditor::MultiEnum { path, variants } => {
-                let current = get_value_at_path(&plugin.draft_config, path)
+                let current = get_value_at_path(&plugin.draft_config, &path)
                     .and_then(JsonValue::as_array)
                     .cloned()
                     .unwrap_or_default();
@@ -2320,8 +2730,8 @@ impl App {
                     dialog,
                     row.title.clone(),
                     plugin.plugin_id.clone(),
-                    path.clone(),
-                    variants.clone(),
+                    path,
+                    variants,
                     current,
                 );
                 return;
@@ -2335,8 +2745,7 @@ impl App {
         });
         if let Some(variants) = schema
             .as_ref()
-            .and_then(|schema| schema.get("enum"))
-            .and_then(JsonValue::as_array)
+            .and_then(schema_enum_values)
             .filter(|variants| !variants.is_empty())
         {
             self.open_enum_selection_overlay(
@@ -2344,7 +2753,7 @@ impl App {
                 row.title.clone(),
                 plugin.plugin_id.clone(),
                 row.primary_path.clone(),
-                variants.clone(),
+                variants,
                 value.clone(),
             );
             return;
@@ -2430,21 +2839,56 @@ impl App {
         plugin_id: String,
         path: ConfigPath,
         value: JsonValue,
-    ) {
+    ) -> bool {
+        match self.try_set_config_value_at(dialog, plugin_id, path, value) {
+            Ok(()) => true,
+            Err(error) => {
+                self.flash_warning(error);
+                false
+            }
+        }
+    }
+
+    fn try_set_config_values_at(
+        &mut self,
+        dialog: &mut PluginWorkbenchOverlay,
+        plugin_id: String,
+        updates: Vec<(ConfigPath, JsonValue)>,
+        focus_path: ConfigPath,
+    ) -> UiResult<()> {
         let Some(plugin_index) = dialog
             .plugins
             .iter()
             .position(|plugin| plugin.plugin_id == plugin_id)
         else {
-            return;
+            return Ok(());
+        };
+        let next_config = {
+            let plugin = &dialog.plugins[plugin_index];
+            apply_staged_config_value_updates(
+                plugin.schema.as_ref(),
+                &plugin.draft_config,
+                updates.as_slice(),
+            )?
         };
         {
             let plugin = &mut dialog.plugins[plugin_index];
-            set_value_at_path(&mut plugin.draft_config, &path, value);
+            plugin.draft_config = next_config;
             recompute_plugin_config_state(plugin);
         }
-        self.focus_config_path(dialog, plugin_id.as_str(), path.as_slice());
+        self.focus_config_path(dialog, plugin_id.as_str(), focus_path.as_slice());
         dialog.clamp_selection();
+        Ok(())
+    }
+
+    fn try_set_config_value_at(
+        &mut self,
+        dialog: &mut PluginWorkbenchOverlay,
+        plugin_id: String,
+        path: ConfigPath,
+        value: JsonValue,
+    ) -> UiResult<()> {
+        self.try_set_config_values_at(dialog, plugin_id, vec![(path.clone(), value)], path)
     }
 
     fn open_named_selection_overlay(
@@ -2480,13 +2924,13 @@ impl App {
         branches: Vec<BranchChoice>,
         current: JsonValue,
     ) {
-        let active = active_branch_label(branches.as_slice(), &current).to_owned();
+        let active = active_branch_id(branches.as_slice(), &current).to_owned();
         let items = branches
             .into_iter()
             .map(|branch| PluginConfigSelectionItem {
                 label: branch.label.clone(),
                 description: Some(schema_kind_label(&branch.schema)),
-                checked: branch.label == active,
+                checked: branch.id == active,
                 value: PluginConfigSelectionValue::Branch(branch),
             })
             .collect::<Vec<_>>();
@@ -2562,43 +3006,6 @@ impl App {
         );
     }
 
-    fn open_nullable_string_selection_overlay(
-        &mut self,
-        dialog: &mut PluginWorkbenchOverlay,
-        title: String,
-        plugin_id: String,
-        path: ConfigPath,
-        current_text: String,
-    ) {
-        let custom_selected = !current_text.is_empty();
-        self.open_named_selection_overlay(
-            dialog,
-            format!("Edit {title}"),
-            "Choose whether this field is not set or stores a custom value.".to_owned(),
-            "Enter apply  Esc cancel  Up/Down move".to_owned(),
-            false,
-            vec![
-                PluginConfigSelectionItem {
-                    label: "Not set".to_owned(),
-                    description: Some("Store null for this field.".to_owned()),
-                    checked: !custom_selected,
-                    value: PluginConfigSelectionValue::NullableMode(NullableStringMode::NotSet),
-                },
-                PluginConfigSelectionItem {
-                    label: "Custom value".to_owned(),
-                    description: Some("Open a text editor for the string value.".to_owned()),
-                    checked: custom_selected,
-                    value: PluginConfigSelectionValue::NullableMode(NullableStringMode::Custom),
-                },
-            ],
-            PluginConfigSelectionAction::SelectNullableStringMode {
-                plugin_id,
-                path,
-                current_text,
-            },
-        );
-    }
-
     fn open_structured_row_drilldown(
         &mut self,
         dialog: &mut PluginWorkbenchOverlay,
@@ -2620,6 +3027,7 @@ impl App {
             title,
             groups,
             selected_row: 0,
+            selected_cell: ConfigRowCell::Value,
         });
     }
 
@@ -2637,29 +3045,31 @@ impl App {
             return;
         }
         let plugin_id = overlay.plugin_id.clone();
-        let changed = if let Some(plugin) = dialog
+        let (changed, blocked) = if let Some(plugin) = dialog
             .plugins
             .iter_mut()
             .find(|plugin| plugin.plugin_id == plugin_id)
         {
-            let mut changed = false;
-            for path in row_paths(&row) {
-                changed |= reset_effective_value_at_path(
-                    &mut plugin.draft_config,
-                    &plugin.default_config,
-                    path.as_slice(),
-                );
-            }
-            if changed {
+            let outcome = apply_reset_paths(
+                &mut plugin.draft_config,
+                &plugin.default_config,
+                plugin.schema.as_ref(),
+                &row_paths(&row).into_iter().cloned().collect::<Vec<_>>(),
+            );
+            if outcome.changed {
+                clear_branch_drafts_for_structural_change(plugin);
                 recompute_plugin_config_state(plugin);
             }
-            changed
+            (outcome.changed, outcome.blocked)
         } else {
-            false
+            (false, Vec::new())
         };
         if changed {
             dialog.drilldown_stack =
                 rebuild_drilldown_stack(dialog, dialog.drilldown_stack.as_slice());
+        }
+        if let Some(message) = reset_paths_warning_message(blocked.as_slice()) {
+            self.flash_warning(message);
         }
     }
 
@@ -2676,7 +3086,7 @@ impl App {
                 kind,
             } => {
                 let value = parse_scalar_editor_value(kind, input)?;
-                self.set_config_value_at(dialog, plugin_id, path, value);
+                self.try_set_config_value_at(dialog, plugin_id, path, value)?;
             }
             PluginConfigEditAction::SetNullableString { plugin_id, path } => {
                 let trimmed = input.trim();
@@ -2685,7 +3095,7 @@ impl App {
                 } else {
                     JsonValue::String(trimmed.to_owned())
                 };
-                self.set_config_value_at(dialog, plugin_id, path, value);
+                self.try_set_config_value_at(dialog, plugin_id, path, value)?;
             }
             PluginConfigEditAction::SetPairIntegers {
                 plugin_id,
@@ -2694,18 +3104,18 @@ impl App {
             } => {
                 let (left_value, right_value) = parse_pair_integer_editor_values(input)?;
                 let selection_plugin_id = plugin_id.clone();
-                self.set_config_value_at(
-                    dialog,
-                    plugin_id.clone(),
-                    left_path.clone(),
-                    JsonValue::Number(JsonNumber::from(left_value)),
-                );
-                self.set_config_value_at(
+                self.try_set_config_values_at(
                     dialog,
                     plugin_id,
-                    right_path,
-                    JsonValue::Number(JsonNumber::from(right_value)),
-                );
+                    vec![
+                        (
+                            left_path.clone(),
+                            JsonValue::Number(JsonNumber::from(left_value)),
+                        ),
+                        (right_path, JsonValue::Number(JsonNumber::from(right_value))),
+                    ],
+                    left_path.clone(),
+                )?;
                 self.focus_config_path(dialog, selection_plugin_id.as_str(), left_path.as_slice());
             }
             PluginConfigEditAction::AddObjectField { plugin_id, path } => {
@@ -2730,6 +3140,13 @@ impl App {
                     {
                         return Err(format!("field `{key}` already exists"));
                     }
+                    if let Some(reason) = object_add_field_block_reason(
+                        plugin.schema.as_ref(),
+                        &plugin.draft_config,
+                        &path,
+                    ) {
+                        return Err(reason);
+                    }
                     let child_schema = validate_new_object_field_key(
                         plugin.schema.as_ref(),
                         &plugin.draft_config,
@@ -2746,9 +3163,15 @@ impl App {
                         })
                         .unwrap_or(JsonValue::Null);
                     set_value_at_path(&mut plugin.draft_config, &child_path, default);
+                    clear_branch_drafts_for_structural_change(plugin);
                     recompute_plugin_config_state(plugin);
                 }
                 self.focus_config_path(dialog, plugin_id.as_str(), child_path.as_slice());
+                self.maybe_open_type_selector_for_selected_row(
+                    dialog,
+                    plugin_id.as_str(),
+                    child_path.as_slice(),
+                );
             }
             PluginConfigEditAction::RenameObjectField { plugin_id, path } => {
                 let new_key = input.trim();
@@ -2783,7 +3206,22 @@ impl App {
                         &parent_path,
                         new_key,
                     )?;
-                    let _ = child_schema;
+                    let current_value = get_value_at_path(&plugin.draft_config, &path)
+                        .cloned()
+                        .unwrap_or(JsonValue::Null);
+                    let mut preview_path = parent_path.clone();
+                    preview_path.push(PathSegment::Key(new_key.to_owned()));
+                    if let Some(schema) = child_schema.as_ref()
+                        && let Some(root_schema) = plugin.schema.as_ref()
+                    {
+                        validate_schema_value_for_path(
+                            root_schema,
+                            schema,
+                            &current_value,
+                            &preview_path,
+                            title_for_schema_or_key(schema, new_key).as_str(),
+                        )?;
+                    }
                     let Some(new_path) = rename_object_field_at_path(
                         &mut plugin.draft_config,
                         path.as_slice(),
@@ -2791,6 +3229,7 @@ impl App {
                     ) else {
                         return Err("failed to rename field".to_owned());
                     };
+                    clear_branch_drafts_for_structural_change(plugin);
                     recompute_plugin_config_state(plugin);
                     new_path
                 };
@@ -2820,7 +3259,7 @@ impl App {
                 };
                 let Some(plugin) = dialog
                     .plugins
-                    .iter_mut()
+                    .iter()
                     .find(|plugin| plugin.plugin_id == plugin_id)
                 else {
                     return Ok(());
@@ -2830,9 +3269,7 @@ impl App {
                     .as_ref()
                     .and_then(|root| schema_for_path(root, root, &plugin.draft_config, &path));
                 let value = default_value_for_type(selected.as_str(), schema.as_ref());
-                set_value_at_path(&mut plugin.draft_config, &path, value);
-                recompute_plugin_config_state(plugin);
-                select_config_path(dialog, plugin_id.as_str(), path.as_slice());
+                self.try_set_config_value_at(dialog, plugin_id, path, value)?;
             }
             PluginConfigSelectionAction::SelectBranch { plugin_id, path } => {
                 let PluginConfigSelectionValue::Branch(branch) = selected_item.value else {
@@ -2840,7 +3277,7 @@ impl App {
                 };
                 let Some(plugin) = dialog
                     .plugins
-                    .iter_mut()
+                    .iter()
                     .find(|plugin| plugin.plugin_id == plugin_id)
                 else {
                     return Ok(());
@@ -2853,19 +3290,16 @@ impl App {
                         _ => None,
                     })
                     .collect::<Vec<_>>();
-                if let Some(current) = get_value_at_path(&plugin.draft_config, &path).cloned() {
-                    let active_key = plugin_branch_draft_key(
-                        plugin.plugin_id.as_str(),
-                        &path,
-                        active_branch_label(all_branches.as_slice(), &current),
-                    );
-                    plugin.branch_drafts.insert(active_key, current);
-                }
-                let target_key = plugin_branch_draft_key(
+                let current = get_value_at_path(&plugin.draft_config, &path)
+                    .cloned()
+                    .unwrap_or(JsonValue::Null);
+                let active_key = plugin_branch_draft_key(
                     plugin.plugin_id.as_str(),
                     &path,
-                    branch.label.as_str(),
+                    active_branch_id(all_branches.as_slice(), &current),
                 );
+                let target_key =
+                    plugin_branch_draft_key(plugin.plugin_id.as_str(), &path, branch.id.as_str());
                 let value = plugin
                     .branch_drafts
                     .get(target_key.as_str())
@@ -2876,18 +3310,23 @@ impl App {
                             plugin.schema.as_ref().unwrap_or(&branch.schema),
                         )
                     });
-                set_value_at_path(&mut plugin.draft_config, &path, value);
-                recompute_plugin_config_state(plugin);
-                select_config_path(dialog, plugin_id.as_str(), path.as_slice());
+                self.try_set_config_value_at(dialog, plugin_id.clone(), path.clone(), value)?;
+                if let Some(plugin) = dialog
+                    .plugins
+                    .iter_mut()
+                    .find(|plugin| plugin.plugin_id == plugin_id)
+                {
+                    plugin.branch_drafts.insert(active_key, current);
+                }
             }
             PluginConfigSelectionAction::SelectEnum { plugin_id, path } => {
                 let PluginConfigSelectionValue::Json(selected) = selected_item.value else {
                     return Err("invalid enum selection".to_owned());
                 };
-                self.set_config_value_at(dialog, plugin_id, path, selected);
+                self.try_set_config_value_at(dialog, plugin_id, path, selected)?;
             }
             PluginConfigSelectionAction::SelectMultiEnum { plugin_id, path } => {
-                let values = overlay
+                let selected_values = overlay
                     .items
                     .iter()
                     .filter(|item| item.checked)
@@ -2896,31 +3335,20 @@ impl App {
                         _ => None,
                     })
                     .collect::<Vec<_>>();
-                self.set_config_value_at(dialog, plugin_id, path, JsonValue::Array(values));
-            }
-            PluginConfigSelectionAction::SelectNullableStringMode {
-                plugin_id,
-                path,
-                current_text,
-            } => {
-                let PluginConfigSelectionValue::NullableMode(mode) = selected_item.value else {
-                    return Err("invalid nullable string selection".to_owned());
+                let Some(plugin) = dialog
+                    .plugins
+                    .iter()
+                    .find(|plugin| plugin.plugin_id == plugin_id)
+                else {
+                    return Ok(());
                 };
-                match mode {
-                    NullableStringMode::NotSet => {
-                        self.set_config_value_at(dialog, plugin_id, path, JsonValue::Null);
-                    }
-                    NullableStringMode::Custom => {
-                        dialog.editor = Some(EditorDialogState::new(
-                            format!("Edit {}", title_from_path(path.as_slice())),
-                            "Enter a string value.".to_owned(),
-                            editor_save_footer(&self.i18n, false),
-                            false,
-                            Editor::from_text(current_text),
-                            PluginConfigEditAction::SetNullableString { plugin_id, path },
-                        ));
-                    }
-                }
+                let current = get_value_at_path(&plugin.draft_config, &path)
+                    .and_then(JsonValue::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let values =
+                    merge_multi_enum_selection(current.as_slice(), selected_values.as_slice());
+                self.try_set_config_value_at(dialog, plugin_id, path, JsonValue::Array(values))?;
             }
         }
         dialog.clamp_selection();
@@ -3334,7 +3762,7 @@ fn render_plugin_config_actions_overlay(
         Text::from(lines),
         None,
     );
-    render_plugin_footer(frame, rows[1], "Enter apply  Esc close  Up/Down move");
+    render_plugin_footer(frame, rows[1], overlay.footer.as_str());
 }
 
 fn render_plugin_config_drilldown_overlay(
@@ -3381,15 +3809,26 @@ fn render_plugin_config_drilldown_overlay(
             Style::default().add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(Span::styled(
-            fixed_columns(
-                &[
-                    ("Setting", 26),
-                    ("Value", 28),
-                    ("Default", 24),
-                    ("State", 10),
-                ],
-                rows[0].width.saturating_sub(4),
-            ),
+            if group_has_action_column(group, dialog.config_view) {
+                standard_config_row_line_with_action(
+                    "Setting",
+                    "Type",
+                    "Value",
+                    "Default",
+                    "Action",
+                    "State",
+                    rows[0].width.saturating_sub(4),
+                )
+            } else {
+                standard_config_row_line(
+                    "Setting",
+                    "Type",
+                    "Value",
+                    "Default",
+                    "State",
+                    rows[0].width.saturating_sub(4),
+                )
+            },
             Style::default().add_modifier(Modifier::BOLD),
         )));
         let mut visible_index = 0usize;
@@ -3399,21 +3838,22 @@ fn render_plugin_config_drilldown_overlay(
                     continue;
                 }
                 if std::ptr::eq(drill_group, group) {
-                    let style = if visible_index == overlay.selected_row {
-                        plugin_workbench_selection_highlight_style()
+                    let include_action = group_has_action_column(group, dialog.config_view);
+                    let focused_cell = if visible_index == overlay.selected_row {
+                        Some(drilldown_selected_row_cell(
+                            overlay,
+                            dialog.config_view,
+                            overlay.selected_cell,
+                        ))
                     } else {
-                        Style::default()
+                        None
                     };
-                    let line = fixed_columns(
-                        &[
-                            (row.title.as_str(), 26),
-                            (row.value_display.as_str(), 28),
-                            (row.default_display.as_str(), 24),
-                            (row.state.label(), 10),
-                        ],
+                    lines.push(standard_config_row_line_with_focus(
+                        row,
                         rows[0].width.saturating_sub(4),
-                    );
-                    lines.push(Line::from(Span::styled(clean(line), style)));
+                        focused_cell,
+                        include_action,
+                    ));
                 }
                 visible_index += 1;
             }
@@ -3430,11 +3870,8 @@ fn render_plugin_config_drilldown_overlay(
         Text::from(lines),
         None,
     );
-    render_plugin_footer(
-        frame,
-        rows[1],
-        "Esc back  Enter edit/open  a add  x actions  Ctrl+d reset row  Up/Down move",
-    );
+    let footer = drilldown_footer_text(dialog, overlay);
+    render_plugin_footer(frame, rows[1], footer.as_str());
 }
 
 fn render_plugin_config_diff_overlay(
@@ -3545,11 +3982,48 @@ fn compact_config_header_line(plugin: &PluginWorkbenchPlugin) -> String {
 
 fn compact_config_view_line(
     plugin: &PluginWorkbenchPlugin,
-    _dialog: &PluginWorkbenchOverlay,
+    dialog: &PluginWorkbenchOverlay,
 ) -> String {
+    let (cell_label, enter_hint) = selected_config_row_context(dialog)
+        .map(|context| {
+            (
+                config_row_cell_label(&context.row, context.layout, context.cell).to_owned(),
+                config_row_cell_enter_hint(&context.row, context.layout, context.cell),
+            )
+        })
+        .unwrap_or_else(|| ("Value".to_owned(), "edit value".to_owned()));
     format!(
-        "Changed: {}                            Restart: Not required",
+        "Changed: {}  Cell: {}  Left/Right move  Enter {}  T type/shape  A add  X actions",
         override_leaf_count(&plugin.draft_override),
+        cell_label,
+        enter_hint,
+    )
+}
+
+fn drilldown_footer_text(
+    dialog: &PluginWorkbenchOverlay,
+    overlay: &PluginConfigDrilldownOverlay,
+) -> String {
+    let enter_hint = drilldown_row_at(overlay, dialog.config_view, overlay.selected_row)
+        .and_then(|row| {
+            drilldown_group_for_row(overlay, dialog.config_view, overlay.selected_row).map(
+                |group| {
+                    config_row_cell_enter_hint(
+                        row,
+                        group.layout,
+                        drilldown_selected_row_cell(
+                            overlay,
+                            dialog.config_view,
+                            overlay.selected_cell,
+                        ),
+                    )
+                },
+            )
+        })
+        .unwrap_or_else(|| "edit value".to_owned());
+    format!(
+        "Esc back  Left/Right cell  Enter {}  T type/shape  A add  X actions  Ctrl+d reset row  Up/Down move",
+        enter_hint
     )
 }
 
@@ -3725,6 +4199,24 @@ fn recompute_plugin_config_state(plugin: &mut PluginWorkbenchPlugin) {
     plugin.config_status = config_status_for_plugin(plugin);
 }
 
+fn plugin_config_error_count(plugin: &PluginWorkbenchPlugin) -> usize {
+    plugin
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+        .count()
+}
+
+fn plugin_save_block_reason(plugin: &PluginWorkbenchPlugin) -> Option<String> {
+    let errors = plugin_config_error_count(plugin);
+    (errors > 0).then(|| {
+        format!(
+            "cannot save {} config with {errors} error(s)",
+            plugin.plugin_id
+        )
+    })
+}
+
 fn config_status_for_plugin(plugin: &PluginWorkbenchPlugin) -> PluginConfigStatus {
     if !plugin.runtime_diagnostics.is_empty() {
         return PluginConfigStatus {
@@ -3738,11 +4230,7 @@ fn config_status_for_plugin(plugin: &PluginWorkbenchPlugin) -> PluginConfigStatu
             label: "Needs restart".to_owned(),
         };
     }
-    let errors = plugin
-        .diagnostics
-        .iter()
-        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
-        .count();
+    let errors = plugin_config_error_count(plugin);
     if errors > 0 {
         return PluginConfigStatus {
             kind: PluginConfigStatusKind::Invalid,
@@ -3782,23 +4270,12 @@ fn config_status_for_plugin(plugin: &PluginWorkbenchPlugin) -> PluginConfigStatu
 
 fn normalize_override_value(value: JsonValue) -> JsonValue {
     match value {
-        JsonValue::Object(object) => {
-            let mut normalized = JsonMap::new();
-            for (key, value) in object {
-                let normalized_value = normalize_override_value(value);
-                let is_empty_object = normalized_value
-                    .as_object()
-                    .is_some_and(|object| object.is_empty());
-                if !is_empty_object {
-                    normalized.insert(key, normalized_value);
-                }
-            }
-            if normalized.is_empty() {
-                JsonValue::Null
-            } else {
-                JsonValue::Object(normalized)
-            }
-        }
+        JsonValue::Object(object) => JsonValue::Object(
+            object
+                .into_iter()
+                .map(|(key, value)| (key, normalize_override_value(value)))
+                .collect(),
+        ),
         JsonValue::Array(items) => JsonValue::Array(
             items
                 .into_iter()
@@ -3807,6 +4284,10 @@ fn normalize_override_value(value: JsonValue) -> JsonValue {
         ),
         other => other,
     }
+}
+
+fn persisted_plugin_config_value(plugin: &PluginWorkbenchPlugin) -> JsonValue {
+    normalize_override_value(plugin.draft_override.clone())
 }
 
 fn derive_override_value(default: &JsonValue, effective: &JsonValue) -> JsonValue {
@@ -4080,10 +4561,327 @@ fn row_visible(_row: &ConfigRowView, _view: PluginConfigView) -> bool {
     true
 }
 
+fn row_rename_action_allowed(plugin: &PluginWorkbenchPlugin, path: &[PathSegment]) -> bool {
+    let Some((parent_path, key)) = path_key_info(path) else {
+        return false;
+    };
+    let Some(root_schema) = plugin.schema.as_ref() else {
+        return true;
+    };
+    let Some(parent_schema) =
+        schema_for_path(root_schema, root_schema, &plugin.draft_config, &parent_path)
+    else {
+        return true;
+    };
+    !schema_declared_property_keys(&parent_schema).contains(&key)
+}
+
+fn array_item_primary_action(info: ArrayItemActionInfo) -> Option<ConfigRowPrimaryAction> {
+    if info.can_insert_after {
+        Some(ConfigRowPrimaryAction::InsertAfter)
+    } else if info.can_duplicate {
+        Some(ConfigRowPrimaryAction::Duplicate)
+    } else if info.can_move_down {
+        Some(ConfigRowPrimaryAction::MoveDown)
+    } else if info.can_move_up {
+        Some(ConfigRowPrimaryAction::MoveUp)
+    } else if info.can_remove {
+        Some(ConfigRowPrimaryAction::Remove)
+    } else {
+        None
+    }
+}
+
+fn config_row_primary_action(
+    plugin: &PluginWorkbenchPlugin,
+    editor: &ConfigRowEditor,
+    primary_path: &[PathSegment],
+    additional_paths: &[ConfigPath],
+) -> Option<ConfigRowPrimaryAction> {
+    if let Some(info) = array_item_action_info(plugin, primary_path)
+        && info.has_any_action()
+    {
+        return array_item_primary_action(info);
+    }
+    if let ConfigRowEditor::Structured { path } = editor
+        && let Some(value) = get_value_at_path(&plugin.draft_config, path)
+    {
+        match value {
+            JsonValue::Object(_) => {
+                if object_add_field_block_reason(plugin.schema.as_ref(), &plugin.draft_config, path)
+                    .is_none()
+                {
+                    return Some(ConfigRowPrimaryAction::AddField);
+                }
+            }
+            JsonValue::Array(_) => {
+                if can_append_array_item(plugin, path.as_slice()) {
+                    return Some(ConfigRowPrimaryAction::AddItem);
+                }
+            }
+            _ => {}
+        }
+    }
+    (additional_paths.is_empty() && row_rename_action_allowed(plugin, primary_path))
+        .then_some(ConfigRowPrimaryAction::Rename)
+}
+
+fn config_row_action_display(
+    plugin: &PluginWorkbenchPlugin,
+    editor: &ConfigRowEditor,
+    primary_path: &[PathSegment],
+    additional_paths: &[ConfigPath],
+) -> Option<String> {
+    config_row_primary_action(plugin, editor, primary_path, additional_paths)
+        .map(ConfigRowPrimaryAction::label)
+        .map(str::to_owned)
+}
+
+fn config_row_cell_fallback_order(
+    layout: ConfigGroupLayout,
+    preferred: ConfigRowCell,
+) -> &'static [ConfigRowCell] {
+    match layout {
+        ConfigGroupLayout::Standard => match preferred {
+            ConfigRowCell::Type => &[
+                ConfigRowCell::Type,
+                ConfigRowCell::Value,
+                ConfigRowCell::Default,
+                ConfigRowCell::Action,
+                ConfigRowCell::State,
+            ],
+            ConfigRowCell::Value => &[
+                ConfigRowCell::Value,
+                ConfigRowCell::Default,
+                ConfigRowCell::Action,
+                ConfigRowCell::State,
+                ConfigRowCell::Type,
+            ],
+            ConfigRowCell::SecondaryValue => &[
+                ConfigRowCell::Value,
+                ConfigRowCell::Default,
+                ConfigRowCell::Action,
+                ConfigRowCell::State,
+                ConfigRowCell::Type,
+            ],
+            ConfigRowCell::Default => &[
+                ConfigRowCell::Default,
+                ConfigRowCell::Action,
+                ConfigRowCell::State,
+                ConfigRowCell::Value,
+                ConfigRowCell::Type,
+            ],
+            ConfigRowCell::Action => &[
+                ConfigRowCell::Action,
+                ConfigRowCell::State,
+                ConfigRowCell::Default,
+                ConfigRowCell::Value,
+                ConfigRowCell::Type,
+            ],
+            ConfigRowCell::State => &[
+                ConfigRowCell::State,
+                ConfigRowCell::Action,
+                ConfigRowCell::Default,
+                ConfigRowCell::Value,
+                ConfigRowCell::Type,
+            ],
+        },
+        ConfigGroupLayout::Pair { .. } => match preferred {
+            ConfigRowCell::Type | ConfigRowCell::Default | ConfigRowCell::Value => &[
+                ConfigRowCell::Value,
+                ConfigRowCell::SecondaryValue,
+                ConfigRowCell::Action,
+                ConfigRowCell::State,
+            ],
+            ConfigRowCell::SecondaryValue => &[
+                ConfigRowCell::SecondaryValue,
+                ConfigRowCell::Value,
+                ConfigRowCell::Action,
+                ConfigRowCell::State,
+            ],
+            ConfigRowCell::Action => &[
+                ConfigRowCell::Action,
+                ConfigRowCell::State,
+                ConfigRowCell::SecondaryValue,
+                ConfigRowCell::Value,
+            ],
+            ConfigRowCell::State => &[
+                ConfigRowCell::State,
+                ConfigRowCell::Action,
+                ConfigRowCell::SecondaryValue,
+                ConfigRowCell::Value,
+            ],
+        },
+    }
+}
+
+fn row_cells(row: &ConfigRowView, layout: ConfigGroupLayout) -> Vec<ConfigRowCell> {
+    match layout {
+        ConfigGroupLayout::Standard => {
+            let mut cells = Vec::new();
+            if row.type_mode.is_switchable() {
+                cells.push(ConfigRowCell::Type);
+            }
+            cells.push(ConfigRowCell::Value);
+            cells.push(ConfigRowCell::Default);
+            if row.action_display.is_some() {
+                cells.push(ConfigRowCell::Action);
+            }
+            cells.push(ConfigRowCell::State);
+            cells
+        }
+        ConfigGroupLayout::Pair { .. } => {
+            let mut cells = vec![ConfigRowCell::Value, ConfigRowCell::SecondaryValue];
+            if row.action_display.is_some() {
+                cells.push(ConfigRowCell::Action);
+            }
+            cells.push(ConfigRowCell::State);
+            cells
+        }
+    }
+}
+
+fn normalize_config_row_cell(
+    row: &ConfigRowView,
+    layout: ConfigGroupLayout,
+    preferred: ConfigRowCell,
+) -> ConfigRowCell {
+    let cells = row_cells(row, layout);
+    config_row_cell_fallback_order(layout, preferred)
+        .iter()
+        .copied()
+        .find(|candidate| cells.contains(candidate))
+        .or_else(|| cells.first().copied())
+        .unwrap_or(ConfigRowCell::Value)
+}
+
+fn move_config_row_cell(
+    row: &ConfigRowView,
+    layout: ConfigGroupLayout,
+    current: ConfigRowCell,
+    delta: isize,
+) -> Option<ConfigRowCell> {
+    let cells = row_cells(row, layout);
+    let current = normalize_config_row_cell(row, layout, current);
+    let index = cells
+        .iter()
+        .position(|cell| *cell == current)
+        .unwrap_or_default();
+    let next = (index as isize + delta).clamp(0, cells.len().saturating_sub(1) as isize) as usize;
+    (next != index).then(|| cells[next])
+}
+
+fn config_row_cell_label(
+    row: &ConfigRowView,
+    layout: ConfigGroupLayout,
+    cell: ConfigRowCell,
+) -> &'static str {
+    match (layout, normalize_config_row_cell(row, layout, cell)) {
+        (ConfigGroupLayout::Standard, ConfigRowCell::Type) => "Type",
+        (ConfigGroupLayout::Standard, ConfigRowCell::Value) => "Value",
+        (ConfigGroupLayout::Standard, ConfigRowCell::Default) => "Default",
+        (ConfigGroupLayout::Standard, ConfigRowCell::Action) => "Action",
+        (ConfigGroupLayout::Standard, ConfigRowCell::State) => "State",
+        (ConfigGroupLayout::Standard, _) => "Value",
+        (ConfigGroupLayout::Pair { left_label, .. }, ConfigRowCell::Value) => left_label,
+        (ConfigGroupLayout::Pair { right_label, .. }, ConfigRowCell::SecondaryValue) => right_label,
+        (ConfigGroupLayout::Pair { .. }, ConfigRowCell::Action) => "Action",
+        (ConfigGroupLayout::Pair { .. }, ConfigRowCell::State) => "State",
+        (ConfigGroupLayout::Pair { left_label, .. }, _) => left_label,
+    }
+}
+
+fn config_row_cell_enter_hint(
+    row: &ConfigRowView,
+    layout: ConfigGroupLayout,
+    cell: ConfigRowCell,
+) -> String {
+    match normalize_config_row_cell(row, layout, cell) {
+        ConfigRowCell::Type => {
+            if row.type_mode == ConfigRowTypeMode::SelectShape {
+                "choose shape".to_owned()
+            } else {
+                "choose type".to_owned()
+            }
+        }
+        ConfigRowCell::Default => "reset field".to_owned(),
+        ConfigRowCell::Action => row
+            .action_display
+            .as_deref()
+            .map(trim_action_display)
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_else(|| "open actions".to_owned()),
+        ConfigRowCell::State => "open actions".to_owned(),
+        ConfigRowCell::SecondaryValue => format!(
+            "edit {}",
+            config_row_cell_label(row, layout, ConfigRowCell::SecondaryValue).to_ascii_lowercase()
+        ),
+        ConfigRowCell::Value => match &row.editor {
+            ConfigRowEditor::Bool { .. } => "toggle value".to_owned(),
+            ConfigRowEditor::ReadOnly { .. } => "view value".to_owned(),
+            ConfigRowEditor::Null { .. } if row.type_mode.is_switchable() => {
+                if row.type_mode == ConfigRowTypeMode::SelectShape {
+                    "choose shape".to_owned()
+                } else {
+                    "choose type".to_owned()
+                }
+            }
+            ConfigRowEditor::Structured { .. } => "configure".to_owned(),
+            ConfigRowEditor::Enum { .. } | ConfigRowEditor::MultiEnum { .. } => {
+                "select value".to_owned()
+            }
+            ConfigRowEditor::PairInteger { .. } => format!(
+                "edit {}",
+                config_row_cell_label(row, layout, ConfigRowCell::Value).to_ascii_lowercase()
+            ),
+            _ => "edit value".to_owned(),
+        },
+    }
+}
+
+fn group_has_action_column(group: &ConfigGroupView, view: PluginConfigView) -> bool {
+    group
+        .rows
+        .iter()
+        .filter(|row| row_visible(row, view))
+        .any(|row| row.action_display.is_some())
+}
+
+fn section_selected_row_cell(
+    section: &ConfigSectionView,
+    view: PluginConfigView,
+    index: usize,
+    preferred: ConfigRowCell,
+) -> ConfigRowCell {
+    let Some(row) = section_row_at(section, view, index) else {
+        return ConfigRowCell::Value;
+    };
+    let layout = section_group_for_row(section, view, index)
+        .map(|group| group.layout)
+        .unwrap_or(ConfigGroupLayout::Standard);
+    normalize_config_row_cell(row, layout, preferred)
+}
+
+fn drilldown_selected_row_cell(
+    overlay: &PluginConfigDrilldownOverlay,
+    view: PluginConfigView,
+    preferred: ConfigRowCell,
+) -> ConfigRowCell {
+    let Some(row) = drilldown_row_at(overlay, view, overlay.selected_row) else {
+        return ConfigRowCell::Value;
+    };
+    let layout = drilldown_group_for_row(overlay, view, overlay.selected_row)
+        .map(|group| group.layout)
+        .unwrap_or(ConfigGroupLayout::Standard);
+    normalize_config_row_cell(row, layout, preferred)
+}
+
 #[derive(Debug, Clone)]
 struct SelectedConfigRowContext {
     plugin_id: String,
     row: ConfigRowView,
+    layout: ConfigGroupLayout,
+    cell: ConfigRowCell,
     group_title: String,
     group_paths: Vec<ConfigPath>,
 }
@@ -4097,6 +4895,8 @@ fn selected_config_row_context(
         return Some(SelectedConfigRowContext {
             plugin_id: overlay.plugin_id.clone(),
             row,
+            layout: group.layout,
+            cell: drilldown_selected_row_cell(overlay, dialog.config_view, overlay.selected_cell),
             group_title: group.title.clone(),
             group_paths: group_row_paths(group),
         });
@@ -4108,6 +4908,13 @@ fn selected_config_row_context(
     Some(SelectedConfigRowContext {
         plugin_id: plugin.plugin_id.clone(),
         row,
+        layout: group.layout,
+        cell: section_selected_row_cell(
+            section,
+            dialog.config_view,
+            dialog.selected_node,
+            dialog.selected_cell,
+        ),
         group_title: group.title.clone(),
         group_paths: group_row_paths(group),
     })
@@ -4247,6 +5054,7 @@ fn rebuild_drilldown_overlay(
         title: previous.title.clone(),
         groups,
         selected_row: previous.selected_row,
+        selected_cell: previous.selected_cell,
     };
     if drilldown_row_count(&overlay, dialog.config_view) == 0 {
         overlay.selected_row = 0;
@@ -4255,6 +5063,8 @@ fn rebuild_drilldown_overlay(
             .selected_row
             .min(drilldown_row_count(&overlay, dialog.config_view).saturating_sub(1));
     }
+    overlay.selected_cell =
+        drilldown_selected_row_cell(&overlay, dialog.config_view, overlay.selected_cell);
     Some(overlay)
 }
 
@@ -5123,8 +5933,7 @@ fn should_expand_object_child(
         return false;
     };
     let root = plugin.schema.as_ref().unwrap_or(child_schema);
-    effective_schema_kind(&flatten_schema_for_validation(root, child_schema)).as_deref()
-        == Some("object")
+    effective_schema_kind(child_schema).as_deref() == Some("object")
         && !schema_is_map_like(root, child_schema)
 }
 
@@ -5166,25 +5975,24 @@ fn build_row_for_path(
         .as_ref()
         .and_then(|schema| schema_for_path(schema, schema, &plugin.draft_config, &path));
     if schema.as_ref().is_some_and(|schema| {
-        schema.get("const").is_some()
-            || schema.get("readOnly").and_then(JsonValue::as_bool) == Some(true)
+        schema_const_value(schema).is_some() || schema_bool_keyword_any(schema, "readOnly")
     }) {
         return build_read_only_row(plugin, title, path, inactive_reason);
     }
-    if let Some(variants) = schema.as_ref().and_then(array_enum_variants) {
+    if let Some(variants) = schema.as_ref().and_then(|schema| {
+        plugin
+            .schema
+            .as_ref()
+            .and_then(|root| array_enum_variants(root, schema))
+    }) {
         return build_multi_enum_row(plugin, title, path, variants, inactive_reason);
+    }
+    if schema.as_ref().and_then(schema_enum_values).is_some() {
+        return build_enum_row(plugin, title, path, inactive_reason);
     }
     if schema
         .as_ref()
-        .and_then(|schema| schema.get("enum"))
-        .and_then(JsonValue::as_array)
-        .is_some()
-    {
-        return build_enum_row(plugin, title, path, inactive_reason);
-    }
-    let type_choices = schema.as_ref().map(schema_type_choices).unwrap_or_default();
-    if type_choices.iter().any(|kind| kind == "null")
-        && type_choices.iter().any(|kind| kind == "string")
+        .is_some_and(schema_uses_nullable_string_editor)
     {
         return build_nullable_string_row(plugin, title, path, inactive_reason);
     }
@@ -5195,7 +6003,7 @@ fn build_row_for_path(
         }
         JsonValue::Number(_) => build_number_row(plugin, title, path, inactive_reason),
         JsonValue::String(_) => build_string_row(plugin, title, path, inactive_reason),
-        JsonValue::Null => build_nullable_string_row(plugin, title, path, inactive_reason),
+        JsonValue::Null => build_null_row(plugin, title, path, inactive_reason),
         JsonValue::Object(_) | JsonValue::Array(_) => {
             build_structured_row(plugin, title, path, inactive_reason)
         }
@@ -5224,6 +6032,7 @@ fn build_read_only_row(
         ConfigRowEditor::ReadOnly { path: path.clone() },
         preview_value(&value),
         preview_value(&default),
+        None,
         None,
         None,
         inactive_reason,
@@ -5255,6 +6064,7 @@ fn build_bool_row(
             .as_bool()
             .map(|value| value.to_string())
             .unwrap_or_else(|| "false".to_owned()),
+        None,
         None,
         None,
         inactive_reason,
@@ -5313,6 +6123,7 @@ fn build_numeric_row(
         format_default_value(&path, &default),
         None,
         None,
+        None,
         inactive_reason,
         path_description(plugin, &path),
         path_constraints(plugin, &path),
@@ -5344,6 +6155,7 @@ fn build_string_row(
         format_default_value(&path, &default),
         None,
         None,
+        None,
         inactive_reason,
         path_description(plugin, &path),
         path_constraints(plugin, &path),
@@ -5368,8 +6180,38 @@ fn build_nullable_string_row(
         path.clone(),
         Vec::new(),
         ConfigRowEditor::NullableString { path: path.clone() },
-        format_nullable_value_with_selector(&path, &value),
+        format_nullable_value_for_cell(&value),
         format_default_nullable_value(&default),
+        None,
+        None,
+        None,
+        inactive_reason,
+        path_description(plugin, &path),
+        path_constraints(plugin, &path),
+    )
+}
+
+fn build_null_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView {
+    let value = get_value_at_path(&plugin.draft_config, &path)
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let default = get_value_at_path(&plugin.default_config, &path)
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    build_config_row(
+        plugin,
+        title,
+        path.clone(),
+        Vec::new(),
+        ConfigRowEditor::Null { path: path.clone() },
+        format_value_with_brackets(&path, &value),
+        format_default_value(&path, &default),
+        None,
         None,
         None,
         inactive_reason,
@@ -5390,9 +6232,7 @@ fn build_enum_row(
         .and_then(|schema| schema_for_path(schema, schema, &plugin.draft_config, &path));
     let variants = schema
         .as_ref()
-        .and_then(|schema| schema.get("enum"))
-        .and_then(JsonValue::as_array)
-        .cloned()
+        .and_then(schema_enum_values)
         .unwrap_or_default();
     let value = get_value_at_path(&plugin.draft_config, &path)
         .cloned()
@@ -5411,6 +6251,7 @@ fn build_enum_row(
         },
         format!("[ {} ▾ ]", preview_value(&value)),
         preview_value(&default),
+        None,
         None,
         None,
         inactive_reason,
@@ -5445,6 +6286,7 @@ fn build_multi_enum_row(
         },
         format_multi_enum_value_with_selector(value.as_slice()),
         format_multi_enum_default_value(default.as_slice()),
+        None,
         None,
         None,
         inactive_reason,
@@ -5484,6 +6326,7 @@ fn build_pair_integer_row(
         format_value_with_brackets(&left_path, &left_value),
         format_default_value(&left_path, &left_default),
         Some(format_value_with_brackets(&right_path, &right_value)),
+        None,
         Some(format_default_value(&right_path, &right_default)),
         inactive_reason,
         path_description(plugin, &left_path),
@@ -5513,19 +6356,149 @@ fn build_structured_row(
         structured_preview(&default),
         None,
         None,
+        None,
         inactive_reason,
         path_description(plugin, &path),
         path_constraints(plugin, &path),
     )
 }
 
-fn array_enum_variants(schema: &JsonValue) -> Option<Vec<JsonValue>> {
+fn schema_contains_keyword(schema: &JsonValue, key: &str) -> bool {
+    if schema
+        .as_object()
+        .is_some_and(|object| object.contains_key(key))
+    {
+        return true;
+    }
+    schema
+        .get("allOf")
+        .and_then(JsonValue::as_array)
+        .is_some_and(|branches| {
+            branches
+                .iter()
+                .any(|branch| schema_contains_keyword(branch, key))
+        })
+}
+
+fn schema_bool_keyword_any(schema: &JsonValue, key: &str) -> bool {
+    if schema.get(key).and_then(JsonValue::as_bool) == Some(true) {
+        return true;
+    }
+    schema
+        .get("allOf")
+        .and_then(JsonValue::as_array)
+        .is_some_and(|branches| {
+            branches
+                .iter()
+                .any(|branch| schema_bool_keyword_any(branch, key))
+        })
+}
+
+fn schema_first_string_keyword<'a>(schema: &'a JsonValue, key: &str) -> Option<&'a str> {
+    if let Some(value) = schema.get(key).and_then(JsonValue::as_str) {
+        return Some(value);
+    }
+    schema
+        .get("allOf")
+        .and_then(JsonValue::as_array)
+        .and_then(|branches| {
+            branches
+                .iter()
+                .find_map(|branch| schema_first_string_keyword(branch, key))
+        })
+}
+
+fn schema_const_value(schema: &JsonValue) -> Option<JsonValue> {
+    if let Some(constant) = schema.get("const") {
+        return Some(constant.clone());
+    }
+    schema
+        .get("allOf")
+        .and_then(JsonValue::as_array)
+        .and_then(|branches| branches.iter().find_map(schema_const_value))
+}
+
+fn schema_enum_values(schema: &JsonValue) -> Option<Vec<JsonValue>> {
+    let mut combined = schema
+        .get("const")
+        .map(|constant| vec![constant.clone()])
+        .or_else(|| {
+            schema
+                .get("enum")
+                .and_then(JsonValue::as_array)
+                .cloned()
+                .filter(|variants| !variants.is_empty())
+        });
+    if let Some(all_of) = schema.get("allOf").and_then(JsonValue::as_array) {
+        for branch in all_of {
+            let Some(branch_values) = schema_enum_values(branch) else {
+                continue;
+            };
+            combined = Some(match combined.take() {
+                Some(current) => current
+                    .into_iter()
+                    .filter(|value| branch_values.iter().any(|candidate| candidate == value))
+                    .collect(),
+                None => branch_values,
+            });
+        }
+    }
+    combined.filter(|variants| !variants.is_empty())
+}
+
+fn schema_description_text(schema: &JsonValue) -> Option<String> {
+    schema
+        .get("description")
+        .and_then(JsonValue::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            schema
+                .get("allOf")
+                .and_then(JsonValue::as_array)
+                .and_then(|branches| branches.iter().find_map(schema_description_text))
+        })
+}
+
+fn schema_examples(schema: &JsonValue) -> Option<Vec<JsonValue>> {
+    schema
+        .get("examples")
+        .and_then(JsonValue::as_array)
+        .cloned()
+        .filter(|examples| !examples.is_empty())
+        .or_else(|| {
+            schema
+                .get("allOf")
+                .and_then(JsonValue::as_array)
+                .and_then(|branches| branches.iter().find_map(schema_examples))
+        })
+}
+
+fn array_enum_variants(root: &JsonValue, schema: &JsonValue) -> Option<Vec<JsonValue>> {
     if effective_schema_kind(schema).as_deref() != Some("array") {
         return None;
     }
-    let item_schema = array_item_schema(schema, 0)?;
-    let variants = item_schema.get("enum")?.as_array()?.clone();
+    if schema_contains_keyword(schema, "prefixItems") {
+        return None;
+    }
+    if !schema_bool_keyword_any(schema, "uniqueItems") {
+        return None;
+    }
+    let item_schema = array_item_schema(root, schema, 0)?;
+    if matches!(item_schema, JsonValue::Bool(false)) {
+        return None;
+    }
+    let variants = schema_enum_values(&item_schema)?;
     (!variants.is_empty()).then_some(variants)
+}
+
+fn schema_uses_nullable_string_editor(schema: &JsonValue) -> bool {
+    let type_choices = schema_type_choices(schema);
+    !type_choices.is_empty()
+        && type_choices.iter().any(|kind| kind == "null")
+        && type_choices.iter().any(|kind| kind == "string")
+        && type_choices
+            .iter()
+            .all(|kind| matches!(kind.as_str(), "null" | "string"))
 }
 
 fn format_multi_enum_value_with_selector(values: &[JsonValue]) -> String {
@@ -5555,6 +6528,47 @@ fn format_multi_enum_default_value(values: &[JsonValue]) -> String {
     }
 }
 
+fn config_row_type_meta(
+    plugin: &PluginWorkbenchPlugin,
+    path: &ConfigPath,
+    editor: &ConfigRowEditor,
+) -> (String, ConfigRowTypeMode) {
+    let value = get_value_at_path(&plugin.draft_config, path).unwrap_or(&JsonValue::Null);
+    let declared_schema = plugin
+        .schema
+        .as_ref()
+        .and_then(|root| declared_schema_for_path(root, root, &plugin.draft_config, path));
+    if !matches!(
+        editor,
+        ConfigRowEditor::ReadOnly { .. }
+            | ConfigRowEditor::Enum { .. }
+            | ConfigRowEditor::MultiEnum { .. }
+            | ConfigRowEditor::PairInteger { .. }
+    ) {
+        if let Some(schema) = declared_schema.as_ref()
+            && let Some(root) = plugin.schema.as_ref()
+            && let Some(branches) = branch_choices(root, schema)
+        {
+            return (
+                format!("[ {} ▾ ]", active_branch_label(branches.as_slice(), value)),
+                ConfigRowTypeMode::SelectShape,
+            );
+        }
+        let choices = schema_type_selector_choices(declared_schema.as_ref());
+        if choices.len() > 1 {
+            return (
+                format!("[ {} ▾ ]", json_kind_label(value)),
+                ConfigRowTypeMode::SelectType,
+            );
+        }
+    }
+    let display = declared_schema
+        .as_ref()
+        .and_then(|schema| effective_schema_kind(schema))
+        .unwrap_or_else(|| json_kind_label(value).to_owned());
+    (display, ConfigRowTypeMode::Fixed)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_config_row(
     plugin: &PluginWorkbenchPlugin,
@@ -5565,6 +6579,7 @@ fn build_config_row(
     value_display: String,
     default_display: String,
     secondary_value_display: Option<String>,
+    action_display: Option<String>,
     _secondary_default_display: Option<String>,
     inactive_reason: Option<String>,
     description: Option<String>,
@@ -5605,6 +6620,15 @@ fn build_config_row(
     } else {
         ConfigRowState::Default
     };
+    let (type_display, type_mode) = config_row_type_meta(plugin, &primary_path, &editor);
+    let action_display = action_display.or_else(|| {
+        config_row_action_display(
+            plugin,
+            &editor,
+            primary_path.as_slice(),
+            additional_paths.as_slice(),
+        )
+    });
     ConfigRowView {
         title: title.to_owned(),
         primary_path,
@@ -5612,9 +6636,12 @@ fn build_config_row(
         editor,
         description,
         constraints,
+        type_display,
+        type_mode,
         value_display,
         default_display,
         secondary_value_display,
+        action_display,
         state,
     }
 }
@@ -5657,12 +6684,7 @@ fn path_description(plugin: &PluginWorkbenchPlugin, path: &ConfigPath) -> Option
         .schema
         .as_ref()
         .and_then(|schema| schema_for_path(schema, schema, &plugin.draft_config, path))
-        .and_then(|schema| {
-            schema
-                .get("description")
-                .and_then(JsonValue::as_str)
-                .map(str::to_owned)
-        })
+        .and_then(|schema| schema_description_text(&schema))
 }
 
 fn path_constraints(plugin: &PluginWorkbenchPlugin, path: &ConfigPath) -> Vec<String> {
@@ -5714,14 +6736,10 @@ fn format_default_value(path: &ConfigPath, value: &JsonValue) -> String {
     }
 }
 
-fn format_nullable_value_with_selector(path: &ConfigPath, value: &JsonValue) -> String {
+fn format_nullable_value_for_cell(value: &JsonValue) -> String {
     match value {
-        JsonValue::Null => "[ Not set ▾ ]".to_owned(),
-        JsonValue::String(text) => format!(
-            "[ {} ▾ ] {}",
-            nullable_mode_label(path),
-            clean(truncate_text(text, 24))
-        ),
+        JsonValue::Null => "[ Not set ]".to_owned(),
+        JsonValue::String(text) => format!("[ {} ]", clean(truncate_text(text, 24))),
         _ => format!("[ {} ]", preview_value(value)),
     }
 }
@@ -5731,14 +6749,6 @@ fn format_default_nullable_value(value: &JsonValue) -> String {
         JsonValue::Null => "Not set".to_owned(),
         JsonValue::String(text) => clean(truncate_text(text, 28)),
         _ => preview_value(value),
-    }
-}
-
-fn nullable_mode_label(path: &ConfigPath) -> &'static str {
-    match path.last() {
-        Some(PathSegment::Key(key)) if key == "executable_path" => "Custom path",
-        Some(PathSegment::Key(key)) if key == "for_selector" => "CSS selector",
-        _ => "Custom value",
     }
 }
 
@@ -6026,13 +7036,52 @@ fn merge_config_override(target: &mut JsonValue, override_value: &JsonValue) {
     }
 }
 
+fn materialized_string_value_for_schema(schema: &JsonValue) -> String {
+    let min_length = schema
+        .get("minLength")
+        .and_then(JsonValue::as_u64)
+        .unwrap_or_default() as usize;
+    if min_length == 0 {
+        String::new()
+    } else {
+        "x".repeat(min_length)
+    }
+}
+
+fn materialized_numeric_value_for_schema(schema: &JsonValue, integer: bool) -> JsonValue {
+    let multiple_of = schema
+        .get("multipleOf")
+        .and_then(JsonValue::as_f64)
+        .filter(|value| *value > 0.0);
+    let step = if integer {
+        1.0
+    } else {
+        multiple_of.unwrap_or(1.0)
+    };
+    let mut candidate = 0.0_f64;
+    if let Some(minimum) = schema.get("minimum").and_then(JsonValue::as_f64) {
+        candidate = candidate.max(minimum);
+    }
+    if let Some(exclusive_minimum) = schema.get("exclusiveMinimum").and_then(JsonValue::as_f64) {
+        candidate = candidate.max(exclusive_minimum + step);
+    }
+    if let Some(multiple_of) = multiple_of {
+        candidate = (candidate / multiple_of).ceil() * multiple_of;
+    }
+    if integer {
+        JsonValue::Number(JsonNumber::from(candidate.ceil() as i64))
+    } else {
+        JsonValue::Number(JsonNumber::from_f64(candidate).unwrap_or_else(|| JsonNumber::from(0)))
+    }
+}
+
 fn materialized_value_for_schema(schema: &JsonValue, root: &JsonValue) -> JsonValue {
     let schema = resolve_schema(root, schema);
     if let Some(default) = schema.get("default") {
         return default.clone();
     }
-    if let Some(constant) = schema.get("const") {
-        return constant.clone();
+    if let Some(constant) = schema_const_value(schema) {
+        return constant;
     }
     if schema_type_choices(schema)
         .iter()
@@ -6040,7 +7089,7 @@ fn materialized_value_for_schema(schema: &JsonValue, root: &JsonValue) -> JsonVa
     {
         return JsonValue::Null;
     }
-    if let Some(variants) = schema.get("enum").and_then(JsonValue::as_array)
+    if let Some(variants) = schema_enum_values(schema)
         && let Some(first) = variants.first()
     {
         return first.clone();
@@ -6066,24 +7115,25 @@ fn materialized_value_for_schema(schema: &JsonValue, root: &JsonValue) -> JsonVa
         Some("object") => {
             let mut object = JsonMap::new();
             let required = schema_required_fields(schema);
-            if let Some(properties) = schema.get("properties").and_then(JsonValue::as_object) {
-                for (key, child_schema) in properties {
-                    if required.contains(key.as_str())
-                        || schema_prefers_materialized_presence(child_schema, root)
-                    {
-                        object.insert(
-                            key.clone(),
-                            materialized_value_for_schema(child_schema, root),
-                        );
-                    }
+            for key in schema_declared_property_keys(schema) {
+                let Some(child_schema) = object_property_schema(root, schema, key.as_str()) else {
+                    continue;
+                };
+                if required.contains(key.as_str())
+                    || schema_prefers_materialized_presence(&child_schema, root)
+                {
+                    object.insert(
+                        key.clone(),
+                        materialized_value_for_schema(&child_schema, root),
+                    );
                 }
             }
             JsonValue::Object(object)
         }
         Some("array") => JsonValue::Array(Vec::new()),
-        Some("string") => JsonValue::String(String::new()),
-        Some("integer") => JsonValue::Number(JsonNumber::from(0)),
-        Some("number") => JsonValue::Number(JsonNumber::from(0)),
+        Some("string") => JsonValue::String(materialized_string_value_for_schema(schema)),
+        Some("integer") => materialized_numeric_value_for_schema(schema, true),
+        Some("number") => materialized_numeric_value_for_schema(schema, false),
         Some("boolean") => JsonValue::Bool(false),
         Some("null") => JsonValue::Null,
         _ => JsonValue::Null,
@@ -6098,16 +7148,17 @@ fn materialize_schema_fields(value: &mut JsonValue, schema: &JsonValue, root: &J
                 return;
             };
             let required = schema_required_fields(&schema);
-            if let Some(properties) = schema.get("properties").and_then(JsonValue::as_object) {
-                for (key, child_schema) in properties {
-                    if required.contains(key.as_str())
-                        || schema_prefers_materialized_presence(child_schema, root)
-                    {
-                        let child = object
-                            .entry(key.clone())
-                            .or_insert_with(|| materialized_value_for_schema(child_schema, root));
-                        materialize_schema_fields(child, child_schema, root);
-                    }
+            for key in schema_declared_property_keys(&schema) {
+                let Some(child_schema) = object_property_schema(root, &schema, key.as_str()) else {
+                    continue;
+                };
+                if required.contains(key.as_str())
+                    || schema_prefers_materialized_presence(&child_schema, root)
+                {
+                    let child = object
+                        .entry(key.clone())
+                        .or_insert_with(|| materialized_value_for_schema(&child_schema, root));
+                    materialize_schema_fields(child, &child_schema, root);
                 }
             }
         }
@@ -6116,7 +7167,7 @@ fn materialize_schema_fields(value: &mut JsonValue, schema: &JsonValue, root: &J
                 return;
             };
             for (index, item) in items.iter_mut().enumerate() {
-                if let Some(item_schema) = array_item_schema(&schema, index) {
+                if let Some(item_schema) = array_item_schema(root, &schema, index) {
                     materialize_schema_fields(item, &item_schema, root);
                 }
             }
@@ -6127,14 +7178,10 @@ fn materialize_schema_fields(value: &mut JsonValue, schema: &JsonValue, root: &J
 
 fn schema_prefers_materialized_presence(schema: &JsonValue, root: &JsonValue) -> bool {
     let schema = resolve_schema(root, schema);
-    if schema.get("default").is_some() || schema.get("const").is_some() {
+    if schema.get("default").is_some() || schema_const_value(schema).is_some() {
         return true;
     }
-    if schema
-        .get("enum")
-        .and_then(JsonValue::as_array)
-        .is_some_and(|variants| !variants.is_empty())
-    {
+    if schema_enum_values(schema).is_some() {
         return true;
     }
     if schema.get("oneOf").is_some()
@@ -6157,7 +7204,7 @@ fn validate_schema_at(
     path: &ConfigPath,
     title: &str,
 ) {
-    let schema = flatten_schema_for_validation(root, schema);
+    let schema = resolve_schema(root, schema);
     if matches!(schema, JsonValue::Bool(true)) {
         return;
     }
@@ -6174,6 +7221,11 @@ fn validate_schema_at(
     let Some(object) = schema.as_object() else {
         return;
     };
+    if let Some(all_of) = object.get("allOf").and_then(JsonValue::as_array) {
+        for branch in all_of {
+            validate_schema_at(diagnostics, root, branch, value, path, title);
+        }
+    }
     if let Some(any_of) = object.get("anyOf").and_then(JsonValue::as_array)
         && !any_of
             .iter()
@@ -6278,6 +7330,22 @@ fn validate_object_schema(
     value: &JsonMap<String, JsonValue>,
     path: &ConfigPath,
 ) {
+    if let Some(patterns) = schema_object
+        .get("patternProperties")
+        .and_then(JsonValue::as_object)
+    {
+        for pattern in patterns.keys() {
+            if let Err(error) = validate_regex_pattern(pattern) {
+                push_diag(
+                    diagnostics,
+                    DiagnosticSeverity::Error,
+                    path,
+                    &title_for_schema_or_key(schema, "Object"),
+                    format!("invalid patternProperties regex `{pattern}`: {error}").as_str(),
+                );
+            }
+        }
+    }
     if let Some(min_properties) = schema_object
         .get("minProperties")
         .and_then(JsonValue::as_u64)
@@ -6319,7 +7387,7 @@ fn validate_object_schema(
                 diagnostics,
                 DiagnosticSeverity::Error,
                 &child_path,
-                &title_for_property(schema, field),
+                &title_for_property(root, schema, field),
                 "required field is missing",
             );
         }
@@ -6344,7 +7412,7 @@ fn validate_object_schema(
     for (key, child_value) in value {
         let mut child_path = path.clone();
         child_path.push(PathSegment::Key(key.clone()));
-        if let Some(child_schema) = object_property_schema(schema, key) {
+        if let Some(child_schema) = object_property_schema(root, schema, key) {
             validate_schema_at(
                 diagnostics,
                 root,
@@ -6392,7 +7460,7 @@ fn validate_object_schema(
                     diagnostics,
                     DiagnosticSeverity::Error,
                     &child_path,
-                    &title_for_property(schema, required),
+                    &title_for_property(root, schema, required),
                     format!("required because `{trigger}` is set").as_str(),
                 );
             }
@@ -6457,7 +7525,7 @@ fn validate_array_schema(
             if !seen.insert(item.to_string()) {
                 push_diag(
                     diagnostics,
-                    DiagnosticSeverity::Warning,
+                    DiagnosticSeverity::Error,
                     path,
                     &title_for_schema_or_key(schema, "Array"),
                     "array contains duplicate items",
@@ -6498,7 +7566,7 @@ fn validate_array_schema(
         }
     }
     for (index, item) in value.iter().enumerate() {
-        if let Some(item_schema) = array_item_schema(schema, index) {
+        if let Some(item_schema) = array_item_schema(root, schema, index) {
             let mut child_path = path.clone();
             child_path.push(PathSegment::Index(index));
             validate_schema_at(
@@ -6553,16 +7621,28 @@ fn validate_string_schema(
             format!("must match format: {format}").as_str(),
         );
     }
-    if let Some(pattern) = schema_object.get("pattern").and_then(JsonValue::as_str)
-        && !Regex::new(pattern).is_ok_and(|regex| regex.is_match(text))
-    {
-        push_diag(
-            diagnostics,
-            DiagnosticSeverity::Error,
-            path,
-            title,
-            format!("must match pattern: {pattern}").as_str(),
-        );
+    if let Some(pattern) = schema_object.get("pattern").and_then(JsonValue::as_str) {
+        match pattern_matches(pattern, text) {
+            Ok(true) => {}
+            Ok(false) => {
+                push_diag(
+                    diagnostics,
+                    DiagnosticSeverity::Error,
+                    path,
+                    title,
+                    format!("must match pattern: {pattern}").as_str(),
+                );
+            }
+            Err(error) => {
+                push_diag(
+                    diagnostics,
+                    DiagnosticSeverity::Error,
+                    path,
+                    title,
+                    format!("invalid regex pattern `{pattern}`: {error}").as_str(),
+                );
+            }
+        }
     }
 }
 
@@ -6659,16 +7739,104 @@ fn push_diag(
     });
 }
 
+fn hostname_format_is_valid(text: &str) -> bool {
+    let text = text.trim_end_matches('.');
+    if text.is_empty()
+        || text.len() > 253
+        || text.contains('/')
+        || text.chars().any(char::is_whitespace)
+    {
+        return false;
+    }
+    text.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .chars()
+                .all(|char| char.is_ascii_alphanumeric() || char == '-')
+    })
+}
+
+fn email_format_is_valid(text: &str) -> bool {
+    let Some((local, domain)) = text.split_once('@') else {
+        return false;
+    };
+    if local.is_empty()
+        || domain.is_empty()
+        || text.chars().any(char::is_whitespace)
+        || text.matches('@').count() != 1
+        || local.starts_with('.')
+        || local.ends_with('.')
+        || local.contains("..")
+    {
+        return false;
+    }
+    let local_valid = local.chars().all(|char| {
+        char.is_ascii_alphanumeric()
+            || matches!(
+                char,
+                '!' | '#'
+                    | '$'
+                    | '%'
+                    | '&'
+                    | '\''
+                    | '*'
+                    | '+'
+                    | '-'
+                    | '/'
+                    | '='
+                    | '?'
+                    | '^'
+                    | '_'
+                    | '`'
+                    | '{'
+                    | '|'
+                    | '}'
+                    | '~'
+                    | '.'
+            )
+    });
+    local_valid && (hostname_format_is_valid(domain) || domain.eq_ignore_ascii_case("localhost"))
+}
+
 fn format_is_valid(format: &str, text: &str) -> bool {
     match format {
         "uri" | "url" => url::Url::parse(text).is_ok(),
-        "email" => text.contains('@') && text.split('@').all(|part| !part.is_empty()),
-        "hostname" => !text.trim().is_empty() && !text.contains('/'),
+        "email" => email_format_is_valid(text),
+        "hostname" => hostname_format_is_valid(text),
         "ipv4" => text.parse::<std::net::Ipv4Addr>().is_ok(),
         "ipv6" => text.parse::<std::net::Ipv6Addr>().is_ok(),
         "uuid" => uuid::Uuid::parse_str(text).is_ok(),
         _ => true,
     }
+}
+
+fn validate_regex_pattern(pattern: &str) -> Result<(), regex::Error> {
+    Regex::new(pattern).map(|_| ())
+}
+
+fn pattern_matches(pattern: &str, text: &str) -> Result<bool, regex::Error> {
+    Regex::new(pattern).map(|regex| regex.is_match(text))
+}
+
+fn merge_multi_enum_selection(current: &[JsonValue], selected: &[JsonValue]) -> Vec<JsonValue> {
+    let mut values = current
+        .iter()
+        .filter(|value| {
+            selected
+                .iter()
+                .any(|selected_value| selected_value == *value)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for selected_value in selected {
+        if !values.iter().any(|value| value == selected_value) {
+            values.push(selected_value.clone());
+        }
+    }
+    values
 }
 
 fn diff_config_values(before: &JsonValue, after: &JsonValue) -> Vec<ConfigDiffRow> {
@@ -6726,39 +7894,55 @@ fn collect_diff_rows(
     }
 }
 
-fn insert_schema_defaults(value: &mut JsonValue, schema: &JsonValue, root: &JsonValue) {
+fn schema_has_direct_defaulted_object_fields(schema: &JsonValue, root: &JsonValue) -> bool {
     let schema = resolve_schema(root, schema);
-    if value.is_null()
-        && let Some(default) = schema.get("default")
-    {
-        *value = default.clone();
-    }
-    let kind = effective_schema_kind(schema);
-    if kind.as_deref() == Some("object") {
-        if !value.is_object() {
+    schema_declared_property_keys(schema)
+        .into_iter()
+        .any(|key| {
+            object_property_schema(root, schema, key.as_str())
+                .as_ref()
+                .is_some_and(|child_schema| child_schema.get("default").is_some())
+        })
+}
+
+fn insert_schema_defaults(value: &mut JsonValue, schema: &JsonValue, root: &JsonValue) {
+    let schema = active_schema_for_value(root, schema, value);
+    if value.is_null() {
+        if let Some(default) = schema.get("default") {
+            *value = default.clone();
+        } else if effective_schema_kind(&schema).as_deref() == Some("object")
+            && schema_has_direct_defaulted_object_fields(&schema, root)
+        {
             *value = JsonValue::Object(JsonMap::new());
+        } else {
+            return;
         }
+    }
+    let kind = effective_schema_kind(&schema);
+    if kind.as_deref() == Some("object") {
         let Some(object) = value.as_object_mut() else {
             return;
         };
-        if let Some(properties) = schema.get("properties").and_then(JsonValue::as_object) {
-            for (key, child_schema) in properties {
-                if let Some(default) = child_schema.get("default")
-                    && !object.contains_key(key)
-                {
-                    object.insert(key.clone(), default.clone());
-                }
-                if let Some(child) = object.get_mut(key) {
-                    insert_schema_defaults(child, child_schema, root);
-                }
+        for key in schema_declared_property_keys(&schema) {
+            let Some(child_schema) = object_property_schema(root, &schema, key.as_str()) else {
+                continue;
+            };
+            if let Some(default) = child_schema.get("default")
+                && !object.contains_key(key.as_str())
+            {
+                object.insert(key.clone(), default.clone());
+            }
+            if let Some(child) = object.get_mut(key.as_str()) {
+                insert_schema_defaults(child, &child_schema, root);
             }
         }
     } else if kind.as_deref() == Some("array")
         && let Some(array) = value.as_array_mut()
-        && let Some(items_schema) = schema.get("items")
     {
-        for item in array {
-            insert_schema_defaults(item, items_schema, root);
+        for (index, item) in array.iter_mut().enumerate() {
+            if let Some(item_schema) = array_item_schema(root, &schema, index) {
+                insert_schema_defaults(item, &item_schema, root);
+            }
         }
     }
 }
@@ -6771,7 +7955,12 @@ fn merge_default_value(target: &mut JsonValue, patch: JsonValue) {
     match (target, patch) {
         (JsonValue::Object(target), JsonValue::Object(patch)) => {
             for (key, value) in patch {
-                target.entry(key).or_insert(value);
+                match target.get_mut(key.as_str()) {
+                    Some(existing) => merge_default_value(existing, value),
+                    None => {
+                        target.insert(key, value);
+                    }
+                }
             }
         }
         (target, value) if target.is_null() => *target = value,
@@ -6810,11 +7999,11 @@ fn schema_for_path(
         current_schema = active_schema_for_value(root, &current_schema, current_value);
         match segment {
             PathSegment::Key(key) => {
-                current_schema = object_property_schema(&current_schema, key)?;
+                current_schema = object_property_schema(root, &current_schema, key)?;
                 current_value = current_value.get(key).unwrap_or(&JsonValue::Null);
             }
             PathSegment::Index(index) => {
-                current_schema = array_item_schema(&current_schema, *index)?;
+                current_schema = array_item_schema(root, &current_schema, *index)?;
                 current_value = current_value.get(*index).unwrap_or(&JsonValue::Null);
             }
         }
@@ -6838,11 +8027,11 @@ fn declared_schema_for_path(
         let parent_schema = active_schema_for_value(root, &current_schema, current_value);
         match segment {
             PathSegment::Key(key) => {
-                current_schema = object_property_schema(&parent_schema, key)?;
+                current_schema = object_property_schema(root, &parent_schema, key)?;
                 current_value = current_value.get(key).unwrap_or(&JsonValue::Null);
             }
             PathSegment::Index(index) => {
-                current_schema = array_item_schema(&parent_schema, *index)?;
+                current_schema = array_item_schema(root, &parent_schema, *index)?;
                 current_value = current_value.get(*index).unwrap_or(&JsonValue::Null);
             }
         }
@@ -6850,22 +8039,90 @@ fn declared_schema_for_path(
     Some(resolve_schema(root, &current_schema).clone())
 }
 
-fn active_schema_for_value(root: &JsonValue, schema: &JsonValue, value: &JsonValue) -> JsonValue {
-    let schema = flatten_schema_for_validation(root, schema);
-    for key in ["oneOf", "anyOf"] {
-        if let Some(branches) = schema.get(key).and_then(JsonValue::as_array) {
-            if let Some(branch) = branches
-                .iter()
-                .find(|branch| schema_matches(root, branch, value))
-            {
-                return branch.clone();
+fn schema_base_without_applicators(
+    schema_object: &JsonMap<String, JsonValue>,
+) -> Option<JsonValue> {
+    let mut base = schema_object.clone();
+    for key in ["allOf", "anyOf", "oneOf", "if", "then", "else"] {
+        base.remove(key);
+    }
+    (!base.is_empty()).then_some(JsonValue::Object(base))
+}
+
+fn first_matching_branch<'a>(
+    root: &JsonValue,
+    branches: &'a [JsonValue],
+    value: &JsonValue,
+) -> Option<&'a JsonValue> {
+    branches
+        .iter()
+        .find(|branch| schema_matches(root, branch, value))
+        .or_else(|| branches.first())
+}
+
+fn collect_applicable_schema_fragments(
+    root: &JsonValue,
+    schema: &JsonValue,
+    value: &JsonValue,
+    fragments: &mut Vec<JsonValue>,
+) {
+    let schema = resolve_schema(root, schema);
+    match schema {
+        JsonValue::Bool(_) => fragments.push(schema.clone()),
+        JsonValue::Object(object) => {
+            if let Some(base) = schema_base_without_applicators(object) {
+                fragments.push(base);
             }
-            if let Some(first) = branches.first() {
-                return first.clone();
+            if let Some(all_of) = object.get("allOf").and_then(JsonValue::as_array) {
+                for branch in all_of {
+                    collect_applicable_schema_fragments(root, branch, value, fragments);
+                }
+            }
+            for key in ["oneOf", "anyOf"] {
+                if let Some(branches) = object.get(key).and_then(JsonValue::as_array)
+                    && let Some(branch) = first_matching_branch(root, branches, value)
+                {
+                    collect_applicable_schema_fragments(root, branch, value, fragments);
+                }
+            }
+            if let Some(if_schema) = object.get("if") {
+                let target = if schema_matches(root, if_schema, value) {
+                    object.get("then")
+                } else {
+                    object.get("else")
+                };
+                if let Some(target_schema) = target {
+                    collect_applicable_schema_fragments(root, target_schema, value, fragments);
+                }
             }
         }
+        _ => fragments.push(schema.clone()),
     }
-    schema
+}
+
+fn compose_schema_fragments(mut fragments: Vec<JsonValue>) -> JsonValue {
+    fragments.retain(|fragment| !matches!(fragment, JsonValue::Bool(true)));
+    if fragments
+        .iter()
+        .any(|fragment| matches!(fragment, JsonValue::Bool(false)))
+    {
+        return JsonValue::Bool(false);
+    }
+    match fragments.len() {
+        0 => JsonValue::Bool(true),
+        1 => fragments.pop().unwrap_or(JsonValue::Bool(true)),
+        _ => {
+            let mut object = JsonMap::new();
+            object.insert("allOf".to_owned(), JsonValue::Array(fragments));
+            JsonValue::Object(object)
+        }
+    }
+}
+
+fn active_schema_for_value(root: &JsonValue, schema: &JsonValue, value: &JsonValue) -> JsonValue {
+    let mut fragments = Vec::new();
+    collect_applicable_schema_fragments(root, schema, value, &mut fragments);
+    compose_schema_fragments(fragments)
 }
 
 fn resolve_schema<'a>(root: &'a JsonValue, schema: &'a JsonValue) -> &'a JsonValue {
@@ -6886,35 +8143,42 @@ fn resolve_schema<'a>(root: &'a JsonValue, schema: &'a JsonValue) -> &'a JsonVal
     cursor
 }
 
-fn merge_all_of(root: &JsonValue, items: &[JsonValue]) -> JsonValue {
-    let mut merged = JsonValue::Object(JsonMap::new());
-    for item in items {
-        let flattened = flatten_schema_for_validation(root, item);
-        merge_schema_overlay(&mut merged, &flattened);
+fn combine_schema_constraints(mut schemas: Vec<JsonValue>) -> Option<JsonValue> {
+    let had_true = schemas
+        .iter()
+        .any(|schema| matches!(schema, JsonValue::Bool(true)));
+    schemas.retain(|schema| !matches!(schema, JsonValue::Bool(true)));
+    if schemas
+        .iter()
+        .any(|schema| matches!(schema, JsonValue::Bool(false)))
+    {
+        return Some(JsonValue::Bool(false));
     }
-    merged
+    match schemas.len() {
+        0 => had_true.then_some(JsonValue::Bool(true)),
+        1 => schemas.pop(),
+        _ => {
+            let mut object = JsonMap::new();
+            object.insert("allOf".to_owned(), JsonValue::Array(schemas));
+            Some(JsonValue::Object(object))
+        }
+    }
 }
 
-fn flatten_schema_for_validation(root: &JsonValue, schema: &JsonValue) -> JsonValue {
+fn direct_object_property_schema(
+    root: &JsonValue,
+    schema: &JsonValue,
+    key: &str,
+) -> Option<JsonValue> {
     let schema = resolve_schema(root, schema);
-    let mut flattened = schema.clone();
-    let Some(all_of) = schema.get("allOf").and_then(JsonValue::as_array) else {
-        return flattened;
-    };
-    if let Some(object) = flattened.as_object_mut() {
-        object.remove("allOf");
-    }
-    let merged = merge_all_of(root, all_of);
-    merge_schema_overlay(&mut flattened, &merged);
-    flattened
-}
+    let mut matches = Vec::new();
+    let mut matched_named_or_pattern = false;
 
-fn object_property_schema(schema: &JsonValue, key: &str) -> Option<JsonValue> {
-    let schema = resolve_schema(schema, schema);
     if let Some(properties) = schema.get("properties").and_then(JsonValue::as_object)
         && let Some(child) = properties.get(key)
     {
-        return Some(child.clone());
+        matches.push(child.clone());
+        matched_named_or_pattern = true;
     }
     if let Some(patterns) = schema
         .get("patternProperties")
@@ -6922,24 +8186,76 @@ fn object_property_schema(schema: &JsonValue, key: &str) -> Option<JsonValue> {
     {
         for (pattern, child) in patterns {
             if pattern_key_matches(pattern, key) {
-                return Some(child.clone());
+                matches.push(child.clone());
+                matched_named_or_pattern = true;
             }
         }
     }
-    match schema.get("additionalProperties") {
-        Some(JsonValue::Object(object)) => Some(JsonValue::Object(object.clone())),
-        _ => None,
+    if !matched_named_or_pattern {
+        match schema.get("additionalProperties") {
+            Some(JsonValue::Object(object)) => matches.push(JsonValue::Object(object.clone())),
+            Some(other) if !matches!(other, JsonValue::Bool(true) | JsonValue::Bool(false)) => {
+                matches.push(other.clone());
+            }
+            _ => {}
+        }
     }
+    combine_schema_constraints(matches)
 }
 
-fn array_item_schema(schema: &JsonValue, index: usize) -> Option<JsonValue> {
-    let schema = resolve_schema(schema, schema);
+fn object_property_schema(root: &JsonValue, schema: &JsonValue, key: &str) -> Option<JsonValue> {
+    let schema = resolve_schema(root, schema);
+    let Some(object) = schema.as_object() else {
+        return matches!(schema, JsonValue::Bool(false)).then_some(JsonValue::Bool(false));
+    };
+    let mut matches = Vec::new();
+    if let Some(base_match) = direct_object_property_schema(root, schema, key) {
+        matches.push(base_match);
+    }
+    if let Some(all_of) = object.get("allOf").and_then(JsonValue::as_array) {
+        for branch in all_of {
+            if let Some(branch_match) = object_property_schema(root, branch, key) {
+                matches.push(branch_match);
+            }
+        }
+    }
+    combine_schema_constraints(matches)
+}
+
+fn direct_array_item_schema(
+    root: &JsonValue,
+    schema: &JsonValue,
+    index: usize,
+) -> Option<JsonValue> {
+    let schema = resolve_schema(root, schema);
     if let Some(prefix) = schema.get("prefixItems").and_then(JsonValue::as_array)
         && let Some(item) = prefix.get(index)
     {
         return Some(item.clone());
     }
-    schema.get("items").cloned()
+    if let Some(items) = schema.get("items") {
+        return Some(items.clone());
+    }
+    (effective_schema_kind(schema).as_deref() == Some("array")).then_some(JsonValue::Bool(true))
+}
+
+fn array_item_schema(root: &JsonValue, schema: &JsonValue, index: usize) -> Option<JsonValue> {
+    let schema = resolve_schema(root, schema);
+    let Some(object) = schema.as_object() else {
+        return matches!(schema, JsonValue::Bool(false)).then_some(JsonValue::Bool(false));
+    };
+    let mut matches = Vec::new();
+    if let Some(base_match) = direct_array_item_schema(root, schema, index) {
+        matches.push(base_match);
+    }
+    if let Some(all_of) = object.get("allOf").and_then(JsonValue::as_array) {
+        for branch in all_of {
+            if let Some(branch_match) = array_item_schema(root, branch, index) {
+                matches.push(branch_match);
+            }
+        }
+    }
+    combine_schema_constraints(matches)
 }
 
 fn branch_choices(root: &JsonValue, schema: &JsonValue) -> Option<Vec<BranchChoice>> {
@@ -6955,6 +8271,7 @@ fn branch_choices(root: &JsonValue, schema: &JsonValue) -> Option<Vec<BranchChoi
         .iter()
         .enumerate()
         .map(|(index, schema)| BranchChoice {
+            id: format!("branch-{index}"),
             label: branch_label(index, schema),
             schema: resolve_schema(root, schema).clone(),
         })
@@ -6984,45 +8301,150 @@ fn branch_label(index: usize, schema: &JsonValue) -> String {
         .unwrap_or_else(|| format!("Branch {}", index + 1))
 }
 
-fn active_branch_label<'a>(branches: &'a [BranchChoice], value: &JsonValue) -> &'a str {
+fn active_branch_choice<'a>(
+    branches: &'a [BranchChoice],
+    value: &JsonValue,
+) -> Option<&'a BranchChoice> {
     branches
         .iter()
         .find(|branch| schema_matches(&branch.schema, &branch.schema, value))
         .or_else(|| branches.first())
+}
+
+fn active_branch_id<'a>(branches: &'a [BranchChoice], value: &JsonValue) -> &'a str {
+    active_branch_choice(branches, value)
+        .map(|branch| branch.id.as_str())
+        .unwrap_or("branch")
+}
+
+fn active_branch_label<'a>(branches: &'a [BranchChoice], value: &JsonValue) -> &'a str {
+    active_branch_choice(branches, value)
         .map(|branch| branch.label.as_str())
         .unwrap_or("branch")
 }
 
-fn plugin_branch_draft_key(plugin_id: &str, path: &ConfigPath, branch: &str) -> String {
-    format!("{plugin_id}:{}:{branch}", path_display(path))
+fn plugin_branch_draft_key(plugin_id: &str, path: &ConfigPath, branch_id: &str) -> String {
+    format!("{plugin_id}:{}:{branch_id}", path_display(path))
+}
+
+fn generic_json_type_choices() -> Vec<String> {
+    vec![
+        "string".to_owned(),
+        "number".to_owned(),
+        "integer".to_owned(),
+        "boolean".to_owned(),
+        "object".to_owned(),
+        "array".to_owned(),
+        "null".to_owned(),
+    ]
 }
 
 fn schema_type_choices(schema: &JsonValue) -> Vec<String> {
-    match schema.get("type") {
-        Some(JsonValue::String(kind)) => vec![kind.clone()],
+    let direct = match schema.get("type") {
+        Some(JsonValue::String(kind)) => BTreeSet::from([kind.clone()]),
         Some(JsonValue::Array(items)) => items
             .iter()
             .filter_map(JsonValue::as_str)
             .map(str::to_owned)
-            .collect(),
-        _ => Vec::new(),
+            .collect::<BTreeSet<_>>(),
+        _ => BTreeSet::new(),
+    };
+    let Some(all_of) = schema.get("allOf").and_then(JsonValue::as_array) else {
+        return direct.into_iter().collect();
+    };
+    let mut combined = direct;
+    let mut branch_types = None::<BTreeSet<String>>;
+    for branch in all_of {
+        let choices = schema_type_choices(branch)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        if choices.is_empty() {
+            continue;
+        }
+        branch_types = Some(match branch_types {
+            Some(current) => current.intersection(&choices).cloned().collect(),
+            None => choices,
+        });
     }
+    if let Some(branch_types) = branch_types {
+        if combined.is_empty() {
+            combined = branch_types;
+        } else {
+            combined = combined.intersection(&branch_types).cloned().collect();
+        }
+    }
+    combined.into_iter().collect()
+}
+
+fn schema_type_selector_choices(schema: Option<&JsonValue>) -> Vec<String> {
+    let Some(schema) = schema else {
+        return generic_json_type_choices();
+    };
+    if matches!(schema, JsonValue::Bool(false)) {
+        return Vec::new();
+    }
+    if matches!(schema, JsonValue::Bool(true)) {
+        return generic_json_type_choices();
+    }
+    let choices = schema_type_choices(schema);
+    if !choices.is_empty() {
+        return choices;
+    }
+    if let Some(kind) = effective_schema_kind(schema) {
+        return vec![kind];
+    }
+    generic_json_type_choices()
+}
+
+fn schema_has_object_shape(schema: &JsonValue) -> bool {
+    if schema.as_object().is_some_and(|object| {
+        object.contains_key("properties")
+            || object.contains_key("patternProperties")
+            || object.contains_key("additionalProperties")
+            || object.contains_key("propertyNames")
+    }) {
+        return true;
+    }
+    schema
+        .get("allOf")
+        .and_then(JsonValue::as_array)
+        .is_some_and(|branches| branches.iter().any(schema_has_object_shape))
+}
+
+fn schema_has_array_shape(schema: &JsonValue) -> bool {
+    if schema.as_object().is_some_and(|object| {
+        object.contains_key("items")
+            || object.contains_key("prefixItems")
+            || object.contains_key("contains")
+            || object.contains_key("minItems")
+            || object.contains_key("maxItems")
+            || object.contains_key("uniqueItems")
+            || object.contains_key("minContains")
+            || object.contains_key("maxContains")
+    }) {
+        return true;
+    }
+    schema
+        .get("allOf")
+        .and_then(JsonValue::as_array)
+        .is_some_and(|branches| branches.iter().any(schema_has_array_shape))
 }
 
 fn effective_schema_kind(schema: &JsonValue) -> Option<String> {
-    match schema.get("type") {
-        Some(JsonValue::String(kind)) => Some(kind.clone()),
-        Some(JsonValue::Array(items)) => items
-            .iter()
-            .filter_map(JsonValue::as_str)
-            .find(|kind| *kind != "null")
-            .map(str::to_owned),
-        _ if schema.get("properties").is_some() => Some("object".to_owned()),
-        _ if schema.get("items").is_some() || schema.get("prefixItems").is_some() => {
-            Some("array".to_owned())
-        }
-        _ => None,
+    let type_choices = schema_type_choices(schema);
+    if !type_choices.is_empty() {
+        return type_choices
+            .into_iter()
+            .find(|kind| kind != "null")
+            .or_else(|| Some("null".to_owned()));
     }
+    if schema_has_object_shape(schema) {
+        return Some("object".to_owned());
+    }
+    if schema_has_array_shape(schema) {
+        return Some("array".to_owned());
+    }
+    None
 }
 
 fn value_matches_schema_type(value: &JsonValue, schema_type: &JsonValue) -> bool {
@@ -7197,11 +8619,592 @@ fn replace_last_index(path: &[PathSegment], new_index: usize) -> ConfigPath {
 
 #[derive(Debug, Clone, Copy)]
 struct ArrayItemActionInfo {
-    can_insert: bool,
+    can_insert_before: bool,
+    can_insert_after: bool,
     can_duplicate: bool,
     can_move_up: bool,
     can_move_down: bool,
     can_remove: bool,
+}
+
+impl ArrayItemActionInfo {
+    fn has_any_action(self) -> bool {
+        self.can_insert_before
+            || self.can_insert_after
+            || self.can_duplicate
+            || self.can_move_up
+            || self.can_move_down
+            || self.can_remove
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigRowPrimaryAction {
+    InsertAfter,
+    Duplicate,
+    MoveDown,
+    MoveUp,
+    Remove,
+    AddField,
+    AddItem,
+    Rename,
+}
+
+impl ConfigRowPrimaryAction {
+    fn plain_label(self) -> &'static str {
+        match self {
+            Self::InsertAfter => "Insert",
+            Self::Duplicate => "Duplicate",
+            Self::MoveDown => "Move down",
+            Self::MoveUp => "Move up",
+            Self::Remove => "Remove",
+            Self::AddField => "Add field",
+            Self::AddItem => "Add item",
+            Self::Rename => "Rename",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::InsertAfter => "[ Insert ]",
+            Self::Duplicate => "[ Duplicate ]",
+            Self::MoveDown => "[ Move down ]",
+            Self::MoveUp => "[ Move up ]",
+            Self::Remove => "[ Remove ]",
+            Self::AddField => "[ Add field ]",
+            Self::AddItem => "[ Add item ]",
+            Self::Rename => "[ Rename ]",
+        }
+    }
+}
+
+fn trim_action_display(label: &str) -> &str {
+    label
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim()
+}
+
+fn action_matches_primary(action: &PluginConfigAction, primary: ConfigRowPrimaryAction) -> bool {
+    matches!(
+        (action, primary),
+        (
+            PluginConfigAction::AppendArrayItem { .. },
+            ConfigRowPrimaryAction::AddItem
+        ) | (
+            PluginConfigAction::PromptAddObjectField { .. },
+            ConfigRowPrimaryAction::AddField
+        ) | (
+            PluginConfigAction::InsertArrayItemAfter { .. },
+            ConfigRowPrimaryAction::InsertAfter
+        ) | (
+            PluginConfigAction::DuplicateArrayItem { .. },
+            ConfigRowPrimaryAction::Duplicate
+        ) | (
+            PluginConfigAction::MoveArrayItem { direction: 1, .. },
+            ConfigRowPrimaryAction::MoveDown
+        ) | (
+            PluginConfigAction::MoveArrayItem { direction: -1, .. },
+            ConfigRowPrimaryAction::MoveUp
+        ) | (
+            PluginConfigAction::RemoveArrayItem { .. },
+            ConfigRowPrimaryAction::Remove
+        ) | (
+            PluginConfigAction::RenameField { .. },
+            ConfigRowPrimaryAction::Rename
+        )
+    )
+}
+
+fn action_is_select_type(action: &PluginConfigAction) -> bool {
+    matches!(action, PluginConfigAction::SelectType { .. })
+}
+
+fn action_is_reset_field(action: &PluginConfigAction) -> bool {
+    matches!(action, PluginConfigAction::ResetField { .. })
+}
+
+fn action_priority_for_focus(
+    action: &PluginConfigAction,
+    focused_cell: ConfigRowCell,
+    primary_action: Option<ConfigRowPrimaryAction>,
+) -> (u8, u8) {
+    let base = match action {
+        PluginConfigAction::SelectType { .. } => 0,
+        PluginConfigAction::AppendArrayItem { .. } => 1,
+        PluginConfigAction::PromptAddObjectField { .. } => 2,
+        PluginConfigAction::InsertArrayItemBefore { .. } => 3,
+        PluginConfigAction::InsertArrayItemAfter { .. } => 4,
+        PluginConfigAction::DuplicateArrayItem { .. } => 5,
+        PluginConfigAction::MoveArrayItem { direction: -1, .. } => 6,
+        PluginConfigAction::MoveArrayItem { direction: 1, .. } => 7,
+        PluginConfigAction::RemoveArrayItem { .. } => 8,
+        PluginConfigAction::RenameField { .. } => 9,
+        PluginConfigAction::ResetField { .. } => 10,
+        PluginConfigAction::ResetGroup { .. } => 11,
+        PluginConfigAction::MoveArrayItem { .. } => 12,
+    };
+    let rank = if focused_cell == ConfigRowCell::Type && action_is_select_type(action) {
+        0
+    } else if focused_cell == ConfigRowCell::Default && action_is_reset_field(action) {
+        0
+    } else if primary_action.is_some_and(|primary| action_matches_primary(action, primary)) {
+        if focused_cell == ConfigRowCell::Action || focused_cell == ConfigRowCell::State {
+            0
+        } else {
+            1
+        }
+    } else if action_is_select_type(action) {
+        2
+    } else if matches!(
+        action,
+        PluginConfigAction::AppendArrayItem { .. }
+            | PluginConfigAction::PromptAddObjectField { .. }
+            | PluginConfigAction::InsertArrayItemBefore { .. }
+            | PluginConfigAction::InsertArrayItemAfter { .. }
+            | PluginConfigAction::DuplicateArrayItem { .. }
+            | PluginConfigAction::MoveArrayItem { .. }
+    ) {
+        3
+    } else if matches!(action, PluginConfigAction::RenameField { .. }) {
+        4
+    } else if action_is_reset_field(action) {
+        5
+    } else {
+        6
+    };
+    (rank, base)
+}
+
+fn prioritize_config_actions(
+    actions: &mut [PluginConfigActionItem],
+    focused_cell: ConfigRowCell,
+    primary_action: Option<ConfigRowPrimaryAction>,
+) -> usize {
+    actions
+        .sort_by_key(|item| action_priority_for_focus(&item.action, focused_cell, primary_action));
+    0
+}
+
+fn config_actions_overlay_footer(primary_action: Option<ConfigRowPrimaryAction>) -> String {
+    let base = "Enter apply  Esc close  Up/Down move";
+    primary_action
+        .map(|action| format!("{base}  Action: {}", action.plain_label()))
+        .unwrap_or_else(|| base.to_owned())
+}
+
+#[derive(Debug, Default)]
+struct ResetPathsOutcome {
+    changed: bool,
+    blocked: Vec<String>,
+}
+
+fn schema_unique_items(schema: &JsonValue) -> bool {
+    schema_bool_keyword_any(schema, "uniqueItems")
+}
+
+fn clear_branch_drafts_for_structural_change(plugin: &mut PluginWorkbenchPlugin) {
+    plugin.branch_drafts.clear();
+}
+
+fn schema_allows_dynamic_object_keys(schema: &JsonValue) -> bool {
+    let direct = match schema.get("additionalProperties") {
+        Some(JsonValue::Bool(false)) => schema
+            .get("patternProperties")
+            .and_then(JsonValue::as_object)
+            .is_some_and(|patterns| !patterns.is_empty()),
+        _ => true,
+    };
+    if let Some(all_of) = schema.get("allOf").and_then(JsonValue::as_array) {
+        direct && all_of.iter().all(schema_allows_dynamic_object_keys)
+    } else {
+        direct
+    }
+}
+
+fn object_add_field_block_reason(
+    root_schema: Option<&JsonValue>,
+    config: &JsonValue,
+    object_path: &ConfigPath,
+) -> Option<String> {
+    let object = get_value_at_path(config, object_path)?.as_object()?;
+    let Some(root_schema) = root_schema else {
+        return None;
+    };
+    let Some(parent_schema) = schema_for_path(root_schema, root_schema, config, object_path) else {
+        return None;
+    };
+    let max_properties =
+        schema_max_u64_constraint(&parent_schema, "maxProperties").map(|value| value as usize);
+    max_properties
+        .filter(|max_properties| object.len() >= *max_properties)
+        .map(|max_properties| {
+            format!("object already has the maximum of {max_properties} field(s)")
+        })
+        .or_else(|| {
+            (!schema_allows_dynamic_object_keys(&parent_schema))
+                .then_some("schema does not allow adding custom field names".to_owned())
+        })
+}
+
+fn write_path_block_reason(
+    root_schema: Option<&JsonValue>,
+    config: &JsonValue,
+    path: &[PathSegment],
+) -> Option<String> {
+    let Some(root_schema) = root_schema else {
+        return None;
+    };
+    let mut current_value = config;
+    let mut prefix = Vec::new();
+    for segment in path {
+        match segment {
+            PathSegment::Key(key) => {
+                let object = current_value.as_object();
+                let present = object.is_some_and(|object| object.contains_key(key));
+                if !present {
+                    let object_len = object.map(|object| object.len()).unwrap_or_default();
+                    if let Some(parent_schema) =
+                        schema_for_path(root_schema, root_schema, config, &prefix)
+                        && let Some(max_properties) =
+                            schema_max_u64_constraint(&parent_schema, "maxProperties")
+                                .map(|value| value as usize)
+                        && object_len >= max_properties
+                    {
+                        return Some(if prefix.is_empty() {
+                            format!("object already has the maximum of {max_properties} field(s)")
+                        } else {
+                            format!(
+                                "{} already has the maximum of {max_properties} field(s)",
+                                path_display(&prefix)
+                            )
+                        });
+                    }
+                }
+                current_value = object
+                    .and_then(|object| object.get(key))
+                    .unwrap_or(&JsonValue::Null);
+            }
+            PathSegment::Index(index) => {
+                current_value = current_value
+                    .as_array()
+                    .and_then(|items| items.get(*index))
+                    .unwrap_or(&JsonValue::Null);
+            }
+        }
+        prefix.push(segment.clone());
+    }
+    None
+}
+
+fn apply_staged_config_value_updates(
+    root_schema: Option<&JsonValue>,
+    current_config: &JsonValue,
+    updates: &[(ConfigPath, JsonValue)],
+) -> UiResult<JsonValue> {
+    let mut next_config = current_config.clone();
+    for (path, value) in updates {
+        if let Some(reason) = write_path_block_reason(root_schema, &next_config, path.as_slice()) {
+            return Err(reason);
+        }
+        set_value_at_path(&mut next_config, path, value.clone());
+    }
+    Ok(next_config)
+}
+
+fn validate_container_candidate(
+    root_schema: &JsonValue,
+    current_root: &JsonValue,
+    container_path: &ConfigPath,
+    candidate_container: JsonValue,
+) -> Option<String> {
+    let mut candidate_root = current_root.clone();
+    set_value_at_path(&mut candidate_root, container_path, candidate_container);
+    let candidate_schema =
+        schema_for_path(root_schema, root_schema, &candidate_root, container_path)
+            .or_else(|| schema_for_path(root_schema, root_schema, current_root, container_path))?;
+    let candidate_value = get_value_at_path(&candidate_root, container_path)
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    let title = title_from_path(container_path.as_slice());
+    validate_schema_value_for_path(
+        root_schema,
+        &candidate_schema,
+        &candidate_value,
+        container_path,
+        title.as_str(),
+    )
+    .err()
+}
+
+fn validate_reset_candidate(
+    root_schema: Option<&JsonValue>,
+    current_root: &JsonValue,
+    path: &ConfigPath,
+) -> Option<String> {
+    let Some(root_schema) = root_schema else {
+        return None;
+    };
+    let (_, parent_path) = path.split_last()?;
+    let container_path = parent_path.to_vec();
+    let mut candidate_root = current_root.clone();
+    remove_value_at_path(&mut candidate_root, path)?;
+    let candidate_container = get_value_at_path(&candidate_root, &container_path)
+        .cloned()
+        .unwrap_or(JsonValue::Null);
+    validate_container_candidate(
+        root_schema,
+        current_root,
+        &container_path,
+        candidate_container,
+    )
+}
+
+fn prepared_default_array_item_value(
+    current_root: &JsonValue,
+    root_schema: Option<&JsonValue>,
+    parent_path: &ConfigPath,
+    insert_index: usize,
+) -> Option<JsonValue> {
+    let array = get_value_at_path(current_root, parent_path)?.as_array()?;
+    if insert_index > array.len() {
+        return None;
+    }
+    let value = if let Some(root_schema) = root_schema {
+        let Some(parent_schema) =
+            schema_for_path(root_schema, root_schema, current_root, parent_path)
+        else {
+            return Some(JsonValue::Null);
+        };
+        let max_items =
+            schema_max_u64_constraint(&parent_schema, "maxItems").map(|value| value as usize);
+        if max_items.is_some_and(|max_items| array.len() >= max_items) {
+            return None;
+        }
+        let item_schema = array_item_schema(root_schema, &parent_schema, insert_index)?;
+        if matches!(item_schema, JsonValue::Bool(false)) {
+            return None;
+        }
+        let value = default_value_for_schema(&item_schema, root_schema);
+        let mut candidate_items = array.clone();
+        candidate_items.insert(insert_index, value.clone());
+        if validate_container_candidate(
+            root_schema,
+            current_root,
+            parent_path,
+            JsonValue::Array(candidate_items),
+        )
+        .is_some()
+        {
+            return None;
+        }
+        value
+    } else {
+        JsonValue::Null
+    };
+    Some(value)
+}
+
+fn can_duplicate_array_item(
+    root_schema: Option<&JsonValue>,
+    current_root: &JsonValue,
+    path: &[PathSegment],
+) -> bool {
+    let Some((parent_path, index, len)) = array_item_path_info(current_root, path) else {
+        return false;
+    };
+    let Some(array) = get_value_at_path(current_root, &parent_path).and_then(JsonValue::as_array)
+    else {
+        return false;
+    };
+    if index >= len {
+        return false;
+    }
+    if let Some(root_schema) = root_schema {
+        let mut candidate_items = array.clone();
+        let Some(clone) = candidate_items.get(index).cloned() else {
+            return false;
+        };
+        candidate_items.insert(index + 1, clone);
+        validate_container_candidate(
+            root_schema,
+            current_root,
+            &parent_path,
+            JsonValue::Array(candidate_items),
+        )
+        .is_none()
+    } else {
+        true
+    }
+}
+
+fn can_remove_array_item(
+    root_schema: Option<&JsonValue>,
+    current_root: &JsonValue,
+    path: &[PathSegment],
+) -> bool {
+    let Some((parent_path, index, len)) = array_item_path_info(current_root, path) else {
+        return false;
+    };
+    let Some(array) = get_value_at_path(current_root, &parent_path).and_then(JsonValue::as_array)
+    else {
+        return false;
+    };
+    if index >= len {
+        return false;
+    }
+    if let Some(root_schema) = root_schema {
+        let mut candidate_items = array.clone();
+        candidate_items.remove(index);
+        validate_container_candidate(
+            root_schema,
+            current_root,
+            &parent_path,
+            JsonValue::Array(candidate_items),
+        )
+        .is_none()
+    } else {
+        true
+    }
+}
+
+fn validate_schema_value_for_path(
+    root_schema: &JsonValue,
+    schema: &JsonValue,
+    value: &JsonValue,
+    path: &ConfigPath,
+    title: &str,
+) -> UiResult<()> {
+    let mut diagnostics = Vec::new();
+    validate_schema_at(&mut diagnostics, root_schema, schema, value, path, title);
+    if let Some(error) = diagnostics
+        .into_iter()
+        .find(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+    {
+        return Err(error.message);
+    }
+    Ok(())
+}
+
+fn reset_path_block_reason(
+    root_schema: Option<&JsonValue>,
+    default_root: &JsonValue,
+    current_root: &JsonValue,
+    path: &ConfigPath,
+) -> Option<String> {
+    if get_value_at_path(default_root, path).is_some() {
+        return None;
+    }
+    if get_value_at_path(current_root, path).is_none() {
+        return None;
+    }
+    if let Some((parent_path, key)) = path_key_info(path.as_slice()) {
+        let object = get_value_at_path(current_root, &parent_path)?.as_object()?;
+        let Some(root_schema) = root_schema else {
+            return None;
+        };
+        let Some(parent_schema) =
+            schema_for_path(root_schema, root_schema, current_root, &parent_path)
+        else {
+            return None;
+        };
+        if schema_required_fields(&parent_schema).contains(key.as_str()) {
+            return Some("field is required and has no default".to_owned());
+        }
+        let min_properties =
+            schema_min_u64_constraint(&parent_schema, "minProperties").unwrap_or(0) as usize;
+        if object.len() <= min_properties {
+            return Some(format!(
+                "object requires at least {min_properties} field(s)"
+            ));
+        }
+        return validate_reset_candidate(Some(root_schema), current_root, path);
+    }
+    let (parent_path, index, len) = array_item_path_info(current_root, path.as_slice())?;
+    let Some(root_schema) = root_schema else {
+        return None;
+    };
+    let Some(parent_schema) = schema_for_path(root_schema, root_schema, current_root, &parent_path)
+    else {
+        return None;
+    };
+    let tuple_prefix_len = schema_prefix_item_count(&parent_schema);
+    if index < tuple_prefix_len {
+        return Some("tuple item has no removable default slot".to_owned());
+    }
+    let min_items = schema_min_u64_constraint(&parent_schema, "minItems").unwrap_or(0) as usize;
+    if len <= min_items {
+        return Some(format!("array requires at least {min_items} item(s)"));
+    }
+    validate_reset_candidate(Some(root_schema), current_root, path)
+}
+
+fn compare_reset_paths(left: &ConfigPath, right: &ConfigPath) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    for (left_segment, right_segment) in left.iter().zip(right.iter()) {
+        match (left_segment, right_segment) {
+            (PathSegment::Index(left_index), PathSegment::Index(right_index))
+                if left_index != right_index =>
+            {
+                return right_index.cmp(left_index);
+            }
+            (PathSegment::Key(left_key), PathSegment::Key(right_key)) if left_key != right_key => {
+                return left_key.cmp(right_key);
+            }
+            (PathSegment::Key(_), PathSegment::Index(_)) => return Ordering::Less,
+            (PathSegment::Index(_), PathSegment::Key(_)) => return Ordering::Greater,
+            _ => {}
+        }
+    }
+    right.len().cmp(&left.len())
+}
+
+fn normalized_reset_paths(paths: &[ConfigPath]) -> Vec<ConfigPath> {
+    let mut paths = paths.to_vec();
+    paths.sort_by(compare_reset_paths);
+    paths.dedup();
+    paths
+}
+
+fn apply_reset_paths(
+    value: &mut JsonValue,
+    default_root: &JsonValue,
+    root_schema: Option<&JsonValue>,
+    paths: &[ConfigPath],
+) -> ResetPathsOutcome {
+    let mut outcome = ResetPathsOutcome::default();
+    for path in normalized_reset_paths(paths) {
+        if let Some(reason) = reset_path_block_reason(root_schema, default_root, value, &path) {
+            outcome
+                .blocked
+                .push(format!("{}: {reason}", path_display(&path)));
+            continue;
+        }
+        outcome.changed |= reset_effective_value_at_path(value, default_root, path.as_slice());
+    }
+    outcome
+}
+
+fn reset_paths_warning_message(blocked: &[String]) -> Option<String> {
+    let first = blocked.first()?;
+    Some(if blocked.len() == 1 {
+        format!("cannot reset {first}")
+    } else {
+        format!("some fields could not be reset (showing first): {first}")
+    })
+}
+
+fn generic_array_item_action_info(index: usize, len: usize) -> ArrayItemActionInfo {
+    ArrayItemActionInfo {
+        can_insert_before: true,
+        can_insert_after: true,
+        can_duplicate: true,
+        can_move_up: index > 0,
+        can_move_down: index + 1 < len,
+        can_remove: len > 0,
+    }
 }
 
 fn duplicate_array_item_at_path(root: &mut JsonValue, path: &[PathSegment]) -> Option<ConfigPath> {
@@ -7274,14 +9277,14 @@ fn validate_new_object_field_key(
     let Some(parent_schema) = schema_for_path(root_schema, root_schema, config, object_path) else {
         return Ok(None);
     };
-    if let Some(property_names_schema) = parent_schema.get("propertyNames") {
+    for property_names_schema in schema_property_name_schemas(&parent_schema) {
         let mut diagnostics = Vec::new();
         let mut key_path = object_path.clone();
         key_path.push(PathSegment::Key(key.to_owned()));
         validate_schema_at(
             &mut diagnostics,
             root_schema,
-            property_names_schema,
+            &property_names_schema,
             &JsonValue::String(key.to_owned()),
             &key_path,
             format!("{key} name").as_str(),
@@ -7293,9 +9296,9 @@ fn validate_new_object_field_key(
             return Err(error.message);
         }
     }
-    let child_schema = object_property_schema(&parent_schema, key);
-    if child_schema.is_none()
-        && parent_schema.get("additionalProperties") == Some(&JsonValue::Bool(false))
+    let child_schema = object_property_schema(root_schema, &parent_schema, key);
+    if matches!(child_schema, Some(JsonValue::Bool(false)))
+        || (child_schema.is_none() && schema_prohibits_additional_properties(&parent_schema))
     {
         return Err(format!("field `{key}` is not allowed by this schema"));
     }
@@ -7307,64 +9310,57 @@ fn array_item_action_info(
     path: &[PathSegment],
 ) -> Option<ArrayItemActionInfo> {
     let (parent_path, index, len) = array_item_path_info(&plugin.draft_config, path)?;
-    let parent_schema = plugin
-        .schema
-        .as_ref()
-        .and_then(|root| schema_for_path(root, root, &plugin.draft_config, &parent_path))?;
-    let parent_schema = plugin
-        .schema
-        .as_ref()
-        .map(|root| flatten_schema_for_validation(root, &parent_schema))
-        .unwrap_or(parent_schema);
-    let tuple_prefix_len = parent_schema
-        .get("prefixItems")
-        .and_then(JsonValue::as_array)
-        .map(|items| items.len())
-        .unwrap_or(0);
+    let Some(root_schema) = plugin.schema.as_ref() else {
+        return Some(generic_array_item_action_info(index, len));
+    };
+    let Some(parent_schema) =
+        schema_for_path(root_schema, root_schema, &plugin.draft_config, &parent_path)
+    else {
+        return Some(generic_array_item_action_info(index, len));
+    };
+    let tuple_prefix_len = schema_prefix_item_count(&parent_schema);
     let tuple_slot = index < tuple_prefix_len;
-    let min_items = parent_schema
-        .get("minItems")
-        .and_then(JsonValue::as_u64)
-        .unwrap_or(0) as usize;
-    let max_items = parent_schema
-        .get("maxItems")
-        .and_then(JsonValue::as_u64)
-        .map(|value| value as usize);
-    let has_item_schema = array_item_schema(&parent_schema, len).is_some()
-        || array_item_schema(&parent_schema, index).is_some();
-    let can_grow = has_item_schema && max_items.is_none_or(|max_items| len < max_items);
+    let min_items = schema_min_u64_constraint(&parent_schema, "minItems").unwrap_or(0) as usize;
+    let can_insert_before = !tuple_slot
+        && prepared_default_array_item_value(
+            &plugin.draft_config,
+            plugin.schema.as_ref(),
+            &parent_path,
+            index,
+        )
+        .is_some();
+    let can_insert_after = !tuple_slot
+        && prepared_default_array_item_value(
+            &plugin.draft_config,
+            plugin.schema.as_ref(),
+            &parent_path,
+            index + 1,
+        )
+        .is_some();
     Some(ArrayItemActionInfo {
-        can_insert: can_grow && !tuple_slot,
-        can_duplicate: can_grow && !tuple_slot,
+        can_insert_before,
+        can_insert_after,
+        can_duplicate: can_insert_after
+            && !schema_unique_items(&parent_schema)
+            && can_duplicate_array_item(plugin.schema.as_ref(), &plugin.draft_config, path),
         can_move_up: !tuple_slot && index > tuple_prefix_len,
         can_move_down: !tuple_slot && index + 1 < len,
-        can_remove: !tuple_slot && len > min_items,
+        can_remove: !tuple_slot
+            && len > min_items
+            && can_remove_array_item(plugin.schema.as_ref(), &plugin.draft_config, path),
     })
 }
 
 fn can_append_array_item(plugin: &PluginWorkbenchPlugin, path: &[PathSegment]) -> bool {
     let path = path.to_vec();
-    let Some(root_schema) = plugin.schema.as_ref() else {
-        return false;
-    };
-    let Some(parent_schema) =
-        schema_for_path(root_schema, root_schema, &plugin.draft_config, &path)
+    let Some(len) = get_value_at_path(&plugin.draft_config, &path)
+        .and_then(JsonValue::as_array)
+        .map(|items| items.len())
     else {
         return false;
     };
-    let parent_schema = flatten_schema_for_validation(root_schema, &parent_schema);
-    let len = get_value_at_path(&plugin.draft_config, &path)
-        .and_then(JsonValue::as_array)
-        .map(|items| items.len())
-        .unwrap_or_default();
-    let max_items = parent_schema
-        .get("maxItems")
-        .and_then(JsonValue::as_u64)
-        .map(|value| value as usize);
-    if max_items.is_some_and(|max_items| len >= max_items) {
-        return false;
-    }
-    array_item_schema(&parent_schema, len).is_some()
+    prepared_default_array_item_value(&plugin.draft_config, plugin.schema.as_ref(), &path, len)
+        .is_some()
 }
 
 fn append_default_array_item_at_path(
@@ -7373,20 +9369,9 @@ fn append_default_array_item_at_path(
     path: &[PathSegment],
 ) -> Option<ConfigPath> {
     let path = path.to_vec();
-    let root_schema = root_schema?;
-    let parent_schema = schema_for_path(root_schema, root_schema, root, &path)?;
-    let parent_schema = flatten_schema_for_validation(root_schema, &parent_schema);
+    let len = get_value_at_path(root, &path)?.as_array()?.len();
+    let value = prepared_default_array_item_value(root, root_schema, &path, len)?;
     let array = get_value_mut_at_path(root, &path)?.as_array_mut()?;
-    let len = array.len();
-    let max_items = parent_schema
-        .get("maxItems")
-        .and_then(JsonValue::as_u64)
-        .map(|value| value as usize);
-    if max_items.is_some_and(|max_items| len >= max_items) {
-        return None;
-    }
-    let item_schema = array_item_schema(&parent_schema, len)?;
-    let value = default_value_for_schema(&item_schema, root_schema);
     array.push(value);
     let mut focus_path = path;
     focus_path.push(PathSegment::Index(len));
@@ -7399,28 +9384,15 @@ fn insert_default_array_item_at_path(
     path: &[PathSegment],
     after: bool,
 ) -> Option<ConfigPath> {
-    let (parent_path, index, len) = array_item_path_info(root, path)?;
-    let root_schema = root_schema?;
-    let parent_schema = schema_for_path(root_schema, root_schema, root, &parent_path)?;
-    let parent_schema = flatten_schema_for_validation(root_schema, &parent_schema);
-    let prefix_len = parent_schema
-        .get("prefixItems")
-        .and_then(JsonValue::as_array)
-        .map(|items| items.len())
-        .unwrap_or(0);
-    if index < prefix_len {
-        return None;
-    }
-    let max_items = parent_schema
-        .get("maxItems")
-        .and_then(JsonValue::as_u64)
-        .map(|value| value as usize);
-    if max_items.is_some_and(|max_items| len >= max_items) {
-        return None;
-    }
+    let (parent_path, index, _len) = array_item_path_info(root, path)?;
     let insert_index = if after { index + 1 } else { index };
-    let item_schema = array_item_schema(&parent_schema, insert_index)?;
-    let value = default_value_for_schema(&item_schema, root_schema);
+    if let Some(root_schema) = root_schema
+        && let Some(parent_schema) = schema_for_path(root_schema, root_schema, root, &parent_path)
+        && index < schema_prefix_item_count(&parent_schema)
+    {
+        return None;
+    }
+    let value = prepared_default_array_item_value(root, root_schema, &parent_path, insert_index)?;
     let array = get_value_mut_at_path(root, &parent_path)?.as_array_mut()?;
     array.insert(insert_index, value);
     let mut focus_path = parent_path;
@@ -7449,8 +9421,8 @@ fn path_display(path: &ConfigPath) -> String {
     out
 }
 
-fn title_for_property(schema: &JsonValue, key: &str) -> String {
-    object_property_schema(schema, key)
+fn title_for_property(root: &JsonValue, schema: &JsonValue, key: &str) -> String {
+    object_property_schema(root, schema, key)
         .map(|schema| title_for_schema_or_key(&schema, key))
         .unwrap_or_else(|| title_from_key(key))
 }
@@ -7572,12 +9544,12 @@ fn field_prompt_for_row(schema: Option<&JsonValue>, row: &ConfigRowView) -> Stri
     if let Some(description) = row.description.as_deref() {
         parts.push(description.to_owned());
     } else if let Some(schema) = schema {
-        if let Some(description) = schema.get("description").and_then(JsonValue::as_str) {
+        if let Some(description) = schema_description_text(schema) {
             parts.push(description.to_owned());
         }
     }
     if let Some(schema) = schema {
-        if let Some(format) = schema.get("format").and_then(JsonValue::as_str) {
+        if let Some(format) = schema_first_string_keyword(schema, "format") {
             parts.push(format!("format: {format}"));
         }
     }
@@ -7585,10 +9557,30 @@ fn field_prompt_for_row(schema: Option<&JsonValue>, row: &ConfigRowView) -> Stri
     parts.join("\n")
 }
 
+fn field_prompt_for_path(plugin: &PluginWorkbenchPlugin, path: &ConfigPath) -> String {
+    let schema = plugin
+        .schema
+        .as_ref()
+        .and_then(|root| declared_schema_for_path(root, root, &plugin.draft_config, path));
+    let mut parts = vec![format!("Path: {}", path_display(path))];
+    if let Some(description) = path_description(plugin, path) {
+        parts.push(description);
+    } else if let Some(schema) = schema.as_ref()
+        && let Some(description) = schema_description_text(schema)
+    {
+        parts.push(description);
+    }
+    if let Some(schema) = schema.as_ref()
+        && let Some(format) = schema_first_string_keyword(schema, "format")
+    {
+        parts.push(format!("format: {format}"));
+    }
+    parts.extend(path_constraints(plugin, path));
+    parts.join("\n")
+}
+
 fn schema_string_is_multiline(schema: &JsonValue) -> bool {
-    schema
-        .get("format")
-        .and_then(JsonValue::as_str)
+    schema_first_string_keyword(schema, "format")
         .is_some_and(|format| matches!(format, "markdown" | "multiline" | "textarea"))
         || schema
             .get("maxLength")
@@ -7597,9 +9589,7 @@ fn schema_string_is_multiline(schema: &JsonValue) -> bool {
 }
 
 fn pattern_key_matches(pattern: &str, key: &str) -> bool {
-    Regex::new(pattern)
-        .map(|regex| regex.is_match(key))
-        .unwrap_or_else(|_| key.contains(pattern.trim_matches('*')))
+    pattern_matches(pattern, key).unwrap_or(false)
 }
 
 fn plugin_header_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
@@ -7894,6 +9884,223 @@ fn append_overview_section_lines(
     }
 }
 
+fn standard_config_row_line(
+    setting: &str,
+    type_display: &str,
+    value: &str,
+    default: &str,
+    state: &str,
+    width: u16,
+) -> String {
+    fixed_columns(
+        &[
+            (setting, 22),
+            (type_display, 16),
+            (value, 22),
+            (default, 18),
+            (state, 10),
+        ],
+        width,
+    )
+}
+
+fn standard_config_row_line_with_action(
+    setting: &str,
+    type_display: &str,
+    value: &str,
+    default: &str,
+    action: &str,
+    state: &str,
+    width: u16,
+) -> String {
+    fixed_columns(
+        &[
+            (setting, 18),
+            (type_display, 14),
+            (value, 18),
+            (default, 14),
+            (action, 14),
+            (state, 8),
+        ],
+        width,
+    )
+}
+
+fn pair_config_row_line_with_action(
+    setting: &str,
+    value: &str,
+    secondary_value: &str,
+    action: &str,
+    state: &str,
+    width: u16,
+) -> String {
+    fixed_columns(
+        &[
+            (setting, 20),
+            (value, 18),
+            (secondary_value, 18),
+            (action, 14),
+            (state, 8),
+        ],
+        width,
+    )
+}
+
+fn styled_fixed_columns(columns: &[(String, usize, Style)], width: u16) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut used = 0usize;
+    for (index, (text, size, style)) in columns.iter().enumerate() {
+        if index > 0 {
+            if used >= width as usize {
+                break;
+            }
+            spans.push(Span::raw("  "));
+            used += 2;
+        }
+        let remaining = width.saturating_sub(used as u16) as usize;
+        if remaining == 0 {
+            break;
+        }
+        let size = (*size).min(remaining);
+        let cell = pad_to_width(clean(text).as_str(), size);
+        spans.push(Span::styled(cell, *style));
+        used += size;
+    }
+    Line::from(spans)
+}
+
+fn config_row_title_style(selected_cell: Option<ConfigRowCell>) -> Style {
+    if selected_cell.is_some() {
+        Style::default().add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    }
+}
+
+fn config_row_cell_style(selected_cell: Option<ConfigRowCell>, cell: ConfigRowCell) -> Style {
+    if selected_cell == Some(cell) {
+        plugin_workbench_selection_highlight_style()
+    } else {
+        Style::default()
+    }
+}
+
+fn standard_config_row_line_with_focus(
+    row: &ConfigRowView,
+    width: u16,
+    selected_cell: Option<ConfigRowCell>,
+    include_action: bool,
+) -> Line<'static> {
+    let mut columns = if include_action {
+        vec![
+            (row.title.clone(), 18, config_row_title_style(selected_cell)),
+            (
+                row.type_display.clone(),
+                14,
+                config_row_cell_style(selected_cell, ConfigRowCell::Type),
+            ),
+            (
+                row.value_display.clone(),
+                18,
+                config_row_cell_style(selected_cell, ConfigRowCell::Value),
+            ),
+            (
+                row.default_display.clone(),
+                14,
+                config_row_cell_style(selected_cell, ConfigRowCell::Default),
+            ),
+            (
+                row.action_display.clone().unwrap_or_default(),
+                14,
+                config_row_cell_style(selected_cell, ConfigRowCell::Action),
+            ),
+            (
+                row.state.label().to_owned(),
+                8,
+                config_row_cell_style(selected_cell, ConfigRowCell::State),
+            ),
+        ]
+    } else {
+        vec![
+            (row.title.clone(), 22, config_row_title_style(selected_cell)),
+            (
+                row.type_display.clone(),
+                16,
+                config_row_cell_style(selected_cell, ConfigRowCell::Type),
+            ),
+            (
+                row.value_display.clone(),
+                22,
+                config_row_cell_style(selected_cell, ConfigRowCell::Value),
+            ),
+            (
+                row.default_display.clone(),
+                18,
+                config_row_cell_style(selected_cell, ConfigRowCell::Default),
+            ),
+            (
+                row.state.label().to_owned(),
+                10,
+                config_row_cell_style(selected_cell, ConfigRowCell::State),
+            ),
+        ]
+    };
+    styled_fixed_columns(columns.as_mut_slice(), width)
+}
+
+fn pair_config_row_line_with_focus(
+    row: &ConfigRowView,
+    width: u16,
+    selected_cell: Option<ConfigRowCell>,
+    include_action: bool,
+) -> Line<'static> {
+    let mut columns = if include_action {
+        vec![
+            (row.title.clone(), 20, config_row_title_style(selected_cell)),
+            (
+                row.value_display.clone(),
+                18,
+                config_row_cell_style(selected_cell, ConfigRowCell::Value),
+            ),
+            (
+                row.secondary_value_display.clone().unwrap_or_default(),
+                18,
+                config_row_cell_style(selected_cell, ConfigRowCell::SecondaryValue),
+            ),
+            (
+                row.action_display.clone().unwrap_or_default(),
+                14,
+                config_row_cell_style(selected_cell, ConfigRowCell::Action),
+            ),
+            (
+                row.state.label().to_owned(),
+                8,
+                config_row_cell_style(selected_cell, ConfigRowCell::State),
+            ),
+        ]
+    } else {
+        vec![
+            (row.title.clone(), 24, config_row_title_style(selected_cell)),
+            (
+                row.value_display.clone(),
+                20,
+                config_row_cell_style(selected_cell, ConfigRowCell::Value),
+            ),
+            (
+                row.secondary_value_display.clone().unwrap_or_default(),
+                20,
+                config_row_cell_style(selected_cell, ConfigRowCell::SecondaryValue),
+            ),
+            (
+                row.state.label().to_owned(),
+                10,
+                config_row_cell_style(selected_cell, ConfigRowCell::State),
+            ),
+        ]
+    };
+    styled_fixed_columns(columns.as_mut_slice(), width)
+}
+
 fn append_group_lines(
     lines: &mut Vec<Line<'static>>,
     dialog: &PluginWorkbenchOverlay,
@@ -7907,18 +10114,17 @@ fn append_group_lines(
         group.title.clone(),
         Style::default().add_modifier(Modifier::BOLD),
     )));
+    let include_action = group_has_action_column(group, dialog.config_view);
     match group.layout {
         ConfigGroupLayout::Standard => {
             lines.push(Line::from(Span::styled(
-                fixed_columns(
-                    &[
-                        ("Setting", 24),
-                        ("Value", 26),
-                        ("Default", 22),
-                        ("State", 10),
-                    ],
-                    width,
-                ),
+                if include_action {
+                    standard_config_row_line_with_action(
+                        "Setting", "Type", "Value", "Default", "Action", "State", width,
+                    )
+                } else {
+                    standard_config_row_line("Setting", "Type", "Value", "Default", "State", width)
+                },
                 Style::default().add_modifier(Modifier::BOLD),
             )));
         }
@@ -7927,15 +10133,26 @@ fn append_group_lines(
             right_label,
         } => {
             lines.push(Line::from(Span::styled(
-                fixed_columns(
-                    &[
-                        ("Setting", 24),
-                        (left_label, 20),
-                        (right_label, 20),
-                        ("State", 10),
-                    ],
-                    width,
-                ),
+                if include_action {
+                    pair_config_row_line_with_action(
+                        "Setting",
+                        left_label,
+                        right_label,
+                        "Action",
+                        "State",
+                        width,
+                    )
+                } else {
+                    fixed_columns(
+                        &[
+                            ("Setting", 24),
+                            (left_label, 20),
+                            (right_label, 20),
+                            ("State", 10),
+                        ],
+                        width,
+                    )
+                },
                 Style::default().add_modifier(Modifier::BOLD),
             )));
         }
@@ -7949,35 +10166,28 @@ fn append_group_lines(
             let is_selected = dialog.selected_section == section_index_for_row(dialog, section)
                 && dialog.selected_node == visible_row_index;
             if std::ptr::eq(group_cursor, group) {
-                let line = match group.layout {
-                    ConfigGroupLayout::Standard => fixed_columns(
-                        &[
-                            (row.title.as_str(), 24),
-                            (row.value_display.as_str(), 26),
-                            (row.default_display.as_str(), 22),
-                            (row.state.label(), 10),
-                        ],
-                        width,
-                    ),
-                    ConfigGroupLayout::Pair { .. } => fixed_columns(
-                        &[
-                            (row.title.as_str(), 24),
-                            (row.value_display.as_str(), 20),
-                            (
-                                row.secondary_value_display.as_deref().unwrap_or_default(),
-                                20,
-                            ),
-                            (row.state.label(), 10),
-                        ],
-                        width,
-                    ),
-                };
-                let style = if is_selected && highlight_selection {
-                    plugin_workbench_selection_highlight_style()
+                let focused_cell = if is_selected && highlight_selection {
+                    Some(section_selected_row_cell(
+                        section,
+                        dialog.config_view,
+                        visible_row_index,
+                        dialog.selected_cell,
+                    ))
                 } else {
-                    Style::default()
+                    None
                 };
-                lines.push(Line::from(Span::styled(clean(line), style)));
+                let line = match group.layout {
+                    ConfigGroupLayout::Standard => standard_config_row_line_with_focus(
+                        row,
+                        width,
+                        focused_cell,
+                        include_action,
+                    ),
+                    ConfigGroupLayout::Pair { .. } => {
+                        pair_config_row_line_with_focus(row, width, focused_cell, include_action)
+                    }
+                };
+                lines.push(line);
             }
             visible_row_index += 1;
         }
@@ -8178,16 +10388,16 @@ fn append_schema_editor_lines(
         append_type_selector_line(lines, schema, value, depth);
     }
     if let Some(schema) = render_schema {
-        if let Some(constant) = schema.get("const") {
+        if let Some(constant) = schema_const_value(schema) {
             lines.push(Line::from(format!(
                 "{}{}        [ {} ] readonly",
                 indent,
                 title,
-                preview_value(constant)
+                preview_value(&constant)
             )));
             return;
         }
-        if let Some(variants) = schema.get("enum").and_then(JsonValue::as_array)
+        if let Some(variants) = schema_enum_values(schema)
             && !variants.is_empty()
         {
             lines.push(Line::from(format!(
@@ -8254,10 +10464,11 @@ fn append_branch_selector_lines(
         return;
     };
     let active = active_branch_label(branches.as_slice(), value);
+    let active_id = active_branch_id(branches.as_slice(), value);
     let also_matches = branches
         .iter()
         .filter(|branch| {
-            branch.label != active && schema_matches(root_schema, &branch.schema, value)
+            branch.id != active_id && schema_matches(root_schema, &branch.schema, value)
         })
         .map(|branch| branch.label.as_str())
         .collect::<Vec<_>>();
@@ -8331,12 +10542,19 @@ fn append_object_editor_lines(
     }
     for key in keys {
         let child = object.get(key.as_str()).unwrap_or(&JsonValue::Null);
-        let child_schema = schema.and_then(|schema| object_property_schema(schema, key.as_str()));
+        let child_schema = schema.and_then(|schema| {
+            root_schema.and_then(|root| object_property_schema(root, schema, key.as_str()))
+        });
         let kind = child_schema
             .as_ref()
             .map(schema_kind_label)
             .unwrap_or_else(|| json_kind_label(child).to_owned());
-        let state = object_field_state(schema, key.as_str(), object.contains_key(key.as_str()));
+        let state = object_field_state(
+            root_schema,
+            schema,
+            key.as_str(),
+            object.contains_key(key.as_str()),
+        );
         lines.push(Line::from(fixed_columns(
             &[
                 (
@@ -8376,10 +10594,7 @@ fn append_array_editor_lines(
     remaining: usize,
 ) {
     let indent = "  ".repeat(depth);
-    let tuple = schema
-        .and_then(|schema| schema.get("prefixItems"))
-        .and_then(JsonValue::as_array)
-        .is_some();
+    let tuple = schema.is_some_and(|schema| schema_prefix_item_count(schema) > 0);
     let object_items = items.iter().any(JsonValue::is_object);
     let title = if tuple {
         "Tuple editor"
@@ -8404,7 +10619,9 @@ fn append_array_editor_lines(
             Style::default().add_modifier(Modifier::BOLD),
         )));
         for (index, item) in items.iter().enumerate() {
-            let item_schema = schema.and_then(|schema| array_item_schema(schema, index));
+            let item_schema = schema.and_then(|schema| {
+                root_schema.and_then(|root| array_item_schema(root, schema, index))
+            });
             lines.push(Line::from(fixed_columns(
                 &[
                     (format!("{indent}{index}").as_str(), 10),
@@ -8454,7 +10671,8 @@ fn append_object_array_table(
     width: u16,
 ) {
     let indent = "  ".repeat(depth);
-    let item_schema = schema.and_then(|schema| array_item_schema(schema, 0));
+    let item_schema =
+        schema.and_then(|schema| root_schema.and_then(|root| array_item_schema(root, schema, 0)));
     let columns = object_array_columns(item_schema.as_ref(), items);
     let mut header = vec![(format!("{indent}Index"), 8)];
     for column in &columns {
@@ -8505,8 +10723,7 @@ fn append_string_editor_lines(
 ) {
     let indent = "  ".repeat(depth);
     let format_suffix = schema
-        .and_then(|schema| schema.get("format"))
-        .and_then(JsonValue::as_str)
+        .and_then(|schema| schema_first_string_keyword(schema, "format"))
         .map(|format| format!("   format: {format}"))
         .unwrap_or_default();
     if schema.is_some_and(schema_string_is_multiline) || text.contains('\n') {
@@ -8526,11 +10743,7 @@ fn append_string_editor_lines(
             format_suffix
         )));
     }
-    if let Some(examples) = schema
-        .and_then(|schema| schema.get("examples"))
-        .and_then(JsonValue::as_array)
-        .filter(|examples| !examples.is_empty())
-    {
+    if let Some(examples) = schema.and_then(schema_examples) {
         let suggestions = examples
             .iter()
             .take(3)
@@ -8579,24 +10792,19 @@ fn append_null_editor_lines(
 }
 
 fn schema_property_count(schema: &JsonValue) -> usize {
-    let schema = resolve_schema(schema, schema);
-    schema
-        .get("properties")
-        .and_then(JsonValue::as_object)
-        .map(|object| object.len())
-        .or_else(|| {
-            schema
-                .get("prefixItems")
-                .and_then(JsonValue::as_array)
-                .map(Vec::len)
-        })
-        .unwrap_or_else(|| {
-            if schema.get("items").is_some() || schema.get("additionalProperties").is_some() {
-                1
-            } else {
-                0
-            }
-        })
+    let property_count = schema_declared_property_keys(schema).len();
+    if property_count > 0 {
+        return property_count;
+    }
+    let prefix_count = schema_prefix_item_count(schema);
+    if prefix_count > 0 {
+        return prefix_count;
+    }
+    if schema_has_array_shape(schema) || schema_has_map_keywords(schema) {
+        1
+    } else {
+        0
+    }
 }
 
 fn command_argument_count(
@@ -8629,10 +10837,140 @@ fn command_schema_and_value(
 }
 
 fn schema_is_map_like(root: &JsonValue, schema: &JsonValue) -> bool {
-    let schema = flatten_schema_for_validation(root, schema);
-    schema.get("additionalProperties").is_some()
-        || schema.get("patternProperties").is_some()
-        || schema.get("propertyNames").is_some()
+    let schema = active_schema_for_value(root, schema, &JsonValue::Object(JsonMap::new()));
+    schema_has_object_shape(&schema) && schema_has_map_keywords(&schema)
+}
+
+fn schema_has_map_keywords(schema: &JsonValue) -> bool {
+    if schema.as_object().is_some_and(|object| {
+        object.contains_key("additionalProperties")
+            || object.contains_key("patternProperties")
+            || object.contains_key("propertyNames")
+    }) {
+        return true;
+    }
+    schema
+        .get("allOf")
+        .and_then(JsonValue::as_array)
+        .is_some_and(|branches| branches.iter().any(schema_has_map_keywords))
+}
+
+fn schema_prohibits_additional_properties(schema: &JsonValue) -> bool {
+    if schema.get("additionalProperties") == Some(&JsonValue::Bool(false)) {
+        return true;
+    }
+    schema
+        .get("allOf")
+        .and_then(JsonValue::as_array)
+        .is_some_and(|branches| branches.iter().any(schema_prohibits_additional_properties))
+}
+
+fn schema_property_name_schemas(schema: &JsonValue) -> Vec<JsonValue> {
+    let mut schemas = schema
+        .get("propertyNames")
+        .cloned()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if let Some(all_of) = schema.get("allOf").and_then(JsonValue::as_array) {
+        for branch in all_of {
+            schemas.extend(schema_property_name_schemas(branch));
+        }
+    }
+    schemas
+}
+
+fn schema_prefix_item_count(schema: &JsonValue) -> usize {
+    let direct = schema
+        .get("prefixItems")
+        .and_then(JsonValue::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    let nested = schema
+        .get("allOf")
+        .and_then(JsonValue::as_array)
+        .map(|branches| {
+            branches
+                .iter()
+                .map(schema_prefix_item_count)
+                .max()
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    direct.max(nested)
+}
+
+fn schema_min_u64_constraint(schema: &JsonValue, key: &str) -> Option<u64> {
+    let direct = schema.get(key).and_then(JsonValue::as_u64);
+    let nested = schema
+        .get("allOf")
+        .and_then(JsonValue::as_array)
+        .and_then(|branches| {
+            branches
+                .iter()
+                .filter_map(|branch| schema_min_u64_constraint(branch, key))
+                .max()
+        });
+    match (direct, nested) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
+}
+
+fn schema_max_u64_constraint(schema: &JsonValue, key: &str) -> Option<u64> {
+    let direct = schema.get(key).and_then(JsonValue::as_u64);
+    let nested = schema
+        .get("allOf")
+        .and_then(JsonValue::as_array)
+        .and_then(|branches| {
+            branches
+                .iter()
+                .filter_map(|branch| schema_max_u64_constraint(branch, key))
+                .min()
+        });
+    match (direct, nested) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
+}
+
+fn schema_declared_property_keys(schema: &JsonValue) -> BTreeSet<String> {
+    let mut keys = schema
+        .get("properties")
+        .and_then(JsonValue::as_object)
+        .into_iter()
+        .flatten()
+        .map(|(key, _)| key.clone())
+        .collect::<BTreeSet<_>>();
+    if let Some(all_of) = schema.get("allOf").and_then(JsonValue::as_array) {
+        for branch in all_of {
+            keys.extend(schema_declared_property_keys(branch));
+        }
+    }
+    keys
+}
+
+fn schema_matches_pattern_property(schema: &JsonValue, key: &str) -> bool {
+    if schema
+        .get("patternProperties")
+        .and_then(JsonValue::as_object)
+        .is_some_and(|patterns| {
+            patterns
+                .keys()
+                .any(|pattern| pattern_key_matches(pattern, key))
+        })
+    {
+        return true;
+    }
+    schema
+        .get("allOf")
+        .and_then(JsonValue::as_array)
+        .is_some_and(|branches| {
+            branches
+                .iter()
+                .any(|branch| schema_matches_pattern_property(branch, key))
+        })
 }
 
 fn ordered_object_keys(
@@ -8648,11 +10986,9 @@ fn ordered_object_keys(
                 keys.push(key.clone());
             }
         }
-        if let Some(properties) = schema.get("properties").and_then(JsonValue::as_object) {
-            for key in properties.keys() {
-                if seen.insert(key.clone()) {
-                    keys.push(key.clone());
-                }
+        for key in schema_declared_property_keys(schema) {
+            if seen.insert(key.clone()) {
+                keys.push(key);
             }
         }
     }
@@ -8665,17 +11001,28 @@ fn ordered_object_keys(
 }
 
 fn schema_required_fields(schema: &JsonValue) -> BTreeSet<String> {
-    schema
+    let mut required = schema
         .get("required")
         .and_then(JsonValue::as_array)
         .into_iter()
         .flatten()
         .filter_map(JsonValue::as_str)
         .map(str::to_owned)
-        .collect()
+        .collect::<BTreeSet<_>>();
+    if let Some(all_of) = schema.get("allOf").and_then(JsonValue::as_array) {
+        for branch in all_of {
+            required.extend(schema_required_fields(branch));
+        }
+    }
+    required
 }
 
-fn object_field_state(schema: Option<&JsonValue>, key: &str, present: bool) -> String {
+fn object_field_state(
+    root: Option<&JsonValue>,
+    schema: Option<&JsonValue>,
+    key: &str,
+    present: bool,
+) -> String {
     let Some(schema) = schema else {
         return "custom".to_owned();
     };
@@ -8685,10 +11032,12 @@ fn object_field_state(schema: Option<&JsonValue>, key: &str, present: bool) -> S
         } else {
             "missing".to_owned()
         }
-    } else if schema
-        .get("properties")
-        .and_then(JsonValue::as_object)
-        .is_some_and(|properties| properties.contains_key(key))
+    } else if schema_declared_property_keys(schema).contains(key)
+        || (present
+            && root.is_some_and(|root| {
+                object_property_schema(root, schema, key).is_some()
+                    || schema_matches_pattern_property(schema, key)
+            }))
     {
         if present {
             "optional".to_owned()
@@ -8703,12 +11052,10 @@ fn object_field_state(schema: Option<&JsonValue>, key: &str, present: bool) -> S
 fn object_array_columns(schema: Option<&JsonValue>, items: &[JsonValue]) -> Vec<String> {
     let mut keys = Vec::new();
     let mut seen = BTreeSet::new();
-    if let Some(schema) = schema
-        && let Some(properties) = schema.get("properties").and_then(JsonValue::as_object)
-    {
-        for key in properties.keys().take(4) {
+    if let Some(schema) = schema {
+        for key in schema_declared_property_keys(schema).into_iter().take(4) {
             if seen.insert(key.clone()) {
-                keys.push(key.clone());
+                keys.push(key);
             }
         }
     }
@@ -8739,7 +11086,7 @@ fn structured_preview(value: &JsonValue) -> String {
 }
 
 fn number_constraint_summary(schema: &JsonValue) -> String {
-    let mut parts = Vec::new();
+    let mut parts = BTreeSet::new();
     for key in [
         "minimum",
         "maximum",
@@ -8748,18 +11095,31 @@ fn number_constraint_summary(schema: &JsonValue) -> String {
         "multipleOf",
     ] {
         if let Some(value) = schema.get(key) {
-            parts.push(format!("{key}: {}", preview_value(value)));
+            parts.insert(format!("{key}: {}", preview_value(value)));
+        }
+    }
+    if let Some(all_of) = schema.get("allOf").and_then(JsonValue::as_array) {
+        for branch in all_of {
+            for part in schema_constraints(branch).into_iter().filter(|part| {
+                part.starts_with("minimum:")
+                    || part.starts_with("maximum:")
+                    || part.starts_with("exclusiveMinimum:")
+                    || part.starts_with("exclusiveMaximum:")
+                    || part.starts_with("multipleOf:")
+            }) {
+                parts.insert(part);
+            }
         }
     }
     if parts.is_empty() {
         String::new()
     } else {
-        format!("     {}", parts.join("   "))
+        format!("     {}", parts.into_iter().collect::<Vec<_>>().join("   "))
     }
 }
 
 fn schema_constraints(schema: &JsonValue) -> Vec<String> {
-    let mut constraints = Vec::new();
+    let mut constraints = BTreeSet::new();
     for key in [
         "format",
         "minimum",
@@ -8775,10 +11135,15 @@ fn schema_constraints(schema: &JsonValue) -> Vec<String> {
         "uniqueItems",
     ] {
         if let Some(value) = schema.get(key) {
-            constraints.push(format!("{key}: {}", preview_value(value)));
+            constraints.insert(format!("{key}: {}", preview_value(value)));
         }
     }
-    constraints
+    if let Some(all_of) = schema.get("allOf").and_then(JsonValue::as_array) {
+        for branch in all_of {
+            constraints.extend(schema_constraints(branch));
+        }
+    }
+    constraints.into_iter().collect()
 }
 
 fn plugin_workbench_summary(dialog: &PluginWorkbenchOverlay) -> String {
@@ -9014,14 +11379,71 @@ fn clean(text: impl AsRef<str>) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn plugin_without_effective_config_does_not_synthesize_static_plugin_config() {
-        let sources = crate::backend::ConfigJsonSources {
+    fn test_sources() -> crate::backend::ConfigJsonSources {
+        crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
             file: json!({}),
             effective: json!({}),
+        }
+    }
+
+    fn build_schema_fixture_plugin(
+        schema: JsonValue,
+        raw_config: JsonValue,
+    ) -> PluginWorkbenchPlugin {
+        let manifest = agena::plugin::PluginManifest::builder("fixture", "0.1.0")
+            .config_schema(schema)
+            .build();
+        let status = agena::plugin::status::PluginStatus::initial("fixture.plugin", "static");
+        let inspect = agena::plugin::PluginInspect {
+            status: status.clone(),
+            manifest: Some(manifest),
+            authority: None,
+            configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(raw_config)),
         };
+        build_plugin_workbench_plugin(&test_sources(), "en-US", status, Some(inspect), Vec::new())
+    }
+
+    fn build_test_dialog(plugin: PluginWorkbenchPlugin) -> PluginWorkbenchOverlay {
+        PluginWorkbenchOverlay {
+            title: "Plugins".to_owned(),
+            query: Editor::default(),
+            mode: PluginWorkbenchMode::Detail,
+            transport_filter: PluginTransportFilter::All,
+            config_filter: PluginConfigFilter::All,
+            plugins: vec![plugin],
+            visible_plugins: vec![0],
+            selected_plugin: 0,
+            detail_tab: PluginDetailTab::Config,
+            config_view: PluginConfigView::Effective,
+            config_focus: PluginConfigFocus::Editor,
+            selected_toolbar_action: 0,
+            selected_section: 0,
+            selected_node: 0,
+            selected_cell: ConfigRowCell::Value,
+            selected_diagnostic: 0,
+            selected_diff_row: 0,
+            config_scroll: 0,
+            diagnostics_scroll: 0,
+            show_diff: false,
+            drilldown_stack: Vec::new(),
+            actions: None,
+            selection: None,
+            editor: None,
+        }
+    }
+
+    fn line_to_string(line: &Line<'static>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn plugin_without_effective_config_does_not_synthesize_static_plugin_config() {
+        let sources = test_sources();
         let status = agena::plugin::status::PluginStatus::initial("agena.fs", "static");
 
         let plugin = build_plugin_workbench_plugin(&sources, "en-US", status, None, Vec::new());
@@ -9050,6 +11472,76 @@ mod tests {
 
         let diagnostics = validate_config_value(Some(&schema), &JsonValue::Null, false);
         assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn validate_config_value_enforces_all_of_required_fields_from_every_branch() {
+        let schema = json!({
+            "type": "object",
+            "allOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "mode": { "type": "string" }
+                    },
+                    "required": ["mode"]
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "cron": { "type": "string", "minLength": 1 }
+                    },
+                    "required": ["cron"]
+                }
+            ]
+        });
+        let diagnostics =
+            validate_config_value(Some(&schema), &json!({"mode": "scheduled"}), false);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == DiagnosticSeverity::Error
+                && diagnostic.path == config_path(["cron"])
+        }));
+    }
+
+    #[test]
+    fn validate_config_value_applies_property_and_pattern_constraints_together() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "foo": { "type": "string" }
+            },
+            "patternProperties": {
+                "^f": { "minLength": 3 }
+            },
+            "additionalProperties": false
+        });
+        let diagnostics = validate_config_value(Some(&schema), &json!({"foo": "ab"}), false);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == DiagnosticSeverity::Error
+                && diagnostic.path == config_path(["foo"])
+        }));
+    }
+
+    #[test]
+    fn validate_config_value_reports_unique_items_as_error() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "tags": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "uniqueItems": true
+                }
+            }
+        });
+        let diagnostics = validate_config_value(Some(&schema), &json!({"tags": ["a", "a"]}), false);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == DiagnosticSeverity::Error
+                && diagnostic.path == config_path(["tags"])
+        }));
     }
 
     #[test]
@@ -9770,6 +12262,7 @@ mod tests {
             selected_toolbar_action: 0,
             selected_section: 0,
             selected_node: 0,
+            selected_cell: ConfigRowCell::Value,
             selected_diagnostic: 0,
             selected_diff_row: 0,
             config_scroll: 0,
@@ -9782,6 +12275,7 @@ mod tests {
                     title: "Maps".to_owned(),
                     groups: build_drilldown_groups(&plugin, &config_path(["maps"]), "Maps"),
                     selected_row: 0,
+                    selected_cell: ConfigRowCell::Value,
                 },
                 PluginConfigDrilldownOverlay {
                     plugin_id: plugin.plugin_id.clone(),
@@ -9793,6 +12287,7 @@ mod tests {
                         "APAC",
                     ),
                     selected_row: 0,
+                    selected_cell: ConfigRowCell::Value,
                 },
             ],
             actions: None,
@@ -9922,7 +12417,7 @@ mod tests {
         );
         assert_eq!(
             value["collection_mesh"]["bucket_steps"]["priority"][0]["ms"],
-            json!(0)
+            json!(1)
         );
     }
 
@@ -9988,7 +12483,7 @@ mod tests {
         );
         assert_eq!(
             value["collection_mesh"]["bucket_steps"]["priority"][1]["ms"],
-            json!(0)
+            json!(1)
         );
     }
 
@@ -10025,7 +12520,8 @@ mod tests {
             ],
         )
         .expect("tuple item info");
-        assert!(!info.can_insert);
+        assert!(!info.can_insert_before);
+        assert!(!info.can_insert_after);
         assert!(!info.can_duplicate);
         assert!(!info.can_move_up);
         assert!(!info.can_move_down);
@@ -10037,6 +12533,101 @@ mod tests {
                 PathSegment::Key("command".to_owned()),
             ],
         ));
+    }
+
+    #[test]
+    fn items_false_prevents_array_growth_actions() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "default": {
+                    "tuple": ["cmd"]
+                },
+                "properties": {
+                    "tuple": {
+                        "type": "array",
+                        "prefixItems": [
+                            { "type": "string" }
+                        ],
+                        "items": false
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let path = config_path(["tuple"]);
+
+        assert!(!can_append_array_item(&plugin, &path));
+
+        let mut value = plugin.draft_config.clone();
+        assert!(
+            append_default_array_item_at_path(&mut value, plugin.schema.as_ref(), &path).is_none()
+        );
+    }
+
+    #[test]
+    fn arrays_without_items_keyword_allow_tail_growth() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "default": {
+                    "events": []
+                },
+                "properties": {
+                    "events": {
+                        "type": "array"
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let path = config_path(["events"]);
+
+        assert!(can_append_array_item(&plugin, &path));
+
+        let mut value = plugin.draft_config.clone();
+        let first = append_default_array_item_at_path(&mut value, plugin.schema.as_ref(), &path)
+            .expect("append unconstrained item");
+        assert_eq!(
+            first,
+            vec![PathSegment::Key("events".to_owned()), PathSegment::Index(0)]
+        );
+        assert_eq!(value["events"][0], JsonValue::Null);
+
+        let second = insert_default_array_item_at_path(
+            &mut value,
+            plugin.schema.as_ref(),
+            first.as_slice(),
+            true,
+        )
+        .expect("insert unconstrained item");
+        assert_eq!(
+            second,
+            vec![PathSegment::Key("events".to_owned()), PathSegment::Index(1)]
+        );
+        assert_eq!(value["events"], json!([null, null]));
+    }
+
+    #[test]
+    fn schema_missing_arrays_allow_generic_tail_growth() {
+        let sources = test_sources();
+        let status = agena::plugin::status::PluginStatus::initial("fixture.plugin", "static");
+        let mut plugin = build_plugin_workbench_plugin(&sources, "en-US", status, None, Vec::new());
+        plugin.draft_config = json!({
+            "items": []
+        });
+
+        let path = config_path(["items"]);
+        assert!(can_append_array_item(&plugin, &path));
+
+        let mut value = plugin.draft_config.clone();
+        let focus =
+            append_default_array_item_at_path(&mut value, None, path.as_slice()).expect("append");
+        assert_eq!(
+            focus,
+            vec![PathSegment::Key("items".to_owned()), PathSegment::Index(0)]
+        );
+        assert_eq!(value["items"], json!([null]));
     }
 
     #[test]
@@ -10095,7 +12686,8 @@ mod tests {
             ],
         )
         .expect("tuple slot actions");
-        assert!(!tuple_slot.can_insert);
+        assert!(!tuple_slot.can_insert_before);
+        assert!(!tuple_slot.can_insert_after);
         assert!(!tuple_slot.can_duplicate);
         assert!(!tuple_slot.can_remove);
 
@@ -10108,7 +12700,8 @@ mod tests {
             ],
         )
         .expect("tail item actions");
-        assert!(tail_item.can_insert);
+        assert!(tail_item.can_insert_before);
+        assert!(tail_item.can_insert_after);
         assert!(tail_item.can_duplicate);
         assert!(tail_item.can_remove);
     }
@@ -10161,6 +12754,1283 @@ mod tests {
             "not_in_schema",
         );
         assert!(disallowed.is_err());
+    }
+
+    #[test]
+    fn nullable_integer_fields_do_not_use_nullable_string_editor() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": ["null", "integer"],
+                        "title": "Limit"
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let path = config_path(["limit"]);
+        let title = title_for_config_path(&plugin, &path, "limit");
+        let row = build_row_for_path(&plugin, path, title.as_str(), None);
+
+        assert!(matches!(row.editor, ConfigRowEditor::Null { .. }));
+    }
+
+    #[test]
+    fn union_rows_render_an_explicit_type_selector_column() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "properties": {
+                    "value": {
+                        "type": ["integer", "string"],
+                        "title": "Value"
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let path = config_path(["value"]);
+        let title = title_for_config_path(&plugin, &path, "value");
+        let row = build_row_for_path(&plugin, path, title.as_str(), None);
+
+        assert_eq!(row.type_mode, ConfigRowTypeMode::SelectType);
+        assert_eq!(row.type_display, "[ null ▾ ]");
+    }
+
+    #[test]
+    fn switchable_standard_rows_expose_all_interactive_cells() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "properties": {
+                    "value": {
+                        "type": ["integer", "string"],
+                        "title": "Value"
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let path = config_path(["value"]);
+        let title = title_for_config_path(&plugin, &path, "value");
+        let row = build_row_for_path(&plugin, path, title.as_str(), None);
+
+        assert_eq!(
+            row_cells(&row, ConfigGroupLayout::Standard),
+            vec![
+                ConfigRowCell::Type,
+                ConfigRowCell::Value,
+                ConfigRowCell::Default,
+                ConfigRowCell::State
+            ]
+        );
+        assert_eq!(
+            move_config_row_cell(&row, ConfigGroupLayout::Standard, ConfigRowCell::Value, -1),
+            Some(ConfigRowCell::Type)
+        );
+        assert_eq!(
+            move_config_row_cell(&row, ConfigGroupLayout::Standard, ConfigRowCell::Type, 1),
+            Some(ConfigRowCell::Value)
+        );
+        assert_eq!(
+            move_config_row_cell(&row, ConfigGroupLayout::Standard, ConfigRowCell::Value, 1),
+            Some(ConfigRowCell::Default)
+        );
+        assert_eq!(
+            move_config_row_cell(&row, ConfigGroupLayout::Standard, ConfigRowCell::Default, 1),
+            Some(ConfigRowCell::State)
+        );
+        assert!(
+            move_config_row_cell(&row, ConfigGroupLayout::Standard, ConfigRowCell::Type, -1)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn one_of_rows_render_an_explicit_shape_selector_column() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "properties": {
+                    "auth": {
+                        "title": "Auth",
+                        "oneOf": [
+                            {
+                                "title": "Token",
+                                "type": "object",
+                                "properties": {
+                                    "token": { "type": "string", "default": "" }
+                                }
+                            },
+                            {
+                                "title": "Password",
+                                "type": "object",
+                                "properties": {
+                                    "username": { "type": "string", "default": "" },
+                                    "password": { "type": "string", "default": "" }
+                                }
+                            }
+                        ]
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let path = config_path(["auth"]);
+        let title = title_for_config_path(&plugin, &path, "auth");
+        let row = build_row_for_path(&plugin, path, title.as_str(), None);
+
+        assert_eq!(row.type_mode, ConfigRowTypeMode::SelectShape);
+        assert_eq!(row.type_display, "[ Token ▾ ]");
+    }
+
+    #[test]
+    fn pair_rows_expose_independent_left_and_right_cells() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "default": {
+                    "value": 5,
+                    "max": 10
+                },
+                "properties": {
+                    "value": { "type": "integer" },
+                    "max": { "type": "integer" }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let row = build_pair_integer_row(
+            &plugin,
+            "Limit",
+            config_path(["value"]),
+            config_path(["max"]),
+            None,
+        );
+        let layout = ConfigGroupLayout::Pair {
+            left_label: "Value",
+            right_label: "Max",
+        };
+
+        assert_eq!(
+            row_cells(&row, layout),
+            vec![
+                ConfigRowCell::Value,
+                ConfigRowCell::SecondaryValue,
+                ConfigRowCell::State
+            ]
+        );
+        assert_eq!(
+            config_row_cell_label(&row, layout, ConfigRowCell::Value),
+            "Value"
+        );
+        assert_eq!(
+            config_row_cell_label(&row, layout, ConfigRowCell::SecondaryValue),
+            "Max"
+        );
+        assert_eq!(
+            config_row_cell_label(&row, layout, ConfigRowCell::State),
+            "State"
+        );
+
+        let line =
+            pair_config_row_line_with_focus(&row, 98, Some(ConfigRowCell::SecondaryValue), false);
+        let highlighted = line
+            .spans
+            .iter()
+            .find(|span| span.style == plugin_workbench_selection_highlight_style())
+            .expect("highlighted secondary value cell");
+        assert!(highlighted.content.contains("10"));
+    }
+
+    #[test]
+    fn nullable_string_rows_use_plain_value_cells_when_type_is_split_out() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": ["string", "null"],
+                        "title": "Path"
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let path = config_path(["path"]);
+        let title = title_for_config_path(&plugin, &path, "path");
+        let row = build_row_for_path(&plugin, path, title.as_str(), None);
+
+        assert_eq!(row.type_mode, ConfigRowTypeMode::SelectType);
+        assert_eq!(row.value_display, "[ Not set ]");
+    }
+
+    #[test]
+    fn structured_container_rows_expose_primary_action_cells() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "default": {
+                    "settings": {},
+                    "items": []
+                },
+                "properties": {
+                    "settings": {
+                        "type": "object",
+                        "additionalProperties": { "type": "string" }
+                    },
+                    "items": {
+                        "type": "array",
+                        "items": { "type": "string", "default": "" }
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+
+        let object_row = build_row_for_path(&plugin, config_path(["settings"]), "Settings", None);
+        assert_eq!(object_row.action_display.as_deref(), Some("[ Add field ]"));
+        assert_eq!(
+            row_cells(&object_row, ConfigGroupLayout::Standard),
+            vec![
+                ConfigRowCell::Value,
+                ConfigRowCell::Default,
+                ConfigRowCell::Action,
+                ConfigRowCell::State
+            ]
+        );
+
+        let array_row = build_row_for_path(&plugin, config_path(["items"]), "Items", None);
+        assert_eq!(array_row.action_display.as_deref(), Some("[ Add item ]"));
+    }
+
+    #[test]
+    fn array_item_rows_expose_direct_primary_actions() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "default": {
+                    "items": ["a", "b"]
+                },
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": { "type": "string", "default": "" }
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let row = build_row_for_path(
+            &plugin,
+            vec![PathSegment::Key("items".to_owned()), PathSegment::Index(0)],
+            "Item 0",
+            None,
+        );
+
+        assert_eq!(row.action_display.as_deref(), Some("[ Insert ]"));
+    }
+
+    #[test]
+    fn dynamic_map_keys_expose_rename_as_primary_action() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "default": {
+                    "headers": {
+                        "x-demo": "alpha"
+                    }
+                },
+                "properties": {
+                    "headers": {
+                        "type": "object",
+                        "additionalProperties": { "type": "string" }
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let row = build_row_for_path(&plugin, config_path(["headers", "x-demo"]), "X Demo", None);
+        assert_eq!(row.action_display.as_deref(), Some("[ Rename ]"));
+    }
+
+    #[test]
+    fn config_editor_renders_action_column_for_structured_groups() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "default": {
+                    "settings": {}
+                },
+                "properties": {
+                    "settings": {
+                        "type": "object",
+                        "additionalProperties": { "type": "string" }
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let mut dialog = build_test_dialog(plugin);
+        dialog.selected_section = 1;
+        dialog.clamp_selection();
+
+        let editor = text_to_string(config_editor_text(
+            &dialog,
+            dialog.selected_plugin().expect("selected plugin"),
+        ));
+        assert!(editor.contains("Action"));
+        assert!(editor.contains("[ Add field ]"));
+    }
+
+    #[test]
+    fn rows_without_action_columns_keep_focus_near_the_right_edge() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "properties": {
+                    "value": {
+                        "type": ["integer", "string"],
+                        "title": "Value"
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let row = build_row_for_path(&plugin, config_path(["value"]), "Value", None);
+
+        assert_eq!(
+            normalize_config_row_cell(&row, ConfigGroupLayout::Standard, ConfigRowCell::Action),
+            ConfigRowCell::State
+        );
+    }
+
+    #[test]
+    fn compact_config_view_line_uses_the_selected_cell_hint() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "default": {
+                    "settings": {}
+                },
+                "properties": {
+                    "settings": {
+                        "type": "object",
+                        "additionalProperties": { "type": "string" }
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let mut dialog = build_test_dialog(plugin);
+        let path = config_path(["settings"]);
+        let (section, row, _) = {
+            let selected_plugin = dialog.selected_plugin().expect("selected plugin");
+            find_best_section_row_for_path(selected_plugin, dialog.config_view, &path)
+                .expect("settings row")
+        };
+        dialog.selected_section = section;
+        dialog.selected_node = row;
+        dialog.selected_cell = ConfigRowCell::Action;
+        dialog.clamp_selection();
+
+        let line =
+            compact_config_view_line(dialog.selected_plugin().expect("selected plugin"), &dialog);
+        assert!(line.contains("Cell: Action"));
+        assert!(line.contains("Enter add field"));
+    }
+
+    #[test]
+    fn drilldown_footer_tracks_the_selected_cell_action() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "default": {
+                    "settings": {
+                        "x-demo": "alpha"
+                    }
+                },
+                "properties": {
+                    "settings": {
+                        "type": "object",
+                        "additionalProperties": { "type": "string" }
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let mut dialog = build_test_dialog(plugin);
+        let (plugin_id, groups) = {
+            let selected_plugin = dialog.selected_plugin().expect("selected plugin");
+            (
+                selected_plugin.plugin_id.clone(),
+                build_drilldown_groups(selected_plugin, &config_path(["settings"]), "Settings"),
+            )
+        };
+        dialog.drilldown_stack.push(PluginConfigDrilldownOverlay {
+            plugin_id,
+            path: config_path(["settings"]),
+            title: "Settings".to_owned(),
+            groups,
+            selected_row: 0,
+            selected_cell: ConfigRowCell::Default,
+        });
+
+        let overlay = dialog.current_drilldown().cloned().expect("drilldown");
+        let footer = drilldown_footer_text(&dialog, &overlay);
+        assert!(footer.contains("Enter reset field"));
+    }
+
+    #[test]
+    fn state_menus_prioritize_the_row_primary_action() {
+        let item_path = vec![PathSegment::Key("items".to_owned()), PathSegment::Index(0)];
+        let mut actions = vec![
+            PluginConfigActionItem {
+                label: "Reset Field".to_owned(),
+                description: String::new(),
+                action: PluginConfigAction::ResetField {
+                    plugin_id: "fixture.plugin".to_owned(),
+                    paths: vec![item_path.clone()],
+                    focus_path: item_path.clone(),
+                },
+            },
+            PluginConfigActionItem {
+                label: "Choose Type".to_owned(),
+                description: String::new(),
+                action: PluginConfigAction::SelectType {
+                    plugin_id: "fixture.plugin".to_owned(),
+                    path: item_path,
+                },
+            },
+            PluginConfigActionItem {
+                label: "Add Item".to_owned(),
+                description: String::new(),
+                action: PluginConfigAction::AppendArrayItem {
+                    plugin_id: "fixture.plugin".to_owned(),
+                    path: config_path(["items"]),
+                },
+            },
+        ];
+
+        let selected = prioritize_config_actions(
+            actions.as_mut_slice(),
+            ConfigRowCell::State,
+            Some(ConfigRowPrimaryAction::AddItem),
+        );
+        assert_eq!(selected, 0);
+        assert!(matches!(
+            actions[0].action,
+            PluginConfigAction::AppendArrayItem { .. }
+        ));
+    }
+
+    #[test]
+    fn config_editor_highlights_only_the_selected_cell() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "properties": {
+                    "value": {
+                        "type": ["integer", "string"],
+                        "title": "Value"
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let mut dialog = build_test_dialog(plugin);
+        dialog.selected_section = 1;
+        dialog.selected_node = 0;
+        dialog.selected_cell = ConfigRowCell::Type;
+        dialog.clamp_selection();
+
+        let text = config_editor_text(&dialog, dialog.selected_plugin().expect("selected plugin"));
+        let line = text
+            .lines
+            .iter()
+            .find(|line| {
+                let rendered = line_to_string(line);
+                rendered.contains("[ null ▾ ]") && rendered.contains("[ null ]")
+            })
+            .expect("selected config row");
+
+        assert!(line.spans.len() > 3);
+        let highlighted = line
+            .spans
+            .iter()
+            .filter(|span| span.style == plugin_workbench_selection_highlight_style())
+            .collect::<Vec<_>>();
+        assert_eq!(highlighted.len(), 1);
+        assert!(highlighted[0].content.contains("[ null ▾ ]"));
+        assert!(line.spans.iter().any(|span| {
+            span.style != plugin_workbench_selection_highlight_style()
+                && span.content.contains("[ null ]")
+        }));
+    }
+
+    #[test]
+    fn implicit_object_shapes_do_not_offer_generic_type_switching() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "properties": {
+                    "filters": {
+                        "title": "Filters",
+                        "properties": {
+                            "enabled": { "type": "boolean" }
+                        }
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let path = config_path(["filters"]);
+        let title = title_for_config_path(&plugin, &path, "filters");
+        let row = build_row_for_path(&plugin, path, title.as_str(), None);
+
+        assert_eq!(row.type_mode, ConfigRowTypeMode::Fixed);
+        assert_eq!(row.type_display, "object");
+    }
+
+    #[test]
+    fn enum_arrays_without_unique_items_do_not_use_multi_select_editor() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "default": {
+                    "tags": ["alpha"]
+                },
+                "properties": {
+                    "tags": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": ["alpha", "beta", "gamma"]
+                        }
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let path = config_path(["tags"]);
+        let title = title_for_config_path(&plugin, &path, "tags");
+        let row = build_row_for_path(&plugin, path, title.as_str(), None);
+
+        assert!(!matches!(row.editor, ConfigRowEditor::MultiEnum { .. }));
+    }
+
+    #[test]
+    fn schema_for_path_applies_if_then_else_branch_constraints() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["basic", "advanced"]
+                },
+                "setting": true
+            },
+            "if": {
+                "properties": {
+                    "mode": { "const": "advanced" }
+                },
+                "required": ["mode"]
+            },
+            "then": {
+                "properties": {
+                    "setting": { "type": "integer", "minimum": 1 }
+                }
+            },
+            "else": {
+                "properties": {
+                    "setting": { "type": "string", "minLength": 1 }
+                }
+            }
+        });
+
+        let advanced = json!({
+            "mode": "advanced",
+            "setting": 3
+        });
+        let advanced_schema =
+            schema_for_path(&schema, &schema, &advanced, &config_path(["setting"]))
+                .expect("advanced setting schema");
+        assert_eq!(
+            effective_schema_kind(&advanced_schema).as_deref(),
+            Some("integer")
+        );
+        assert!(
+            schema_constraints(&advanced_schema)
+                .iter()
+                .any(|constraint| constraint == "minimum: 1")
+        );
+
+        let basic = json!({
+            "mode": "basic",
+            "setting": "on"
+        });
+        let basic_schema = schema_for_path(&schema, &schema, &basic, &config_path(["setting"]))
+            .expect("basic setting schema");
+        assert_eq!(
+            effective_schema_kind(&basic_schema).as_deref(),
+            Some("string")
+        );
+        assert!(
+            schema_constraints(&basic_schema)
+                .iter()
+                .any(|constraint| constraint == "minLength: 1")
+        );
+    }
+
+    #[test]
+    fn ordered_object_keys_include_all_of_declared_and_required_fields() {
+        let schema = json!({
+            "type": "object",
+            "allOf": [
+                {
+                    "properties": {
+                        "mode": { "type": "string" }
+                    },
+                    "required": ["mode"]
+                },
+                {
+                    "properties": {
+                        "cron": { "type": "string", "minLength": 1 }
+                    },
+                    "required": ["cron"]
+                }
+            ]
+        });
+        let value = json!({
+            "mode": "scheduled"
+        });
+
+        let active_root =
+            schema_for_path(&schema, &schema, &value, &Vec::new()).expect("active root schema");
+        let keys =
+            ordered_object_keys(Some(&active_root), value.as_object().expect("object value"));
+        assert!(keys.iter().any(|key| key == "mode"));
+        assert!(keys.iter().any(|key| key == "cron"));
+
+        let cron_schema =
+            schema_for_path(&schema, &schema, &value, &config_path(["cron"])).expect("cron schema");
+        assert!(
+            schema_constraints(&cron_schema)
+                .iter()
+                .any(|constraint| constraint == "minLength: 1")
+        );
+    }
+
+    #[test]
+    fn persisted_plugin_config_value_keeps_sparse_override_shape() {
+        let schema = json!({
+            "type": "object",
+            "default": {
+                "endpoint": "https://docs.local",
+                "limits": {
+                    "timeoutMs": 5000,
+                    "enabled": true
+                }
+            },
+            "properties": {
+                "endpoint": { "type": "string" },
+                "limits": {
+                    "type": "object",
+                    "properties": {
+                        "timeoutMs": { "type": "integer" },
+                        "enabled": { "type": "boolean" }
+                    }
+                }
+            }
+        });
+        let mut plugin = build_schema_fixture_plugin(schema, JsonValue::Null);
+        assert_eq!(persisted_plugin_config_value(&plugin), JsonValue::Null);
+
+        set_value_at_path(
+            &mut plugin.draft_config,
+            &config_path(["limits", "timeoutMs"]),
+            json!(9000),
+        );
+        recompute_plugin_config_state(&mut plugin);
+
+        assert_eq!(
+            persisted_plugin_config_value(&plugin),
+            json!({
+                "limits": {
+                    "timeoutMs": 9000
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn persisted_plugin_config_value_preserves_explicit_empty_objects() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "settings": {
+                    "type": ["null", "object"],
+                    "additionalProperties": false
+                }
+            }
+        });
+        let mut plugin = build_schema_fixture_plugin(schema, JsonValue::Null);
+        plugin.draft_config = json!({
+            "settings": {}
+        });
+        recompute_plugin_config_state(&mut plugin);
+
+        assert_eq!(
+            persisted_plugin_config_value(&plugin),
+            json!({
+                "settings": {}
+            })
+        );
+        assert!(plugin.dirty);
+    }
+
+    #[test]
+    fn normalize_override_value_preserves_empty_objects_inside_arrays() {
+        assert_eq!(normalize_override_value(json!([{}])), json!([{}]));
+    }
+
+    #[test]
+    fn merge_multi_enum_selection_preserves_existing_order() {
+        let current = vec![json!("beta"), json!("alpha")];
+        let selected = vec![json!("alpha"), json!("beta"), json!("gamma")];
+
+        let merged = merge_multi_enum_selection(current.as_slice(), selected.as_slice());
+
+        assert_eq!(merged, vec![json!("beta"), json!("alpha"), json!("gamma")]);
+    }
+
+    #[test]
+    fn branch_draft_keys_use_branch_ids_even_when_labels_match() {
+        let path = config_path(["mode"]);
+        let first = plugin_branch_draft_key("fixture", &path, "branch-0");
+        let second = plugin_branch_draft_key("fixture", &path, "branch-1");
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn structural_changes_clear_branch_draft_cache() {
+        let mut plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "oneOf": [
+                            {
+                                "title": "A",
+                                "type": "object",
+                                "properties": {
+                                    "value": { "type": "string" }
+                                }
+                            },
+                            {
+                                "title": "B",
+                                "type": "object",
+                                "properties": {
+                                    "enabled": { "type": "boolean" }
+                                }
+                            }
+                        ]
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let path = config_path(["mode"]);
+        plugin.branch_drafts.insert(
+            plugin_branch_draft_key("fixture.plugin", &path, "branch-0"),
+            json!({"value": "demo"}),
+        );
+
+        clear_branch_drafts_for_structural_change(&mut plugin);
+
+        assert!(plugin.branch_drafts.is_empty());
+    }
+
+    #[test]
+    fn plugin_save_block_reason_reports_invalid_configs() {
+        let mut plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "properties": {
+                    "endpoint": { "type": "string", "format": "uri" }
+                }
+            }),
+            json!({
+                "endpoint": 42
+            }),
+        );
+        recompute_plugin_config_state(&mut plugin);
+
+        let reason = plugin_save_block_reason(&plugin).expect("save should be blocked");
+        assert!(reason.contains("cannot save"));
+        assert!(reason.contains("1 error"));
+    }
+
+    #[test]
+    fn validate_config_value_reports_invalid_regex_patterns() {
+        let string_schema = json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "pattern": "["
+                }
+            }
+        });
+        let string_diagnostics =
+            validate_config_value(Some(&string_schema), &json!({"name": "demo"}), false);
+        assert!(string_diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == DiagnosticSeverity::Error
+                && diagnostic.message.contains("invalid regex pattern")
+        }));
+
+        let object_schema = json!({
+            "type": "object",
+            "patternProperties": {
+                "[": { "type": "string" }
+            }
+        });
+        let object_diagnostics =
+            validate_config_value(Some(&object_schema), &json!({"demo": "value"}), false);
+        assert!(object_diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == DiagnosticSeverity::Error
+                && diagnostic
+                    .message
+                    .contains("invalid patternProperties regex")
+        }));
+    }
+
+    #[test]
+    fn validate_config_value_rejects_invalid_hostname_format() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "host": {
+                    "type": "string",
+                    "format": "hostname"
+                }
+            }
+        });
+        let diagnostics = validate_config_value(Some(&schema), &json!({"host": "bad/host"}), false);
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.severity == DiagnosticSeverity::Error
+                && diagnostic.path == config_path(["host"])
+        }));
+    }
+
+    #[test]
+    fn rename_rejects_values_that_do_not_match_the_new_key_schema() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "patternProperties": {
+                        "^x-int-": { "type": "integer" },
+                        "^x-str-": { "type": "string" }
+                    }
+                }
+            }
+        });
+        let value = json!({
+            "headers": {
+                "x-str-name": "demo"
+            }
+        });
+
+        let target_schema = validate_new_object_field_key(
+            Some(&schema),
+            &value,
+            &config_path(["headers"]),
+            "x-int-name",
+        )
+        .expect("new key allowed")
+        .expect("pattern schema");
+
+        let error = validate_schema_value_for_path(
+            &schema,
+            &target_schema,
+            &json!("demo"),
+            &config_path(["headers", "x-int-name"]),
+            "X Int Name",
+        )
+        .expect_err("rename should reject incompatible value");
+
+        assert!(error.contains("declared type"));
+    }
+
+    #[test]
+    fn apply_reset_paths_resets_array_groups_from_the_tail_first() {
+        let mut value = json!({
+            "items": ["alpha", "beta", "x", "y"]
+        });
+        let default_root = json!({
+            "items": ["alpha", "beta"]
+        });
+        let paths = vec![
+            vec![PathSegment::Key("items".to_owned()), PathSegment::Index(0)],
+            vec![PathSegment::Key("items".to_owned()), PathSegment::Index(1)],
+            vec![PathSegment::Key("items".to_owned()), PathSegment::Index(2)],
+            vec![PathSegment::Key("items".to_owned()), PathSegment::Index(3)],
+        ];
+
+        let outcome = apply_reset_paths(&mut value, &default_root, None, paths.as_slice());
+
+        assert!(outcome.changed);
+        assert!(outcome.blocked.is_empty());
+        assert_eq!(value, default_root);
+    }
+
+    #[test]
+    fn unique_items_arrays_do_not_offer_duplicate_actions() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "default": {
+                    "tags": ["alpha", "beta"]
+                },
+                "properties": {
+                    "tags": {
+                        "type": "array",
+                        "uniqueItems": true,
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+
+        let info = array_item_action_info(
+            &plugin,
+            &[PathSegment::Key("tags".to_owned()), PathSegment::Index(0)],
+        )
+        .expect("item info");
+        assert!(!info.can_duplicate);
+        assert!(info.can_insert_before);
+        assert!(info.can_insert_after);
+    }
+
+    #[test]
+    fn max_properties_blocks_add_field_prompts() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "settings": {
+                    "type": "object",
+                    "maxProperties": 1,
+                    "properties": {
+                        "mode": { "type": "string" }
+                    }
+                }
+            }
+        });
+        let value = json!({
+            "settings": {
+                "mode": "on"
+            }
+        });
+
+        let reason =
+            object_add_field_block_reason(Some(&schema), &value, &config_path(["settings"]))
+                .expect("maxProperties reason");
+        assert!(reason.contains("maximum of 1 field"));
+    }
+
+    #[test]
+    fn write_path_block_reason_blocks_materializing_optional_fields_past_max_properties() {
+        let schema = json!({
+            "type": "object",
+            "maxProperties": 1,
+            "properties": {
+                "mode": { "type": "string" },
+                "cron": { "type": "string" }
+            }
+        });
+        let value = json!({
+            "mode": "scheduled"
+        });
+
+        let reason = write_path_block_reason(Some(&schema), &value, &config_path(["cron"]))
+            .expect("materialization blocked");
+        assert!(reason.contains("maximum of 1 field"));
+    }
+
+    #[test]
+    fn staged_config_value_updates_are_atomic_when_a_later_write_fails() {
+        let schema = json!({
+            "type": "object",
+            "maxProperties": 1,
+            "properties": {
+                "mode": { "type": "string" },
+                "cron": { "type": "string" }
+            }
+        });
+        let current = json!({});
+
+        let result = apply_staged_config_value_updates(
+            Some(&schema),
+            &current,
+            &[
+                (config_path(["mode"]), json!("scheduled")),
+                (config_path(["cron"]), json!("* * * * *")),
+            ],
+        );
+
+        assert!(result.is_err());
+        assert_eq!(current, json!({}));
+    }
+
+    #[test]
+    fn closed_objects_hide_add_field_even_when_declared_rows_are_missing() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "settings": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "mode": { "type": "string" }
+                    }
+                }
+            }
+        });
+        let value = json!({
+            "settings": {}
+        });
+
+        let reason =
+            object_add_field_block_reason(Some(&schema), &value, &config_path(["settings"]))
+                .expect("closed object reason");
+        assert!(reason.contains("custom field names"));
+    }
+
+    #[test]
+    fn array_structural_actions_respect_contains_and_max_contains() {
+        let plugin = build_schema_fixture_plugin(
+            json!({
+                "type": "object",
+                "default": {
+                    "tags": ["edge"]
+                },
+                "properties": {
+                    "tags": {
+                        "type": "array",
+                        "items": { "const": "edge" },
+                        "contains": { "const": "edge" },
+                        "maxContains": 1
+                    }
+                }
+            }),
+            JsonValue::Null,
+        );
+        let path = config_path(["tags"]);
+        let item_path = vec![PathSegment::Key("tags".to_owned()), PathSegment::Index(0)];
+
+        assert!(!can_append_array_item(&plugin, &path));
+
+        let info = array_item_action_info(&plugin, &item_path).expect("item info");
+        assert!(!info.can_insert_before);
+        assert!(!info.can_insert_after);
+        assert!(!info.can_duplicate);
+        assert!(!info.can_remove);
+
+        let mut current = json!({
+            "tags": ["edge"]
+        });
+        let defaults = json!({
+            "tags": []
+        });
+        let outcome = apply_reset_paths(
+            &mut current,
+            &defaults,
+            plugin.schema.as_ref(),
+            &[item_path],
+        );
+        assert!(!outcome.changed);
+        assert!(
+            outcome
+                .blocked
+                .iter()
+                .any(|message| message.contains("matching item"))
+        );
+    }
+
+    #[test]
+    fn insert_schema_defaults_skips_nullable_objects_without_defaults() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "settings": {
+                    "type": ["null", "object"],
+                    "properties": {
+                        "mode": { "type": "string" }
+                    }
+                }
+            }
+        });
+        let mut value = json!({
+            "settings": null
+        });
+
+        insert_schema_defaults(&mut value, &schema, &schema);
+
+        assert_eq!(value["settings"], JsonValue::Null);
+    }
+
+    #[test]
+    fn insert_schema_defaults_materializes_nullable_objects_with_direct_child_defaults() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "settings": {
+                    "type": ["null", "object"],
+                    "properties": {
+                        "mode": {
+                            "type": "string",
+                            "default": "auto"
+                        }
+                    }
+                }
+            }
+        });
+        let mut value = json!({
+            "settings": null
+        });
+
+        insert_schema_defaults(&mut value, &schema, &schema);
+
+        assert_eq!(
+            value,
+            json!({
+                "settings": {
+                    "mode": "auto"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn reset_paths_block_object_removals_that_break_dependent_required() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "settings": {
+                    "type": "object",
+                    "properties": {
+                        "mode": { "type": "string" },
+                        "cron": { "type": "string" }
+                    },
+                    "dependentRequired": {
+                        "mode": ["cron"]
+                    }
+                }
+            }
+        });
+        let mut value = json!({
+            "settings": {
+                "mode": "scheduled",
+                "cron": "* * * * *"
+            }
+        });
+        let defaults = json!({
+            "settings": {
+                "mode": "scheduled"
+            }
+        });
+
+        let outcome = apply_reset_paths(
+            &mut value,
+            &defaults,
+            Some(&schema),
+            &[config_path(["settings", "cron"])],
+        );
+        assert!(!outcome.changed);
+        assert_eq!(value["settings"]["cron"], json!("* * * * *"));
+        assert!(
+            outcome
+                .blocked
+                .iter()
+                .any(|message| message.contains("required because `mode` is set"))
+        );
+    }
+
+    #[test]
+    fn min_constraints_block_defaultless_reset_removals() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "settings": {
+                    "type": "object",
+                    "minProperties": 1,
+                    "properties": {
+                        "mode": { "type": "string" }
+                    }
+                },
+                "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "type": "string" }
+                }
+            }
+        });
+
+        let mut object_value = json!({
+            "settings": {
+                "mode": "on"
+            }
+        });
+        let object_defaults = json!({
+            "settings": {}
+        });
+        let object_outcome = apply_reset_paths(
+            &mut object_value,
+            &object_defaults,
+            Some(&schema),
+            &[config_path(["settings", "mode"])],
+        );
+        assert!(!object_outcome.changed);
+        assert_eq!(object_value["settings"]["mode"], json!("on"));
+        assert!(
+            object_outcome
+                .blocked
+                .iter()
+                .any(|message| message.contains("at least 1 field"))
+        );
+
+        let mut array_value = json!({
+            "items": ["alpha"]
+        });
+        let array_defaults = json!({
+            "items": []
+        });
+        let array_outcome = apply_reset_paths(
+            &mut array_value,
+            &array_defaults,
+            Some(&schema),
+            &[vec![
+                PathSegment::Key("items".to_owned()),
+                PathSegment::Index(0),
+            ]],
+        );
+        assert!(!array_outcome.changed);
+        assert_eq!(array_value["items"], json!(["alpha"]));
+        assert!(
+            array_outcome
+                .blocked
+                .iter()
+                .any(|message| message.contains("at least 1 item"))
+        );
     }
 
     #[test]
@@ -10319,6 +14189,7 @@ mod tests {
             selected_toolbar_action: 0,
             selected_section: 2,
             selected_node: 0,
+            selected_cell: ConfigRowCell::Value,
             selected_diagnostic: 0,
             selected_diff_row: 0,
             config_scroll: 0,
@@ -10351,6 +14222,7 @@ mod tests {
             dialog.selected_plugin().unwrap(),
         ));
         assert!(editor.contains("Limits"));
+        assert!(editor.contains("Type"));
         assert!(editor.contains("Timeout"));
         assert!(editor.contains("Enabled"));
     }

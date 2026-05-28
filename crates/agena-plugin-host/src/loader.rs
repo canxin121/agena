@@ -383,7 +383,7 @@ fn validate_schema_value(
     schema: &JsonValue,
     value: &JsonValue,
 ) -> Result<(), String> {
-    let schema = flatten_schema_for_validation(root, schema);
+    let schema = resolve_schema(root, schema);
     match schema {
         JsonValue::Bool(true) => return Ok(()),
         JsonValue::Bool(false) => {
@@ -394,6 +394,12 @@ fn validate_schema_value(
     }
 
     let schema_obj = schema.as_object().expect("object already checked");
+
+    if let Some(all_of) = schema_obj.get("allOf").and_then(JsonValue::as_array) {
+        for branch in all_of {
+            validate_schema_value(path, root, branch, value)?;
+        }
+    }
 
     if let Some(any_of) = schema_obj.get("anyOf").and_then(JsonValue::as_array) {
         let matching = any_of
@@ -485,6 +491,16 @@ fn validate_object_schema(
     schema_object: &JsonMap<String, JsonValue>,
     value: &JsonMap<String, JsonValue>,
 ) -> Result<(), String> {
+    if let Some(patterns) = schema_object
+        .get("patternProperties")
+        .and_then(JsonValue::as_object)
+    {
+        for pattern in patterns.keys() {
+            validate_regex_pattern(pattern).map_err(|error| {
+                format!("{path}: invalid patternProperties regex `{pattern}`: {error}")
+            })?;
+        }
+    }
     if let Some(min_properties) = schema_object
         .get("minProperties")
         .and_then(JsonValue::as_u64)
@@ -658,10 +674,16 @@ fn validate_string_schema(
     {
         return Err(format!("{path}: string must match format {format}"));
     }
-    if let Some(pattern) = schema_object.get("pattern").and_then(JsonValue::as_str)
-        && !pattern_key_matches(pattern, text)
-    {
-        return Err(format!("{path}: string must match pattern {pattern}"));
+    if let Some(pattern) = schema_object.get("pattern").and_then(JsonValue::as_str) {
+        match pattern_matches(pattern, text) {
+            Ok(true) => {}
+            Ok(false) => return Err(format!("{path}: string must match pattern {pattern}")),
+            Err(error) => {
+                return Err(format!(
+                    "{path}: invalid regex pattern `{pattern}`: {error}"
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -728,51 +750,28 @@ fn resolve_schema<'a>(root: &'a JsonValue, schema: &'a JsonValue) -> &'a JsonVal
     cursor
 }
 
-fn merge_schema_overlay(target: &mut JsonValue, overlay: &JsonValue) {
-    match (target, overlay) {
-        (JsonValue::Object(target), JsonValue::Object(overlay)) => {
-            for (key, overlay_value) in overlay {
-                match target.get_mut(key) {
-                    Some(target_value) => merge_schema_overlay(target_value, overlay_value),
-                    None => {
-                        target.insert(key.clone(), overlay_value.clone());
-                    }
-                }
-            }
+fn combine_schema_constraints(mut schemas: Vec<JsonValue>) -> Option<JsonValue> {
+    match schemas.len() {
+        0 => None,
+        1 => schemas.pop(),
+        _ => {
+            let mut object = JsonMap::new();
+            object.insert("allOf".to_owned(), JsonValue::Array(schemas));
+            Some(JsonValue::Object(object))
         }
-        (target, overlay) => *target = overlay.clone(),
     }
-}
-
-fn merge_all_of(root: &JsonValue, items: &[JsonValue]) -> JsonValue {
-    let mut merged = JsonValue::Object(JsonMap::new());
-    for item in items {
-        let flattened = flatten_schema_for_validation(root, item);
-        merge_schema_overlay(&mut merged, &flattened);
-    }
-    merged
-}
-
-fn flatten_schema_for_validation(root: &JsonValue, schema: &JsonValue) -> JsonValue {
-    let schema = resolve_schema(root, schema);
-    let mut flattened = schema.clone();
-    let Some(all_of) = schema.get("allOf").and_then(JsonValue::as_array) else {
-        return flattened;
-    };
-    if let Some(object) = flattened.as_object_mut() {
-        object.remove("allOf");
-    }
-    let merged = merge_all_of(root, all_of);
-    merge_schema_overlay(&mut flattened, &merged);
-    flattened
 }
 
 fn object_property_schema(root: &JsonValue, schema: &JsonValue, key: &str) -> Option<JsonValue> {
     let schema = resolve_schema(root, schema);
+    let mut matches = Vec::new();
+    let mut matched_named_or_pattern = false;
+
     if let Some(properties) = schema.get("properties").and_then(JsonValue::as_object)
         && let Some(child) = properties.get(key)
     {
-        return Some(child.clone());
+        matches.push(child.clone());
+        matched_named_or_pattern = true;
     }
     if let Some(patterns) = schema
         .get("patternProperties")
@@ -780,14 +779,21 @@ fn object_property_schema(root: &JsonValue, schema: &JsonValue, key: &str) -> Op
     {
         for (pattern, child) in patterns {
             if pattern_key_matches(pattern, key) {
-                return Some(child.clone());
+                matches.push(child.clone());
+                matched_named_or_pattern = true;
             }
         }
     }
-    match schema.get("additionalProperties") {
-        Some(JsonValue::Object(object)) => Some(JsonValue::Object(object.clone())),
-        _ => None,
+    if !matched_named_or_pattern {
+        match schema.get("additionalProperties") {
+            Some(JsonValue::Object(object)) => matches.push(JsonValue::Object(object.clone())),
+            Some(other) if !matches!(other, JsonValue::Bool(true) | JsonValue::Bool(false)) => {
+                matches.push(other.clone());
+            }
+            _ => {}
+        }
     }
+    combine_schema_constraints(matches)
 }
 
 fn array_item_schema(root: &JsonValue, schema: &JsonValue, index: usize) -> Option<JsonValue> {
@@ -829,11 +835,73 @@ fn value_matches_type(kind: &str, value: &JsonValue) -> bool {
     }
 }
 
+fn hostname_format_is_valid(text: &str) -> bool {
+    let text = text.trim_end_matches('.');
+    if text.is_empty()
+        || text.len() > 253
+        || text.contains('/')
+        || text.chars().any(char::is_whitespace)
+    {
+        return false;
+    }
+    text.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .chars()
+                .all(|char| char.is_ascii_alphanumeric() || char == '-')
+    })
+}
+
+fn email_format_is_valid(text: &str) -> bool {
+    let Some((local, domain)) = text.split_once('@') else {
+        return false;
+    };
+    if local.is_empty()
+        || domain.is_empty()
+        || text.chars().any(char::is_whitespace)
+        || text.matches('@').count() != 1
+        || local.starts_with('.')
+        || local.ends_with('.')
+        || local.contains("..")
+    {
+        return false;
+    }
+    let local_valid = local.chars().all(|char| {
+        char.is_ascii_alphanumeric()
+            || matches!(
+                char,
+                '!' | '#'
+                    | '$'
+                    | '%'
+                    | '&'
+                    | '\''
+                    | '*'
+                    | '+'
+                    | '-'
+                    | '/'
+                    | '='
+                    | '?'
+                    | '^'
+                    | '_'
+                    | '`'
+                    | '{'
+                    | '|'
+                    | '}'
+                    | '~'
+                    | '.'
+            )
+    });
+    local_valid && (hostname_format_is_valid(domain) || domain.eq_ignore_ascii_case("localhost"))
+}
+
 fn format_is_valid(format: &str, text: &str) -> bool {
     match format {
         "uri" | "url" => url::Url::parse(text).is_ok(),
-        "email" => text.contains('@') && text.split('@').all(|part| !part.is_empty()),
-        "hostname" => !text.trim().is_empty() && !text.contains('/'),
+        "email" => email_format_is_valid(text),
+        "hostname" => hostname_format_is_valid(text),
         "ipv4" => text.parse::<std::net::Ipv4Addr>().is_ok(),
         "ipv6" => text.parse::<std::net::Ipv6Addr>().is_ok(),
         "uuid" => uuid::Uuid::parse_str(text).is_ok(),
@@ -841,10 +909,16 @@ fn format_is_valid(format: &str, text: &str) -> bool {
     }
 }
 
+fn validate_regex_pattern(pattern: &str) -> Result<(), regex::Error> {
+    Regex::new(pattern).map(|_| ())
+}
+
+fn pattern_matches(pattern: &str, text: &str) -> Result<bool, regex::Error> {
+    Regex::new(pattern).map(|regex| regex.is_match(text))
+}
+
 fn pattern_key_matches(pattern: &str, key: &str) -> bool {
-    Regex::new(pattern)
-        .map(|regex| regex.is_match(key))
-        .unwrap_or_else(|_| key.contains(pattern.trim_matches('*')))
+    pattern_matches(pattern, key).unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -893,23 +967,25 @@ mod tests {
                     "properties": {
                         "mode": { "type": "string", "enum": ["manual", "scheduled"] }
                     },
-                    "required": ["mode"],
-                    "additionalProperties": false
+                    "required": ["mode"]
                 },
                 {
                     "type": "object",
                     "properties": {
                         "cron": { "type": "string", "minLength": 1 }
                     },
-                    "additionalProperties": false
+                    "required": ["cron"]
                 }
             ],
             "if": {
                 "properties": { "mode": { "const": "scheduled" } },
                 "required": ["mode"]
             },
-            "then": {
-                "required": ["cron"]
+            "then": { "required": ["cron"] },
+            "additionalProperties": false,
+            "properties": {
+                "mode": true,
+                "cron": true
             }
         });
         let value = json!({
@@ -920,6 +996,120 @@ mod tests {
         let result = validate_schema_value("$", &schema, &schema, &value);
 
         assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn validate_schema_value_enforces_all_of_required_fields_from_every_branch() {
+        let schema = json!({
+            "type": "object",
+            "allOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "mode": { "type": "string" }
+                    },
+                    "required": ["mode"]
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "cron": { "type": "string", "minLength": 1 }
+                    },
+                    "required": ["cron"]
+                }
+            ]
+        });
+        let value = json!({
+            "mode": "scheduled"
+        });
+
+        let result = validate_schema_value("$", &schema, &schema, &value);
+
+        assert!(result.is_err(), "{result:?}");
+    }
+
+    #[test]
+    fn validate_schema_value_applies_property_and_pattern_constraints_together() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "foo": { "type": "string" }
+            },
+            "patternProperties": {
+                "^f": { "minLength": 3 }
+            },
+            "additionalProperties": false
+        });
+        let value = json!({
+            "foo": "ab"
+        });
+
+        let result = validate_schema_value("$", &schema, &schema, &value);
+
+        assert!(result.is_err(), "{result:?}");
+    }
+
+    #[test]
+    fn validate_schema_value_reports_invalid_regex_patterns() {
+        let string_schema = json!({
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "pattern": "["
+                }
+            }
+        });
+        let string_result = validate_schema_value(
+            "$",
+            &string_schema,
+            &string_schema,
+            &json!({"name": "demo"}),
+        );
+        assert!(string_result.is_err(), "{string_result:?}");
+        assert!(
+            string_result
+                .as_ref()
+                .err()
+                .is_some_and(|error| error.contains("invalid regex pattern"))
+        );
+
+        let object_schema = json!({
+            "type": "object",
+            "patternProperties": {
+                "[": { "type": "string" }
+            }
+        });
+        let object_result = validate_schema_value(
+            "$",
+            &object_schema,
+            &object_schema,
+            &json!({"demo": "value"}),
+        );
+        assert!(object_result.is_err(), "{object_result:?}");
+        assert!(
+            object_result
+                .as_ref()
+                .err()
+                .is_some_and(|error| error.contains("invalid patternProperties regex"))
+        );
+    }
+
+    #[test]
+    fn validate_schema_value_rejects_invalid_hostname_format() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "host": {
+                    "type": "string",
+                    "format": "hostname"
+                }
+            }
+        });
+
+        let result = validate_schema_value("$", &schema, &schema, &json!({"host": "bad/host"}));
+
+        assert!(result.is_err(), "{result:?}");
     }
 
     #[test]

@@ -62,6 +62,7 @@ use unicode_width::UnicodeWidthChar;
 use crate::backend::{
     Backend, ConfigJsonSources, InspectorRow, LiveEvent, ProviderConfigDraft,
     ProviderDraftAdapterRule, ProviderDraftAuthKind, ProviderNativeToolsPreset, SessionRefresh,
+    provider_native_tools_config_for_preset, provider_native_tools_preset_from_config,
 };
 use crate::clipboard::{
     normalize_pasted_path, paste_image_to_temp_png, pasted_image_format, set_clipboard_text,
@@ -891,6 +892,7 @@ enum ChoiceOverlayAction {
     SettingsField(SettingsFieldSpec),
     RuntimeSetting(RuntimeSettingSpec),
     ProviderStudioField(ProviderStudioField),
+    ProviderStudioModelField(ProviderModelConfigField),
     PermissionRuleStudio(PermissionRuleStudioChoiceField),
     PermissionStudioMode(PermissionStudioModeTarget),
 }
@@ -1203,6 +1205,7 @@ struct ProviderStudioOverlay {
     pending_adapter_models_key: Option<String>,
     pending_auth_key: Option<String>,
     detail_page: Option<ProviderStudioDetailPage>,
+    model_page: Option<ProviderStudioModelPage>,
     editor: Option<ProviderStudioEditor>,
 }
 
@@ -1248,7 +1251,6 @@ enum ProviderStudioField {
     ServiceKeyEnv,
     DefaultAdapter,
     DefaultModel,
-    NativeTools,
 }
 
 #[derive(Debug, Clone)]
@@ -1258,15 +1260,56 @@ struct ProviderStudioDetailPage {
     selection: SelectionCursor,
 }
 
+#[derive(Debug, Clone)]
+struct ProviderStudioModelPage {
+    title: String,
+    footer: String,
+    adapter_id: String,
+    original_model_id: String,
+    draft: ProviderModelConfigDraft,
+    selection: SelectionCursor,
+}
+
+#[derive(Debug, Clone)]
+struct ProviderModelConfigDraft {
+    model_id: String,
+    enabled: bool,
+    display_name: String,
+    lifecycle: String,
+    context_window_tokens: String,
+    max_input_tokens: String,
+    max_output_tokens: String,
+    input_modalities: BTreeSet<String>,
+    features: BTreeSet<String>,
+    output_modalities: String,
+    description: String,
+    native_tools_preset: ProviderNativeToolsPreset,
+    native_tools_custom: agena::config::ProviderNativeToolsConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderModelConfigField {
+    ModelId,
+    Enabled,
+    DisplayName,
+    Lifecycle,
+    ContextWindowTokens,
+    MaxInputTokens,
+    MaxOutputTokens,
+    InputModalities,
+    Features,
+    OutputModalities,
+    Description,
+    NativeTools,
+}
+
 type ProviderStudioEditor = EditorDialogState<ProviderStudioEditorAction>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ProviderStudioEditorAction {
     Field(ProviderStudioField),
-    ModelJson {
-        adapter_id: String,
-        model_id: String,
-    },
+    NewModel { adapter_id: String },
+    ModelField(ProviderModelConfigField),
 }
 
 #[derive(Debug, Clone)]
@@ -4824,37 +4867,31 @@ impl App {
                         dialog.editor = None;
                         return false;
                     }
-                    ProviderStudioEditorAction::ModelJson {
-                        adapter_id,
-                        model_id,
-                    } => {
-                        let value = input.trim();
-                        let parsed = if value.is_empty() {
-                            Ok(JsonValue::Object(Default::default()))
-                        } else {
-                            serde_json::from_str::<JsonValue>(value)
-                                .map_err(|error| error.to_string())
-                        };
-                        match parsed {
-                            Ok(model_value) => {
-                                dialog.saving = true;
-                                self.request_provider_studio_save_model_value(
-                                    dialog.draft.clone(),
-                                    adapter_id,
-                                    model_id,
-                                    model_value,
-                                );
-                                dialog.editor = None;
-                            }
-                            Err(error) => self.flash_error(self.i18n.text_args(
-                                "flash-provider-studio-invalid-model-json",
-                                &crate::fl_args!("error" => error),
-                            )),
+                    ProviderStudioEditorAction::NewModel { adapter_id } => {
+                        let value = input.trim().to_string();
+                        match self.add_provider_studio_manual_model(dialog, adapter_id, value) {
+                            Ok(()) => dialog.editor = None,
+                            Err(error) => self.flash_error(error),
                         }
+                        return false;
+                    }
+                    ProviderStudioEditorAction::ModelField(field) => {
+                        let value = input.trim().to_string();
+                        if let Err(error) =
+                            self.commit_provider_studio_model_field(dialog, field, value)
+                        {
+                            self.flash_error(error);
+                            return false;
+                        }
+                        dialog.editor = None;
                         return false;
                     }
                 },
             }
+        }
+
+        if dialog.model_page.is_some() {
+            return self.handle_provider_studio_model_page_key(key, dialog);
         }
 
         if dialog.detail_page.is_some() {
@@ -4885,6 +4922,16 @@ impl App {
             }
             KeyCode::Char('r') => {
                 self.request_provider_studio_adapter_models(dialog);
+                false
+            }
+            KeyCode::Char('+') if dialog.selection.focus() == ProviderStudioFocus::Models => {
+                self.open_provider_studio_new_model_editor(dialog);
+                false
+            }
+            KeyCode::Delete | KeyCode::Backspace
+                if dialog.selection.focus() == ProviderStudioFocus::Models =>
+            {
+                self.delete_provider_studio_selected_model(dialog);
                 false
             }
             KeyCode::Char('s') | KeyCode::Char('S') => {
@@ -7065,7 +7112,16 @@ impl App {
             Ok(message) => {
                 let preserved_selected_adapter_ids = dialog.selected_adapter_ids.clone();
                 let preserved_selected_adapter_id = provider_studio_selected_adapter_id(&dialog);
-                let preserved_selected_model_keys = dialog.selected_model_keys.clone();
+                let mut preserved_selected_model_keys = dialog.selected_model_keys.clone();
+                if let crate::backend::ProviderStudioSaveResult::ModelDeleted {
+                    adapter_id,
+                    model_id,
+                    ..
+                } = &message
+                {
+                    preserved_selected_model_keys
+                        .remove(provider_studio_model_key(adapter_id, model_id).as_str());
+                }
                 self.flash_success(provider_studio_save_result_message(&self.i18n, &message));
                 let providers = self.backend.list_configured_providers();
                 let provider_rows = provider_studio_provider_rows(&self.i18n, providers.as_slice());
@@ -9981,6 +10037,28 @@ impl App {
                     }
                 }
             }
+            ChoiceOverlayAction::ProviderStudioModelField(field) => {
+                let value = match selection {
+                    SearchListRow::Clear(_) => String::new(),
+                    SearchListRow::Custom(value) => value.raw,
+                    SearchListRow::Item(item) => item.value,
+                };
+                let Some((host, mut parent)) = self.take_provider_studio_dialog() else {
+                    self.flash_error(ui_text::t(&self.i18n, "flash-provider-studio-context-lost"));
+                    return true;
+                };
+                match self.commit_provider_studio_model_field(&mut parent, field, value) {
+                    Ok(()) => {
+                        self.restore_provider_studio_dialog(host, parent);
+                        true
+                    }
+                    Err(error) => {
+                        self.restore_provider_studio_dialog(host, parent);
+                        self.flash_error(error);
+                        false
+                    }
+                }
+            }
             ChoiceOverlayAction::PermissionRuleStudio(field) => {
                 let value = match selection {
                     SearchListRow::Clear(_) => String::new(),
@@ -10379,12 +10457,67 @@ impl App {
             ProviderStudioField::DefaultModel => Some(provider_studio_default_model_choice_items(
                 &self.i18n, dialog,
             )),
-            ProviderStudioField::NativeTools => {
+            _ => None,
+        }
+    }
+
+    fn provider_studio_field_choice_overlay_style(
+        field: ProviderStudioField,
+    ) -> ChoiceOverlayStyle {
+        match field {
+            ProviderStudioField::AuthMode
+            | ProviderStudioField::CredentialIssuer
+            | ProviderStudioField::InstanceUrl
+            | ProviderStudioField::RedirectUri
+            | ProviderStudioField::ApiKeyEnv
+            | ProviderStudioField::ServiceKeyEnv => ChoiceOverlayStyle::SelectOnly,
+            ProviderStudioField::Region
+            | ProviderStudioField::Profile
+            | ProviderStudioField::DefaultAdapter
+            | ProviderStudioField::DefaultModel => ChoiceOverlayStyle::Searchable,
+            _ => ChoiceOverlayStyle::Searchable,
+        }
+    }
+
+    fn provider_model_config_field_choice_items(
+        &self,
+        dialog: &ProviderStudioOverlay,
+        field: ProviderModelConfigField,
+    ) -> Option<Vec<ChoiceItem>> {
+        match field {
+            ProviderModelConfigField::Enabled => Some(boolean_choice_items(
+                ui_text::t(&self.i18n, "provider-model-enabled-detail").as_str(),
+            )),
+            ProviderModelConfigField::Lifecycle => Some(
+                [
+                    "active",
+                    "preview",
+                    "beta",
+                    "alpha",
+                    "experimental",
+                    "deprecated",
+                ]
+                .into_iter()
+                .map(|value| {
+                    choice_item(
+                        value,
+                        ui_text::t(&self.i18n, "provider-model-lifecycle-detail"),
+                    )
+                })
+                .collect(),
+            ),
+            ProviderModelConfigField::NativeTools => {
                 let mut items = vec![choice_item(
                     ProviderNativeToolsPreset::Disabled.token(),
                     ui_text::t(&self.i18n, "provider-native-tools-disabled-detail"),
                 )];
-                if let Some(preset) = dialog.draft.available_native_tools_preset() {
+                if let Some(adapter_id) = dialog
+                    .model_page
+                    .as_ref()
+                    .map(|page| page.adapter_id.as_str())
+                    && let Some(preset) =
+                        provider_native_tools_available_preset_for_adapter(adapter_id)
+                {
                     let detail_key = match preset {
                         ProviderNativeToolsPreset::OpenAiHostedDefaults => {
                             "provider-native-tools-openai-detail"
@@ -10404,7 +10537,9 @@ impl App {
                         ui_text::t(&self.i18n, detail_key),
                     ));
                 }
-                if dialog.draft.native_tools_preset == ProviderNativeToolsPreset::Custom {
+                if dialog.model_page.as_ref().is_some_and(|page| {
+                    page.draft.native_tools_preset == ProviderNativeToolsPreset::Custom
+                }) {
                     items.push(choice_item(
                         ProviderNativeToolsPreset::Custom.token(),
                         ui_text::t(&self.i18n, "provider-native-tools-custom-detail"),
@@ -10412,26 +10547,35 @@ impl App {
                 }
                 Some(items)
             }
-            _ => None,
+            ProviderModelConfigField::ModelId
+            | ProviderModelConfigField::DisplayName
+            | ProviderModelConfigField::ContextWindowTokens
+            | ProviderModelConfigField::MaxInputTokens
+            | ProviderModelConfigField::MaxOutputTokens
+            | ProviderModelConfigField::InputModalities
+            | ProviderModelConfigField::Features
+            | ProviderModelConfigField::OutputModalities
+            | ProviderModelConfigField::Description => None,
         }
     }
 
-    fn provider_studio_field_choice_overlay_style(
-        field: ProviderStudioField,
+    fn provider_model_config_field_choice_overlay_style(
+        field: ProviderModelConfigField,
     ) -> ChoiceOverlayStyle {
         match field {
-            ProviderStudioField::AuthMode
-            | ProviderStudioField::CredentialIssuer
-            | ProviderStudioField::InstanceUrl
-            | ProviderStudioField::RedirectUri
-            | ProviderStudioField::ApiKeyEnv
-            | ProviderStudioField::ServiceKeyEnv
-            | ProviderStudioField::NativeTools => ChoiceOverlayStyle::SelectOnly,
-            ProviderStudioField::Region
-            | ProviderStudioField::Profile
-            | ProviderStudioField::DefaultAdapter
-            | ProviderStudioField::DefaultModel => ChoiceOverlayStyle::Searchable,
-            _ => ChoiceOverlayStyle::Searchable,
+            ProviderModelConfigField::Enabled | ProviderModelConfigField::NativeTools => {
+                ChoiceOverlayStyle::SelectOnly
+            }
+            ProviderModelConfigField::Lifecycle => ChoiceOverlayStyle::Searchable,
+            ProviderModelConfigField::ModelId
+            | ProviderModelConfigField::DisplayName
+            | ProviderModelConfigField::ContextWindowTokens
+            | ProviderModelConfigField::MaxInputTokens
+            | ProviderModelConfigField::MaxOutputTokens
+            | ProviderModelConfigField::InputModalities
+            | ProviderModelConfigField::Features
+            | ProviderModelConfigField::OutputModalities
+            | ProviderModelConfigField::Description => ChoiceOverlayStyle::Searchable,
         }
     }
 
@@ -10915,9 +11059,6 @@ impl App {
                         credential_drafts: Default::default(),
                         default_adapter: String::new(),
                         default_model: String::new(),
-                        native_tools_preset: ProviderNativeToolsPreset::Disabled,
-                        native_tools_custom: Default::default(),
-                        native_tools_touched: false,
                     };
                     draft.normalize_shape();
                     draft
@@ -10934,6 +11075,7 @@ impl App {
             pending_adapter_models_key: None,
             pending_auth_key: None,
             detail_page: None,
+            model_page: None,
             editor: None,
         };
         let selected_id = overlay
@@ -10982,6 +11124,7 @@ impl App {
                 dialog.pending_adapter_models_key = None;
                 dialog.pending_auth_key = None;
                 dialog.detail_page = None;
+                dialog.model_page = None;
                 dialog.listing_adapter_models = false;
                 dialog.adapter_selection_touched = provider_id.is_some();
                 dialog.selected_adapter_ids = configured_adapter_ids;
@@ -11310,6 +11453,25 @@ impl App {
         });
     }
 
+    fn request_provider_studio_delete_model(
+        &mut self,
+        draft: ProviderConfigDraft,
+        adapter_id: String,
+        model_id: String,
+    ) {
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = backend
+                .delete_provider_model(draft.clone(), adapter_id.as_str(), model_id.as_str())
+                .await;
+            let _ = tx.send(AppMessage::ProviderStudioSaved {
+                provider_id: draft.provider_id.clone(),
+                result,
+            });
+        });
+    }
+
     fn move_provider_studio_selection(&mut self, dialog: &mut ProviderStudioOverlay, delta: isize) {
         match dialog.selection.focus() {
             ProviderStudioFocus::Fields => dialog
@@ -11417,6 +11579,7 @@ impl App {
             self.flash_warning(provider_studio_no_auth_details_message(&self.i18n));
             return;
         }
+        dialog.model_page = None;
         dialog.detail_page = Some(ProviderStudioDetailPage {
             title: ui_text::t(&self.i18n, "overlay-provider-studio-detail"),
             footer: ui_text::t(&self.i18n, "overlay-provider-studio-detail-footer"),
@@ -11508,6 +11671,307 @@ impl App {
         }
     }
 
+    fn open_provider_studio_model_page(
+        &mut self,
+        dialog: &mut ProviderStudioOverlay,
+        adapter_id: String,
+        model_id: String,
+        provider_model: Option<ProviderModel>,
+    ) {
+        match self.backend.provider_model_draft_value(
+            &dialog.draft,
+            adapter_id.as_str(),
+            model_id.as_str(),
+            provider_model.as_ref(),
+        ) {
+            Ok(model_value) => {
+                match provider_model_config_draft_from_value(model_id.as_str(), model_value) {
+                    Ok(draft) => {
+                        dialog.detail_page = None;
+                        dialog.model_page = Some(ProviderStudioModelPage {
+                            title: self.i18n.text_args(
+                                "overlay-provider-studio-model-title",
+                                &crate::fl_args!(
+                                    "adapter" => adapter_id.clone(),
+                                    "model" => model_id.clone(),
+                                ),
+                            ),
+                            footer: ui_text::t(&self.i18n, "overlay-provider-studio-model-footer"),
+                            adapter_id,
+                            original_model_id: model_id,
+                            draft,
+                            selection: SelectionCursor::default(),
+                        });
+                    }
+                    Err(error) => self.flash_error(error),
+                }
+            }
+            Err(error) => self.flash_error(error.to_string()),
+        }
+    }
+
+    fn open_provider_studio_new_model_editor(&mut self, dialog: &mut ProviderStudioOverlay) {
+        let Some(adapter_id) = provider_studio_selected_adapter_id(dialog) else {
+            self.flash_warning(ui_text::t(
+                &self.i18n,
+                "flash-provider-studio-adapter-required",
+            ));
+            return;
+        };
+        if !provider_studio_adapter_selectable(dialog, adapter_id.as_str()) {
+            self.flash_warning(ui_text::t(
+                &self.i18n,
+                "flash-provider-studio-adapter-unavailable",
+            ));
+            return;
+        }
+        dialog.editor = Some(ProviderStudioEditor::new(
+            ui_text::t(&self.i18n, "overlay-provider-studio-new-model-title"),
+            ui_text::t(&self.i18n, "overlay-provider-studio-new-model-prompt"),
+            ui_text::t(&self.i18n, "overlay-provider-studio-edit-footer"),
+            false,
+            Editor::from_text(String::new()),
+            ProviderStudioEditorAction::NewModel { adapter_id },
+        ));
+    }
+
+    fn add_provider_studio_manual_model(
+        &mut self,
+        dialog: &mut ProviderStudioOverlay,
+        adapter_id: String,
+        model_id: String,
+    ) -> UiResult<()> {
+        let model_id = model_id.trim();
+        if model_id.is_empty() {
+            return Err(ui_text::t(
+                &self.i18n,
+                "flash-provider-studio-model-id-required",
+            ));
+        }
+        if !dialog.selected_adapter_ids.contains(adapter_id.as_str()) {
+            dialog.selected_adapter_ids.insert(adapter_id.clone());
+            dialog.adapter_selection_touched = true;
+        }
+        if !dialog
+            .adapter_models
+            .iter()
+            .any(|adapter_models| adapter_models.adapter_id == adapter_id)
+        {
+            dialog.adapter_models.push(ProviderAdapterModelsResource {
+                adapter_id: adapter_id.clone(),
+                enabled: true,
+                resolved_base_url: None,
+                models: Vec::new(),
+                error: None,
+            });
+        }
+        let adapter_index = dialog
+            .adapter_models
+            .iter()
+            .position(|adapter_models| adapter_models.adapter_id == adapter_id)
+            .expect("adapter models entry must exist");
+        if !dialog.adapter_models[adapter_index]
+            .models
+            .iter()
+            .any(|model| model.id.as_str() == model_id)
+        {
+            dialog.adapter_models[adapter_index]
+                .models
+                .push(ProviderModel::new(adapter_id.as_str(), model_id));
+            dialog.adapter_models[adapter_index]
+                .models
+                .sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
+        }
+        let selected_model_index = dialog.adapter_models[adapter_index]
+            .models
+            .iter()
+            .position(|model| model.id.as_str() == model_id)
+            .unwrap_or_default();
+        if let Some(left_index) = dialog
+            .adapter_candidate_ids
+            .iter()
+            .position(|candidate| candidate == &adapter_id)
+        {
+            dialog.selection.set_left_selected(left_index);
+        }
+        dialog.selection.set_right_selected(selected_model_index);
+        dialog
+            .selected_model_keys
+            .insert(provider_studio_model_key(adapter_id.as_str(), model_id));
+        provider_studio_ensure_default_selection(dialog);
+        self.open_provider_studio_model_page(dialog, adapter_id, model_id.to_owned(), None);
+        Ok(())
+    }
+
+    fn activate_provider_studio_model_field_editor(
+        &mut self,
+        dialog: &mut ProviderStudioOverlay,
+        field: ProviderModelConfigField,
+    ) {
+        if !provider_model_config_field_editable(field) {
+            return;
+        }
+        if let Some(items) = self.provider_model_config_field_choice_items(dialog, field) {
+            let current = dialog
+                .model_page
+                .as_ref()
+                .map(|page| provider_model_config_field_value(&page.draft, field))
+                .unwrap_or_default();
+            self.open_choice_overlay(self.build_choice_overlay(
+                ui_text::t(&self.i18n, "overlay-provider-studio-model-edit-title"),
+                provider_model_config_field_prompt(&self.i18n, field),
+                Editor::from_text(current),
+                items,
+                ChoiceOverlayAction::ProviderStudioModelField(field),
+                !matches!(field, ProviderModelConfigField::Enabled),
+                Self::provider_model_config_field_choice_overlay_style(field),
+            ));
+            return;
+        }
+        let current = dialog
+            .model_page
+            .as_ref()
+            .map(|page| provider_model_config_field_value(&page.draft, field))
+            .unwrap_or_default();
+        dialog.editor = Some(ProviderStudioEditor::new(
+            ui_text::t(&self.i18n, "overlay-provider-studio-model-edit-title"),
+            provider_model_config_field_prompt(&self.i18n, field),
+            ui_text::t(&self.i18n, "overlay-provider-studio-edit-footer"),
+            matches!(field, ProviderModelConfigField::Description),
+            Editor::from_text(current),
+            ProviderStudioEditorAction::ModelField(field),
+        ));
+    }
+
+    fn activate_provider_studio_model_page_selection(
+        &mut self,
+        dialog: &mut ProviderStudioOverlay,
+    ) {
+        let Some(selected) = dialog
+            .model_page
+            .as_ref()
+            .map(|page| page.selection.selected)
+        else {
+            return;
+        };
+        let Some(field) = provider_model_config_fields().get(selected).copied() else {
+            return;
+        };
+        self.activate_provider_studio_model_field_editor(dialog, field);
+    }
+
+    fn commit_provider_studio_model_field(
+        &mut self,
+        dialog: &mut ProviderStudioOverlay,
+        field: ProviderModelConfigField,
+        value: String,
+    ) -> UiResult<()> {
+        let Some(page) = dialog.model_page.as_mut() else {
+            return Err(ui_text::t(&self.i18n, "flash-provider-studio-context-lost"));
+        };
+        commit_provider_model_config_field(&mut page.draft, field, value)
+    }
+
+    fn save_provider_studio_model_page(&mut self, dialog: &mut ProviderStudioOverlay) {
+        let Some(page) = dialog.model_page.as_ref() else {
+            return;
+        };
+        let (model_id, model_value) = match provider_model_config_draft_to_model_value(&page.draft)
+        {
+            Ok(value) => value,
+            Err(error) => {
+                self.flash_error(error);
+                return;
+            }
+        };
+        dialog.saving = true;
+        self.request_provider_studio_save_model_value(
+            dialog.draft.clone(),
+            page.adapter_id.clone(),
+            model_id,
+            model_value,
+        );
+    }
+
+    fn delete_provider_studio_model(
+        &mut self,
+        dialog: &mut ProviderStudioOverlay,
+        adapter_id: String,
+        model_id: String,
+    ) {
+        if dialog.draft.source_provider_id.is_some() {
+            dialog.saving = true;
+            self.request_provider_studio_delete_model(dialog.draft.clone(), adapter_id, model_id);
+        } else {
+            remove_provider_studio_model_from_dialog(
+                dialog,
+                adapter_id.as_str(),
+                model_id.as_str(),
+            );
+        }
+    }
+
+    fn delete_provider_studio_selected_model(&mut self, dialog: &mut ProviderStudioOverlay) {
+        let target = if let Some(page) = dialog.model_page.as_ref() {
+            Some((page.adapter_id.clone(), page.original_model_id.clone()))
+        } else {
+            provider_studio_selected_model_target(dialog)
+                .map(|(adapter_id, model_id, _)| (adapter_id, model_id))
+        };
+        let Some((adapter_id, model_id)) = target else {
+            self.flash_warning(ui_text::t(
+                &self.i18n,
+                "flash-provider-studio-model-required",
+            ));
+            return;
+        };
+        self.delete_provider_studio_model(dialog, adapter_id, model_id);
+    }
+
+    fn handle_provider_studio_model_page_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut ProviderStudioOverlay,
+    ) -> bool {
+        let field_count = provider_model_config_fields().len();
+        if dialog.model_page.is_none() {
+            return false;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                dialog.model_page = None;
+                false
+            }
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                self.save_provider_studio_model_page(dialog);
+                false
+            }
+            KeyCode::Char('d') | KeyCode::Delete | KeyCode::Backspace => {
+                let Some((adapter_id, model_id)) = dialog
+                    .model_page
+                    .as_ref()
+                    .map(|page| (page.adapter_id.clone(), page.original_model_id.clone()))
+                else {
+                    return false;
+                };
+                self.delete_provider_studio_model(dialog, adapter_id, model_id);
+                false
+            }
+            KeyCode::Enter => {
+                self.activate_provider_studio_model_page_selection(dialog);
+                false
+            }
+            _ if dialog
+                .model_page
+                .as_mut()
+                .is_some_and(|page| page.selection.handle_navigation_key(key, field_count, 10)) =>
+            {
+                false
+            }
+            _ => false,
+        }
+    }
+
     fn activate_provider_studio_focus(&mut self, dialog: &mut ProviderStudioOverlay) {
         match dialog.selection.focus() {
             ProviderStudioFocus::Fields => {
@@ -11536,42 +12000,15 @@ impl App {
                 }
             }
             ProviderStudioFocus::Models => {
-                if let Some(adapter_models) = provider_studio_selected_adapter_models(dialog)
-                    && let Some(model) = adapter_models
-                        .models
-                        .get(dialog.selection.right_selected())
-                        .cloned()
+                if let Some((adapter_id, model_id, provider_model)) =
+                    provider_studio_selected_model_target(dialog)
                 {
-                    let adapter_id = adapter_models.adapter_id.clone();
-                    match self.backend.provider_model_draft_value(
-                        &dialog.draft,
-                        adapter_id.as_str(),
-                        model.id.as_str(),
-                        Some(&model),
-                    ) {
-                        Ok(model_value) => {
-                            let text = serde_json::to_string_pretty(&model_value)
-                                .unwrap_or_else(|_| "{}".to_owned());
-                            dialog.editor = Some(ProviderStudioEditor::new(
-                                self.i18n.text_args(
-                                    "overlay-provider-studio-model-json-title",
-                                    &crate::fl_args!(
-                                        "adapter" => adapter_id.clone(),
-                                        "model" => model.id.to_string(),
-                                    ),
-                                ),
-                                ui_text::t(&self.i18n, "overlay-provider-studio-model-json-prompt"),
-                                ui_text::t(&self.i18n, "overlay-provider-studio-model-edit-footer"),
-                                true,
-                                Editor::from_text(text),
-                                ProviderStudioEditorAction::ModelJson {
-                                    adapter_id,
-                                    model_id: model.id.to_string(),
-                                },
-                            ));
-                        }
-                        Err(error) => self.flash_error(error.to_string()),
-                    }
+                    self.open_provider_studio_model_page(
+                        dialog,
+                        adapter_id,
+                        model_id,
+                        provider_model,
+                    );
                 }
             }
         }
@@ -11625,7 +12062,6 @@ impl App {
             }
             ProviderStudioField::BaseUrl => {
                 dialog.draft.auth.base_url = value;
-                dialog.draft.sync_native_tools_suggestion();
             }
             ProviderStudioField::InstanceUrl => {
                 dialog.draft.auth.instance_url = value;
@@ -11685,15 +12121,6 @@ impl App {
             }
             ProviderStudioField::DefaultModel => {
                 dialog.draft.default_model = value;
-            }
-            ProviderStudioField::NativeTools => {
-                let preset = if value.trim().is_empty() {
-                    ProviderNativeToolsPreset::Disabled
-                } else {
-                    ProviderNativeToolsPreset::parse(value.as_str())
-                        .ok_or_else(|| format!("unsupported native tools preset `{value}`"))?
-                };
-                dialog.draft.set_native_tools_preset(preset);
             }
         }
         Ok(())
@@ -14316,6 +14743,18 @@ fn provider_studio_save_result_message(
             model_id,
         } => i18n.text_args(
             "flash-provider-save-configured-model",
+            &crate::fl_args!(
+                "provider" => provider_id.clone(),
+                "adapter" => adapter_id.clone(),
+                "model" => model_id.clone(),
+            ),
+        ),
+        crate::backend::ProviderStudioSaveResult::ModelDeleted {
+            provider_id,
+            adapter_id,
+            model_id,
+        } => i18n.text_args(
+            "flash-provider-delete-model",
             &crate::fl_args!(
                 "provider" => provider_id.clone(),
                 "adapter" => adapter_id.clone(),
@@ -17485,7 +17924,6 @@ fn provider_studio_field_allows_clear(field: ProviderStudioField) -> bool {
             | ProviderStudioField::ServiceKeyEnv
             | ProviderStudioField::DefaultAdapter
             | ProviderStudioField::DefaultModel
-            | ProviderStudioField::NativeTools
     )
 }
 
@@ -17502,6 +17940,10 @@ fn choice_overlay_clear_detail(i18n: &I18n, action: &ChoiceOverlayAction) -> Str
         ChoiceOverlayAction::ProviderStudioField(field) => i18n.text_args(
             "overlay-choice-clear-provider-detail",
             &crate::fl_args!("field" => provider_studio_field_label(i18n, *field)),
+        ),
+        ChoiceOverlayAction::ProviderStudioModelField(field) => i18n.text_args(
+            "overlay-choice-clear-provider-detail",
+            &crate::fl_args!("field" => provider_model_config_field_label(i18n, *field)),
         ),
         ChoiceOverlayAction::PermissionRuleStudio(field) => match field {
             PermissionRuleStudioChoiceField::SubjectKind => {
@@ -22956,6 +23398,59 @@ mod tests {
                 &crate::backend::ProviderStudioSaveError::ProviderModelConfigMustBeObject,
             )),
             "provider model config 必须是一个 JSON object"
+        );
+    }
+
+    #[test]
+    fn provider_model_config_draft_writes_native_tools_on_model() {
+        let mut draft = provider_model_config_draft_from_overlay(
+            "gpt-5",
+            agena::config::ProviderModelOverlay::default(),
+        );
+        draft.native_tools_preset = ProviderNativeToolsPreset::OpenAiHostedDefaults;
+
+        let (model_id, value) =
+            provider_model_config_draft_to_model_value(&draft).expect("model value");
+
+        assert_eq!(model_id, "gpt-5");
+        assert_eq!(
+            value,
+            json!({
+                "native_tools": {
+                    "enabled": true,
+                    "routes": {
+                        "web_search": "provider_hosted",
+                        "file_search": "provider_hosted",
+                        "code_execution": "provider_hosted"
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn provider_model_config_draft_preserves_custom_native_tools() {
+        let draft = provider_model_config_draft_from_value(
+            "claude",
+            json!({
+                "native_tools": {
+                    "enabled": true,
+                    "routes": {
+                        "web_search": "plugin"
+                    }
+                }
+            }),
+        )
+        .expect("draft");
+
+        assert_eq!(draft.native_tools_preset, ProviderNativeToolsPreset::Custom);
+
+        let (_, value) = provider_model_config_draft_to_model_value(&draft).expect("model value");
+        assert_eq!(
+            value
+                .pointer("/native_tools/routes/web_search")
+                .and_then(JsonValue::as_str),
+            Some("plugin")
         );
     }
 

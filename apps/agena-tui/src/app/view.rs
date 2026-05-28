@@ -2343,7 +2343,61 @@ impl App {
             dashboard_spec
         };
 
-        let detail_overlay = if let Some(detail_page) = dialog.detail_page.as_ref() {
+        let detail_overlay = if let Some(model_page) = dialog.model_page.as_ref() {
+            let lines = provider_model_config_fields()
+                .iter()
+                .enumerate()
+                .map(|(field_index, field)| {
+                    let field = *field;
+                    let selected =
+                        dialog.editor.is_none() && model_page.selection.selected == field_index;
+                    let editable = provider_model_config_field_editable(field);
+                    let label_style = if selected {
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
+                    } else if editable {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    };
+                    let value_style = if selected {
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
+                    } else if editable {
+                        Style::default()
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    };
+                    DetailTextLine::labeled(
+                        provider_model_config_field_label(&self.i18n, field),
+                        sanitize_display_text(provider_model_config_field_display(
+                            &self.i18n,
+                            &model_page.draft,
+                            field,
+                        )),
+                        label_style,
+                        value_style,
+                    )
+                })
+                .collect::<Vec<_>>();
+            Some(DashboardDetailOverlaySpec::new(
+                DetailTextDialogSpec::new(
+                    sanitize_display_text(model_page.title.as_str()).into(),
+                    96,
+                    DetailTextSpec::with_label_width(18),
+                    (6, 20),
+                )
+                .with_footer(
+                    sanitize_display_text(model_page.footer.as_str()).into(),
+                    (1, 2),
+                    None,
+                    Style::default(),
+                ),
+                lines,
+            ))
+        } else if let Some(detail_page) = dialog.detail_page.as_ref() {
             let detail_fields = provider_studio_detail_fields(dialog);
             let auth_state_lines = provider_studio_auth_state_lines(&self.i18n, dialog);
             let mut lines = Vec::with_capacity(1 + auth_state_lines.len() + detail_fields.len());

@@ -6,12 +6,10 @@ use crate::error::AppError;
 
 use super::{
     AuthData, AuthStore, CopilotDeployment, CredentialIssuer, DeviceCodeStart, OAuthAuthorizeStart,
-    OAuthCallback, OAuthTokenResponse, OAuthUserInfo, exchange_atomgit_oauth_state,
-    exchange_gitlab_oauth_code, exchange_openai_oauth_code, poll_atomgit_oauth_state,
-    poll_copilot_device_code, poll_openai_headless_device_code, refresh_atomgit_token,
-    refresh_gitlab_token, refresh_openai_token, start_atomgit_oauth, start_copilot_device_code,
-    start_gitlab_oauth, start_openai_browser_oauth, start_openai_headless_device_code,
-    wait_for_oauth_callback,
+    OAuthCallback, OAuthTokenResponse, OAuthUserInfo, exchange_gitlab_oauth_code,
+    exchange_openai_oauth_code, poll_copilot_device_code, poll_openai_headless_device_code,
+    refresh_gitlab_token, refresh_openai_token, start_copilot_device_code, start_gitlab_oauth,
+    start_openai_browser_oauth, start_openai_headless_device_code, wait_for_oauth_callback,
 };
 
 struct StoredOAuthCredential {
@@ -219,50 +217,6 @@ impl<S: AuthStore> AuthManager<S> {
             enterprise_url,
         )?;
         self.persist_auth(provider_id, auth).map(Some)
-    }
-
-    pub async fn start_atomgit_login(&self) -> Result<OAuthAuthorizeStart, AppError> {
-        start_atomgit_oauth().await
-    }
-
-    pub async fn poll_atomgit_login(
-        &self,
-        provider_id: &str,
-        state: impl Into<String>,
-    ) -> Result<Option<AuthData>, AppError> {
-        let state = state.into();
-        if !poll_atomgit_oauth_state(state.as_str()).await? {
-            return Ok(None);
-        }
-
-        let token = exchange_atomgit_oauth_state(state.as_str()).await?;
-        let auth = oauth_auth_data_with_user(
-            provider_id,
-            CredentialIssuer::AtomGit,
-            token.refresh,
-            token.access,
-            token.expires_at_ms,
-            token.account_id,
-            None,
-            token.user,
-        )?;
-        self.persist_auth(provider_id, auth).map(Some)
-    }
-
-    pub async fn refresh_atomgit_login(&self, provider_id: &str) -> Result<AuthData, AppError> {
-        let stored = self.stored_oauth_credential(provider_id)?;
-        let token = refresh_atomgit_token(stored.refresh.as_str()).await?;
-        let auth = oauth_auth_data_with_user(
-            provider_id,
-            CredentialIssuer::AtomGit,
-            token.refresh,
-            token.access,
-            token.expires_at_ms,
-            token.account_id.or(stored.account_id),
-            None,
-            token.user.or(stored.user),
-        )?;
-        self.persist_auth(provider_id, auth)
     }
 
     pub fn start_gitlab_login(

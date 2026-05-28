@@ -1627,17 +1627,6 @@ impl AgenaCli {
                     )
                     .await?;
                 }
-                ProviderOAuthTarget::AtomGit => {
-                    let start = manager.start_atomgit_login().await?;
-                    complete_polled_login(
-                        timeout,
-                        Duration::from_secs(2),
-                        "atomgit browser login timed out",
-                        || prompt_browser_login(start.authorize_url.as_str()),
-                        || manager.poll_atomgit_login(provider_id.as_str(), start.state.clone()),
-                    )
-                    .await?;
-                }
             }
             println!("logged in: {provider_id}");
             return Ok(());
@@ -3484,7 +3473,6 @@ fn auth_summary(provider_id: String, auth: AuthData) -> AuthSummary {
                     crate::provider::auth::CredentialIssuer::Gitlab => "gitlab".to_owned(),
                     crate::provider::auth::CredentialIssuer::GoogleAdc => "google_adc".to_owned(),
                     crate::provider::auth::CredentialIssuer::SapAiCore => "sap_ai_core".to_owned(),
-                    crate::provider::auth::CredentialIssuer::AtomGit => "atomgit".to_owned(),
                 }),
                 expires_at_ms: Some(expires_at_ms),
             }

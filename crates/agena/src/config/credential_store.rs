@@ -199,7 +199,6 @@ pub fn provider_auth_data(resolved: &ResolvedProviderConfig) -> Option<AuthData>
 pub enum ProviderOAuthTarget {
     OpenAi,
     Gitlab { instance_url: String },
-    AtomGit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -302,28 +301,10 @@ pub fn provider_supports_copilot_device(resolved: &ResolvedProviderConfig) -> bo
     })
 }
 
-pub fn provider_supports_atomgit_oauth(resolved: &ResolvedProviderConfig) -> bool {
-    matches!(
-        resolved.auth,
-        ProviderAuthConfig::Credential(super::ProviderCredentialAuthConfig {
-            issuer: crate::provider::auth::CredentialIssuer::AtomGit,
-            ..
-        })
-    ) && resolved.adapters.values().any(|adapter| {
-        matches!(
-            &adapter.definition,
-            super::ProviderAdapterDefinition::OpenAi(config)
-                if matches!(config.options.backend, super::OpenAiBackendConfig::Api)
-        )
-    })
-}
-
 pub fn provider_supports_api_key_write(resolved: &ResolvedProviderConfig) -> bool {
     match resolved.auth {
         ProviderAuthConfig::Api(_) => {
-            !provider_supports_openai_oauth(resolved)
-                && !provider_supports_copilot_device(resolved)
-                && !provider_supports_atomgit_oauth(resolved)
+            !provider_supports_openai_oauth(resolved) && !provider_supports_copilot_device(resolved)
         }
         ProviderAuthConfig::Gitlab(_) => true,
         ProviderAuthConfig::Credential(_) => false,
@@ -336,15 +317,13 @@ pub fn resolve_provider_oauth_target(
 ) -> Result<Option<ProviderOAuthTarget>, ProviderAuthTargetError> {
     let openai = provider_supports_openai_oauth(resolved);
     let gitlab = provider_has_gitlab_adapter(resolved);
-    let atomgit = provider_supports_atomgit_oauth(resolved);
-    match (openai, gitlab, atomgit) {
-        (true, false, false) => Ok(Some(ProviderOAuthTarget::OpenAi)),
-        (false, true, false) => provider_gitlab_instance_url(resolved)
+    match (openai, gitlab) {
+        (true, false) => Ok(Some(ProviderOAuthTarget::OpenAi)),
+        (false, true) => provider_gitlab_instance_url(resolved)
             .map(|instance_url| ProviderOAuthTarget::Gitlab { instance_url })
             .map(Some)
             .ok_or(ProviderAuthTargetError::AmbiguousGitlab),
-        (false, false, true) => Ok(Some(ProviderOAuthTarget::AtomGit)),
-        (false, false, false) => Ok(None),
+        (false, false) => Ok(None),
         _ => Err(ProviderAuthTargetError::AmbiguousProvider),
     }
 }
@@ -417,7 +396,6 @@ fn credential_issuer_value(issuer: crate::provider::auth::CredentialIssuer) -> &
         crate::provider::auth::CredentialIssuer::Gitlab => "gitlab",
         crate::provider::auth::CredentialIssuer::GoogleAdc => "google_adc",
         crate::provider::auth::CredentialIssuer::SapAiCore => "sap_ai_core",
-        crate::provider::auth::CredentialIssuer::AtomGit => "atomgit",
     }
 }
 

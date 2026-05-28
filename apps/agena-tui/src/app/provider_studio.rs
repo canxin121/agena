@@ -697,44 +697,7 @@ pub(super) fn provider_studio_main_field_value(
         ProviderStudioField::EditAuthDetailsAction => {
             provider_studio_auth_details_summary(i18n, dialog)
         }
-        ProviderStudioField::NativeTools => {
-            provider_studio_native_tools_summary(i18n, &dialog.draft)
-        }
         _ => provider_studio_field_value(&dialog.draft, field),
-    }
-}
-
-fn provider_studio_native_tools_summary(i18n: &I18n, draft: &ProviderConfigDraft) -> String {
-    match draft.native_tools_preset {
-        ProviderNativeToolsPreset::Disabled => {
-            ui_text::t(i18n, "provider-native-tools-disabled-label")
-        }
-        ProviderNativeToolsPreset::OpenAiHostedDefaults => {
-            ui_text::t(i18n, "provider-native-tools-openai-label")
-        }
-        ProviderNativeToolsPreset::AnthropicHostedDefaults => {
-            ui_text::t(i18n, "provider-native-tools-anthropic-label")
-        }
-        ProviderNativeToolsPreset::GeminiHostedDefaults => {
-            ui_text::t(i18n, "provider-native-tools-gemini-label")
-        }
-        ProviderNativeToolsPreset::Custom => {
-            let bindings = draft
-                .effective_native_tools_config()
-                .bindings()
-                .into_iter()
-                .map(|binding| binding.tool.config_key().to_owned())
-                .collect::<Vec<_>>();
-            if bindings.is_empty() {
-                ui_text::t(i18n, "provider-native-tools-custom-label")
-            } else {
-                format!(
-                    "{} · {}",
-                    ui_text::t(i18n, "provider-native-tools-custom-label"),
-                    bindings.join(", ")
-                )
-            }
-        }
     }
 }
 
@@ -1027,7 +990,6 @@ pub(super) fn provider_studio_visible_fields(
         fields.extend([
             ProviderStudioField::DefaultAdapter,
             ProviderStudioField::DefaultModel,
-            ProviderStudioField::NativeTools,
         ]);
     }
     fields
@@ -1061,7 +1023,6 @@ fn provider_studio_field_label_key(field: ProviderStudioField) -> &'static str {
         ProviderStudioField::ServiceKeyEnv => "provider-field-service-key-env",
         ProviderStudioField::DefaultAdapter => "provider-field-default-adapter",
         ProviderStudioField::DefaultModel => "provider-field-default-model",
-        ProviderStudioField::NativeTools => "provider-field-native-tools",
     }
 }
 
@@ -1133,7 +1094,6 @@ pub(super) fn provider_studio_field_value(
         ProviderStudioField::ServiceKeyEnv => draft.auth.service_key_env.clone(),
         ProviderStudioField::DefaultAdapter => draft.default_adapter.clone(),
         ProviderStudioField::DefaultModel => draft.default_model.clone(),
-        ProviderStudioField::NativeTools => draft.native_tools_preset.token().to_owned(),
     }
 }
 
@@ -1214,12 +1174,471 @@ pub(super) fn provider_studio_field_editable(
             dialog.draft.auth_kind,
             ProviderDraftAuthKind::Credential(Some(issuer)) if issuer.requires_service_key_env()
         ),
-        ProviderStudioField::DefaultAdapter
-        | ProviderStudioField::DefaultModel
-        | ProviderStudioField::NativeTools => true,
+        ProviderStudioField::DefaultAdapter | ProviderStudioField::DefaultModel => true,
     }
 }
 
 pub(super) fn provider_studio_model_key(adapter_id: &str, model_id: &str) -> String {
     format!("{adapter_id}\u{1f}{model_id}")
+}
+
+pub(super) fn remove_provider_studio_model_from_dialog(
+    dialog: &mut ProviderStudioOverlay,
+    adapter_id: &str,
+    model_id: &str,
+) {
+    if let Some(adapter_models) = dialog
+        .adapter_models
+        .iter_mut()
+        .find(|adapter_models| adapter_models.adapter_id == adapter_id)
+    {
+        adapter_models
+            .models
+            .retain(|model| model.id.as_str() != model_id);
+    }
+    dialog
+        .selected_model_keys
+        .remove(provider_studio_model_key(adapter_id, model_id).as_str());
+    if dialog.draft.default_adapter == adapter_id && dialog.draft.default_model == model_id {
+        dialog.draft.default_model.clear();
+    }
+    dialog.model_page = None;
+    dialog.selection.clamp_right(
+        provider_studio_selected_adapter_models(dialog)
+            .map(|adapter| adapter.models.len())
+            .unwrap_or_default(),
+    );
+    provider_studio_ensure_default_selection(dialog);
+}
+
+const PROVIDER_MODEL_CONFIG_FIELDS: [ProviderModelConfigField; 12] = [
+    ProviderModelConfigField::ModelId,
+    ProviderModelConfigField::Enabled,
+    ProviderModelConfigField::DisplayName,
+    ProviderModelConfigField::Lifecycle,
+    ProviderModelConfigField::ContextWindowTokens,
+    ProviderModelConfigField::MaxInputTokens,
+    ProviderModelConfigField::MaxOutputTokens,
+    ProviderModelConfigField::InputModalities,
+    ProviderModelConfigField::Features,
+    ProviderModelConfigField::OutputModalities,
+    ProviderModelConfigField::Description,
+    ProviderModelConfigField::NativeTools,
+];
+
+pub(super) fn provider_model_config_fields() -> &'static [ProviderModelConfigField] {
+    &PROVIDER_MODEL_CONFIG_FIELDS
+}
+
+pub(super) fn provider_model_config_draft_from_value(
+    model_id: &str,
+    value: JsonValue,
+) -> std::result::Result<ProviderModelConfigDraft, String> {
+    let overlay = serde_json::from_value::<agena::config::ProviderModelOverlay>(value)
+        .map_err(|error| error.to_string())?;
+    Ok(provider_model_config_draft_from_overlay(model_id, overlay))
+}
+
+pub(super) fn provider_model_config_draft_from_overlay(
+    model_id: &str,
+    overlay: agena::config::ProviderModelOverlay,
+) -> ProviderModelConfigDraft {
+    ProviderModelConfigDraft {
+        model_id: model_id.to_owned(),
+        enabled: overlay.enabled,
+        display_name: overlay.definition.display_name.unwrap_or_default(),
+        lifecycle: overlay
+            .definition
+            .lifecycle
+            .map(model_lifecycle_token)
+            .unwrap_or_default(),
+        context_window_tokens: overlay
+            .definition
+            .context_window_tokens
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        max_input_tokens: overlay
+            .definition
+            .max_input_tokens
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        max_output_tokens: overlay
+            .definition
+            .max_output_tokens
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        input_modalities: overlay
+            .definition
+            .capabilities
+            .input
+            .as_ref()
+            .map(|patch| {
+                patch
+                    .supported()
+                    .iter()
+                    .map(|modality| modality.as_str().to_owned())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        features: overlay
+            .definition
+            .capabilities
+            .features
+            .as_ref()
+            .map(|patch| {
+                patch
+                    .supported()
+                    .iter()
+                    .map(|feature| feature.as_str().to_owned())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        output_modalities: overlay.definition.output_modalities.join(", "),
+        description: overlay.definition.description.unwrap_or_default(),
+        native_tools_preset: provider_native_tools_preset_from_config(&overlay.native_tools),
+        native_tools_custom: overlay.native_tools,
+    }
+}
+
+pub(super) fn provider_model_config_draft_to_model_value(
+    draft: &ProviderModelConfigDraft,
+) -> std::result::Result<(String, JsonValue), String> {
+    let model_id = draft.model_id.trim();
+    if model_id.is_empty() {
+        return Err("model id is required".to_owned());
+    }
+
+    let mut overlay = agena::config::ProviderModelOverlay {
+        enabled: draft.enabled,
+        ..Default::default()
+    };
+    overlay.native_tools = provider_native_tools_config_for_preset(
+        draft.native_tools_preset,
+        &draft.native_tools_custom,
+    );
+    overlay.definition.display_name = trimmed_owned_local(draft.display_name.as_str());
+    overlay.definition.lifecycle = parse_optional_model_lifecycle(draft.lifecycle.as_str())?;
+    overlay.definition.context_window_tokens = parse_optional_u32_field(
+        draft.context_window_tokens.as_str(),
+        "context_window_tokens",
+    )?;
+    overlay.definition.max_input_tokens =
+        parse_optional_u32_field(draft.max_input_tokens.as_str(), "max_input_tokens")?;
+    overlay.definition.max_output_tokens =
+        parse_optional_u32_field(draft.max_output_tokens.as_str(), "max_output_tokens")?;
+    overlay.definition.output_modalities = split_csv_tokens(draft.output_modalities.as_str());
+    overlay.definition.description = trimmed_owned_local(draft.description.as_str());
+    if !draft.input_modalities.is_empty() {
+        overlay.definition.capabilities.input =
+            Some(agena::provider::CapabilitySelectionPatch::Supported(
+                draft
+                    .input_modalities
+                    .iter()
+                    .filter_map(|value| parse_model_input_modality(value.as_str()))
+                    .collect(),
+            ));
+    }
+    if !draft.features.is_empty() {
+        overlay.definition.capabilities.features =
+            Some(agena::provider::CapabilitySelectionPatch::Supported(
+                draft
+                    .features
+                    .iter()
+                    .filter_map(|value| parse_model_capability_feature(value.as_str()))
+                    .collect(),
+            ));
+    }
+
+    let value = provider_model_overlay_to_json_local(overlay)?;
+    Ok((model_id.to_owned(), value))
+}
+
+pub(super) fn provider_model_config_field_label(
+    i18n: &I18n,
+    field: ProviderModelConfigField,
+) -> String {
+    ui_text::t(i18n, provider_model_config_field_label_key(field))
+}
+
+pub(super) fn provider_model_config_field_prompt(
+    i18n: &I18n,
+    field: ProviderModelConfigField,
+) -> String {
+    i18n.text_args(
+        "overlay-provider-studio-model-field-prompt",
+        &crate::fl_args!("field" => provider_model_config_field_label(i18n, field)),
+    )
+}
+
+pub(super) fn provider_model_config_field_value(
+    draft: &ProviderModelConfigDraft,
+    field: ProviderModelConfigField,
+) -> String {
+    match field {
+        ProviderModelConfigField::ModelId => draft.model_id.clone(),
+        ProviderModelConfigField::Enabled => draft.enabled.to_string(),
+        ProviderModelConfigField::DisplayName => draft.display_name.clone(),
+        ProviderModelConfigField::Lifecycle => draft.lifecycle.clone(),
+        ProviderModelConfigField::ContextWindowTokens => draft.context_window_tokens.clone(),
+        ProviderModelConfigField::MaxInputTokens => draft.max_input_tokens.clone(),
+        ProviderModelConfigField::MaxOutputTokens => draft.max_output_tokens.clone(),
+        ProviderModelConfigField::InputModalities => draft
+            .input_modalities
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", "),
+        ProviderModelConfigField::Features => draft
+            .features
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", "),
+        ProviderModelConfigField::OutputModalities => draft.output_modalities.clone(),
+        ProviderModelConfigField::Description => draft.description.clone(),
+        ProviderModelConfigField::NativeTools => draft.native_tools_preset.token().to_owned(),
+    }
+}
+
+pub(super) fn provider_model_config_field_display(
+    i18n: &I18n,
+    draft: &ProviderModelConfigDraft,
+    field: ProviderModelConfigField,
+) -> String {
+    let value = provider_model_config_field_value(draft, field);
+    if value.trim().is_empty() {
+        ui_text::t(i18n, "value-unset")
+    } else if field == ProviderModelConfigField::NativeTools {
+        provider_native_tools_preset_label(i18n, draft.native_tools_preset)
+    } else {
+        value
+    }
+}
+
+pub(super) fn provider_model_config_field_editable(field: ProviderModelConfigField) -> bool {
+    field != ProviderModelConfigField::ModelId
+}
+
+pub(super) fn commit_provider_model_config_field(
+    draft: &mut ProviderModelConfigDraft,
+    field: ProviderModelConfigField,
+    value: String,
+) -> std::result::Result<(), String> {
+    match field {
+        ProviderModelConfigField::ModelId => {
+            let value = value.trim();
+            if value.is_empty() {
+                return Err("model id is required".to_owned());
+            }
+            draft.model_id = value.to_owned();
+        }
+        ProviderModelConfigField::Enabled => {
+            draft.enabled = parse_bool_token(value.as_str())?;
+        }
+        ProviderModelConfigField::DisplayName => draft.display_name = value,
+        ProviderModelConfigField::Lifecycle => {
+            parse_optional_model_lifecycle(value.as_str())?;
+            draft.lifecycle = value.trim().to_owned();
+        }
+        ProviderModelConfigField::ContextWindowTokens => {
+            parse_optional_u32_field(value.as_str(), "context_window_tokens")?;
+            draft.context_window_tokens = value.trim().to_owned();
+        }
+        ProviderModelConfigField::MaxInputTokens => {
+            parse_optional_u32_field(value.as_str(), "max_input_tokens")?;
+            draft.max_input_tokens = value.trim().to_owned();
+        }
+        ProviderModelConfigField::MaxOutputTokens => {
+            parse_optional_u32_field(value.as_str(), "max_output_tokens")?;
+            draft.max_output_tokens = value.trim().to_owned();
+        }
+        ProviderModelConfigField::InputModalities => {
+            draft.input_modalities = parse_model_input_modality_set(value.as_str())?;
+        }
+        ProviderModelConfigField::Features => {
+            draft.features = parse_model_capability_feature_set(value.as_str())?;
+        }
+        ProviderModelConfigField::OutputModalities => {
+            draft.output_modalities = split_csv_tokens(value.as_str()).join(", ");
+        }
+        ProviderModelConfigField::Description => draft.description = value,
+        ProviderModelConfigField::NativeTools => {
+            let preset = if value.trim().is_empty() {
+                ProviderNativeToolsPreset::Disabled
+            } else {
+                ProviderNativeToolsPreset::parse(value.as_str())
+                    .ok_or_else(|| format!("unsupported native tools preset `{value}`"))?
+            };
+            draft.native_tools_preset = preset;
+        }
+    }
+    Ok(())
+}
+
+fn provider_model_config_field_label_key(field: ProviderModelConfigField) -> &'static str {
+    match field {
+        ProviderModelConfigField::ModelId => "provider-model-field-model-id",
+        ProviderModelConfigField::Enabled => "provider-model-field-enabled",
+        ProviderModelConfigField::DisplayName => "provider-model-field-display-name",
+        ProviderModelConfigField::Lifecycle => "provider-model-field-lifecycle",
+        ProviderModelConfigField::ContextWindowTokens => "provider-model-field-context-window",
+        ProviderModelConfigField::MaxInputTokens => "provider-model-field-max-input",
+        ProviderModelConfigField::MaxOutputTokens => "provider-model-field-max-output",
+        ProviderModelConfigField::InputModalities => "provider-model-field-input-modalities",
+        ProviderModelConfigField::Features => "provider-model-field-features",
+        ProviderModelConfigField::OutputModalities => "provider-model-field-output-modalities",
+        ProviderModelConfigField::Description => "provider-model-field-description",
+        ProviderModelConfigField::NativeTools => "provider-model-field-native-tools",
+    }
+}
+
+pub(super) fn provider_native_tools_available_preset_for_adapter(
+    adapter_id: &str,
+) -> Option<ProviderNativeToolsPreset> {
+    match adapter_id.trim() {
+        "openai" => Some(ProviderNativeToolsPreset::OpenAiHostedDefaults),
+        "anthropic" => Some(ProviderNativeToolsPreset::AnthropicHostedDefaults),
+        "gemini" => Some(ProviderNativeToolsPreset::GeminiHostedDefaults),
+        _ => None,
+    }
+}
+
+pub(super) fn provider_native_tools_preset_label(
+    i18n: &I18n,
+    preset: ProviderNativeToolsPreset,
+) -> String {
+    match preset {
+        ProviderNativeToolsPreset::Disabled => {
+            ui_text::t(i18n, "provider-native-tools-disabled-label")
+        }
+        ProviderNativeToolsPreset::OpenAiHostedDefaults => {
+            ui_text::t(i18n, "provider-native-tools-openai-label")
+        }
+        ProviderNativeToolsPreset::AnthropicHostedDefaults => {
+            ui_text::t(i18n, "provider-native-tools-anthropic-label")
+        }
+        ProviderNativeToolsPreset::GeminiHostedDefaults => {
+            ui_text::t(i18n, "provider-native-tools-gemini-label")
+        }
+        ProviderNativeToolsPreset::Custom => ui_text::t(i18n, "provider-native-tools-custom-label"),
+    }
+}
+
+fn provider_model_overlay_to_json_local(
+    overlay: agena::config::ProviderModelOverlay,
+) -> std::result::Result<JsonValue, String> {
+    if overlay.enabled && overlay.native_tools.is_empty() && overlay.definition.is_empty() {
+        return Ok(JsonValue::Object(JsonMap::new()));
+    }
+    match serde_json::to_value(overlay).map_err(|error| error.to_string())? {
+        JsonValue::Object(mut object) => {
+            if matches!(object.get("enabled"), Some(JsonValue::Bool(true))) {
+                object.remove("enabled");
+            }
+            Ok(JsonValue::Object(object))
+        }
+        other => Ok(other),
+    }
+}
+
+fn trimmed_owned_local(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn parse_optional_u32_field(
+    value: &str,
+    field: &'static str,
+) -> std::result::Result<Option<u32>, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    value
+        .parse::<u32>()
+        .map(Some)
+        .map_err(|_| format!("{field} must be an unsigned integer"))
+}
+
+fn parse_optional_model_lifecycle(
+    value: &str,
+) -> std::result::Result<Option<agena::model::ModelLifecycle>, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_value::<agena::model::ModelLifecycle>(JsonValue::String(value.to_owned()))
+        .map(Some)
+        .map_err(|_| format!("unsupported lifecycle `{value}`"))
+}
+
+fn model_lifecycle_token(value: agena::model::ModelLifecycle) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+fn split_csv_tokens(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn parse_bool_token(value: &str) -> std::result::Result<bool, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "yes" | "1" | "enabled" => Ok(true),
+        "false" | "no" | "0" | "disabled" => Ok(false),
+        other => Err(format!("unsupported boolean `{other}`")),
+    }
+}
+
+fn parse_model_input_modality(value: &str) -> Option<agena::model::ModelInputModality> {
+    match value.trim() {
+        "text" => Some(agena::model::ModelInputModality::Text),
+        "image" => Some(agena::model::ModelInputModality::Image),
+        "document" => Some(agena::model::ModelInputModality::Document),
+        "audio" => Some(agena::model::ModelInputModality::Audio),
+        "video" => Some(agena::model::ModelInputModality::Video),
+        "file" => Some(agena::model::ModelInputModality::File),
+        _ => None,
+    }
+}
+
+fn parse_model_input_modality_set(value: &str) -> std::result::Result<BTreeSet<String>, String> {
+    let mut parsed = BTreeSet::new();
+    for token in split_csv_tokens(value) {
+        if parse_model_input_modality(token.as_str()).is_none() {
+            return Err(format!("unsupported input modality `{token}`"));
+        }
+        parsed.insert(token);
+    }
+    Ok(parsed)
+}
+
+fn parse_model_capability_feature(value: &str) -> Option<agena::provider::ModelCapabilityFeature> {
+    match value.trim() {
+        "tool_calling" => Some(agena::provider::ModelCapabilityFeature::ToolCalling),
+        "streaming" => Some(agena::provider::ModelCapabilityFeature::Streaming),
+        "reasoning" => Some(agena::provider::ModelCapabilityFeature::Reasoning),
+        "structured_output" => Some(agena::provider::ModelCapabilityFeature::StructuredOutput),
+        "temperature" => Some(agena::provider::ModelCapabilityFeature::Temperature),
+        _ => None,
+    }
+}
+
+fn parse_model_capability_feature_set(
+    value: &str,
+) -> std::result::Result<BTreeSet<String>, String> {
+    let mut parsed = BTreeSet::new();
+    for token in split_csv_tokens(value) {
+        if parse_model_capability_feature(token.as_str()).is_none() {
+            return Err(format!("unsupported model feature `{token}`"));
+        }
+        parsed.insert(token);
+    }
+    Ok(parsed)
 }

@@ -1474,9 +1474,9 @@ fn unsupported_tool_call_is_returned_to_model() {
         assert!(
             error
                 .as_deref()
-                .is_some_and(|value| value.contains("invalid tool input"))
+                .is_some_and(|value| value.contains("unknown tool: agena.web/unsupported"))
         );
-        assert!(output.contains("missing field `action`"));
+        assert!(output.contains("agena.web/unsupported"));
         assert!(
             completed.messages.iter().any(|message| {
                 message.role == Role::Assistant
@@ -2766,7 +2766,11 @@ fn pending_permission_request_aggregates_invocation_actions() {
         assert!(
             request.related_actions.iter().any(|action| matches!(
                 action,
-                PermissionAction::Tool { tool_name, .. } if tool_name == "shell" || tool_name == "bash"
+                PermissionAction::Tool { tool_name, .. }
+                    if tool_name == "shell"
+                        || tool_name == "bash"
+                        || tool_name.ends_with("/shell")
+                        || tool_name.ends_with("/bash")
             )),
             "aggregated request should include the shell tool action: {:?}",
             request.related_actions

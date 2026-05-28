@@ -3384,7 +3384,7 @@ mod tests {
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_plugin_manager(&workspace.root));
         let invocation = ToolInvocation {
-            name: "plugin_paths".to_string(),
+            name: "fixture/plugin_paths".to_string(),
             plugin_name: None,
             input: StructuredObject::try_from(json!({
                 "file_path": "docs/spec.md",

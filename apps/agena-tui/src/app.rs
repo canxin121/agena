@@ -1240,10 +1240,6 @@ enum ProviderStudioField {
     ExpiresAtMs,
     AccountId,
     EnterpriseDomain,
-    Username,
-    DisplayName,
-    Email,
-    AvatarUrl,
     Region,
     Profile,
     AccessKeyId,
@@ -10312,10 +10308,6 @@ impl App {
                     "sap_ai_core",
                     ui_text::t(&self.i18n, "provider-issuer-sap-ai-core-detail"),
                 ),
-                choice_item(
-                    "atomgit",
-                    ui_text::t(&self.i18n, "provider-issuer-atomgit-detail"),
-                ),
             ]),
             ProviderStudioField::InstanceUrl => Some(vec![choice_item(
                 "https://gitlab.com",
@@ -11668,18 +11660,6 @@ impl App {
                     .credential_drafts
                     .github_copilot
                     .enterprise_domain = value;
-            }
-            ProviderStudioField::Username => {
-                dialog.draft.credential_drafts.atomgit.username = value;
-            }
-            ProviderStudioField::DisplayName => {
-                dialog.draft.credential_drafts.atomgit.display_name = value;
-            }
-            ProviderStudioField::Email => {
-                dialog.draft.credential_drafts.atomgit.email = value;
-            }
-            ProviderStudioField::AvatarUrl => {
-                dialog.draft.credential_drafts.atomgit.avatar_url = value;
             }
             ProviderStudioField::Region => {
                 dialog.draft.auth.region = value;
@@ -14236,9 +14216,6 @@ fn provider_draft_auth_action_message(
         crate::backend::ProviderDraftAuthMessage::GitlabBrowserStarted => {
             ui_text::t(i18n, "flash-provider-auth-gitlab-browser-started")
         }
-        crate::backend::ProviderDraftAuthMessage::AtomGitBrowserStarted => {
-            ui_text::t(i18n, "flash-provider-auth-atomgit-browser-started")
-        }
         crate::backend::ProviderDraftAuthMessage::OpenaiCredentialCaptured => {
             ui_text::t(i18n, "flash-provider-auth-openai-captured")
         }
@@ -14250,12 +14227,6 @@ fn provider_draft_auth_action_message(
         }
         crate::backend::ProviderDraftAuthMessage::GitlabCredentialCaptured => {
             ui_text::t(i18n, "flash-provider-auth-gitlab-captured")
-        }
-        crate::backend::ProviderDraftAuthMessage::AtomGitPending => {
-            ui_text::t(i18n, "flash-provider-auth-atomgit-pending")
-        }
-        crate::backend::ProviderDraftAuthMessage::AtomGitCredentialCaptured => {
-            ui_text::t(i18n, "flash-provider-auth-atomgit-captured")
         }
     }
 }
@@ -14477,7 +14448,6 @@ fn provider_credential_issuer_label_localized(i18n: &I18n, issuer: CredentialIss
             CredentialIssuer::Gitlab => "provider-issuer-gitlab-label",
             CredentialIssuer::GoogleAdc => "provider-issuer-google-adc-label",
             CredentialIssuer::SapAiCore => "provider-issuer-sap-ai-core-label",
-            CredentialIssuer::AtomGit => "provider-issuer-atomgit-label",
         },
     )
 }
@@ -17507,10 +17477,6 @@ fn provider_studio_field_allows_clear(field: ProviderStudioField) -> bool {
             | ProviderStudioField::ExpiresAtMs
             | ProviderStudioField::AccountId
             | ProviderStudioField::EnterpriseDomain
-            | ProviderStudioField::Username
-            | ProviderStudioField::DisplayName
-            | ProviderStudioField::Email
-            | ProviderStudioField::AvatarUrl
             | ProviderStudioField::Region
             | ProviderStudioField::Profile
             | ProviderStudioField::AccessKeyId
@@ -22897,7 +22863,7 @@ mod tests {
     #[test]
     fn provider_studio_messages_follow_locale() {
         let i18n = I18n::resolve(Some("zh-CN"), None);
-        let auth_kind = ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit));
+        let auth_kind = ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab));
         let rule = auth_kind
             .adapter_rule("openai")
             .expect("expected localized adapter rule");
@@ -22912,20 +22878,21 @@ mod tests {
         );
         assert_eq!(
             provider_studio_adapter_rule_detail(&i18n, rule),
-            "通过 openai adapter 路由的 AtomGit 凭证。"
+            "通过 openai adapter 路由的 GitLab OAuth 凭证。"
         );
         assert_eq!(
             sanitize_terminal_text(&provider_studio_live_listing_unavailable_message(
-                &i18n, &auth_kind
+                &i18n,
+                &ProviderDraftAuthKind::Credential(None)
             )),
-            "当前 auth credential:atomgit 不支持 live model listing"
+            "当前 auth credential 不支持 live model listing"
         );
         assert_eq!(
             sanitize_terminal_text(&provider_studio_listing_auth_required_message(
                 &i18n,
-                &ProviderDraftAuthKind::BedrockSigv4
+                &ProviderDraftAuthKind::Credential(None)
             )),
-            "列出 adapter models 需要 api/gitlab_api 认证，或需要一个已保存的 provider；当前 auth 是 bedrock_sigv4"
+            "列出 adapter models 需要当前 auth/adapter 组合支持 live model discovery，或需要一个已保存的 provider；当前 auth 是 credential"
         );
         assert_eq!(
             sanitize_terminal_text(&provider_studio_model_count_label(&i18n, 3)),

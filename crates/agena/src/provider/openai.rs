@@ -8,6 +8,8 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+use super::copilot_models::CopilotModelExtension;
+
 use crate::{
     config::{NativeToolFreshness, ProviderNativeToolKind, ProviderNativeToolRoute},
     error::AppError,
@@ -240,15 +242,15 @@ impl OpenAiAdapter {
             return Ok(self.base_url.clone());
         };
 
-        let domain = auth_data
+        let Some(domain) = auth_data
             .try_lock()
             .ok()
             .as_deref()
             .and_then(AuthData::enterprise_url)
             .map(ToOwned::to_owned)
-            .ok_or_else(|| {
-                AppError::Config("enterprise_url missing for enterprise copilot auth".to_owned())
-            })?;
+        else {
+            return Ok(self.base_url.clone());
+        };
 
         Ok(format!("https://copilot-api.{}", normalize_domain(&domain)))
     }
@@ -599,7 +601,7 @@ impl OpenAiAdapter {
     fn copilot_should_use_responses(model: &str) -> bool {
         let is_gpt5 = model
             .strip_prefix("gpt-")
-            .and_then(|x| x.split('-').next())
+            .and_then(|x| x.split(['-', '.']).next())
             .and_then(|major| major.parse::<u32>().ok())
             .map(|major| major >= 5)
             .unwrap_or(false);
@@ -1478,13 +1480,18 @@ impl OpenAiAdapter {
             );
             map.insert(
                 "name".to_owned(),
-                serde_json::Value::String(tool.exposed_name.clone()),
+                serde_json::Value::String(crate::tool::model_safe_tool_name(
+                    tool.exposed_name.as_str(),
+                )),
             );
             map.insert(
                 "description".to_owned(),
                 serde_json::Value::String(tool.description_text().to_string()),
             );
-            map.insert("parameters".to_owned(), tool.sanitized_input_schema());
+            map.insert(
+                "parameters".to_owned(),
+                crate::tool::model_safe_tool_schema(&tool.sanitized_input_schema()),
+            );
             if tool.decl.strict {
                 map.insert("strict".to_owned(), serde_json::Value::Bool(true));
             }
@@ -1769,9 +1776,7 @@ impl OpenAiAdapter {
         request: &CompletionRequest,
     ) -> Vec<OpenAiResponsesInputItem> {
         let mut input = Self::to_responses_input(request);
-        if !matches!(self.profile, OpenAiProfile::GithubCopilot) {
-            clear_responses_prompt_cache_hints(input.as_mut_slice());
-        }
+        clear_responses_prompt_cache_hints(input.as_mut_slice());
         input
     }
 
@@ -1786,7 +1791,6 @@ impl OpenAiAdapter {
             Self::append_responses_items_for_message(&mut input, message);
         }
 
-        apply_responses_prompt_cache_hints(input.as_mut_slice());
         input
     }
 
@@ -1961,7 +1965,7 @@ impl OpenAiAdapter {
                                         OpenAiFunctionCallItem {
                                             kind: "function_call",
                                             call_id: id,
-                                            name,
+                                            name: crate::tool::model_safe_tool_name(&name),
                                             arguments: arguments_json,
                                             copilot_cache_control: None,
                                         },
@@ -2409,10 +2413,17 @@ impl ModelRuntime for OpenAiAdapter {
         Ok(payload
             .into_items()
             .into_iter()
+            .filter(|m| {
+                self.profile != OpenAiProfile::GithubCopilot
+                    || (m.copilot.visible() && !m.copilot.uses_messages_endpoint())
+            })
             .map(|m| {
                 let metadata = m.metadata();
                 let model = ProviderModel::new(self.id.as_str(), m.id);
-                let capabilities = self.model_capabilities(&model.id);
+                let mut capabilities = self.model_capabilities(&model.id);
+                if self.profile == OpenAiProfile::GithubCopilot {
+                    capabilities = m.copilot.capabilities().with_fallbacks_from(&capabilities);
+                }
                 let mut model = model.with_capabilities(capabilities);
                 if !metadata.is_empty() {
                     model = model.with_metadata(metadata);
@@ -3011,23 +3022,6 @@ enum OpenAiResponsesInputItem {
     FunctionCallOutput(OpenAiFunctionCallOutputItem),
 }
 
-impl OpenAiResponsesInputItem {
-    fn is_system(&self) -> bool {
-        matches!(
-            self,
-            Self::Message(OpenAiInputMessage { role, .. }) if role == "system"
-        )
-    }
-
-    fn set_copilot_cache_control(&mut self, cache_control: prompt_cache::PromptCacheControl) {
-        match self {
-            Self::Message(message) => message.copilot_cache_control = Some(cache_control),
-            Self::FunctionCall(item) => item.copilot_cache_control = Some(cache_control),
-            Self::FunctionCallOutput(item) => item.copilot_cache_control = Some(cache_control),
-        }
-    }
-}
-
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 enum OpenAiRealtimeConversationItem {
@@ -3113,6 +3107,8 @@ impl OpenAiModelListResponse {
 #[derive(Debug, Deserialize)]
 struct OpenAiModel {
     id: String,
+    #[serde(default, flatten)]
+    copilot: CopilotModelExtension,
     #[serde(default)]
     display_name: Option<String>,
     #[serde(default)]
@@ -3139,7 +3135,7 @@ impl OpenAiModel {
             metadata = metadata.with_max_output_tokens(clamp_u64_to_u32(max_output_tokens));
         }
 
-        metadata
+        metadata.with_fallbacks_from(&self.copilot.metadata(self.id.as_str()))
     }
 }
 
@@ -3266,18 +3262,6 @@ fn apply_chat_prompt_cache_hints(messages: &mut [chat_wire::ChatMessage]) {
     }
 }
 
-fn apply_responses_prompt_cache_hints(input: &mut [OpenAiResponsesInputItem]) {
-    let flags = input
-        .iter()
-        .map(OpenAiResponsesInputItem::is_system)
-        .collect::<Vec<_>>();
-    for index in prompt_cache::select_cache_target_indices(flags.as_slice()) {
-        if let Some(item) = input.get_mut(index) {
-            item.set_copilot_cache_control(prompt_cache::PromptCacheControl::ephemeral());
-        }
-    }
-}
-
 fn clear_responses_prompt_cache_hints(input: &mut [OpenAiResponsesInputItem]) {
     for item in input {
         match item {
@@ -3336,5 +3320,13 @@ mod tests {
         assert_eq!(metadata.limits.context_window_tokens, Some(262_144));
         assert_eq!(metadata.limits.max_input_tokens, Some(260_000));
         assert_eq!(metadata.limits.max_output_tokens, Some(64_000));
+    }
+
+    #[test]
+    fn copilot_responses_mode_handles_dotted_gpt5_versions() {
+        assert!(OpenAiAdapter::copilot_should_use_responses("gpt-5.4-mini"));
+        assert!(OpenAiAdapter::copilot_should_use_responses("gpt-5.2-codex"));
+        assert!(!OpenAiAdapter::copilot_should_use_responses("gpt-5-mini"));
+        assert!(!OpenAiAdapter::copilot_should_use_responses("gpt-4.1"));
     }
 }

@@ -9,6 +9,8 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+use super::copilot_models::CopilotModelExtension;
+
 use crate::{
     config::{ProviderNativeToolKind, ProviderNativeToolRoute},
     error::AppError,
@@ -204,15 +206,15 @@ impl AnthropicAdapter {
             return Ok(self.base_url.clone());
         };
 
-        let domain = auth_data
+        let Some(domain) = auth_data
             .try_lock()
             .ok()
             .as_deref()
             .and_then(AuthData::enterprise_url)
             .map(ToOwned::to_owned)
-            .ok_or_else(|| {
-                AppError::Config("enterprise_url missing for enterprise copilot auth".to_owned())
-            })?;
+        else {
+            return Ok(self.base_url.clone());
+        };
 
         Ok(format!("https://copilot-api.{}", normalize_domain(&domain)))
     }
@@ -291,7 +293,7 @@ impl AnthropicAdapter {
                     arguments_json,
                 } => blocks.push(AnthropicTextBlock::tool_use(
                     id.clone(),
-                    name.clone(),
+                    crate::tool::model_safe_tool_name(name),
                     arguments_json.clone(),
                 )),
                 wire_message::WirePart::ToolResult {
@@ -472,12 +474,20 @@ impl AnthropicAdapter {
         let mut tools = Vec::new();
         for tool in &request.tools {
             let mut map = serde_json::Map::new();
-            map.insert("name".to_owned(), Value::String(tool.exposed_name.clone()));
+            map.insert(
+                "name".to_owned(),
+                Value::String(crate::tool::model_safe_tool_name(
+                    tool.exposed_name.as_str(),
+                )),
+            );
             map.insert(
                 "description".to_owned(),
                 Value::String(tool.description_text().to_string()),
             );
-            map.insert("input_schema".to_owned(), tool.sanitized_input_schema());
+            map.insert(
+                "input_schema".to_owned(),
+                crate::tool::model_safe_tool_schema(&tool.sanitized_input_schema()),
+            );
             if self.supports_eager_input_streaming() {
                 map.insert("eager_input_streaming".to_owned(), Value::Bool(true));
             }
@@ -786,10 +796,21 @@ impl ModelRuntime for AnthropicAdapter {
         Ok(payload
             .into_items()
             .into_iter()
+            .filter(|m| {
+                self.profile != AnthropicProfile::GithubCopilot
+                    || (m.copilot.visible() && m.copilot.uses_messages_endpoint())
+            })
             .map(|m| {
+                let metadata = m.copilot.metadata(m.id.as_str());
                 let mut model = ProviderModel::new(PROVIDER_ID, m.id);
-                let capabilities = self.model_capabilities(&model.id);
+                let mut capabilities = self.model_capabilities(&model.id);
+                if self.profile == AnthropicProfile::GithubCopilot {
+                    capabilities = m.copilot.capabilities().with_fallbacks_from(&capabilities);
+                }
                 model = model.with_capabilities(capabilities);
+                if !metadata.is_empty() {
+                    model = model.with_metadata(metadata);
+                }
                 model.display_name = m.display_name.or(m.name);
                 model
             })
@@ -1610,6 +1631,8 @@ impl AnthropicModelListResponse {
 #[derive(Debug, Deserialize)]
 struct AnthropicModel {
     id: String,
+    #[serde(default, flatten)]
+    copilot: CopilotModelExtension,
     #[serde(default)]
     display_name: Option<String>,
     #[serde(default)]

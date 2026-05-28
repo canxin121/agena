@@ -490,9 +490,9 @@ impl AmazonBedrockAdapter {
         tools
             .iter()
             .map(|tool| BedrockAnthropicToolDefinition {
-                name: tool.exposed_name.clone(),
+                name: crate::tool::model_safe_tool_name(tool.exposed_name.as_str()),
                 description: tool.description_text().to_string(),
-                input_schema: tool.sanitized_input_schema(),
+                input_schema: crate::tool::model_safe_tool_schema(&tool.sanitized_input_schema()),
                 cache_control: None,
                 eager_input_streaming: None,
             })
@@ -532,7 +532,7 @@ impl AmazonBedrockAdapter {
                     arguments_json,
                 } => blocks.push(BedrockAnthropicTextBlock::tool_use(
                     id.clone(),
-                    name.clone(),
+                    crate::tool::model_safe_tool_name(name),
                     arguments_json.clone(),
                 )),
                 wire_message::WirePart::ToolResult {

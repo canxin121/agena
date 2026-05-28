@@ -482,9 +482,9 @@ fn tools_to_ollama_definitions(
         .map(|tool| OllamaToolDefinition {
             kind: "function",
             function: OllamaFunctionDefinition {
-                name: tool.exposed_name.clone(),
+                name: crate::tool::model_safe_tool_name(tool.exposed_name.as_str()),
                 description: tool.description_text().to_string(),
-                parameters: tool.sanitized_input_schema(),
+                parameters: crate::tool::model_safe_tool_schema(&tool.sanitized_input_schema()),
             },
         })
         .collect()

@@ -283,7 +283,10 @@ impl SessionProcessor {
                         pending.id = Some(id);
                     }
                     if let Some(name) = name {
-                        pending.name = Some(name);
+                        pending.name = Some(canonical_tool_name_from_model_name(
+                            name.as_str(),
+                            run.completion.tools.as_slice(),
+                        ));
                     }
                     pending.arguments_json.push_str(arguments_delta.as_str());
                     self.ensure_pending_tool_call_part(
@@ -723,11 +726,8 @@ impl SessionProcessor {
                 .await?;
 
             let tool_name = pending.name.unwrap_or_else(|| "unknown".to_string());
-            let invocation = if run
-                .completion
-                .tools
-                .iter()
-                .any(|tool| tool.exposed_name == tool_name)
+            let invocation = if tool_for_model_name(&tool_name, run.completion.tools.as_slice())
+                .is_some()
             {
                 parse_tool_invocation(
                     tool_name.as_str(),
@@ -968,7 +968,7 @@ fn placeholder_tool_invocation(
         .unwrap_or("unknown");
     let Some(tool) = available_tools
         .iter()
-        .find(|tool| tool.exposed_name == requested_name)
+        .find(|tool| crate::tool::tool_matches_model_name(tool, requested_name))
     else {
         return ToolInvocation {
             name: requested_name.to_string(),
@@ -986,15 +986,27 @@ pub(crate) fn parse_tool_invocation(
     available_tools: &[RegisteredTool],
 ) -> Result<ToolInvocation, AppError> {
     let trimmed_name = name.trim();
-    let tool = available_tools
-        .iter()
-        .find(|tool| tool.exposed_name == trimmed_name)
-        .ok_or_else(|| {
-            AppError::Provider(format!("unsupported tool call from model: {trimmed_name}"))
-        })?;
+    let tool = tool_for_model_name(trimmed_name, available_tools).ok_or_else(|| {
+        AppError::Provider(format!("unsupported tool call from model: {trimmed_name}"))
+    })?;
 
     let parsed = parse_custom_input(arguments_json)?;
     Ok(tool_invocation_for_definition(tool, parsed))
+}
+
+fn tool_for_model_name<'a>(
+    name: &str,
+    available_tools: &'a [RegisteredTool],
+) -> Option<&'a RegisteredTool> {
+    available_tools
+        .iter()
+        .find(|tool| crate::tool::tool_matches_model_name(tool, name))
+}
+
+fn canonical_tool_name_from_model_name(name: &str, available_tools: &[RegisteredTool]) -> String {
+    tool_for_model_name(name, available_tools)
+        .map(|tool| tool.exposed_name.clone())
+        .unwrap_or_else(|| name.trim().to_owned())
 }
 
 fn tool_invocation_for_definition(

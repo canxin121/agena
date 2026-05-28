@@ -18,7 +18,9 @@ use agena::{
         ConfigSettingsSetInput, ProcessEnvironment, ProviderAdapterOverlay, ProviderAuthConfig,
         ProviderAuthMode, ProviderAuthOverlay, ProviderModelOverlay, ProviderNativeToolRoute,
         ProviderNativeToolsConfig, ProviderOverlay, delete_file_setting,
-        draft_atomgit_provider_adapter_models_target, draft_gitlab_provider_adapter_models_target,
+        draft_bedrock_sigv4_provider_adapter_models_target,
+        draft_credential_provider_adapter_models_target,
+        draft_gitlab_provider_adapter_models_target, draft_none_provider_adapter_models_target,
         draft_provider_adapter_models_target, list_provider_adapter_models_with_config,
         patch_file_settings, provider_model_overlay_from_catalog_definition, read_file_setting,
         saved_provider_adapter_models_target, set_file_setting,
@@ -34,10 +36,9 @@ use agena::{
     permission::PermissionReplyKind,
     provider::ProviderModel,
     provider::auth::{
-        AuthData, CredentialIssuer, OAuthUserInfo, exchange_atomgit_oauth_state,
-        exchange_gitlab_oauth_code, exchange_openai_oauth_code, parse_oauth_callback_url,
-        poll_atomgit_oauth_state, poll_copilot_device_code, start_atomgit_oauth,
-        start_copilot_device_code, start_gitlab_oauth, start_openai_browser_oauth,
+        AuthData, CredentialIssuer, exchange_gitlab_oauth_code, exchange_openai_oauth_code,
+        parse_oauth_callback_url, poll_copilot_device_code, start_copilot_device_code,
+        start_gitlab_oauth, start_openai_browser_oauth,
     },
     runtime::AgenaRuntime,
     tool,
@@ -257,7 +258,7 @@ const NONE_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRu
     adapter_id: "ollama",
     detail_key: "provider-adapter-rule-none-ollama-detail",
     requires_base_url: false,
-    supports_draft_model_listing: false,
+    supports_draft_model_listing: true,
 }];
 
 const API_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
@@ -300,7 +301,7 @@ const OPENAI_CHATGPT_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraf
     adapter_id: "openai",
     detail_key: "provider-adapter-rule-openai-chatgpt-openai-detail",
     requires_base_url: false,
-    supports_draft_model_listing: false,
+    supports_draft_model_listing: true,
 }];
 
 const GITHUB_COPILOT_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
@@ -308,13 +309,13 @@ const GITHUB_COPILOT_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
         adapter_id: "openai",
         detail_key: "provider-adapter-rule-github-copilot-openai-detail",
         requires_base_url: false,
-        supports_draft_model_listing: false,
+        supports_draft_model_listing: true,
     },
     ProviderDraftAdapterRule {
         adapter_id: "anthropic",
         detail_key: "provider-adapter-rule-github-copilot-anthropic-detail",
         requires_base_url: false,
-        supports_draft_model_listing: false,
+        supports_draft_model_listing: true,
     },
 ];
 
@@ -323,13 +324,13 @@ const GITLAB_CREDENTIAL_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
         adapter_id: "openai",
         detail_key: "provider-adapter-rule-gitlab-credential-openai-detail",
         requires_base_url: false,
-        supports_draft_model_listing: false,
+        supports_draft_model_listing: true,
     },
     ProviderDraftAdapterRule {
         adapter_id: "anthropic",
         detail_key: "provider-adapter-rule-gitlab-credential-anthropic-detail",
         requires_base_url: false,
-        supports_draft_model_listing: false,
+        supports_draft_model_listing: true,
     },
 ];
 
@@ -337,20 +338,13 @@ const GOOGLE_ADC_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAda
     adapter_id: "openai",
     detail_key: "provider-adapter-rule-google-adc-openai-detail",
     requires_base_url: true,
-    supports_draft_model_listing: false,
+    supports_draft_model_listing: true,
 }];
 
 const SAP_AI_CORE_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
     adapter_id: "openai",
     detail_key: "provider-adapter-rule-sap-ai-core-openai-detail",
     requires_base_url: true,
-    supports_draft_model_listing: false,
-}];
-
-const ATOMGIT_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
-    adapter_id: "openai",
-    detail_key: "provider-adapter-rule-atomgit-openai-detail",
-    requires_base_url: false,
     supports_draft_model_listing: true,
 }];
 
@@ -358,7 +352,7 @@ const BEDROCK_SIGV4_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraft
     adapter_id: "amazon_bedrock",
     detail_key: "provider-adapter-rule-bedrock-sigv4-amazon-bedrock-detail",
     requires_base_url: false,
-    supports_draft_model_listing: false,
+    supports_draft_model_listing: true,
 }];
 
 const DEFAULT_LOCAL_OAUTH_REDIRECT_URI: &str = "http://127.0.0.1:1455/callback";
@@ -380,10 +374,9 @@ impl ProviderDraftAuthKind {
     }
 
     pub fn supports_draft_model_listing(&self) -> bool {
-        matches!(
-            self,
-            Self::Api | Self::Gitlab | Self::Credential(Some(CredentialIssuer::AtomGit))
-        )
+        self.adapter_rules()
+            .iter()
+            .any(|rule| rule.supports_draft_model_listing)
     }
 
     pub fn mode_label(&self) -> &'static str {
@@ -416,7 +409,6 @@ impl ProviderDraftAuthKind {
             Self::Credential(Some(CredentialIssuer::Gitlab)) => GITLAB_CREDENTIAL_ADAPTER_RULES,
             Self::Credential(Some(CredentialIssuer::GoogleAdc)) => GOOGLE_ADC_ADAPTER_RULES,
             Self::Credential(Some(CredentialIssuer::SapAiCore)) => SAP_AI_CORE_ADAPTER_RULES,
-            Self::Credential(Some(CredentialIssuer::AtomGit)) => ATOMGIT_ADAPTER_RULES,
             Self::BedrockSigv4 => BEDROCK_SIGV4_ADAPTER_RULES,
         }
     }
@@ -507,22 +499,10 @@ pub struct GitlabCredentialDraft {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct AtomGitCredentialDraft {
-    pub tokens: ProviderOAuthTokensDraft,
-    pub account_id: String,
-    pub username: String,
-    pub display_name: String,
-    pub email: String,
-    pub avatar_url: String,
-    pub browser: Option<ProviderBrowserAuthSessionDraft>,
-}
-
-#[derive(Debug, Clone, Default)]
 pub struct ProviderCredentialDraftBundle {
     pub openai_chatgpt: OpenAiChatgptCredentialDraft,
     pub github_copilot: GithubCopilotCredentialDraft,
     pub gitlab: GitlabCredentialDraft,
-    pub atomgit: AtomGitCredentialDraft,
 }
 
 impl ProviderCredentialDraftBundle {
@@ -540,7 +520,6 @@ impl ProviderCredentialDraftBundle {
             Some(CredentialIssuer::OpenaiChatgpt) => Some(&self.openai_chatgpt.tokens),
             Some(CredentialIssuer::GithubCopilot) => Some(&self.github_copilot.tokens),
             Some(CredentialIssuer::Gitlab) => Some(&self.gitlab.tokens),
-            Some(CredentialIssuer::AtomGit) => Some(&self.atomgit.tokens),
             Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => None,
         }
     }
@@ -553,7 +532,6 @@ impl ProviderCredentialDraftBundle {
             Some(CredentialIssuer::OpenaiChatgpt) => Some(&mut self.openai_chatgpt.tokens),
             Some(CredentialIssuer::GithubCopilot) => Some(&mut self.github_copilot.tokens),
             Some(CredentialIssuer::Gitlab) => Some(&mut self.gitlab.tokens),
-            Some(CredentialIssuer::AtomGit) => Some(&mut self.atomgit.tokens),
             Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => None,
         }
     }
@@ -581,7 +559,6 @@ impl ProviderCredentialDraftBundle {
     fn account_id(&self, issuer: Option<CredentialIssuer>) -> Option<&str> {
         match issuer {
             Some(CredentialIssuer::OpenaiChatgpt) => Some(self.openai_chatgpt.account_id.as_str()),
-            Some(CredentialIssuer::AtomGit) => Some(self.atomgit.account_id.as_str()),
             _ => None,
         }
     }
@@ -605,7 +582,6 @@ impl ProviderCredentialDraftBundle {
     fn set_account_id(&mut self, issuer: Option<CredentialIssuer>, value: String) {
         match issuer {
             Some(CredentialIssuer::OpenaiChatgpt) => self.openai_chatgpt.account_id = value,
-            Some(CredentialIssuer::AtomGit) => self.atomgit.account_id = value,
             _ => {}
         }
     }
@@ -616,13 +592,10 @@ pub enum ProviderDraftAuthMessage {
     OpenaiBrowserStarted,
     CopilotDeviceStarted { user_code: String },
     GitlabBrowserStarted,
-    AtomGitBrowserStarted,
     OpenaiCredentialCaptured,
     CopilotPending,
     CopilotCredentialCaptured,
     GitlabCredentialCaptured,
-    AtomGitPending,
-    AtomGitCredentialCaptured,
 }
 
 #[derive(Debug, Clone)]
@@ -1300,50 +1273,6 @@ impl ProviderConfigDraft {
                     user: None,
                 }))
             }
-            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
-                let tokens = &self.credential_drafts.atomgit.tokens;
-                if optional_non_empty(tokens.refresh_token.as_str()).is_none()
-                    && optional_non_empty(tokens.access_token.as_str()).is_none()
-                {
-                    return Ok(None);
-                }
-                let account_id =
-                    optional_non_empty(self.credential_drafts.atomgit.account_id.as_str())
-                        .map(ToOwned::to_owned);
-                let username = optional_non_empty(self.credential_drafts.atomgit.username.as_str())
-                    .map(ToOwned::to_owned);
-                let user = match (account_id.clone(), username.clone()) {
-                    (Some(id), Some(username)) => Some(OAuthUserInfo {
-                        id,
-                        username,
-                        name: optional_non_empty(
-                            self.credential_drafts.atomgit.display_name.as_str(),
-                        )
-                        .map(ToOwned::to_owned),
-                        email: optional_non_empty(self.credential_drafts.atomgit.email.as_str())
-                            .map(ToOwned::to_owned),
-                        avatar_url: optional_non_empty(
-                            self.credential_drafts.atomgit.avatar_url.as_str(),
-                        )
-                        .map(ToOwned::to_owned),
-                    }),
-                    (None, None) => None,
-                    _ => {
-                        return Err(anyhow!(
-                            "atomgit manual credential requires both account_id and username when storing user metadata"
-                        ));
-                    }
-                };
-                Ok(Some(AuthData::OAuth {
-                    issuer: Some(CredentialIssuer::AtomGit),
-                    refresh: tokens.refresh_token.clone(),
-                    access: tokens.access_token.clone(),
-                    expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
-                    account_id,
-                    enterprise_url: None,
-                    user,
-                }))
-            }
             ProviderDraftAuthKind::Credential(Some(
                 CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore,
             ))
@@ -1353,6 +1282,26 @@ impl ProviderConfigDraft {
             | ProviderDraftAuthKind::Gitlab
             | ProviderDraftAuthKind::Credential(None)
             | ProviderDraftAuthKind::BedrockSigv4 => Ok(None),
+        }
+    }
+
+    fn credential_auth_data_for_listing(
+        &self,
+        issuer: CredentialIssuer,
+    ) -> Result<Option<AuthData>> {
+        match issuer {
+            CredentialIssuer::OpenaiChatgpt
+            | CredentialIssuer::GithubCopilot
+            | CredentialIssuer::Gitlab => {
+                let credential = self.oauth_auth_data()?.ok_or_else(|| {
+                    anyhow!(
+                        "draft {} model listing requires OAuth tokens; start auth first or enter tokens manually",
+                        credential_issuer_label(issuer)
+                    )
+                })?;
+                Ok(Some(credential))
+            }
+            CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore => Ok(None),
         }
     }
 
@@ -1425,22 +1374,12 @@ impl ProviderConfigDraft {
                 CredentialIssuer::OpenaiChatgpt
                     | CredentialIssuer::GithubCopilot
                     | CredentialIssuer::Gitlab
-                    | CredentialIssuer::AtomGit
             ))
         )
     }
 
     pub(crate) fn supports_saved_model_listing(&self) -> bool {
-        match self.auth_kind {
-            ProviderDraftAuthKind::Api | ProviderDraftAuthKind::Gitlab => true,
-            ProviderDraftAuthKind::Credential(Some(issuer)) => {
-                issuer.supports_saved_model_listing()
-            }
-            ProviderDraftAuthKind::Unset
-            | ProviderDraftAuthKind::None
-            | ProviderDraftAuthKind::Credential(None)
-            | ProviderDraftAuthKind::BedrockSigv4 => false,
-        }
+        self.auth_kind.supports_draft_model_listing()
     }
 
     pub(crate) fn tokens_present(&self) -> bool {
@@ -1672,12 +1611,17 @@ impl ProviderConfigDraft {
     ) -> Result<agena::config::ProviderAdapterModelsTarget> {
         if !self.auth_kind.supports_draft_model_listing() {
             return Err(anyhow!(
-                "draft adapter model listing requires api, gitlab_api, or atomgit credential auth; current auth is {}",
+                "draft adapter model listing requires an auth/adapter combination with live model discovery; current auth is {}",
                 self.auth_kind.label()
             ));
         }
         self.validate_listing_request(adapter_ids)?;
         match self.auth_kind {
+            ProviderDraftAuthKind::None => draft_none_provider_adapter_models_target(
+                Some(self.provider_id.as_str()),
+                adapter_ids,
+            )
+            .map_err(map_provider_adapter_models_config_error),
             ProviderDraftAuthKind::Api => draft_provider_adapter_models_target(
                 Some(self.provider_id.as_str()),
                 self.auth.base_url.as_str(),
@@ -1694,25 +1638,36 @@ impl ProviderConfigDraft {
                 adapter_ids,
             )
             .map_err(map_provider_adapter_models_config_error),
-            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
-                let credential = self.oauth_auth_data()?.ok_or_else(|| {
-                    anyhow!(
-                        "draft atomgit model listing requires OAuth tokens; run AtomGit auth first or enter tokens manually"
-                    )
-                })?;
-                if !auth_data_has_access_or_api_key(&credential) {
-                    return Err(anyhow!(
-                        "draft atomgit model listing requires a non-empty access token; run AtomGit auth first or enter access_token manually"
-                    ));
-                }
-                draft_atomgit_provider_adapter_models_target(
+            ProviderDraftAuthKind::Credential(Some(issuer)) => {
+                let credential = self.credential_auth_data_for_listing(issuer)?;
+                draft_credential_provider_adapter_models_target(
                     Some(self.provider_id.as_str()),
+                    issuer,
                     credential,
+                    Some(self.auth.base_url.as_str()),
+                    agena::config::ProviderProtocolPathsConfig::default(),
+                    Some(self.auth.service_key_env.as_str()),
+                    Some(self.auth.instance_url.as_str()),
                     adapter_ids,
                 )
                 .map_err(map_provider_adapter_models_config_error)
             }
-            _ => unreachable!("listing guard ensures only supported draft auth kinds reach here"),
+            ProviderDraftAuthKind::BedrockSigv4 => {
+                draft_bedrock_sigv4_provider_adapter_models_target(
+                    Some(self.provider_id.as_str()),
+                    Some(self.auth.base_url.as_str()),
+                    Some(self.auth.region.as_str()),
+                    Some(self.auth.profile.as_str()),
+                    Some(self.auth.access_key_id.as_str()),
+                    Some(self.auth.secret_access_key.as_str()),
+                    Some(self.auth.session_token.as_str()),
+                    adapter_ids,
+                )
+                .map_err(map_provider_adapter_models_config_error)
+            }
+            ProviderDraftAuthKind::Unset | ProviderDraftAuthKind::Credential(None) => {
+                unreachable!("listing guard ensures only supported draft auth kinds reach here")
+            }
         }
     }
 
@@ -1812,49 +1767,6 @@ impl ProviderConfigDraft {
             .gitlab
             .tokens
             .expires_at_ms
-            .trim()
-            .hash(&mut hasher);
-        self.credential_drafts
-            .atomgit
-            .tokens
-            .refresh_token
-            .trim()
-            .hash(&mut hasher);
-        self.credential_drafts
-            .atomgit
-            .tokens
-            .access_token
-            .trim()
-            .hash(&mut hasher);
-        self.credential_drafts
-            .atomgit
-            .tokens
-            .expires_at_ms
-            .trim()
-            .hash(&mut hasher);
-        self.credential_drafts
-            .atomgit
-            .account_id
-            .trim()
-            .hash(&mut hasher);
-        self.credential_drafts
-            .atomgit
-            .username
-            .trim()
-            .hash(&mut hasher);
-        self.credential_drafts
-            .atomgit
-            .display_name
-            .trim()
-            .hash(&mut hasher);
-        self.credential_drafts
-            .atomgit
-            .email
-            .trim()
-            .hash(&mut hasher);
-        self.credential_drafts
-            .atomgit
-            .avatar_url
             .trim()
             .hash(&mut hasher);
         self.auth.region.trim().hash(&mut hasher);
@@ -4287,7 +4199,7 @@ fn populate_provider_credential_drafts(
         expires_at_ms,
         account_id,
         enterprise_url,
-        user,
+        user: _,
         ..
     }) = credential
     else {
@@ -4310,19 +4222,6 @@ fn populate_provider_credential_drafts(
         }
         CredentialIssuer::Gitlab => {
             drafts.gitlab.tokens = tokens;
-        }
-        CredentialIssuer::AtomGit => {
-            drafts.atomgit.tokens = tokens;
-            drafts.atomgit.account_id = account_id
-                .clone()
-                .or_else(|| user.as_ref().map(|user| user.id.clone()))
-                .unwrap_or_default();
-            if let Some(user) = user {
-                drafts.atomgit.username = user.username.clone();
-                drafts.atomgit.display_name = user.name.clone().unwrap_or_default();
-                drafts.atomgit.email = user.email.clone().unwrap_or_default();
-                drafts.atomgit.avatar_url = user.avatar_url.clone().unwrap_or_default();
-            }
         }
         CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore => {}
     }
@@ -4408,21 +4307,6 @@ async fn start_provider_draft_auth(
             Ok(ProviderDraftAuthActionResult {
                 draft,
                 message: ProviderDraftAuthMessage::GitlabBrowserStarted,
-                clipboard_text: Some(start.authorize_url),
-            })
-        }
-        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
-            let start = start_atomgit_oauth()
-                .await
-                .map_err(ProviderDraftAuthError::other)?;
-            draft.credential_drafts.atomgit.browser = Some(ProviderBrowserAuthSessionDraft {
-                authorize_url: start.authorize_url.clone(),
-                state: start.state,
-                pkce_verifier: String::new(),
-            });
-            Ok(ProviderDraftAuthActionResult {
-                draft,
-                message: ProviderDraftAuthMessage::AtomGitBrowserStarted,
                 clipboard_text: Some(start.authorize_url),
             })
         }
@@ -4551,44 +4435,6 @@ async fn continue_provider_draft_auth(
             Ok(ProviderDraftAuthActionResult {
                 draft,
                 message: ProviderDraftAuthMessage::GitlabCredentialCaptured,
-                clipboard_text: None,
-            })
-        }
-        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
-            let session = draft
-                .credential_drafts
-                .atomgit
-                .browser
-                .clone()
-                .ok_or(ProviderDraftAuthError::StartBrowserAuthFirst)?;
-            if !poll_atomgit_oauth_state(session.state.as_str())
-                .await
-                .map_err(ProviderDraftAuthError::other)?
-            {
-                return Ok(ProviderDraftAuthActionResult {
-                    draft,
-                    message: ProviderDraftAuthMessage::AtomGitPending,
-                    clipboard_text: None,
-                });
-            }
-
-            let token = exchange_atomgit_oauth_state(session.state.as_str())
-                .await
-                .map_err(ProviderDraftAuthError::other)?;
-            update_oauth_tokens_from_response(&mut draft.credential_drafts.atomgit.tokens, &token);
-            draft.credential_drafts.atomgit.account_id =
-                token.account_id.clone().unwrap_or_default();
-            if let Some(user) = token.user {
-                draft.credential_drafts.atomgit.account_id = user.id.clone();
-                draft.credential_drafts.atomgit.username = user.username;
-                draft.credential_drafts.atomgit.display_name = user.name.unwrap_or_default();
-                draft.credential_drafts.atomgit.email = user.email.unwrap_or_default();
-                draft.credential_drafts.atomgit.avatar_url = user.avatar_url.unwrap_or_default();
-            }
-            draft.credential_drafts.atomgit.browser = None;
-            Ok(ProviderDraftAuthActionResult {
-                draft,
-                message: ProviderDraftAuthMessage::AtomGitCredentialCaptured,
                 clipboard_text: None,
             })
         }
@@ -4959,13 +4805,6 @@ fn parse_oauth_expires_at_ms(value: &str) -> Result<i64> {
         .map(|value| value.unwrap_or(0))
 }
 
-fn auth_data_has_access_or_api_key(auth: &AuthData) -> bool {
-    match auth {
-        AuthData::Api { key } | AuthData::WellKnown { key, .. } => !key.trim().is_empty(),
-        AuthData::OAuth { access, .. } => !access.trim().is_empty(),
-    }
-}
-
 fn build_provider_patch_value_for_save(
     draft: &ProviderConfigDraft,
     default_adapter: &str,
@@ -5120,7 +4959,6 @@ pub(crate) fn credential_issuer_label(issuer: CredentialIssuer) -> &'static str 
         CredentialIssuer::Gitlab => "gitlab",
         CredentialIssuer::GoogleAdc => "google_adc",
         CredentialIssuer::SapAiCore => "sap_ai_core",
-        CredentialIssuer::AtomGit => "atomgit",
     }
 }
 
@@ -5131,9 +4969,8 @@ fn parse_credential_issuer(value: &str) -> Result<CredentialIssuer> {
         "gitlab" => Ok(CredentialIssuer::Gitlab),
         "google_adc" => Ok(CredentialIssuer::GoogleAdc),
         "sap_ai_core" => Ok(CredentialIssuer::SapAiCore),
-        "atomgit" | "atom_git" => Ok(CredentialIssuer::AtomGit),
         _ => Err(anyhow!(
-            "unsupported credential issuer `{}`; expected openai_chatgpt, github_copilot, gitlab, google_adc, sap_ai_core, or atomgit",
+            "unsupported credential issuer `{}`; expected openai_chatgpt, github_copilot, gitlab, google_adc, or sap_ai_core",
             value.trim()
         )),
     }

@@ -25,6 +25,7 @@ pub(crate) mod tool_search;
 pub(crate) mod truncation;
 pub(crate) mod worktree;
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -78,6 +79,199 @@ pub use worktree::{
 
 pub fn skills_plugin_id() -> &'static str {
     skills::SKILLS_PLUGIN_ID
+}
+
+pub(crate) fn model_safe_tool_name(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return "tool".to_owned();
+    }
+
+    let mut safe = String::with_capacity(trimmed.len());
+    for byte in trimmed.bytes() {
+        match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-' => {
+                safe.push(byte as char);
+            }
+            _ => {
+                use std::fmt::Write as _;
+                let _ = write!(&mut safe, "__x{byte:02x}__");
+            }
+        }
+    }
+    if safe.is_empty() {
+        "tool".to_owned()
+    } else {
+        safe
+    }
+}
+
+pub(crate) fn tool_matches_model_name(registered_tool: &RegisteredTool, name: &str) -> bool {
+    let trimmed = name.trim();
+    registered_tool.exposed_name == trimmed
+        || model_safe_tool_name(registered_tool.exposed_name.as_str()) == trimmed
+}
+
+pub(crate) fn model_safe_tool_schema(schema: &serde_json::Value) -> serde_json::Value {
+    let serde_json::Value::Object(mut object) = schema.clone() else {
+        return empty_object_schema();
+    };
+
+    for key in ["oneOf", "anyOf", "allOf"] {
+        let Some(serde_json::Value::Array(variants)) = object.remove(key) else {
+            continue;
+        };
+        if variants
+            .iter()
+            .all(|variant| json_schema_object(variant).is_some())
+        {
+            return merge_top_level_object_variants(object, variants);
+        }
+        return empty_object_schema();
+    }
+
+    let is_object = object
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|kind| kind == "object")
+        || object.contains_key("properties");
+    if !is_object {
+        return empty_object_schema();
+    }
+    object
+        .entry("type".to_owned())
+        .or_insert_with(|| serde_json::Value::String("object".to_owned()));
+    object
+        .entry("properties".to_owned())
+        .or_insert_with(|| serde_json::Value::Object(Default::default()));
+    serde_json::Value::Object(object)
+}
+
+fn empty_object_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {}
+    })
+}
+
+fn merge_top_level_object_variants(
+    mut base: serde_json::Map<String, serde_json::Value>,
+    variants: Vec<serde_json::Value>,
+) -> serde_json::Value {
+    base.insert(
+        "type".to_owned(),
+        serde_json::Value::String("object".to_owned()),
+    );
+    let mut properties = base
+        .remove("properties")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let mut required_intersection: Option<BTreeSet<String>> = required_set(&base);
+
+    for variant in variants {
+        let Some(variant) = json_schema_object(&variant) else {
+            continue;
+        };
+        if let Some(variant_properties) = variant
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+        {
+            for (name, schema) in variant_properties {
+                properties
+                    .entry(name.clone())
+                    .and_modify(|existing| *existing = merge_property_schema(existing, schema))
+                    .or_insert_with(|| schema.clone());
+            }
+        }
+        if let Some(variant_required) = required_set(variant) {
+            required_intersection = Some(match required_intersection.take() {
+                Some(existing) => existing
+                    .intersection(&variant_required)
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
+                None => variant_required,
+            });
+        }
+    }
+
+    base.insert(
+        "properties".to_owned(),
+        serde_json::Value::Object(properties),
+    );
+    if let Some(required) = required_intersection.filter(|required| !required.is_empty()) {
+        base.insert(
+            "required".to_owned(),
+            serde_json::Value::Array(
+                required
+                    .into_iter()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            ),
+        );
+    } else {
+        base.remove("required");
+    }
+    serde_json::Value::Object(base)
+}
+
+fn json_schema_object(
+    value: &serde_json::Value,
+) -> Option<&serde_json::Map<String, serde_json::Value>> {
+    let object = value.as_object()?;
+    let is_object = object
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|kind| kind == "object")
+        || object.contains_key("properties")
+        || object.contains_key("required");
+    is_object.then_some(object)
+}
+
+fn required_set(object: &serde_json::Map<String, serde_json::Value>) -> Option<BTreeSet<String>> {
+    object
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+}
+
+fn merge_property_schema(
+    existing: &serde_json::Value,
+    next: &serde_json::Value,
+) -> serde_json::Value {
+    let Some(mut literals) = string_literals(existing) else {
+        return existing.clone();
+    };
+    let Some(next_literals) = string_literals(next) else {
+        return existing.clone();
+    };
+    literals.extend(next_literals);
+    serde_json::json!({
+        "type": "string",
+        "enum": literals.into_iter().collect::<Vec<_>>()
+    })
+}
+
+fn string_literals(value: &serde_json::Value) -> Option<BTreeSet<String>> {
+    let object = value.as_object()?;
+    if let Some(value) = object.get("const").and_then(serde_json::Value::as_str) {
+        return Some(BTreeSet::from([value.to_owned()]));
+    }
+    object
+        .get("enum")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
 }
 
 pub fn new_skills_plugin() -> impl crate::plugin::sdk::Plugin {
@@ -590,12 +784,12 @@ impl ToolExecutor {
     ) -> Option<RegisteredTool> {
         self.catalogued_tools()
             .into_iter()
-            .find(|entry| entry.exposed_name == invocation.tool_name)
+            .find(|entry| tool_matches_model_name(entry, invocation.tool_name.as_str()))
             .or_else(|| {
                 let canonical = canonical_tool_name(invocation.tool_name.as_str());
                 self.catalogued_tools()
                     .into_iter()
-                    .find(|entry| entry.exposed_name == canonical)
+                    .find(|entry| tool_matches_model_name(entry, canonical))
             })
     }
 
@@ -669,6 +863,12 @@ impl ToolExecutor {
             .or_else(|| {
                 self.plugins
                     .lookup_tool(canonical_tool_name(invocation.tool_name.as_str()))
+            })
+            .or_else(|| {
+                self.plugins
+                    .registered_tools()
+                    .into_iter()
+                    .find(|tool| tool_matches_model_name(tool, invocation.tool_name.as_str()))
             })
     }
 
@@ -2092,6 +2292,54 @@ mod tests {
     const TASK_TOOL: &str = "agena.workflow/task";
     const FIXTURE_ECHO_TOOL: &str = "fixture/plugin_echo";
     const WEB_FETCH_TOOL: &str = "agena.web/fetch";
+
+    #[test]
+    fn model_safe_tool_name_escapes_provider_invalid_separators() {
+        assert_eq!(
+            super::model_safe_tool_name("agena.fs/fs"),
+            "agena__x2e__fs__x2f__fs"
+        );
+        assert_eq!(
+            super::model_safe_tool_name("mcp:docs:search"),
+            "mcp__x3a__docs__x3a__search"
+        );
+    }
+
+    #[test]
+    fn model_safe_tool_schema_merges_top_level_object_unions() {
+        let schema = json!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["action", "query"],
+                    "properties": {
+                        "action": { "const": "search" },
+                        "query": { "type": "string" }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["action", "path"],
+                    "properties": {
+                        "action": { "const": "open" },
+                        "path": { "type": "string" }
+                    }
+                }
+            ]
+        });
+
+        let safe = super::model_safe_tool_schema(&schema);
+
+        assert_eq!(safe["type"], "object");
+        assert_eq!(safe["required"], json!(["action"]));
+        assert_eq!(
+            safe["properties"]["action"]["enum"],
+            json!(["open", "search"])
+        );
+        assert_eq!(safe["properties"]["query"]["type"], "string");
+        assert_eq!(safe["properties"]["path"]["type"], "string");
+        assert!(safe.get("oneOf").is_none());
+    }
 
     #[derive(Debug)]
     struct TempWorkspace {

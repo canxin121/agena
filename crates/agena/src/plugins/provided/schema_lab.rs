@@ -699,10 +699,16 @@ fn schema_lab_config_schema() -> JsonValue {
         "suspended_until": { "title": "Suspended Until", "type": "null" },
         "retry": {
           "title": "Retry Policy",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": true,
+            "max_attempts": true,
+            "backoff": true
+          },
           "allOf": [
             {
               "type": "object",
-              "additionalProperties": false,
               "required": ["enabled", "max_attempts"],
               "properties": {
                 "enabled": { "type": "boolean", "title": "Enabled" },
@@ -711,7 +717,6 @@ fn schema_lab_config_schema() -> JsonValue {
             },
             {
               "type": "object",
-              "additionalProperties": false,
               "required": ["backoff"],
               "properties": {
                 "backoff": { "$ref": "#/$defs/retryBackoff" }
@@ -1002,10 +1007,16 @@ fn schema_lab_config_schema() -> JsonValue {
         "notification_target": { "$ref": "#/$defs/notificationTarget" },
         "retention_policy": {
           "title": "Retention Policy",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": true,
+            "days": true,
+            "archive_tier": true
+          },
           "allOf": [
             {
               "type": "object",
-              "additionalProperties": false,
               "required": ["enabled", "days"],
               "properties": {
                 "enabled": { "type": "boolean", "title": "Enabled" },
@@ -1014,7 +1025,6 @@ fn schema_lab_config_schema() -> JsonValue {
             },
             {
               "type": "object",
-              "additionalProperties": false,
               "required": ["archive_tier"],
               "properties": {
                 "archive_tier": {

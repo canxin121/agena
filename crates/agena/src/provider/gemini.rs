@@ -389,7 +389,10 @@ impl GeminiAdapter {
                 name,
                 arguments_json,
                 ..
-            } => GeminiPart::function_call(name.clone(), parse_json_or_object(arguments_json)),
+            } => GeminiPart::function_call(
+                crate::tool::model_safe_tool_name(name),
+                parse_json_or_object(arguments_json),
+            ),
             wire_message::WirePart::ToolResult {
                 tool_name,
                 output_json,
@@ -1183,7 +1186,7 @@ fn gemini_tool_response_name(tool_name: &str) -> String {
     if trimmed.is_empty() {
         "tool_result".to_owned()
     } else {
-        trimmed.to_owned()
+        crate::tool::model_safe_tool_name(trimmed)
     }
 }
 
@@ -1718,9 +1721,11 @@ fn build_gemini_tools(
             .tools
             .iter()
             .map(|tool| GeminiFunctionDeclaration {
-                name: tool.exposed_name.clone(),
+                name: crate::tool::model_safe_tool_name(tool.exposed_name.as_str()),
                 description: tool.description_text().to_string(),
-                parameters: sanitize_function_parameters(&tool.sanitized_input_schema()),
+                parameters: sanitize_function_parameters(&crate::tool::model_safe_tool_schema(
+                    &tool.sanitized_input_schema(),
+                )),
             })
             .collect::<Vec<_>>();
         let mut map = serde_json::Map::new();

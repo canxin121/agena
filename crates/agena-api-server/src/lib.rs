@@ -179,14 +179,6 @@ pub fn router(state: AppState) -> Router {
                 post(rest::finish_gitlab_browser_auth),
             )
             .route(
-                "/api/v1/auth/providers/atomgit/browser/start",
-                post(rest::start_atomgit_browser_auth),
-            )
-            .route(
-                "/api/v1/auth/providers/atomgit/browser/poll",
-                post(rest::poll_atomgit_browser_auth),
-            )
-            .route(
                 "/api/v1/auth/providers/github-copilot/device/start",
                 post(rest::start_copilot_device_auth),
             )

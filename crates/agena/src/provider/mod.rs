@@ -7,6 +7,7 @@ mod capabilities;
 mod cataloged_models;
 mod chat_wire;
 mod configured_models;
+mod copilot_models;
 mod core;
 mod gemini;
 mod gitlab;

@@ -352,9 +352,6 @@ enum ProviderStudioSummaryLabel {
     Callback,
     Redirect,
     Account,
-    Name,
-    User,
-    Email,
     Profile,
     Region,
     Code,
@@ -368,9 +365,6 @@ fn provider_studio_summary_label(i18n: &I18n, label: ProviderStudioSummaryLabel)
             ProviderStudioSummaryLabel::Callback => "provider-studio-summary-callback",
             ProviderStudioSummaryLabel::Redirect => "provider-studio-summary-redirect",
             ProviderStudioSummaryLabel::Account => "provider-studio-summary-account",
-            ProviderStudioSummaryLabel::Name => "provider-studio-summary-name",
-            ProviderStudioSummaryLabel::User => "provider-studio-summary-user",
-            ProviderStudioSummaryLabel::Email => "provider-studio-summary-email",
             ProviderStudioSummaryLabel::Profile => "provider-studio-summary-profile",
             ProviderStudioSummaryLabel::Region => "provider-studio-summary-region",
             ProviderStudioSummaryLabel::Code => "provider-studio-summary-code",
@@ -466,14 +460,6 @@ pub(super) fn provider_studio_start_auth_summary(
             .as_ref()
             .and_then(|session| provider_studio_summary_value(session.authorize_url.as_str(), 56))
             .unwrap_or_else(|| status.to_owned()),
-        Some(CredentialIssuer::AtomGit) => dialog
-            .draft
-            .credential_drafts
-            .atomgit
-            .browser
-            .as_ref()
-            .and_then(|session| provider_studio_summary_value(session.authorize_url.as_str(), 56))
-            .unwrap_or_else(|| status.to_owned()),
         Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => status,
     }
 }
@@ -555,20 +541,6 @@ pub(super) fn provider_studio_continue_auth_summary(
                 })
         })
         .unwrap_or(status),
-        Some(CredentialIssuer::AtomGit) => dialog
-            .draft
-            .credential_drafts
-            .atomgit
-            .browser
-            .as_ref()
-            .map(|session| {
-                provider_studio_browser_continue_summary(
-                    i18n,
-                    "provider-studio-summary-poll-browser",
-                    session.state.as_str(),
-                )
-            })
-            .unwrap_or(status),
         Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => status,
     }
 }
@@ -678,43 +650,6 @@ pub(super) fn provider_studio_auth_details_hint(
             )
             .or_else(|| provider_studio_summary_value(draft.auth.base_url.as_str(), 48))
         }
-        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
-            provider_studio_labeled_summary(
-                i18n,
-                ProviderStudioSummaryLabel::Name,
-                draft.credential_drafts.atomgit.display_name.as_str(),
-                28,
-            )
-            .or_else(|| {
-                provider_studio_labeled_summary(
-                    i18n,
-                    ProviderStudioSummaryLabel::User,
-                    draft.credential_drafts.atomgit.username.as_str(),
-                    28,
-                )
-            })
-            .or_else(|| {
-                provider_studio_labeled_summary(
-                    i18n,
-                    ProviderStudioSummaryLabel::Email,
-                    draft.credential_drafts.atomgit.email.as_str(),
-                    32,
-                )
-            })
-            .or_else(|| {
-                provider_studio_labeled_summary(
-                    i18n,
-                    ProviderStudioSummaryLabel::Account,
-                    draft.credential_drafts.atomgit.account_id.as_str(),
-                    24,
-                )
-            })
-            .or_else(|| {
-                draft
-                    .tokens_present()
-                    .then(|| ui_text::t(i18n, "provider-studio-summary-tokens-set"))
-            })
-        }
         ProviderDraftAuthKind::BedrockSigv4 => provider_studio_labeled_summary(
             i18n,
             ProviderStudioSummaryLabel::Profile,
@@ -818,7 +753,6 @@ fn provider_studio_has_pending_auth_state(dialog: &ProviderStudioOverlay) -> boo
             .device
             .is_some(),
         Some(CredentialIssuer::Gitlab) => dialog.draft.credential_drafts.gitlab.browser.is_some(),
-        Some(CredentialIssuer::AtomGit) => dialog.draft.credential_drafts.atomgit.browser.is_some(),
         Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => false,
     }
 }
@@ -897,30 +831,6 @@ pub(super) fn provider_studio_auth_state_lines(
                     ),
                     i18n.text_args(
                         "provider-studio-auth-paste-callback",
-                        &crate::fl_args!(
-                            "state" => truncate_display_width(session.state.as_str(), 24)
-                        ),
-                    ),
-                ]
-            })
-            .unwrap_or_default(),
-        Some(CredentialIssuer::AtomGit) => dialog
-            .draft
-            .credential_drafts
-            .atomgit
-            .browser
-            .as_ref()
-            .map(|session| {
-                vec![
-                    ui_text::t(i18n, "provider-studio-auth-atomgit-ready"),
-                    i18n.text_args(
-                        "provider-studio-auth-authorize",
-                        &crate::fl_args!(
-                            "url" => truncate_display_width(session.authorize_url.as_str(), 56)
-                        ),
-                    ),
-                    i18n.text_args(
-                        "provider-studio-auth-finish-browser",
                         &crate::fl_args!(
                             "state" => truncate_display_width(session.state.as_str(), 24)
                         ),
@@ -1015,16 +925,6 @@ pub(super) fn provider_studio_detail_fields(
                 fields.push(ProviderStudioField::ServiceKeyEnv);
                 fields
             }
-            Some(CredentialIssuer::AtomGit) => vec![
-                ProviderStudioField::RefreshToken,
-                ProviderStudioField::AccessToken,
-                ProviderStudioField::ExpiresAtMs,
-                ProviderStudioField::AccountId,
-                ProviderStudioField::Username,
-                ProviderStudioField::DisplayName,
-                ProviderStudioField::Email,
-                ProviderStudioField::AvatarUrl,
-            ],
             None => Vec::new(),
         },
         ProviderDraftAuthKind::BedrockSigv4 => vec![
@@ -1063,8 +963,7 @@ pub(super) fn provider_studio_auth_is_configured(dialog: &ProviderStudioOverlay)
         }
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt))
         | ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot))
-        | ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab))
-        | ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
+        | ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab)) => {
             dialog.draft.active_tokens().is_some_and(|tokens| {
                 !tokens.refresh_token.trim().is_empty() || !tokens.access_token.trim().is_empty()
             })
@@ -1154,10 +1053,6 @@ fn provider_studio_field_label_key(field: ProviderStudioField) -> &'static str {
         ProviderStudioField::ExpiresAtMs => "provider-field-expires-at-ms",
         ProviderStudioField::AccountId => "provider-field-account-id",
         ProviderStudioField::EnterpriseDomain => "provider-field-enterprise-domain",
-        ProviderStudioField::Username => "provider-field-username",
-        ProviderStudioField::DisplayName => "provider-field-display-name",
-        ProviderStudioField::Email => "provider-field-email",
-        ProviderStudioField::AvatarUrl => "provider-field-avatar-url",
         ProviderStudioField::Region => "provider-field-region",
         ProviderStudioField::Profile => "provider-field-profile",
         ProviderStudioField::AccessKeyId => "provider-field-access-key-id",
@@ -1230,10 +1125,6 @@ pub(super) fn provider_studio_field_value(
             .github_copilot
             .enterprise_domain
             .clone(),
-        ProviderStudioField::Username => draft.credential_drafts.atomgit.username.clone(),
-        ProviderStudioField::DisplayName => draft.credential_drafts.atomgit.display_name.clone(),
-        ProviderStudioField::Email => draft.credential_drafts.atomgit.email.clone(),
-        ProviderStudioField::AvatarUrl => draft.credential_drafts.atomgit.avatar_url.clone(),
         ProviderStudioField::Region => draft.auth.region.clone(),
         ProviderStudioField::Profile => draft.auth.profile.clone(),
         ProviderStudioField::AccessKeyId => draft.auth.access_key_id.clone(),
@@ -1302,25 +1193,15 @@ pub(super) fn provider_studio_field_editable(
                 CredentialIssuer::OpenaiChatgpt
                     | CredentialIssuer::GithubCopilot
                     | CredentialIssuer::Gitlab
-                    | CredentialIssuer::AtomGit
             ))
         ),
         ProviderStudioField::AccountId => matches!(
             dialog.draft.auth_kind,
-            ProviderDraftAuthKind::Credential(Some(
-                CredentialIssuer::OpenaiChatgpt | CredentialIssuer::AtomGit
-            ))
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt))
         ),
         ProviderStudioField::EnterpriseDomain => matches!(
             dialog.draft.auth_kind,
             ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot))
-        ),
-        ProviderStudioField::Username
-        | ProviderStudioField::DisplayName
-        | ProviderStudioField::Email
-        | ProviderStudioField::AvatarUrl => matches!(
-            dialog.draft.auth_kind,
-            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit))
         ),
         ProviderStudioField::Region
         | ProviderStudioField::Profile

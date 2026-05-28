@@ -150,38 +150,6 @@ pub async fn finish_gitlab_browser_auth(
     .await
 }
 
-pub async fn start_atomgit_browser_auth(
-    State(state): State<AppState>,
-    Json(request): Json<AuthProviderRequest>,
-) -> Result<Json<AuthBrowserStartResource>, ServerError> {
-    let (provider_id, target) = resolve_browser_auth_request(&state, &request, "atomgit")?;
-    target.require_atomgit_browser(provider_id.as_str())?;
-    let start = auth_manager(&state)
-        .start_atomgit_login()
-        .await
-        .map_err(ServerError::Core)?;
-    Ok(Json(AuthBrowserStartResource::from_start(
-        provider_id,
-        None,
-        start,
-    )))
-}
-
-pub async fn poll_atomgit_browser_auth(
-    State(state): State<AppState>,
-    Json(request): Json<AuthStatePollRequest>,
-) -> Result<Json<AuthLoginResultResource>, ServerError> {
-    let (provider_id, target) = resolve_browser_auth_request(&state, &request.provider, "atomgit")?;
-    target.require_atomgit_browser(provider_id.as_str())?;
-    let manager = auth_manager(&state);
-    poll_auth_login(
-        &state,
-        provider_id.as_str(),
-        manager.poll_atomgit_login(provider_id.as_str(), request.state),
-    )
-    .await
-}
-
 pub async fn start_copilot_device_auth(
     State(state): State<AppState>,
     Json(request): Json<AuthEnterpriseDeviceRequest>,
@@ -249,12 +217,6 @@ pub async fn refresh_auth_provider(
         ProviderOAuthTarget::Gitlab { instance_url } => {
             auth_manager(&state)
                 .refresh_gitlab_login(provider_id.as_str(), instance_url)
-                .await
-                .map_err(ServerError::Core)?;
-        }
-        ProviderOAuthTarget::AtomGit => {
-            auth_manager(&state)
-                .refresh_atomgit_login(provider_id.as_str())
                 .await
                 .map_err(ServerError::Core)?;
         }
@@ -437,14 +399,13 @@ fn copilot_deployment(enterprise_domain: Option<&str>) -> CopilotDeployment {
 trait ProviderOAuthTargetExt {
     fn require_openai_browser(self, provider_id: &str) -> Result<(), ServerError>;
     fn require_gitlab_browser(self, provider_id: &str) -> Result<String, ServerError>;
-    fn require_atomgit_browser(self, provider_id: &str) -> Result<(), ServerError>;
 }
 
 impl ProviderOAuthTargetExt for ProviderOAuthTarget {
     fn require_openai_browser(self, provider_id: &str) -> Result<(), ServerError> {
         match self {
             Self::OpenAi => Ok(()),
-            Self::Gitlab { .. } | Self::AtomGit => Err(ServerError::BadRequest(format!(
+            Self::Gitlab { .. } => Err(ServerError::BadRequest(format!(
                 "{provider_id} does not support openai browser login"
             ))),
         }
@@ -453,17 +414,8 @@ impl ProviderOAuthTargetExt for ProviderOAuthTarget {
     fn require_gitlab_browser(self, provider_id: &str) -> Result<String, ServerError> {
         match self {
             Self::Gitlab { instance_url } => Ok(instance_url),
-            Self::OpenAi | Self::AtomGit => Err(ServerError::BadRequest(format!(
+            Self::OpenAi => Err(ServerError::BadRequest(format!(
                 "{provider_id} does not support gitlab browser login"
-            ))),
-        }
-    }
-
-    fn require_atomgit_browser(self, provider_id: &str) -> Result<(), ServerError> {
-        match self {
-            Self::AtomGit => Ok(()),
-            Self::OpenAi | Self::Gitlab { .. } => Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support atomgit browser login"
             ))),
         }
     }

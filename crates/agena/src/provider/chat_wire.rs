@@ -176,9 +176,9 @@ pub(crate) fn tools_to_chat_definitions(
         .map(|tool| ChatToolDefinition {
             kind: "function".to_owned(),
             function: ChatFunctionDefinition {
-                name: tool.exposed_name.clone(),
+                name: crate::tool::model_safe_tool_name(tool.exposed_name.as_str()),
                 description: tool.description_text().to_string(),
-                parameters: tool.sanitized_input_schema(),
+                parameters: crate::tool::model_safe_tool_schema(&tool.sanitized_input_schema()),
                 strict: tool.decl.strict,
             },
         })
@@ -836,7 +836,7 @@ fn assistant_content_and_tool_calls(
                     kind: "function".to_owned(),
                     id: id.clone(),
                     function: ChatFunctionCallRequest {
-                        name: name.clone(),
+                        name: crate::tool::model_safe_tool_name(name),
                         arguments: arguments_json.clone(),
                     },
                 });

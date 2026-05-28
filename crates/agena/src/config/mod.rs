@@ -43,7 +43,9 @@ pub use types::{
 
 pub use adapter_models::{
     HTTP_ADAPTER_MODEL_LIST_ADAPTER_IDS, ProviderAdapterModelsListing, ProviderAdapterModelsTarget,
-    draft_gitlab_provider_adapter_models_target, draft_provider_adapter_models_target,
+    draft_bedrock_sigv4_provider_adapter_models_target,
+    draft_credential_provider_adapter_models_target, draft_gitlab_provider_adapter_models_target,
+    draft_none_provider_adapter_models_target, draft_provider_adapter_models_target,
     list_provider_adapter_models_with_config, saved_provider_adapter_models_target,
 };
 pub use credential_store::{

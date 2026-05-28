@@ -745,13 +745,13 @@ fn build_adapter_provider(
                     base_url,
                     adapter_default_model.to_owned(),
                 )
-                .with_profile(AnthropicProfile::GithubCopilot)
-                .with_models_url(adapter.options.models_url.clone())
-                .with_messages_url(adapter.options.messages_url.clone())
                 .with_auth_header(
                     adapter.options.auth_header.clone(),
                     adapter.options.auth_scheme.clone(),
                 )
+                .with_profile(AnthropicProfile::GithubCopilot)
+                .with_models_url(adapter.options.models_url.clone())
+                .with_messages_url(adapter.options.messages_url.clone())
                 .with_beta_header(adapter.options.extra_beta_header.clone())
                 .with_eager_input_streaming_override(adapter.options.eager_input_streaming)
                 .with_extra_headers(http_adapter_extra_headers(

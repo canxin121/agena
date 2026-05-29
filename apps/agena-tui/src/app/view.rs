@@ -2882,11 +2882,12 @@ fn settings_compact_toolbar_text(i18n: &I18n, dialog: &SettingsStudioOverlay) ->
             false,
         ),
     ];
-    if dialog
-        .state
-        .selected_section()
-        .is_some_and(|section| section.id == SettingsStudioSectionId::PluginEntries)
-    {
+    if dialog.state.selected_item().is_some_and(|item| {
+        matches!(
+            item.action,
+            SettingsPickerAction::TogglePluginConfigEnabled { .. }
+        )
+    }) {
         items.push((
             ui_text::t(i18n, "overlay-settings-compact-toolbar-toggle"),
             "t",
@@ -2895,8 +2896,8 @@ fn settings_compact_toolbar_text(i18n: &I18n, dialog: &SettingsStudioOverlay) ->
     }
     if dialog
         .state
-        .selected_section()
-        .is_some_and(|section| section.id == SettingsStudioSectionId::Agents)
+        .selected_item()
+        .is_some_and(|item| matches!(item.action, SettingsPickerAction::OpenAgent(_)))
     {
         items.push((
             ui_text::t(i18n, "overlay-settings-compact-toolbar-default"),
@@ -3055,55 +3056,48 @@ fn settings_compact_editor_text(
 fn settings_compact_item_detail_text(
     i18n: &I18n,
     dialog: &SettingsStudioOverlay,
-    section: &SettingsStudioSection,
+    _section: &SettingsStudioSection,
 ) -> Text<'static> {
-    match section.id {
-        SettingsStudioSectionId::Agents => dialog
-            .state
-            .selected_item()
-            .and_then(|item| match &item.action {
-                SettingsPickerAction::OpenAgent(agent) => Some(settings_studio_agent_detail_text(
+    dialog
+        .state
+        .selected_item()
+        .map(|item| {
+            if let SettingsPickerAction::OpenAgent(agent) = &item.action {
+                return settings_studio_agent_detail_text(
                     i18n,
                     agent,
                     dialog.default_agent_name.as_deref(),
-                )),
-                _ => None,
-            })
-            .unwrap_or_else(|| Text::from(ui_text::t(i18n, "overlay-settings-agent-empty-detail"))),
-        _ => dialog
-            .state
-            .selected_item()
-            .map(|item| {
-                let mut lines = vec![Line::from(sanitize_display_text(item.detail.as_str()))];
-                if !item.value.trim().is_empty() {
-                    lines.push(Line::from(sanitize_display_text(i18n.text_args(
-                        "overlay-settings-detail-current",
-                        &crate::fl_args!("value" => item.value.clone()),
-                    ))));
-                }
-                lines.push(Line::from(sanitize_display_text(ui_text::t(
-                    i18n,
-                    "overlay-settings-detail-action",
+                );
+            }
+            let mut lines = vec![Line::from(sanitize_display_text(item.detail.as_str()))];
+            if !item.value.trim().is_empty() {
+                lines.push(Line::from(sanitize_display_text(i18n.text_args(
+                    "overlay-settings-detail-current",
+                    &crate::fl_args!("value" => item.value.clone()),
                 ))));
-                Text::from(lines)
-            })
-            .unwrap_or_else(|| Text::from(ui_text::t(i18n, "overlay-settings-empty-detail"))),
-    }
+            }
+            lines.push(Line::from(sanitize_display_text(ui_text::t(
+                i18n,
+                "overlay-settings-detail-action",
+            ))));
+            Text::from(lines)
+        })
+        .unwrap_or_else(|| Text::from(ui_text::t(i18n, "overlay-settings-empty-detail")))
 }
 
 fn settings_compact_enter_action_label(
     i18n: &I18n,
     dialog: &SettingsStudioOverlay,
-    current_section: Option<&SettingsStudioSection>,
+    _current_section: Option<&SettingsStudioSection>,
 ) -> String {
     if dialog.state.focus() == SettingsStudioFocus::Navigation {
         return ui_text::t(i18n, "overlay-settings-compact-action-section");
     }
-    match current_section.map(|section| section.id) {
-        Some(SettingsStudioSectionId::PluginEntries) => {
+    match dialog.state.selected_item().map(|item| &item.action) {
+        Some(SettingsPickerAction::TogglePluginConfigEnabled { .. }) => {
             ui_text::t(i18n, "overlay-settings-compact-action-toggle")
         }
-        Some(SettingsStudioSectionId::Agents) => {
+        Some(SettingsPickerAction::OpenAgent(_)) => {
             ui_text::t(i18n, "overlay-settings-compact-action-open-agent")
         }
         _ => ui_text::t(i18n, "overlay-settings-compact-action-edit"),

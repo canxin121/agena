@@ -9,25 +9,25 @@ use agena_tui_components::{
     HeaderBodyFooterTextSurfaceSpec, HeaderRowSpec, LineTextDialogSpec, ListPanelSpec,
     ListWorkbenchDialogSpec, ListWorkbenchPanelState, QuerySuggestionPopupSpec,
     QuestionFlowCustomInputSpec, QuestionFlowDialogMode, QuestionFlowDialogSpec,
-    SearchListDialogSpec, SearchPanelsDialogSpec, SearchPanelsDialogState,
-    SectionedWorkbenchDialogSpec, SuggestionPopupItem, SuggestionPopupSpec, SurfaceMode,
-    TextDialogLine, TextPanelSpec, VerticalSectionSize, WorkbenchTextSection, WrappedTextSpec,
-    adaptive_detail_split, adaptive_modal_width, build_accented_two_line_list_item,
-    build_detail_two_line_list_item, build_wrapped_text_lines, inset_rect, join_inline_segments,
-    layout_composer_surface, layout_header_body_footer_surface, pane_header_height,
-    render_composer_editor_surface, render_dashboard_workbench_dialog, render_decision_dialog,
-    render_editor_dialog, render_editor_preview_dialog, render_framed_surface,
-    render_header_body_footer_text_surface, render_header_row, render_line_text_dialog,
-    render_list_panel, render_list_workbench_dialog, render_overlay_line_input_dialog,
-    render_query_suggestion_popup, render_question_flow_dialog, render_search_list_dialog,
-    render_search_panels_dialog, render_sectioned_workbench_dialog, render_suggestion_popup,
-    render_text_panel, render_wrapped_text, split_vertical_sections, truncate_display_text,
+    SearchListDialogSpec, SearchPanelsDialogSpec, SearchPanelsDialogState, SuggestionPopupItem,
+    SuggestionPopupSpec, SurfaceMode, TextDialogLine, TextPanelSpec, VerticalSectionSize,
+    WorkbenchTextSection, WrappedTextSpec, adaptive_detail_split, adaptive_modal_width,
+    build_accented_two_line_list_item, build_detail_two_line_list_item, build_wrapped_text_lines,
+    inset_rect, join_inline_segments, layout_composer_surface, layout_header_body_footer_surface,
+    pane_header_height, render_composer_editor_surface, render_dashboard_workbench_dialog,
+    render_decision_dialog, render_editor_dialog, render_editor_preview_dialog,
+    render_framed_surface, render_header_body_footer_text_surface, render_header_row,
+    render_line_text_dialog, render_list_panel, render_list_workbench_dialog,
+    render_overlay_line_input_dialog, render_query_suggestion_popup, render_question_flow_dialog,
+    render_search_list_dialog, render_search_panels_dialog, render_suggestion_popup,
+    render_text_panel, render_wrapped_text, split_vertical_sections, title_with_summary,
+    truncate_display_text,
 };
 use ratatui::{
-    layout::{Alignment, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Borders, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, ListItem, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -1435,160 +1435,123 @@ impl App {
                 )
             })
             .unwrap_or_else(|| ui_text::t(&self.i18n, "overlay-settings-empty-summary"));
-
-        let nav_items = dialog
-            .state
-            .sections()
-            .iter()
-            .map(|section| {
-                build_detail_two_line_list_item(
-                    sanitize_display_text(section.label.as_str()).into(),
-                    Some(sanitize_display_text(section.summary.as_str()).into()),
-                    Style::default().fg(Color::DarkGray),
-                )
-            })
-            .collect::<Vec<_>>();
         let section_title = current_section
             .map(|section| section.label.clone())
             .unwrap_or_else(|| ui_text::t(&self.i18n, "overlay-settings-default-section-title"));
-        let section_description = current_section
-            .map(|section| section.description.clone())
-            .unwrap_or_else(|| ui_text::t(&self.i18n, "overlay-settings-empty-section"));
-        let items_panel_items = current_section
-            .map(|section| {
-                section
-                    .items
-                    .iter()
-                    .map(|item| {
-                        build_accented_two_line_list_item(
-                            sanitize_display_text(item.label.as_str()).into(),
-                            Some(sanitize_display_text(item.value.as_str()).into()),
-                            Some(sanitize_display_text(item.detail.as_str()).into()),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let selected_item = dialog.state.selected_item();
-        let detail_body = match current_section.map(|section| section.id) {
-            Some(SettingsStudioSectionId::Agents) => selected_item
-                .and_then(|item| match &item.action {
-                    SettingsPickerAction::OpenAgent(agent) => {
-                        Some(settings_studio_agent_detail_text(
-                            &self.i18n,
-                            agent,
-                            dialog.default_agent_name.as_deref(),
-                        ))
-                    }
-                    _ => None,
-                })
-                .unwrap_or_else(|| {
-                    Text::from(ui_text::t(
-                        &self.i18n,
-                        "overlay-settings-agent-empty-detail",
-                    ))
-                }),
-            _ => selected_item
-                .map(|item| {
-                    let action_hint = ui_text::t(&self.i18n, "overlay-settings-detail-action");
-                    if item.value.trim().is_empty() {
-                        Text::from(sanitize_display_text(format!(
-                            "{}\n{}",
-                            item.detail, action_hint
-                        )))
-                    } else {
-                        Text::from(sanitize_display_text(format!(
-                            "{}\n{}\n{}",
-                            item.detail,
-                            self.i18n.text_args(
-                                "overlay-settings-detail-current",
-                                &crate::fl_args!("value" => item.value.clone()),
-                            ),
-                            action_hint,
-                        )))
-                    }
-                })
-                .unwrap_or_else(|| {
-                    Text::from(ui_text::t(&self.i18n, "overlay-settings-empty-detail"))
-                }),
-        };
 
-        let spec = SectionedWorkbenchDialogSpec::new(
-            sanitize_display_text(dialog.title.as_str()).into(),
-            sanitize_display_text(dialog.footer.as_str()).into(),
-            136,
-            28,
-            if nav_items.is_empty() {
-                ListWorkbenchPanelState::empty(
-                    Some(ui_text::t(&self.i18n, "overlay-settings-sections").into()),
-                    ui_text::t(&self.i18n, "overlay-settings-empty-section").into(),
-                    BoundedListPanelHeight {
-                        lines_per_item: 2,
-                        min_body_height: 4,
-                        max_body_height: 12,
-                    },
-                )
-            } else {
-                ListWorkbenchPanelState::items(
-                    BoundedListPanelHeight {
-                        lines_per_item: 2,
-                        min_body_height: 4,
-                        max_body_height: 12,
-                    },
-                    Some(ui_text::t(&self.i18n, "overlay-settings-sections").into()),
-                    nav_items.as_slice(),
-                    Some(dialog.state.selected_section_index()),
-                    if dialog.state.focus() == SettingsStudioFocus::Navigation {
-                        selection_highlight_style()
-                    } else {
-                        Style::default().add_modifier(Modifier::BOLD)
-                    },
-                    ">> ".into(),
-                )
-            },
-            WorkbenchTextSection::new(
-                sanitize_display_text(section_title).into(),
-                Text::from(sanitize_display_text(section_description)),
-                1,
-                3,
-            ),
-            if items_panel_items.is_empty() {
-                ListWorkbenchPanelState::empty(
-                    Some(ui_text::t(&self.i18n, "overlay-settings-options").into()),
-                    ui_text::t(&self.i18n, "overlay-settings-empty-items").into(),
-                    BoundedListPanelHeight {
-                        lines_per_item: 2,
-                        min_body_height: 4,
-                        max_body_height: 12,
-                    },
-                )
-            } else {
-                ListWorkbenchPanelState::items(
-                    BoundedListPanelHeight {
-                        lines_per_item: 2,
-                        min_body_height: 4,
-                        max_body_height: 12,
-                    },
-                    Some(ui_text::t(&self.i18n, "overlay-settings-options").into()),
-                    items_panel_items.as_slice(),
-                    Some(dialog.state.selected_item_index()),
-                    if dialog.state.focus() == SettingsStudioFocus::Items {
-                        selection_highlight_style()
-                    } else {
-                        Style::default().add_modifier(Modifier::BOLD)
-                    },
-                    ">> ".into(),
-                )
-            },
-            WorkbenchTextSection::new(
-                ui_text::t(&self.i18n, "overlay-workbench-details").into(),
-                detail_body,
-                3,
-                6,
-            ),
+        let title = title_with_summary(
+            dialog.title.as_str(),
+            section_summary.as_str(),
+            surface.outer_width(area, 150),
         )
-        .with_summary(sanitize_display_text(section_summary.as_str()).into());
-        render_sectioned_workbench_dialog(frame, area, surface, &spec);
+        .trim()
+        .to_string();
+        let framed = render_framed_surface(
+            frame,
+            area,
+            surface,
+            &FramedSurfaceSpec {
+                title: sanitize_display_text(title).into(),
+                target_width: 150,
+                target_height: 42,
+            },
+        );
+        let page_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(12), Constraint::Length(1)])
+            .split(framed.inner);
+        let block = Block::default()
+            .title(format!(
+                " {} / {} ",
+                sanitize_display_text(dialog.title.as_str()),
+                sanitize_display_text(section_title.as_str())
+            ))
+            .borders(Borders::ALL);
+        let inner = block.inner(page_rows[0]);
+        frame.render_widget(block, page_rows[0]);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(8),
+            ])
+            .split(inner);
+        frame.render_widget(
+            Paragraph::new(settings_compact_header_line(
+                &self.i18n,
+                dialog,
+                current_section,
+            ))
+            .wrap(Wrap { trim: false }),
+            rows[0],
+        );
+        frame.render_widget(
+            Paragraph::new(settings_compact_view_line(
+                &self.i18n,
+                dialog,
+                current_section,
+            ))
+            .wrap(Wrap { trim: false }),
+            rows[1],
+        );
+        frame.render_widget(
+            Paragraph::new(settings_compact_toolbar_text(&self.i18n, dialog))
+                .wrap(Wrap { trim: false }),
+            rows[2],
+        );
+        frame.render_widget(
+            Paragraph::new(settings_compact_divider(inner.width)).wrap(Wrap { trim: false }),
+            rows[3],
+        );
+
+        let nav_width = rows[4]
+            .width
+            .saturating_mul(3)
+            .saturating_div(10)
+            .clamp(18, 30)
+            .min(rows[4].width.saturating_sub(1));
+        let body = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(nav_width),
+                Constraint::Length(u16::from(rows[4].width > 0)),
+                Constraint::Min(24),
+            ])
+            .split(rows[4]);
+        frame.render_widget(
+            Paragraph::new(settings_compact_sections_text(
+                &self.i18n,
+                dialog,
+                body[0].width,
+            ))
+            .wrap(Wrap { trim: false }),
+            body[0],
+        );
+        frame.render_widget(
+            Paragraph::new(settings_compact_vertical_divider(body[1].height))
+                .wrap(Wrap { trim: false }),
+            body[1],
+        );
+        frame.render_widget(
+            Paragraph::new(settings_compact_editor_text(
+                &self.i18n,
+                dialog,
+                current_section,
+                body[2].width,
+                body[2].height,
+            ))
+            .wrap(Wrap { trim: false }),
+            body[2],
+        );
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.footer.as_str()))
+                .wrap(Wrap { trim: false }),
+            page_rows[1],
+        );
     }
 
     fn render_agent_studio_overlay(
@@ -1866,28 +1829,20 @@ impl App {
         let selected_index = dialog.state.selected_item_index();
         let selected_focus = dialog.state.focus() == PermissionStudioFocus::Items;
 
-        lines.push(Line::from(vec![
-            Span::styled(
-                Self::pad_permission_studio_cell(left_header.as_str(), left_width as usize),
-                header_style,
+        lines.push(Line::from(Span::styled(
+            settings_compact_fixed_columns(
+                &[
+                    (left_header.as_str(), left_width as usize),
+                    (right_header.as_str(), right_width as usize),
+                ],
+                width,
             ),
-            Span::raw(" | "),
-            Span::styled(
-                Self::pad_permission_studio_cell(right_header.as_str(), right_width as usize),
-                header_style,
-            ),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled(
-                "-".repeat(left_width as usize),
-                Style::default().fg(Color::DarkGray),
-            ),
-            Span::raw("-+-"),
-            Span::styled(
-                "-".repeat(right_width as usize),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]));
+            header_style,
+        )));
+        lines.push(Line::from(Span::styled(
+            "─".repeat(width as usize),
+            Style::default().fg(Color::DarkGray),
+        )));
 
         if section.items.is_empty() {
             lines.push(Line::from(Span::styled(
@@ -1898,29 +1853,28 @@ impl App {
         }
 
         for (index, item) in section.items.iter().enumerate() {
-            let is_selected = selected_focus && index == selected_index;
-            let style = if is_selected {
+            let is_selected = index == selected_index;
+            let style = if is_selected && selected_focus {
                 selected_style
+            } else if is_selected {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 row_style
             };
-            let marker = if is_selected { "> " } else { "  " };
-            let left = truncate_display_text(item.label.as_str(), left_width as usize);
-            let right = truncate_display_text(item.value.as_str(), right_width as usize);
-            lines.push(Line::from(vec![
-                Span::styled(
-                    Self::pad_permission_studio_cell(
-                        format!("{marker}{left}").as_str(),
-                        left_width as usize,
-                    ),
-                    style,
+            let marker = if is_selected { ">> " } else { "   " };
+            let left = format!("{marker}{}", item.label);
+            lines.push(Line::from(Span::styled(
+                settings_compact_fixed_columns(
+                    &[
+                        (left.as_str(), left_width as usize),
+                        (item.value.as_str(), right_width as usize),
+                    ],
+                    width,
                 ),
-                Span::raw(" | "),
-                Span::styled(
-                    Self::pad_permission_studio_cell(right.as_str(), right_width as usize),
-                    style,
-                ),
-            ]));
+                style,
+            )));
         }
 
         Text::from(lines)
@@ -1977,16 +1931,6 @@ impl App {
             PermissionStudioSectionId::RootPath
             | PermissionStudioSectionId::RootNetwork
             | PermissionStudioSectionId::RootTools => ("Item".to_string(), "Summary".to_string()),
-        }
-    }
-
-    fn pad_permission_studio_cell(text: &str, width: usize) -> String {
-        let truncated = truncate_display_text(text, width);
-        let used = UnicodeWidthStr::width(truncated.as_str());
-        if used >= width {
-            truncated
-        } else {
-            format!("{truncated}{:width$}", "", width = width - used)
         }
     }
 
@@ -2152,7 +2096,7 @@ impl App {
                     && dialog.selection.focus() == ProviderStudioFocus::Fields
                     && dialog.selection.top_selected() == index;
                 let label_style = if selected {
-                    Style::default().add_modifier(Modifier::BOLD)
+                    selection_highlight_style()
                 } else {
                     Style::default()
                 };
@@ -2335,7 +2279,9 @@ impl App {
                     Some(ui_text::t(&self.i18n, "overlay-provider-studio-providers").into()),
                     provider_items.as_slice(),
                     (!dialog.providers.items.is_empty()).then_some(dialog.providers.selected),
-                    Style::default().add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                     ">> ".into(),
                 ),
             ))
@@ -2353,18 +2299,14 @@ impl App {
                         dialog.editor.is_none() && model_page.selection.selected == field_index;
                     let editable = provider_model_config_field_editable(field);
                     let label_style = if selected {
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD)
+                        selection_highlight_style()
                     } else if editable {
                         Style::default().add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::DarkGray)
                     };
                     let value_style = if selected {
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD)
+                        selection_highlight_style()
                     } else if editable {
                         Style::default()
                     } else {
@@ -2422,18 +2364,14 @@ impl App {
                         let selected = dialog.editor.is_none()
                             && detail_page.selection.selected == field_index;
                         let label_style = if selected {
-                            Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD)
+                            selection_highlight_style()
                         } else if provider_studio_field_editable(dialog, field) {
                             Style::default().add_modifier(Modifier::BOLD)
                         } else {
                             Style::default().fg(Color::DarkGray)
                         };
                         let value_style = if selected {
-                            Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD)
+                            selection_highlight_style()
                         } else if provider_studio_field_editable(dialog, field) {
                             Style::default()
                         } else {
@@ -2848,6 +2786,386 @@ fn sanitize_display_text(text: impl AsRef<str>) -> String {
 
 fn sanitize_display_str(text: &str) -> String {
     sanitize_display_text(text)
+}
+
+fn settings_compact_header_line(
+    i18n: &I18n,
+    dialog: &SettingsStudioOverlay,
+    current_section: Option<&SettingsStudioSection>,
+) -> String {
+    let section_label = current_section
+        .map(|section| section.label.clone())
+        .unwrap_or_else(|| ui_text::t(i18n, "overlay-settings-default-section-title"));
+    let section_count = i18n.text_args(
+        "overlay-settings-compact-section-count",
+        &crate::fl_args!("count" => dialog.state.sections().len() as i64),
+    );
+    let option_count = i18n.text_args(
+        "overlay-settings-compact-option-count",
+        &crate::fl_args!(
+            "count" => current_section
+                .map(|section| section.items.len())
+                .unwrap_or_default() as i64
+        ),
+    );
+    let layout_label = ui_text::t(i18n, "overlay-settings-compact-layout");
+    settings_compact_fixed_columns(
+        &[
+            (dialog.title.as_str(), 18),
+            (section_label.as_str(), 28),
+            (section_count.as_str(), 18),
+            (option_count.as_str(), 18),
+            (layout_label.as_str(), 30),
+        ],
+        128,
+    )
+}
+
+fn settings_compact_view_line(
+    i18n: &I18n,
+    dialog: &SettingsStudioOverlay,
+    current_section: Option<&SettingsStudioSection>,
+) -> String {
+    let pane = settings_compact_focus_label(i18n, dialog.state.focus());
+    let selected = dialog.state.selected_item();
+    let selected_label = selected
+        .map(|item| item.label.clone())
+        .unwrap_or_else(|| ui_text::t(i18n, "overlay-settings-empty-items"));
+    let selected_value = selected
+        .map(|item| item.value.clone())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| ui_text::t(i18n, "value-unset"));
+    let focus = i18n.text_args(
+        "overlay-settings-compact-focus",
+        &crate::fl_args!("pane" => pane),
+    );
+    let selected = i18n.text_args(
+        "overlay-settings-compact-selected",
+        &crate::fl_args!("item" => selected_label),
+    );
+    let value = i18n.text_args(
+        "overlay-settings-compact-value",
+        &crate::fl_args!("value" => selected_value),
+    );
+    let action = i18n.text_args(
+        "overlay-settings-compact-enter",
+        &crate::fl_args!(
+            "action" => settings_compact_enter_action_label(i18n, dialog, current_section)
+        ),
+    );
+    settings_compact_fixed_columns(
+        &[
+            (focus.as_str(), 24),
+            (selected.as_str(), 44),
+            (value.as_str(), 34),
+            (action.as_str(), 28),
+        ],
+        134,
+    )
+}
+
+fn settings_compact_toolbar_text(i18n: &I18n, dialog: &SettingsStudioOverlay) -> Text<'static> {
+    let mut items = vec![
+        (
+            ui_text::t(i18n, "overlay-settings-compact-toolbar-sections"),
+            "Left",
+            dialog.state.focus() == SettingsStudioFocus::Navigation,
+        ),
+        (
+            ui_text::t(i18n, "overlay-settings-compact-toolbar-open"),
+            "Enter",
+            dialog.state.focus() == SettingsStudioFocus::Items,
+        ),
+        (
+            ui_text::t(i18n, "overlay-settings-compact-toolbar-refresh"),
+            "r",
+            false,
+        ),
+    ];
+    if dialog
+        .state
+        .selected_section()
+        .is_some_and(|section| section.id == SettingsStudioSectionId::PluginEntries)
+    {
+        items.push((
+            ui_text::t(i18n, "overlay-settings-compact-toolbar-toggle"),
+            "t",
+            false,
+        ));
+    }
+    if dialog
+        .state
+        .selected_section()
+        .is_some_and(|section| section.id == SettingsStudioSectionId::Agents)
+    {
+        items.push((
+            ui_text::t(i18n, "overlay-settings-compact-toolbar-default"),
+            "d",
+            false,
+        ));
+    }
+
+    let mut spans = Vec::new();
+    for (index, (label, shortcut, selected)) in items.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let style = if selected {
+            selection_highlight_style()
+        } else {
+            Style::default()
+        };
+        spans.push(Span::styled(
+            sanitize_display_text(format!("[ {label} ({shortcut}) ]")),
+            style,
+        ));
+    }
+    Text::from(Line::from(spans))
+}
+
+fn settings_compact_sections_text(
+    i18n: &I18n,
+    dialog: &SettingsStudioOverlay,
+    width: u16,
+) -> Text<'static> {
+    let mut lines = vec![Line::from(Span::styled(
+        sanitize_display_text(ui_text::t(i18n, "overlay-settings-sections")),
+        Style::default().add_modifier(Modifier::BOLD),
+    ))];
+    lines.push(Line::from(""));
+    if dialog.state.sections().is_empty() {
+        lines.push(Line::from(sanitize_display_text(ui_text::t(
+            i18n,
+            "overlay-settings-empty-section",
+        ))));
+        return Text::from(lines);
+    }
+    let content_width = width.max(1) as usize;
+    for (index, section) in dialog.state.sections().iter().enumerate() {
+        let selected = index == dialog.state.selected_section_index();
+        let marker = if selected { "> " } else { "  " };
+        let label = format!("{marker}{} ({})", section.label, section.items.len());
+        let line = settings_compact_pad_to_width(label.as_str(), content_width);
+        let style = if selected && dialog.state.focus() == SettingsStudioFocus::Navigation {
+            selection_highlight_style()
+        } else if selected {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(Span::styled(sanitize_display_text(line), style)));
+    }
+    Text::from(lines)
+}
+
+fn settings_compact_editor_text(
+    i18n: &I18n,
+    dialog: &SettingsStudioOverlay,
+    current_section: Option<&SettingsStudioSection>,
+    width: u16,
+    height: u16,
+) -> Text<'static> {
+    let mut lines = Vec::new();
+    let Some(section) = current_section else {
+        lines.push(Line::from(sanitize_display_text(ui_text::t(
+            i18n,
+            "overlay-settings-empty-section",
+        ))));
+        return Text::from(lines);
+    };
+
+    lines.push(Line::from(Span::styled(
+        sanitize_display_text(section.label.as_str()),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(Span::styled(
+        sanitize_display_text(section.description.as_str()),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(""));
+
+    let detail = settings_compact_item_detail_text(i18n, dialog, section);
+    let fixed_rows = 4usize
+        .saturating_add(2)
+        .saturating_add(detail.lines.len().max(1));
+    let visible_item_count = height.saturating_sub(fixed_rows as u16).max(1) as usize;
+
+    if section.items.is_empty() {
+        lines.push(Line::from(sanitize_display_text(ui_text::t(
+            i18n,
+            "overlay-settings-empty-items",
+        ))));
+    } else {
+        let option_header = ui_text::t(i18n, "overlay-settings-compact-column-option");
+        let value_header = ui_text::t(i18n, "overlay-settings-compact-column-value");
+        let detail_header = ui_text::t(i18n, "overlay-settings-compact-column-detail");
+        lines.push(Line::from(Span::styled(
+            settings_compact_fixed_columns(
+                &[
+                    (option_header.as_str(), 34),
+                    (value_header.as_str(), 26),
+                    (detail_header.as_str(), 58),
+                ],
+                width,
+            ),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        let (start, end) = settings_compact_visible_range(
+            section.items.len(),
+            dialog.state.selected_item_index(),
+            visible_item_count,
+        );
+        for (index, item) in section.items[start..end].iter().enumerate() {
+            let index = start + index;
+            let selected = index == dialog.state.selected_item_index();
+            let marker = if selected { ">> " } else { "   " };
+            let label = format!("{marker}{}", item.label);
+            let line = settings_compact_fixed_columns(
+                &[
+                    (label.as_str(), 34),
+                    (item.value.as_str(), 26),
+                    (item.detail.as_str(), 58),
+                ],
+                width,
+            );
+            let style = if selected && dialog.state.focus() == SettingsStudioFocus::Items {
+                selection_highlight_style()
+            } else if selected {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            lines.push(Line::from(Span::styled(line, style)));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        sanitize_display_text(ui_text::t(i18n, "overlay-workbench-details")),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    lines.extend(detail.lines);
+    Text::from(lines)
+}
+
+fn settings_compact_item_detail_text(
+    i18n: &I18n,
+    dialog: &SettingsStudioOverlay,
+    section: &SettingsStudioSection,
+) -> Text<'static> {
+    match section.id {
+        SettingsStudioSectionId::Agents => dialog
+            .state
+            .selected_item()
+            .and_then(|item| match &item.action {
+                SettingsPickerAction::OpenAgent(agent) => Some(settings_studio_agent_detail_text(
+                    i18n,
+                    agent,
+                    dialog.default_agent_name.as_deref(),
+                )),
+                _ => None,
+            })
+            .unwrap_or_else(|| Text::from(ui_text::t(i18n, "overlay-settings-agent-empty-detail"))),
+        _ => dialog
+            .state
+            .selected_item()
+            .map(|item| {
+                let mut lines = vec![Line::from(sanitize_display_text(item.detail.as_str()))];
+                if !item.value.trim().is_empty() {
+                    lines.push(Line::from(sanitize_display_text(i18n.text_args(
+                        "overlay-settings-detail-current",
+                        &crate::fl_args!("value" => item.value.clone()),
+                    ))));
+                }
+                lines.push(Line::from(sanitize_display_text(ui_text::t(
+                    i18n,
+                    "overlay-settings-detail-action",
+                ))));
+                Text::from(lines)
+            })
+            .unwrap_or_else(|| Text::from(ui_text::t(i18n, "overlay-settings-empty-detail"))),
+    }
+}
+
+fn settings_compact_enter_action_label(
+    i18n: &I18n,
+    dialog: &SettingsStudioOverlay,
+    current_section: Option<&SettingsStudioSection>,
+) -> String {
+    if dialog.state.focus() == SettingsStudioFocus::Navigation {
+        return ui_text::t(i18n, "overlay-settings-compact-action-section");
+    }
+    match current_section.map(|section| section.id) {
+        Some(SettingsStudioSectionId::PluginEntries) => {
+            ui_text::t(i18n, "overlay-settings-compact-action-toggle")
+        }
+        Some(SettingsStudioSectionId::Agents) => {
+            ui_text::t(i18n, "overlay-settings-compact-action-open-agent")
+        }
+        _ => ui_text::t(i18n, "overlay-settings-compact-action-edit"),
+    }
+}
+
+fn settings_compact_focus_label(i18n: &I18n, focus: SettingsStudioFocus) -> String {
+    match focus {
+        SettingsStudioFocus::Navigation => ui_text::t(i18n, "overlay-settings-sections"),
+        SettingsStudioFocus::Items => ui_text::t(i18n, "overlay-settings-options"),
+    }
+}
+
+fn settings_compact_visible_range(
+    item_count: usize,
+    selected_index: usize,
+    max_visible: usize,
+) -> (usize, usize) {
+    if item_count == 0 {
+        return (0, 0);
+    }
+    let max_visible = max_visible.max(1).min(item_count);
+    let selected_index = selected_index.min(item_count.saturating_sub(1));
+    let start = selected_index
+        .saturating_sub(max_visible / 2)
+        .min(item_count.saturating_sub(max_visible));
+    (start, start + max_visible)
+}
+
+fn settings_compact_divider(width: u16) -> String {
+    "─".repeat(width as usize)
+}
+
+fn settings_compact_vertical_divider(height: u16) -> Text<'static> {
+    Text::from((0..height).map(|_| Line::from("│")).collect::<Vec<_>>())
+}
+
+fn settings_compact_fixed_columns(columns: &[(&str, usize)], width: u16) -> String {
+    let mut out = String::new();
+    for (index, (text, size)) in columns.iter().enumerate() {
+        if index > 0 {
+            out.push_str("  ");
+        }
+        let remaining = width.saturating_sub(out.width() as u16) as usize;
+        if remaining == 0 {
+            break;
+        }
+        let size = (*size).min(remaining);
+        let cleaned = sanitize_display_text(text);
+        let clipped = truncate_display_text(cleaned.as_str(), size);
+        out.push_str(clipped.as_str());
+        let padding = size.saturating_sub(clipped.width());
+        out.push_str(" ".repeat(padding).as_str());
+    }
+    out
+}
+
+fn settings_compact_pad_to_width(text: &str, width: usize) -> String {
+    let cleaned = sanitize_display_text(text);
+    let clipped = truncate_display_text(cleaned.as_str(), width);
+    let padding = width.saturating_sub(clipped.width());
+    format!("{clipped}{}", " ".repeat(padding))
 }
 
 fn user_input_review_answer_preview(i18n: &I18n, values: &[String]) -> String {

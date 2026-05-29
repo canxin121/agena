@@ -1249,64 +1249,36 @@ impl OpenAiAdapter {
                         utils::ResponsesToolEventKind::Added => {
                             if let Some(arguments_snapshot) =
                                 tool_event.arguments.filter(|s| !s.is_empty())
+                                && let Some(arguments_delta) =
+                                    responses_tool_snapshot_delta(state, arguments_snapshot)
                             {
-                                let arguments_delta = if arguments_snapshot.starts_with(&state.arguments)
-                                {
-                                    arguments_snapshot[state.arguments.len()..].to_owned()
-                                } else {
-                                    arguments_snapshot.clone()
+                                stream_has_content = true;
+                                yield CompletionStreamEvent::ToolCallDelta {
+                                    provider_id: provider_id.clone(),
+                                    model: model_name.clone(),
+                                    stream_key: key.clone(),
+                                    id: state.id.clone(),
+                                    name: state.name.clone(),
+                                    arguments_delta,
                                 };
-
-                                if arguments_snapshot.starts_with(&state.arguments) {
-                                    state.arguments.push_str(arguments_delta.as_str());
-                                } else {
-                                    state.arguments = arguments_snapshot;
-                                }
-
-                                if !arguments_delta.is_empty() {
-                                    stream_has_content = true;
-                                    yield CompletionStreamEvent::ToolCallDelta {
-                                        provider_id: provider_id.clone(),
-                                        model: model_name.clone(),
-                                        stream_key: key.clone(),
-                                        id: state.id.clone(),
-                                        name: state.name.clone(),
-                                        arguments_delta,
-                                    };
-                                }
                             }
                         }
                         utils::ResponsesToolEventKind::Done => {
                             if let Some(arguments_snapshot) =
                                 tool_event.arguments.filter(|s| !s.is_empty())
+                                && let Some(arguments_delta) =
+                                    responses_tool_snapshot_delta(state, arguments_snapshot)
                             {
-                                let arguments_delta = if arguments_snapshot.starts_with(&state.arguments)
-                                {
-                                    arguments_snapshot[state.arguments.len()..].to_owned()
-                                } else {
-                                    arguments_snapshot.clone()
+                                stream_has_content = true;
+                                yield CompletionStreamEvent::ToolCallDelta {
+                                    provider_id: provider_id.clone(),
+                                    model: model_name.clone(),
+                                    stream_key: key.clone(),
+                                    id: state.id.clone(),
+                                    name: state.name.clone(),
+                                    arguments_delta,
                                 };
-
-                                if arguments_snapshot.starts_with(&state.arguments) {
-                                    state.arguments.push_str(arguments_delta.as_str());
-                                } else {
-                                    state.arguments = arguments_snapshot;
-                                }
-
-                                if !arguments_delta.is_empty() {
-                                    stream_has_content = true;
-                                    yield CompletionStreamEvent::ToolCallDelta {
-                                        provider_id: provider_id.clone(),
-                                        model: model_name.clone(),
-                                        stream_key: key.clone(),
-                                        id: state.id.clone(),
-                                        name: state.name.clone(),
-                                        arguments_delta,
-                                    };
-                                }
                             }
-
-                            pending_tool_calls.remove(key.as_str());
                         }
                     }
                 }
@@ -2798,64 +2770,36 @@ impl ModelRuntime for OpenAiAdapter {
                         utils::ResponsesToolEventKind::Added => {
                             if let Some(arguments_snapshot) =
                                 tool_event.arguments.filter(|s| !s.is_empty())
+                                && let Some(arguments_delta) =
+                                    responses_tool_snapshot_delta(state, arguments_snapshot)
                             {
-                                let arguments_delta = if arguments_snapshot.starts_with(&state.arguments)
-                                {
-                                    arguments_snapshot[state.arguments.len()..].to_owned()
-                                } else {
-                                    arguments_snapshot.clone()
+                                stream_has_content = true;
+                                yield CompletionStreamEvent::ToolCallDelta {
+                                    provider_id: provider_id.clone(),
+                                    model: model_name.clone(),
+                                    stream_key: key.clone(),
+                                    id: state.id.clone(),
+                                    name: state.name.clone(),
+                                    arguments_delta,
                                 };
-
-                                if arguments_snapshot.starts_with(&state.arguments) {
-                                    state.arguments.push_str(arguments_delta.as_str());
-                                } else {
-                                    state.arguments = arguments_snapshot;
-                                }
-
-                                if !arguments_delta.is_empty() {
-                                    stream_has_content = true;
-                                    yield CompletionStreamEvent::ToolCallDelta {
-                                        provider_id: provider_id.clone(),
-                                        model: model_name.clone(),
-                                        stream_key: key.clone(),
-                                        id: state.id.clone(),
-                                        name: state.name.clone(),
-                                        arguments_delta,
-                                    };
-                                }
                             }
                         }
                         utils::ResponsesToolEventKind::Done => {
                             if let Some(arguments_snapshot) =
                                 tool_event.arguments.filter(|s| !s.is_empty())
+                                && let Some(arguments_delta) =
+                                    responses_tool_snapshot_delta(state, arguments_snapshot)
                             {
-                                let arguments_delta = if arguments_snapshot.starts_with(&state.arguments)
-                                {
-                                    arguments_snapshot[state.arguments.len()..].to_owned()
-                                } else {
-                                    arguments_snapshot.clone()
+                                stream_has_content = true;
+                                yield CompletionStreamEvent::ToolCallDelta {
+                                    provider_id: provider_id.clone(),
+                                    model: model_name.clone(),
+                                    stream_key: key.clone(),
+                                    id: state.id.clone(),
+                                    name: state.name.clone(),
+                                    arguments_delta,
                                 };
-
-                                if arguments_snapshot.starts_with(&state.arguments) {
-                                    state.arguments.push_str(arguments_delta.as_str());
-                                } else {
-                                    state.arguments = arguments_snapshot;
-                                }
-
-                                if !arguments_delta.is_empty() {
-                                    stream_has_content = true;
-                                    yield CompletionStreamEvent::ToolCallDelta {
-                                        provider_id: provider_id.clone(),
-                                        model: model_name.clone(),
-                                        stream_key: key.clone(),
-                                        id: state.id.clone(),
-                                        name: state.name.clone(),
-                                        arguments_delta,
-                                    };
-                                }
                             }
-
-                            pending_tool_calls.remove(key.as_str());
                         }
                     }
                 }
@@ -3115,6 +3059,23 @@ struct ResponsesToolState {
     id: Option<String>,
     name: Option<String>,
     arguments: String,
+}
+
+fn responses_tool_snapshot_delta(
+    state: &mut ResponsesToolState,
+    arguments_snapshot: String,
+) -> Option<String> {
+    if arguments_snapshot.starts_with(&state.arguments) {
+        let delta = arguments_snapshot[state.arguments.len()..].to_owned();
+        if delta.is_empty() {
+            return None;
+        }
+        state.arguments.push_str(delta.as_str());
+        return Some(delta);
+    }
+
+    state.arguments = arguments_snapshot.clone();
+    Some(arguments_snapshot)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3499,5 +3460,47 @@ mod tests {
             responses_reasoning_delta(&event),
             Some("thinking".to_owned())
         );
+    }
+
+    #[test]
+    fn responses_tool_snapshot_delta_ignores_duplicate_snapshot() {
+        let mut state = ResponsesToolState {
+            arguments: r#"{"query":"web"}"#.to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            responses_tool_snapshot_delta(&mut state, r#"{"query":"web"}"#.to_string()),
+            None
+        );
+        assert_eq!(state.arguments, r#"{"query":"web"}"#);
+    }
+
+    #[test]
+    fn responses_tool_snapshot_delta_emits_only_new_suffix() {
+        let mut state = ResponsesToolState {
+            arguments: "{\"query\":\"".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            responses_tool_snapshot_delta(&mut state, r#"{"query":"web"}"#.to_string()),
+            Some(r#"web"}"#.to_string())
+        );
+        assert_eq!(state.arguments, r#"{"query":"web"}"#);
+    }
+
+    #[test]
+    fn responses_tool_snapshot_delta_replaces_mismatched_snapshot() {
+        let mut state = ResponsesToolState {
+            arguments: r#"{"query":"old"}"#.to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            responses_tool_snapshot_delta(&mut state, r#"{"query":"new"}"#.to_string()),
+            Some(r#"{"query":"new"}"#.to_string())
+        );
+        assert_eq!(state.arguments, r#"{"query":"new"}"#);
     }
 }

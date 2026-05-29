@@ -197,6 +197,108 @@ struct ToolsHelpInput {
     pub include_schema: Option<bool>,
 }
 
+fn resolve_tools_tool_input(input: serde_json::Value) -> SdkResult<(String, serde_json::Value)> {
+    if input.as_object().is_some_and(serde_json::Map::is_empty) {
+        return Ok((
+            "usage".to_string(),
+            serde_json::Value::Object(serde_json::Map::new()),
+        ));
+    }
+
+    match ToolsToolInput::resolve_tool("tools", input.clone()) {
+        Ok(resolved) => Ok(resolved),
+        Err(primary) => match normalize_tools_tool_input(&input) {
+            Some(normalized) if normalized != input => {
+                ToolsToolInput::resolve_tool("tools", normalized)
+            }
+            _ => Err(primary),
+        },
+    }
+}
+
+fn normalize_tools_tool_input(input: &serde_json::Value) -> Option<serde_json::Value> {
+    let object = input.as_object()?;
+    let action = object
+        .get("action")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            if object.contains_key("query") {
+                Some("search".to_string())
+            } else if object.contains_key("tool")
+                || object.contains_key("name")
+                || object.contains_key("tool_name")
+            {
+                Some("help".to_string())
+            } else {
+                None
+            }
+        })?;
+
+    match action.as_str() {
+        "search" => normalize_tools_search_input(object),
+        "help" => normalize_tools_help_input(object),
+        _ => None,
+    }
+}
+
+fn normalize_tools_search_input(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Option<serde_json::Value> {
+    if object.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "action" | "query" | "limit" | "include_schema" | "tool"
+        )
+    }) {
+        return None;
+    }
+
+    let mut normalized = serde_json::Map::new();
+    normalized.insert(
+        "action".to_string(),
+        serde_json::Value::String("search".to_string()),
+    );
+    if let Some(query) = object.get("query") {
+        normalized.insert("query".to_string(), query.clone());
+    }
+    if let Some(limit) = object.get("limit") {
+        normalized.insert("limit".to_string(), limit.clone());
+    }
+
+    Some(serde_json::Value::Object(normalized))
+}
+
+fn normalize_tools_help_input(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Option<serde_json::Value> {
+    if object.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "action" | "tool" | "include_schema" | "query" | "limit" | "name" | "tool_name"
+        )
+    }) {
+        return None;
+    }
+
+    let tool = object
+        .get("tool")
+        .or_else(|| object.get("name"))
+        .or_else(|| object.get("tool_name"))?;
+
+    let mut normalized = serde_json::Map::new();
+    normalized.insert(
+        "action".to_string(),
+        serde_json::Value::String("help".to_string()),
+    );
+    normalized.insert("tool".to_string(), tool.clone());
+    if let Some(include_schema) = object.get("include_schema") {
+        normalized.insert("include_schema".to_string(), include_schema.clone());
+    }
+
+    Some(serde_json::Value::Object(normalized))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "agent",
@@ -1043,6 +1145,19 @@ impl WorkflowPlugin {
                 .with_title(format!("{} help", descriptor.name)),
         )
     }
+
+    fn invoke_tool_catalog_usage() -> ToolInvokeOutput {
+        ToolInvokeOutput::text(
+            [
+                "Tool catalog usage:",
+                r#"- Search: {"action":"search","query":"web","limit":8}"#,
+                r#"- Help: {"action":"help","tool":"agena.web/search"}"#,
+                "This command only inspects tool help; call the target tool directly to execute it.",
+            ]
+            .join("\n"),
+        )
+        .with_title("Tool catalog usage")
+    }
 }
 
 pub(crate) fn new_plugin() -> WorkflowPlugin {
@@ -1097,7 +1212,7 @@ impl Plugin for WorkflowPlugin {
                 }
             }
             "tools" => {
-                let (action, action_input) = ToolsToolInput::resolve_tool("tools", input.input)?;
+                let (action, action_input) = resolve_tools_tool_input(input.input)?;
                 match action.as_str() {
                     "search" => {
                         self.invoke_tool_search(
@@ -1113,6 +1228,7 @@ impl Plugin for WorkflowPlugin {
                         )
                         .await
                     }
+                    "usage" => Ok(Self::invoke_tool_catalog_usage()),
                     other => Err(PluginError::invalid_params(format!(
                         "unknown tools action '{other}'"
                     ))),
@@ -1440,6 +1556,87 @@ mod tests {
         )
         .expect_err("tools search should reject unknown fields");
         assert!(err.to_string().contains("unknown field `backend`"));
+
+        let err = resolve_tools_tool_input(json!({
+            "action": "search",
+            "query": "memory",
+            "backend": "legacy"
+        }))
+        .expect_err("tools resolver should preserve unknown-field rejection");
+        assert!(err.to_string().contains("unknown field `backend`"));
+    }
+
+    #[test]
+    fn tools_search_accepts_query_without_action() {
+        let (action, action_input) = resolve_tools_tool_input(json!({
+            "query": "web network",
+            "limit": 3
+        }))
+        .expect("query-only tools input should infer search");
+
+        assert_eq!(action, "search");
+        let parsed: ToolSearchToolInput =
+            serde_json::from_value(action_input).expect("search input");
+        assert_eq!(parsed.query, "web network");
+        assert_eq!(parsed.limit, Some(3));
+    }
+
+    #[test]
+    fn tools_search_ignores_help_only_noise_fields() {
+        let (action, action_input) = resolve_tools_tool_input(json!({
+            "action": "search",
+            "include_schema": false,
+            "limit": 10,
+            "query": "network tools web fetch search crawl",
+            "tool": ""
+        }))
+        .expect("search should ignore known help-only fields");
+
+        assert_eq!(action, "search");
+        let parsed: ToolSearchToolInput =
+            serde_json::from_value(action_input).expect("search input");
+        assert_eq!(parsed.query, "network tools web fetch search crawl");
+        assert_eq!(parsed.limit, Some(10));
+    }
+
+    #[test]
+    fn tools_help_accepts_tool_name_without_action() {
+        let (action, action_input) = resolve_tools_tool_input(json!({
+            "tool_name": "agena.web/search",
+            "include_schema": false
+        }))
+        .expect("tool_name-only tools input should infer help");
+
+        assert_eq!(action, "help");
+        let parsed: ToolsHelpInput = serde_json::from_value(action_input).expect("help input");
+        assert_eq!(parsed.tool, "agena.web/search");
+        assert_eq!(parsed.include_schema, Some(false));
+    }
+
+    #[test]
+    fn tools_help_ignores_search_only_noise_fields() {
+        let (action, action_input) = resolve_tools_tool_input(json!({
+            "action": "help",
+            "tool": "agena.web/search",
+            "query": "web",
+            "limit": 10,
+            "include_schema": true
+        }))
+        .expect("help should ignore known search-only fields");
+
+        assert_eq!(action, "help");
+        let parsed: ToolsHelpInput = serde_json::from_value(action_input).expect("help input");
+        assert_eq!(parsed.tool, "agena.web/search");
+        assert_eq!(parsed.include_schema, Some(true));
+    }
+
+    #[test]
+    fn tools_empty_input_returns_usage() {
+        let (action, action_input) =
+            resolve_tools_tool_input(json!({})).expect("empty tools input should return usage");
+
+        assert_eq!(action, "usage");
+        assert_eq!(action_input, json!({}));
     }
 
     #[test]

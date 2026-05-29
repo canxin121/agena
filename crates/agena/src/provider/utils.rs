@@ -817,6 +817,8 @@ pub fn optional_non_empty(value: Option<String>) -> Option<String> {
 
 // ─── OpenAI Responses API event helpers ──────────────────────────────────────
 
+const RESPONSES_CALL_ID_MAX_CHARS: usize = 64;
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ChatStreamChunk {
     #[serde(default)]
@@ -865,6 +867,14 @@ pub struct ResponsesToolEvent {
     pub id: Option<String>,
     pub name: Option<String>,
     pub arguments: Option<String>,
+}
+
+pub fn responses_protocol_call_id(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter(|value| value.chars().count() <= RESPONSES_CALL_ID_MAX_CHARS)
+        .map(ToOwned::to_owned)
 }
 
 impl ResponsesToolEvent {
@@ -939,12 +949,14 @@ pub fn responses_tool_event(
         )?;
         let item_id = normalize_optional_text(parsed.item_id);
         let call_id = normalize_optional_text(parsed.call_id);
+        let id = responses_protocol_call_id(call_id.as_deref())
+            .or_else(|| responses_protocol_call_id(item_id.as_deref()));
         return Ok(Some(ResponsesToolEvent {
             kind: ResponsesToolEventKind::Delta,
             output_index: parsed.output_index,
             item_id: item_id.clone(),
             call_id: call_id.clone(),
-            id: call_id.or(item_id),
+            id,
             name: normalize_optional_text(parsed.name),
             arguments: optional_non_empty(Some(parsed.delta)),
         }));
@@ -958,12 +970,14 @@ pub fn responses_tool_event(
         )?;
         let item_id = normalize_optional_text(parsed.item_id);
         let call_id = normalize_optional_text(parsed.call_id);
+        let id = responses_protocol_call_id(call_id.as_deref())
+            .or_else(|| responses_protocol_call_id(item_id.as_deref()));
         return Ok(Some(ResponsesToolEvent {
             kind: ResponsesToolEventKind::Done,
             output_index: parsed.output_index,
             item_id: item_id.clone(),
             call_id: call_id.clone(),
-            id: call_id.or(item_id),
+            id,
             name: normalize_optional_text(parsed.name),
             arguments: optional_non_empty(Some(parsed.arguments)),
         }));
@@ -977,6 +991,8 @@ pub fn responses_tool_event(
         }
         let item_id = normalize_optional_text(parsed.item.id);
         let call_id = normalize_optional_text(parsed.item.call_id);
+        let id = responses_protocol_call_id(call_id.as_deref())
+            .or_else(|| responses_protocol_call_id(item_id.as_deref()));
         return Ok(Some(ResponsesToolEvent {
             kind: if event_type == "response.output_item.added" {
                 ResponsesToolEventKind::Added
@@ -986,7 +1002,7 @@ pub fn responses_tool_event(
             output_index: parsed.output_index,
             item_id: item_id.clone(),
             call_id: call_id.clone(),
-            id: call_id.or(item_id),
+            id,
             name: normalize_optional_text(parsed.item.name),
             arguments: optional_non_empty(parsed.item.arguments),
         }));
@@ -1384,6 +1400,29 @@ mod tests {
                 .stream_key_candidates("openai")
                 .expect("stream keys"),
             vec!["item:item_1".to_string()]
+        );
+    }
+
+    #[test]
+    fn responses_tool_event_does_not_expose_oversized_item_id_as_call_id() {
+        let oversized_id = "k".repeat(412);
+        let event = serde_json::json!({
+            "type": "response.function_call_arguments.delta",
+            "item_id": oversized_id,
+            "delta": "{\"query\""
+        });
+
+        let tool_event = responses_tool_event("openai", &event)
+            .expect("parse tool event")
+            .expect("tool event");
+
+        assert_eq!(tool_event.id, None);
+        assert_eq!(tool_event.item_id.as_deref(), Some(oversized_id.as_str()));
+        assert_eq!(
+            tool_event
+                .stream_key_candidates("openai")
+                .expect("stream keys"),
+            vec![format!("item:{oversized_id}")]
         );
     }
 }

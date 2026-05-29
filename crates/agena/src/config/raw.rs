@@ -500,12 +500,10 @@ fn resolve_default_agent(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        let agent = agents.get(explicit_agent).ok_or_else(|| {
-            ConfigError::Validation(format!(
-                "agents.default `{explicit_agent}` references unknown agent"
-            ))
-        })?;
-        if agent.disabled {
+        if agents
+            .get(explicit_agent)
+            .is_some_and(|agent| agent.disabled)
+        {
             return Err(ConfigError::Validation(format!(
                 "agents.default `{explicit_agent}` references disabled agent"
             )));
@@ -2526,6 +2524,39 @@ mod tests {
                 && binding.connector_names == vec!["docs".to_owned()]
         }));
         assert_eq!(bindings.len(), 3);
+    }
+
+    #[test]
+    fn resolves_default_agent_name_from_external_registry() {
+        let resolved = resolve_config(json!({
+            "agents": {
+                "default": "build"
+            }
+        }))
+        .expect("agents.default should allow default or disk-discovered agent profiles");
+
+        assert_eq!(resolved.default_agent.as_deref(), Some("build"));
+    }
+
+    #[test]
+    fn rejects_disabled_config_agent_as_default() {
+        let error = resolve_config(json!({
+            "agents": {
+                "default": "planner",
+                "planner": {
+                    "disabled": true,
+                    "prompt": "Plan the next steps."
+                }
+            }
+        }))
+        .expect_err("disabled config-backed agents must not be selectable defaults");
+
+        assert!(
+            error
+                .to_string()
+                .contains("agents.default `planner` references disabled agent"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

@@ -244,6 +244,20 @@ impl RunBuffer {
         Ok(())
     }
 
+    pub fn replace_tool_arguments(
+        &mut self,
+        call_id: &ToolCallId,
+        arguments_text: impl Into<String>,
+    ) -> Result<(), RunBufferError> {
+        let asst = self.current_assistant()?;
+        let entry = asst
+            .tool_calls
+            .get_mut(call_id)
+            .ok_or_else(|| RunBufferError::UnknownToolCall(call_id.clone()))?;
+        entry.arguments_text = arguments_text.into();
+        Ok(())
+    }
+
     pub fn set_finish_reason(&mut self, reason: FinishReason) -> Result<(), RunBufferError> {
         self.current_assistant()?.finish_reason = reason;
         Ok(())
@@ -426,5 +440,33 @@ mod tests {
 
         assert_eq!(issued.call_id, new_call_id);
         assert_eq!(issued.arguments, json!({"query": "web"}));
+    }
+
+    #[test]
+    fn commit_uses_replaced_tool_arguments_snapshot() {
+        let mut ids = SequentialIdAllocator::starting_at(1);
+        let mut buffer = RunBuffer::new(RunId::new());
+        buffer.begin_assistant(&mut ids);
+
+        let call_id = ToolCallId::new("call_1");
+        buffer.start_tool_call(call_id.clone()).unwrap();
+        buffer.name_tool_call(&call_id, "lookup").unwrap();
+        buffer
+            .append_tool_arguments(&call_id, r#"{"query":"old"}"#)
+            .unwrap();
+        buffer
+            .replace_tool_arguments(&call_id, r#"{"query":"new"}"#)
+            .unwrap();
+
+        let events = buffer.commit(&mut ids).unwrap();
+        let issued = events
+            .iter()
+            .find_map(|event| match event {
+                EventKind::ToolCallIssued(payload) => Some(payload),
+                _ => None,
+            })
+            .expect("tool call issued event");
+
+        assert_eq!(issued.arguments, json!({"query": "new"}));
     }
 }

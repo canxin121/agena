@@ -709,6 +709,22 @@ where
                 }
                 state.arguments.push_str(arguments_delta.as_str());
             }
+            CompletionStreamEvent::ToolCallSnapshot {
+                stream_key,
+                id,
+                name,
+                arguments_json,
+                ..
+            } => {
+                let state = tool_calls.entry(stream_key).or_default();
+                if let Some(id) = id {
+                    state.id = Some(id);
+                }
+                if let Some(name) = name {
+                    state.name = Some(name);
+                }
+                state.arguments = arguments_json;
+            }
             CompletionStreamEvent::Completed {
                 provider_id: pid,
                 model,

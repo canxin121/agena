@@ -304,6 +304,45 @@ impl SessionProcessor {
                             .map_err(|err| AppError::Internal(err.to_string()))?;
                     }
                 }
+                Ok(CompletionStreamEvent::ToolCallSnapshot {
+                    stream_key,
+                    id,
+                    name,
+                    arguments_json,
+                    ..
+                }) => {
+                    saw_tool_call = true;
+                    if let Some(part_id) = active_text_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
+                    if let Some(part_id) = active_reasoning_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
+
+                    let pending = pending_calls.entry(stream_key).or_default();
+                    if let Some(id) = id {
+                        pending.id = Some(id);
+                    }
+                    if let Some(name) = name {
+                        pending.name = Some(canonical_tool_name_from_model_name(
+                            name.as_str(),
+                            run.completion.tools.as_slice(),
+                        ));
+                    }
+                    pending.arguments_json = arguments_json.clone();
+                    self.ensure_pending_tool_call_part(
+                        &mut run,
+                        &mut assistant,
+                        &mut run_buffer,
+                        pending,
+                    )
+                    .await?;
+                    if let Some(history_call_id) = pending.history_call_id.as_ref() {
+                        run_buffer
+                            .replace_tool_arguments(history_call_id, arguments_json)
+                            .map_err(|err| AppError::Internal(err.to_string()))?;
+                    }
+                }
                 Ok(CompletionStreamEvent::Completed {
                     finish_reason,
                     usage: usage_value,

@@ -149,94 +149,164 @@ const AWS_REGION_CHOICES: &[&str] = &[
     "af-south-1",
 ];
 
-const SETTINGS_FIELDS: [SettingsFieldSpec; 18] = [
+const PLUGIN_TOOL_PRESENTATION_PATH: &str = "plugins.policy.tool_presentation";
+const PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH: &str =
+    "plugins.policy.tool_presentation.default_mode";
+const LEGACY_PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH: &str =
+    "plugins.tool_presentation.default_mode";
+const MEMORY_PROJECT_INSTRUCTIONS_ENABLED_PATH: &str =
+    "plugins.list.\"agena.memory\".config.project_instructions.enabled";
+const MEMORY_PROJECT_INSTRUCTIONS_INCLUDE_GLOBAL_PATH: &str =
+    "plugins.list.\"agena.memory\".config.project_instructions.include_global";
+
+const SETTINGS_FIELDS: [SettingsFieldSpec; 25] = [
     SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigProviders,
         path: "providers.default",
         description_key: "settings-field-default-provider-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigAgents,
         path: "agents.default",
         description_key: "settings-field-default-agent-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigUi,
         path: "ui.locale",
         description_key: "settings-field-ui-locale-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigTracing,
+        path: "tracing.filter",
+        description_key: "settings-field-tracing-filter-description",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigTracing,
+        path: "tracing.database",
+        description_key: "settings-field-tracing-database-description",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigTracing,
+        path: "tracing.adapter",
+        description_key: "settings-field-tracing-adapter-description",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.providers.http.timeout_secs",
         description_key: "settings-field-runtime-provider-http-timeout-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.providers.http.connect_timeout_secs",
         description_key: "settings-field-runtime-provider-http-connect-timeout-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.providers.retry.max_retries",
         description_key: "settings-field-runtime-request-retry-max-retries-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.providers.retry.base_delay_ms",
         description_key: "settings-field-runtime-request-retry-base-delay-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.providers.retry.max_delay_ms",
         description_key: "settings-field-runtime-request-retry-max-delay-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
+        path: "runtime.providers.stream_replay.max_retries_after_output",
+        description_key: "settings-field-runtime-stream-replay-max-retries-after-output-description",
+        kind: SettingsFieldKind::Integer,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
+        path: "runtime.providers.stream_replay.max_tracked_events",
+        description_key: "settings-field-runtime-stream-replay-max-tracked-events-description",
+        kind: SettingsFieldKind::Integer,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.reload.enabled",
         description_key: "settings-field-runtime-reload-enabled-description",
         kind: SettingsFieldKind::Bool,
     },
     SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.reload.poll_interval_secs",
         description_key: "settings-field-runtime-reload-poll-interval-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.model_catalog.cache_max_age_secs",
         description_key: "settings-field-runtime-model-catalog-cache-max-age-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.session.cache.max_sessions",
         description_key: "settings-field-runtime-session-cache-max-sessions-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.session.cache.ttl_secs",
         description_key: "settings-field-runtime-session-cache-ttl-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.session.cache.max_bytes",
         description_key: "settings-field-runtime-session-cache-max-bytes-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.session.gc.enabled",
         description_key: "settings-field-runtime-session-gc-enabled-description",
         kind: SettingsFieldKind::Bool,
     },
     SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.session.gc.interval_secs",
         description_key: "settings-field-runtime-session-gc-interval-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
-        path: "memory.project_instructions.enabled",
+        section: SettingsStudioSectionId::ConfigSession,
+        path: "session.compaction.auto",
+        description_key: "settings-field-session-compaction-auto-description",
+        kind: SettingsFieldKind::Bool,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigSession,
+        path: "session.compaction.reserved_tokens",
+        description_key: "settings-field-session-compaction-reserved-tokens-description",
+        kind: SettingsFieldKind::Integer,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigPlugins,
+        path: MEMORY_PROJECT_INSTRUCTIONS_ENABLED_PATH,
         description_key: "settings-field-plugin-memory-project-instructions-enabled-description",
         kind: SettingsFieldKind::Bool,
     },
     SettingsFieldSpec {
-        path: "memory.project_instructions.include_global",
+        section: SettingsStudioSectionId::ConfigPlugins,
+        path: MEMORY_PROJECT_INSTRUCTIONS_INCLUDE_GLOBAL_PATH,
         description_key: "settings-field-plugin-memory-project-instructions-include-global-description",
         kind: SettingsFieldKind::Bool,
     },
@@ -844,14 +914,18 @@ impl SectionedListSection for SettingsStudioSection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsStudioSectionId {
-    General,
-    Runtime,
-    Plugins,
-    PluginEntries,
-    Agents,
-    Providers,
-    ModelCatalog,
-    Permissions,
+    ConfigProviders,
+    ConfigAgents,
+    ConfigPermission,
+    ConfigPlugins,
+    ConfigRuntime,
+    ConfigSession,
+    ConfigHarnesses,
+    ConfigTracing,
+    ConfigUi,
+    RuntimeOverrides,
+    RuntimeRules,
+    Catalogs,
     Files,
 }
 
@@ -907,6 +981,7 @@ enum PermissionRuleStudioChoiceField {
 
 #[derive(Debug, Clone, Copy)]
 struct SettingsFieldSpec {
+    section: SettingsStudioSectionId,
     path: &'static str,
     description_key: &'static str,
     kind: SettingsFieldKind,
@@ -3157,29 +3232,31 @@ impl App {
                 self.refresh_settings_studio_overlay(dialog);
                 false
             }
-            KeyCode::Char('d')
-                if dialog.state.focus() == SettingsStudioFocus::Items
-                    && matches!(
-                        dialog.state.selected_section(),
-                        Some(section) if section.id == SettingsStudioSectionId::Agents
-                    ) =>
-            {
+            KeyCode::Char('d') if dialog.state.focus() == SettingsStudioFocus::Items => {
                 let Some(item) = dialog.state.selected_item().cloned() else {
                     return false;
                 };
-                let SettingsPickerAction::OpenAgent(agent) = item.action else {
-                    return false;
-                };
-                self.set_default_agent(agent.name.as_str(), dialog);
+                match item.action {
+                    SettingsPickerAction::OpenAgent(agent) => {
+                        self.set_default_agent(agent.name.as_str(), dialog);
+                    }
+                    SettingsPickerAction::TogglePluginConfigEnabled {
+                        plugin_id,
+                        configured_plugin,
+                        enabled,
+                    } => {
+                        self.toggle_plugin_config_enabled(
+                            plugin_id.as_str(),
+                            configured_plugin,
+                            enabled,
+                            dialog,
+                        );
+                    }
+                    _ => return false,
+                }
                 false
             }
-            KeyCode::Char('t') | KeyCode::Char('d')
-                if dialog.state.focus() == SettingsStudioFocus::Items
-                    && matches!(
-                        dialog.state.selected_section(),
-                        Some(section) if section.id == SettingsStudioSectionId::PluginEntries
-                    ) =>
-            {
+            KeyCode::Char('t') if dialog.state.focus() == SettingsStudioFocus::Items => {
                 let Some(item) = dialog.state.selected_item().cloned() else {
                     return false;
                 };
@@ -8728,22 +8805,62 @@ impl App {
             .list_model_catalog_models("", 0, 1)
             .map_err(|error| error.to_string())?;
 
-        let general_items = settings_studio_general_items(&self.i18n, &sources);
-        let runtime_items = settings_studio_runtime_items(&self.i18n, &self.run_options);
-        let plugin_items = settings_studio_plugin_items(&self.i18n, &sources);
-        let agent_items =
-            settings_studio_agent_items(&self.i18n, &agents, default_agent.as_deref());
-        let provider_items = settings_studio_provider_items(&self.i18n, &configured_providers);
+        let runtime_override_items = settings_studio_runtime_items(&self.i18n, &self.run_options);
+        let mut plugin_items = settings_studio_plugin_items(&self.i18n, &sources);
+        plugin_items.extend(settings_studio_field_items(
+            &self.i18n,
+            &sources,
+            SettingsStudioSectionId::ConfigPlugins,
+        ));
+        plugin_items.extend(plugin_config_items.clone());
+        let mut agent_items = settings_studio_field_items(
+            &self.i18n,
+            &sources,
+            SettingsStudioSectionId::ConfigAgents,
+        );
+        agent_items.extend(settings_studio_agent_items(
+            &self.i18n,
+            &agents,
+            default_agent.as_deref(),
+        ));
+        let mut provider_items = settings_studio_field_items(
+            &self.i18n,
+            &sources,
+            SettingsStudioSectionId::ConfigProviders,
+        );
+        provider_items.extend(settings_studio_provider_items(
+            &self.i18n,
+            &configured_providers,
+        ));
+        let runtime_config_items = settings_studio_field_items(
+            &self.i18n,
+            &sources,
+            SettingsStudioSectionId::ConfigRuntime,
+        );
+        let session_config_items = settings_studio_field_items(
+            &self.i18n,
+            &sources,
+            SettingsStudioSectionId::ConfigSession,
+        );
+        let tracing_items = settings_studio_field_items(
+            &self.i18n,
+            &sources,
+            SettingsStudioSectionId::ConfigTracing,
+        );
+        let ui_items =
+            settings_studio_field_items(&self.i18n, &sources, SettingsStudioSectionId::ConfigUi);
+        let harness_items = settings_studio_harness_items(&self.i18n, &sources);
         let model_catalog_items = settings_studio_model_catalog_items(&self.i18n, &model_catalog);
         let file_items = settings_studio_file_items(&self.i18n, &sources);
-        let mut permission_items = vec![SettingsStudioItem {
+        let permission_items = vec![SettingsStudioItem {
             label: ui_text::t(&self.i18n, "settings-permission-global-label"),
             value: permission_override_summary(&self.i18n, &global_permission),
             detail: ui_text::t(&self.i18n, "settings-permission-global-detail"),
             action: SettingsPickerAction::OpenGlobalPermissionWorkbench,
         }];
+        let mut runtime_rule_items = Vec::new();
         if let Some(current_session_permission) = current_session_permission.as_ref() {
-            permission_items.push(SettingsStudioItem {
+            runtime_rule_items.push(SettingsStudioItem {
                 label: ui_text::t(&self.i18n, "settings-permission-current-label"),
                 value: permission_settings_value(
                     &self.i18n,
@@ -8757,7 +8874,7 @@ impl App {
                 action: SettingsPickerAction::OpenCurrentSessionPermissionWorkbench,
             });
         }
-        permission_items.push(SettingsStudioItem {
+        runtime_rule_items.push(SettingsStudioItem {
             label: ui_text::t(&self.i18n, "overlay-settings-manage-permission-rules"),
             value: permission_rule_count.to_string(),
             detail: ui_text::t(
@@ -8769,57 +8886,20 @@ impl App {
         let agent_count = agents.len();
         let mut sections = vec![
             SettingsStudioSection {
-                id: SettingsStudioSectionId::General,
-                label: ui_text::t(&self.i18n, "overlay-settings-section-general-label"),
+                id: SettingsStudioSectionId::ConfigProviders,
+                label: ui_text::t(&self.i18n, "overlay-settings-section-providers-label"),
                 summary: self.i18n.text_args(
-                    "overlay-settings-section-general-summary",
-                    &crate::fl_args!("count" => general_items.len() as i64),
-                ),
-                description: ui_text::t(&self.i18n, "overlay-settings-section-general-description"),
-                items: general_items,
-            },
-            SettingsStudioSection {
-                id: SettingsStudioSectionId::Runtime,
-                label: ui_text::t(&self.i18n, "overlay-settings-section-runtime-label"),
-                summary: ui_text::t(&self.i18n, "overlay-settings-section-runtime-summary"),
-                description: ui_text::t(&self.i18n, "overlay-settings-section-runtime-description"),
-                items: runtime_items,
-            },
-            SettingsStudioSection {
-                id: SettingsStudioSectionId::Plugins,
-                label: ui_text::t(&self.i18n, "overlay-settings-section-plugins-label"),
-                summary: self.i18n.text_args(
-                    "overlay-settings-section-plugins-summary",
-                    &crate::fl_args!(
-                        "mode" => settings_studio_tool_description_mode_label(
-                            &self.i18n,
-                            plugins_default_mode.as_str(),
-                        ),
-                    ),
-                ),
-                description: ui_text::t(&self.i18n, "overlay-settings-section-plugins-description"),
-                items: plugin_items,
-            },
-            SettingsStudioSection {
-                id: SettingsStudioSectionId::PluginEntries,
-                label: ui_text::t(&self.i18n, "overlay-settings-section-plugin-entries-label"),
-                summary: self.i18n.text_args(
-                    "overlay-settings-section-plugin-entries-summary",
-                    &crate::fl_args!(
-                        "count" => plugin_config_items.len() as i64,
-                        "inactive" => settings_studio_plugin_config_inactive_count(
-                            &plugin_config_items
-                        ) as i64,
-                    ),
+                    "overlay-settings-section-providers-summary",
+                    &crate::fl_args!("count" => configured_providers.len() as i64),
                 ),
                 description: ui_text::t(
                     &self.i18n,
-                    "overlay-settings-section-plugin-entries-description",
+                    "overlay-settings-section-providers-description",
                 ),
-                items: plugin_config_items,
+                items: provider_items,
             },
             SettingsStudioSection {
-                id: SettingsStudioSectionId::Agents,
+                id: SettingsStudioSectionId::ConfigAgents,
                 label: ui_text::t(&self.i18n, "overlay-settings-section-agents-label"),
                 summary: match default_agent.as_deref() {
                     Some(default) => self.i18n.text_args(
@@ -8840,20 +8920,99 @@ impl App {
                 items: agent_items,
             },
             SettingsStudioSection {
-                id: SettingsStudioSectionId::Providers,
-                label: ui_text::t(&self.i18n, "overlay-settings-section-providers-label"),
+                id: SettingsStudioSectionId::ConfigPermission,
+                label: ui_text::t(&self.i18n, "overlay-settings-section-permissions-label"),
+                summary: permission_override_summary(&self.i18n, &global_permission),
+                description: ui_text::t(
+                    &self.i18n,
+                    "overlay-settings-section-permissions-description",
+                ),
+                items: permission_items,
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::ConfigPlugins,
+                label: ui_text::t(&self.i18n, "overlay-settings-section-plugins-label"),
                 summary: self.i18n.text_args(
-                    "overlay-settings-section-providers-summary",
-                    &crate::fl_args!("count" => configured_providers.len() as i64),
+                    "overlay-settings-section-plugins-summary",
+                    &crate::fl_args!(
+                        "mode" => settings_studio_tool_description_mode_label(
+                            &self.i18n,
+                            plugins_default_mode.as_str(),
+                        ),
+                    ),
+                ),
+                description: ui_text::t(&self.i18n, "overlay-settings-section-plugins-description"),
+                items: plugin_items,
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::ConfigRuntime,
+                label: ui_text::t(&self.i18n, "overlay-settings-section-runtime-label"),
+                summary: settings_studio_config_root_summary(&sources, "runtime"),
+                description: ui_text::t(&self.i18n, "overlay-settings-section-runtime-description"),
+                items: runtime_config_items,
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::ConfigSession,
+                label: ui_text::t(&self.i18n, "overlay-settings-section-session-label"),
+                summary: settings_studio_config_root_summary(&sources, "session"),
+                description: ui_text::t(&self.i18n, "overlay-settings-section-session-description"),
+                items: session_config_items,
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::ConfigHarnesses,
+                label: ui_text::t(&self.i18n, "overlay-settings-section-harnesses-label"),
+                summary: settings_studio_config_root_summary(&sources, "harnesses"),
+                description: ui_text::t(
+                    &self.i18n,
+                    "overlay-settings-section-harnesses-description",
+                ),
+                items: harness_items,
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::ConfigTracing,
+                label: ui_text::t(&self.i18n, "overlay-settings-section-tracing-label"),
+                summary: settings_studio_config_root_summary(&sources, "tracing"),
+                description: ui_text::t(&self.i18n, "overlay-settings-section-tracing-description"),
+                items: tracing_items,
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::ConfigUi,
+                label: ui_text::t(&self.i18n, "overlay-settings-section-ui-label"),
+                summary: settings_studio_config_root_summary(&sources, "ui"),
+                description: ui_text::t(&self.i18n, "overlay-settings-section-ui-description"),
+                items: ui_items,
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::RuntimeOverrides,
+                label: ui_text::t(
+                    &self.i18n,
+                    "overlay-settings-section-runtime-overrides-label",
+                ),
+                summary: ui_text::t(
+                    &self.i18n,
+                    "overlay-settings-section-runtime-overrides-summary",
                 ),
                 description: ui_text::t(
                     &self.i18n,
-                    "overlay-settings-section-providers-description",
+                    "overlay-settings-section-runtime-overrides-description",
                 ),
-                items: provider_items,
+                items: runtime_override_items,
             },
             SettingsStudioSection {
-                id: SettingsStudioSectionId::ModelCatalog,
+                id: SettingsStudioSectionId::RuntimeRules,
+                label: ui_text::t(&self.i18n, "overlay-settings-section-runtime-rules-label"),
+                summary: self.i18n.text_args(
+                    "overlay-settings-section-runtime-rules-summary",
+                    &crate::fl_args!("count" => permission_rule_count as i64),
+                ),
+                description: ui_text::t(
+                    &self.i18n,
+                    "overlay-settings-section-runtime-rules-description",
+                ),
+                items: runtime_rule_items,
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::Catalogs,
                 label: ui_text::t(&self.i18n, "overlay-settings-section-model-catalog-label"),
                 summary: self.i18n.text_args(
                     "overlay-settings-section-model-catalog-summary",
@@ -8864,22 +9023,6 @@ impl App {
                     "overlay-settings-section-model-catalog-description",
                 ),
                 items: model_catalog_items,
-            },
-            SettingsStudioSection {
-                id: SettingsStudioSectionId::Permissions,
-                label: ui_text::t(&self.i18n, "overlay-settings-section-permissions-label"),
-                summary: join_inline_segments(vec![
-                    self.i18n.text_args(
-                        "overlay-settings-section-permissions-summary",
-                        &crate::fl_args!("count" => permission_rule_count as i64),
-                    ),
-                    permission_override_summary(&self.i18n, &global_permission),
-                ]),
-                description: ui_text::t(
-                    &self.i18n,
-                    "overlay-settings-section-permissions-description",
-                ),
-                items: permission_items,
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::Files,
@@ -10255,6 +10398,12 @@ impl App {
                     .map(|(code, detail)| choice_item(*code, *detail))
                     .collect(),
             ),
+            "tracing.filter" | "tracing.database" | "tracing.adapter" => Some(
+                ["off", "error", "warn", "info", "debug", "trace"]
+                    .into_iter()
+                    .map(|level| choice_item(level, "log level"))
+                    .collect(),
+            ),
             _ if matches!(field.kind, SettingsFieldKind::Bool) => Some(boolean_choice_items(
                 settings_choice_bool_override_detail(&self.i18n).as_str(),
             )),
@@ -10265,7 +10414,9 @@ impl App {
     fn settings_field_choice_overlay_style(field: SettingsFieldSpec) -> ChoiceOverlayStyle {
         match field.path {
             "providers.default" | "agents.default" => ChoiceOverlayStyle::Searchable,
-            "ui.locale" => ChoiceOverlayStyle::SelectOnly,
+            "ui.locale" | "tracing.filter" | "tracing.database" | "tracing.adapter" => {
+                ChoiceOverlayStyle::SelectOnly
+            }
             _ if matches!(field.kind, SettingsFieldKind::Bool) => ChoiceOverlayStyle::SelectOnly,
             _ => ChoiceOverlayStyle::Searchable,
         }
@@ -10623,7 +10774,7 @@ impl App {
             "help"
         };
         match self.block_on_async(self.backend.set_config_setting(
-            "plugins.tool_presentation.default_mode",
+            PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH,
             JsonValue::String(next.to_string()),
         )) {
             Ok(_) => {
@@ -15100,12 +15251,14 @@ fn runtime_setting_override_summary(i18n: &I18n, value: &str) -> String {
     )
 }
 
-fn settings_studio_general_items(
+fn settings_studio_field_items(
     i18n: &I18n,
     sources: &ConfigJsonSources,
+    section: SettingsStudioSectionId,
 ) -> Vec<SettingsStudioItem> {
     SETTINGS_FIELDS
         .iter()
+        .filter(|field| field.section == section)
         .map(|field| {
             let file_value =
                 get_json_path(&sources.file, Some(field.path)).unwrap_or(JsonValue::Null);
@@ -15123,6 +15276,44 @@ fn settings_studio_general_items(
             }
         })
         .collect()
+}
+
+fn settings_studio_harness_items(
+    i18n: &I18n,
+    sources: &ConfigJsonSources,
+) -> Vec<SettingsStudioItem> {
+    ["harnesses.browser", "harnesses.shell", "harnesses.editor"]
+        .into_iter()
+        .map(|path| settings_studio_config_path_item(i18n, sources, path))
+        .collect()
+}
+
+fn settings_studio_config_path_item(
+    i18n: &I18n,
+    sources: &ConfigJsonSources,
+    path: &str,
+) -> SettingsStudioItem {
+    let file_value = get_json_path(&sources.file, Some(path)).unwrap_or(JsonValue::Null);
+    let effective_value = get_json_path(&sources.effective, Some(path)).unwrap_or(JsonValue::Null);
+    SettingsStudioItem {
+        label: path.to_string(),
+        value: format_setting_value_inline(&effective_value),
+        detail: format!(
+            "{} · {}",
+            ui_text::t(i18n, "settings-config-open-file-detail"),
+            format_setting_field_summary(&file_value, &effective_value)
+        ),
+        action: SettingsPickerAction::OpenConfigFile,
+    }
+}
+
+fn settings_studio_config_root_summary(sources: &ConfigJsonSources, path: &str) -> String {
+    let file_value = get_json_path(&sources.file, Some(path)).unwrap_or(JsonValue::Null);
+    let effective_value = get_json_path(&sources.effective, Some(path)).unwrap_or(JsonValue::Null);
+    format!(
+        "{path} · {}",
+        format_setting_field_summary(&file_value, &effective_value)
+    )
 }
 
 fn settings_studio_runtime_items(
@@ -15180,14 +15371,21 @@ fn quoted_settings_segment(value: &str) -> String {
 }
 
 fn settings_studio_plugins_default_mode(sources: &ConfigJsonSources) -> String {
-    get_json_path(
+    let current = get_json_path(
         &sources.effective,
-        Some("plugins.tool_presentation.default_mode"),
+        Some(PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH),
     )
-    .unwrap_or(JsonValue::String("detailed".to_string()))
-    .as_str()
-    .unwrap_or("detailed")
-    .to_string()
+    .unwrap_or(JsonValue::Null);
+    let current = if current.is_null() {
+        get_json_path(
+            &sources.effective,
+            Some(LEGACY_PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH),
+        )
+        .unwrap_or(JsonValue::Null)
+    } else {
+        current
+    };
+    current.as_str().unwrap_or("detailed").to_string()
 }
 
 fn settings_studio_plugins_count(sources: &ConfigJsonSources, path: &str) -> usize {
@@ -15352,9 +15550,9 @@ fn settings_studio_plugin_items(
 ) -> Vec<SettingsStudioItem> {
     let default_mode = settings_studio_plugins_default_mode(sources);
     let plugin_override_count =
-        settings_studio_plugins_count(sources, "plugins.tool_presentation.plugins");
+        settings_studio_plugins_count(sources, "plugins.policy.tool_presentation.plugins");
     let tool_override_count =
-        settings_studio_plugins_count(sources, "plugins.tool_presentation.tools");
+        settings_studio_plugins_count(sources, "plugins.policy.tool_presentation.tools");
     vec![
         SettingsStudioItem {
             label: ui_text::t(i18n, "settings-plugin-workbench-label"),
@@ -15363,36 +15561,24 @@ fn settings_studio_plugin_items(
             action: SettingsPickerAction::OpenPluginWorkbench,
         },
         SettingsStudioItem {
-            label: "plugins.tool_presentation.default_mode".to_string(),
+            label: PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH.to_string(),
             value: settings_studio_tool_description_mode_label(i18n, default_mode.as_str()),
             detail: ui_text::t(i18n, "settings-plugin-default-mode-detail"),
             action: SettingsPickerAction::ToggleToolDescriptionMode,
         },
         SettingsStudioItem {
-            label: "plugins.tool_presentation.plugins".to_string(),
+            label: format!("{PLUGIN_TOOL_PRESENTATION_PATH}.plugins"),
             value: format!("{plugin_override_count} override(s)"),
             detail: ui_text::t(i18n, "settings-plugin-per-plugin-detail"),
             action: SettingsPickerAction::OpenConfigFile,
         },
         SettingsStudioItem {
-            label: "plugins.tool_presentation.tools".to_string(),
+            label: format!("{PLUGIN_TOOL_PRESENTATION_PATH}.tools"),
             value: format!("{tool_override_count} override(s)"),
             detail: ui_text::t(i18n, "settings-plugin-per-tool-detail"),
             action: SettingsPickerAction::OpenConfigFile,
         },
     ]
-}
-
-fn settings_studio_plugin_config_inactive_count(items: &[SettingsStudioItem]) -> usize {
-    items
-        .iter()
-        .filter(|item| {
-            matches!(
-                &item.action,
-                SettingsPickerAction::TogglePluginConfigEnabled { enabled: false, .. }
-            )
-        })
-        .count()
 }
 
 fn agent_default_summary(i18n: &I18n, default: &agena::agents::AgentSelectionConfig) -> String {
@@ -22475,6 +22661,7 @@ mod tests {
     use agena::plugin::status::{PluginRunState, PluginStatus};
     use chrono::Utc;
     use serde_json::json;
+    use tempfile::tempdir;
 
     fn permission_request(request_id: &str) -> PermissionRequest {
         PermissionRequest {
@@ -23628,6 +23815,167 @@ mod tests {
                 &crate::fl_args!("field" => bool_field.path),
             )
         );
+    }
+
+    #[test]
+    fn settings_fields_are_partitioned_by_current_config_roots() {
+        let i18n = I18n::english();
+        let sources = ConfigJsonSources {
+            config_path: PathBuf::from("/tmp/agena-config.json"),
+            config_found: true,
+            file: json!({}),
+            effective: json!({
+                "runtime": {
+                    "reload": { "enabled": true },
+                    "providers": {
+                        "stream_replay": {
+                            "max_retries_after_output": 2,
+                            "max_tracked_events": 2048
+                        }
+                    }
+                },
+                "plugins": {
+                    "list": {
+                        "agena.memory": {
+                            "config": {
+                                "project_instructions": {
+                                    "enabled": true,
+                                    "include_global": true
+                                }
+                            }
+                        }
+                    }
+                }
+            }),
+        };
+
+        let all_paths = SETTINGS_FIELDS
+            .iter()
+            .map(|field| field.path)
+            .collect::<Vec<_>>();
+        assert!(
+            !all_paths.iter().any(|path| path.starts_with("memory.")),
+            "settings fields must not expose removed top-level memory paths: {all_paths:?}"
+        );
+        assert!(all_paths.contains(&MEMORY_PROJECT_INSTRUCTIONS_ENABLED_PATH));
+        assert!(all_paths.contains(&MEMORY_PROJECT_INSTRUCTIONS_INCLUDE_GLOBAL_PATH));
+
+        let runtime_items =
+            settings_studio_field_items(&i18n, &sources, SettingsStudioSectionId::ConfigRuntime);
+        assert!(
+            runtime_items
+                .iter()
+                .all(|item| item.label.starts_with("runtime."))
+        );
+        assert!(runtime_items.iter().any(|item| {
+            item.label == "runtime.providers.stream_replay.max_retries_after_output"
+        }));
+
+        let plugin_items =
+            settings_studio_field_items(&i18n, &sources, SettingsStudioSectionId::ConfigPlugins);
+        assert!(plugin_items.iter().all(|item| {
+            item.label
+                .starts_with("plugins.list.\"agena.memory\".config.")
+        }));
+    }
+
+    #[test]
+    fn settings_plugin_policy_items_use_current_policy_path() {
+        let i18n = I18n::english();
+        let sources = ConfigJsonSources {
+            config_path: PathBuf::from("/tmp/agena-config.json"),
+            config_found: true,
+            file: json!({}),
+            effective: json!({
+                "plugins": {
+                    "policy": {
+                        "tool_presentation": {
+                            "default_mode": "help",
+                            "plugins": { "agena.web": "detailed" },
+                            "tools": { "agena.web/fetch": "help" }
+                        }
+                    }
+                }
+            }),
+        };
+
+        assert_eq!(settings_studio_plugins_default_mode(&sources), "help");
+        let items = settings_studio_plugin_items(&i18n, &sources);
+        let labels = items
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(labels.contains(&PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH));
+        assert!(labels.contains(&"plugins.policy.tool_presentation.plugins"));
+        assert!(labels.contains(&"plugins.policy.tool_presentation.tools"));
+        assert!(
+            !labels
+                .iter()
+                .any(|label| label.starts_with("plugins.tool_presentation")),
+            "plugin policy UI must not expose legacy plugins.tool_presentation paths: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn current_settings_write_paths_validate_against_config_schema() {
+        let temp = tempdir().expect("temp config dir");
+        let config_path = temp.path().join("config.json");
+        fs::write(&config_path, "{}\n").expect("write empty config");
+
+        for (path, value) in [
+            (PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH, json!("help")),
+            ("session.compaction.auto", json!(true)),
+            ("tracing.database", json!("error")),
+            (
+                "runtime.providers.stream_replay.max_tracked_events",
+                json!(2048),
+            ),
+        ] {
+            agena::config::set_file_setting(
+                config_path.clone(),
+                agena::config::ConfigSettingsSetInput {
+                    path: path.to_owned(),
+                    value,
+                    options: agena::config::ConfigSettingsEditOptions {
+                        dry_run: false,
+                        validate: true,
+                        reload: false,
+                    },
+                },
+            )
+            .unwrap_or_else(|error| panic!("{path} should validate: {error}"));
+        }
+
+        let memory_segments =
+            agena::config::parse_settings_path(MEMORY_PROJECT_INSTRUCTIONS_ENABLED_PATH)
+                .expect("memory settings path should parse");
+        assert_eq!(
+            &memory_segments[..4],
+            ["plugins", "list", "agena.memory", "config"]
+        );
+        agena::config::set_file_setting(
+            config_path.clone(),
+            agena::config::ConfigSettingsSetInput {
+                path: "plugins.list.\"agena.memory\"".to_owned(),
+                value: json!({
+                    "enabled": true,
+                    "package": { "kind": "static" },
+                    "config": {
+                        "project_instructions": {
+                            "enabled": true,
+                            "include_global": false
+                        }
+                    }
+                }),
+                options: agena::config::ConfigSettingsEditOptions {
+                    dry_run: false,
+                    validate: true,
+                    reload: false,
+                },
+            },
+        )
+        .expect("materialized agena.memory plugin config should validate");
     }
 
     #[test]

@@ -22,8 +22,8 @@ use agena::{
         draft_credential_provider_adapter_models_target,
         draft_gitlab_provider_adapter_models_target, draft_none_provider_adapter_models_target,
         draft_provider_adapter_models_target, list_provider_adapter_models_with_config,
-        patch_file_settings, provider_model_overlay_from_catalog_definition, read_file_setting,
-        saved_provider_adapter_models_target, set_file_setting,
+        parse_settings_path, patch_file_settings, provider_model_overlay_from_catalog_definition,
+        read_file_setting, saved_provider_adapter_models_target, set_file_setting,
     },
     event::{DomainEvent, EventKind},
     memory::MemoryStore,
@@ -1686,6 +1686,143 @@ pub struct ConfigJsonSources {
     pub effective: JsonValue,
 }
 
+fn set_effective_config_alias(root: &mut JsonValue, segments: &[&str], value: JsonValue) {
+    if segments.is_empty() {
+        *root = value;
+        return;
+    }
+    if !root.is_object() {
+        *root = JsonValue::Object(JsonMap::new());
+    }
+    let mut cursor = root;
+    for segment in &segments[..segments.len().saturating_sub(1)] {
+        let object = cursor.as_object_mut().expect("effective config object");
+        cursor = object
+            .entry((*segment).to_owned())
+            .or_insert_with(|| JsonValue::Object(JsonMap::new()));
+        if !cursor.is_object() {
+            *cursor = JsonValue::Object(JsonMap::new());
+        }
+    }
+    let object = cursor.as_object_mut().expect("effective config object");
+    object.insert(segments[segments.len() - 1].to_owned(), value);
+}
+
+fn augment_effective_config_json(
+    effective: &mut JsonValue,
+    config: &agena::config::ResolvedConfig,
+) {
+    if let Some(provider) = config.default_selection.provider.as_ref() {
+        set_effective_config_alias(
+            effective,
+            &["providers", "default"],
+            JsonValue::String(provider.clone()),
+        );
+    }
+    if let Some(agent) = config.default_agent.as_ref() {
+        set_effective_config_alias(
+            effective,
+            &["agents", "default"],
+            JsonValue::String(agent.clone()),
+        );
+    }
+}
+
+fn plugin_config_setting_target(path: &str) -> Result<Option<(String, Vec<String>)>> {
+    let segments = parse_settings_path(path).map_err(|error| anyhow!(error.to_string()))?;
+    if segments.len() < 4
+        || segments.first().is_none_or(|segment| segment != "plugins")
+        || segments.get(1).is_none_or(|segment| segment != "list")
+        || segments.get(3).is_none_or(|segment| segment != "config")
+    {
+        return Ok(None);
+    }
+    Ok(Some((segments[2].clone(), segments[4..].to_vec())))
+}
+
+fn default_static_plugin_record() -> JsonValue {
+    json!({
+        "enabled": true,
+        "package": { "kind": "static" },
+        "config": null
+    })
+}
+
+fn plugin_record_for_config_edit(sources: &ConfigJsonSources, plugin_id: &str) -> JsonValue {
+    let path = format!("plugins.list.{}", quoted_settings_segment(plugin_id));
+    agena::config::get_json_path(&sources.file, Some(path.as_str()))
+        .ok()
+        .filter(|value| value.is_object())
+        .or_else(|| {
+            agena::config::get_json_path(&sources.effective, Some(path.as_str()))
+                .ok()
+                .filter(|value| value.is_object())
+        })
+        .unwrap_or_else(default_static_plugin_record)
+}
+
+fn normalize_plugin_record_for_config_edit(record: &mut JsonValue) -> Result<&mut JsonValue> {
+    if !record.is_object() {
+        *record = default_static_plugin_record();
+    }
+    let object = record
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("plugin config record must be an object"))?;
+    object
+        .entry("enabled".to_owned())
+        .or_insert(JsonValue::Bool(true));
+    object
+        .entry("package".to_owned())
+        .or_insert_with(|| json!({ "kind": "static" }));
+    Ok(object
+        .entry("config".to_owned())
+        .or_insert_with(|| JsonValue::Object(JsonMap::new())))
+}
+
+fn set_nested_json_value(root: &mut JsonValue, segments: &[String], value: JsonValue) {
+    if segments.is_empty() {
+        *root = value;
+        return;
+    }
+    if !root.is_object() {
+        *root = JsonValue::Object(JsonMap::new());
+    }
+    let mut cursor = root;
+    for segment in &segments[..segments.len().saturating_sub(1)] {
+        let object = cursor.as_object_mut().expect("nested settings object");
+        cursor = object
+            .entry(segment.clone())
+            .or_insert_with(|| JsonValue::Object(JsonMap::new()));
+        if !cursor.is_object() {
+            *cursor = JsonValue::Object(JsonMap::new());
+        }
+    }
+    let object = cursor.as_object_mut().expect("nested settings object");
+    object.insert(segments[segments.len() - 1].clone(), value);
+}
+
+fn remove_nested_json_value(root: &mut JsonValue, segments: &[String]) -> bool {
+    if segments.is_empty() {
+        let deleted = !root.is_null();
+        *root = JsonValue::Null;
+        return deleted;
+    }
+    let mut cursor = root;
+    for segment in &segments[..segments.len().saturating_sub(1)] {
+        let Some(next) = cursor
+            .as_object_mut()
+            .and_then(|object| object.get_mut(segment.as_str()))
+        else {
+            return false;
+        };
+        cursor = next;
+    }
+    cursor
+        .as_object_mut()
+        .and_then(|object| object.remove(segments[segments.len() - 1].as_str()))
+        .is_some()
+}
+
 /// Push notification emitted by the unified bus for the active session.
 /// Indicates whether the change requires reloading messages.
 #[derive(Debug, Clone)]
@@ -1959,9 +2096,10 @@ impl Backend {
             .map_err(|error| anyhow!(error.to_string()))
             .context("failed to read config file settings")?
             .value;
-        let effective = serde_json::to_value(&resolution.config)
+        let mut effective = serde_json::to_value(&resolution.config)
             .map_err(|error| anyhow!(error.to_string()))
             .context("failed to serialize effective config")?;
+        augment_effective_config_json(&mut effective, &resolution.config);
         Ok(ConfigJsonSources {
             config_path,
             config_found: resolution.meta.config_found,
@@ -1971,6 +2109,19 @@ impl Backend {
     }
 
     pub async fn set_config_setting(
+        &self,
+        path: &str,
+        value: JsonValue,
+    ) -> Result<ConfigSettingsEditResponse> {
+        if let Some((plugin_id, config_segments)) = plugin_config_setting_target(path)? {
+            return self
+                .set_plugin_config_setting(plugin_id.as_str(), config_segments.as_slice(), value)
+                .await;
+        }
+        self.set_config_setting_direct(path, value).await
+    }
+
+    async fn set_config_setting_direct(
         &self,
         path: &str,
         value: JsonValue,
@@ -2001,6 +2152,11 @@ impl Backend {
     }
 
     pub async fn delete_config_setting(&self, path: &str) -> Result<ConfigSettingsEditResponse> {
+        if let Some((plugin_id, config_segments)) = plugin_config_setting_target(path)? {
+            return self
+                .delete_plugin_config_setting(plugin_id.as_str(), config_segments.as_slice())
+                .await;
+        }
         let config_path = self.runtime.config_resolution().meta.config_path.clone();
         let response = delete_file_setting(
             config_path,
@@ -2023,6 +2179,33 @@ impl Backend {
                 .context("failed to reload runtime after config change")?;
         }
         Ok(response)
+    }
+
+    async fn set_plugin_config_setting(
+        &self,
+        plugin_id: &str,
+        config_segments: &[String],
+        value: JsonValue,
+    ) -> Result<ConfigSettingsEditResponse> {
+        let sources = self.config_json_sources()?;
+        let mut record = plugin_record_for_config_edit(&sources, plugin_id);
+        let config = normalize_plugin_record_for_config_edit(&mut record)?;
+        set_nested_json_value(config, config_segments, value);
+        let path = format!("plugins.list.{}", quoted_settings_segment(plugin_id));
+        self.set_config_setting_direct(path.as_str(), record).await
+    }
+
+    async fn delete_plugin_config_setting(
+        &self,
+        plugin_id: &str,
+        config_segments: &[String],
+    ) -> Result<ConfigSettingsEditResponse> {
+        let sources = self.config_json_sources()?;
+        let mut record = plugin_record_for_config_edit(&sources, plugin_id);
+        let config = normalize_plugin_record_for_config_edit(&mut record)?;
+        remove_nested_json_value(config, config_segments);
+        let path = format!("plugins.list.{}", quoted_settings_segment(plugin_id));
+        self.set_config_setting_direct(path.as_str(), record).await
     }
 
     pub fn provider_config_draft(&self, provider_id: Option<&str>) -> Result<ProviderConfigDraft> {
@@ -5110,6 +5293,34 @@ mod tests {
     use agena::{config::LoadConfigRequest, memory, tracing as tracing_config, web};
     use std::{collections::BTreeSet, sync::Arc};
     use tempfile::tempdir;
+
+    #[test]
+    fn effective_config_alias_writer_preserves_raw_config_paths() {
+        let mut value = json!({
+            "providers": {
+                "openai": { "enabled": true }
+            },
+            "agents": {
+                "coder": { "description": "Code" }
+            }
+        });
+
+        set_effective_config_alias(
+            &mut value,
+            &["providers", "default"],
+            JsonValue::String("openai".to_owned()),
+        );
+        set_effective_config_alias(
+            &mut value,
+            &["agents", "default"],
+            JsonValue::String("coder".to_owned()),
+        );
+
+        assert_eq!(value["providers"]["default"], json!("openai"));
+        assert_eq!(value["providers"]["openai"]["enabled"], json!(true));
+        assert_eq!(value["agents"]["default"], json!("coder"));
+        assert_eq!(value["agents"]["coder"]["description"], json!("Code"));
+    }
 
     #[test]
     fn merge_provider_model_adapter_patch_preserves_existing_models() {

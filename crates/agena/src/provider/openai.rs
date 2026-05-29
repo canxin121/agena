@@ -3,12 +3,16 @@ use futures_core::Stream;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
 };
 use tokio::sync::Mutex;
 
 use super::copilot_models::CopilotModelExtension;
+use super::protocol_ids::{self, ProviderItemId, ProviderStreamKey};
+use super::tool_stream::{
+    ToolStreamAccumulator, ToolStreamInput, ToolStreamInputKind, ToolStreamUpdate,
+};
 
 use crate::{
     config::{NativeToolFreshness, ProviderNativeToolKind, ProviderNativeToolRoute},
@@ -1062,7 +1066,7 @@ impl OpenAiAdapter {
         let provider_id = ProviderId::new(provider_name.as_str());
         let model_name = ModelId::new(model);
         let conversation_items =
-            Self::realtime_conversation_items_for_messages(request.messages.as_slice());
+            Self::realtime_conversation_items_for_messages(request.messages.as_slice())?;
         let tool_plan = Self::responses_tool_plan(request)?;
         let response_tools =
             (!tool_plan.tools.is_empty()).then(|| serde_json::Value::Array(tool_plan.tools));
@@ -1151,8 +1155,7 @@ impl OpenAiAdapter {
                     ))
                 })?;
 
-            let mut pending_tool_calls: std::collections::BTreeMap<String, ResponsesToolState> = std::collections::BTreeMap::new();
-            let mut pending_tool_call_keys: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+            let mut tool_stream = ToolStreamAccumulator::default();
             let mut stream_usage: Option<CompletionUsage> = None;
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_has_content = false;
@@ -1205,89 +1208,14 @@ impl OpenAiAdapter {
 
                 if let Some(tool_event) = utils::responses_tool_event(provider_name.as_str(), &event)? {
                     stream_tool_call_seen = true;
-                    let key = responses_tool_stream_key(
-                        &mut pending_tool_call_keys,
-                        &pending_tool_calls,
-                        &tool_event,
-                        provider_name.as_str(),
-                    )?;
-
-                    let registers_call = responses_tool_event_registers_call(tool_event.kind);
-                    let was_new = !pending_tool_calls.contains_key(&key);
-                    let state = pending_tool_calls.entry(key.clone()).or_default();
-                    if let Some(id) = tool_event.id.clone() {
-                        state.id = Some(id);
-                    }
-                    if let Some(name) = tool_event.name.clone() {
-                        state.name = Some(name);
-                    }
-
-                    if registers_call && was_new {
-                        // Register the call with the aggregator so a
-                        // parameterless tool call (no Delta events) is
-                        // not silently dropped.
+                    let input = responses_tool_stream_input(provider_name.as_str(), tool_event)?;
+                    for update in tool_stream.ingest(provider_name.as_str(), input)? {
                         stream_has_content = true;
-                        yield CompletionStreamEvent::ToolCallDelta {
-                            provider_id: provider_id.clone(),
-                            model: model_name.clone(),
-                            stream_key: key.clone(),
-                            id: state.id.clone(),
-                            name: state.name.clone(),
-                            arguments_delta: String::new(),
-                        };
-                    }
-
-                    match tool_event.kind {
-                        utils::ResponsesToolEventKind::Delta => {
-                            if let Some(arguments_delta) =
-                                tool_event.arguments.filter(|s| !s.is_empty())
-                            {
-                                state.arguments.push_str(arguments_delta.as_str());
-                                stream_has_content = true;
-                                yield CompletionStreamEvent::ToolCallDelta {
-                                    provider_id: provider_id.clone(),
-                                    model: model_name.clone(),
-                                    stream_key: key.clone(),
-                                    id: state.id.clone(),
-                                    name: state.name.clone(),
-                                    arguments_delta,
-                                };
-                            }
-                        }
-                        utils::ResponsesToolEventKind::Added => {
-                            if let Some(arguments_snapshot) =
-                                tool_event.arguments.filter(|s| !s.is_empty())
-                                && let Some(arguments_delta) =
-                                    responses_tool_snapshot_delta(state, arguments_snapshot)
-                            {
-                                stream_has_content = true;
-                                yield CompletionStreamEvent::ToolCallDelta {
-                                    provider_id: provider_id.clone(),
-                                    model: model_name.clone(),
-                                    stream_key: key.clone(),
-                                    id: state.id.clone(),
-                                    name: state.name.clone(),
-                                    arguments_delta,
-                                };
-                            }
-                        }
-                        utils::ResponsesToolEventKind::Done => {
-                            if let Some(arguments_snapshot) =
-                                tool_event.arguments.filter(|s| !s.is_empty())
-                                && let Some(arguments_delta) =
-                                    responses_tool_snapshot_delta(state, arguments_snapshot)
-                            {
-                                stream_has_content = true;
-                                yield CompletionStreamEvent::ToolCallDelta {
-                                    provider_id: provider_id.clone(),
-                                    model: model_name.clone(),
-                                    stream_key: key.clone(),
-                                    id: state.id.clone(),
-                                    name: state.name.clone(),
-                                    arguments_delta,
-                                };
-                            }
-                        }
+                        yield completion_event_from_tool_stream_update(
+                            &provider_id,
+                            &model_name,
+                            update,
+                        );
                     }
                 }
 
@@ -1758,10 +1686,10 @@ impl OpenAiAdapter {
     fn responses_input_for_request(
         &self,
         request: &CompletionRequest,
-    ) -> Vec<OpenAiResponsesInputItem> {
-        let mut input = Self::to_responses_input(request);
+    ) -> Result<Vec<OpenAiResponsesInputItem>, AppError> {
+        let mut input = Self::to_responses_input(request)?;
         clear_responses_prompt_cache_hints(input.as_mut_slice());
-        input
+        Ok(input)
     }
 
     fn responses_reasoning_config(
@@ -1783,7 +1711,9 @@ impl OpenAiAdapter {
             .then_some(OpenAiResponsesTextConfig { verbosity, format })
     }
 
-    fn to_responses_input(request: &CompletionRequest) -> Vec<OpenAiResponsesInputItem> {
+    fn to_responses_input(
+        request: &CompletionRequest,
+    ) -> Result<Vec<OpenAiResponsesInputItem>, AppError> {
         let mut input = Vec::new();
 
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
@@ -1794,21 +1724,23 @@ impl OpenAiAdapter {
             Self::append_responses_items_for_message(&mut input, message);
         }
 
-        input
+        validate_responses_input(input.as_slice())?;
+        Ok(input)
     }
 
     fn realtime_conversation_items_for_messages(
         messages: &[Message],
-    ) -> Vec<OpenAiRealtimeConversationItem> {
+    ) -> Result<Vec<OpenAiRealtimeConversationItem>, AppError> {
         let mut input = Vec::new();
         for message in messages {
             Self::append_responses_items_for_message(&mut input, message);
         }
+        validate_responses_input(input.as_slice())?;
         clear_responses_prompt_cache_hints(input.as_mut_slice());
-        input
+        Ok(input
             .into_iter()
             .map(OpenAiRealtimeConversationItem::from_responses_input)
-            .collect()
+            .collect())
     }
 
     fn attachment_upload_name(item: &AttachmentItem) -> String {
@@ -2465,7 +2397,7 @@ impl ModelRuntime for OpenAiAdapter {
                 .await;
         }
 
-        let input = self.responses_input_for_request(&request);
+        let input = self.responses_input_for_request(&request)?;
         let tool_plan = Self::responses_tool_plan(&request)?;
 
         let body = OpenAiResponsesRequest {
@@ -2552,7 +2484,7 @@ impl ModelRuntime for OpenAiAdapter {
         let mut input_request = request.clone();
         input_request.system = None;
         input_request.previous_response_id = None;
-        let input = self.responses_input_for_request(&input_request);
+        let input = self.responses_input_for_request(&input_request)?;
         let tool_plan = Self::responses_tool_plan(&request)?;
         let body = OpenAiResponsesCompactRequest {
             model: model.to_string(),
@@ -2623,7 +2555,7 @@ impl ModelRuntime for OpenAiAdapter {
                 .await;
         }
 
-        let input = self.responses_input_for_request(&request);
+        let input = self.responses_input_for_request(&request)?;
         let tool_plan = Self::responses_tool_plan(&request)?;
 
         let body = OpenAiResponsesRequest {
@@ -2701,8 +2633,7 @@ impl ModelRuntime for OpenAiAdapter {
         let model_name = model;
 
         let stream = async_stream::try_stream! {
-            let mut pending_tool_calls: std::collections::BTreeMap<String, ResponsesToolState> = std::collections::BTreeMap::new();
-            let mut pending_tool_call_keys: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+            let mut tool_stream = ToolStreamAccumulator::default();
             let mut stream_usage: Option<CompletionUsage> = None;
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_has_content = false;
@@ -2743,89 +2674,14 @@ impl ModelRuntime for OpenAiAdapter {
 
                 if let Some(tool_event) = utils::responses_tool_event(provider_name.as_str(), &event)? {
                     stream_tool_call_seen = true;
-                    let key = responses_tool_stream_key(
-                        &mut pending_tool_call_keys,
-                        &pending_tool_calls,
-                        &tool_event,
-                        provider_name.as_str(),
-                    )?;
-
-                    let registers_call = responses_tool_event_registers_call(tool_event.kind);
-                    let was_new = !pending_tool_calls.contains_key(&key);
-                    let state = pending_tool_calls.entry(key.clone()).or_default();
-                    if let Some(id) = tool_event.id.clone() {
-                        state.id = Some(id);
-                    }
-                    if let Some(name) = tool_event.name.clone() {
-                        state.name = Some(name);
-                    }
-
-                    if registers_call && was_new {
-                        // Register the call with the aggregator so a
-                        // parameterless tool call (no Delta events) is
-                        // not silently dropped.
+                    let input = responses_tool_stream_input(provider_name.as_str(), tool_event)?;
+                    for update in tool_stream.ingest(provider_name.as_str(), input)? {
                         stream_has_content = true;
-                        yield CompletionStreamEvent::ToolCallDelta {
-                            provider_id: provider_id.clone(),
-                            model: model_name.clone(),
-                            stream_key: key.clone(),
-                            id: state.id.clone(),
-                            name: state.name.clone(),
-                            arguments_delta: String::new(),
-                        };
-                    }
-
-                    match tool_event.kind {
-                        utils::ResponsesToolEventKind::Delta => {
-                            if let Some(arguments_delta) =
-                                tool_event.arguments.filter(|s| !s.is_empty())
-                            {
-                                state.arguments.push_str(arguments_delta.as_str());
-                                stream_has_content = true;
-                                yield CompletionStreamEvent::ToolCallDelta {
-                                    provider_id: provider_id.clone(),
-                                    model: model_name.clone(),
-                                    stream_key: key.clone(),
-                                    id: state.id.clone(),
-                                    name: state.name.clone(),
-                                    arguments_delta,
-                                };
-                            }
-                        }
-                        utils::ResponsesToolEventKind::Added => {
-                            if let Some(arguments_snapshot) =
-                                tool_event.arguments.filter(|s| !s.is_empty())
-                                && let Some(arguments_delta) =
-                                    responses_tool_snapshot_delta(state, arguments_snapshot)
-                            {
-                                stream_has_content = true;
-                                yield CompletionStreamEvent::ToolCallDelta {
-                                    provider_id: provider_id.clone(),
-                                    model: model_name.clone(),
-                                    stream_key: key.clone(),
-                                    id: state.id.clone(),
-                                    name: state.name.clone(),
-                                    arguments_delta,
-                                };
-                            }
-                        }
-                        utils::ResponsesToolEventKind::Done => {
-                            if let Some(arguments_snapshot) =
-                                tool_event.arguments.filter(|s| !s.is_empty())
-                                && let Some(arguments_delta) =
-                                    responses_tool_snapshot_delta(state, arguments_snapshot)
-                            {
-                                stream_has_content = true;
-                                yield CompletionStreamEvent::ToolCallDelta {
-                                    provider_id: provider_id.clone(),
-                                    model: model_name.clone(),
-                                    stream_key: key.clone(),
-                                    id: state.id.clone(),
-                                    name: state.name.clone(),
-                                    arguments_delta,
-                                };
-                            }
-                        }
+                        yield completion_event_from_tool_stream_update(
+                            &provider_id,
+                            &model_name,
+                            update,
+                        );
                     }
                 }
 
@@ -3022,6 +2878,78 @@ impl OpenAiInputContent {
     }
 }
 
+fn validate_responses_input(input: &[OpenAiResponsesInputItem]) -> Result<(), AppError> {
+    let mut seen_tool_calls = BTreeSet::new();
+
+    for (index, item) in input.iter().enumerate() {
+        match item {
+            OpenAiResponsesInputItem::Message(message) => {
+                validate_responses_message(index, message)?;
+            }
+            OpenAiResponsesInputItem::FunctionCall(item) => {
+                if !protocol_ids::valid_openai_responses_call_id(item.call_id.as_str()) {
+                    return Err(AppError::Internal(format!(
+                        "invalid OpenAI Responses function_call call_id at input[{index}]"
+                    )));
+                }
+                if item.name.trim().is_empty() {
+                    return Err(AppError::Internal(format!(
+                        "invalid OpenAI Responses function_call name at input[{index}]"
+                    )));
+                }
+                seen_tool_calls.insert(item.call_id.clone());
+            }
+            OpenAiResponsesInputItem::FunctionCallOutput(item) => {
+                if !protocol_ids::valid_openai_responses_call_id(item.call_id.as_str()) {
+                    return Err(AppError::Internal(format!(
+                        "invalid OpenAI Responses function_call_output call_id at input[{index}]"
+                    )));
+                }
+                if !seen_tool_calls.contains(item.call_id.as_str()) {
+                    return Err(AppError::Internal(format!(
+                        "OpenAI Responses function_call_output at input[{index}] references unknown call_id `{}`",
+                        item.call_id
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_responses_message(index: usize, message: &OpenAiInputMessage) -> Result<(), AppError> {
+    let role = message.role.trim();
+    if role.is_empty() {
+        return Err(AppError::Internal(format!(
+            "OpenAI Responses message at input[{index}] has empty role"
+        )));
+    }
+    if message.content.is_empty() {
+        return Err(AppError::Internal(format!(
+            "OpenAI Responses message at input[{index}] has empty content"
+        )));
+    }
+
+    for content in &message.content {
+        match (role, content) {
+            ("assistant", OpenAiInputContent::InputText { .. }) => {
+                return Err(AppError::Internal(format!(
+                    "OpenAI Responses assistant message at input[{index}] used input_text; assistant history must use output_text"
+                )));
+            }
+            (role, OpenAiInputContent::OutputText { .. }) if role != "assistant" => {
+                return Err(AppError::Internal(format!(
+                    "OpenAI Responses {role} message at input[{index}] used output_text"
+                )));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 enum OpenAiResponsesInputItem {
@@ -3083,43 +3011,91 @@ struct OpenAiFunctionCallOutputItem {
     copilot_cache_control: Option<prompt_cache::PromptCacheControl>,
 }
 
-#[derive(Debug, Default)]
-struct ResponsesToolState {
-    id: Option<String>,
-    name: Option<String>,
-    arguments: String,
-}
-
-fn responses_tool_stream_key(
-    aliases: &mut BTreeMap<String, String>,
-    pending: &BTreeMap<String, ResponsesToolState>,
-    event: &utils::ResponsesToolEvent,
+fn responses_tool_stream_input(
     provider_id: &str,
-) -> Result<String, AppError> {
-    let candidates = event.stream_key_candidates(provider_id)?;
-    let key = candidates
-        .iter()
-        .find_map(|candidate| aliases.get(candidate).cloned())
-        .or_else(|| {
-            candidates
-                .iter()
-                .find(|candidate| pending.contains_key(candidate.as_str()))
-                .cloned()
-        })
-        .unwrap_or_else(|| candidates[0].clone());
-
-    for candidate in candidates {
-        aliases.insert(candidate, key.clone());
+    event: utils::ResponsesToolEvent,
+) -> Result<ToolStreamInput, AppError> {
+    let stream_key_candidates = event
+        .stream_key_candidates(provider_id)?
+        .into_iter()
+        .filter_map(ProviderStreamKey::new)
+        .collect::<Vec<_>>();
+    if stream_key_candidates.is_empty() {
+        return Err(AppError::Provider(format!(
+            "{provider_id} returned tool event without usable stream key candidates"
+        )));
     }
 
-    Ok(key)
+    let model_call_id = event
+        .call_id
+        .as_deref()
+        .and_then(protocol_ids::openai_responses_call_id)
+        .or_else(|| {
+            event
+                .id
+                .as_deref()
+                .and_then(protocol_ids::openai_responses_call_id)
+        });
+
+    Ok(ToolStreamInput {
+        kind: match event.kind {
+            utils::ResponsesToolEventKind::Added => ToolStreamInputKind::Start,
+            utils::ResponsesToolEventKind::Delta => ToolStreamInputKind::Delta,
+            utils::ResponsesToolEventKind::Done => ToolStreamInputKind::Finish,
+        },
+        stream_key_candidates,
+        provider_item_id: event.item_id.and_then(ProviderItemId::new),
+        model_call_id,
+        name: event.name,
+        arguments: event.arguments,
+    })
 }
 
-fn responses_tool_event_registers_call(kind: utils::ResponsesToolEventKind) -> bool {
-    matches!(
-        kind,
-        utils::ResponsesToolEventKind::Added | utils::ResponsesToolEventKind::Done
-    )
+fn completion_event_from_tool_stream_update(
+    provider_id: &ProviderId,
+    model: &ModelId,
+    update: ToolStreamUpdate,
+) -> CompletionStreamEvent {
+    match update {
+        ToolStreamUpdate::Registered {
+            stream_key,
+            id,
+            name,
+        } => CompletionStreamEvent::ToolCallDelta {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            stream_key,
+            id,
+            name,
+            arguments_delta: String::new(),
+        },
+        ToolStreamUpdate::ArgumentsDelta {
+            stream_key,
+            id,
+            name,
+            arguments_delta,
+        } => CompletionStreamEvent::ToolCallDelta {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            stream_key,
+            id,
+            name,
+            arguments_delta,
+        },
+        ToolStreamUpdate::ArgumentsSnapshot {
+            stream_key,
+            id,
+            name,
+            arguments_json,
+        } => CompletionStreamEvent::ToolCallSnapshot {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            stream_key,
+            id,
+            name,
+            arguments_json,
+        },
+    }
 }
 
 fn responses_finish_reason_with_tool_calls(
@@ -3134,39 +3110,13 @@ fn responses_finish_reason_with_tool_calls(
 
 fn responses_output_call_id(call_id: Option<&str>, item_id: Option<&str>) -> Option<String> {
     call_id
-        .and_then(|value| utils::responses_protocol_call_id(Some(value)))
+        .and_then(protocol_ids::openai_responses_call_id)
+        .map(|id| id.into_string())
         .or_else(|| item_id.and_then(responses_input_call_id))
 }
 
 fn responses_input_call_id(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if trimmed.chars().count() <= 64 {
-        return Some(trimmed.to_owned());
-    }
-
-    let hash = blake3::hash(trimmed.as_bytes());
-    let hex = hash.to_hex().to_string();
-    Some(format!("call_{}", &hex[..32]))
-}
-
-fn responses_tool_snapshot_delta(
-    state: &mut ResponsesToolState,
-    arguments_snapshot: String,
-) -> Option<String> {
-    if arguments_snapshot.starts_with(&state.arguments) {
-        let delta = arguments_snapshot[state.arguments.len()..].to_owned();
-        if delta.is_empty() {
-            return None;
-        }
-        state.arguments.push_str(delta.as_str());
-        return Some(delta);
-    }
-
-    state.arguments = arguments_snapshot.clone();
-    Some(arguments_snapshot)
+    protocol_ids::openai_responses_call_id(raw).map(|id| id.into_string())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3453,7 +3403,7 @@ mod tests {
             Message::prompt_text(Role::User, "who are you?"),
         ]);
 
-        let input = OpenAiAdapter::to_responses_input(&request);
+        let input = OpenAiAdapter::to_responses_input(&request).expect("responses input");
         let value = serde_json::to_value(&input).expect("serialize responses input");
 
         assert_eq!(
@@ -3479,6 +3429,38 @@ mod tests {
                 }
             ])
         );
+    }
+
+    #[test]
+    fn responses_input_validator_rejects_assistant_input_text() {
+        let input = vec![OpenAiResponsesInputItem::Message(OpenAiInputMessage {
+            role: "assistant".to_owned(),
+            content: vec![OpenAiInputContent::InputText {
+                text: "bad history".to_owned(),
+            }],
+            copilot_cache_control: None,
+        })];
+
+        let err = validate_responses_input(input.as_slice()).expect_err("validator error");
+        assert!(
+            err.to_string()
+                .contains("assistant history must use output_text")
+        );
+    }
+
+    #[test]
+    fn responses_input_validator_rejects_orphan_function_output() {
+        let input = vec![OpenAiResponsesInputItem::FunctionCallOutput(
+            OpenAiFunctionCallOutputItem {
+                kind: "function_call_output",
+                call_id: "call_1".to_owned(),
+                output: serde_json::json!("{}"),
+                copilot_cache_control: None,
+            },
+        )];
+
+        let err = validate_responses_input(input.as_slice()).expect_err("validator error");
+        assert!(err.to_string().contains("references unknown call_id"));
     }
 
     #[test]
@@ -3521,7 +3503,7 @@ mod tests {
             assistant,
         ]);
 
-        let input = OpenAiAdapter::to_responses_input(&request);
+        let input = OpenAiAdapter::to_responses_input(&request).expect("responses input");
         let value = serde_json::to_value(&input).expect("serialize responses input");
 
         assert_eq!(
@@ -3586,7 +3568,7 @@ mod tests {
         };
         let request = test_completion_request(vec![assistant]);
 
-        let input = OpenAiAdapter::to_responses_input(&request);
+        let input = OpenAiAdapter::to_responses_input(&request).expect("responses input");
         let value = serde_json::to_value(&input).expect("serialize responses input");
         let call_id = value[0]["call_id"].as_str().expect("function_call call id");
         let output_call_id = value[1]["call_id"]
@@ -3621,7 +3603,7 @@ mod tests {
 
         let body = OpenAiResponsesRequest {
             model: request.model.to_string(),
-            input: OpenAiAdapter::to_responses_input(&request),
+            input: OpenAiAdapter::to_responses_input(&request).expect("responses input"),
             tools: Vec::new(),
             include: None,
             max_output_tokens: None,
@@ -3673,111 +3655,6 @@ mod tests {
             responses_reasoning_delta(&event),
             Some("thinking".to_owned())
         );
-    }
-
-    #[test]
-    fn responses_tool_snapshot_delta_ignores_duplicate_snapshot() {
-        let mut state = ResponsesToolState {
-            arguments: r#"{"query":"web"}"#.to_string(),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            responses_tool_snapshot_delta(&mut state, r#"{"query":"web"}"#.to_string()),
-            None
-        );
-        assert_eq!(state.arguments, r#"{"query":"web"}"#);
-    }
-
-    #[test]
-    fn responses_tool_snapshot_delta_emits_only_new_suffix() {
-        let mut state = ResponsesToolState {
-            arguments: "{\"query\":\"".to_string(),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            responses_tool_snapshot_delta(&mut state, r#"{"query":"web"}"#.to_string()),
-            Some(r#"web"}"#.to_string())
-        );
-        assert_eq!(state.arguments, r#"{"query":"web"}"#);
-    }
-
-    #[test]
-    fn responses_tool_snapshot_delta_replaces_mismatched_snapshot() {
-        let mut state = ResponsesToolState {
-            arguments: r#"{"query":"old"}"#.to_string(),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            responses_tool_snapshot_delta(&mut state, r#"{"query":"new"}"#.to_string()),
-            Some(r#"{"query":"new"}"#.to_string())
-        );
-        assert_eq!(state.arguments, r#"{"query":"new"}"#);
-    }
-
-    #[test]
-    fn responses_tool_stream_key_aliases_item_index_and_call_ids() {
-        let mut aliases = BTreeMap::new();
-        let mut pending = BTreeMap::new();
-        let added = utils::ResponsesToolEvent {
-            kind: utils::ResponsesToolEventKind::Added,
-            output_index: Some(0),
-            item_id: Some("item_1".to_string()),
-            call_id: Some("call_1".to_string()),
-            id: Some("call_1".to_string()),
-            name: Some("lookup".to_string()),
-            arguments: None,
-        };
-
-        let key =
-            responses_tool_stream_key(&mut aliases, &pending, &added, "openai").expect("added key");
-        assert_eq!(key, "item:item_1");
-        pending.insert(key.clone(), ResponsesToolState::default());
-
-        let delta_by_index = utils::ResponsesToolEvent {
-            kind: utils::ResponsesToolEventKind::Delta,
-            output_index: Some(0),
-            item_id: None,
-            call_id: None,
-            id: None,
-            name: None,
-            arguments: Some("{}".to_string()),
-        };
-        assert_eq!(
-            responses_tool_stream_key(&mut aliases, &pending, &delta_by_index, "openai")
-                .expect("delta key"),
-            key
-        );
-
-        let done_by_call_id = utils::ResponsesToolEvent {
-            kind: utils::ResponsesToolEventKind::Done,
-            output_index: None,
-            item_id: None,
-            call_id: Some("call_1".to_string()),
-            id: Some("call_1".to_string()),
-            name: Some("lookup".to_string()),
-            arguments: Some("{}".to_string()),
-        };
-        assert_eq!(
-            responses_tool_stream_key(&mut aliases, &pending, &done_by_call_id, "openai")
-                .expect("done key"),
-            key
-        );
-    }
-
-    #[test]
-    fn responses_tool_done_events_register_parameterless_calls() {
-        assert!(responses_tool_event_registers_call(
-            utils::ResponsesToolEventKind::Done
-        ));
-        assert!(responses_tool_event_registers_call(
-            utils::ResponsesToolEventKind::Added
-        ));
-        assert!(!responses_tool_event_registers_call(
-            utils::ResponsesToolEventKind::Delta
-        ));
     }
 
     #[test]

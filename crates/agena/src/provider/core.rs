@@ -453,6 +453,21 @@ pub(crate) fn remap_stream_event_provider_id(
             name,
             arguments_delta,
         },
+        CompletionStreamEvent::ToolCallSnapshot {
+            model,
+            stream_key,
+            id,
+            name,
+            arguments_json,
+            ..
+        } => CompletionStreamEvent::ToolCallSnapshot {
+            provider_id: provider_id.clone(),
+            model,
+            stream_key,
+            id,
+            name,
+            arguments_json,
+        },
         CompletionStreamEvent::Completed {
             model,
             finish_reason,
@@ -500,6 +515,20 @@ pub(crate) fn remap_stream_event_provider_and_model(
             id,
             name,
             arguments_delta,
+        },
+        CompletionStreamEvent::ToolCallSnapshot {
+            stream_key,
+            id,
+            name,
+            arguments_json,
+            ..
+        } => CompletionStreamEvent::ToolCallSnapshot {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            stream_key,
+            id,
+            name,
+            arguments_json,
         },
         CompletionStreamEvent::Completed {
             finish_reason,

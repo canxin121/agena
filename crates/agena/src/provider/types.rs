@@ -246,6 +246,17 @@ pub enum CompletionStreamEvent {
         #[serde(default)]
         arguments_delta: String,
     },
+    ToolCallSnapshot {
+        provider_id: ProviderId,
+        model: ModelId,
+        stream_key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default)]
+        arguments_json: String,
+    },
     Completed {
         provider_id: ProviderId,
         model: ModelId,

@@ -22,6 +22,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use serde_json::Value;
 use smol_str::SmolStr;
 use thiserror::Error;
@@ -291,8 +292,7 @@ impl RunBuffer {
                             .name
                             .clone()
                             .ok_or_else(|| RunBufferError::ToolCallMissingName(call_id.clone()))?;
-                        let arguments = serde_json::from_str(&entry.arguments_text)
-                            .unwrap_or(Value::String(entry.arguments_text.clone()));
+                        let arguments = parse_tool_arguments_value(entry.arguments_text.as_str());
                         items.push(EventKind::ToolCallIssued(ToolCallIssued {
                             message_id,
                             run_id,
@@ -307,5 +307,65 @@ impl RunBuffer {
         }
 
         Ok(items)
+    }
+}
+
+fn parse_tool_arguments_value(arguments_text: &str) -> Value {
+    let body = if arguments_text.trim().is_empty() {
+        "{}"
+    } else {
+        arguments_text
+    };
+
+    let mut deserializer = serde_json::Deserializer::from_str(body);
+    let Ok(parsed) = Value::deserialize(&mut deserializer) else {
+        return Value::String(arguments_text.to_string());
+    };
+
+    if let Err(err) = deserializer.end() {
+        tracing::warn!(
+            error = %err,
+            arguments_len = body.len(),
+            "tool arguments included trailing content; ignored suffix after valid JSON prefix"
+        );
+    }
+
+    parsed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::EventKind;
+    use serde_json::json;
+
+    #[test]
+    fn commit_parses_tool_arguments_with_trailing_duplicate_snapshot() {
+        let mut ids = SequentialIdAllocator::starting_at(1);
+        let mut buffer = RunBuffer::new(RunId::new());
+        buffer.begin_assistant(&mut ids);
+
+        let call_id = ToolCallId::new("call_1");
+        buffer.start_tool_call(call_id.clone()).unwrap();
+        buffer
+            .name_tool_call(&call_id, "agena.workflow/tools")
+            .unwrap();
+        buffer
+            .append_tool_arguments(
+                &call_id,
+                r#"{"action":"search","query":"web"}{"action":"search","query":"web"}"#,
+            )
+            .unwrap();
+
+        let events = buffer.commit(&mut ids).unwrap();
+        let arguments = events
+            .iter()
+            .find_map(|event| match event {
+                EventKind::ToolCallIssued(payload) => Some(&payload.arguments),
+                _ => None,
+            })
+            .expect("tool call issued event");
+
+        assert_eq!(arguments, &json!({"action": "search", "query": "web"}));
     }
 }

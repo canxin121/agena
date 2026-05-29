@@ -65,14 +65,19 @@ pub fn detect(messages: &[Message], policy: DoomLoopPolicy) -> Option<DoomLoopHi
     let mut latest_signature: Option<(String, String)> = None;
     let mut run_len: u8 = 0;
 
-    for message in messages.iter().rev() {
+    'messages: for message in messages.iter().rev() {
         if message.role != Role::Assistant {
-            continue;
+            break;
         }
+        let mut saw_tool_in_message = false;
         for part in message.parts.iter().rev() {
             let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
+                if latest_signature.is_some() {
+                    break 'messages;
+                }
                 continue;
             };
+            saw_tool_in_message = true;
             let signature = signature_of(exec.invocation());
             match &latest_signature {
                 Some(prev) if prev == &signature => {
@@ -94,6 +99,9 @@ pub fn detect(messages: &[Message], policy: DoomLoopPolicy) -> Option<DoomLoopHi
                 });
             }
         }
+        if !saw_tool_in_message {
+            break;
+        }
     }
 
     None
@@ -105,4 +113,110 @@ fn signature_of(invocation: &ToolInvocation) -> (String, String) {
         name.clone(),
         serde_json::to_string(input).unwrap_or_default(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::{
+        ExecutionStatus, MessagePart, OperationPart, PartContent, StructuredObject, TimeRange,
+        ToolInvocation,
+    };
+    use chrono::Utc;
+    use serde_json::json;
+
+    fn assistant_tool(name: &str, input: serde_json::Value) -> Message {
+        let created_at = Utc::now();
+        let invocation = ToolInvocation::new(
+            name,
+            StructuredObject::try_from(input).expect("tool input should be an object"),
+        );
+        let mut message = Message {
+            id: 0,
+            role: Role::Assistant,
+            state: ExecutionStatus::Completed,
+            parts: vec![MessagePart::with_content(
+                1,
+                0,
+                created_at,
+                ExecutionStatus::Failed,
+                PartContent::Operation(OperationPart::failed(
+                    1,
+                    invocation,
+                    "failed",
+                    "failed",
+                    Vec::new(),
+                    Vec::new(),
+                    Default::default(),
+                    TimeRange::default(),
+                )),
+            )],
+            created_at,
+            metadata: Default::default(),
+            provider_state: None,
+            usage: None,
+        };
+        message.parts[0].operation_id = Some("call".to_string());
+        message
+    }
+
+    #[test]
+    fn detects_tail_repeated_tool_calls() {
+        let messages = vec![
+            assistant_tool("tools", json!({})),
+            assistant_tool("tools", json!({})),
+            assistant_tool("tools", json!({})),
+        ];
+
+        let hit = detect(
+            messages.as_slice(),
+            DoomLoopPolicy {
+                repeat_threshold: 3,
+            },
+        )
+        .expect("repeated tail calls should trip doom-loop");
+
+        assert_eq!(hit.tool_label, "tools");
+        assert_eq!(hit.repeat_count, 3);
+    }
+
+    #[test]
+    fn user_message_breaks_old_repeated_tool_calls() {
+        let messages = vec![
+            assistant_tool("tools", json!({})),
+            assistant_tool("tools", json!({})),
+            assistant_tool("tools", json!({})),
+            Message::prompt_text(Role::User, "try again"),
+        ];
+
+        assert!(
+            detect(
+                messages.as_slice(),
+                DoomLoopPolicy {
+                    repeat_threshold: 3
+                },
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn assistant_text_breaks_repeated_tool_calls() {
+        let messages = vec![
+            assistant_tool("tools", json!({})),
+            assistant_tool("tools", json!({})),
+            Message::prompt_text(Role::Assistant, "I will answer without tools."),
+            assistant_tool("tools", json!({})),
+        ];
+
+        assert!(
+            detect(
+                messages.as_slice(),
+                DoomLoopPolicy {
+                    repeat_threshold: 3
+                },
+            )
+            .is_none()
+        );
+    }
 }

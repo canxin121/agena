@@ -1963,11 +1963,13 @@ impl OpenAiAdapter {
                             } => {
                                 Self::flush_assistant_responses_text(input, &mut text_chunks);
                                 Self::flush_responses_function_output(input, &mut pending_output);
-                                if !id.trim().is_empty() && !name.trim().is_empty() {
+                                if let Some(call_id) = responses_input_call_id(id.as_str())
+                                    && !name.trim().is_empty()
+                                {
                                     input.push(OpenAiResponsesInputItem::FunctionCall(
                                         OpenAiFunctionCallItem {
                                             kind: "function_call",
-                                            call_id: id,
+                                            call_id,
                                             name: crate::tool::model_safe_tool_name(&name),
                                             arguments: arguments_json,
                                             copilot_cache_control: None,
@@ -1982,8 +1984,10 @@ impl OpenAiAdapter {
                             } => {
                                 Self::flush_assistant_responses_text(input, &mut text_chunks);
                                 Self::flush_responses_function_output(input, &mut pending_output);
-                                if !tool_call_id.trim().is_empty() {
-                                    pending_output = Some((tool_call_id, output_json, Vec::new()));
+                                if let Some(call_id) =
+                                    responses_input_call_id(tool_call_id.as_str())
+                                {
+                                    pending_output = Some((call_id, output_json, Vec::new()));
                                 }
                             }
                         }
@@ -2065,8 +2069,7 @@ impl OpenAiAdapter {
             .flatten()
             .filter(|item| item.kind.as_deref() == Some("function_call"))
             .map(|item| {
-                let id = utils::normalize_optional_text(item.call_id.clone())
-                    .or_else(|| utils::normalize_optional_text(item.id.clone()))
+                let id = responses_output_call_id(item.call_id.as_deref(), item.id.as_deref())
                     .ok_or_else(|| {
                         AppError::Provider(
                             "openai responses payload returned function_call without id/call_id"
@@ -3129,6 +3132,26 @@ fn responses_finish_reason_with_tool_calls(
     finish_reason
 }
 
+fn responses_output_call_id(call_id: Option<&str>, item_id: Option<&str>) -> Option<String> {
+    call_id
+        .and_then(|value| utils::responses_protocol_call_id(Some(value)))
+        .or_else(|| item_id.and_then(responses_input_call_id))
+}
+
+fn responses_input_call_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.chars().count() <= 64 {
+        return Some(trimmed.to_owned());
+    }
+
+    let hash = blake3::hash(trimmed.as_bytes());
+    let hex = hash.to_hex().to_string();
+    Some(format!("call_{}", &hex[..32]))
+}
+
 fn responses_tool_snapshot_delta(
     state: &mut ResponsesToolState,
     arguments_snapshot: String,
@@ -3523,6 +3546,57 @@ mod tests {
                 }
             ])
         );
+    }
+
+    #[test]
+    fn responses_input_hashes_oversized_tool_call_ids() {
+        let created_at = chrono::Utc::now();
+        let invocation = ToolInvocation::new(
+            "agena.web/search",
+            StructuredObject::try_from(serde_json::json!({ "query": "science" }))
+                .expect("tool input"),
+        );
+        let mut tool_part = MessagePart::with_content(
+            1,
+            0,
+            created_at,
+            ExecutionStatus::Completed,
+            PartContent::Operation(OperationPart::completed(
+                1,
+                invocation,
+                r#"{"results":[]}"#,
+                Vec::new(),
+                Vec::new(),
+                ToolOutput::default(),
+                TimeRange::default(),
+            )),
+        );
+        let oversized_id = "k".repeat(412);
+        tool_part.operation_id = Some(oversized_id.clone());
+
+        let assistant = Message {
+            id: 2,
+            role: Role::Assistant,
+            state: ExecutionStatus::Completed,
+            parts: vec![tool_part],
+            created_at,
+            metadata: Default::default(),
+            provider_state: None,
+            usage: None,
+        };
+        let request = test_completion_request(vec![assistant]);
+
+        let input = OpenAiAdapter::to_responses_input(&request);
+        let value = serde_json::to_value(&input).expect("serialize responses input");
+        let call_id = value[0]["call_id"].as_str().expect("function_call call id");
+        let output_call_id = value[1]["call_id"]
+            .as_str()
+            .expect("function_call_output call id");
+
+        assert_ne!(call_id, oversized_id);
+        assert!(call_id.starts_with("call_"));
+        assert!(call_id.chars().count() <= 64);
+        assert_eq!(output_call_id, call_id);
     }
 
     #[test]

@@ -2808,14 +2808,16 @@ fn settings_compact_header_line(
                 .unwrap_or_default() as i64
         ),
     );
-    let layout_label = ui_text::t(i18n, "overlay-settings-compact-layout");
+    let section_summary = current_section
+        .map(|section| section.summary.clone())
+        .unwrap_or_else(|| ui_text::t(i18n, "overlay-settings-empty-summary"));
     settings_compact_fixed_columns(
         &[
-            (dialog.title.as_str(), 18),
-            (section_label.as_str(), 28),
+            (dialog.title.as_str(), 16),
+            (section_label.as_str(), 24),
+            (section_summary.as_str(), 54),
             (section_count.as_str(), 18),
             (option_count.as_str(), 18),
-            (layout_label.as_str(), 30),
         ],
         128,
     )
@@ -2918,10 +2920,24 @@ fn settings_compact_sections_text(
         return Text::from(lines);
     }
     let content_width = width.max(1) as usize;
+    let mut previous_group = String::new();
     for (index, section) in dialog.state.sections().iter().enumerate() {
+        let group = settings_section_group_label(i18n, section.id);
+        if group != previous_group {
+            if !previous_group.is_empty() {
+                lines.push(Line::from(""));
+            }
+            previous_group = group.clone();
+            lines.push(Line::from(Span::styled(
+                sanitize_display_text(settings_compact_pad_to_width(group.as_str(), content_width)),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        }
         let selected = index == dialog.state.selected_section_index();
         let marker = if selected { "> " } else { "  " };
-        let label = format!("{marker}{} ({})", section.label, section.items.len());
+        let label = format!("{marker}{}  {}", section.label, section.items.len());
         let line = settings_compact_pad_to_width(label.as_str(), content_width);
         let style = if selected && dialog.state.focus() == SettingsStudioFocus::Navigation {
             selection_highlight_style()
@@ -3039,6 +3055,12 @@ fn settings_compact_item_detail_text(
         .selected_item()
         .map(|item| {
             let mut lines = vec![Line::from(sanitize_display_text(item.detail.as_str()))];
+            if let SettingsPickerAction::EditField(field) = &item.action {
+                lines.push(Line::from(sanitize_display_text(i18n.text_args(
+                    "overlay-settings-detail-path",
+                    &crate::fl_args!("path" => field.path),
+                ))));
+            }
             if !item.value.trim().is_empty() {
                 lines.push(Line::from(sanitize_display_text(i18n.text_args(
                     "overlay-settings-detail-current",
@@ -3075,6 +3097,27 @@ fn settings_compact_focus_label(i18n: &I18n, focus: SettingsStudioFocus) -> Stri
         SettingsStudioFocus::Navigation => ui_text::t(i18n, "overlay-settings-sections"),
         SettingsStudioFocus::Items => ui_text::t(i18n, "overlay-settings-options"),
     }
+}
+
+fn settings_section_group_label(i18n: &I18n, section: SettingsStudioSectionId) -> String {
+    let key = match section {
+        SettingsStudioSectionId::ConfigProviders
+        | SettingsStudioSectionId::ConfigAgents
+        | SettingsStudioSectionId::ConfigPermission
+        | SettingsStudioSectionId::ConfigPlugins => "overlay-settings-group-core",
+        SettingsStudioSectionId::ConfigRuntime
+        | SettingsStudioSectionId::ConfigSession
+        | SettingsStudioSectionId::ConfigHarnesses
+        | SettingsStudioSectionId::ConfigTracing
+        | SettingsStudioSectionId::ConfigUi => "overlay-settings-group-application",
+        SettingsStudioSectionId::RuntimeOverrides | SettingsStudioSectionId::RuntimeRules => {
+            "overlay-settings-group-session"
+        }
+        SettingsStudioSectionId::Catalogs | SettingsStudioSectionId::Files => {
+            "overlay-settings-group-system"
+        }
+    };
+    ui_text::t(i18n, key)
 }
 
 fn settings_compact_visible_range(

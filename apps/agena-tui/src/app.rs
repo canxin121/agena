@@ -163,150 +163,175 @@ const SETTINGS_FIELDS: [SettingsFieldSpec; 25] = [
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigProviders,
         path: "providers.default",
+        label_key: "settings-field-default-provider-label",
         description_key: "settings-field-default-provider-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigAgents,
         path: "agents.default",
+        label_key: "settings-field-default-agent-label",
         description_key: "settings-field-default-agent-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigUi,
         path: "ui.locale",
+        label_key: "settings-field-ui-locale-label",
         description_key: "settings-field-ui-locale-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigTracing,
         path: "tracing.filter",
+        label_key: "settings-field-tracing-filter-label",
         description_key: "settings-field-tracing-filter-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigTracing,
         path: "tracing.database",
+        label_key: "settings-field-tracing-database-label",
         description_key: "settings-field-tracing-database-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigTracing,
         path: "tracing.adapter",
+        label_key: "settings-field-tracing-adapter-label",
         description_key: "settings-field-tracing-adapter-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.providers.http.timeout_secs",
+        label_key: "settings-field-runtime-provider-http-timeout-label",
         description_key: "settings-field-runtime-provider-http-timeout-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.providers.http.connect_timeout_secs",
+        label_key: "settings-field-runtime-provider-http-connect-timeout-label",
         description_key: "settings-field-runtime-provider-http-connect-timeout-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.providers.retry.max_retries",
+        label_key: "settings-field-runtime-request-retry-max-retries-label",
         description_key: "settings-field-runtime-request-retry-max-retries-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.providers.retry.base_delay_ms",
+        label_key: "settings-field-runtime-request-retry-base-delay-label",
         description_key: "settings-field-runtime-request-retry-base-delay-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.providers.retry.max_delay_ms",
+        label_key: "settings-field-runtime-request-retry-max-delay-label",
         description_key: "settings-field-runtime-request-retry-max-delay-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.providers.stream_replay.max_retries_after_output",
+        label_key: "settings-field-runtime-stream-replay-max-retries-after-output-label",
         description_key: "settings-field-runtime-stream-replay-max-retries-after-output-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.providers.stream_replay.max_tracked_events",
+        label_key: "settings-field-runtime-stream-replay-max-tracked-events-label",
         description_key: "settings-field-runtime-stream-replay-max-tracked-events-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.reload.enabled",
+        label_key: "settings-field-runtime-reload-enabled-label",
         description_key: "settings-field-runtime-reload-enabled-description",
         kind: SettingsFieldKind::Bool,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.reload.poll_interval_secs",
+        label_key: "settings-field-runtime-reload-poll-interval-label",
         description_key: "settings-field-runtime-reload-poll-interval-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.model_catalog.cache_max_age_secs",
+        label_key: "settings-field-runtime-model-catalog-cache-max-age-label",
         description_key: "settings-field-runtime-model-catalog-cache-max-age-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.session.cache.max_sessions",
+        label_key: "settings-field-runtime-session-cache-max-sessions-label",
         description_key: "settings-field-runtime-session-cache-max-sessions-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.session.cache.ttl_secs",
+        label_key: "settings-field-runtime-session-cache-ttl-label",
         description_key: "settings-field-runtime-session-cache-ttl-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.session.cache.max_bytes",
+        label_key: "settings-field-runtime-session-cache-max-bytes-label",
         description_key: "settings-field-runtime-session-cache-max-bytes-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.session.gc.enabled",
+        label_key: "settings-field-runtime-session-gc-enabled-label",
         description_key: "settings-field-runtime-session-gc-enabled-description",
         kind: SettingsFieldKind::Bool,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigRuntime,
         path: "runtime.session.gc.interval_secs",
+        label_key: "settings-field-runtime-session-gc-interval-label",
         description_key: "settings-field-runtime-session-gc-interval-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigSession,
         path: "session.compaction.auto",
+        label_key: "settings-field-session-compaction-auto-label",
         description_key: "settings-field-session-compaction-auto-description",
         kind: SettingsFieldKind::Bool,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigSession,
         path: "session.compaction.reserved_tokens",
+        label_key: "settings-field-session-compaction-reserved-tokens-label",
         description_key: "settings-field-session-compaction-reserved-tokens-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigPlugins,
         path: MEMORY_PROJECT_INSTRUCTIONS_ENABLED_PATH,
+        label_key: "settings-field-plugin-memory-project-instructions-enabled-label",
         description_key: "settings-field-plugin-memory-project-instructions-enabled-description",
         kind: SettingsFieldKind::Bool,
     },
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigPlugins,
         path: MEMORY_PROJECT_INSTRUCTIONS_INCLUDE_GLOBAL_PATH,
+        label_key: "settings-field-plugin-memory-project-instructions-include-global-label",
         description_key: "settings-field-plugin-memory-project-instructions-include-global-description",
         kind: SettingsFieldKind::Bool,
     },
@@ -982,6 +1007,7 @@ enum PermissionRuleStudioChoiceField {
 struct SettingsFieldSpec {
     section: SettingsStudioSectionId,
     path: &'static str,
+    label_key: &'static str,
     description_key: &'static str,
     kind: SettingsFieldKind,
 }
@@ -8899,21 +8925,21 @@ impl App {
             SettingsStudioSection {
                 id: SettingsStudioSectionId::ConfigRuntime,
                 label: ui_text::t(&self.i18n, "overlay-settings-section-runtime-label"),
-                summary: settings_studio_config_root_summary(&sources, "runtime"),
+                summary: ui_text::t(&self.i18n, "overlay-settings-section-runtime-summary"),
                 description: ui_text::t(&self.i18n, "overlay-settings-section-runtime-description"),
                 items: runtime_config_items,
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::ConfigSession,
                 label: ui_text::t(&self.i18n, "overlay-settings-section-session-label"),
-                summary: settings_studio_config_root_summary(&sources, "session"),
+                summary: ui_text::t(&self.i18n, "overlay-settings-section-session-summary"),
                 description: ui_text::t(&self.i18n, "overlay-settings-section-session-description"),
                 items: session_config_items,
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::ConfigHarnesses,
                 label: ui_text::t(&self.i18n, "overlay-settings-section-harnesses-label"),
-                summary: settings_studio_config_root_summary(&sources, "harnesses"),
+                summary: ui_text::t(&self.i18n, "overlay-settings-section-harnesses-summary"),
                 description: ui_text::t(
                     &self.i18n,
                     "overlay-settings-section-harnesses-description",
@@ -8923,14 +8949,14 @@ impl App {
             SettingsStudioSection {
                 id: SettingsStudioSectionId::ConfigTracing,
                 label: ui_text::t(&self.i18n, "overlay-settings-section-tracing-label"),
-                summary: settings_studio_config_root_summary(&sources, "tracing"),
+                summary: ui_text::t(&self.i18n, "overlay-settings-section-tracing-summary"),
                 description: ui_text::t(&self.i18n, "overlay-settings-section-tracing-description"),
                 items: tracing_items,
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::ConfigUi,
                 label: ui_text::t(&self.i18n, "overlay-settings-section-ui-label"),
-                summary: settings_studio_config_root_summary(&sources, "ui"),
+                summary: ui_text::t(&self.i18n, "overlay-settings-section-ui-summary"),
                 description: ui_text::t(&self.i18n, "overlay-settings-section-ui-description"),
                 items: ui_items,
             },
@@ -10245,7 +10271,10 @@ impl App {
         };
         if let Some(all_items) = self.settings_field_choice_items(field) {
             self.open_choice_overlay(self.build_choice_overlay(
-                settings_edit_title(&self.i18n, field.path),
+                settings_edit_title(
+                    &self.i18n,
+                    settings_field_edit_title(&self.i18n, field).as_str(),
+                ),
                 settings_value_edit_prompt(&self.i18n, field, &file_value, &effective_value),
                 Editor::from_text(setting_value_input_text(&prefill)),
                 all_items,
@@ -10256,7 +10285,10 @@ impl App {
             return;
         }
         self.overlay = Some(Overlay::SettingsValueEdit(SettingsValueEditOverlay::new(
-            settings_edit_title(&self.i18n, field.path),
+            settings_edit_title(
+                &self.i18n,
+                settings_field_edit_title(&self.i18n, field).as_str(),
+            ),
             settings_value_edit_prompt(&self.i18n, field, &file_value, &effective_value),
             Editor::from_text(setting_value_input_text(&prefill)),
             field,
@@ -15105,6 +15137,18 @@ fn settings_field_display_description(i18n: &I18n, field: SettingsFieldSpec) -> 
     ui_text::t(i18n, field.description_key)
 }
 
+fn settings_field_display_label(i18n: &I18n, field: SettingsFieldSpec) -> String {
+    ui_text::t(i18n, field.label_key)
+}
+
+fn settings_field_edit_title(i18n: &I18n, field: SettingsFieldSpec) -> String {
+    format!(
+        "{} ({})",
+        settings_field_display_label(i18n, field),
+        field.path
+    )
+}
+
 fn runtime_setting_display_label(i18n: &I18n, field: RuntimeSettingSpec) -> String {
     let key = match field.id {
         RuntimeSettingId::ThinkingMode => "settings-runtime-thinking-label",
@@ -15179,12 +15223,12 @@ fn settings_studio_field_items(
             let effective_value =
                 get_json_path(&sources.effective, Some(field.path)).unwrap_or(JsonValue::Null);
             SettingsStudioItem {
-                label: field.path.to_string(),
+                label: settings_field_display_label(i18n, *field),
                 value: format_setting_value_inline(&effective_value),
                 detail: format!(
-                    "{} · {}",
+                    "{} / {}",
                     settings_field_display_description(i18n, *field),
-                    format_setting_field_summary(&file_value, &effective_value)
+                    format_setting_field_summary(i18n, &file_value, &effective_value)
                 ),
                 action: SettingsPickerAction::EditField(*field),
             }
@@ -15210,24 +15254,25 @@ fn settings_studio_config_path_item(
     let file_value = get_json_path(&sources.file, Some(path)).unwrap_or(JsonValue::Null);
     let effective_value = get_json_path(&sources.effective, Some(path)).unwrap_or(JsonValue::Null);
     SettingsStudioItem {
-        label: path.to_string(),
+        label: settings_config_path_display_label(i18n, path),
         value: format_setting_value_inline(&effective_value),
         detail: format!(
-            "{} · {}",
+            "{} / {} / {}",
             ui_text::t(i18n, "settings-config-open-file-detail"),
-            format_setting_field_summary(&file_value, &effective_value)
+            path,
+            format_setting_field_summary(i18n, &file_value, &effective_value)
         ),
         action: SettingsPickerAction::OpenConfigFile,
     }
 }
 
-fn settings_studio_config_root_summary(sources: &ConfigJsonSources, path: &str) -> String {
-    let file_value = get_json_path(&sources.file, Some(path)).unwrap_or(JsonValue::Null);
-    let effective_value = get_json_path(&sources.effective, Some(path)).unwrap_or(JsonValue::Null);
-    format!(
-        "{path} · {}",
-        format_setting_field_summary(&file_value, &effective_value)
-    )
+fn settings_config_path_display_label(i18n: &I18n, path: &str) -> String {
+    match path {
+        "harnesses.browser" => ui_text::t(i18n, "settings-harness-browser-label"),
+        "harnesses.shell" => ui_text::t(i18n, "settings-harness-shell-label"),
+        "harnesses.editor" => ui_text::t(i18n, "settings-harness-editor-label"),
+        _ => path.to_string(),
+    }
 }
 
 fn settings_studio_runtime_items(
@@ -15327,21 +15372,37 @@ fn settings_studio_plugin_items(
             action: SettingsPickerAction::OpenPluginWorkbench,
         },
         SettingsStudioItem {
-            label: PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH.to_string(),
+            label: ui_text::t(i18n, "settings-plugin-default-mode-label"),
             value: settings_studio_tool_description_mode_label(i18n, default_mode.as_str()),
-            detail: ui_text::t(i18n, "settings-plugin-default-mode-detail"),
+            detail: format!(
+                "{} / {}",
+                ui_text::t(i18n, "settings-plugin-default-mode-detail"),
+                PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH
+            ),
             action: SettingsPickerAction::ToggleToolDescriptionMode,
         },
         SettingsStudioItem {
-            label: format!("{PLUGIN_TOOL_PRESENTATION_PATH}.plugins"),
-            value: format!("{plugin_override_count} override(s)"),
-            detail: ui_text::t(i18n, "settings-plugin-per-plugin-detail"),
+            label: ui_text::t(i18n, "settings-plugin-per-plugin-label"),
+            value: i18n.text_args(
+                "settings-plugin-override-count",
+                &crate::fl_args!("count" => plugin_override_count as i64),
+            ),
+            detail: format!(
+                "{} / {PLUGIN_TOOL_PRESENTATION_PATH}.plugins",
+                ui_text::t(i18n, "settings-plugin-per-plugin-detail"),
+            ),
             action: SettingsPickerAction::OpenConfigFile,
         },
         SettingsStudioItem {
-            label: format!("{PLUGIN_TOOL_PRESENTATION_PATH}.tools"),
-            value: format!("{tool_override_count} override(s)"),
-            detail: ui_text::t(i18n, "settings-plugin-per-tool-detail"),
+            label: ui_text::t(i18n, "settings-plugin-per-tool-label"),
+            value: i18n.text_args(
+                "settings-plugin-override-count",
+                &crate::fl_args!("count" => tool_override_count as i64),
+            ),
+            detail: format!(
+                "{} / {PLUGIN_TOOL_PRESENTATION_PATH}.tools",
+                ui_text::t(i18n, "settings-plugin-per-tool-detail"),
+            ),
             action: SettingsPickerAction::OpenConfigFile,
         },
     ]
@@ -17556,21 +17617,33 @@ fn settings_studio_file_items(i18n: &I18n, sources: &ConfigJsonSources) -> Vec<S
     }]
 }
 
-fn format_setting_field_summary(file_value: &JsonValue, effective_value: &JsonValue) -> String {
+fn format_setting_field_summary(
+    i18n: &I18n,
+    file_value: &JsonValue,
+    effective_value: &JsonValue,
+) -> String {
     if !file_value.is_null() {
         if file_value == effective_value {
-            format!("configured {}", format_setting_value_inline(file_value))
+            i18n.text_args(
+                "settings-source-configured",
+                &crate::fl_args!("value" => format_setting_value_inline(file_value)),
+            )
         } else {
-            format!(
-                "file {} · effective {}",
-                format_setting_value_inline(file_value),
-                format_setting_value_inline(effective_value)
+            i18n.text_args(
+                "settings-source-file-effective",
+                &crate::fl_args!(
+                    "file" => format_setting_value_inline(file_value),
+                    "effective" => format_setting_value_inline(effective_value),
+                ),
             )
         }
     } else if !effective_value.is_null() {
-        format!("effective {}", format_setting_value_inline(effective_value))
+        i18n.text_args(
+            "settings-source-effective",
+            &crate::fl_args!("value" => format_setting_value_inline(effective_value)),
+        )
     } else {
-        "unset".to_string()
+        ui_text::t(i18n, "settings-source-unset")
     }
 }
 
@@ -17616,7 +17689,13 @@ fn settings_value_edit_prompt(
     file_value: &JsonValue,
     effective_value: &JsonValue,
 ) -> String {
-    let mut lines = vec![settings_field_display_description(i18n, field)];
+    let mut lines = vec![
+        settings_field_display_description(i18n, field),
+        i18n.text_args(
+            "overlay-settings-detail-path",
+            &crate::fl_args!("path" => field.path),
+        ),
+    ];
     if !file_value.is_null() {
         lines.push(i18n.text_args(
             "overlay-settings-edit-file-value",
@@ -23512,7 +23591,15 @@ mod tests {
 
         assert_eq!(
             settings_field_display_description(&i18n, SETTINGS_FIELDS[0]),
-            "默认 provider id"
+            "没有会话覆盖时使用的 provider"
+        );
+        assert_eq!(
+            settings_field_display_label(&i18n, SETTINGS_FIELDS[0]),
+            "默认 Provider"
+        );
+        assert_eq!(
+            sanitize_terminal_text(&format_setting_field_summary(&i18n, &json!(1), &json!(2))),
+            "文件：1 / 生效：2"
         );
 
         let bool_field = SETTINGS_FIELDS
@@ -23576,21 +23663,26 @@ mod tests {
 
         let runtime_items =
             settings_studio_field_items(&i18n, &sources, SettingsStudioSectionId::ConfigRuntime);
-        assert!(
-            runtime_items
-                .iter()
-                .all(|item| item.label.starts_with("runtime."))
-        );
-        assert!(runtime_items.iter().any(|item| {
-            item.label == "runtime.providers.stream_replay.max_retries_after_output"
-        }));
+        assert!(runtime_items.iter().all(|item| matches!(
+            &item.action,
+            SettingsPickerAction::EditField(field) if field.path.starts_with("runtime.")
+        )));
+        assert!(runtime_items
+            .iter()
+            .any(|item| item.label == "Replay Retries After Output"
+                && matches!(
+                    &item.action,
+                    SettingsPickerAction::EditField(field)
+                        if field.path == "runtime.providers.stream_replay.max_retries_after_output"
+                )));
 
         let plugin_items =
             settings_studio_field_items(&i18n, &sources, SettingsStudioSectionId::ConfigPlugins);
-        assert!(plugin_items.iter().all(|item| {
-            item.label
-                .starts_with("plugins.list.\"agena.memory\".config.")
-        }));
+        assert!(plugin_items.iter().all(|item| matches!(
+            &item.action,
+            SettingsPickerAction::EditField(field)
+                if field.path.starts_with("plugins.list.\"agena.memory\".config.")
+        )));
     }
 
     #[test]
@@ -23620,13 +23712,32 @@ mod tests {
             .map(|item| item.label.as_str())
             .collect::<Vec<_>>();
 
-        assert!(labels.contains(&PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH));
-        assert!(labels.contains(&"plugins.policy.tool_presentation.plugins"));
-        assert!(labels.contains(&"plugins.policy.tool_presentation.tools"));
+        assert!(labels.contains(&"Tool Description Mode"));
+        assert!(labels.contains(&"Plugin Description Overrides"));
+        assert!(labels.contains(&"Tool Description Overrides"));
+        let rendered_items = items
+            .iter()
+            .map(|item| format!("{} {}", item.label, item.detail))
+            .collect::<Vec<_>>();
         assert!(
-            !labels
+            rendered_items
                 .iter()
-                .any(|label| label.starts_with("plugins.tool_presentation")),
+                .any(|item| item.contains(PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH))
+        );
+        assert!(
+            rendered_items
+                .iter()
+                .any(|item| item.contains("plugins.policy.tool_presentation.plugins"))
+        );
+        assert!(
+            rendered_items
+                .iter()
+                .any(|item| item.contains("plugins.policy.tool_presentation.tools"))
+        );
+        assert!(
+            !rendered_items
+                .iter()
+                .any(|item| item.contains("plugins.tool_presentation")),
             "plugin policy UI must not expose legacy plugins.tool_presentation paths: {labels:?}"
         );
     }
@@ -23718,7 +23829,7 @@ mod tests {
                 .iter()
                 .map(|item| item.label.as_str())
                 .collect::<Vec<_>>(),
-            vec!["agents.default", "Agent Profiles"]
+            vec!["Default Agent", "Agent Profiles"]
         );
         assert!(matches!(
             &agent_items[1].action,
@@ -23733,7 +23844,7 @@ mod tests {
                 .iter()
                 .map(|item| item.label.as_str())
                 .collect::<Vec<_>>(),
-            vec!["providers.default", "Provider Studio"]
+            vec!["Default Provider", "Provider Studio"]
         );
         assert!(matches!(
             &provider_items[1].action,

@@ -849,7 +849,7 @@ pub struct ChatStreamDelta {
     pub tool_calls: Option<Vec<serde_json::Value>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResponsesToolEventKind {
     Added,
     Delta,
@@ -860,22 +860,31 @@ pub enum ResponsesToolEventKind {
 pub struct ResponsesToolEvent {
     pub kind: ResponsesToolEventKind,
     pub output_index: Option<usize>,
+    pub item_id: Option<String>,
+    pub call_id: Option<String>,
     pub id: Option<String>,
     pub name: Option<String>,
     pub arguments: Option<String>,
 }
 
 impl ResponsesToolEvent {
-    pub fn stream_key(&self, provider_id: &str) -> Result<String, AppError> {
+    pub fn stream_key_candidates(&self, provider_id: &str) -> Result<Vec<String>, AppError> {
+        let mut keys = Vec::new();
+        if let Some(item_id) = self.item_id.as_ref() {
+            keys.push(format!("item:{item_id}"));
+        }
         if let Some(idx) = self.output_index {
-            return Ok(format!("idx:{idx}"));
+            keys.push(format!("idx:{idx}"));
         }
-        if let Some(id) = self.id.as_ref() {
-            return Ok(format!("id:{id}"));
+        if let Some(call_id) = self.call_id.as_ref() {
+            keys.push(format!("call:{call_id}"));
         }
-        Err(AppError::Provider(format!(
-            "{provider_id} returned tool event without output_index/call_id"
-        )))
+        if keys.is_empty() {
+            return Err(AppError::Provider(format!(
+                "{provider_id} returned tool event without item_id/output_index/call_id"
+            )));
+        }
+        Ok(keys)
     }
 }
 
@@ -928,11 +937,14 @@ pub fn responses_tool_event(
             "responses function_call_arguments.delta",
             event.clone(),
         )?;
+        let item_id = normalize_optional_text(parsed.item_id);
+        let call_id = normalize_optional_text(parsed.call_id);
         return Ok(Some(ResponsesToolEvent {
             kind: ResponsesToolEventKind::Delta,
             output_index: parsed.output_index,
-            id: normalize_optional_text(parsed.call_id)
-                .or_else(|| normalize_optional_text(parsed.item_id)),
+            item_id: item_id.clone(),
+            call_id: call_id.clone(),
+            id: call_id.or(item_id),
             name: normalize_optional_text(parsed.name),
             arguments: optional_non_empty(Some(parsed.delta)),
         }));
@@ -944,11 +956,14 @@ pub fn responses_tool_event(
             "responses function_call_arguments.done",
             event.clone(),
         )?;
+        let item_id = normalize_optional_text(parsed.item_id);
+        let call_id = normalize_optional_text(parsed.call_id);
         return Ok(Some(ResponsesToolEvent {
             kind: ResponsesToolEventKind::Done,
             output_index: parsed.output_index,
-            id: normalize_optional_text(parsed.call_id)
-                .or_else(|| normalize_optional_text(parsed.item_id)),
+            item_id: item_id.clone(),
+            call_id: call_id.clone(),
+            id: call_id.or(item_id),
             name: normalize_optional_text(parsed.name),
             arguments: optional_non_empty(Some(parsed.arguments)),
         }));
@@ -960,6 +975,8 @@ pub fn responses_tool_event(
         if parsed.item.kind != "function_call" {
             return Ok(None);
         }
+        let item_id = normalize_optional_text(parsed.item.id);
+        let call_id = normalize_optional_text(parsed.item.call_id);
         return Ok(Some(ResponsesToolEvent {
             kind: if event_type == "response.output_item.added" {
                 ResponsesToolEventKind::Added
@@ -967,8 +984,9 @@ pub fn responses_tool_event(
                 ResponsesToolEventKind::Done
             },
             output_index: parsed.output_index,
-            id: normalize_optional_text(parsed.item.call_id)
-                .or_else(|| normalize_optional_text(parsed.item.id)),
+            item_id: item_id.clone(),
+            call_id: call_id.clone(),
+            id: call_id.or(item_id),
             name: normalize_optional_text(parsed.item.name),
             arguments: optional_non_empty(parsed.item.arguments),
         }));
@@ -1314,6 +1332,58 @@ mod tests {
             responses_stream_error("openai", &event)
                 .expect("parse stream event")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn responses_tool_event_uses_item_index_and_call_key_candidates() {
+        let event = serde_json::json!({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": "item_1",
+                "call_id": "call_1",
+                "name": "lookup",
+                "arguments": ""
+            }
+        });
+
+        let tool_event = responses_tool_event("openai", &event)
+            .expect("parse tool event")
+            .expect("tool event");
+
+        assert_eq!(tool_event.id.as_deref(), Some("call_1"));
+        assert_eq!(
+            tool_event
+                .stream_key_candidates("openai")
+                .expect("stream keys"),
+            vec![
+                "item:item_1".to_string(),
+                "idx:0".to_string(),
+                "call:call_1".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn responses_tool_event_accepts_delta_with_item_id_only() {
+        let event = serde_json::json!({
+            "type": "response.function_call_arguments.delta",
+            "item_id": "item_1",
+            "delta": "{\"query\""
+        });
+
+        let tool_event = responses_tool_event("openai", &event)
+            .expect("parse tool event")
+            .expect("tool event");
+
+        assert_eq!(tool_event.id.as_deref(), Some("item_1"));
+        assert_eq!(
+            tool_event
+                .stream_key_candidates("openai")
+                .expect("stream keys"),
+            vec!["item:item_1".to_string()]
         );
     }
 }

@@ -1780,6 +1780,25 @@ impl OpenAiAdapter {
         input
     }
 
+    fn responses_reasoning_config(
+        request: &CompletionRequest,
+        model: &str,
+    ) -> Option<OpenAiResponsesReasoningConfig> {
+        chat_wire::reasoning_effort(request.thinking.as_ref(), model).map(|effort| {
+            OpenAiResponsesReasoningConfig {
+                effort: Some(effort),
+            }
+        })
+    }
+
+    fn responses_text_config(request: &CompletionRequest) -> Option<OpenAiResponsesTextConfig> {
+        let verbosity = request.verbosity.clone();
+        let format =
+            OpenAiResponsesTextFormat::from_response_format(request.response_format.as_ref());
+        (verbosity.is_some() || format.is_some())
+            .then_some(OpenAiResponsesTextConfig { verbosity, format })
+    }
+
     fn to_responses_input(request: &CompletionRequest) -> Vec<OpenAiResponsesInputItem> {
         let mut input = Vec::new();
 
@@ -1851,17 +1870,17 @@ impl OpenAiAdapter {
         match item.kind {
             AttachmentKind::Image => wire_message::media_url(item)
                 .map(|image_url| OpenAiInputContent::Image { image_url })
-                .unwrap_or_else(|| OpenAiInputContent::Text {
+                .unwrap_or_else(|| OpenAiInputContent::InputText {
                     text: wire_message::hint_text(item),
                 }),
             AttachmentKind::Audio
             | AttachmentKind::Video
             | AttachmentKind::Pdf
-            | AttachmentKind::File => {
-                Self::responses_file_content(item).unwrap_or_else(|| OpenAiInputContent::Text {
+            | AttachmentKind::File => Self::responses_file_content(item).unwrap_or_else(|| {
+                OpenAiInputContent::InputText {
                     text: wire_message::hint_text(item),
-                })
-            }
+                }
+            }),
         }
     }
 
@@ -1876,7 +1895,7 @@ impl OpenAiAdapter {
 
         input.push(OpenAiResponsesInputItem::Message(OpenAiInputMessage {
             role: role.to_owned(),
-            content: vec![OpenAiInputContent::Text { text }],
+            content: vec![OpenAiInputContent::text_for_role(role, text)],
             copilot_cache_control: None,
         }));
     }
@@ -1999,16 +2018,16 @@ impl OpenAiAdapter {
             .iter()
             .map(|part| match part {
                 wire_message::WirePart::Text { text } => {
-                    OpenAiInputContent::Text { text: text.clone() }
+                    OpenAiInputContent::InputText { text: text.clone() }
                 }
                 wire_message::WirePart::Attachment { item } => {
                     Self::responses_content_from_attachment(item)
                 }
-                wire_message::WirePart::ToolCall { name, .. } => OpenAiInputContent::Text {
+                wire_message::WirePart::ToolCall { name, .. } => OpenAiInputContent::InputText {
                     text: format!("[tool_call:{name}]"),
                 },
                 wire_message::WirePart::ToolResult { tool_call_id, .. } => {
-                    OpenAiInputContent::Text {
+                    OpenAiInputContent::InputText {
                         text: format!("[tool_result:{tool_call_id}]"),
                     }
                 }
@@ -2026,7 +2045,7 @@ impl OpenAiAdapter {
 
         let mut content = Vec::new();
         if !output_json.trim().is_empty() {
-            content.push(OpenAiInputContent::Text {
+            content.push(OpenAiInputContent::InputText {
                 text: output_json.to_owned(),
             });
         }
@@ -2475,17 +2494,8 @@ impl ModelRuntime for OpenAiAdapter {
             stop: (!request.stop_sequences.is_empty()).then(|| request.stop_sequences.clone()),
             top_p: request.top_p,
             seed: request.seed,
-            response_format: chat_wire::map_response_format(request.response_format.as_ref()),
-            reasoning_effort: chat_wire::reasoning_effort(
-                request.thinking.as_ref(),
-                model.as_str(),
-            ),
-            text: request
-                .verbosity
-                .as_ref()
-                .map(|verbosity| OpenAiResponsesTextConfig {
-                    verbosity: verbosity.clone(),
-                }),
+            reasoning: Self::responses_reasoning_config(&request, model.as_str()),
+            text: Self::responses_text_config(&request),
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -2566,17 +2576,8 @@ impl ModelRuntime for OpenAiAdapter {
                 .parallel_tool_calls()
                 .unwrap_or(false),
             prompt_cache_key: request.prompt_cache_key.clone(),
-            reasoning: chat_wire::reasoning_effort(request.thinking.as_ref(), model.as_str()).map(
-                |effort| OpenAiCompactReasoningConfig {
-                    effort: Some(effort),
-                },
-            ),
-            text: request
-                .verbosity
-                .as_ref()
-                .map(|verbosity| OpenAiResponsesTextConfig {
-                    verbosity: verbosity.clone(),
-                }),
+            reasoning: Self::responses_reasoning_config(&request, model.as_str()),
+            text: Self::responses_text_config(&request),
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -2649,17 +2650,8 @@ impl ModelRuntime for OpenAiAdapter {
             stop: (!request.stop_sequences.is_empty()).then(|| request.stop_sequences.clone()),
             top_p: request.top_p,
             seed: request.seed,
-            response_format: chat_wire::map_response_format(request.response_format.as_ref()),
-            reasoning_effort: chat_wire::reasoning_effort(
-                request.thinking.as_ref(),
-                model.as_str(),
-            ),
-            text: request
-                .verbosity
-                .as_ref()
-                .map(|verbosity| OpenAiResponsesTextConfig {
-                    verbosity: verbosity.clone(),
-                }),
+            reasoning: Self::responses_reasoning_config(&request, model.as_str()),
+            text: Self::responses_text_config(&request),
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -2943,9 +2935,7 @@ struct OpenAiResponsesRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     seed: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    response_format: Option<chat_wire::ChatResponseFormat>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reasoning_effort: Option<String>,
+    reasoning: Option<OpenAiResponsesReasoningConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<OpenAiResponsesTextConfig>,
 }
@@ -2964,13 +2954,13 @@ struct OpenAiResponsesCompactRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    reasoning: Option<OpenAiCompactReasoningConfig>,
+    reasoning: Option<OpenAiResponsesReasoningConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<OpenAiResponsesTextConfig>,
 }
 
 #[derive(Debug, Serialize)]
-struct OpenAiCompactReasoningConfig {
+struct OpenAiResponsesReasoningConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     effort: Option<String>,
 }
@@ -2983,7 +2973,40 @@ struct OpenAiResponsesCompactResponse {
 
 #[derive(Debug, Serialize)]
 struct OpenAiResponsesTextConfig {
-    verbosity: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verbosity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<OpenAiResponsesTextFormat>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum OpenAiResponsesTextFormat {
+    JsonObject,
+    JsonSchema {
+        name: String,
+        schema: serde_json::Value,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        strict: bool,
+    },
+}
+
+impl OpenAiResponsesTextFormat {
+    fn from_response_format(format: Option<&crate::provider::ResponseFormat>) -> Option<Self> {
+        match format? {
+            crate::provider::ResponseFormat::Text => None,
+            crate::provider::ResponseFormat::JsonObject => Some(Self::JsonObject),
+            crate::provider::ResponseFormat::JsonSchema {
+                name,
+                schema,
+                strict,
+            } => Some(Self::JsonSchema {
+                name: name.clone(),
+                schema: schema.clone(),
+                strict: *strict,
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -2998,7 +3021,9 @@ struct OpenAiInputMessage {
 #[serde(tag = "type")]
 enum OpenAiInputContent {
     #[serde(rename = "input_text")]
-    Text { text: String },
+    InputText { text: String },
+    #[serde(rename = "output_text")]
+    OutputText { text: String },
     #[serde(rename = "input_image")]
     Image { image_url: String },
     #[serde(rename = "input_file")]
@@ -3012,6 +3037,16 @@ enum OpenAiInputContent {
         #[serde(skip_serializing_if = "Option::is_none")]
         filename: Option<String>,
     },
+}
+
+impl OpenAiInputContent {
+    fn text_for_role(role: &str, text: String) -> Self {
+        if role == "assistant" {
+            Self::OutputText { text }
+        } else {
+            Self::InputText { text }
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -3239,6 +3274,7 @@ struct OpenAiInputTokenDetails {
 fn responses_reasoning_delta(event: &serde_json::Value) -> Option<String> {
     let event_type = event.get("type")?.as_str()?;
     if event_type == "response.reasoning_summary_text.delta"
+        || event_type == "response.reasoning_text.delta"
         || event_type == "response.reasoning.delta"
     {
         return event
@@ -3297,6 +3333,29 @@ fn clamp_u64_to_u32(value: u64) -> u32 {
 mod tests {
     use super::*;
 
+    fn test_completion_request(messages: Vec<Message>) -> CompletionRequest {
+        CompletionRequest {
+            model: ModelId::new("gpt-5.4-mini"),
+            system: None,
+            messages,
+            tools: Vec::new(),
+            native_tools: crate::config::ProviderNativeToolsConfig::default(),
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            verbosity: None,
+            response_format: None,
+            request_override: crate::model::ModelSpeedModeRequestOverride::default(),
+        }
+    }
+
     #[test]
     fn openai_model_parses_compatible_token_limits() {
         let payload = r#"{
@@ -3328,5 +3387,117 @@ mod tests {
         assert!(OpenAiAdapter::copilot_should_use_responses("gpt-5.2-codex"));
         assert!(!OpenAiAdapter::copilot_should_use_responses("gpt-5-mini"));
         assert!(!OpenAiAdapter::copilot_should_use_responses("gpt-4.1"));
+    }
+
+    #[test]
+    fn responses_input_serializes_assistant_history_as_output_text() {
+        let request = test_completion_request(vec![
+            Message::prompt_text(Role::User, "hi"),
+            Message::prompt_text(Role::Assistant, "Hello"),
+            Message::prompt_text(Role::User, "who are you?"),
+        ]);
+
+        let input = OpenAiAdapter::to_responses_input(&request);
+        let value = serde_json::to_value(&input).expect("serialize responses input");
+
+        assert_eq!(
+            value,
+            serde_json::json!([
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "input_text", "text": "hi" }
+                    ]
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        { "type": "output_text", "text": "Hello" }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "input_text", "text": "who are you?" }
+                    ]
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn responses_request_serializes_reasoning_and_structured_output_in_responses_shape() {
+        let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
+        request.thinking = Some(crate::provider::ThinkingRequest::Effort {
+            effort: crate::provider::ReasoningEffort::High,
+        });
+        request.verbosity = Some("high".to_owned());
+        request.response_format = Some(crate::provider::ResponseFormat::JsonSchema {
+            name: "answer".to_owned(),
+            schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "answer": { "type": "string" }
+                },
+                "required": ["answer"],
+                "additionalProperties": false
+            }),
+            strict: true,
+        });
+
+        let body = OpenAiResponsesRequest {
+            model: request.model.to_string(),
+            input: OpenAiAdapter::to_responses_input(&request),
+            tools: Vec::new(),
+            include: None,
+            max_output_tokens: None,
+            temperature: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            stream: false,
+            stop: None,
+            top_p: None,
+            seed: None,
+            reasoning: OpenAiAdapter::responses_reasoning_config(&request, request.model.as_str()),
+            text: OpenAiAdapter::responses_text_config(&request),
+        };
+
+        let value = serde_json::to_value(&body).expect("serialize responses request");
+
+        assert!(value.get("reasoning_effort").is_none());
+        assert!(value.get("response_format").is_none());
+        assert_eq!(value["reasoning"], serde_json::json!({ "effort": "high" }));
+        assert_eq!(
+            value["text"],
+            serde_json::json!({
+                "verbosity": "high",
+                "format": {
+                    "type": "json_schema",
+                    "name": "answer",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "answer": { "type": "string" }
+                        },
+                        "required": ["answer"],
+                        "additionalProperties": false
+                    },
+                    "strict": true
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn responses_reasoning_delta_accepts_reasoning_text_delta() {
+        let event = serde_json::json!({
+            "type": "response.reasoning_text.delta",
+            "delta": "thinking"
+        });
+
+        assert_eq!(
+            responses_reasoning_delta(&event),
+            Some("thinking".to_owned())
+        );
     }
 }

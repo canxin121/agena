@@ -1051,13 +1051,18 @@ pub fn responses_stream_error(
     provider_id: &str,
     event: &serde_json::Value,
 ) -> Result<Option<AppError>, AppError> {
-    let Some(payload) = event.get("error").filter(|v| !v.is_null()) else {
-        return Ok(None);
+    let payload = if responses_event_type(event) == Some("error") {
+        event.clone()
+    } else {
+        let Some(payload) = event.get("error").filter(|v| !v.is_null()) else {
+            return Ok(None);
+        };
+        payload.clone()
     };
     let parsed = parse_json_value::<ResponsesStreamErrorPayload>(
         provider_id,
         "responses stream error",
-        payload.clone(),
+        payload,
     )?;
     if parsed.code.is_none() && parsed.message.is_none() {
         // Empty error envelopes appear on some `response.completed`
@@ -1264,3 +1269,51 @@ struct ProviderErrorBody {
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::{AppError, ProviderErrorKind};
+
+    #[test]
+    fn responses_stream_error_accepts_top_level_error_event() {
+        let event = serde_json::json!({
+            "type": "error",
+            "code": "invalid_prompt",
+            "message": "Invalid value: input_text"
+        });
+
+        let err = responses_stream_error("openai", &event)
+            .expect("parse stream error")
+            .expect("top-level error");
+
+        match err {
+            AppError::ProviderClassified {
+                provider,
+                message,
+                kind,
+                retryable,
+            } => {
+                assert_eq!(provider, "openai");
+                assert_eq!(message, "Invalid value: input_text");
+                assert_eq!(kind, ProviderErrorKind::ApiError);
+                assert!(!retryable);
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_stream_error_ignores_empty_completed_error_envelope() {
+        let event = serde_json::json!({
+            "type": "response.completed",
+            "error": {}
+        });
+
+        assert!(
+            responses_stream_error("openai", &event)
+                .expect("parse stream event")
+                .is_none()
+        );
+    }
+}

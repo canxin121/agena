@@ -10,7 +10,8 @@ use crate::{
 /// Controls extended thinking / reasoning for providers that support it.
 ///
 /// For Anthropic: maps to `thinking` plus provider-specific effort/output settings.
-/// For OpenAI reasoning models: maps to `reasoning_effort`.
+/// For OpenAI reasoning models: maps to Responses `reasoning.effort` or
+/// Chat Completions `reasoning_effort`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ThinkingRequest {

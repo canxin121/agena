@@ -674,14 +674,36 @@ impl SessionProcessor {
                     .map_err(|err| AppError::Internal(err.to_string()))?;
             }
             pending.history_call_id = Some(history_call_id);
-        } else if let Some(history_call_id) = pending.history_call_id.as_ref()
-            && let Some(name) = pending.name.as_deref()
-        {
-            // A second name fragment can arrive after the part already exists.
-            // Re-set the name; RunBuffer accepts repeated assignment.
-            run_buffer
-                .name_tool_call(history_call_id, name)
-                .map_err(|err| AppError::Internal(err.to_string()))?;
+        } else if pending.history_call_id.is_some() {
+            if let Some(provider_call_id) = pending.id.as_deref().filter(|id| !id.trim().is_empty())
+            {
+                let next_history_call_id = ToolCallId::new(provider_call_id);
+                let should_replace = pending
+                    .history_call_id
+                    .as_ref()
+                    .is_some_and(|history_call_id| history_call_id != &next_history_call_id);
+                if should_replace {
+                    let current_history_call_id =
+                        pending.history_call_id.clone().expect("checked above");
+                    run_buffer
+                        .replace_tool_call_id(
+                            &current_history_call_id,
+                            next_history_call_id.clone(),
+                        )
+                        .map_err(|err| AppError::Internal(err.to_string()))?;
+                    pending.history_call_id = Some(next_history_call_id);
+                }
+            }
+
+            if let Some(history_call_id) = pending.history_call_id.as_ref()
+                && let Some(name) = pending.name.as_deref()
+            {
+                // A second name fragment can arrive after the part already exists.
+                // Re-set the name; RunBuffer accepts repeated assignment.
+                run_buffer
+                    .name_tool_call(history_call_id, name)
+                    .map_err(|err| AppError::Internal(err.to_string()))?;
+            }
         }
 
         if let (Some(part_id), Some(operation_id)) = (

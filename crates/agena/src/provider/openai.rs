@@ -1152,9 +1152,11 @@ impl OpenAiAdapter {
                 })?;
 
             let mut pending_tool_calls: std::collections::BTreeMap<String, ResponsesToolState> = std::collections::BTreeMap::new();
+            let mut pending_tool_call_keys: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
             let mut stream_usage: Option<CompletionUsage> = None;
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_has_content = false;
+            let mut stream_tool_call_seen = false;
             let mut completed_emitted = false;
             let mut response_id: Option<String> = None;
 
@@ -1202,9 +1204,15 @@ impl OpenAiAdapter {
                 }
 
                 if let Some(tool_event) = utils::responses_tool_event(provider_name.as_str(), &event)? {
-                    let key = tool_event.stream_key(provider_name.as_str())?;
+                    stream_tool_call_seen = true;
+                    let key = responses_tool_stream_key(
+                        &mut pending_tool_call_keys,
+                        &pending_tool_calls,
+                        &tool_event,
+                        provider_name.as_str(),
+                    )?;
 
-                    let is_added = matches!(tool_event.kind, utils::ResponsesToolEventKind::Added);
+                    let registers_call = responses_tool_event_registers_call(tool_event.kind);
                     let was_new = !pending_tool_calls.contains_key(&key);
                     let state = pending_tool_calls.entry(key.clone()).or_default();
                     if let Some(id) = tool_event.id.clone() {
@@ -1214,7 +1222,7 @@ impl OpenAiAdapter {
                         state.name = Some(name);
                     }
 
-                    if is_added && was_new {
+                    if registers_call && was_new {
                         // Register the call with the aggregator so a
                         // parameterless tool call (no Delta events) is
                         // not silently dropped.
@@ -1301,12 +1309,14 @@ impl OpenAiAdapter {
                 }
 
                 if utils::responses_is_completed(&event) {
+                    let finish_reason = responses_finish_reason_with_tool_calls(
+                        CompletionFinishReason::from_provider(stream_finish_reason.as_deref()),
+                        stream_tool_call_seen,
+                    );
                     yield CompletionStreamEvent::Completed {
                         provider_id: provider_id.clone(),
                         model: model_name.clone(),
-                        finish_reason: CompletionFinishReason::from_provider(
-                            stream_finish_reason.as_deref(),
-                        ),
+                        finish_reason,
                         usage: stream_usage.clone(),
                         provider_metadata: response_id_metadata(response_id.clone()),
                     };
@@ -1322,12 +1332,14 @@ impl OpenAiAdapter {
             if !completed_emitted
                 && (stream_has_content || stream_finish_reason.is_some() || stream_usage.is_some())
             {
+                let finish_reason = responses_finish_reason_with_tool_calls(
+                    CompletionFinishReason::from_provider(stream_finish_reason.as_deref()),
+                    stream_tool_call_seen,
+                );
                 yield CompletionStreamEvent::Completed {
                     provider_id: provider_id.clone(),
                     model: model_name.clone(),
-                    finish_reason: CompletionFinishReason::from_provider(
-                        stream_finish_reason.as_deref(),
-                    ),
+                    finish_reason,
                     usage: stream_usage,
                     provider_metadata: None,
                 };
@@ -2500,6 +2512,8 @@ impl ModelRuntime for OpenAiAdapter {
         let reasoning_text = Self::extract_reasoning_text(&response);
         let finish_reason = CompletionFinishReason::from_provider(response.stop_reason.as_deref());
         let tool_calls = Self::parse_responses_tool_calls(response.output.as_ref())?;
+        let finish_reason =
+            responses_finish_reason_with_tool_calls(finish_reason, !tool_calls.is_empty());
 
         if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
             return self.complete_by_aggregating_stream(request).await;
@@ -2685,9 +2699,11 @@ impl ModelRuntime for OpenAiAdapter {
 
         let stream = async_stream::try_stream! {
             let mut pending_tool_calls: std::collections::BTreeMap<String, ResponsesToolState> = std::collections::BTreeMap::new();
+            let mut pending_tool_call_keys: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
             let mut stream_usage: Option<CompletionUsage> = None;
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_has_content = false;
+            let mut stream_tool_call_seen = false;
             let mut completed_emitted = false;
             let mut response_id: Option<String> = None;
 
@@ -2723,9 +2739,15 @@ impl ModelRuntime for OpenAiAdapter {
                 }
 
                 if let Some(tool_event) = utils::responses_tool_event(provider_name.as_str(), &event)? {
-                    let key = tool_event.stream_key(provider_name.as_str())?;
+                    stream_tool_call_seen = true;
+                    let key = responses_tool_stream_key(
+                        &mut pending_tool_call_keys,
+                        &pending_tool_calls,
+                        &tool_event,
+                        provider_name.as_str(),
+                    )?;
 
-                    let is_added = matches!(tool_event.kind, utils::ResponsesToolEventKind::Added);
+                    let registers_call = responses_tool_event_registers_call(tool_event.kind);
                     let was_new = !pending_tool_calls.contains_key(&key);
                     let state = pending_tool_calls.entry(key.clone()).or_default();
                     if let Some(id) = tool_event.id.clone() {
@@ -2735,7 +2757,7 @@ impl ModelRuntime for OpenAiAdapter {
                         state.name = Some(name);
                     }
 
-                    if is_added && was_new {
+                    if registers_call && was_new {
                         // Register the call with the aggregator so a
                         // parameterless tool call (no Delta events) is
                         // not silently dropped.
@@ -2822,12 +2844,14 @@ impl ModelRuntime for OpenAiAdapter {
                 }
 
                 if utils::responses_is_completed(&event) {
+                    let finish_reason = responses_finish_reason_with_tool_calls(
+                        CompletionFinishReason::from_provider(stream_finish_reason.as_deref()),
+                        stream_tool_call_seen,
+                    );
                     yield CompletionStreamEvent::Completed {
                         provider_id: provider_id.clone(),
                         model: model_name.clone(),
-                        finish_reason: CompletionFinishReason::from_provider(
-                            stream_finish_reason.as_deref(),
-                        ),
+                        finish_reason,
                         usage: stream_usage.clone(),
                         provider_metadata: response_id_metadata(response_id.clone()),
                     };
@@ -2839,12 +2863,14 @@ impl ModelRuntime for OpenAiAdapter {
             if !completed_emitted
                 && (stream_has_content || stream_finish_reason.is_some() || stream_usage.is_some())
             {
+                let finish_reason = responses_finish_reason_with_tool_calls(
+                    CompletionFinishReason::from_provider(stream_finish_reason.as_deref()),
+                    stream_tool_call_seen,
+                );
                 yield CompletionStreamEvent::Completed {
                     provider_id: provider_id.clone(),
                     model: model_name.clone(),
-                    finish_reason: CompletionFinishReason::from_provider(
-                        stream_finish_reason.as_deref(),
-                    ),
+                    finish_reason,
                     usage: stream_usage,
                     provider_metadata: response_id_metadata(response_id),
                 };
@@ -3059,6 +3085,48 @@ struct ResponsesToolState {
     id: Option<String>,
     name: Option<String>,
     arguments: String,
+}
+
+fn responses_tool_stream_key(
+    aliases: &mut BTreeMap<String, String>,
+    pending: &BTreeMap<String, ResponsesToolState>,
+    event: &utils::ResponsesToolEvent,
+    provider_id: &str,
+) -> Result<String, AppError> {
+    let candidates = event.stream_key_candidates(provider_id)?;
+    let key = candidates
+        .iter()
+        .find_map(|candidate| aliases.get(candidate).cloned())
+        .or_else(|| {
+            candidates
+                .iter()
+                .find(|candidate| pending.contains_key(candidate.as_str()))
+                .cloned()
+        })
+        .unwrap_or_else(|| candidates[0].clone());
+
+    for candidate in candidates {
+        aliases.insert(candidate, key.clone());
+    }
+
+    Ok(key)
+}
+
+fn responses_tool_event_registers_call(kind: utils::ResponsesToolEventKind) -> bool {
+    matches!(
+        kind,
+        utils::ResponsesToolEventKind::Added | utils::ResponsesToolEventKind::Done
+    )
+}
+
+fn responses_finish_reason_with_tool_calls(
+    finish_reason: Option<CompletionFinishReason>,
+    saw_tool_call: bool,
+) -> Option<CompletionFinishReason> {
+    if saw_tool_call && matches!(finish_reason, None | Some(CompletionFinishReason::Stop)) {
+        return Some(CompletionFinishReason::ToolCalls);
+    }
+    finish_reason
 }
 
 fn responses_tool_snapshot_delta(
@@ -3293,6 +3361,10 @@ fn clamp_u64_to_u32(value: u64) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::{
+        ExecutionStatus, MessagePart, OperationPart, PartContent, StructuredObject, TimeRange,
+        ToolInvocation, ToolOutput,
+    };
 
     fn test_completion_request(messages: Vec<Message>) -> CompletionRequest {
         CompletionRequest {
@@ -3381,6 +3453,73 @@ mod tests {
                     "content": [
                         { "type": "input_text", "text": "who are you?" }
                     ]
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn responses_input_serializes_tool_call_and_output_as_items() {
+        let created_at = chrono::Utc::now();
+        let invocation = ToolInvocation::new(
+            "agena.web/search",
+            StructuredObject::try_from(serde_json::json!({ "query": "weather" }))
+                .expect("tool input"),
+        );
+        let mut tool_part = MessagePart::with_content(
+            1,
+            0,
+            created_at,
+            ExecutionStatus::Completed,
+            PartContent::Operation(OperationPart::completed(
+                1,
+                invocation,
+                r#"{"forecast":"sunny"}"#,
+                Vec::new(),
+                Vec::new(),
+                ToolOutput::default(),
+                TimeRange::default(),
+            )),
+        );
+        tool_part.operation_id = Some("call_1".to_string());
+
+        let assistant = Message {
+            id: 2,
+            role: Role::Assistant,
+            state: ExecutionStatus::Completed,
+            parts: vec![tool_part],
+            created_at,
+            metadata: Default::default(),
+            provider_state: None,
+            usage: None,
+        };
+        let request = test_completion_request(vec![
+            Message::prompt_text(Role::User, "check weather"),
+            assistant,
+        ]);
+
+        let input = OpenAiAdapter::to_responses_input(&request);
+        let value = serde_json::to_value(&input).expect("serialize responses input");
+
+        assert_eq!(
+            value,
+            serde_json::json!([
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "input_text", "text": "check weather" }
+                    ]
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "agena__x2e__web__x2f__search",
+                    "arguments": "{\"query\":\"weather\"}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "{\"forecast\":\"sunny\"}"
                 }
             ])
         );
@@ -3502,5 +3641,88 @@ mod tests {
             Some(r#"{"query":"new"}"#.to_string())
         );
         assert_eq!(state.arguments, r#"{"query":"new"}"#);
+    }
+
+    #[test]
+    fn responses_tool_stream_key_aliases_item_index_and_call_ids() {
+        let mut aliases = BTreeMap::new();
+        let mut pending = BTreeMap::new();
+        let added = utils::ResponsesToolEvent {
+            kind: utils::ResponsesToolEventKind::Added,
+            output_index: Some(0),
+            item_id: Some("item_1".to_string()),
+            call_id: Some("call_1".to_string()),
+            id: Some("call_1".to_string()),
+            name: Some("lookup".to_string()),
+            arguments: None,
+        };
+
+        let key =
+            responses_tool_stream_key(&mut aliases, &pending, &added, "openai").expect("added key");
+        assert_eq!(key, "item:item_1");
+        pending.insert(key.clone(), ResponsesToolState::default());
+
+        let delta_by_index = utils::ResponsesToolEvent {
+            kind: utils::ResponsesToolEventKind::Delta,
+            output_index: Some(0),
+            item_id: None,
+            call_id: None,
+            id: None,
+            name: None,
+            arguments: Some("{}".to_string()),
+        };
+        assert_eq!(
+            responses_tool_stream_key(&mut aliases, &pending, &delta_by_index, "openai")
+                .expect("delta key"),
+            key
+        );
+
+        let done_by_call_id = utils::ResponsesToolEvent {
+            kind: utils::ResponsesToolEventKind::Done,
+            output_index: None,
+            item_id: None,
+            call_id: Some("call_1".to_string()),
+            id: Some("call_1".to_string()),
+            name: Some("lookup".to_string()),
+            arguments: Some("{}".to_string()),
+        };
+        assert_eq!(
+            responses_tool_stream_key(&mut aliases, &pending, &done_by_call_id, "openai")
+                .expect("done key"),
+            key
+        );
+    }
+
+    #[test]
+    fn responses_tool_done_events_register_parameterless_calls() {
+        assert!(responses_tool_event_registers_call(
+            utils::ResponsesToolEventKind::Done
+        ));
+        assert!(responses_tool_event_registers_call(
+            utils::ResponsesToolEventKind::Added
+        ));
+        assert!(!responses_tool_event_registers_call(
+            utils::ResponsesToolEventKind::Delta
+        ));
+    }
+
+    #[test]
+    fn responses_finish_reason_prefers_tool_calls_when_tools_were_seen() {
+        assert_eq!(
+            responses_finish_reason_with_tool_calls(Some(CompletionFinishReason::Stop), true),
+            Some(CompletionFinishReason::ToolCalls)
+        );
+        assert_eq!(
+            responses_finish_reason_with_tool_calls(None, true),
+            Some(CompletionFinishReason::ToolCalls)
+        );
+        assert_eq!(
+            responses_finish_reason_with_tool_calls(Some(CompletionFinishReason::Length), true),
+            Some(CompletionFinishReason::Length)
+        );
+        assert_eq!(
+            responses_finish_reason_with_tool_calls(Some(CompletionFinishReason::Stop), false),
+            Some(CompletionFinishReason::Stop)
+        );
     }
 }

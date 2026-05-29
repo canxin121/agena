@@ -201,6 +201,35 @@ impl RunBuffer {
         Ok(())
     }
 
+    pub fn replace_tool_call_id(
+        &mut self,
+        old_call_id: &ToolCallId,
+        new_call_id: ToolCallId,
+    ) -> Result<(), RunBufferError> {
+        if old_call_id == &new_call_id {
+            return Ok(());
+        }
+
+        let asst = self.current_assistant()?;
+        if asst.tool_calls.contains_key(&new_call_id) {
+            return Err(RunBufferError::DuplicateToolCall(new_call_id));
+        }
+
+        let entry = asst
+            .tool_calls
+            .remove(old_call_id)
+            .ok_or_else(|| RunBufferError::UnknownToolCall(old_call_id.clone()))?;
+        if let Some(order_entry) = asst
+            .tool_call_order
+            .iter_mut()
+            .find(|call_id| *call_id == old_call_id)
+        {
+            *order_entry = new_call_id.clone();
+        }
+        asst.tool_calls.insert(new_call_id, entry);
+        Ok(())
+    }
+
     pub fn append_tool_arguments(
         &mut self,
         call_id: &ToolCallId,
@@ -367,5 +396,35 @@ mod tests {
             .expect("tool call issued event");
 
         assert_eq!(arguments, &json!({"action": "search", "query": "web"}));
+    }
+
+    #[test]
+    fn commit_uses_replaced_tool_call_id_and_preserves_arguments() {
+        let mut ids = SequentialIdAllocator::starting_at(1);
+        let mut buffer = RunBuffer::new(RunId::new());
+        buffer.begin_assistant(&mut ids);
+
+        let old_call_id = ToolCallId::new("item_1");
+        let new_call_id = ToolCallId::new("call_1");
+        buffer.start_tool_call(old_call_id.clone()).unwrap();
+        buffer.name_tool_call(&old_call_id, "lookup").unwrap();
+        buffer
+            .append_tool_arguments(&old_call_id, r#"{"query":"web"}"#)
+            .unwrap();
+        buffer
+            .replace_tool_call_id(&old_call_id, new_call_id.clone())
+            .unwrap();
+
+        let events = buffer.commit(&mut ids).unwrap();
+        let issued = events
+            .iter()
+            .find_map(|event| match event {
+                EventKind::ToolCallIssued(payload) => Some(payload),
+                _ => None,
+            })
+            .expect("tool call issued event");
+
+        assert_eq!(issued.call_id, new_call_id);
+        assert_eq!(issued.arguments, json!({"query": "web"}));
     }
 }

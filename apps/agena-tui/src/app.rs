@@ -712,7 +712,6 @@ struct SettingsStudioOverlay {
     title: String,
     footer: String,
     state: SectionedListState<SettingsStudioSection>,
-    default_agent_name: Option<String>,
     plugins_default_mode: String,
 }
 
@@ -1000,14 +999,8 @@ enum SettingsPickerAction {
     EditField(SettingsFieldSpec),
     EditRuntimeSetting(RuntimeSettingSpec),
     ToggleToolDescriptionMode,
-    TogglePluginConfigEnabled {
-        plugin_id: String,
-        configured_plugin: JsonValue,
-        enabled: bool,
-    },
-    OpenAgent(Box<AgentDescriptor>),
+    OpenAgentBrowser,
     OpenProviderWorkbench,
-    OpenProviderWorkbenchFor(String),
     OpenModelCatalogWorkbench,
     OpenRuntimeProviderOverride,
     OpenRuntimeModelOverride,
@@ -1663,6 +1656,7 @@ enum PickerValue {
     Command(&'static CommandSpec),
     RuntimeTool(String),
     Provider(ProviderSummaryResource),
+    Agent(Box<AgentDescriptor>),
     Session(i64),
     Message(i64),
     PermissionRuleCreate,
@@ -1681,6 +1675,7 @@ enum PickerKind {
     Lineage { session_id: i64 },
     RewindMessages { session_id: i64 },
     Providers(ProviderPickerPurpose),
+    Agents,
     ChildSessions { parent_session_id: i64 },
     PermissionRules,
     Inspector,
@@ -3232,50 +3227,6 @@ impl App {
                 self.refresh_settings_studio_overlay(dialog);
                 false
             }
-            KeyCode::Char('d') if dialog.state.focus() == SettingsStudioFocus::Items => {
-                let Some(item) = dialog.state.selected_item().cloned() else {
-                    return false;
-                };
-                match item.action {
-                    SettingsPickerAction::OpenAgent(agent) => {
-                        self.set_default_agent(agent.name.as_str(), dialog);
-                    }
-                    SettingsPickerAction::TogglePluginConfigEnabled {
-                        plugin_id,
-                        configured_plugin,
-                        enabled,
-                    } => {
-                        self.toggle_plugin_config_enabled(
-                            plugin_id.as_str(),
-                            configured_plugin,
-                            enabled,
-                            dialog,
-                        );
-                    }
-                    _ => return false,
-                }
-                false
-            }
-            KeyCode::Char('t') if dialog.state.focus() == SettingsStudioFocus::Items => {
-                let Some(item) = dialog.state.selected_item().cloned() else {
-                    return false;
-                };
-                let SettingsPickerAction::TogglePluginConfigEnabled {
-                    plugin_id,
-                    configured_plugin,
-                    enabled,
-                } = item.action
-                else {
-                    return false;
-                };
-                self.toggle_plugin_config_enabled(
-                    plugin_id.as_str(),
-                    configured_plugin,
-                    enabled,
-                    dialog,
-                );
-                false
-            }
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l')
                 if dialog.state.focus() == SettingsStudioFocus::Navigation =>
             {
@@ -4819,6 +4770,13 @@ impl App {
                 let Some(item) = dialog.items.get(dialog.selected).cloned() else {
                     return false;
                 };
+                if matches!(dialog.meta.kind, PickerKind::Agents)
+                    && let PickerValue::Agent(agent) = item.value
+                {
+                    self.route_stack.push(Route::Picker(dialog.clone()));
+                    self.open_agent_studio(agent.name.as_str());
+                    return false;
+                }
                 if matches!(dialog.meta.kind, PickerKind::PermissionRules) {
                     match item.value {
                         PickerValue::PermissionRuleCreate => {
@@ -8779,11 +8737,6 @@ impl App {
         let agents = self.backend.list_agent_descriptors();
         let default_agent = self.backend.default_agent_name();
         let plugins_default_mode = settings_studio_plugins_default_mode(&sources);
-        let plugin_config_items = settings_studio_plugin_config_items(
-            &self.i18n,
-            &sources,
-            &self.backend.plugin_statuses(),
-        );
         let configured_providers = self.backend.list_configured_providers();
         let permission_rule_count = self
             .block_on_async(self.backend.list_permission_rules())
@@ -8812,15 +8765,14 @@ impl App {
             &sources,
             SettingsStudioSectionId::ConfigPlugins,
         ));
-        plugin_items.extend(plugin_config_items.clone());
         let mut agent_items = settings_studio_field_items(
             &self.i18n,
             &sources,
             SettingsStudioSectionId::ConfigAgents,
         );
-        agent_items.extend(settings_studio_agent_items(
+        agent_items.push(settings_studio_agent_browser_item(
             &self.i18n,
-            &agents,
+            agents.len(),
             default_agent.as_deref(),
         ));
         let mut provider_items = settings_studio_field_items(
@@ -8828,7 +8780,7 @@ impl App {
             &sources,
             SettingsStudioSectionId::ConfigProviders,
         );
-        provider_items.extend(settings_studio_provider_items(
+        provider_items.push(settings_studio_provider_workbench_item(
             &self.i18n,
             &configured_providers,
         ));
@@ -9064,7 +9016,6 @@ impl App {
                 selected_item,
                 focus,
             ),
-            default_agent_name: default_agent,
             plugins_default_mode,
         })
     }
@@ -9723,32 +9674,14 @@ impl App {
                 self.toggle_tool_description_mode(dialog);
                 false
             }
-            SettingsPickerAction::TogglePluginConfigEnabled {
-                plugin_id,
-                configured_plugin,
-                enabled,
-            } => {
-                self.toggle_plugin_config_enabled(
-                    plugin_id.as_str(),
-                    configured_plugin,
-                    enabled,
-                    dialog,
-                );
-                false
-            }
-            SettingsPickerAction::OpenAgent(agent) => {
+            SettingsPickerAction::OpenAgentBrowser => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
-                self.open_agent_studio(agent.name.as_str());
+                self.open_agent_picker("");
                 false
             }
             SettingsPickerAction::OpenProviderWorkbench => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_provider_studio(None);
-                false
-            }
-            SettingsPickerAction::OpenProviderWorkbenchFor(provider_id) => {
-                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
-                self.open_provider_studio(Some(provider_id.as_str()));
                 false
             }
             SettingsPickerAction::OpenModelCatalogWorkbench => {
@@ -10788,56 +10721,12 @@ impl App {
         }
     }
 
-    fn toggle_plugin_config_enabled(
-        &mut self,
-        plugin_id: &str,
-        configured_plugin: JsonValue,
-        enabled: bool,
-        dialog: &mut SettingsStudioOverlay,
-    ) {
-        let Some(mut plugin_object) = configured_plugin.as_object().cloned() else {
-            self.flash_error(self.i18n.text_args(
-                "flash-plugin-config-not-object",
-                &crate::fl_args!("plugin_id" => plugin_id),
-            ));
-            return;
-        };
-        plugin_object.insert("enabled".to_string(), JsonValue::Bool(!enabled));
-        match self.block_on_async(self.backend.set_config_setting(
-            &format!("plugins.list.{}", quoted_settings_segment(plugin_id)),
-            JsonValue::Object(plugin_object),
-        )) {
-            Ok(_) => {
-                self.flash_success(self.i18n.text_args(
-                    if enabled {
-                        "flash-plugin-config-disabled"
-                    } else {
-                        "flash-plugin-config-enabled"
-                    },
-                    &crate::fl_args!("plugin_id" => plugin_id),
-                ));
-                self.refresh_settings_studio_overlay(dialog);
-            }
-            Err(error) => self.flash_error(error),
-        }
-    }
-
     fn set_default_agent_value(&mut self, agent_name: &str) -> UiResult<()> {
         self.block_on_async(
             self.backend
                 .set_config_setting("agents.default", JsonValue::String(agent_name.to_string())),
         )
         .map(|_| ())
-    }
-
-    fn set_default_agent(&mut self, agent_name: &str, dialog: &mut SettingsStudioOverlay) {
-        match self.set_default_agent_value(agent_name) {
-            Ok(()) => {
-                self.flash_success(default_agent_updated_message(&self.i18n, agent_name));
-                self.refresh_settings_studio_overlay(dialog);
-            }
-            Err(error) => self.flash_error(error),
-        }
     }
 
     fn open_inspector_picker(
@@ -11155,6 +11044,31 @@ impl App {
         );
         self.current_route = Route::Picker(dialog);
         self.request_providers(purpose);
+    }
+
+    fn open_agent_picker(&mut self, query: &str) {
+        let dialog = self.build_agent_picker_overlay(query);
+        self.current_route = Route::Picker(dialog);
+    }
+
+    fn build_agent_picker_overlay(&self, query: &str) -> PickerOverlay {
+        let mut agents = self.backend.list_agent_descriptors();
+        agents.sort_by(|left, right| left.name.cmp(&right.name));
+        let default_agent = self.backend.default_agent_name();
+        let all_items = agents
+            .into_iter()
+            .map(|agent| agent_picker_item(&self.i18n, agent, default_agent.as_deref()))
+            .collect();
+        self.build_picker_overlay(
+            ui_text::t(&self.i18n, "overlay-agents-title"),
+            ui_text::t(&self.i18n, "overlay-agents-prompt"),
+            ui_text::t(&self.i18n, "overlay-agents-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-empty"),
+            Editor::from_text(query.trim().to_string()),
+            all_items,
+            PickerKind::Agents,
+            false,
+        )
     }
 
     fn open_session_model_chooser(&mut self) {
@@ -15396,154 +15310,6 @@ fn settings_studio_plugins_count(sources: &ConfigJsonSources, path: &str) -> usi
         .unwrap_or(0)
 }
 
-fn settings_studio_plugin_config_items(
-    i18n: &I18n,
-    sources: &ConfigJsonSources,
-    runtime_statuses: &[agena::plugin::status::PluginStatus],
-) -> Vec<SettingsStudioItem> {
-    let plugin_configs_value =
-        get_json_path(&sources.effective, Some("plugins.list")).unwrap_or(JsonValue::Null);
-    let plugin_configs = plugin_configs_value
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
-    let file_configs_value =
-        get_json_path(&sources.file, Some("plugins.list")).unwrap_or(JsonValue::Null);
-    let file_configs = file_configs_value.as_object().cloned().unwrap_or_default();
-
-    let mut items = runtime_statuses
-        .iter()
-        .filter_map(|status| {
-            let plugin_id = status.plugin_id.as_str();
-            let (configured_plugin, source) =
-                if let Some(configured_plugin) = plugin_configs.get(plugin_id) {
-                    (
-                        configured_plugin.clone(),
-                        if file_configs.contains_key(plugin_id) {
-                            "file".to_string()
-                        } else {
-                            "runtime".to_string()
-                        },
-                    )
-                } else {
-                    return None;
-                };
-            let configured_plugin_object = configured_plugin.as_object()?;
-            let enabled = configured_plugin_object
-                .get("enabled")
-                .and_then(JsonValue::as_bool)
-                .unwrap_or(true);
-            let value = i18n.text_args(
-                "settings-plugin-config-value",
-                &crate::fl_args!(
-                    "kind" => status.kind.to_string(),
-                    "source" => settings_plugin_config_source_label(i18n, source.as_str()),
-                    "state" => status.state.as_str().to_string(),
-                    "status" => ui_text::t(
-                        i18n,
-                        if enabled {
-                            "settings-plugin-config-status-enabled"
-                        } else {
-                            "settings-plugin-config-status-disabled"
-                        },
-                    )
-                ),
-            );
-            Some(SettingsStudioItem {
-                label: status.plugin_id.clone(),
-                value,
-                detail: plugin_config_detail_text(
-                    i18n,
-                    status,
-                    configured_plugin_object,
-                    source.as_str(),
-                    enabled,
-                ),
-                action: SettingsPickerAction::TogglePluginConfigEnabled {
-                    plugin_id: status.plugin_id.clone(),
-                    configured_plugin,
-                    enabled,
-                },
-            })
-        })
-        .collect::<Vec<_>>();
-    items.sort_by(|left, right| left.label.cmp(&right.label));
-    items
-}
-
-fn settings_plugin_config_source_label(i18n: &I18n, source: &str) -> String {
-    ui_text::t(
-        i18n,
-        match source {
-            "file" => "settings-plugin-config-source-file",
-            "runtime" => "settings-plugin-config-source-runtime",
-            _ => "value-unknown",
-        },
-    )
-}
-
-fn plugin_config_detail_text(
-    i18n: &I18n,
-    status: &agena::plugin::status::PluginStatus,
-    configured_plugin: &JsonMap<String, JsonValue>,
-    source: &str,
-    enabled: bool,
-) -> String {
-    let mut parts = vec![
-        i18n.text_args(
-            "settings-plugin-config-detail-kind",
-            &crate::fl_args!("kind" => status.kind.to_string()),
-        ),
-        i18n.text_args(
-            "settings-plugin-config-detail-source",
-            &crate::fl_args!("source" => settings_plugin_config_source_label(i18n, source)),
-        ),
-        i18n.text_args(
-            "settings-plugin-config-detail-state",
-            &crate::fl_args!("state" => status.state.as_str().to_string()),
-        ),
-    ];
-    if let Some(pid) = status.pid {
-        parts.push(i18n.text_args(
-            "settings-plugin-config-detail-pid",
-            &crate::fl_args!("pid" => pid.to_string()),
-        ));
-    }
-    if status.restart_count > 0 {
-        parts.push(i18n.text_args(
-            "settings-plugin-config-detail-restarts",
-            &crate::fl_args!("count" => status.restart_count as i64),
-        ));
-    }
-    if let Some(error) = status
-        .last_error
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        parts.push(i18n.text_args(
-            "settings-plugin-config-detail-last-error",
-            &crate::fl_args!("error" => error.to_string()),
-        ));
-    }
-    parts.push(if enabled {
-        ui_text::t(i18n, "settings-plugin-config-detail-enabled")
-    } else {
-        ui_text::t(i18n, "settings-plugin-config-detail-disabled")
-    });
-    if configured_plugin
-        .get("config")
-        .is_some_and(|config| !config.is_null())
-    {
-        parts.push(ui_text::t(
-            i18n,
-            "settings-plugin-config-detail-custom-config",
-        ));
-    }
-    parts.push(ui_text::t(i18n, "settings-plugin-config-detail-toggle"));
-    join_inline_segments(parts)
-}
-
 fn settings_studio_plugin_items(
     i18n: &I18n,
     sources: &ConfigJsonSources,
@@ -15763,94 +15529,54 @@ fn agent_permission_summary(
     }
 }
 
-fn settings_studio_agent_items(
+fn settings_studio_agent_browser_item(
     i18n: &I18n,
-    agents: &[AgentDescriptor],
+    agent_count: usize,
     default_agent: Option<&str>,
-) -> Vec<SettingsStudioItem> {
-    let mut items = agents
-        .iter()
-        .map(|agent| {
-            let source = agent
-                .source_path
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| ui_text::t(i18n, "value-runtime-config"));
-            let mut badges = vec![agent.scope.as_str().to_string()];
-            if default_agent.is_some_and(|name| name == agent.name.as_str()) {
-                badges.push(ui_text::t(i18n, "value-default"));
-            }
-            let value = join_inline_segments(badges);
-            let detail = if agent.description.trim().is_empty() {
-                i18n.text_args(
-                    "settings-agent-no-description",
-                    &crate::fl_args!("source" => source),
-                )
-            } else {
-                i18n.text_args(
-                    "settings-agent-description-with-source",
-                    &crate::fl_args!(
-                        "description" => agent.description.clone(),
-                        "source" => source
-                    ),
-                )
-            };
-            SettingsStudioItem {
-                label: agent.name.clone(),
-                value,
-                detail,
-                action: SettingsPickerAction::OpenAgent(Box::new(agent.clone())),
-            }
-        })
-        .collect::<Vec<_>>();
-    items.sort_by(|left, right| left.label.cmp(&right.label));
-    items
+) -> SettingsStudioItem {
+    SettingsStudioItem {
+        label: ui_text::t(i18n, "settings-agent-browser-label"),
+        value: match default_agent {
+            Some(default) => i18n.text_args(
+                "settings-agent-browser-value-default",
+                &crate::fl_args!(
+                    "count" => agent_count as i64,
+                    "default" => default.to_string(),
+                ),
+            ),
+            None => i18n.text_args(
+                "settings-agent-browser-value",
+                &crate::fl_args!("count" => agent_count as i64),
+            ),
+        },
+        detail: ui_text::t(i18n, "settings-agent-browser-detail"),
+        action: SettingsPickerAction::OpenAgentBrowser,
+    }
 }
 
-fn settings_studio_agent_detail_text(
+fn agent_picker_item(
     i18n: &I18n,
-    agent: &AgentDescriptor,
+    agent: AgentDescriptor,
     default_agent: Option<&str>,
-) -> Text<'static> {
-    let mut lines = vec![
-        app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-agent-overview-scope"),
-            agent.scope.as_str().to_string(),
-        ),
-        app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-settings-agent-detail-default"),
-            localized_yes_no(
-                i18n,
-                default_agent.is_some_and(|name| name == agent.name.as_str()),
-            ),
-        ),
-        app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-agent-overview-source"),
-            agent
-                .source_path
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| ui_text::t(i18n, "value-runtime-config")),
-        ),
-        app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-agent-overview-permission"),
-            agent_permission_summary(i18n, &agent.permission),
-        ),
-        app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-settings-agent-detail-model"),
-            agent_default_summary(i18n, &agent.defaults),
-        ),
-    ];
-    if !agent.description.trim().is_empty() {
-        lines.push(app_detail_plain_line(String::new()));
-        lines.push(app_detail_plain_line(agent.description.clone()));
+) -> PickerItem {
+    let source = agent
+        .source_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| ui_text::t(i18n, "value-runtime-config"));
+    let mut detail = vec![agent.scope.as_str().to_string(), source];
+    if default_agent.is_some_and(|name| name == agent.name.as_str()) {
+        detail.push(ui_text::t(i18n, "value-default"));
     }
-    lines.push(app_detail_plain_line(String::new()));
-    lines.push(app_detail_plain_line(ui_text::t(
-        i18n,
-        "overlay-settings-agent-detail-hint",
-    )));
-    build_app_detail_text(lines)
+    let description = agent.description.trim();
+    if !description.is_empty() {
+        detail.push(description.to_string());
+    }
+    PickerItem {
+        label: agent.name.clone(),
+        detail: join_inline_segments(detail),
+        value: PickerValue::Agent(Box::new(agent)),
+    }
 }
 
 fn agent_profile_editable(profile: &AgentProfile) -> bool {
@@ -17790,30 +17516,19 @@ fn agent_config_path(agent_name: &str, suffix: &str) -> String {
     format!("agents.{}.{}", quoted_settings_segment(agent_name), suffix)
 }
 
-fn settings_studio_provider_items(
+fn settings_studio_provider_workbench_item(
     i18n: &I18n,
     providers: &[ProviderSummaryResource],
-) -> Vec<SettingsStudioItem> {
-    let mut items = vec![SettingsStudioItem {
-        label: ui_text::t(i18n, "settings-provider-new-label"),
-        value: String::new(),
-        detail: ui_text::t(i18n, "settings-provider-new-detail"),
+) -> SettingsStudioItem {
+    SettingsStudioItem {
+        label: ui_text::t(i18n, "settings-provider-workbench-label"),
+        value: i18n.text_args(
+            "settings-provider-workbench-value",
+            &crate::fl_args!("count" => providers.len() as i64),
+        ),
+        detail: ui_text::t(i18n, "settings-provider-workbench-detail"),
         action: SettingsPickerAction::OpenProviderWorkbench,
-    }];
-    items.extend(providers.iter().map(|provider| SettingsStudioItem {
-        label: provider.provider_id.clone(),
-        value: format!(
-            "{}/{}",
-            provider.defaults.adapter.as_deref().unwrap_or("adapter"),
-            provider.defaults.model
-        ),
-        detail: i18n.text_args(
-            "settings-provider-existing-detail",
-            &crate::fl_args!("count" => provider.adapters.len() as i64),
-        ),
-        action: SettingsPickerAction::OpenProviderWorkbenchFor(provider.provider_id.clone()),
-    }));
-    items
+    }
 }
 
 fn settings_studio_model_catalog_items(
@@ -22658,7 +22373,6 @@ mod tests {
     use agena::message::{
         ExecutionStatus, MessagePart, OperationBlock, OperationPart, PartContent, UserInputOption,
     };
-    use agena::plugin::status::{PluginRunState, PluginStatus};
     use chrono::Utc;
     use serde_json::json;
     use tempfile::tempdir;
@@ -23924,6 +23638,7 @@ mod tests {
         fs::write(&config_path, "{}\n").expect("write empty config");
 
         for (path, value) in [
+            ("agents.default", json!("build")),
             (PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH, json!("help")),
             ("session.compaction.auto", json!(true)),
             ("tracing.database", json!("error")),
@@ -23979,6 +23694,54 @@ mod tests {
     }
 
     #[test]
+    fn settings_complex_collections_are_navigation_entries() {
+        let i18n = I18n::english();
+        let sources = ConfigJsonSources {
+            config_path: PathBuf::from("/tmp/agena-config.json"),
+            config_found: true,
+            file: json!({}),
+            effective: json!({
+                "agents": {
+                    "default": "build"
+                },
+                "providers": {
+                    "default": "openai"
+                }
+            }),
+        };
+
+        let mut agent_items =
+            settings_studio_field_items(&i18n, &sources, SettingsStudioSectionId::ConfigAgents);
+        agent_items.push(settings_studio_agent_browser_item(&i18n, 8, Some("build")));
+        assert_eq!(
+            agent_items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["agents.default", "Agent Profiles"]
+        );
+        assert!(matches!(
+            &agent_items[1].action,
+            SettingsPickerAction::OpenAgentBrowser
+        ));
+
+        let mut provider_items =
+            settings_studio_field_items(&i18n, &sources, SettingsStudioSectionId::ConfigProviders);
+        provider_items.push(settings_studio_provider_workbench_item(&i18n, &[]));
+        assert_eq!(
+            provider_items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["providers.default", "Provider Studio"]
+        );
+        assert!(matches!(
+            &provider_items[1].action,
+            SettingsPickerAction::OpenProviderWorkbench
+        ));
+    }
+
+    #[test]
     fn transcript_node_flash_messages_follow_locale() {
         let i18n = I18n::resolve(Some("zh-CN"), None);
         let kind = transcript_node_kind_label(&i18n, TranscriptNodeKind::Tool);
@@ -23998,45 +23761,5 @@ mod tests {
             )),
             "已收起tool 输出"
         );
-    }
-
-    #[test]
-    fn settings_plugin_entries_use_effective_plugin_entries() {
-        let i18n = I18n::english();
-        let sources = ConfigJsonSources {
-            config_path: PathBuf::from("/tmp/agena-config.json"),
-            config_found: true,
-            file: json!({}),
-            effective: json!({
-                "plugins": {
-                    "list": {
-                        "agena.fs": {
-                            "enabled": true,
-                            "package": { "kind": "static" },
-                            "config": null
-                        }
-                    }
-                }
-            }),
-        };
-        let items = settings_studio_plugin_config_items(
-            &i18n,
-            &sources,
-            &[PluginStatus {
-                plugin_id: "agena.fs".to_string(),
-                kind: "static",
-                state: PluginRunState::Running,
-                pid: None,
-                restart_count: 0,
-                last_exit_code: None,
-                last_restart_at_ms: None,
-                last_error: None,
-            }],
-        );
-
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].label, "agena.fs");
-        assert!(items[0].value.contains("runtime"));
-        assert!(!items[0].detail.contains("built-in plugin"));
     }
 }

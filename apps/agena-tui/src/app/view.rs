@@ -3415,20 +3415,49 @@ fn settings_compact_item_title_line(item: &SettingsStudioItem, marker: &str, wid
     }
 
     let marker_width = UnicodeWidthStr::width(marker.as_str());
-    let max_value_width = width.saturating_mul(36).saturating_div(100).clamp(8, 28);
-    let value = truncate_display_text(value.as_str(), max_value_width);
-    let value_width = UnicodeWidthStr::width(value.as_str());
-    let label_budget = width
-        .saturating_sub(marker_width)
-        .saturating_sub(value_width)
-        .saturating_sub(2)
-        .max(1);
-    let label = truncate_display_text(label.as_str(), label_budget);
     let label_width = UnicodeWidthStr::width(label.as_str());
+    let value_width = UnicodeWidthStr::width(value.as_str());
+    let full_width = marker_width
+        .saturating_add(label_width)
+        .saturating_add(value_width)
+        .saturating_add(2);
+    if full_width <= width {
+        let gap = width
+            .saturating_sub(marker_width)
+            .saturating_sub(label_width)
+            .saturating_sub(value_width)
+            .max(1);
+        return format!("{marker}{label}{}{}", " ".repeat(gap), value);
+    }
+
+    let available = width.saturating_sub(marker_width);
+    let gap_width = if available > 2 { 2 } else { 1 };
+    let content_budget = available.saturating_sub(gap_width);
+    if content_budget <= 1 {
+        return truncate_display_text(format!("{marker}{label}").as_str(), width);
+    }
+
+    let min_value_budget = value_width.min(16).min(content_budget.saturating_sub(1));
+    let preferred_label_budget = label_width.min(24);
+    let mut label_budget = preferred_label_budget.min(content_budget.saturating_sub(1));
+    let mut value_budget = content_budget.saturating_sub(label_budget);
+    if value_budget < min_value_budget {
+        let min_label_budget = label_width.min(12).min(content_budget.saturating_sub(1));
+        let reclaim = min_value_budget
+            .saturating_sub(value_budget)
+            .min(label_budget.saturating_sub(min_label_budget));
+        label_budget = label_budget.saturating_sub(reclaim);
+        value_budget = value_budget.saturating_add(reclaim);
+    }
+
+    let label = truncate_display_text(label.as_str(), label_budget.max(1));
+    let value = truncate_display_text(value.as_str(), value_budget.max(1));
+    let label_width = UnicodeWidthStr::width(label.as_str());
+    let value_width = UnicodeWidthStr::width(value.as_str());
     let gap = width
         .saturating_sub(marker_width)
-        .saturating_sub(label_width)
         .saturating_sub(value_width)
+        .saturating_sub(label_width)
         .max(1);
     format!("{marker}{label}{}{}", " ".repeat(gap), value)
 }
@@ -3790,6 +3819,40 @@ mod tests {
             .map(line_text)
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn settings_item_title_uses_available_width_for_value() {
+        let item = SettingsStudioItem::new(
+            "Default",
+            "github / openai / gpt-5.2-codex",
+            "Default provider route",
+            SettingsPickerAction::OpenProviderDefaultWizard,
+        );
+
+        let line = settings_compact_item_title_line(&item, ">> ", 96);
+
+        assert!(line.contains("github / openai / gpt-5.2-codex"));
+        assert!(
+            !line.contains("..."),
+            "wide value should not truncate: {line}"
+        );
+        assert!(UnicodeWidthStr::width(line.as_str()) <= 96);
+    }
+
+    #[test]
+    fn settings_item_title_truncates_only_when_constrained() {
+        let item = SettingsStudioItem::new(
+            "Very Long Setting Name",
+            "github / openai / gpt-5.2-codex",
+            "Default provider route",
+            SettingsPickerAction::OpenProviderDefaultWizard,
+        );
+
+        let line = settings_compact_item_title_line(&item, ">> ", 32);
+
+        assert!(line.contains("..."), "narrow value should truncate: {line}");
+        assert!(UnicodeWidthStr::width(line.as_str()) <= 32);
     }
 
     fn sample_catalog_model() -> CatalogModelResource {

@@ -2100,7 +2100,7 @@ impl App {
         dialog.editor = Some(EditorDialogState::new(
             format!("Rename {}", title_from_key(key.as_str())),
             "Enter the new field name.".to_owned(),
-            "Enter rename  Esc cancel".to_owned(),
+            "Type to edit".to_owned(),
             false,
             Editor::from_text(key),
             PluginConfigEditAction::RenameObjectField { plugin_id, path },
@@ -2220,7 +2220,7 @@ impl App {
                     "Enter a field name for {}. If the schema allows multiple value types or shapes, the editor will prompt you after create.",
                     path_display(&path)
                 ),
-                "Enter create  Esc cancel".to_owned(),
+                "Type to edit".to_owned(),
                 false,
                 Editor::default(),
                 PluginConfigEditAction::AddObjectField { plugin_id, path },
@@ -2434,7 +2434,7 @@ impl App {
             dialog,
             "Select Type".to_owned(),
             format!("Choose JSON type for {}", path_display(&row.primary_path)),
-            "Enter apply  Esc cancel  Up/Down move".to_owned(),
+            String::new(),
             false,
             choices
                 .into_iter()
@@ -2641,7 +2641,7 @@ impl App {
         dialog.editor = Some(EditorDialogState::new(
             format!("Edit {} · {}", row.title, label),
             field_prompt_for_path(plugin, &path),
-            "Enter save  Esc cancel".to_owned(),
+            "Type to edit".to_owned(),
             false,
             Editor::from_text(current),
             PluginConfigEditAction::SetScalar {
@@ -2805,7 +2805,7 @@ impl App {
                 dialog.editor = Some(EditorDialogState::new(
                     format!("Edit {}", row.title),
                     field_prompt_for_row(schema.as_ref(), &row),
-                    "Enter save  Esc cancel".to_owned(),
+                    "Type to edit".to_owned(),
                     false,
                     Editor::from_text(number.to_string()),
                     PluginConfigEditAction::SetScalar {
@@ -2938,7 +2938,7 @@ impl App {
             dialog,
             title,
             prompt,
-            "Enter apply  Esc cancel  Up/Down move".to_owned(),
+            String::new(),
             false,
             items,
             PluginConfigSelectionAction::SelectBranch { plugin_id, path },
@@ -2970,7 +2970,7 @@ impl App {
             dialog,
             format!("Select {title}"),
             "Choose one value".to_owned(),
-            "Enter apply  Esc cancel  Up/Down move".to_owned(),
+            String::new(),
             false,
             items,
             PluginConfigSelectionAction::SelectEnum { plugin_id, path },
@@ -2999,7 +2999,7 @@ impl App {
             dialog,
             format!("Select {title}"),
             "Choose one or more values".to_owned(),
-            "Space toggle  Enter apply  Esc cancel  Up/Down move".to_owned(),
+            "Space toggle".to_owned(),
             true,
             items,
             PluginConfigSelectionAction::SelectMultiEnum { plugin_id, path },
@@ -3484,7 +3484,7 @@ fn render_plugin_list_page(frame: &mut Frame, area: Rect, dialog: &PluginWorkben
     render_plugin_footer(
         frame,
         rows[2],
-        "Type to search  t transport filter  c config filter  Enter details  r refresh  Esc close",
+        "Type to search  t transport filter  c config filter  r refresh",
     );
 }
 
@@ -3530,11 +3530,7 @@ fn render_plugin_detail_page(frame: &mut Frame, area: Rect, dialog: &PluginWorkb
         PluginDetailTab::Diagnostics => plugin_diagnostics_text(plugin),
     };
     render_plugin_panel(frame, rows[2], dialog.detail_tab.label(), body, None);
-    render_plugin_footer(
-        frame,
-        rows[3],
-        "Esc plugins  Tab/Down next tab  Shift+Tab/Up previous tab  PageUp/PageDown scroll  r refresh",
-    );
+    render_plugin_footer(frame, rows[3], "r refresh");
 }
 
 fn render_plugin_compact_config_page(
@@ -3901,7 +3897,7 @@ fn render_plugin_config_diff_overlay(
         config_diff_text(dialog, plugin),
         None,
     );
-    render_plugin_footer(frame, rows[1], "D/Esc close");
+    render_plugin_footer(frame, rows[1], "D close");
 }
 
 fn render_plugin_panel(
@@ -3984,47 +3980,21 @@ fn compact_config_view_line(
     plugin: &PluginWorkbenchPlugin,
     dialog: &PluginWorkbenchOverlay,
 ) -> String {
-    let (cell_label, enter_hint) = selected_config_row_context(dialog)
-        .map(|context| {
-            (
-                config_row_cell_label(&context.row, context.layout, context.cell).to_owned(),
-                config_row_cell_enter_hint(&context.row, context.layout, context.cell),
-            )
-        })
-        .unwrap_or_else(|| ("Value".to_owned(), "edit value".to_owned()));
+    let cell_label = selected_config_row_context(dialog)
+        .map(|context| config_row_cell_label(&context.row, context.layout, context.cell).to_owned())
+        .unwrap_or_else(|| "Value".to_owned());
     format!(
-        "Changed: {}  Cell: {}  Left/Right move  Enter {}  T type/shape  A add  X actions",
+        "Changed: {}  Cell: {}  T type/shape  A add  X actions",
         override_leaf_count(&plugin.draft_override),
         cell_label,
-        enter_hint,
     )
 }
 
 fn drilldown_footer_text(
-    dialog: &PluginWorkbenchOverlay,
-    overlay: &PluginConfigDrilldownOverlay,
+    _dialog: &PluginWorkbenchOverlay,
+    _overlay: &PluginConfigDrilldownOverlay,
 ) -> String {
-    let enter_hint = drilldown_row_at(overlay, dialog.config_view, overlay.selected_row)
-        .and_then(|row| {
-            drilldown_group_for_row(overlay, dialog.config_view, overlay.selected_row).map(
-                |group| {
-                    config_row_cell_enter_hint(
-                        row,
-                        group.layout,
-                        drilldown_selected_row_cell(
-                            overlay,
-                            dialog.config_view,
-                            overlay.selected_cell,
-                        ),
-                    )
-                },
-            )
-        })
-        .unwrap_or_else(|| "edit value".to_owned());
-    format!(
-        "Esc back  Left/Right cell  Enter {}  T type/shape  A add  X actions  Ctrl+d reset row  Up/Down move",
-        enter_hint
-    )
+    "T type/shape  A add  X actions  Ctrl+D reset row".to_owned()
 }
 
 fn compact_config_toolbar_text(dialog: &PluginWorkbenchOverlay) -> Text<'static> {
@@ -4788,54 +4758,6 @@ fn config_row_cell_label(
         (ConfigGroupLayout::Pair { .. }, ConfigRowCell::Action) => "Action",
         (ConfigGroupLayout::Pair { .. }, ConfigRowCell::State) => "State",
         (ConfigGroupLayout::Pair { left_label, .. }, _) => left_label,
-    }
-}
-
-fn config_row_cell_enter_hint(
-    row: &ConfigRowView,
-    layout: ConfigGroupLayout,
-    cell: ConfigRowCell,
-) -> String {
-    match normalize_config_row_cell(row, layout, cell) {
-        ConfigRowCell::Type => {
-            if row.type_mode == ConfigRowTypeMode::SelectShape {
-                "choose shape".to_owned()
-            } else {
-                "choose type".to_owned()
-            }
-        }
-        ConfigRowCell::Default => "reset field".to_owned(),
-        ConfigRowCell::Action => row
-            .action_display
-            .as_deref()
-            .map(trim_action_display)
-            .map(str::to_ascii_lowercase)
-            .unwrap_or_else(|| "open actions".to_owned()),
-        ConfigRowCell::State => "open actions".to_owned(),
-        ConfigRowCell::SecondaryValue => format!(
-            "edit {}",
-            config_row_cell_label(row, layout, ConfigRowCell::SecondaryValue).to_ascii_lowercase()
-        ),
-        ConfigRowCell::Value => match &row.editor {
-            ConfigRowEditor::Bool { .. } => "toggle value".to_owned(),
-            ConfigRowEditor::ReadOnly { .. } => "view value".to_owned(),
-            ConfigRowEditor::Null { .. } if row.type_mode.is_switchable() => {
-                if row.type_mode == ConfigRowTypeMode::SelectShape {
-                    "choose shape".to_owned()
-                } else {
-                    "choose type".to_owned()
-                }
-            }
-            ConfigRowEditor::Structured { .. } => "configure".to_owned(),
-            ConfigRowEditor::Enum { .. } | ConfigRowEditor::MultiEnum { .. } => {
-                "select value".to_owned()
-            }
-            ConfigRowEditor::PairInteger { .. } => format!(
-                "edit {}",
-                config_row_cell_label(row, layout, ConfigRowCell::Value).to_ascii_lowercase()
-            ),
-            _ => "edit value".to_owned(),
-        },
     }
 }
 
@@ -8678,14 +8600,6 @@ impl ConfigRowPrimaryAction {
     }
 }
 
-fn trim_action_display(label: &str) -> &str {
-    label
-        .trim()
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .trim()
-}
-
 fn action_matches_primary(action: &PluginConfigAction, primary: ConfigRowPrimaryAction) -> bool {
     matches!(
         (action, primary),
@@ -8788,10 +8702,9 @@ fn prioritize_config_actions(
 }
 
 fn config_actions_overlay_footer(primary_action: Option<ConfigRowPrimaryAction>) -> String {
-    let base = "Enter apply  Esc close  Up/Down move";
     primary_action
-        .map(|action| format!("{base}  Action: {}", action.plain_label()))
-        .unwrap_or_else(|| base.to_owned())
+        .map(|action| format!("Primary: {}", action.plain_label()))
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Default)]
@@ -13108,7 +13021,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_config_view_line_uses_the_selected_cell_hint() {
+    fn compact_config_view_line_omits_basic_navigation_hints() {
         let plugin = build_schema_fixture_plugin(
             json!({
                 "type": "object",
@@ -13139,11 +13052,13 @@ mod tests {
         let line =
             compact_config_view_line(dialog.selected_plugin().expect("selected plugin"), &dialog);
         assert!(line.contains("Cell: Action"));
-        assert!(line.contains("Enter add field"));
+        assert!(line.contains("T type/shape"));
+        assert!(line.contains("X actions"));
+        assert!(!line.contains("Enter"));
     }
 
     #[test]
-    fn drilldown_footer_tracks_the_selected_cell_action() {
+    fn drilldown_footer_omits_basic_navigation_hints() {
         let plugin = build_schema_fixture_plugin(
             json!({
                 "type": "object",
@@ -13180,7 +13095,8 @@ mod tests {
 
         let overlay = dialog.current_drilldown().cloned().expect("drilldown");
         let footer = drilldown_footer_text(&dialog, &overlay);
-        assert!(footer.contains("Enter reset field"));
+        assert!(footer.contains("Ctrl+D reset row"));
+        assert!(!footer.contains("Enter"));
     }
 
     #[test]

@@ -25,12 +25,12 @@ transcript-empty-session = 이 세션에는 아직 메시지가 없습니다.
 no-session-selected = 선택된 세션이 없습니다.
 no-session-selected-hint = Alt+S 로 세션을 선택하거나 입력창에 바로 입력을 시작해 새 세션을 만드세요.
 composer-session-new = 새 세션
-composer-placeholder = Agena에 입력. Enter 전송. Alt+Up 기록. / 명령. F3 첨부.
+composer-placeholder = Agena에 입력. Alt+Up 기록. / 명령. F3 첨부.
 
 status-global = Alt+S 세션 | Alt+P 명령 | ? 도움말 | q/Ctrl+C 종료
 status-sessions = 세션: Alt+S 전환 | /sessions [검색] | /search [검색]
 status-transcript = 기록: j/k 스크롤 | / 검색 | c 마지막 복사 | y 복사 | v 페이저
-status-composer = 입력: Enter 대기/전송 | Ctrl+Enter 즉시 전송 | Alt+Up/Down 기록 | Shift+Enter 줄바꿈 | / 명령 | Tab 대화
+status-composer = 입력: Ctrl+Enter 즉시 전송 | Ctrl+J 줄바꿈 | Alt+Up/Down 기록 | / 명령 | Tab 대화
 
 help-title = 도움말
 help-header = Agena TUI
@@ -69,20 +69,20 @@ overlay-session-search-title = 세션 검색
 overlay-session-search-prompt = 세션 제목 검색
 overlay-transcript-search-title = 기록 검색
 overlay-transcript-search-prompt = 로드된 메시지 안에서 검색
-overlay-line-footer = Enter 적용 | Esc 닫기
+overlay-line-footer = 입력해 편집
 
 overlay-attach-title = 파일 첨부
 overlay-attach-prompt = 경로나 검색어를 입력하세요. Enter 로 선택된 파일을 첨부합니다.
 overlay-attach-no-match = 일치하는 파일이 없습니다
 overlay-attach-matches = 일치 결과
-overlay-attach-footer = Enter 첨부 | Tab 선택 경로 채우기 | Up/Down 이동 | Esc 닫기
+overlay-attach-footer = Tab 선택 경로 채우기
 
 overlay-user-input-title = 대기 중인 사용자 입력
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = 사용자 정의 값 허용
 overlay-user-input-reply-format = 답변 형식: question_id=value;other_id=value1,value2
 overlay-user-input-cancel-hint = Ctrl+D 로 요청 취소
-overlay-user-input-footer = Enter 제출 | Esc 닫기 | Ctrl+D 취소
+overlay-user-input-footer = Ctrl+D 취소
 
 flash-terminal-event-error = 터미널 이벤트 오류: {$error}
 flash-created-session = 세션을 만들었습니다 {$title}

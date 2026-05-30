@@ -25,12 +25,12 @@ transcript-empty-session = 目前工作階段還沒有訊息。
 no-session-selected = 尚未選擇工作階段。
 no-session-selected-hint = 按 Alt+S 選擇工作階段，或直接在輸入區開始輸入以建立新工作階段。
 composer-session-new = 新工作階段
-composer-placeholder = 輸入給 Agena。Enter 送出。Alt+Up 歷史。/ 指令。F3 附件。
+composer-placeholder = 輸入給 Agena。Alt+Up 歷史。/ 指令。F3 附件。
 
 status-global = Alt+S 工作階段 | Alt+P 指令面板 | ? 說明 | q/Ctrl+C 離開
 status-sessions = 工作階段：Alt+S 切換器 | /sessions [查詢] | /search [查詢]
 status-transcript = 記錄：j/k 捲動 | / 搜尋 | c 複製上一則 | y 複製 | v 分頁
-status-composer = 輸入：Enter 排隊/送出 | Ctrl+Enter 立即送出 | Alt+Up/Down 歷史 | Shift+Enter 換行 | / 指令 | Tab 對話
+status-composer = 輸入：Ctrl+Enter 立即送出 | Ctrl+J 換行 | Alt+Up/Down 歷史 | / 指令 | Tab 對話
 
 help-title = 說明
 help-header = Agena TUI
@@ -69,20 +69,20 @@ overlay-session-search-title = 工作階段搜尋
 overlay-session-search-prompt = 搜尋工作階段標題
 overlay-transcript-search-title = 記錄搜尋
 overlay-transcript-search-prompt = 在已載入訊息中搜尋
-overlay-line-footer = Enter 套用 | Esc 關閉
+overlay-line-footer = 輸入以編輯
 
 overlay-attach-title = 附加檔案
 overlay-attach-prompt = 輸入路徑或搜尋詞。Enter 會附加目前選中的檔案。
 overlay-attach-no-match = 沒有相符的檔案
 overlay-attach-matches = 相符結果
-overlay-attach-footer = Enter 附加 | Tab 填入選中路徑 | Up/Down 移動 | Esc 關閉
+overlay-attach-footer = Tab 填入選中路徑
 
 overlay-user-input-title = 待處理使用者輸入
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = 允許自訂值
 overlay-user-input-reply-format = 回覆格式：question_id=value;other_id=value1,value2
 overlay-user-input-cancel-hint = Ctrl+D 取消此請求
-overlay-user-input-footer = Enter 送出 | Esc 關閉 | Ctrl+D 取消
+overlay-user-input-footer = Ctrl+D 取消
 
 flash-terminal-event-error = 終端事件錯誤：{$error}
 flash-created-session = 已建立工作階段 {$title}

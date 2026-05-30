@@ -13,7 +13,7 @@ use agena::{
         NetworkPermissionConfig, PathAccessModes, PathAccessRuleConfig, PathPermissionConfig,
         PermissionConfig, ToolPermissionConfig, ToolPermissionRules,
     },
-    agents::{AgentDescriptor, AgentProfile},
+    agents::{AgentDescriptor, AgentFrontmatter, AgentProfile, AgentScope},
     config::get_json_path,
     event::{DomainEvent, EventKind as AgenaSessionEvent},
     message::{
@@ -748,9 +748,24 @@ struct SettingsStudioOverlay {
 struct AgentStudioOverlay {
     agent_name: String,
     profile: AgentProfile,
+    storage: AgentProfileStorage,
     editable: bool,
     default_agent_name: Option<String>,
     workbench: ListWorkbenchState<AgentStudioItem, AgentStudioEditor>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentProfileStorage {
+    BuiltIn,
+    Config,
+    Markdown,
+    Runtime,
+}
+
+impl AgentProfileStorage {
+    fn editable(self) -> bool {
+        matches!(self, Self::Config | Self::Markdown)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -4012,7 +4027,7 @@ impl App {
         match item.action {
             AgentStudioAction::Edit(field) => {
                 if !dialog.editable {
-                    self.flash_warning(agent_file_backed_edit_message(&self.i18n));
+                    self.flash_warning(agent_read_only_edit_message(&self.i18n));
                     return false;
                 }
                 self.open_agent_studio_editor(dialog, field);
@@ -4063,24 +4078,68 @@ impl App {
     ) -> UiResult<()> {
         match action {
             AgentStudioEditorAction::Field(field) => {
-                let (path, value) = agent_studio_field_setting_value(
-                    &self.i18n,
-                    dialog.agent_name.as_str(),
-                    field,
-                    input.as_str(),
-                )?;
-                if let Some(value) = value {
-                    self.block_on_async(self.backend.set_config_setting(path.as_str(), value))
-                        .map_err(|error| error.to_string())?;
-                    self.flash_success(settings_path_updated_message(&self.i18n, path.as_str()));
-                } else {
-                    self.block_on_async(self.backend.delete_config_setting(path.as_str()))
-                        .map_err(|error| error.to_string())?;
-                    self.flash_success(settings_path_cleared_message(&self.i18n, path.as_str()));
+                match dialog.storage {
+                    AgentProfileStorage::Config => {
+                        let (path, value) = agent_studio_field_setting_value(
+                            &self.i18n,
+                            dialog.agent_name.as_str(),
+                            field,
+                            input.as_str(),
+                        )?;
+                        if let Some(value) = value {
+                            self.block_on_async(
+                                self.backend.set_config_setting(path.as_str(), value),
+                            )
+                            .map_err(|error| error.to_string())?;
+                            self.flash_success(settings_path_updated_message(
+                                &self.i18n,
+                                path.as_str(),
+                            ));
+                        } else {
+                            self.block_on_async(self.backend.delete_config_setting(path.as_str()))
+                                .map_err(|error| error.to_string())?;
+                            self.flash_success(settings_path_cleared_message(
+                                &self.i18n,
+                                path.as_str(),
+                            ));
+                        }
+                    }
+                    AgentProfileStorage::Markdown => {
+                        let mut profile = dialog.profile.clone();
+                        apply_agent_studio_field_to_profile(&mut profile, field, input.as_str());
+                        self.persist_agent_markdown_profile(&profile)?;
+                    }
+                    AgentProfileStorage::BuiltIn | AgentProfileStorage::Runtime => {
+                        return Err(agent_read_only_edit_message(&self.i18n));
+                    }
                 }
                 self.refresh_agent_studio_overlay(dialog);
             }
         }
+        Ok(())
+    }
+
+    fn persist_agent_markdown_profile(&mut self, profile: &AgentProfile) -> UiResult<()> {
+        let path = profile
+            .source_path
+            .as_ref()
+            .ok_or_else(|| agent_read_only_edit_message(&self.i18n))?;
+        let text = agent_markdown_document(&profile.frontmatter, profile.prompt.as_str())?;
+        fs::write(path, text).map_err(|error| {
+            self.i18n.text_args(
+                "flash-agent-source-write-failed",
+                &crate::fl_args!(
+                    "path" => path.display().to_string(),
+                    "error" => error.to_string(),
+                ),
+            )
+        })?;
+        self.block_on_async(self.backend.reload_runtime())
+            .map_err(|error| error.to_string())?;
+        self.flash_success(self.i18n.text_args(
+            "flash-agent-source-updated",
+            &crate::fl_args!("path" => path.display().to_string()),
+        ));
         Ok(())
     }
 
@@ -6937,6 +6996,7 @@ impl App {
                     &self.i18n,
                     agents,
                     self.backend.default_agent_name().as_deref(),
+                    &self.backend.config_agent_names(),
                 );
                 Self::refresh_picker_overlay(&mut dialog);
             }
@@ -9185,6 +9245,13 @@ impl App {
         }
     }
 
+    fn agent_profile_storage(&self, profile: &AgentProfile) -> AgentProfileStorage {
+        agent_profile_storage(
+            profile,
+            self.backend.config_has_agent(profile.name.as_str()),
+        )
+    }
+
     fn build_agent_studio_overlay(
         &self,
         agent_name: &str,
@@ -9194,14 +9261,11 @@ impl App {
             .backend
             .get_agent_profile(agent_name)
             .ok_or_else(|| format!("agent not found: {agent_name}"))?;
-        let editable = agent_profile_editable(&profile);
+        let storage = self.agent_profile_storage(&profile);
+        let editable = storage.editable();
         let default_agent_name = self.backend.default_agent_name();
-        let items = agent_studio_items(
-            &self.i18n,
-            &profile,
-            editable,
-            default_agent_name.as_deref(),
-        );
+        let items =
+            agent_studio_items(&self.i18n, &profile, storage, default_agent_name.as_deref());
         let selected = preferred_item_label
             .and_then(|label| items.iter().position(|item| item.label == label))
             .unwrap_or(0);
@@ -9214,6 +9278,7 @@ impl App {
         Ok(AgentStudioOverlay {
             agent_name: profile.name.clone(),
             profile,
+            storage,
             editable,
             default_agent_name,
             workbench: ListWorkbenchState::new(
@@ -9308,12 +9373,13 @@ impl App {
                     .backend
                     .get_agent_profile(agent_name)
                     .ok_or_else(|| format!("agent not found: {agent_name}"))?;
+                let storage = self.agent_profile_storage(&profile);
                 let permission = profile.frontmatter.permission.clone();
                 (
                     profile.name.clone(),
-                    agent_profile_source_label_localized(&self.i18n, &profile),
-                    profile.scope.as_str().to_string(),
-                    agent_profile_editable(&profile),
+                    agent_profile_source_label_localized(&self.i18n, &profile, storage),
+                    agent_profile_scope_label_localized(&self.i18n, &profile),
+                    storage.editable(),
                     permission.clone(),
                 )
             }
@@ -9410,18 +9476,45 @@ impl App {
                 self.refresh_current_transcript_execution_state();
             }
             PermissionStudioSource::Agent { agent_name } => {
-                let path = agent_config_path(agent_name.as_str(), "permission");
-                if permission.is_empty() {
-                    self.block_on_async(self.backend.delete_config_setting(path.as_str()))
-                        .map_err(|error| error.to_string())?;
-                    self.flash_success(settings_path_cleared_message(&self.i18n, path.as_str()));
-                } else {
-                    self.block_on_async(self.backend.set_config_setting(
-                        path.as_str(),
-                        serde_json::to_value(&permission).map_err(|error| error.to_string())?,
-                    ))
-                    .map_err(|error| error.to_string())?;
-                    self.flash_success(settings_path_updated_message(&self.i18n, path.as_str()));
+                let mut profile = self
+                    .backend
+                    .get_agent_profile(agent_name)
+                    .ok_or_else(|| format!("agent not found: {agent_name}"))?;
+                match self.agent_profile_storage(&profile) {
+                    AgentProfileStorage::Config => {
+                        let path = agent_config_path(agent_name.as_str(), "permission");
+                        if permission.is_empty() {
+                            self.block_on_async(self.backend.delete_config_setting(path.as_str()))
+                                .map_err(|error| error.to_string())?;
+                            self.flash_success(settings_path_cleared_message(
+                                &self.i18n,
+                                path.as_str(),
+                            ));
+                        } else {
+                            self.block_on_async(
+                                self.backend.set_config_setting(
+                                    path.as_str(),
+                                    serde_json::to_value(&permission)
+                                        .map_err(|error| error.to_string())?,
+                                ),
+                            )
+                            .map_err(|error| error.to_string())?;
+                            self.flash_success(settings_path_updated_message(
+                                &self.i18n,
+                                path.as_str(),
+                            ));
+                        }
+                    }
+                    AgentProfileStorage::Markdown => {
+                        profile.frontmatter.permission = permission;
+                        self.persist_agent_markdown_profile(&profile)?;
+                    }
+                    AgentProfileStorage::BuiltIn | AgentProfileStorage::Runtime => {
+                        return Err(permission_studio_read_only_message(
+                            &self.i18n,
+                            &dialog.source,
+                        ));
+                    }
                 }
                 self.refresh_current_transcript_execution_state();
             }
@@ -10855,10 +10948,19 @@ impl App {
     }
 
     fn open_agent_profile_source(&mut self, profile: &AgentProfile) {
-        if let Some(path) = profile.source_path.clone() {
-            self.pending_ui_action = Some(UiAction::OpenPath { path });
-        } else {
-            self.open_runtime_config_in_editor();
+        match self.agent_profile_storage(profile) {
+            AgentProfileStorage::Markdown => {
+                if let Some(path) = profile.source_path.clone() {
+                    self.pending_ui_action = Some(UiAction::OpenPath { path });
+                }
+            }
+            AgentProfileStorage::Config => self.open_runtime_config_in_editor(),
+            AgentProfileStorage::BuiltIn => {
+                self.flash_info(ui_text::t(&self.i18n, "flash-agent-built-in-no-source"));
+            }
+            AgentProfileStorage::Runtime => {
+                self.flash_info(ui_text::t(&self.i18n, "flash-agent-runtime-no-source"));
+            }
         }
     }
 
@@ -11306,6 +11408,7 @@ impl App {
                 &self.i18n,
                 self.backend.list_agent_descriptors(),
                 self.backend.default_agent_name().as_deref(),
+                &self.backend.config_agent_names(),
             )
         };
         self.build_picker_overlay(
@@ -14939,12 +15042,12 @@ fn default_agent_updated_message(i18n: &I18n, agent_name: &str) -> String {
     )
 }
 
-fn agent_file_backed_edit_message(i18n: &I18n) -> String {
-    ui_text::t(i18n, "flash-agent-file-backed-edit")
+fn agent_read_only_edit_message(i18n: &I18n) -> String {
+    ui_text::t(i18n, "flash-agent-read-only-edit")
 }
 
-fn agent_file_backed_permissions_message(i18n: &I18n) -> String {
-    ui_text::t(i18n, "flash-agent-file-backed-permissions")
+fn agent_read_only_permissions_message(i18n: &I18n) -> String {
+    ui_text::t(i18n, "flash-agent-read-only-permissions")
 }
 
 fn provider_studio_no_auth_details_message(i18n: &I18n) -> String {
@@ -15846,13 +15949,24 @@ fn agent_picker_item(
     i18n: &I18n,
     agent: AgentDescriptor,
     default_agent: Option<&str>,
+    config_owned: bool,
 ) -> PickerItem {
-    let source = agent
-        .source_path
-        .as_ref()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| ui_text::t(i18n, "value-runtime-config"));
-    let mut detail = vec![agent.scope.as_str().to_string(), source];
+    let storage = agent_descriptor_storage(&agent, config_owned);
+    let source = match storage {
+        AgentProfileStorage::BuiltIn => ui_text::t(i18n, "value-built-in"),
+        AgentProfileStorage::Config => ui_text::t(i18n, "value-runtime-config"),
+        AgentProfileStorage::Markdown => agent
+            .source_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| ui_text::t(i18n, "value-markdown-backed")),
+        AgentProfileStorage::Runtime => ui_text::t(i18n, "value-runtime-registered"),
+    };
+    let mut detail = vec![
+        agent_scope_label_localized(i18n, agent.scope),
+        agent_profile_storage_label_localized(i18n, storage),
+        source,
+    ];
     if default_agent.is_some_and(|name| name == agent.name.as_str()) {
         detail.push(ui_text::t(i18n, "value-default"));
     }
@@ -15867,6 +15981,29 @@ fn agent_picker_item(
     }
 }
 
+fn agent_descriptor_storage(agent: &AgentDescriptor, config_owned: bool) -> AgentProfileStorage {
+    if matches!(agent.scope, AgentScope::Default) {
+        AgentProfileStorage::BuiltIn
+    } else if agent.source_path.is_some() {
+        AgentProfileStorage::Markdown
+    } else if config_owned {
+        AgentProfileStorage::Config
+    } else {
+        AgentProfileStorage::Runtime
+    }
+}
+
+fn agent_scope_label_localized(i18n: &I18n, scope: AgentScope) -> String {
+    ui_text::t(
+        i18n,
+        match scope {
+            AgentScope::Project => "value-agent-scope-project",
+            AgentScope::User => "value-agent-scope-user",
+            AgentScope::Default => "value-agent-scope-default",
+        },
+    )
+}
+
 fn agent_list_create_item(i18n: &I18n) -> PickerItem {
     PickerItem {
         label: ui_text::t(i18n, "overlay-agent-list-create-label"),
@@ -15879,27 +16016,67 @@ fn agent_list_items(
     i18n: &I18n,
     mut agents: Vec<AgentDescriptor>,
     default_agent: Option<&str>,
+    config_agents: &HashSet<String>,
 ) -> Vec<PickerItem> {
     agents.sort_by(|left, right| left.name.cmp(&right.name));
     let mut items = vec![agent_list_create_item(i18n)];
-    items.extend(
-        agents
-            .into_iter()
-            .map(|agent| agent_picker_item(i18n, agent, default_agent)),
-    );
+    items.extend(agents.into_iter().map(|agent| {
+        let config_owned = config_agents.contains(agent.name.as_str());
+        agent_picker_item(i18n, agent, default_agent, config_owned)
+    }));
     items
 }
 
-fn agent_profile_editable(profile: &AgentProfile) -> bool {
-    profile.source_path.is_none() && matches!(profile.scope, agena::agents::AgentScope::Project)
+fn agent_profile_storage(profile: &AgentProfile, config_owned: bool) -> AgentProfileStorage {
+    if matches!(profile.scope, AgentScope::Default) {
+        AgentProfileStorage::BuiltIn
+    } else if profile.source_path.is_some() {
+        AgentProfileStorage::Markdown
+    } else if config_owned {
+        AgentProfileStorage::Config
+    } else {
+        AgentProfileStorage::Runtime
+    }
 }
 
-fn agent_profile_source_label_localized(i18n: &I18n, profile: &AgentProfile) -> String {
-    profile
-        .source_path
-        .as_ref()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| ui_text::t(i18n, "value-runtime-config-file"))
+fn agent_profile_storage_label_localized(i18n: &I18n, storage: AgentProfileStorage) -> String {
+    ui_text::t(
+        i18n,
+        match storage {
+            AgentProfileStorage::BuiltIn => "value-built-in",
+            AgentProfileStorage::Config => "value-config-backed",
+            AgentProfileStorage::Markdown => "value-markdown-backed",
+            AgentProfileStorage::Runtime => "value-runtime-registered",
+        },
+    )
+}
+
+fn agent_profile_scope_label_localized(i18n: &I18n, profile: &AgentProfile) -> String {
+    ui_text::t(
+        i18n,
+        match profile.scope {
+            AgentScope::Project => "value-agent-scope-project",
+            AgentScope::User => "value-agent-scope-user",
+            AgentScope::Default => "value-agent-scope-default",
+        },
+    )
+}
+
+fn agent_profile_source_label_localized(
+    i18n: &I18n,
+    profile: &AgentProfile,
+    storage: AgentProfileStorage,
+) -> String {
+    match storage {
+        AgentProfileStorage::BuiltIn => ui_text::t(i18n, "value-built-in-defaults"),
+        AgentProfileStorage::Config => ui_text::t(i18n, "value-runtime-config-file"),
+        AgentProfileStorage::Markdown => profile
+            .source_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| ui_text::t(i18n, "value-markdown-backed")),
+        AgentProfileStorage::Runtime => ui_text::t(i18n, "value-runtime-registered"),
+    }
 }
 
 fn agent_prompt_summary(i18n: &I18n, prompt: &str) -> String {
@@ -15923,7 +16100,7 @@ fn agent_optional_string_summary(i18n: &I18n, value: Option<&str>, empty_key: &s
 fn agent_studio_items(
     i18n: &I18n,
     profile: &AgentProfile,
-    editable: bool,
+    storage: AgentProfileStorage,
     default_agent_name: Option<&str>,
 ) -> Vec<AgentStudioItem> {
     let is_default = default_agent_name.is_some_and(|name| name == profile.name.as_str());
@@ -15992,16 +16169,31 @@ fn agent_studio_items(
             action: AgentStudioAction::SetDefault,
         },
         AgentStudioItem {
-            label: if profile.source_path.is_some() {
-                ui_text::t(i18n, "agent-studio-item-open-source-file")
-            } else {
-                ui_text::t(i18n, "agent-studio-item-open-config-file")
+            label: match storage {
+                AgentProfileStorage::Markdown => {
+                    ui_text::t(i18n, "agent-studio-item-open-source-file")
+                }
+                AgentProfileStorage::Config => {
+                    ui_text::t(i18n, "agent-studio-item-open-config-file")
+                }
+                AgentProfileStorage::BuiltIn | AgentProfileStorage::Runtime => {
+                    ui_text::t(i18n, "agent-studio-item-source-label")
+                }
             },
-            value: agent_profile_source_label_localized(i18n, profile),
-            detail: if editable {
-                ui_text::t(i18n, "agent-studio-item-open-config-detail")
-            } else {
-                ui_text::t(i18n, "agent-studio-item-open-source-detail")
+            value: agent_profile_source_label_localized(i18n, profile, storage),
+            detail: match storage {
+                AgentProfileStorage::Config => {
+                    ui_text::t(i18n, "agent-studio-item-open-config-detail")
+                }
+                AgentProfileStorage::Markdown => {
+                    ui_text::t(i18n, "agent-studio-item-open-source-detail")
+                }
+                AgentProfileStorage::BuiltIn => {
+                    ui_text::t(i18n, "agent-studio-item-open-built-in-detail")
+                }
+                AgentProfileStorage::Runtime => {
+                    ui_text::t(i18n, "agent-studio-item-open-runtime-detail")
+                }
             },
             action: AgentStudioAction::OpenSource,
         },
@@ -16012,7 +16204,7 @@ fn agent_studio_item_detail_text(
     i18n: &I18n,
     profile: &AgentProfile,
     item: &AgentStudioItem,
-    editable: bool,
+    storage: AgentProfileStorage,
     default_agent_name: Option<&str>,
 ) -> Text<'static> {
     match &item.action {
@@ -16033,9 +16225,7 @@ fn agent_studio_item_detail_text(
                 ));
             }
             lines.push(app_detail_plain_line(String::new()));
-            lines.push(app_detail_plain_line(agent_editability_hint(
-                i18n, editable,
-            )));
+            lines.push(app_detail_plain_line(agent_editability_hint(i18n, storage)));
             build_app_detail_text(lines)
         }
         AgentStudioAction::Edit(AgentStudioField::Prompt) => {
@@ -16056,9 +16246,7 @@ fn agent_studio_item_detail_text(
                 lines.push(app_detail_plain_line(profile.prompt.clone()));
             }
             lines.push(app_detail_plain_line(String::new()));
-            lines.push(app_detail_plain_line(agent_editability_hint(
-                i18n, editable,
-            )));
+            lines.push(app_detail_plain_line(agent_editability_hint(i18n, storage)));
             build_app_detail_text(lines)
         }
         AgentStudioAction::OpenPermissionWorkbench => build_app_detail_text(vec![
@@ -16074,7 +16262,7 @@ fn agent_studio_item_detail_text(
             app_detail_plain_line(String::new()),
             app_detail_plain_line(ui_text::t(
                 i18n,
-                if editable {
+                if storage.editable() {
                     "overlay-agent-detail-open-permission"
                 } else {
                     "overlay-agent-detail-open-permission-read-only"
@@ -16094,14 +16282,14 @@ fn agent_studio_item_detail_text(
         AgentStudioAction::OpenSource => build_app_detail_text(vec![
             app_detail_labeled_line(
                 ui_text::t(i18n, "overlay-agent-overview-source"),
-                agent_profile_source_label_localized(i18n, profile),
+                agent_profile_source_label_localized(i18n, profile, storage),
             ),
             app_detail_labeled_line(
                 ui_text::t(i18n, "overlay-agent-overview-scope"),
-                profile.scope.as_str().to_string(),
+                agent_profile_scope_label_localized(i18n, profile),
             ),
             app_detail_plain_line(String::new()),
-            app_detail_plain_line(ui_text::t(i18n, "overlay-agent-detail-open-source-hint")),
+            app_detail_plain_line(item.detail.clone()),
         ]),
         AgentStudioAction::Edit(_) => build_app_detail_text(vec![
             app_detail_plain_line(item.detail.clone()),
@@ -16110,7 +16298,7 @@ fn agent_studio_item_detail_text(
                 item.value.clone(),
             ),
             app_detail_plain_line(String::new()),
-            app_detail_plain_line(agent_editability_hint(i18n, editable)),
+            app_detail_plain_line(agent_editability_hint(i18n, storage)),
         ]),
     }
 }
@@ -16119,7 +16307,7 @@ fn agent_studio_overview_text(
     i18n: &I18n,
     profile: &AgentProfile,
     default_agent_name: Option<&str>,
-    editable: bool,
+    storage: AgentProfileStorage,
 ) -> Text<'static> {
     let mut lines = vec![
         app_detail_labeled_line(
@@ -16128,7 +16316,11 @@ fn agent_studio_overview_text(
         ),
         app_detail_labeled_line(
             ui_text::t(i18n, "overlay-agent-overview-scope"),
-            profile.scope.as_str().to_string(),
+            agent_profile_scope_label_localized(i18n, profile),
+        ),
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-agent-overview-storage"),
+            agent_profile_storage_label_localized(i18n, storage),
         ),
         app_detail_labeled_line(
             ui_text::t(i18n, "overlay-agent-overview-default-agent"),
@@ -16139,7 +16331,7 @@ fn agent_studio_overview_text(
         ),
         app_detail_labeled_line(
             ui_text::t(i18n, "overlay-agent-overview-source"),
-            agent_profile_source_label_localized(i18n, profile),
+            agent_profile_source_label_localized(i18n, profile, storage),
         ),
         app_detail_labeled_line(
             ui_text::t(i18n, "overlay-agent-overview-permission"),
@@ -16161,11 +16353,7 @@ fn agent_studio_overview_text(
     lines.push(app_detail_plain_line(String::new()));
     lines.push(app_detail_plain_line(ui_text::t(
         i18n,
-        if editable {
-            "overlay-agent-overview-editable"
-        } else {
-            "overlay-agent-overview-read-only"
-        },
+        agent_profile_overview_hint_key(storage),
     )));
     build_app_detail_text(lines)
 }
@@ -16197,12 +16385,25 @@ fn localized_yes_no(i18n: &I18n, value: bool) -> String {
     ui_text::t(i18n, if value { "value-yes" } else { "value-no" })
 }
 
-fn agent_editability_hint(i18n: &I18n, editable: bool) -> String {
-    if editable {
-        ui_text::t(i18n, "overlay-agent-detail-editable-hint")
-    } else {
-        ui_text::t(i18n, "overlay-agent-detail-read-only-hint")
+fn agent_profile_overview_hint_key(storage: AgentProfileStorage) -> &'static str {
+    match storage {
+        AgentProfileStorage::BuiltIn => "overlay-agent-overview-built-in",
+        AgentProfileStorage::Config => "overlay-agent-overview-config-editable",
+        AgentProfileStorage::Markdown => "overlay-agent-overview-markdown-editable",
+        AgentProfileStorage::Runtime => "overlay-agent-overview-runtime-read-only",
     }
+}
+
+fn agent_editability_hint(i18n: &I18n, storage: AgentProfileStorage) -> String {
+    ui_text::t(
+        i18n,
+        match storage {
+            AgentProfileStorage::BuiltIn => "overlay-agent-detail-built-in-hint",
+            AgentProfileStorage::Config => "overlay-agent-detail-config-editable-hint",
+            AgentProfileStorage::Markdown => "overlay-agent-detail-markdown-editable-hint",
+            AgentProfileStorage::Runtime => "overlay-agent-detail-runtime-read-only-hint",
+        },
+    )
 }
 
 fn agent_studio_editor_config(
@@ -16272,6 +16473,41 @@ fn agent_studio_field_input_text(profile: &AgentProfile, field: AgentStudioField
     }
 }
 
+fn apply_agent_studio_field_to_profile(
+    profile: &mut AgentProfile,
+    field: AgentStudioField,
+    input: &str,
+) {
+    let trimmed = input.trim();
+    match field {
+        AgentStudioField::Description => {
+            profile.frontmatter.description = if trimmed.is_empty() {
+                String::new()
+            } else {
+                input.to_string()
+            };
+        }
+        AgentStudioField::Prompt => {
+            profile.prompt = if trimmed.is_empty() {
+                String::new()
+            } else {
+                input.to_string()
+            };
+        }
+        AgentStudioField::DefaultProvider => {
+            profile.frontmatter.defaults.provider =
+                (!trimmed.is_empty()).then(|| trimmed.to_string());
+        }
+        AgentStudioField::DefaultAdapter => {
+            profile.frontmatter.defaults.adapter =
+                (!trimmed.is_empty()).then(|| trimmed.to_string());
+        }
+        AgentStudioField::DefaultModel => {
+            profile.frontmatter.defaults.model = (!trimmed.is_empty()).then(|| trimmed.to_string());
+        }
+    }
+}
+
 fn agent_studio_field_setting_value(
     _i18n: &I18n,
     agent_name: &str,
@@ -16297,6 +16533,32 @@ fn agent_studio_field_setting_value(
         }
     };
     Ok((path, value))
+}
+
+fn agent_frontmatter_empty(frontmatter: &AgentFrontmatter) -> bool {
+    frontmatter.description.trim().is_empty()
+        && frontmatter.permission.is_empty()
+        && frontmatter.defaults.is_empty()
+}
+
+fn agent_markdown_document(frontmatter: &AgentFrontmatter, prompt: &str) -> UiResult<String> {
+    let prompt = prompt.trim_start_matches('\n');
+    if agent_frontmatter_empty(frontmatter) {
+        return Ok(if prompt.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n", prompt.trim_end_matches('\n'))
+        });
+    }
+    let yaml = serde_yaml::to_string(frontmatter).map_err(|error| error.to_string())?;
+    let yaml = yaml
+        .strip_prefix("---\n")
+        .unwrap_or(yaml.as_str())
+        .trim_end();
+    Ok(format!(
+        "---\n{yaml}\n---\n{}\n",
+        prompt.trim_end_matches('\n')
+    ))
 }
 
 fn permission_studio_nav_items(i18n: &I18n) -> Vec<PermissionStudioNavItem> {
@@ -17243,7 +17505,7 @@ fn permission_settings_value(
 
 fn permission_studio_read_only_message(i18n: &I18n, source: &PermissionStudioSource) -> String {
     match source {
-        PermissionStudioSource::Agent { .. } => agent_file_backed_permissions_message(i18n),
+        PermissionStudioSource::Agent { .. } => agent_read_only_permissions_message(i18n),
         PermissionStudioSource::GlobalConfig | PermissionStudioSource::Session { .. } => {
             ui_text::t(i18n, "permission-studio-detail-read-only")
         }
@@ -24139,6 +24401,7 @@ mod tests {
                 source_path: None,
             }],
             Some("build"),
+            &HashSet::from(["build".to_string()]),
         );
         assert_eq!(agent_items[0].label, "+ New Agent");
         assert!(matches!(agent_items[0].value, PickerValue::AgentCreate));
@@ -24163,6 +24426,71 @@ mod tests {
         assert_eq!(
             sanitize_terminal_text(&i18n_provider_list_detail(&i18n, &provider)),
             "copilot / gpt-5 · 1 adapters"
+        );
+    }
+
+    #[test]
+    fn agent_storage_distinguishes_builtin_config_markdown_and_runtime() {
+        let i18n = I18n::english();
+        let mut profile = AgentProfile {
+            name: "build".to_string(),
+            frontmatter: Default::default(),
+            prompt: String::new(),
+            source_path: None,
+            scope: AgentScope::Default,
+        };
+        assert_eq!(
+            agent_profile_storage(&profile, false),
+            AgentProfileStorage::BuiltIn
+        );
+        assert_eq!(
+            agent_profile_source_label_localized(&i18n, &profile, AgentProfileStorage::BuiltIn),
+            "built-in defaults"
+        );
+
+        profile.scope = AgentScope::Project;
+        assert_eq!(
+            agent_profile_storage(&profile, true),
+            AgentProfileStorage::Config
+        );
+
+        profile.source_path = Some(PathBuf::from("/tmp/custom.md"));
+        assert_eq!(
+            agent_profile_storage(&profile, true),
+            AgentProfileStorage::Markdown
+        );
+        assert!(AgentProfileStorage::Markdown.editable());
+
+        profile.source_path = None;
+        assert_eq!(
+            agent_profile_storage(&profile, false),
+            AgentProfileStorage::Runtime
+        );
+        assert!(!AgentProfileStorage::Runtime.editable());
+    }
+
+    #[test]
+    fn agent_markdown_document_round_trips_frontmatter_and_prompt() {
+        let mut frontmatter = AgentFrontmatter {
+            description: "Custom agent".to_string(),
+            ..Default::default()
+        };
+        frontmatter.defaults.provider = Some("github".to_string());
+        frontmatter.defaults.model = Some("gpt-5".to_string());
+
+        let text = agent_markdown_document(&frontmatter, "Use the repo context.\n").unwrap();
+        let parsed = AgentProfile::from_raw(&text, "custom", AgentScope::User).unwrap();
+        assert_eq!(parsed.frontmatter.description, "Custom agent");
+        assert_eq!(
+            parsed.frontmatter.defaults.provider.as_deref(),
+            Some("github")
+        );
+        assert_eq!(parsed.frontmatter.defaults.model.as_deref(), Some("gpt-5"));
+        assert_eq!(parsed.prompt, "Use the repo context.\n");
+
+        assert_eq!(
+            agent_markdown_document(&AgentFrontmatter::default(), "Prompt only").unwrap(),
+            "Prompt only\n"
         );
     }
 

@@ -55,6 +55,14 @@ pub fn list_providers_response(state: &AppState) -> Vec<ProviderSummaryResource>
                     defaults: ProviderDefaultsResource {
                         adapter: provider.default_adapter().map(ToString::to_string),
                         model: provider.default_model().to_string(),
+                        thinking_mode: provider_config
+                            .and_then(|provider| provider.defaults.thinking_mode.clone()),
+                        speed_mode: provider_config
+                            .and_then(|provider| provider.defaults.speed_mode.clone()),
+                        verbosity: provider_config
+                            .and_then(|provider| provider.defaults.verbosity.clone()),
+                        parallel_tool_calls: provider_config
+                            .and_then(|provider| provider.defaults.parallel_tool_calls),
                     },
                     adapters,
                     native_tools: provider_config.map(provider_native_tools_summary_resource),

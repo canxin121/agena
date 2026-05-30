@@ -158,6 +158,7 @@ const MEMORY_PROJECT_INSTRUCTIONS_ENABLED_PATH: &str =
     "plugins.list.\"agena.memory\".config.project_instructions.enabled";
 const MEMORY_PROJECT_INSTRUCTIONS_INCLUDE_GLOBAL_PATH: &str =
     "plugins.list.\"agena.memory\".config.project_instructions.include_global";
+const PROVIDER_DEFAULT_WIZARD_INHERIT: &str = "__agena_default__";
 
 const SETTINGS_FIELDS: [SettingsFieldSpec; 25] = [
     SettingsFieldSpec {
@@ -1040,6 +1041,7 @@ type ChoiceOverlay = SearchListOverlay<ChoiceItem, ChoiceCustomValue, ChoiceOver
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChoiceOverlayStyle {
     Searchable,
+    SearchableSelect,
     SelectOnly,
 }
 
@@ -1047,10 +1049,29 @@ enum ChoiceOverlayStyle {
 enum ChoiceOverlayAction {
     SettingsField(SettingsFieldSpec),
     RuntimeSetting(RuntimeSettingSpec),
+    ProviderDefaultWizard(ProviderDefaultWizardStep, ProviderDefaultWizardDraft),
     ProviderStudioField(ProviderStudioField),
     ProviderStudioModelField(ProviderModelConfigField),
     PermissionRuleStudio(PermissionRuleStudioChoiceField),
     PermissionStudioMode(PermissionStudioModeTarget),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderDefaultWizardStep {
+    Provider,
+    Adapter,
+    Model,
+    ThinkingMode,
+    SpeedMode,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ProviderDefaultWizardDraft {
+    provider_id: String,
+    adapter_id: Option<String>,
+    model_id: Option<String>,
+    thinking_mode: Option<String>,
+    speed_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1083,6 +1104,7 @@ enum SettingsPickerAction {
     EditField(SettingsFieldSpec),
     EditRuntimeSetting(RuntimeSettingSpec),
     ToggleToolDescriptionMode,
+    OpenProviderDefaultWizard,
     OpenAgentList,
     OpenProviderList,
     OpenModelCatalogWorkbench,
@@ -8586,6 +8608,13 @@ impl App {
         }
     }
 
+    fn searchable_select_choice_overlay_config() -> SearchListOverlayConfig {
+        SearchListOverlayConfig {
+            custom_value_enabled: false,
+            ..Self::standard_choice_overlay_config()
+        }
+    }
+
     fn select_only_choice_overlay_config() -> SearchListOverlayConfig {
         SearchListOverlayConfig {
             target_width: 96,
@@ -8661,13 +8690,16 @@ impl App {
     fn choice_overlay_config(style: ChoiceOverlayStyle) -> SearchListOverlayConfig {
         match style {
             ChoiceOverlayStyle::Searchable => Self::standard_choice_overlay_config(),
+            ChoiceOverlayStyle::SearchableSelect => Self::searchable_select_choice_overlay_config(),
             ChoiceOverlayStyle::SelectOnly => Self::select_only_choice_overlay_config(),
         }
     }
 
     fn choice_overlay_footer(&self, style: ChoiceOverlayStyle) -> String {
         match style {
-            ChoiceOverlayStyle::Searchable => ui_text::t(&self.i18n, "overlay-choice-footer"),
+            ChoiceOverlayStyle::Searchable | ChoiceOverlayStyle::SearchableSelect => {
+                ui_text::t(&self.i18n, "overlay-choice-footer")
+            }
             ChoiceOverlayStyle::SelectOnly => {
                 ui_text::t(&self.i18n, "overlay-choice-footer-select")
             }
@@ -8994,15 +9026,8 @@ impl App {
             agents.len(),
             default_agent.as_deref(),
         ));
-        let mut provider_items = settings_studio_field_items(
-            &self.i18n,
-            &sources,
-            SettingsStudioSectionId::ConfigProviders,
-        );
-        provider_items.push(settings_studio_provider_workbench_item(
-            &self.i18n,
-            &configured_providers,
-        ));
+        let provider_items =
+            settings_studio_provider_items(&self.i18n, &sources, &configured_providers);
         let runtime_config_items = settings_studio_field_items(
             &self.i18n,
             &sources,
@@ -9924,6 +9949,10 @@ impl App {
                 self.toggle_tool_description_mode(dialog);
                 false
             }
+            SettingsPickerAction::OpenProviderDefaultWizard => {
+                self.open_provider_default_wizard();
+                false
+            }
             SettingsPickerAction::OpenAgentList => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_agent_list("");
@@ -10352,6 +10381,14 @@ impl App {
                     }
                 }
             }
+            ChoiceOverlayAction::ProviderDefaultWizard(step, draft) => {
+                let input = match selection {
+                    SearchListRow::Clear(_) => String::new(),
+                    SearchListRow::Custom(value) => value.raw,
+                    SearchListRow::Item(item) => item.value,
+                };
+                self.commit_provider_default_wizard_step(step, draft, input)
+            }
             ChoiceOverlayAction::ProviderStudioField(field) => {
                 let value = match selection {
                     SearchListRow::Clear(_) => String::new(),
@@ -10528,6 +10565,455 @@ impl App {
             Editor::from_text(setting_value_input_text(&prefill)),
             field,
         )));
+    }
+
+    fn open_provider_default_wizard(&mut self) {
+        let provider_id = self
+            .backend
+            .config_json_sources()
+            .ok()
+            .and_then(|sources| get_json_path(&sources.effective, Some("providers.default")).ok())
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_default();
+        let draft = ProviderDefaultWizardDraft {
+            provider_id,
+            ..Default::default()
+        };
+        self.open_provider_default_provider_step(draft);
+    }
+
+    fn open_provider_default_provider_step(&mut self, draft: ProviderDefaultWizardDraft) -> bool {
+        let providers = self.configured_defaultable_provider_summaries();
+        if providers.is_empty() {
+            self.flash_warning(ui_text::t(
+                &self.i18n,
+                "flash-provider-default-no-providers",
+            ));
+            return false;
+        }
+        let items = providers
+            .iter()
+            .map(|provider| {
+                choice_item(
+                    provider.provider_id.clone(),
+                    provider_default_route_summary(&self.i18n, provider),
+                )
+            })
+            .collect();
+        self.open_provider_default_choice_overlay(
+            "overlay-provider-default-provider-title",
+            "overlay-provider-default-provider-prompt",
+            Editor::from_text(draft.provider_id.clone()),
+            items,
+            ProviderDefaultWizardStep::Provider,
+            draft,
+            ChoiceOverlayStyle::SearchableSelect,
+        )
+    }
+
+    fn open_provider_default_adapter_step(&mut self, draft: ProviderDefaultWizardDraft) -> bool {
+        let Some(provider) = self.configured_provider_summary(draft.provider_id.as_str()) else {
+            self.flash_warning(self.i18n.text_args(
+                "flash-provider-default-provider-missing",
+                &crate::fl_args!("provider" => draft.provider_id.clone()),
+            ));
+            return false;
+        };
+        let mut items = provider
+            .adapters
+            .iter()
+            .filter(|adapter| adapter.enabled)
+            .map(|adapter| {
+                choice_item(
+                    adapter.adapter_id.clone(),
+                    provider_default_adapter_detail(&self.i18n, adapter.configured_model_count),
+                )
+            })
+            .collect::<Vec<_>>();
+        if items.is_empty()
+            && let Some(adapter) = provider
+                .defaults
+                .adapter
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+        {
+            items.push(choice_item(
+                adapter.to_owned(),
+                ui_text::t(
+                    &self.i18n,
+                    "settings-provider-default-current-adapter-detail",
+                ),
+            ));
+        }
+        let input = draft
+            .adapter_id
+            .clone()
+            .or_else(|| provider.defaults.adapter.clone())
+            .unwrap_or_default();
+        self.open_provider_default_choice_overlay(
+            "overlay-provider-default-adapter-title",
+            "overlay-provider-default-adapter-prompt",
+            Editor::from_text(input),
+            items,
+            ProviderDefaultWizardStep::Adapter,
+            draft,
+            ChoiceOverlayStyle::SearchableSelect,
+        )
+    }
+
+    fn open_provider_default_model_step(&mut self, draft: ProviderDefaultWizardDraft) -> bool {
+        let Some(adapter_id) = draft.adapter_id.as_deref() else {
+            self.flash_warning(ui_text::t(
+                &self.i18n,
+                "flash-provider-default-adapter-required",
+            ));
+            return false;
+        };
+        let Some(provider) = self.configured_provider_summary(draft.provider_id.as_str()) else {
+            self.flash_warning(self.i18n.text_args(
+                "flash-provider-default-provider-missing",
+                &crate::fl_args!("provider" => draft.provider_id.clone()),
+            ));
+            return false;
+        };
+        let items = match self.provider_default_model_choice_items(
+            provider.provider_id.as_str(),
+            adapter_id,
+            provider.defaults.adapter.as_deref(),
+        ) {
+            Ok(items) => items,
+            Err(error) => {
+                self.flash_warning(error);
+                Vec::new()
+            }
+        };
+        let input = draft
+            .model_id
+            .clone()
+            .or_else(|| {
+                (!provider.defaults.model.trim().is_empty())
+                    .then(|| provider.defaults.model.clone())
+            })
+            .unwrap_or_default();
+        self.open_provider_default_choice_overlay(
+            "overlay-provider-default-model-title",
+            "overlay-provider-default-model-prompt",
+            Editor::from_text(input),
+            items,
+            ProviderDefaultWizardStep::Model,
+            draft,
+            ChoiceOverlayStyle::SearchableSelect,
+        )
+    }
+
+    fn open_provider_default_thinking_step_or_next(
+        &mut self,
+        draft: ProviderDefaultWizardDraft,
+    ) -> bool {
+        match self
+            .provider_default_mode_choice_items(&draft, ProviderDefaultWizardStep::ThinkingMode)
+        {
+            Ok(items) if !items.is_empty() => self.open_provider_default_choice_overlay(
+                "overlay-provider-default-thinking-title",
+                "overlay-provider-default-thinking-prompt",
+                Editor::from_text(
+                    draft
+                        .thinking_mode
+                        .clone()
+                        .unwrap_or_else(|| ui_text::t(&self.i18n, "value-default")),
+                ),
+                items,
+                ProviderDefaultWizardStep::ThinkingMode,
+                draft,
+                ChoiceOverlayStyle::SearchableSelect,
+            ),
+            Ok(_) => self.open_provider_default_speed_step_or_finish(draft),
+            Err(error) => {
+                self.flash_warning(error);
+                self.open_provider_default_speed_step_or_finish(draft)
+            }
+        }
+    }
+
+    fn open_provider_default_speed_step_or_finish(
+        &mut self,
+        draft: ProviderDefaultWizardDraft,
+    ) -> bool {
+        match self.provider_default_mode_choice_items(&draft, ProviderDefaultWizardStep::SpeedMode)
+        {
+            Ok(items) if !items.is_empty() => self.open_provider_default_choice_overlay(
+                "overlay-provider-default-speed-title",
+                "overlay-provider-default-speed-prompt",
+                Editor::from_text(
+                    draft
+                        .speed_mode
+                        .clone()
+                        .unwrap_or_else(|| ui_text::t(&self.i18n, "value-default")),
+                ),
+                items,
+                ProviderDefaultWizardStep::SpeedMode,
+                draft,
+                ChoiceOverlayStyle::SearchableSelect,
+            ),
+            Ok(_) => self.finish_provider_default_wizard(draft),
+            Err(error) => {
+                self.flash_warning(error);
+                self.finish_provider_default_wizard(draft)
+            }
+        }
+    }
+
+    fn open_provider_default_choice_overlay(
+        &mut self,
+        title_key: &str,
+        prompt_key: &str,
+        input: Editor,
+        items: Vec<ChoiceItem>,
+        step: ProviderDefaultWizardStep,
+        draft: ProviderDefaultWizardDraft,
+        style: ChoiceOverlayStyle,
+    ) -> bool {
+        if items.is_empty() {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-provider-default-empty-step"));
+            return false;
+        }
+        self.open_choice_overlay(self.build_choice_overlay(
+            ui_text::t(&self.i18n, title_key),
+            ui_text::t(&self.i18n, prompt_key),
+            input,
+            items,
+            ChoiceOverlayAction::ProviderDefaultWizard(step, draft),
+            false,
+            style,
+        ));
+        true
+    }
+
+    fn configured_provider_summary(&self, provider_id: &str) -> Option<ProviderSummaryResource> {
+        self.configured_defaultable_provider_summaries()
+            .into_iter()
+            .find(|provider| provider.provider_id == provider_id.trim())
+    }
+
+    fn configured_defaultable_provider_summaries(&self) -> Vec<ProviderSummaryResource> {
+        let active_provider_ids = self
+            .backend
+            .list_providers()
+            .into_iter()
+            .map(|provider| provider.provider_id)
+            .collect::<HashSet<_>>();
+        self.backend
+            .list_configured_providers()
+            .into_iter()
+            .filter(|provider| active_provider_ids.contains(provider.provider_id.as_str()))
+            .collect()
+    }
+
+    fn provider_default_model_choice_items(
+        &self,
+        provider_id: &str,
+        adapter_id: &str,
+        default_adapter: Option<&str>,
+    ) -> UiResult<Vec<ChoiceItem>> {
+        let mut items = match self.block_on_async(self.backend.list_provider_models(provider_id)) {
+            Ok(models) => models
+                .into_iter()
+                .filter(|model| {
+                    let model_adapter = model
+                        .adapter_id
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .or_else(|| default_adapter.map(str::to_owned));
+                    model_adapter.as_deref() == Some(adapter_id)
+                })
+                .map(|model| {
+                    choice_item(
+                        model.id.to_string(),
+                        provider_default_model_detail(&self.i18n, &model),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            Err(error) => {
+                let fallback = self.configured_provider_model_choice_items(provider_id, adapter_id);
+                if fallback.is_empty() {
+                    return Err(error);
+                }
+                fallback
+            }
+        };
+
+        items.sort_by(|left, right| left.label.cmp(&right.label));
+        Ok(dedupe_choice_items(items))
+    }
+
+    fn configured_provider_model_choice_items(
+        &self,
+        provider_id: &str,
+        adapter_id: &str,
+    ) -> Vec<ChoiceItem> {
+        self.backend
+            .configured_provider_adapter_models(Some(provider_id))
+            .into_iter()
+            .find(|models| models.adapter_id == adapter_id)
+            .map(|adapter_models| {
+                adapter_models
+                    .models
+                    .into_iter()
+                    .map(|model| {
+                        choice_item(
+                            model.id.to_string(),
+                            ui_text::t(&self.i18n, "overlay-provider-studio-configured"),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    }
+
+    fn provider_default_mode_choice_items(
+        &self,
+        draft: &ProviderDefaultWizardDraft,
+        step: ProviderDefaultWizardStep,
+    ) -> UiResult<Vec<ChoiceItem>> {
+        let Some(model) = provider_default_wizard_model_ref(draft) else {
+            return Ok(Vec::new());
+        };
+        let request = RunOptions {
+            model: Some(model),
+            ..Default::default()
+        };
+        let rows = match step {
+            ProviderDefaultWizardStep::ThinkingMode => {
+                self.backend.runtime_thinking_mode_rows(&request)
+            }
+            ProviderDefaultWizardStep::SpeedMode => self.backend.runtime_speed_mode_rows(&request),
+            _ => Ok(Vec::new()),
+        }
+        .map_err(|error| error.to_string())?;
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut items = vec![choice_item_with_value(
+            ui_text::t(&self.i18n, "value-default"),
+            PROVIDER_DEFAULT_WIZARD_INHERIT,
+            ui_text::t(&self.i18n, "settings-provider-default-mode-inherit-detail"),
+        )];
+        items.extend(inspector_rows_to_choice_items(rows));
+        Ok(items)
+    }
+
+    fn commit_provider_default_wizard_step(
+        &mut self,
+        step: ProviderDefaultWizardStep,
+        mut draft: ProviderDefaultWizardDraft,
+        input: String,
+    ) -> bool {
+        let value = input.trim();
+        if value.is_empty() {
+            self.flash_warning(ui_text::t(
+                &self.i18n,
+                "flash-provider-default-selection-required",
+            ));
+            return false;
+        }
+
+        match step {
+            ProviderDefaultWizardStep::Provider => {
+                draft.provider_id = value.to_owned();
+                draft.adapter_id = None;
+                draft.model_id = None;
+                draft.thinking_mode = None;
+                draft.speed_mode = None;
+                self.open_provider_default_adapter_step(draft)
+            }
+            ProviderDefaultWizardStep::Adapter => {
+                draft.adapter_id = Some(value.to_owned());
+                draft.model_id = None;
+                draft.thinking_mode = None;
+                draft.speed_mode = None;
+                self.open_provider_default_model_step(draft)
+            }
+            ProviderDefaultWizardStep::Model => {
+                draft.model_id = Some(value.to_owned());
+                draft.thinking_mode = None;
+                draft.speed_mode = None;
+                self.open_provider_default_thinking_step_or_next(draft)
+            }
+            ProviderDefaultWizardStep::ThinkingMode => {
+                draft.thinking_mode = provider_default_wizard_optional_value(value);
+                self.open_provider_default_speed_step_or_finish(draft)
+            }
+            ProviderDefaultWizardStep::SpeedMode => {
+                draft.speed_mode = provider_default_wizard_optional_value(value);
+                self.finish_provider_default_wizard(draft)
+            }
+        }
+    }
+
+    fn finish_provider_default_wizard(&mut self, draft: ProviderDefaultWizardDraft) -> bool {
+        match self.persist_provider_default_wizard(draft.clone()) {
+            Ok(()) => {
+                self.flash_success(self.i18n.text_args(
+                    "flash-provider-default-updated",
+                    &crate::fl_args!(
+                        "provider" => draft.provider_id,
+                        "model" => draft.model_id.unwrap_or_default(),
+                    ),
+                ));
+                self.refresh_current_route_after_local_edit();
+                true
+            }
+            Err(error) => {
+                self.flash_error(error);
+                false
+            }
+        }
+    }
+
+    fn persist_provider_default_wizard(&self, draft: ProviderDefaultWizardDraft) -> UiResult<()> {
+        let provider_id = draft.provider_id.trim();
+        let adapter_id = draft
+            .adapter_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| ui_text::t(&self.i18n, "flash-provider-default-adapter-required"))?;
+        let model_id = draft
+            .model_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| ui_text::t(&self.i18n, "flash-provider-default-model-required"))?;
+        let sources = self
+            .backend
+            .config_json_sources()
+            .map_err(|error| error.to_string())?;
+        let defaults_path = provider_defaults_settings_path(provider_id);
+        let mut defaults = get_json_path(&sources.file, Some(defaults_path.as_str()))
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        defaults.insert(
+            "adapter".to_string(),
+            JsonValue::String(adapter_id.to_owned()),
+        );
+        defaults.insert("model".to_string(), JsonValue::String(model_id.to_owned()));
+        set_optional_string_object_value(
+            &mut defaults,
+            "thinking_mode",
+            draft.thinking_mode.as_deref(),
+        );
+        set_optional_string_object_value(&mut defaults, "speed_mode", draft.speed_mode.as_deref());
+
+        self.block_on_async(
+            self.backend
+                .set_config_setting(defaults_path.as_str(), JsonValue::Object(defaults)),
+        )?;
+        self.block_on_async(self.backend.set_config_setting(
+            "providers.default",
+            JsonValue::String(provider_id.to_owned()),
+        ))?;
+        Ok(())
     }
 
     fn open_runtime_setting_editor(&mut self, field: RuntimeSettingSpec, _return_query: &str) {
@@ -15568,6 +16054,238 @@ fn settings_studio_field_items(
         .collect()
 }
 
+fn settings_studio_provider_items(
+    i18n: &I18n,
+    sources: &ConfigJsonSources,
+    providers: &[ProviderSummaryResource],
+) -> Vec<SettingsStudioItem> {
+    let mut items =
+        settings_studio_field_items(i18n, sources, SettingsStudioSectionId::ConfigProviders)
+            .into_iter()
+            .map(|item| {
+                if item.path.as_deref() == Some("providers.default") {
+                    settings_studio_provider_default_item(i18n, sources, providers)
+                } else {
+                    item
+                }
+            })
+            .collect::<Vec<_>>();
+    items.push(settings_studio_provider_workbench_item(i18n, providers));
+    items
+}
+
+fn settings_studio_provider_default_item(
+    i18n: &I18n,
+    sources: &ConfigJsonSources,
+    providers: &[ProviderSummaryResource],
+) -> SettingsStudioItem {
+    let field = SETTINGS_FIELDS
+        .iter()
+        .find(|field| field.path == "providers.default")
+        .copied()
+        .expect("providers.default settings field must exist");
+    let file_value = get_json_path(&sources.file, Some(field.path)).unwrap_or(JsonValue::Null);
+    let effective_value =
+        get_json_path(&sources.effective, Some(field.path)).unwrap_or(JsonValue::Null);
+    let effective_summary = provider_default_selection_summary(i18n, providers, &effective_value);
+    let current_summary = if file_value.is_null() {
+        ui_text::t(i18n, "settings-source-unset")
+    } else {
+        provider_default_selection_summary(i18n, providers, &file_value)
+    };
+    SettingsStudioItem::new(
+        settings_field_display_label(i18n, field),
+        effective_summary.clone(),
+        settings_field_display_description(i18n, field),
+        SettingsPickerAction::OpenProviderDefaultWizard,
+    )
+    .with_path(field.path)
+    .with_current_value(current_summary)
+    .with_effective_value(effective_summary)
+}
+
+fn provider_default_selection_summary(
+    i18n: &I18n,
+    providers: &[ProviderSummaryResource],
+    value: &JsonValue,
+) -> String {
+    let Some(provider_id) = value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return format_setting_value_inline(value);
+    };
+    providers
+        .iter()
+        .find(|provider| provider.provider_id == provider_id)
+        .map(|provider| provider_default_route_summary(i18n, provider))
+        .unwrap_or_else(|| provider_id.to_owned())
+}
+
+fn provider_default_route_summary(i18n: &I18n, provider: &ProviderSummaryResource) -> String {
+    let mut route = vec![provider.provider_id.clone()];
+    if let Some(adapter) = provider
+        .defaults
+        .adapter
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        route.push(adapter.trim().to_owned());
+    }
+    if !provider.defaults.model.trim().is_empty() {
+        route.push(provider.defaults.model.trim().to_owned());
+    }
+
+    let mut parts = vec![route.join(" / ")];
+    if let Some(thinking_mode) = provider
+        .defaults
+        .thinking_mode
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(i18n.text_args(
+            "run-options-summary-thinking",
+            &crate::fl_args!("value" => thinking_mode.to_string()),
+        ));
+    }
+    if let Some(speed_mode) = provider
+        .defaults
+        .speed_mode
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(i18n.text_args(
+            "run-options-summary-speed",
+            &crate::fl_args!("value" => speed_mode.to_string()),
+        ));
+    }
+    if let Some(verbosity) = provider
+        .defaults
+        .verbosity
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(i18n.text_args(
+            "run-options-summary-verbosity",
+            &crate::fl_args!("value" => verbosity.to_string()),
+        ));
+    }
+    if let Some(parallel_tool_calls) = provider.defaults.parallel_tool_calls {
+        parts.push(i18n.text_args(
+            "run-options-summary-parallel-tools",
+            &crate::fl_args!(
+                "value" => ui_text::t(
+                    i18n,
+                    if parallel_tool_calls {
+                        "value-on"
+                    } else {
+                        "value-off"
+                    },
+                )
+            ),
+        ));
+    }
+    join_inline_segments(parts)
+}
+
+fn provider_default_adapter_detail(i18n: &I18n, configured_model_count: usize) -> String {
+    join_inline_segments(vec![
+        ui_text::t(i18n, "value-enabled"),
+        provider_studio_model_count_label(i18n, configured_model_count),
+    ])
+}
+
+fn provider_default_model_detail(i18n: &I18n, model: &ProviderModel) -> String {
+    let mut parts = Vec::new();
+    if let Some(display_name) = model
+        .display_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty() && *value != model.id.as_str())
+    {
+        parts.push(display_name.trim().to_owned());
+    }
+    if let Some(context_window) = model.metadata.limits.context_window_tokens {
+        parts.push(i18n.text_args(
+            "session-model-context-window",
+            &crate::fl_args!("value" => context_window as i64),
+        ));
+    }
+    if !model.thinking_modes.is_empty() {
+        parts.push(i18n.text_args(
+            "run-options-summary-thinking",
+            &crate::fl_args!(
+                "value" => model
+                    .thinking_modes
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
+    }
+    if !model.speed_modes.is_empty() {
+        parts.push(i18n.text_args(
+            "run-options-summary-speed",
+            &crate::fl_args!(
+                "value" => model
+                    .speed_modes
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
+    }
+    if parts.is_empty() {
+        ui_text::t(i18n, "settings-provider-default-model-detail")
+    } else {
+        join_inline_segments(parts)
+    }
+}
+
+fn provider_default_wizard_model_ref(draft: &ProviderDefaultWizardDraft) -> Option<ModelRef> {
+    let provider_id = draft.provider_id.trim();
+    let adapter_id = draft.adapter_id.as_deref()?.trim();
+    let model_id = draft.model_id.as_deref()?.trim();
+    if provider_id.is_empty() || adapter_id.is_empty() || model_id.is_empty() {
+        return None;
+    }
+    Some(ModelRef::new_with_adapter(
+        provider_id,
+        adapter_id,
+        model_id,
+    ))
+}
+
+fn provider_default_wizard_optional_value(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value == PROVIDER_DEFAULT_WIZARD_INHERIT {
+        None
+    } else {
+        Some(value.to_owned())
+    }
+}
+
+fn provider_defaults_settings_path(provider_id: &str) -> String {
+    format!(
+        "providers.{}.defaults",
+        quoted_settings_segment(provider_id.trim())
+    )
+}
+
+fn set_optional_string_object_value(
+    object: &mut JsonMap<String, JsonValue>,
+    key: &str,
+    value: Option<&str>,
+) {
+    if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+        object.insert(key.to_owned(), JsonValue::String(value.to_owned()));
+    } else {
+        object.remove(key);
+    }
+}
+
 fn settings_studio_harness_items(
     i18n: &I18n,
     sources: &ConfigJsonSources,
@@ -18479,6 +19197,28 @@ fn choice_item(value: impl Into<String>, detail: impl Into<String>) -> ChoiceIte
     }
 }
 
+fn choice_item_with_value(
+    label: impl Into<String>,
+    value: impl Into<String>,
+    detail: impl Into<String>,
+) -> ChoiceItem {
+    let label = label.into();
+    let value = value.into();
+    let detail = detail.into();
+    let search_text = format!(
+        "{} {} {}",
+        label.to_lowercase(),
+        value.to_lowercase(),
+        detail.to_lowercase()
+    );
+    ChoiceItem {
+        label,
+        detail,
+        value,
+        search_text,
+    }
+}
+
 fn dedupe_choice_items(items: Vec<ChoiceItem>) -> Vec<ChoiceItem> {
     let mut deduped = Vec::new();
     let mut seen = BTreeSet::new();
@@ -18642,6 +19382,9 @@ fn choice_overlay_clear_detail(i18n: &I18n, action: &ChoiceOverlayAction) -> Str
             "overlay-choice-clear-runtime-detail",
             &crate::fl_args!("field" => runtime_setting_display_label(i18n, *field)),
         ),
+        ChoiceOverlayAction::ProviderDefaultWizard(_, _) => {
+            ui_text::t(i18n, "overlay-choice-clear-provider-default-detail")
+        }
         ChoiceOverlayAction::ProviderStudioField(field) => i18n.text_args(
             "overlay-choice-clear-provider-detail",
             &crate::fl_args!("field" => provider_studio_field_label(i18n, *field)),
@@ -24358,11 +25101,11 @@ mod tests {
 
         assert_eq!(
             settings_field_display_description(&i18n, SETTINGS_FIELDS[0]),
-            "没有会话覆盖时使用的 provider"
+            "没有会话覆盖时使用的 provider、adapter、model、thinking 和 speed 默认值"
         );
         assert_eq!(
             settings_field_display_label(&i18n, SETTINGS_FIELDS[0]),
-            "默认 Provider"
+            "默认"
         );
         assert_eq!(
             sanitize_terminal_text(&format_setting_field_summary(&i18n, &json!(1), &json!(2))),
@@ -24610,15 +25353,34 @@ mod tests {
             SettingsPickerAction::OpenAgentList
         ));
 
-        let mut provider_items =
-            settings_studio_field_items(&i18n, &sources, SettingsStudioSectionId::ConfigProviders);
-        provider_items.push(settings_studio_provider_workbench_item(&i18n, &[]));
+        let provider = ProviderSummaryResource {
+            provider_id: "openai".to_string(),
+            defaults: agena_api::resource::ProviderDefaultsResource {
+                adapter: Some("responses".to_string()),
+                model: "gpt-5".to_string(),
+                thinking_mode: Some("high".to_string()),
+                speed_mode: Some("fast".to_string()),
+                verbosity: None,
+                parallel_tool_calls: None,
+            },
+            adapters: Vec::new(),
+            native_tools: None,
+        };
+        let provider_items = settings_studio_provider_items(&i18n, &sources, &[provider]);
         assert_eq!(
             provider_items
                 .iter()
                 .map(|item| item.label.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Default Provider", "Provider List"]
+            vec!["Default", "Provider List"]
+        );
+        assert!(matches!(
+            &provider_items[0].action,
+            SettingsPickerAction::OpenProviderDefaultWizard
+        ));
+        assert_eq!(
+            sanitize_terminal_text(provider_items[0].value.as_str()),
+            "openai / responses / gpt-5 · thinking high · speed fast"
         );
         assert!(matches!(
             &provider_items[1].action,
@@ -24651,6 +25413,10 @@ mod tests {
             defaults: agena_api::resource::ProviderDefaultsResource {
                 adapter: Some("copilot".to_string()),
                 model: "gpt-5".to_string(),
+                thinking_mode: None,
+                speed_mode: None,
+                verbosity: None,
+                parallel_tool_calls: None,
             },
             adapters: vec![agena_api::resource::ProviderAdapterSummaryResource {
                 adapter_id: "copilot".to_string(),

@@ -1972,6 +1972,14 @@ impl Backend {
                         defaults: ProviderDefaultsResource {
                             adapter: provider.default_adapter().map(ToString::to_string),
                             model: provider.default_model().to_string(),
+                            thinking_mode: configured
+                                .and_then(|provider| provider.defaults.thinking_mode.clone()),
+                            speed_mode: configured
+                                .and_then(|provider| provider.defaults.speed_mode.clone()),
+                            verbosity: configured
+                                .and_then(|provider| provider.defaults.verbosity.clone()),
+                            parallel_tool_calls: configured
+                                .and_then(|provider| provider.defaults.parallel_tool_calls),
                         },
                         adapters: Vec::new(),
                         native_tools: configured.map(provider_native_tools_summary_resource),
@@ -2078,6 +2086,10 @@ impl Backend {
                 defaults: ProviderDefaultsResource {
                     adapter: provider.defaults.adapter.clone(),
                     model: provider.defaults.model.clone().unwrap_or_default(),
+                    thinking_mode: provider.defaults.thinking_mode.clone(),
+                    speed_mode: provider.defaults.speed_mode.clone(),
+                    verbosity: provider.defaults.verbosity.clone(),
+                    parallel_tool_calls: provider.defaults.parallel_tool_calls,
                 },
                 adapters: provider
                     .adapters

@@ -675,6 +675,29 @@ mod tests {
     }
 
     #[test]
+    fn search_panels_overlay_with_editor_delete_at_end_edits_query() {
+        let mut overlay = SearchPanelsOverlay::new(
+            "Title".to_string(),
+            "Prompt".to_string(),
+            "Empty".to_string(),
+            "Footer".to_string(),
+            Editor::from_text("query".to_string()),
+            false,
+            (),
+        );
+        overlay.items = vec![TestItem {
+            id: "one",
+            search_text: "one",
+        }];
+
+        assert_eq!(
+            overlay.handle_filter_input_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE), 10),
+            SearchInputKeyResult::Edited { changed: true }
+        );
+        assert_eq!(overlay.input.text(), "quer");
+    }
+
+    #[test]
     fn search_panels_dialog_spec_builder_preserves_bounds_and_titles() {
         let spec = SearchPanelsDialogSpec::new(
             90,

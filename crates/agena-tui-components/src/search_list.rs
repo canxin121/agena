@@ -685,6 +685,8 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::style::Style;
 
+    use crate::Editor;
+
     use super::{
         SearchInputKeyResult, SearchListDialogSpec, SearchListDialogState, SearchListInput,
         SearchListNoCustom, SearchListOverlay, SearchListOverlayConfig,
@@ -797,6 +799,27 @@ mod tests {
             SearchInputKeyResult::Edited { changed: true }
         );
         assert_eq!(overlay.input.text(), "a");
+    }
+
+    #[test]
+    fn search_list_overlay_with_editor_delete_at_end_edits_query() {
+        let mut overlay = SearchListOverlay::<PathBuf, SearchListNoCustom, (), Editor>::new(
+            "Title".to_string(),
+            "Prompt".to_string(),
+            "Footer".to_string(),
+            "Empty".to_string(),
+            Editor::from_text("query".to_string()),
+            test_config(),
+            None,
+            (),
+        );
+        overlay.items = vec![PathBuf::from("one")];
+
+        assert_eq!(
+            overlay.handle_filter_input_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE), 10),
+            SearchInputKeyResult::Edited { changed: true }
+        );
+        assert_eq!(overlay.input.text(), "quer");
     }
 
     #[test]

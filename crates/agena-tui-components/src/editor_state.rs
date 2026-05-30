@@ -151,4 +151,24 @@ mod tests {
 
         assert_eq!(result, EditorDialogKeyResult::Close);
     }
+
+    #[test]
+    fn single_line_editor_delete_at_end_edits_text() {
+        let mut state = EditorDialogState::new(
+            "Title".to_string(),
+            "Prompt".to_string(),
+            "Footer".to_string(),
+            false,
+            Editor::from_text("body".to_string()),
+            1_u8,
+        );
+
+        let result = drive_editor_dialog_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
+        );
+
+        assert_eq!(result, EditorDialogKeyResult::Continue);
+        assert_eq!(state.input.text(), "bod");
+    }
 }

@@ -426,6 +426,14 @@ impl Editor {
                 self.delete_backward_word();
             }
             KeyEvent {
+                code: KeyCode::Char('\u{007f}'),
+                modifiers,
+                ..
+            } if modifiers.contains(KeyModifiers::ALT) => {
+                self.prepare_for_command();
+                self.delete_backward_word();
+            }
+            KeyEvent {
                 code: KeyCode::Char('\u{0008}'),
                 modifiers: KeyModifiers::NONE,
                 ..
@@ -1245,6 +1253,16 @@ mod tests {
         editor.handle_line_input_key(KeyEvent::new(KeyCode::Char('\u{007f}'), KeyModifiers::NONE));
         assert_eq!(editor.text(), "hel");
         assert_eq!(editor.cursor(), 3);
+    }
+
+    #[test]
+    fn alt_ascii_del_behaves_like_alt_backspace() {
+        let mut editor = Editor::from_text("hello world".to_string());
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Char('\u{007f}'), KeyModifiers::ALT));
+
+        assert_eq!(editor.text(), "hello ");
+        assert_eq!(editor.cursor(), 6);
     }
 
     #[test]

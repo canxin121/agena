@@ -2850,16 +2850,13 @@ fn settings_compact_sections_text(
                     .add_modifier(Modifier::BOLD),
             )));
         }
+        let focused = dialog.state.focus() == SettingsStudioFocus::Navigation;
         let selected = index == dialog.state.selected_section_index();
-        let marker = if selected { "> " } else { "  " };
+        let marker = if selected && focused { "> " } else { "  " };
         let label = format!("{marker}{}  {}", section.label, section.items.len());
         let line = settings_compact_pad_to_width(label.as_str(), content_width);
-        let style = if selected && dialog.state.focus() == SettingsStudioFocus::Navigation {
+        let style = if selected && focused {
             selection_highlight_style()
-        } else if selected {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
@@ -2913,14 +2910,11 @@ fn settings_compact_editor_text(
         );
         for (index, item) in section.items[start..end].iter().enumerate() {
             let index = start + index;
+            let focused = dialog.state.focus() == SettingsStudioFocus::Items;
             let selected = index == dialog.state.selected_item_index();
-            let marker = if selected { ">> " } else { "   " };
-            let style = if selected && dialog.state.focus() == SettingsStudioFocus::Items {
+            let marker = if selected && focused { ">> " } else { "   " };
+            let style = if selected && focused {
                 selection_highlight_style()
-            } else if selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
@@ -3220,5 +3214,108 @@ fn permission_request_scope_label(i18n: &I18n, scope: PermissionScope) -> String
         PermissionScope::Session => ui_text::t(i18n, "value-session"),
         PermissionScope::Workspace => ui_text::t(i18n, "value-workspace"),
         PermissionScope::Global => ui_text::t(i18n, "value-global"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings_dialog_with_focus(focus: SettingsStudioFocus) -> SettingsStudioOverlay {
+        SettingsStudioOverlay {
+            title: "Settings".to_string(),
+            footer: String::new(),
+            plugins_default_mode: "help".to_string(),
+            state: SectionedListState::new(
+                vec![
+                    SettingsStudioSection {
+                        id: SettingsStudioSectionId::ConfigProviders,
+                        label: "Providers".to_string(),
+                        summary: String::new(),
+                        description: "Provider settings".to_string(),
+                        items: vec![
+                            SettingsStudioItem::new(
+                                "Default Provider",
+                                "github",
+                                "Provider used by default.",
+                                SettingsPickerAction::OpenProviderList,
+                            ),
+                            SettingsStudioItem::new(
+                                "Provider List",
+                                "1 provider",
+                                "Open provider list.",
+                                SettingsPickerAction::OpenProviderList,
+                            ),
+                        ],
+                    },
+                    SettingsStudioSection {
+                        id: SettingsStudioSectionId::ConfigAgents,
+                        label: "Agents".to_string(),
+                        summary: String::new(),
+                        description: "Agent settings".to_string(),
+                        items: vec![SettingsStudioItem::new(
+                            "Default Agent",
+                            "build",
+                            "Agent used by default.",
+                            SettingsPickerAction::OpenAgentList,
+                        )],
+                    },
+                ],
+                0,
+                0,
+                focus,
+            ),
+        }
+    }
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    }
+
+    fn find_line<'a>(text: &'a Text<'_>, needle: &str) -> &'a Line<'a> {
+        text.lines
+            .iter()
+            .find(|line| line_text(line).contains(needle))
+            .unwrap_or_else(|| panic!("missing line containing {needle:?}: {text:?}"))
+    }
+
+    #[test]
+    fn settings_compact_view_highlights_only_navigation_when_navigation_has_focus() {
+        let i18n = I18n::english();
+        let dialog = settings_dialog_with_focus(SettingsStudioFocus::Navigation);
+        let section_text = settings_compact_sections_text(&i18n, &dialog, 28);
+        let editor_text =
+            settings_compact_editor_text(&i18n, &dialog, dialog.state.selected_section(), 48, 12);
+
+        let provider_line = find_line(&section_text, "Providers");
+        let default_provider_line = find_line(&editor_text, "Default Provider");
+
+        assert!(line_text(provider_line).starts_with("> Providers"));
+        assert_eq!(provider_line.spans[0].style, selection_highlight_style());
+        assert!(line_text(default_provider_line).starts_with("   Default Provider"));
+        assert_eq!(default_provider_line.spans[0].style, Style::default());
+    }
+
+    #[test]
+    fn settings_compact_view_highlights_only_items_when_items_have_focus() {
+        let i18n = I18n::english();
+        let dialog = settings_dialog_with_focus(SettingsStudioFocus::Items);
+        let section_text = settings_compact_sections_text(&i18n, &dialog, 28);
+        let editor_text =
+            settings_compact_editor_text(&i18n, &dialog, dialog.state.selected_section(), 48, 12);
+
+        let provider_line = find_line(&section_text, "Providers");
+        let default_provider_line = find_line(&editor_text, "Default Provider");
+
+        assert!(line_text(provider_line).starts_with("  Providers"));
+        assert_eq!(provider_line.spans[0].style, Style::default());
+        assert!(line_text(default_provider_line).starts_with(">> Default Provider"));
+        assert_eq!(
+            default_provider_line.spans[0].style,
+            selection_highlight_style()
+        );
     }
 }

@@ -117,4 +117,22 @@ mod tests {
         state.input.flush_all_pending_input();
         assert_eq!(state.input.text(), "a");
     }
+
+    #[test]
+    fn input_dialog_delete_at_end_edits_text() {
+        let mut state = InputDialogState::new(
+            "Title".to_string(),
+            "Prompt".to_string(),
+            Editor::from_text("value".to_string()),
+            3_u8,
+        );
+
+        let result = drive_input_dialog_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
+        );
+
+        assert_eq!(result, InputDialogKeyResult::Continue);
+        assert_eq!(state.input.text(), "valu");
+    }
 }

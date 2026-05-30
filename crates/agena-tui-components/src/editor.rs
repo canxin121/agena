@@ -436,12 +436,29 @@ impl Editor {
                 ..
             }
             | KeyEvent {
+                code: KeyCode::Char('\u{007f}'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
                 code: KeyCode::Backspace,
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
                 self.prepare_for_command();
                 self.backspace();
+            }
+            KeyEvent {
+                code: KeyCode::Delete,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.prepare_for_command();
+                if self.cursor >= self.text.len() {
+                    self.backspace();
+                } else {
+                    self.delete();
+                }
             }
             KeyEvent {
                 code: KeyCode::Delete,
@@ -459,11 +476,6 @@ impl Editor {
             | KeyEvent {
                 code: KeyCode::Char('d'),
                 modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Delete,
-                modifiers: KeyModifiers::NONE,
                 ..
             } => {
                 self.prepare_for_command();
@@ -1220,6 +1232,31 @@ mod tests {
 
         assert_eq!(editor.text(), "hello");
         assert_eq!(editor.cursor(), 5);
+    }
+
+    #[test]
+    fn delete_at_end_behaves_like_backspace_for_terminal_delete_keys() {
+        let mut editor = Editor::from_text("hello".to_string());
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        assert_eq!(editor.text(), "hell");
+        assert_eq!(editor.cursor(), 4);
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Char('\u{007f}'), KeyModifiers::NONE));
+        assert_eq!(editor.text(), "hel");
+        assert_eq!(editor.cursor(), 3);
+    }
+
+    #[test]
+    fn delete_in_middle_still_removes_forward_character() {
+        let mut editor = Editor::from_text("hello".to_string());
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+
+        assert_eq!(editor.text(), "helo");
+        assert_eq!(editor.cursor(), 3);
     }
 
     #[test]

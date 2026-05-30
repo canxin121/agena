@@ -13,11 +13,11 @@ use agena_tui_components::{
     SuggestionPopupSpec, SurfaceMode, TextDialogLine, TextPanelSpec, VerticalSectionSize,
     WorkbenchTextSection, WrappedTextSpec, adaptive_detail_split, adaptive_modal_width,
     build_accented_two_line_list_item, build_detail_two_line_list_item, build_wrapped_text_lines,
-    inset_rect, join_inline_segments, layout_composer_surface, layout_header_body_footer_surface,
-    pane_header_height, render_composer_editor_surface, render_dashboard_workbench_dialog,
-    render_decision_dialog, render_editor_dialog, render_editor_preview_dialog,
-    render_framed_surface, render_header_body_footer_text_surface, render_header_row,
-    render_line_text_dialog, render_list_panel, render_list_workbench_dialog,
+    format_key_value_segment, inset_rect, join_inline_segments, layout_composer_surface,
+    layout_header_body_footer_surface, pane_header_height, render_composer_editor_surface,
+    render_dashboard_workbench_dialog, render_decision_dialog, render_editor_dialog,
+    render_editor_preview_dialog, render_framed_surface, render_header_body_footer_text_surface,
+    render_header_row, render_line_text_dialog, render_list_panel, render_list_workbench_dialog,
     render_overlay_line_input_dialog, render_query_suggestion_popup, render_question_flow_dialog,
     render_search_list_dialog, render_search_panels_dialog, render_suggestion_popup,
     render_text_panel, render_wrapped_text, split_vertical_sections, truncate_display_text,
@@ -2479,89 +2479,18 @@ impl App {
                 build_detail_two_line_list_item(
                     sanitize_display_text(entry.model_id.as_str()).into(),
                     Some(
-                        sanitize_display_text(entry.display_name.clone().unwrap_or_else(|| {
-                            entry
-                                .origin
-                                .clone()
-                                .unwrap_or_else(|| ui_text::t(&self.i18n, "value-unknown"))
-                        }))
-                        .into(),
+                        sanitize_display_text(model_catalog_list_subtitle(&self.i18n, entry))
+                            .into(),
                     ),
                     Style::default().fg(Color::DarkGray),
                 )
             })
             .collect::<Vec<_>>();
-        let detail_spec = DetailTextSpec::with_label_width(9);
         let detail_body = dialog
             .workbench
             .list
             .selected_item()
-            .map(|entry| {
-                let mut lines = vec![
-                    DetailTextLine::labeled(
-                        ui_text::t(&self.i18n, "overlay-model-catalog-field-model-id"),
-                        sanitize_display_text(entry.model_id.as_str()),
-                        Style::default().fg(Color::DarkGray),
-                        Style::default(),
-                    ),
-                    DetailTextLine::labeled(
-                        ui_text::t(&self.i18n, "overlay-model-catalog-field-display"),
-                        sanitize_display_text(
-                            entry
-                                .display_name
-                                .clone()
-                                .unwrap_or_else(|| ui_text::t(&self.i18n, "value-unset")),
-                        ),
-                        Style::default().fg(Color::DarkGray),
-                        Style::default(),
-                    ),
-                    DetailTextLine::labeled(
-                        ui_text::t(&self.i18n, "overlay-model-catalog-field-origin"),
-                        sanitize_display_text(
-                            entry
-                                .origin
-                                .clone()
-                                .unwrap_or_else(|| ui_text::t(&self.i18n, "value-unset")),
-                        ),
-                        Style::default().fg(Color::DarkGray),
-                        Style::default(),
-                    ),
-                    DetailTextLine::labeled(
-                        ui_text::t(&self.i18n, "overlay-model-catalog-field-limits"),
-                        sanitize_display_text(self.i18n.text_args(
-                            "overlay-model-catalog-limits",
-                            &crate::fl_args!(
-                                "context" => entry
-                                    .context_window_tokens
-                                    .map(|value| value.to_string())
-                                    .unwrap_or_else(|| "?".to_owned()),
-                                "output" => entry
-                                    .max_output_tokens
-                                    .map(|value| value.to_string())
-                                    .unwrap_or_else(|| "?".to_owned())
-                            ),
-                        )),
-                        Style::default().fg(Color::DarkGray),
-                        Style::default(),
-                    ),
-                    DetailTextLine::labeled(
-                        ui_text::t(&self.i18n, "overlay-model-catalog-field-source"),
-                        sanitize_display_text(format!("{:?}", entry.source)),
-                        Style::default().fg(Color::DarkGray),
-                        Style::default(),
-                    ),
-                ];
-                if let Some(description) = entry.description.as_deref()
-                    && !description.trim().is_empty()
-                {
-                    lines.push(DetailTextLine::plain(String::new(), Style::default()));
-                    lines.push(DetailTextLine::plain(
-                        sanitize_display_text(description),
-                        Style::default(),
-                    ));
-                }
-                build_detail_text(lines, &detail_spec)
-            })
+            .map(|entry| model_catalog_detail_text(&self.i18n, entry))
             .unwrap_or_else(|| {
                 Text::from(sanitize_display_text(
                     dialog.summary.last_error.clone().unwrap_or_else(|| {
@@ -2612,7 +2541,7 @@ impl App {
                 ui_text::t(&self.i18n, "overlay-model-catalog-detail").into(),
                 detail_body,
                 4,
-                12,
+                30,
             )],
         )
         .with_summary(sanitize_display_text(summary.as_str()).into())
@@ -2629,6 +2558,550 @@ impl App {
         let chrome_rows = 2_u16 + item_rows + popup_rows + status_rows;
         min(12, line_count as u16 + chrome_rows)
     }
+}
+
+fn model_catalog_list_subtitle(i18n: &I18n, entry: &CatalogModelResource) -> String {
+    let mut parts = Vec::new();
+    if let Some(display_name) = entry
+        .display_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(display_name.to_owned());
+    }
+    if let Some(origin) = entry
+        .origin
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(origin.to_owned());
+    }
+    if let Some(lifecycle) = entry.lifecycle {
+        parts.push(model_catalog_lifecycle_label(i18n, lifecycle));
+    }
+    if model_catalog_has_token_limits(entry) {
+        parts.push(model_catalog_limits_summary(i18n, entry));
+    }
+    let feature_summary = model_catalog_supported_feature_summary(&entry.capabilities);
+    if !feature_summary.is_empty() {
+        parts.push(feature_summary);
+    }
+    let pricing = model_catalog_pricing_summary(i18n, entry.pricing.as_ref());
+    if pricing != ui_text::t(i18n, "value-unset") {
+        parts.push(pricing);
+    }
+    join_inline_segments(parts)
+}
+
+fn model_catalog_detail_text(i18n: &I18n, entry: &CatalogModelResource) -> Text<'static> {
+    let mut lines = vec![
+        model_catalog_detail_labeled_line(
+            i18n,
+            "overlay-model-catalog-field-model-id",
+            entry.model_id.as_str(),
+        ),
+        model_catalog_detail_labeled_line(
+            i18n,
+            "overlay-model-catalog-field-display",
+            model_catalog_optional_string(i18n, entry.display_name.as_deref()),
+        ),
+        model_catalog_detail_labeled_line(
+            i18n,
+            "overlay-model-catalog-field-origin",
+            model_catalog_optional_string(i18n, entry.origin.as_deref()),
+        ),
+        model_catalog_detail_labeled_line(
+            i18n,
+            "overlay-model-catalog-field-lifecycle",
+            entry
+                .lifecycle
+                .map(|lifecycle| model_catalog_lifecycle_label(i18n, lifecycle))
+                .unwrap_or_else(|| ui_text::t(i18n, "value-unset")),
+        ),
+        model_catalog_detail_labeled_line(
+            i18n,
+            "overlay-model-catalog-field-dates",
+            model_catalog_dates_summary(i18n, entry),
+        ),
+        model_catalog_detail_labeled_line(
+            i18n,
+            "overlay-model-catalog-field-limits",
+            model_catalog_limits_summary(i18n, entry),
+        ),
+        model_catalog_detail_labeled_line(
+            i18n,
+            "overlay-model-catalog-field-inputs",
+            model_catalog_input_capability_summary(i18n, &entry.capabilities),
+        ),
+        model_catalog_detail_labeled_line(
+            i18n,
+            "overlay-model-catalog-field-output",
+            model_catalog_string_list_summary(i18n, &entry.output_modalities),
+        ),
+        model_catalog_detail_labeled_line(
+            i18n,
+            "overlay-model-catalog-field-features",
+            model_catalog_feature_capability_summary(i18n, &entry.capabilities),
+        ),
+        model_catalog_detail_labeled_line(
+            i18n,
+            "overlay-model-catalog-field-modes",
+            model_catalog_modes_summary(i18n, entry),
+        ),
+        model_catalog_detail_labeled_line(
+            i18n,
+            "overlay-model-catalog-field-defaults",
+            model_catalog_defaults_summary(i18n, entry),
+        ),
+        model_catalog_detail_labeled_line(
+            i18n,
+            "overlay-model-catalog-field-runtime",
+            model_catalog_runtime_summary(i18n, entry),
+        ),
+        model_catalog_detail_labeled_line(
+            i18n,
+            "overlay-model-catalog-field-pricing",
+            model_catalog_pricing_summary(i18n, entry.pricing.as_ref()),
+        ),
+        model_catalog_detail_labeled_line(
+            i18n,
+            "overlay-model-catalog-field-source",
+            model_catalog_source_summary(entry),
+        ),
+    ];
+    if let Some(description) = entry.description.as_deref()
+        && !description.trim().is_empty()
+    {
+        lines.push(DetailTextLine::plain(String::new(), Style::default()));
+        lines.push(DetailTextLine::plain(
+            sanitize_display_text(description),
+            Style::default(),
+        ));
+    }
+    build_detail_text(lines, &DetailTextSpec::with_label_width(14))
+}
+
+fn model_catalog_detail_labeled_line(
+    i18n: &I18n,
+    label_key: &str,
+    value: impl Into<String>,
+) -> DetailTextLine<'static> {
+    let value = value.into();
+    DetailTextLine::labeled(
+        ui_text::t(i18n, label_key),
+        sanitize_display_text(value.as_str()),
+        Style::default().fg(Color::DarkGray),
+        Style::default(),
+    )
+}
+
+fn model_catalog_optional_string(i18n: &I18n, value: Option<&str>) -> String {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| ui_text::t(i18n, "value-unset"))
+}
+
+fn model_catalog_lifecycle_label(i18n: &I18n, value: agena::model::ModelLifecycle) -> String {
+    let key = match value {
+        agena::model::ModelLifecycle::Active => "overlay-model-catalog-lifecycle-active",
+        agena::model::ModelLifecycle::Preview => "overlay-model-catalog-lifecycle-preview",
+        agena::model::ModelLifecycle::Beta => "overlay-model-catalog-lifecycle-beta",
+        agena::model::ModelLifecycle::Alpha => "overlay-model-catalog-lifecycle-alpha",
+        agena::model::ModelLifecycle::Experimental => {
+            "overlay-model-catalog-lifecycle-experimental"
+        }
+        agena::model::ModelLifecycle::Deprecated => "overlay-model-catalog-lifecycle-deprecated",
+    };
+    ui_text::t(i18n, key)
+}
+
+fn model_catalog_dates_summary(i18n: &I18n, entry: &CatalogModelResource) -> String {
+    let mut parts = Vec::new();
+    if let Some(value) = entry
+        .release_date
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(i18n.text_args(
+            "overlay-model-catalog-date-release",
+            &crate::fl_args!("value" => value),
+        ));
+    }
+    if let Some(value) = entry
+        .last_updated
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(i18n.text_args(
+            "overlay-model-catalog-date-updated",
+            &crate::fl_args!("value" => value),
+        ));
+    }
+    if let Some(value) = entry
+        .knowledge_cutoff
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(i18n.text_args(
+            "overlay-model-catalog-date-cutoff",
+            &crate::fl_args!("value" => value),
+        ));
+    }
+    if parts.is_empty() {
+        ui_text::t(i18n, "value-unset")
+    } else {
+        join_inline_segments(parts)
+    }
+}
+
+fn model_catalog_limits_summary(i18n: &I18n, entry: &CatalogModelResource) -> String {
+    sanitize_display_text(i18n.text_args(
+        "overlay-model-catalog-limits",
+        &crate::fl_args!(
+            "context" => model_catalog_token_count(i18n, entry.context_window_tokens),
+            "input" => model_catalog_token_count(i18n, entry.max_input_tokens),
+            "output" => model_catalog_token_count(i18n, entry.max_output_tokens),
+        ),
+    ))
+}
+
+fn model_catalog_has_token_limits(entry: &CatalogModelResource) -> bool {
+    entry.context_window_tokens.is_some()
+        || entry.max_input_tokens.is_some()
+        || entry.max_output_tokens.is_some()
+}
+
+fn model_catalog_token_count(i18n: &I18n, value: Option<u32>) -> String {
+    value
+        .map(|value| format_tokens_k(value as u64))
+        .unwrap_or_else(|| ui_text::t(i18n, "value-unset"))
+}
+
+fn model_catalog_input_capability_summary(
+    i18n: &I18n,
+    capabilities: &agena::provider::ModelCapabilityPatch,
+) -> String {
+    let mut supported = Vec::new();
+    let mut unsupported = Vec::new();
+    for modality in [
+        agena::model::ModelInputModality::Text,
+        agena::model::ModelInputModality::Image,
+        agena::model::ModelInputModality::Document,
+        agena::model::ModelInputModality::Audio,
+        agena::model::ModelInputModality::Video,
+        agena::model::ModelInputModality::File,
+    ] {
+        match capabilities.input_support(modality) {
+            Some(agena::model::CapabilitySupport::Supported) => {
+                supported.push(modality.as_str().to_owned())
+            }
+            Some(agena::model::CapabilitySupport::Unsupported) => {
+                unsupported.push(modality.as_str().to_owned())
+            }
+            Some(agena::model::CapabilitySupport::Unknown) | None => {}
+        }
+    }
+    model_catalog_support_summary(i18n, supported, unsupported)
+}
+
+fn model_catalog_feature_capability_summary(
+    i18n: &I18n,
+    capabilities: &agena::provider::ModelCapabilityPatch,
+) -> String {
+    let mut supported = Vec::new();
+    let mut unsupported = Vec::new();
+    for feature in [
+        agena::provider::ModelCapabilityFeature::ToolCalling,
+        agena::provider::ModelCapabilityFeature::Streaming,
+        agena::provider::ModelCapabilityFeature::Reasoning,
+        agena::provider::ModelCapabilityFeature::StructuredOutput,
+        agena::provider::ModelCapabilityFeature::Temperature,
+    ] {
+        match capabilities.feature_support(feature) {
+            Some(agena::model::CapabilitySupport::Supported) => {
+                supported.push(model_catalog_feature_label(feature).to_owned())
+            }
+            Some(agena::model::CapabilitySupport::Unsupported) => {
+                unsupported.push(model_catalog_feature_label(feature).to_owned())
+            }
+            Some(agena::model::CapabilitySupport::Unknown) | None => {}
+        }
+    }
+    model_catalog_support_summary(i18n, supported, unsupported)
+}
+
+fn model_catalog_supported_feature_summary(
+    capabilities: &agena::provider::ModelCapabilityPatch,
+) -> String {
+    [
+        agena::provider::ModelCapabilityFeature::ToolCalling,
+        agena::provider::ModelCapabilityFeature::Streaming,
+        agena::provider::ModelCapabilityFeature::Reasoning,
+        agena::provider::ModelCapabilityFeature::StructuredOutput,
+        agena::provider::ModelCapabilityFeature::Temperature,
+    ]
+    .into_iter()
+    .filter(|feature| {
+        matches!(
+            capabilities.feature_support(*feature),
+            Some(agena::model::CapabilitySupport::Supported)
+        )
+    })
+    .map(model_catalog_feature_label)
+    .collect::<Vec<_>>()
+    .join(", ")
+}
+
+fn model_catalog_feature_label(feature: agena::provider::ModelCapabilityFeature) -> &'static str {
+    match feature {
+        agena::provider::ModelCapabilityFeature::ToolCalling => "tools",
+        agena::provider::ModelCapabilityFeature::Streaming => "stream",
+        agena::provider::ModelCapabilityFeature::Reasoning => "reasoning",
+        agena::provider::ModelCapabilityFeature::StructuredOutput => "structured",
+        agena::provider::ModelCapabilityFeature::Temperature => "temperature",
+    }
+}
+
+fn model_catalog_support_summary(
+    i18n: &I18n,
+    supported: Vec<String>,
+    unsupported: Vec<String>,
+) -> String {
+    let mut parts = Vec::new();
+    if !supported.is_empty() {
+        parts.push(format_key_value_segment("+", supported.join(", ").as_str()));
+    }
+    if !unsupported.is_empty() {
+        parts.push(format_key_value_segment(
+            "-",
+            unsupported.join(", ").as_str(),
+        ));
+    }
+    if parts.is_empty() {
+        ui_text::t(i18n, "value-unset")
+    } else {
+        join_inline_segments(parts)
+    }
+}
+
+fn model_catalog_string_list_summary(i18n: &I18n, values: &[String]) -> String {
+    if values.is_empty() {
+        ui_text::t(i18n, "value-unset")
+    } else {
+        values.join(", ")
+    }
+}
+
+fn model_catalog_modes_summary(i18n: &I18n, entry: &CatalogModelResource) -> String {
+    let mut parts = Vec::new();
+    if let Some(default) = entry
+        .default_thinking_mode
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "overlay-model-catalog-default-thinking").as_str(),
+            default,
+        ));
+    }
+    let thinking_modes = model_catalog_thinking_mode_names(entry);
+    if !thinking_modes.is_empty() {
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "overlay-model-catalog-thinking-modes").as_str(),
+            thinking_modes.as_str(),
+        ));
+    }
+    let speed_modes = model_catalog_speed_mode_names(entry);
+    if !speed_modes.is_empty() {
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "overlay-model-catalog-speed-modes").as_str(),
+            speed_modes.as_str(),
+        ));
+    }
+    if parts.is_empty() {
+        ui_text::t(i18n, "value-unset")
+    } else {
+        join_inline_segments(parts)
+    }
+}
+
+fn model_catalog_thinking_mode_names(entry: &CatalogModelResource) -> String {
+    entry
+        .thinking_modes
+        .iter()
+        .filter(|(_, mode)| !mode.disabled)
+        .map(|(name, mode)| {
+            mode.display_name
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(name.as_str())
+                .to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn model_catalog_speed_mode_names(entry: &CatalogModelResource) -> String {
+    entry
+        .speed_modes
+        .iter()
+        .filter(|(_, mode)| !mode.disabled)
+        .map(|(name, mode)| {
+            mode.display_name
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(name.as_str())
+                .to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn model_catalog_defaults_summary(i18n: &I18n, entry: &CatalogModelResource) -> String {
+    let mut parts = Vec::new();
+    if let Some(value) = entry
+        .default_verbosity
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "overlay-model-catalog-default-verbosity").as_str(),
+            value,
+        ));
+    }
+    if let Some(value) = entry
+        .default_temperature
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "overlay-model-catalog-default-temperature").as_str(),
+            value,
+        ));
+    }
+    if let Some(value) = entry
+        .default_top_p
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "overlay-model-catalog-default-top-p").as_str(),
+            value,
+        ));
+    }
+    if let Some(value) = entry.default_top_k {
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "overlay-model-catalog-default-top-k").as_str(),
+            value.to_string().as_str(),
+        ));
+    }
+    if parts.is_empty() {
+        ui_text::t(i18n, "value-unset")
+    } else {
+        join_inline_segments(parts)
+    }
+}
+
+fn model_catalog_runtime_summary(i18n: &I18n, entry: &CatalogModelResource) -> String {
+    let mut parts = Vec::new();
+    if let Some(value) = entry.supports_parallel_tool_calls {
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "overlay-model-catalog-parallel-tools").as_str(),
+            model_catalog_bool_label(i18n, value).as_str(),
+        ));
+    }
+    if let Some(value) = entry.supports_verbosity {
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "overlay-model-catalog-supports-verbosity").as_str(),
+            model_catalog_bool_label(i18n, value).as_str(),
+        ));
+    }
+    if let Some(value) = entry.assistant_reasoning_interleaved {
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "overlay-model-catalog-reasoning-interleaved").as_str(),
+            model_catalog_bool_label(i18n, value).as_str(),
+        ));
+    }
+    if let Some(value) = entry
+        .assistant_reasoning_field
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "overlay-model-catalog-reasoning-field").as_str(),
+            value,
+        ));
+    }
+    if let Some(value) = entry.open_weights {
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "overlay-model-catalog-open-weights").as_str(),
+            model_catalog_bool_label(i18n, value).as_str(),
+        ));
+    }
+    if parts.is_empty() {
+        ui_text::t(i18n, "value-unset")
+    } else {
+        join_inline_segments(parts)
+    }
+}
+
+fn model_catalog_bool_label(i18n: &I18n, value: bool) -> String {
+    ui_text::t(i18n, if value { "value-yes" } else { "value-no" })
+}
+
+fn model_catalog_pricing_summary(
+    i18n: &I18n,
+    pricing: Option<&agena::model::ModelPricing>,
+) -> String {
+    let Some(pricing) = pricing.filter(|pricing| !pricing.is_empty()) else {
+        return ui_text::t(i18n, "value-unset");
+    };
+    let mut parts = Vec::new();
+    if let Some(value) = pricing.input_usd_per_million_tokens.as_deref() {
+        parts.push(sanitize_display_text(i18n.text_args(
+            "overlay-model-catalog-price-input",
+            &crate::fl_args!("value" => value),
+        )));
+    }
+    if let Some(value) = pricing.output_usd_per_million_tokens.as_deref() {
+        parts.push(sanitize_display_text(i18n.text_args(
+            "overlay-model-catalog-price-output",
+            &crate::fl_args!("value" => value),
+        )));
+    }
+    if let Some(value) = pricing.cache_read_usd_per_million_tokens.as_deref() {
+        parts.push(sanitize_display_text(i18n.text_args(
+            "overlay-model-catalog-price-cache-read",
+            &crate::fl_args!("value" => value),
+        )));
+    }
+    if let Some(value) = pricing.cache_write_usd_per_million_tokens.as_deref() {
+        parts.push(sanitize_display_text(i18n.text_args(
+            "overlay-model-catalog-price-cache-write",
+            &crate::fl_args!("value" => value),
+        )));
+    }
+    if !pricing.tiers.is_empty() {
+        parts.push(sanitize_display_text(i18n.text_args(
+            "overlay-model-catalog-tier-count",
+            &crate::fl_args!("count" => pricing.tiers.len() as i64),
+        )));
+    }
+    if parts.is_empty() {
+        ui_text::t(i18n, "value-unset")
+    } else {
+        join_inline_segments(parts)
+    }
+}
+
+fn model_catalog_source_summary(entry: &CatalogModelResource) -> String {
+    entry
+        .source_label
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{:?}", entry.source).to_ascii_lowercase())
 }
 
 fn user_input_nav_line(
@@ -3280,6 +3753,122 @@ mod tests {
             .iter()
             .find(|line| line_text(line).contains(needle))
             .unwrap_or_else(|| panic!("missing line containing {needle:?}: {text:?}"))
+    }
+
+    fn text_plain(text: &Text<'_>) -> String {
+        text.lines
+            .iter()
+            .map(line_text)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn sample_catalog_model() -> CatalogModelResource {
+        CatalogModelResource {
+            model_id: "gpt-test".to_string(),
+            source: agena_api_server::local_api::ModelCatalogSourceKind::Generated,
+            source_label: Some("generated catalog".to_string()),
+            display_name: Some("GPT Test".to_string()),
+            origin: Some("OpenAI".to_string()),
+            lifecycle: Some(agena::model::ModelLifecycle::Preview),
+            context_window_tokens: Some(128_000),
+            max_input_tokens: Some(64_000),
+            max_output_tokens: Some(16_000),
+            description: Some("A detailed test model.".to_string()),
+            knowledge_cutoff: Some("2025-10".to_string()),
+            release_date: Some("2026-01-15".to_string()),
+            last_updated: Some("2026-02-01".to_string()),
+            open_weights: Some(false),
+            default_thinking_mode: Some("medium".to_string()),
+            supports_parallel_tool_calls: Some(true),
+            supports_verbosity: Some(true),
+            default_verbosity: Some("medium".to_string()),
+            default_temperature: Some("0.2".to_string()),
+            default_top_p: Some("0.95".to_string()),
+            default_top_k: Some(40),
+            assistant_reasoning_interleaved: Some(true),
+            assistant_reasoning_field: Some("reasoning".to_string()),
+            output_modalities: vec!["text".to_string(), "image".to_string()],
+            pricing: Some(agena::model::ModelPricing {
+                input_usd_per_million_tokens: Some("1.25".to_string()),
+                output_usd_per_million_tokens: Some("10.00".to_string()),
+                cache_read_usd_per_million_tokens: Some("0.10".to_string()),
+                cache_write_usd_per_million_tokens: None,
+                tiers: Vec::new(),
+            }),
+            thinking_modes: std::collections::BTreeMap::from([(
+                "medium".to_string(),
+                agena::provider::ConfiguredModelThinkingMode {
+                    display_name: Some("Medium".to_string()),
+                    ..Default::default()
+                },
+            )]),
+            speed_modes: std::collections::BTreeMap::from([(
+                "fast".to_string(),
+                agena::provider::ConfiguredModelSpeedMode {
+                    display_name: Some("Fast".to_string()),
+                    ..Default::default()
+                },
+            )]),
+            capabilities: agena::provider::ModelCapabilityPatch {
+                input: Some(
+                    agena::provider::CapabilitySelectionPatch::from_supported_unsupported(
+                        vec![
+                            agena::model::ModelInputModality::Text,
+                            agena::model::ModelInputModality::Image,
+                        ],
+                        vec![agena::model::ModelInputModality::Audio],
+                    ),
+                ),
+                features: Some(
+                    agena::provider::CapabilitySelectionPatch::from_supported_unsupported(
+                        vec![
+                            agena::provider::ModelCapabilityFeature::ToolCalling,
+                            agena::provider::ModelCapabilityFeature::Reasoning,
+                        ],
+                        vec![agena::provider::ModelCapabilityFeature::Temperature],
+                    ),
+                ),
+            },
+        }
+    }
+
+    #[test]
+    fn model_catalog_list_subtitle_includes_core_metadata() {
+        let i18n = I18n::english();
+        let entry = sample_catalog_model();
+        let subtitle = model_catalog_list_subtitle(&i18n, &entry);
+
+        assert!(subtitle.contains("GPT Test"));
+        assert!(subtitle.contains("OpenAI"));
+        assert!(subtitle.contains("preview"));
+        assert!(subtitle.contains("ctx 128k"));
+        assert!(subtitle.contains("tools"));
+        assert!(subtitle.contains("reasoning"));
+        assert!(subtitle.contains("in $1.25/M"), "subtitle was: {subtitle}");
+    }
+
+    #[test]
+    fn model_catalog_detail_text_includes_extended_metadata() {
+        let i18n = I18n::english();
+        let entry = sample_catalog_model();
+        let detail = model_catalog_detail_text(&i18n, &entry);
+        let plain = text_plain(&detail);
+
+        assert!(plain.contains("Lifecycle"));
+        assert!(plain.contains("release 2026-01-15"));
+        assert!(plain.contains("+=text, image"));
+        assert!(plain.contains("-=audio"));
+        assert!(plain.contains("+=tools, reasoning"));
+        assert!(plain.contains("-=temperature"));
+        assert!(plain.contains("thinking=medium"));
+        assert!(plain.contains("thinking modes=Medium"));
+        assert!(plain.contains("speed modes=Fast"));
+        assert!(plain.contains("verbosity=medium"));
+        assert!(plain.contains("parallel tools=yes"));
+        assert!(plain.contains("in $1.25/M"));
+        assert!(plain.contains("generated catalog"));
+        assert!(plain.contains("A detailed test model."));
     }
 
     #[test]

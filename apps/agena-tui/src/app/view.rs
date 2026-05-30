@@ -3462,9 +3462,16 @@ fn settings_compact_item_detail_text(i18n: &I18n, dialog: &SettingsStudioOverlay
         .state
         .selected_item()
         .map(|item| {
-            let mut lines = vec![Line::from(sanitize_display_text(item.detail.as_str()))];
+            let mut lines = vec![Line::from(Span::styled(
+                sanitize_display_text(item.detail.as_str()),
+                Style::default(),
+            ))];
             if let Some(current_value) = item.current_value.as_deref() {
                 lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    sanitize_display_text(ui_text::t(i18n, "settings-detail-values-heading")),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )));
                 lines.push(Line::from(sanitize_display_text(i18n.text_args(
                     "overlay-settings-detail-current",
                     &crate::fl_args!("value" => current_value.to_string()),
@@ -3476,6 +3483,19 @@ fn settings_compact_item_detail_text(i18n: &I18n, dialog: &SettingsStudioOverlay
                     &crate::fl_args!("value" => effective_value.to_string()),
                 ))));
             }
+            if !item.source_rows.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    sanitize_display_text(ui_text::t(i18n, "settings-detail-sources-heading")),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )));
+                for row in &item.source_rows {
+                    lines.push(Line::from(sanitize_display_text(format!(
+                        "{}: {}",
+                        row.label, row.value
+                    ))));
+                }
+            }
             if let Some(path) = item.path.as_deref() {
                 lines.push(Line::from(""));
                 lines.push(Line::from(sanitize_display_text(i18n.text_args(
@@ -3484,13 +3504,22 @@ fn settings_compact_item_detail_text(i18n: &I18n, dialog: &SettingsStudioOverlay
                 ))));
             }
             lines.push(Line::from(""));
-            lines.push(Line::from(sanitize_display_text(ui_text::t(
-                i18n,
-                "overlay-settings-detail-action",
-            ))));
+            lines.push(Line::from(sanitize_display_text(
+                settings_item_action_hint(i18n, item),
+            )));
             Text::from(lines)
         })
         .unwrap_or_else(|| Text::from(ui_text::t(i18n, "overlay-settings-empty-detail")))
+}
+
+fn settings_item_action_hint(i18n: &I18n, item: &SettingsStudioItem) -> String {
+    match &item.action {
+        SettingsPickerAction::OpenSessionEffectivePermissionView(_) => {
+            ui_text::t(i18n, "settings-detail-action-readonly")
+        }
+        SettingsPickerAction::OpenConfigFile => ui_text::t(i18n, "settings-detail-action-file"),
+        _ => ui_text::t(i18n, "overlay-settings-detail-action"),
+    }
 }
 
 fn settings_section_group_label(i18n: &I18n, section: SettingsStudioSectionId) -> String {

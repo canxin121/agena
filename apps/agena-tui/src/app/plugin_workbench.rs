@@ -11296,6 +11296,7 @@ mod tests {
         crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({}),
         }
@@ -11474,6 +11475,7 @@ mod tests {
         let sources = crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({
                 "plugins": {
@@ -11651,6 +11653,7 @@ mod tests {
         let sources = crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({}),
         };
@@ -11695,6 +11698,7 @@ mod tests {
         let sources = crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({}),
         };
@@ -11729,6 +11733,7 @@ mod tests {
         let sources = crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({}),
         };
@@ -11817,6 +11822,7 @@ mod tests {
         let sources = crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({}),
         };
@@ -11907,6 +11913,7 @@ mod tests {
         let sources = crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({}),
         };
@@ -11955,6 +11962,7 @@ mod tests {
         let sources = crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({}),
         };
@@ -12009,6 +12017,7 @@ mod tests {
         let sources = crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({}),
         };
@@ -12155,6 +12164,7 @@ mod tests {
         let sources = crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({}),
         };
@@ -12295,6 +12305,7 @@ mod tests {
         let sources = crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({}),
         };
@@ -12353,6 +12364,7 @@ mod tests {
         let sources = crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({}),
         };
@@ -12419,6 +12431,7 @@ mod tests {
         let sources = crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({}),
         };
@@ -12562,6 +12575,7 @@ mod tests {
         let sources = crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({}),
         };
@@ -12638,6 +12652,7 @@ mod tests {
         let sources = crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({}),
         };
@@ -13981,6 +13996,7 @@ mod tests {
         let sources = crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({}),
         };
@@ -14085,6 +14101,7 @@ mod tests {
         let sources = crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({}),
         };
@@ -14323,6 +14340,7 @@ mod tests {
         let sources = crate::backend::ConfigJsonSources {
             config_path: std::path::PathBuf::from("config.json"),
             config_found: false,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({}),
         };

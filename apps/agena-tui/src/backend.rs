@@ -226,7 +226,10 @@ pub struct InspectorRow {
 
 #[derive(Debug, Clone)]
 pub struct SessionPermissionStudioState {
+    pub session_id: i64,
     pub session_title: String,
+    pub agent_name: Option<String>,
+    pub agent_permission: Option<agena::agent::PermissionConfig>,
     pub permission: agena::agent::PermissionConfig,
     pub effective_permission: agena::agent::PermissionConfig,
 }
@@ -1682,6 +1685,7 @@ impl ProviderConfigDraft {
 pub struct ConfigJsonSources {
     pub config_path: PathBuf,
     pub config_found: bool,
+    pub applied_layers: Vec<String>,
     pub file: JsonValue,
     pub effective: JsonValue,
 }
@@ -2135,6 +2139,12 @@ impl Backend {
         Ok(ConfigJsonSources {
             config_path,
             config_found: resolution.meta.config_found,
+            applied_layers: resolution
+                .meta
+                .applied_layers
+                .iter()
+                .map(|layer| layer.description.clone())
+                .collect(),
             file,
             effective,
         })
@@ -3308,8 +3318,16 @@ impl Backend {
             .get_session(session_id)
             .await
             .with_context(|| format!("failed to load session {session_id}"))?;
+        let agent_name = execution.execution.agent_profile.clone();
+        let agent_permission = agent_name
+            .as_deref()
+            .and_then(|name| self.get_agent_profile(name))
+            .map(|profile| profile.frontmatter.permission);
         Ok(SessionPermissionStudioState {
+            session_id,
             session_title: execution.session.title.clone(),
+            agent_name,
+            agent_permission,
             permission: session.runtime().execution.selection.permission.clone(),
             effective_permission: execution.execution.effective_permission.clone(),
         })

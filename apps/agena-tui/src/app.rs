@@ -61,8 +61,9 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::backend::{
     Backend, ConfigJsonSources, InspectorRow, LiveEvent, ProviderConfigDraft,
-    ProviderDraftAdapterRule, ProviderDraftAuthKind, ProviderNativeToolsPreset, SessionRefresh,
-    provider_native_tools_config_for_preset, provider_native_tools_preset_from_config,
+    ProviderDraftAdapterRule, ProviderDraftAuthKind, ProviderNativeToolsPreset,
+    SessionPermissionStudioState, SessionRefresh, provider_native_tools_config_for_preset,
+    provider_native_tools_preset_from_config,
 };
 use crate::clipboard::{
     normalize_pasted_path, paste_image_to_temp_png, pasted_image_format, set_clipboard_text,
@@ -805,6 +806,7 @@ enum PermissionStudioSource {
     GlobalConfig,
     Agent { agent_name: String },
     Session { session_id: i64 },
+    EffectiveSession { session_id: i64 },
 }
 
 #[derive(Debug, Clone)]
@@ -946,7 +948,23 @@ struct SettingsStudioItem {
     path: Option<String>,
     current_value: Option<String>,
     effective_value: Option<String>,
+    source_rows: Vec<SettingsSourceRow>,
     action: SettingsPickerAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SettingsSourceRow {
+    label: String,
+    value: String,
+}
+
+impl SettingsSourceRow {
+    fn new(label: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            value: value.into(),
+        }
+    }
 }
 
 impl SettingsStudioItem {
@@ -965,6 +983,7 @@ impl SettingsStudioItem {
             path: None,
             current_value,
             effective_value: None,
+            source_rows: Vec::new(),
             action,
         }
     }
@@ -981,6 +1000,11 @@ impl SettingsStudioItem {
 
     fn with_effective_value(mut self, value: impl Into<String>) -> Self {
         self.effective_value = Some(value.into());
+        self
+    }
+
+    fn with_source_rows(mut self, rows: Vec<SettingsSourceRow>) -> Self {
+        self.source_rows = rows;
         self
     }
 }
@@ -1106,6 +1130,7 @@ enum SettingsPickerAction {
     ToggleToolDescriptionMode,
     OpenProviderDefaultWizard,
     OpenAgentList,
+    OpenAgentPermissionWorkbench(String),
     OpenProviderList,
     OpenModelCatalogWorkbench,
     OpenRuntimeProviderOverride,
@@ -1113,6 +1138,7 @@ enum SettingsPickerAction {
     ClearRuntimeModelStack,
     OpenGlobalPermissionWorkbench,
     OpenCurrentSessionPermissionWorkbench,
+    OpenSessionEffectivePermissionView(i64),
     OpenPermissionRules,
     OpenPluginWorkbench,
     OpenConfigFile,
@@ -8996,6 +9022,9 @@ impl App {
         let global_permission = permission_config_from_json_value(
             &get_json_path(&sources.effective, Some("permission")).unwrap_or(JsonValue::Null),
         )?;
+        let global_permission_file = permission_config_from_json_value(
+            &get_json_path(&sources.file, Some("permission")).unwrap_or(JsonValue::Null),
+        )?;
         let current_session_permission =
             self.current_or_selected_session_id()
                 .and_then(|session_id| {
@@ -9048,31 +9077,14 @@ impl App {
         let harness_items = settings_studio_harness_items(&self.i18n, &sources);
         let model_catalog_items = settings_studio_model_catalog_items(&self.i18n, &model_catalog);
         let file_items = settings_studio_file_items(&self.i18n, &sources);
-        let permission_items = vec![
-            SettingsStudioItem::new(
-                ui_text::t(&self.i18n, "settings-permission-global-label"),
-                permission_override_summary(&self.i18n, &global_permission),
-                ui_text::t(&self.i18n, "settings-permission-global-detail"),
-                SettingsPickerAction::OpenGlobalPermissionWorkbench,
-            )
-            .with_path("permission"),
-        ];
+        let permission_items = settings_studio_permission_items(
+            &self.i18n,
+            &sources,
+            &global_permission_file,
+            &global_permission,
+            current_session_permission.as_ref(),
+        );
         let mut runtime_rule_items = Vec::new();
-        if let Some(current_session_permission) = current_session_permission.as_ref() {
-            runtime_rule_items.push(SettingsStudioItem::new(
-                ui_text::t(&self.i18n, "settings-permission-current-label"),
-                permission_settings_value(
-                    &self.i18n,
-                    &current_session_permission.permission,
-                    &current_session_permission.effective_permission,
-                ),
-                self.i18n.text_args(
-                    "settings-permission-current-detail",
-                    &crate::fl_args!("session" => current_session_permission.session_title.clone()),
-                ),
-                SettingsPickerAction::OpenCurrentSessionPermissionWorkbench,
-            ));
-        }
         runtime_rule_items.push(SettingsStudioItem::new(
             ui_text::t(&self.i18n, "overlay-settings-manage-permission-rules"),
             permission_rule_count.to_string(),
@@ -9121,7 +9133,12 @@ impl App {
             SettingsStudioSection {
                 id: SettingsStudioSectionId::ConfigPermission,
                 label: ui_text::t(&self.i18n, "overlay-settings-section-permissions-label"),
-                summary: permission_override_summary(&self.i18n, &global_permission),
+                summary: current_session_permission
+                    .as_ref()
+                    .map(|state| {
+                        permission_override_summary(&self.i18n, &state.effective_permission)
+                    })
+                    .unwrap_or_else(|| permission_override_summary(&self.i18n, &global_permission)),
                 description: ui_text::t(
                     &self.i18n,
                     "overlay-settings-section-permissions-description",
@@ -9398,8 +9415,7 @@ impl App {
                     .config_json_sources()
                     .map_err(|error| error.to_string())?;
                 let permission = permission_config_from_json_value(
-                    &get_json_path(&sources.effective, Some("permission"))
-                        .unwrap_or(JsonValue::Null),
+                    &get_json_path(&sources.file, Some("permission")).unwrap_or(JsonValue::Null),
                 )?;
                 (
                     ui_text::t(&self.i18n, "settings-permission-global-label"),
@@ -9437,6 +9453,21 @@ impl App {
                     ui_text::t(&self.i18n, "permission-studio-source-session"),
                     true,
                     state.permission,
+                )
+            }
+            PermissionStudioSource::EffectiveSession { session_id } => {
+                let state = self
+                    .block_on_async(
+                        self.backend
+                            .get_session_permission_studio_state(*session_id),
+                    )
+                    .map_err(|error| error.to_string())?;
+                (
+                    ui_text::t(&self.i18n, "settings-permission-effective-label"),
+                    state.session_title,
+                    ui_text::t(&self.i18n, "permission-studio-source-effective"),
+                    false,
+                    state.effective_permission,
                 )
             }
         };
@@ -9567,6 +9598,12 @@ impl App {
                     self.apply_transcript_execution(execution);
                 }
                 self.flash_success(ui_text::t(&self.i18n, "flash-session-permission-updated"));
+            }
+            PermissionStudioSource::EffectiveSession { .. } => {
+                return Err(permission_studio_read_only_message(
+                    &self.i18n,
+                    &dialog.source,
+                ));
             }
         }
         self.refresh_permission_studio_overlay(dialog);
@@ -9958,6 +9995,11 @@ impl App {
                 self.open_agent_list("");
                 false
             }
+            SettingsPickerAction::OpenAgentPermissionWorkbench(agent_name) => {
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
+                self.open_agent_permission_studio(agent_name.as_str());
+                false
+            }
             SettingsPickerAction::OpenProviderList => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_provider_list("");
@@ -9996,6 +10038,20 @@ impl App {
                 };
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_session_permission_studio(session_id);
+                false
+            }
+            SettingsPickerAction::OpenSessionEffectivePermissionView(session_id) => {
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
+                match self.build_permission_studio_overlay(
+                    PermissionStudioSource::EffectiveSession { session_id },
+                    PermissionStudioPage::Overview,
+                    Some(PermissionStudioSectionId::RootPath),
+                    None,
+                    PermissionStudioFocus::Navigation,
+                ) {
+                    Ok(permission) => self.current_route = Route::PermissionStudio(permission),
+                    Err(error) => self.flash_error(error),
+                }
                 false
             }
             SettingsPickerAction::OpenPermissionRules => {
@@ -16022,6 +16078,56 @@ fn runtime_setting_override_summary(i18n: &I18n, value: &str) -> String {
     )
 }
 
+fn settings_layers_summary(sources: &ConfigJsonSources) -> String {
+    if sources.applied_layers.is_empty() {
+        return "built-in defaults".to_owned();
+    }
+    sources.applied_layers.join(" -> ")
+}
+
+fn settings_config_file_source_summary(i18n: &I18n, sources: &ConfigJsonSources) -> String {
+    let status_key = if sources.config_found {
+        "settings-source-file-found"
+    } else {
+        "settings-source-file-missing"
+    };
+    i18n.text_args(
+        status_key,
+        &crate::fl_args!("path" => sources.config_path.display().to_string()),
+    )
+}
+
+fn settings_source_rows_for_config_path(
+    i18n: &I18n,
+    sources: &ConfigJsonSources,
+    path: &str,
+    file_summary: impl Into<String>,
+    effective_summary: impl Into<String>,
+) -> Vec<SettingsSourceRow> {
+    vec![
+        SettingsSourceRow::new(
+            ui_text::t(i18n, "settings-source-row-config-file"),
+            settings_config_file_source_summary(i18n, sources),
+        ),
+        SettingsSourceRow::new(
+            ui_text::t(i18n, "settings-source-row-file-value"),
+            file_summary,
+        ),
+        SettingsSourceRow::new(
+            ui_text::t(i18n, "settings-source-row-effective-value"),
+            effective_summary,
+        ),
+        SettingsSourceRow::new(
+            ui_text::t(i18n, "settings-source-row-write-target"),
+            format!("{path} -> {}", sources.config_path.display()),
+        ),
+        SettingsSourceRow::new(
+            ui_text::t(i18n, "settings-source-row-layers"),
+            settings_layers_summary(sources),
+        ),
+    ]
+}
+
 fn settings_studio_field_items(
     i18n: &I18n,
     sources: &ConfigJsonSources,
@@ -16041,6 +16147,13 @@ fn settings_studio_field_items(
             } else {
                 format_setting_value_inline(&file_value)
             };
+            let source_rows = settings_source_rows_for_config_path(
+                i18n,
+                sources,
+                field.path,
+                current_summary.clone(),
+                effective_summary.clone(),
+            );
             SettingsStudioItem::new(
                 settings_field_display_label(i18n, *field),
                 effective_summary.clone(),
@@ -16050,6 +16163,7 @@ fn settings_studio_field_items(
             .with_path(field.path)
             .with_current_value(current_summary)
             .with_effective_value(effective_summary)
+            .with_source_rows(source_rows)
         })
         .collect()
 }
@@ -16093,6 +16207,13 @@ fn settings_studio_provider_default_item(
     } else {
         provider_default_selection_summary(i18n, providers, &file_value)
     };
+    let source_rows = settings_source_rows_for_config_path(
+        i18n,
+        sources,
+        field.path,
+        current_summary.clone(),
+        effective_summary.clone(),
+    );
     SettingsStudioItem::new(
         settings_field_display_label(i18n, field),
         effective_summary.clone(),
@@ -16102,6 +16223,7 @@ fn settings_studio_provider_default_item(
     .with_path(field.path)
     .with_current_value(current_summary)
     .with_effective_value(effective_summary)
+    .with_source_rows(source_rows)
 }
 
 fn provider_default_selection_summary(
@@ -16309,6 +16431,13 @@ fn settings_studio_config_path_item(
     } else {
         format_setting_value_inline(&file_value)
     };
+    let source_rows = settings_source_rows_for_config_path(
+        i18n,
+        sources,
+        path,
+        current_summary.clone(),
+        effective_summary.clone(),
+    );
     SettingsStudioItem::new(
         settings_config_path_display_label(i18n, path),
         effective_summary.clone(),
@@ -16318,6 +16447,7 @@ fn settings_studio_config_path_item(
     .with_path(path)
     .with_current_value(current_summary)
     .with_effective_value(effective_summary)
+    .with_source_rows(source_rows)
 }
 
 fn settings_config_path_display_label(i18n: &I18n, path: &str) -> String {
@@ -16363,13 +16493,26 @@ fn settings_studio_runtime_items(
             SettingsPickerAction::ClearRuntimeModelStack,
         ),
     ];
+    for item in &mut items {
+        item.source_rows = vec![SettingsSourceRow::new(
+            ui_text::t(i18n, "settings-source-row-write-target"),
+            ui_text::t(i18n, "settings-source-current-session-runtime"),
+        )];
+    }
     items.extend(RUNTIME_SETTINGS.iter().map(|field| {
+        let summary = run_options.runtime_setting_summary(i18n, *field);
         SettingsStudioItem::new(
             runtime_setting_display_label(i18n, *field),
-            run_options.runtime_setting_summary(i18n, *field),
+            summary.clone(),
             runtime_setting_display_description(i18n, *field),
             SettingsPickerAction::EditRuntimeSetting(*field),
         )
+        .with_current_value(summary.clone())
+        .with_effective_value(summary)
+        .with_source_rows(vec![SettingsSourceRow::new(
+            ui_text::t(i18n, "settings-source-row-write-target"),
+            ui_text::t(i18n, "settings-source-current-session-runtime"),
+        )])
     }));
     items
 }
@@ -16411,11 +16554,32 @@ fn settings_studio_plugins_count(sources: &ConfigJsonSources, path: &str) -> usi
         .unwrap_or(0)
 }
 
+fn settings_source_value_for_path(i18n: &I18n, root: &JsonValue, path: &str) -> String {
+    let value = get_json_path(root, Some(path)).unwrap_or(JsonValue::Null);
+    if value.is_null() {
+        ui_text::t(i18n, "settings-source-unset")
+    } else {
+        format_setting_value_inline(&value)
+    }
+}
+
 fn settings_studio_plugin_items(
     i18n: &I18n,
     sources: &ConfigJsonSources,
 ) -> Vec<SettingsStudioItem> {
     let default_mode = settings_studio_plugins_default_mode(sources);
+    let default_mode_file = get_json_path(
+        &sources.file,
+        Some(PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH),
+    )
+    .unwrap_or(JsonValue::Null);
+    let default_mode_file_summary = if default_mode_file.is_null() {
+        ui_text::t(i18n, "settings-source-unset")
+    } else {
+        format_setting_value_inline(&default_mode_file)
+    };
+    let default_mode_effective_summary =
+        settings_studio_tool_description_mode_label(i18n, default_mode.as_str());
     let plugin_override_count =
         settings_studio_plugins_count(sources, "plugins.policy.tool_presentation.plugins");
     let tool_override_count =
@@ -16429,11 +16593,20 @@ fn settings_studio_plugin_items(
         ),
         SettingsStudioItem::new(
             ui_text::t(i18n, "settings-plugin-default-mode-label"),
-            settings_studio_tool_description_mode_label(i18n, default_mode.as_str()),
+            default_mode_effective_summary.clone(),
             ui_text::t(i18n, "settings-plugin-default-mode-detail"),
             SettingsPickerAction::ToggleToolDescriptionMode,
         )
-        .with_path(PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH),
+        .with_path(PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH)
+        .with_current_value(default_mode_file_summary.clone())
+        .with_effective_value(default_mode_effective_summary.clone())
+        .with_source_rows(settings_source_rows_for_config_path(
+            i18n,
+            sources,
+            PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH,
+            default_mode_file_summary,
+            default_mode_effective_summary,
+        )),
         SettingsStudioItem::new(
             ui_text::t(i18n, "settings-plugin-per-plugin-label"),
             i18n.text_args(
@@ -16443,7 +16616,21 @@ fn settings_studio_plugin_items(
             ui_text::t(i18n, "settings-plugin-per-plugin-detail"),
             SettingsPickerAction::OpenConfigFile,
         )
-        .with_path(format!("{PLUGIN_TOOL_PRESENTATION_PATH}.plugins")),
+        .with_path(format!("{PLUGIN_TOOL_PRESENTATION_PATH}.plugins"))
+        .with_source_rows(settings_source_rows_for_config_path(
+            i18n,
+            sources,
+            format!("{PLUGIN_TOOL_PRESENTATION_PATH}.plugins").as_str(),
+            settings_source_value_for_path(
+                i18n,
+                &sources.file,
+                format!("{PLUGIN_TOOL_PRESENTATION_PATH}.plugins").as_str(),
+            ),
+            i18n.text_args(
+                "settings-plugin-override-count",
+                &crate::fl_args!("count" => plugin_override_count as i64),
+            ),
+        )),
         SettingsStudioItem::new(
             ui_text::t(i18n, "settings-plugin-per-tool-label"),
             i18n.text_args(
@@ -16453,7 +16640,21 @@ fn settings_studio_plugin_items(
             ui_text::t(i18n, "settings-plugin-per-tool-detail"),
             SettingsPickerAction::OpenConfigFile,
         )
-        .with_path(format!("{PLUGIN_TOOL_PRESENTATION_PATH}.tools")),
+        .with_path(format!("{PLUGIN_TOOL_PRESENTATION_PATH}.tools"))
+        .with_source_rows(settings_source_rows_for_config_path(
+            i18n,
+            sources,
+            format!("{PLUGIN_TOOL_PRESENTATION_PATH}.tools").as_str(),
+            settings_source_value_for_path(
+                i18n,
+                &sources.file,
+                format!("{PLUGIN_TOOL_PRESENTATION_PATH}.tools").as_str(),
+            ),
+            i18n.text_args(
+                "settings-plugin-override-count",
+                &crate::fl_args!("count" => tool_override_count as i64),
+            ),
+        )),
     ]
 }
 
@@ -16662,6 +16863,157 @@ fn settings_studio_agent_browser_item(
         ui_text::t(i18n, "settings-agent-browser-detail"),
         SettingsPickerAction::OpenAgentList,
     )
+}
+
+fn permission_layer_source_rows(
+    i18n: &I18n,
+    global_permission: &PermissionConfig,
+    session: Option<&SessionPermissionStudioState>,
+) -> Vec<SettingsSourceRow> {
+    let mut rows = vec![SettingsSourceRow::new(
+        ui_text::t(i18n, "settings-permission-layer-global"),
+        permission_override_summary(i18n, global_permission),
+    )];
+    if let Some(session) = session {
+        rows.push(SettingsSourceRow::new(
+            session
+                .agent_name
+                .as_deref()
+                .map(|name| {
+                    i18n.text_args(
+                        "settings-permission-layer-agent-named",
+                        &crate::fl_args!("agent" => name.to_string()),
+                    )
+                })
+                .unwrap_or_else(|| ui_text::t(i18n, "settings-permission-layer-agent")),
+            session
+                .agent_permission
+                .as_ref()
+                .map(|permission| permission_override_summary(i18n, permission))
+                .unwrap_or_else(|| ui_text::t(i18n, "settings-source-unset")),
+        ));
+        rows.push(SettingsSourceRow::new(
+            ui_text::t(i18n, "settings-permission-layer-session"),
+            permission_override_summary(i18n, &session.permission),
+        ));
+        rows.push(SettingsSourceRow::new(
+            ui_text::t(i18n, "settings-permission-layer-effective"),
+            permission_override_summary(i18n, &session.effective_permission),
+        ));
+    }
+    rows
+}
+
+fn settings_studio_permission_items(
+    i18n: &I18n,
+    sources: &ConfigJsonSources,
+    global_file_permission: &PermissionConfig,
+    global_effective_permission: &PermissionConfig,
+    current_session: Option<&SessionPermissionStudioState>,
+) -> Vec<SettingsStudioItem> {
+    let mut items = Vec::new();
+    if let Some(session) = current_session {
+        let effective_summary = permission_override_summary(i18n, &session.effective_permission);
+        items.push(
+            SettingsStudioItem::new(
+                ui_text::t(i18n, "settings-permission-effective-label"),
+                effective_summary.clone(),
+                i18n.text_args(
+                    "settings-permission-effective-detail",
+                    &crate::fl_args!("session" => session.session_title.clone()),
+                ),
+                SettingsPickerAction::OpenSessionEffectivePermissionView(session.session_id),
+            )
+            .with_current_value(effective_summary.clone())
+            .with_effective_value(effective_summary)
+            .with_source_rows(permission_layer_source_rows(
+                i18n,
+                global_effective_permission,
+                Some(session),
+            )),
+        );
+        let session_summary = permission_override_summary(i18n, &session.permission);
+        items.push(
+            SettingsStudioItem::new(
+                ui_text::t(i18n, "settings-permission-current-label"),
+                session_summary.clone(),
+                i18n.text_args(
+                    "settings-permission-current-detail",
+                    &crate::fl_args!("session" => session.session_title.clone()),
+                ),
+                SettingsPickerAction::OpenCurrentSessionPermissionWorkbench,
+            )
+            .with_current_value(session_summary.clone())
+            .with_effective_value(permission_override_summary(
+                i18n,
+                &session.effective_permission,
+            ))
+            .with_source_rows({
+                let mut rows =
+                    permission_layer_source_rows(i18n, global_effective_permission, Some(session));
+                rows.push(SettingsSourceRow::new(
+                    ui_text::t(i18n, "settings-source-row-write-target"),
+                    ui_text::t(i18n, "settings-source-current-session"),
+                ));
+                rows
+            }),
+        );
+        if let Some(agent_name) = session.agent_name.as_deref() {
+            let agent_permission = session.agent_permission.clone().unwrap_or_default();
+            let agent_summary = permission_override_summary(i18n, &agent_permission);
+            items.push(
+                SettingsStudioItem::new(
+                    i18n.text_args(
+                        "settings-permission-agent-label",
+                        &crate::fl_args!("agent" => agent_name.to_string()),
+                    ),
+                    agent_summary.clone(),
+                    ui_text::t(i18n, "settings-permission-agent-detail"),
+                    SettingsPickerAction::OpenAgentPermissionWorkbench(agent_name.to_string()),
+                )
+                .with_current_value(agent_summary.clone())
+                .with_effective_value(permission_override_summary(
+                    i18n,
+                    &session.effective_permission,
+                ))
+                .with_source_rows(vec![
+                    SettingsSourceRow::new(
+                        ui_text::t(i18n, "settings-permission-layer-agent"),
+                        agent_summary,
+                    ),
+                    SettingsSourceRow::new(
+                        ui_text::t(i18n, "settings-source-row-write-target"),
+                        i18n.text_args(
+                            "settings-source-agent-profile",
+                            &crate::fl_args!("agent" => agent_name.to_string()),
+                        ),
+                    ),
+                ]),
+            );
+        }
+    }
+
+    let file_summary = permission_override_summary(i18n, global_file_permission);
+    let effective_summary = permission_override_summary(i18n, global_effective_permission);
+    items.push(
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-permission-global-label"),
+            effective_summary.clone(),
+            ui_text::t(i18n, "settings-permission-global-detail"),
+            SettingsPickerAction::OpenGlobalPermissionWorkbench,
+        )
+        .with_path("permission")
+        .with_current_value(file_summary.clone())
+        .with_effective_value(effective_summary.clone())
+        .with_source_rows(settings_source_rows_for_config_path(
+            i18n,
+            sources,
+            "permission",
+            file_summary,
+            effective_summary,
+        )),
+    );
+    items
 }
 
 fn agent_picker_item(
@@ -18220,34 +18572,12 @@ fn permission_override_summary(i18n: &I18n, permission: &PermissionConfig) -> St
     }
 }
 
-fn permission_settings_value(
-    i18n: &I18n,
-    override_permission: &PermissionConfig,
-    effective_permission: &PermissionConfig,
-) -> String {
-    if override_permission == effective_permission {
-        permission_override_summary(i18n, override_permission)
-    } else {
-        join_inline_segments(vec![
-            i18n.text_args(
-                "permission-studio-settings-override",
-                &crate::fl_args!(
-                    "value" => permission_override_summary(i18n, override_permission)
-                ),
-            ),
-            i18n.text_args(
-                "permission-studio-settings-effective",
-                &crate::fl_args!(
-                    "value" => permission_override_summary(i18n, effective_permission)
-                ),
-            ),
-        ])
-    }
-}
-
 fn permission_studio_read_only_message(i18n: &I18n, source: &PermissionStudioSource) -> String {
     match source {
         PermissionStudioSource::Agent { .. } => agent_read_only_permissions_message(i18n),
+        PermissionStudioSource::EffectiveSession { .. } => {
+            ui_text::t(i18n, "settings-permission-effective-read-only")
+        }
         PermissionStudioSource::GlobalConfig | PermissionStudioSource::Session { .. } => {
             ui_text::t(i18n, "permission-studio-detail-read-only")
         }
@@ -25134,6 +25464,7 @@ mod tests {
         let sources = ConfigJsonSources {
             config_path: PathBuf::from("/tmp/agena-config.json"),
             config_found: true,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({
                 "runtime": {
@@ -25196,11 +25527,68 @@ mod tests {
     }
 
     #[test]
+    fn settings_field_items_expose_config_source_rows() {
+        let i18n = I18n::english();
+        let sources = ConfigJsonSources {
+            config_path: PathBuf::from("/tmp/agena-config.json"),
+            config_found: true,
+            applied_layers: vec![
+                "built-in defaults".to_string(),
+                "file:/tmp/agena-config.json".to_string(),
+                "process environment".to_string(),
+            ],
+            file: json!({
+                "runtime": {
+                    "reload": {
+                        "enabled": false
+                    }
+                }
+            }),
+            effective: json!({
+                "runtime": {
+                    "reload": {
+                        "enabled": true
+                    }
+                }
+            }),
+        };
+
+        let items =
+            settings_studio_field_items(&i18n, &sources, SettingsStudioSectionId::ConfigRuntime);
+        let reload = items
+            .iter()
+            .find(|item| item.path.as_deref() == Some("runtime.reload.enabled"))
+            .expect("runtime reload setting should be listed");
+
+        assert_eq!(reload.current_value.as_deref(), Some("false"));
+        assert_eq!(reload.effective_value.as_deref(), Some("true"));
+        let rendered_rows = sanitize_terminal_text(
+            reload
+                .source_rows
+                .iter()
+                .map(|row| format!("{}={}", row.label, row.value))
+                .collect::<Vec<_>>()
+                .join("\n")
+                .as_str(),
+        );
+        assert!(rendered_rows.contains("Config file=/tmp/agena-config.json (found)"));
+        assert!(rendered_rows.contains("File value=false"));
+        assert!(rendered_rows.contains("Effective value=true"));
+        assert!(
+            rendered_rows.contains("Writes to=runtime.reload.enabled -> /tmp/agena-config.json")
+        );
+        assert!(rendered_rows.contains(
+            "Active layers=built-in defaults -> file:/tmp/agena-config.json -> process environment"
+        ));
+    }
+
+    #[test]
     fn settings_plugin_policy_items_use_current_policy_path() {
         let i18n = I18n::english();
         let sources = ConfigJsonSources {
             config_path: PathBuf::from("/tmp/agena-config.json"),
             config_found: true,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({
                 "plugins": {
@@ -25327,6 +25715,7 @@ mod tests {
         let sources = ConfigJsonSources {
             config_path: PathBuf::from("/tmp/agena-config.json"),
             config_found: true,
+            applied_layers: Vec::new(),
             file: json!({}),
             effective: json!({
                 "agents": {
@@ -25386,6 +25775,98 @@ mod tests {
             &provider_items[1].action,
             SettingsPickerAction::OpenProviderList
         ));
+    }
+
+    #[test]
+    fn permission_settings_items_expose_effective_session_agent_and_global_layers() {
+        let i18n = I18n::english();
+        let sources = ConfigJsonSources {
+            config_path: PathBuf::from("/tmp/agena-config.json"),
+            config_found: true,
+            applied_layers: vec!["built-in defaults".to_string()],
+            file: json!({}),
+            effective: json!({}),
+        };
+        let global = PermissionConfig {
+            network: Some(NetworkPermissionConfig {
+                internet: Some(PermissionMode::Ask),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let agent = PermissionConfig {
+            network: Some(NetworkPermissionConfig {
+                private: Some(PermissionMode::Allow),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let session_override = PermissionConfig {
+            network: Some(NetworkPermissionConfig {
+                internet: Some(PermissionMode::Deny),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let effective = global.merged_with(&agent).merged_with(&session_override);
+        let session = SessionPermissionStudioState {
+            session_id: 42,
+            session_title: "work".to_string(),
+            agent_name: Some("build".to_string()),
+            agent_permission: Some(agent),
+            permission: session_override,
+            effective_permission: effective,
+        };
+
+        let items = settings_studio_permission_items(
+            &i18n,
+            &sources,
+            &PermissionConfig::default(),
+            &global,
+            Some(&session),
+        );
+
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| sanitize_terminal_text(item.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                "Effective Permission".to_string(),
+                "Current Session Permission".to_string(),
+                "Agent Permission · build".to_string(),
+                "Global Permission".to_string()
+            ]
+        );
+        assert!(matches!(
+            &items[0].action,
+            SettingsPickerAction::OpenSessionEffectivePermissionView(42)
+        ));
+        assert!(matches!(
+            &items[1].action,
+            SettingsPickerAction::OpenCurrentSessionPermissionWorkbench
+        ));
+        assert!(matches!(
+            &items[2].action,
+            SettingsPickerAction::OpenAgentPermissionWorkbench(agent) if agent == "build"
+        ));
+        assert!(matches!(
+            &items[3].action,
+            SettingsPickerAction::OpenGlobalPermissionWorkbench
+        ));
+        let effective_rows = sanitize_terminal_text(
+            items[0]
+                .source_rows
+                .iter()
+                .map(|row| format!("{}={}", row.label, row.value))
+                .collect::<Vec<_>>()
+                .join("\n")
+                .as_str(),
+        );
+        assert!(effective_rows.contains("Global="));
+        assert!(effective_rows.contains("Agent build="));
+        assert!(effective_rows.contains("Session="));
+        assert!(effective_rows.contains("Effective="));
     }
 
     #[test]

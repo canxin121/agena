@@ -1269,6 +1269,8 @@ pub struct AgentNetworkPermissionConfig {
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct AgentToolPermissionConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<AgentPermissionMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tags: BTreeMap<String, AgentPermissionMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

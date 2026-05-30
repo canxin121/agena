@@ -1117,10 +1117,11 @@ deny
     },
     "network": {
       "internet": "ask",
-      "private": "deny",
-      "loopback": "deny"
+      "private": "ask",
+      "loopback": "ask"
     },
     "tools": {
+      "default": "ask",
       "tags": {
         "filesystem_read": "allow",
         "filesystem_write": "ask",
@@ -1131,6 +1132,8 @@ deny
   }
 }
 ```
+
+未显式配置 `permission` 时，Agena 的全局权限默认值是：允许读取当前 workspace，workspace 写入、外部路径读写、网络区域和未覆盖工具调用均为 `ask`。显式配置的字段会覆盖这些默认值，未配置的字段继续保留默认值。
 
 Agent 也可以有自己的权限：
 
@@ -1283,6 +1286,7 @@ Network target 会先分到三类默认策略：`loopback` 匹配 `localhost`、
 {
   "permission": {
     "tools": {
+      "default": "ask",
       "tags": {
         "filesystem_read": "allow",
         "filesystem_write": "ask",

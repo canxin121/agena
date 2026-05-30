@@ -398,7 +398,10 @@ impl RawConfig {
         let raw_session = self.session.unwrap_or_default();
         let runtime = RuntimeConfig::from_raw(raw_runtime)?;
         let session = SessionConfig::from_raw(raw_session)?;
-        let permission = self.permission.unwrap_or_default();
+        let mut permission = crate::agent::PermissionConfig::global_default();
+        if let Some(overlay) = self.permission {
+            permission.merge_from(overlay);
+        }
         let plugins: PluginConfig =
             crate::plugins::sources::resolve_plugin_config(self.plugins.unwrap_or_default());
         PluginRuntimeOptions::validate_plugin_ids(&plugins)?;
@@ -2413,6 +2416,87 @@ mod tests {
     fn resolve_config(value: serde_json::Value) -> Result<ResolvedConfig, ConfigError> {
         let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
         raw.resolve_with_env(&TestEnvironment)
+    }
+
+    #[test]
+    fn resolve_config_applies_global_permission_defaults() {
+        let resolved = resolve_config(json!({})).expect("empty config should resolve");
+        let path = resolved.permission.path.expect("path defaults");
+        let workspace = path.workspace.expect("workspace path defaults");
+        let external = path.external.expect("external path defaults");
+        assert_eq!(
+            workspace.read,
+            Some(crate::permission::PermissionMode::Allow)
+        );
+        assert_eq!(
+            workspace.write,
+            Some(crate::permission::PermissionMode::Ask)
+        );
+        assert_eq!(external.read, Some(crate::permission::PermissionMode::Ask));
+        assert_eq!(external.write, Some(crate::permission::PermissionMode::Ask));
+
+        let network = resolved.permission.network.expect("network defaults");
+        assert_eq!(
+            network.internet,
+            Some(crate::permission::PermissionMode::Ask)
+        );
+        assert_eq!(
+            network.private,
+            Some(crate::permission::PermissionMode::Ask)
+        );
+        assert_eq!(
+            network.loopback,
+            Some(crate::permission::PermissionMode::Ask)
+        );
+
+        let tools = resolved.permission.tools.expect("tool defaults");
+        assert_eq!(tools.default, Some(crate::permission::PermissionMode::Ask));
+        assert_eq!(
+            tools.tags.get("filesystem_read").copied(),
+            Some(crate::permission::PermissionMode::Allow)
+        );
+    }
+
+    #[test]
+    fn resolve_config_merges_explicit_permission_over_global_defaults() {
+        let resolved = resolve_config(json!({
+            "permission": {
+                "path": {
+                    "external": {
+                        "read": "allow"
+                    }
+                },
+                "tools": {
+                    "names": {
+                        "shell": "allow"
+                    }
+                }
+            }
+        }))
+        .expect("partial permission config should resolve");
+
+        let path = resolved.permission.path.expect("path defaults");
+        assert_eq!(
+            path.workspace.and_then(|modes| modes.read),
+            Some(crate::permission::PermissionMode::Allow)
+        );
+        let external = path.external.expect("external path defaults");
+        assert_eq!(
+            external.read,
+            Some(crate::permission::PermissionMode::Allow)
+        );
+        assert_eq!(external.write, Some(crate::permission::PermissionMode::Ask));
+
+        let tools = resolved.permission.tools.expect("tool defaults");
+        assert_eq!(tools.default, Some(crate::permission::PermissionMode::Ask));
+        assert_eq!(
+            tools.tags.get("filesystem_read").copied(),
+            Some(crate::permission::PermissionMode::Allow)
+        );
+        assert_eq!(
+            tools.names.get("shell").copied(),
+            Some(crate::permission::PermissionMode::Allow)
+        );
     }
 
     #[test]

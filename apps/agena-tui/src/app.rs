@@ -916,6 +916,7 @@ enum PermissionStudioModeTarget {
     NetworkInternet,
     NetworkPrivate,
     NetworkLoopback,
+    ToolDefault,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9636,16 +9637,15 @@ impl App {
                 }
             }
             PermissionStudioPage::ToolTags => {
-                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog)
-                else {
+                let Some(key) = permission_studio_selected_tool_tag_key(dialog) else {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
-                        "flash-permission-studio-no-selection",
+                        "flash-permission-studio-no-duplicate",
                     ));
                     return;
                 };
                 PermissionStudioEditorAction::AddToolTag {
-                    duplicate_from: Some(duplicate_from),
+                    duplicate_from: Some(key),
                 }
             }
             PermissionStudioPage::ToolNames => {
@@ -9734,11 +9734,8 @@ impl App {
                 )
             }
             PermissionStudioPage::ToolTags => {
-                let Some(label) = self.permission_studio_selected_item_label(dialog) else {
-                    self.flash_warning(ui_text::t(
-                        &self.i18n,
-                        "flash-permission-studio-no-selection",
-                    ));
+                let Some(key) = permission_studio_selected_tool_tag_key(dialog) else {
+                    self.flash_warning(ui_text::t(&self.i18n, "flash-permission-studio-no-delete"));
                     return;
                 };
                 (
@@ -9747,10 +9744,10 @@ impl App {
                         "overlay-permission-studio-delete-body",
                         &crate::fl_args!(
                             "kind" => ui_text::t(&self.i18n, "permission-studio-page-tags"),
-                            "value" => label.clone(),
+                            "value" => key.clone(),
                         ),
                     )],
-                    ConfirmAction::PermissionStudioDeleteToolTag { key: label },
+                    ConfirmAction::PermissionStudioDeleteToolTag { key },
                 )
             }
             PermissionStudioPage::ToolNames => {
@@ -16858,6 +16855,15 @@ fn permission_studio_page_label(i18n: &I18n, page: &PermissionStudioPage) -> Str
     }
 }
 
+fn permission_studio_selected_tool_tag_key(dialog: &PermissionStudioOverlay) -> Option<String> {
+    match dialog.state.selected_item()?.action.clone() {
+        PermissionStudioAction::EditText(PermissionStudioTextTarget::ToolTagKey { key }) => {
+            Some(key)
+        }
+        _ => None,
+    }
+}
+
 fn permission_studio_sections(
     i18n: &I18n,
     dialog: &PermissionStudioOverlay,
@@ -17047,23 +17053,36 @@ fn permission_studio_sections(
                 .map(|tools| tools.tags.keys().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
             keys.sort();
-            let tag_items = keys
-                .into_iter()
-                .map(|key| PermissionStudioItem {
-                    label: key.clone(),
-                    value: permission_mode_input_text(
-                        dialog
-                            .permission
-                            .tools
-                            .as_ref()
-                            .and_then(|tools| tools.tags.get(key.as_str()).copied()),
-                        i18n,
-                    ),
-                    action: PermissionStudioAction::EditText(
-                        PermissionStudioTextTarget::ToolTagKey { key },
-                    ),
-                })
-                .collect::<Vec<_>>();
+            let mut tag_items = vec![PermissionStudioItem {
+                label: ui_text::t(i18n, "permission-studio-tool-default"),
+                value: permission_mode_input_text(
+                    dialog
+                        .permission
+                        .tools
+                        .as_ref()
+                        .and_then(|tools| tools.default),
+                    i18n,
+                ),
+                action: PermissionStudioAction::EditMode(PermissionStudioModeTarget::ToolDefault),
+            }];
+            tag_items.extend(
+                keys.into_iter()
+                    .map(|key| PermissionStudioItem {
+                        label: key.clone(),
+                        value: permission_mode_input_text(
+                            dialog
+                                .permission
+                                .tools
+                                .as_ref()
+                                .and_then(|tools| tools.tags.get(key.as_str()).copied()),
+                            i18n,
+                        ),
+                        action: PermissionStudioAction::EditText(
+                            PermissionStudioTextTarget::ToolTagKey { key },
+                        ),
+                    })
+                    .collect::<Vec<_>>(),
+            );
             vec![PermissionStudioSection {
                 id: PermissionStudioSectionId::ToolTags,
                 label: ui_text::t(i18n, "permission-studio-page-tags"),
@@ -17205,6 +17224,18 @@ fn permission_studio_sections(
                 label: ui_text::t(i18n, "permission-studio-page-tools"),
                 items: vec![
                     PermissionStudioItem {
+                        label: ui_text::t(i18n, "permission-studio-tool-default"),
+                        value: permission_mode_input_text(
+                            dialog
+                                .permission
+                                .tools
+                                .as_ref()
+                                .and_then(|tools| tools.default),
+                            i18n,
+                        ),
+                        action: PermissionStudioAction::Noop,
+                    },
+                    PermissionStudioItem {
                         label: ui_text::t(i18n, "permission-studio-page-tags"),
                         value: permission_rule_count_summary(
                             i18n,
@@ -17266,6 +17297,7 @@ fn permission_studio_mode_target_label(i18n: &I18n, target: &PermissionStudioMod
             PermissionStudioModeTarget::NetworkInternet => "permission-studio-network-internet",
             PermissionStudioModeTarget::NetworkPrivate => "permission-studio-network-private",
             PermissionStudioModeTarget::NetworkLoopback => "permission-studio-network-loopback",
+            PermissionStudioModeTarget::ToolDefault => "permission-studio-tool-default",
         },
     )
 }
@@ -17394,6 +17426,12 @@ fn apply_permission_studio_mode_input(
                 .network
                 .get_or_insert_with(Default::default)
                 .loopback = mode;
+        }
+        PermissionStudioModeTarget::ToolDefault => {
+            permission
+                .tools
+                .get_or_insert_with(Default::default)
+                .default = mode;
         }
     }
     normalize_permission_config(permission);
@@ -17557,6 +17595,12 @@ fn agent_tool_permission_summary(i18n: &I18n, tools: Option<&ToolPermissionConfi
         return ui_text::t(i18n, "value-unset");
     };
     let mut parts = Vec::new();
+    if let Some(mode) = tools.default {
+        parts.push(i18n.text_args(
+            "permission-studio-tool-default-summary",
+            &crate::fl_args!("value" => permission_mode_label(i18n, mode)),
+        ));
+    }
     if !tools.tags.is_empty() {
         parts.push(i18n.text_args(
             "value-tag-count",
@@ -17721,6 +17765,12 @@ fn push_tool_permission_detail_lines(
         i18n,
         "agent-permission-field-tool-section",
     )));
+    if let Some(mode) = tools.default {
+        lines.push(app_detail_labeled_line(
+            ui_text::t(i18n, "permission-studio-tool-default"),
+            permission_mode_label(i18n, mode),
+        ));
+    }
     push_permission_mode_entries(
         i18n,
         lines,
@@ -17888,6 +17938,9 @@ fn permission_studio_mode_target_value(
             .network
             .as_ref()
             .and_then(|network| network.loopback),
+        PermissionStudioModeTarget::ToolDefault => {
+            permission.tools.as_ref().and_then(|tools| tools.default)
+        }
     }
 }
 
@@ -24244,6 +24297,25 @@ mod tests {
         assert_eq!(
             path.rules.get("tmp/**"),
             Some(&PathAccessRuleConfig::Shorthand("allow".to_string()))
+        );
+    }
+
+    #[test]
+    fn permission_studio_tool_default_mode_edits_are_structured() {
+        let i18n = I18n::english();
+        let mut permission = PermissionConfig::default();
+
+        apply_permission_studio_mode_input(
+            &i18n,
+            &mut permission,
+            &PermissionStudioModeTarget::ToolDefault,
+            "ask",
+        )
+        .expect("expected tool default update");
+
+        assert_eq!(
+            permission.tools.and_then(|tools| tools.default),
+            Some(PermissionMode::Ask)
         );
     }
 

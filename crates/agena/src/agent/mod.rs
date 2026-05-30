@@ -23,6 +23,34 @@ pub struct PermissionConfig {
 }
 
 impl PermissionConfig {
+    pub fn global_default() -> Self {
+        let ask = PermissionMode::Ask;
+        Self {
+            path: Some(PathPermissionConfig {
+                workspace: Some(PathAccessModes {
+                    read: Some(PermissionMode::Allow),
+                    write: Some(ask),
+                }),
+                external: Some(PathAccessModes {
+                    read: Some(ask),
+                    write: Some(ask),
+                }),
+                ..Default::default()
+            }),
+            network: Some(NetworkPermissionConfig {
+                internet: Some(ask),
+                private: Some(ask),
+                loopback: Some(ask),
+                ..Default::default()
+            }),
+            tools: Some(ToolPermissionConfig {
+                default: Some(ask),
+                tags: BTreeMap::from([("filesystem_read".to_string(), PermissionMode::Allow)]),
+                ..Default::default()
+            }),
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         path_permission_is_empty(&self.path)
             && network_permission_is_empty(&self.network)
@@ -315,6 +343,8 @@ impl NetworkPermissionConfig {
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct ToolPermissionConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<PermissionMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tags: BTreeMap<String, PermissionMode>,
     #[serde(default, rename = "names", skip_serializing_if = "BTreeMap::is_empty")]
@@ -327,13 +357,17 @@ pub struct ToolPermissionConfig {
 
 impl ToolPermissionConfig {
     pub fn is_empty(&self) -> bool {
-        self.tags.is_empty()
+        self.default.is_none()
+            && self.tags.is_empty()
             && self.names.is_empty()
             && self.plugin.is_empty()
             && self.rules.is_empty()
     }
 
     pub fn merge_from(&mut self, overlay: Self) {
+        if overlay.default.is_some() {
+            self.default = overlay.default;
+        }
         self.tags.extend(overlay.tags);
         self.names.extend(overlay.names);
         self.plugin.extend(overlay.plugin);
@@ -344,6 +378,9 @@ impl ToolPermissionConfig {
         &self,
         mut base: ToolPermissionPolicy,
     ) -> Result<ToolPermissionPolicy, PermissionConfigError> {
+        if let Some(mode) = self.default {
+            base = base.with_default_mode(mode);
+        }
         for (tag, mode) in &self.tags {
             if let Some(tag) = ToolTag::from_tag(tag) {
                 base = base.with_tag_mode(tag, *mode);

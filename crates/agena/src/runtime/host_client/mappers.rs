@@ -484,6 +484,7 @@ pub(super) fn core_tool_permission_from_sdk(
     tools: crate::plugin::sdk::host_api::AgentToolPermissionConfig,
 ) -> crate::agent::ToolPermissionConfig {
     crate::agent::ToolPermissionConfig {
+        default: tools.default.map(core_permission_mode_from_sdk),
         tags: tools
             .tags
             .into_iter()
@@ -511,6 +512,7 @@ pub(super) fn sdk_tool_permission_from_core(
     tools: crate::agent::ToolPermissionConfig,
 ) -> crate::plugin::sdk::host_api::AgentToolPermissionConfig {
     crate::plugin::sdk::host_api::AgentToolPermissionConfig {
+        default: tools.default.map(sdk_permission_mode_from_core),
         tags: tools
             .tags
             .into_iter()

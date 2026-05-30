@@ -1999,6 +1999,26 @@ impl Backend {
         self.runtime.current_snapshot().agents().get(name.trim())
     }
 
+    pub fn config_has_agent(&self, name: &str) -> bool {
+        self.runtime
+            .current_snapshot()
+            .config_resolution()
+            .config
+            .agents
+            .contains_key(name.trim())
+    }
+
+    pub fn config_agent_names(&self) -> HashSet<String> {
+        self.runtime
+            .current_snapshot()
+            .config_resolution()
+            .config
+            .agents
+            .keys()
+            .cloned()
+            .collect()
+    }
+
     pub fn default_agent_name(&self) -> Option<String> {
         let snapshot = self.runtime.current_snapshot();
         let configured = snapshot
@@ -2149,6 +2169,14 @@ impl Backend {
                 .context("failed to reload runtime after config change")?;
         }
         Ok(response)
+    }
+
+    pub async fn reload_runtime(&self) -> Result<()> {
+        self.runtime
+            .reload()
+            .await
+            .context("failed to reload runtime after agent source change")?;
+        Ok(())
     }
 
     pub async fn delete_config_setting(&self, path: &str) -> Result<ConfigSettingsEditResponse> {

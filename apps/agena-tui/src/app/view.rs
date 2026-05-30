@@ -1500,19 +1500,20 @@ impl App {
         surface: SurfaceMode,
     ) {
         let title_summary = format!(
-            "{} · {}",
-            dialog.profile.scope.as_str(),
+            "{} · {} · {}",
+            agent_profile_scope_label_localized(&self.i18n, &dialog.profile),
+            agent_profile_storage_label_localized(&self.i18n, dialog.storage),
             if dialog.editable {
-                ui_text::t(&self.i18n, "value-config-owned")
+                ui_text::t(&self.i18n, "value-editable")
             } else {
-                ui_text::t(&self.i18n, "value-file-backed")
+                ui_text::t(&self.i18n, "value-read-only")
             }
         );
         let overview_body = agent_studio_overview_text(
             &self.i18n,
             &dialog.profile,
             dialog.default_agent_name.as_deref(),
-            dialog.editable,
+            dialog.storage,
         );
         let selected_item = dialog.workbench.list.selected_item();
         let detail_body = selected_item
@@ -1521,7 +1522,7 @@ impl App {
                     &self.i18n,
                     &dialog.profile,
                     item,
-                    dialog.editable,
+                    dialog.storage,
                     dialog.default_agent_name.as_deref(),
                 )
             })

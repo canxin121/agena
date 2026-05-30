@@ -584,6 +584,9 @@ enum AppMessage {
         purpose: ProviderPickerPurpose,
         result: UiResult<Vec<ProviderSummaryResource>>,
     },
+    AgentsLoaded {
+        result: UiResult<Vec<AgentDescriptor>>,
+    },
     SessionSearchPageLoaded {
         mode: SessionViewMode,
         query: String,
@@ -688,6 +691,7 @@ type UiResult<T> = std::result::Result<T, String>;
 enum Overlay {
     TranscriptSearch(LineInputOverlay),
     SessionRename(LineInputOverlay),
+    AgentCreate(LineInputOverlay),
     SettingsValueEdit(SettingsValueEditOverlay),
     RuntimeSettingEdit(RuntimeSettingEditOverlay),
     Choice(ChoiceOverlay),
@@ -1025,8 +1029,8 @@ enum SettingsPickerAction {
     EditField(SettingsFieldSpec),
     EditRuntimeSetting(RuntimeSettingSpec),
     ToggleToolDescriptionMode,
-    OpenAgentBrowser,
-    OpenProviderWorkbench,
+    OpenAgentList,
+    OpenProviderList,
     OpenModelCatalogWorkbench,
     OpenRuntimeProviderOverride,
     OpenRuntimeModelOverride,
@@ -1618,15 +1622,18 @@ impl SearchListItem for PickerItem {
     }
 
     fn search_list_matches_query(&self, query: &str) -> bool {
-        let query = query.trim();
-        if query.is_empty() {
+        let raw_query = query.trim();
+        if raw_query.is_empty() {
             return true;
         }
+        let query = raw_query.to_ascii_lowercase();
+        let query = query.as_str();
         match &self.value {
             PickerValue::Command(spec) => {
-                commands::command_matches_query(spec, query)
+                commands::command_matches_query(spec, raw_query)
                     || self.detail.to_ascii_lowercase().contains(query)
             }
+            PickerValue::ProviderCreate | PickerValue::AgentCreate => true,
             PickerValue::RuntimeTool(_) => {
                 self.label.to_ascii_lowercase().contains(query)
                     || self.detail.to_ascii_lowercase().contains(query)
@@ -1681,7 +1688,9 @@ struct PickerItem {
 enum PickerValue {
     Command(&'static CommandSpec),
     RuntimeTool(String),
+    ProviderCreate,
     Provider(ProviderSummaryResource),
+    AgentCreate,
     Agent(Box<AgentDescriptor>),
     Session(i64),
     Message(i64),
@@ -1693,6 +1702,7 @@ enum PickerValue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProviderPickerPurpose {
     SetProvider,
+    Configure,
 }
 
 #[derive(Debug, Clone)]
@@ -2536,6 +2546,7 @@ impl App {
                 self.handle_line_overlay_key(key, dialog, OverlayCommit::TranscriptSearch)
             }
             Overlay::SessionRename(dialog) => self.handle_session_rename_overlay_key(key, dialog),
+            Overlay::AgentCreate(dialog) => self.handle_agent_create_overlay_key(key, dialog),
             Overlay::SettingsValueEdit(dialog) => {
                 self.handle_settings_value_edit_overlay_key(key, dialog)
             }
@@ -3238,6 +3249,18 @@ impl App {
         match drive_input_dialog_key(dialog, key) {
             InputDialogKeyResult::Close => true,
             InputDialogKeyResult::Submit(_, value) => self.submit_session_rename(value.as_str()),
+            InputDialogKeyResult::Continue => false,
+        }
+    }
+
+    fn handle_agent_create_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut LineInputOverlay,
+    ) -> bool {
+        match drive_input_dialog_key(dialog, key) {
+            InputDialogKeyResult::Close => true,
+            InputDialogKeyResult::Submit(_, value) => self.create_agent_from_list(value.as_str()),
             InputDialogKeyResult::Continue => false,
         }
     }
@@ -4776,6 +4799,20 @@ impl App {
                 }
                 false
             }
+            KeyCode::Char('n') if matches!(dialog.meta.kind, PickerKind::Agents) => {
+                self.open_agent_create_overlay();
+                false
+            }
+            KeyCode::Char('n')
+                if matches!(
+                    dialog.meta.kind,
+                    PickerKind::Providers(ProviderPickerPurpose::Configure)
+                ) =>
+            {
+                self.route_stack.push(Route::Picker(dialog.clone()));
+                self.open_provider_studio(None);
+                false
+            }
             KeyCode::Char('n') if matches!(dialog.meta.kind, PickerKind::PermissionRules) => {
                 self.route_stack.push(Route::Picker(dialog.clone()));
                 self.open_permission_rule_studio(None, None);
@@ -4796,12 +4833,37 @@ impl App {
                 let Some(item) = dialog.items.get(dialog.selected).cloned() else {
                     return false;
                 };
-                if matches!(dialog.meta.kind, PickerKind::Agents)
-                    && let PickerValue::Agent(agent) = item.value
-                {
-                    self.route_stack.push(Route::Picker(dialog.clone()));
-                    self.open_agent_studio(agent.name.as_str());
-                    return false;
+                if matches!(dialog.meta.kind, PickerKind::Agents) {
+                    match item.value {
+                        PickerValue::AgentCreate => {
+                            self.open_agent_create_overlay();
+                            return false;
+                        }
+                        PickerValue::Agent(agent) => {
+                            self.route_stack.push(Route::Picker(dialog.clone()));
+                            self.open_agent_studio(agent.name.as_str());
+                            return false;
+                        }
+                        _ => {}
+                    }
+                }
+                if matches!(
+                    dialog.meta.kind,
+                    PickerKind::Providers(ProviderPickerPurpose::Configure)
+                ) {
+                    match item.value {
+                        PickerValue::ProviderCreate => {
+                            self.route_stack.push(Route::Picker(dialog.clone()));
+                            self.open_provider_studio(None);
+                            return false;
+                        }
+                        PickerValue::Provider(provider) => {
+                            self.route_stack.push(Route::Picker(dialog.clone()));
+                            self.open_provider_studio(Some(provider.provider_id.as_str()));
+                            return false;
+                        }
+                        _ => {}
+                    }
                 }
                 if matches!(dialog.meta.kind, PickerKind::PermissionRules) {
                     match item.value {
@@ -5250,7 +5312,9 @@ impl App {
         }
         if let Some(overlay) = &mut self.overlay {
             match overlay {
-                Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
+                Overlay::TranscriptSearch(dialog)
+                | Overlay::SessionRename(dialog)
+                | Overlay::AgentCreate(dialog) => {
                     dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                 }
@@ -6342,6 +6406,7 @@ impl App {
             AppMessage::ProvidersLoaded { purpose, result } => {
                 self.handle_providers_loaded(purpose, result)
             }
+            AppMessage::AgentsLoaded { result } => self.handle_agents_loaded(result),
             AppMessage::ModelCatalogLoaded {
                 query,
                 offset,
@@ -6823,11 +6888,15 @@ impl App {
         match result {
             Ok(providers) => {
                 let fallback_adapter = settings_choice_adapter_fallback(&self.i18n);
-                dialog.meta.all_items = providers
-                    .into_iter()
-                    .map(|provider| PickerItem {
-                        label: provider.provider_id.clone(),
-                        detail: settings_choice_default_provider_detail(
+                let mut items = Vec::new();
+                if purpose == ProviderPickerPurpose::Configure {
+                    items.push(provider_list_create_item(&self.i18n));
+                }
+                items.extend(providers.into_iter().map(|provider| {
+                    let detail = if purpose == ProviderPickerPurpose::Configure {
+                        i18n_provider_list_detail(&self.i18n, &provider)
+                    } else {
+                        settings_choice_default_provider_detail(
                             &self.i18n,
                             provider
                                 .defaults
@@ -6835,10 +6904,40 @@ impl App {
                                 .as_deref()
                                 .unwrap_or(fallback_adapter.as_str()),
                             provider.defaults.model.as_str(),
-                        ),
+                        )
+                    };
+                    PickerItem {
+                        label: provider.provider_id.clone(),
+                        detail,
                         value: PickerValue::Provider(provider),
-                    })
-                    .collect();
+                    }
+                }));
+                dialog.meta.all_items = items;
+                Self::refresh_picker_overlay(&mut dialog);
+            }
+            Err(error) => self.flash_error(error),
+        }
+        self.restore_picker_dialog(host, dialog);
+    }
+
+    fn handle_agents_loaded(&mut self, result: UiResult<Vec<AgentDescriptor>>) {
+        let Some((host, mut dialog)) = self.take_picker_dialog() else {
+            return;
+        };
+        if !matches!(dialog.meta.kind, PickerKind::Agents) {
+            self.restore_picker_dialog(host, dialog);
+            return;
+        }
+
+        dialog.loading = false;
+        dialog.empty_message = ui_text::t(&self.i18n, "overlay-picker-empty");
+        match result {
+            Ok(agents) => {
+                dialog.meta.all_items = agent_list_items(
+                    &self.i18n,
+                    agents,
+                    self.backend.default_agent_name().as_deref(),
+                );
                 Self::refresh_picker_overlay(&mut dialog);
             }
             Err(error) => self.flash_error(error),
@@ -7415,8 +7514,20 @@ impl App {
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = Ok(backend.list_providers());
+            let result = Ok(match purpose {
+                ProviderPickerPurpose::SetProvider => backend.list_providers(),
+                ProviderPickerPurpose::Configure => backend.list_configured_providers(),
+            });
             let _ = tx.send(AppMessage::ProvidersLoaded { purpose, result });
+        });
+    }
+
+    fn request_agent_list(&mut self) {
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = Ok(backend.list_agent_descriptors());
+            let _ = tx.send(AppMessage::AgentsLoaded { result });
         });
     }
 
@@ -8674,6 +8785,14 @@ impl App {
         )
     }
 
+    fn build_agent_create_overlay(&self) -> LineInputOverlay {
+        self.build_line_input_overlay(
+            ui_text::t(&self.i18n, "overlay-agent-list-create-title"),
+            ui_text::t(&self.i18n, "overlay-agent-list-create-prompt"),
+            Editor::default(),
+        )
+    }
+
     fn build_confirm_overlay(
         &self,
         title: String,
@@ -9700,14 +9819,14 @@ impl App {
                 self.toggle_tool_description_mode(dialog);
                 false
             }
-            SettingsPickerAction::OpenAgentBrowser => {
+            SettingsPickerAction::OpenAgentList => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
-                self.open_agent_picker("");
+                self.open_agent_list("");
                 false
             }
-            SettingsPickerAction::OpenProviderWorkbench => {
+            SettingsPickerAction::OpenProviderList => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
-                self.open_provider_studio(None);
+                self.open_provider_list("");
                 false
             }
             SettingsPickerAction::OpenModelCatalogWorkbench => {
@@ -9805,6 +9924,17 @@ impl App {
                 self.build_permission_rule_picker_overlay(dialog.input.text())
                     .map(Route::Picker)
                     .unwrap_or(Route::Picker(dialog))
+            }
+            Route::Picker(dialog) if matches!(dialog.meta.kind, PickerKind::Agents) => {
+                Route::Picker(self.build_agent_list_overlay(dialog.input.text(), false))
+            }
+            Route::Picker(dialog)
+                if matches!(
+                    dialog.meta.kind,
+                    PickerKind::Providers(ProviderPickerPurpose::Configure)
+                ) =>
+            {
+                Route::Picker(self.build_provider_list_overlay(dialog.input.text(), false))
             }
             Route::PluginWorkbench(dialog) => {
                 Route::PluginWorkbench(Box::new(self.refresh_restored_plugin_workbench(*dialog)))
@@ -11078,28 +11208,122 @@ impl App {
         self.request_providers(purpose);
     }
 
-    fn open_agent_picker(&mut self, query: &str) {
-        let dialog = self.build_agent_picker_overlay(query);
+    fn open_provider_list(&mut self, query: &str) {
+        let dialog = self.build_provider_list_overlay(query, true);
         self.current_route = Route::Picker(dialog);
+        self.request_providers(ProviderPickerPurpose::Configure);
     }
 
-    fn build_agent_picker_overlay(&self, query: &str) -> PickerOverlay {
-        let mut agents = self.backend.list_agent_descriptors();
-        agents.sort_by(|left, right| left.name.cmp(&right.name));
-        let default_agent = self.backend.default_agent_name();
-        let all_items = agents
-            .into_iter()
-            .map(|agent| agent_picker_item(&self.i18n, agent, default_agent.as_deref()))
-            .collect();
+    fn build_provider_list_overlay(&self, query: &str, loading: bool) -> PickerOverlay {
+        let all_items =
+            if loading {
+                Vec::new()
+            } else {
+                let mut items = vec![provider_list_create_item(&self.i18n)];
+                items.extend(self.backend.list_configured_providers().into_iter().map(
+                    |provider| PickerItem {
+                        label: provider.provider_id.clone(),
+                        detail: i18n_provider_list_detail(&self.i18n, &provider),
+                        value: PickerValue::Provider(provider),
+                    },
+                ));
+                items
+            };
         self.build_picker_overlay(
-            ui_text::t(&self.i18n, "overlay-agents-title"),
-            ui_text::t(&self.i18n, "overlay-agents-prompt"),
-            ui_text::t(&self.i18n, "overlay-agents-footer"),
-            ui_text::t(&self.i18n, "overlay-picker-empty"),
+            ui_text::t(&self.i18n, "overlay-provider-list-title"),
+            ui_text::t(&self.i18n, "overlay-provider-list-prompt"),
+            ui_text::t(&self.i18n, "overlay-provider-list-footer"),
+            ui_text::t(
+                &self.i18n,
+                if loading {
+                    "overlay-picker-loading"
+                } else {
+                    "overlay-picker-empty"
+                },
+            ),
+            Editor::from_text(query.trim().to_string()),
+            all_items,
+            PickerKind::Providers(ProviderPickerPurpose::Configure),
+            loading,
+        )
+    }
+
+    fn open_agent_list(&mut self, query: &str) {
+        let dialog = self.build_agent_list_overlay(query, true);
+        self.current_route = Route::Picker(dialog);
+        self.request_agent_list();
+    }
+
+    fn open_agent_create_overlay(&mut self) {
+        self.overlay = Some(Overlay::AgentCreate(self.build_agent_create_overlay()));
+    }
+
+    fn create_agent_from_list(&mut self, input: &str) -> bool {
+        let agent_name = input.trim();
+        if agent_name.is_empty() {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-agent-create-name-required"));
+            return false;
+        }
+        if self
+            .backend
+            .list_agent_descriptors()
+            .iter()
+            .any(|agent| agent.name == agent_name)
+        {
+            self.flash_warning(self.i18n.text_args(
+                "flash-agent-create-name-exists",
+                &crate::fl_args!("name" => agent_name),
+            ));
+            return false;
+        }
+
+        let path = format!("agents.{}", quoted_settings_segment(agent_name));
+        match self.block_on_async(self.backend.set_config_setting(path.as_str(), json!({}))) {
+            Ok(_) => {
+                self.flash_success(self.i18n.text_args(
+                    "flash-agent-created",
+                    &crate::fl_args!("name" => agent_name),
+                ));
+                if matches!(&self.current_route, Route::Picker(dialog) if matches!(dialog.meta.kind, PickerKind::Agents))
+                {
+                    self.route_stack.push(self.current_route.clone());
+                }
+                self.open_agent_studio(agent_name);
+                true
+            }
+            Err(error) => {
+                self.flash_error(error.to_string());
+                false
+            }
+        }
+    }
+
+    fn build_agent_list_overlay(&self, query: &str, loading: bool) -> PickerOverlay {
+        let all_items = if loading {
+            Vec::new()
+        } else {
+            agent_list_items(
+                &self.i18n,
+                self.backend.list_agent_descriptors(),
+                self.backend.default_agent_name().as_deref(),
+            )
+        };
+        self.build_picker_overlay(
+            ui_text::t(&self.i18n, "overlay-agent-list-title"),
+            ui_text::t(&self.i18n, "overlay-agent-list-prompt"),
+            ui_text::t(&self.i18n, "overlay-agent-list-footer"),
+            ui_text::t(
+                &self.i18n,
+                if loading {
+                    "overlay-picker-loading"
+                } else {
+                    "overlay-picker-empty"
+                },
+            ),
             Editor::from_text(query.trim().to_string()),
             all_items,
             PickerKind::Agents,
-            false,
+            loading,
         )
     }
 
@@ -13773,6 +13997,9 @@ impl App {
                 Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                     dialog.input.flush_pending_input_if_due(now);
                 }
+                Overlay::AgentCreate(dialog) => {
+                    dialog.input.flush_pending_input_if_due(now);
+                }
                 Overlay::SettingsValueEdit(dialog) => {
                     dialog.input.flush_pending_input_if_due(now);
                 }
@@ -15611,7 +15838,7 @@ fn settings_studio_agent_browser_item(
             ),
         },
         detail: ui_text::t(i18n, "settings-agent-browser-detail"),
-        action: SettingsPickerAction::OpenAgentBrowser,
+        action: SettingsPickerAction::OpenAgentList,
     }
 }
 
@@ -15638,6 +15865,29 @@ fn agent_picker_item(
         detail: join_inline_segments(detail),
         value: PickerValue::Agent(Box::new(agent)),
     }
+}
+
+fn agent_list_create_item(i18n: &I18n) -> PickerItem {
+    PickerItem {
+        label: ui_text::t(i18n, "overlay-agent-list-create-label"),
+        detail: ui_text::t(i18n, "overlay-agent-list-create-detail"),
+        value: PickerValue::AgentCreate,
+    }
+}
+
+fn agent_list_items(
+    i18n: &I18n,
+    mut agents: Vec<AgentDescriptor>,
+    default_agent: Option<&str>,
+) -> Vec<PickerItem> {
+    agents.sort_by(|left, right| left.name.cmp(&right.name));
+    let mut items = vec![agent_list_create_item(i18n)];
+    items.extend(
+        agents
+            .into_iter()
+            .map(|agent| agent_picker_item(i18n, agent, default_agent)),
+    );
+    items
 }
 
 fn agent_profile_editable(profile: &AgentProfile) -> bool {
@@ -17588,7 +17838,7 @@ fn settings_studio_provider_workbench_item(
             &crate::fl_args!("count" => providers.len() as i64),
         ),
         detail: ui_text::t(i18n, "settings-provider-workbench-detail"),
-        action: SettingsPickerAction::OpenProviderWorkbench,
+        action: SettingsPickerAction::OpenProviderList,
     }
 }
 
@@ -18017,6 +18267,29 @@ fn provider_studio_provider_rows(
         ),
     }));
     rows
+}
+
+fn provider_list_create_item(i18n: &I18n) -> PickerItem {
+    PickerItem {
+        label: ui_text::t(i18n, "overlay-provider-list-create-label"),
+        detail: ui_text::t(i18n, "overlay-provider-list-create-detail"),
+        value: PickerValue::ProviderCreate,
+    }
+}
+
+fn i18n_provider_list_detail(i18n: &I18n, provider: &ProviderSummaryResource) -> String {
+    i18n.text_args(
+        "overlay-provider-list-row-detail",
+        &crate::fl_args!(
+            "adapter" => provider
+                .defaults
+                .adapter
+                .clone()
+                .unwrap_or_else(|| settings_choice_adapter_fallback(i18n)),
+            "model" => provider.defaults.model.clone(),
+            "count" => provider.adapters.len() as i64,
+        ),
+    )
 }
 
 fn session_model_choice_item(
@@ -23829,11 +24102,11 @@ mod tests {
                 .iter()
                 .map(|item| item.label.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Default Agent", "Agent Profiles"]
+            vec!["Default Agent", "Agent List"]
         );
         assert!(matches!(
             &agent_items[1].action,
-            SettingsPickerAction::OpenAgentBrowser
+            SettingsPickerAction::OpenAgentList
         ));
 
         let mut provider_items =
@@ -23844,12 +24117,53 @@ mod tests {
                 .iter()
                 .map(|item| item.label.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Default Provider", "Provider Studio"]
+            vec!["Default Provider", "Provider List"]
         );
         assert!(matches!(
             &provider_items[1].action,
-            SettingsPickerAction::OpenProviderWorkbench
+            SettingsPickerAction::OpenProviderList
         ));
+    }
+
+    #[test]
+    fn agent_and_provider_lists_expose_create_rows() {
+        let i18n = I18n::english();
+        let agent_items = agent_list_items(
+            &i18n,
+            vec![AgentDescriptor {
+                name: "build".to_string(),
+                description: "Primary coding agent".to_string(),
+                permission: Default::default(),
+                defaults: Default::default(),
+                scope: agena::agents::AgentScope::Project,
+                source_path: None,
+            }],
+            Some("build"),
+        );
+        assert_eq!(agent_items[0].label, "+ New Agent");
+        assert!(matches!(agent_items[0].value, PickerValue::AgentCreate));
+        assert_eq!(agent_items[1].label, "build");
+
+        let provider = ProviderSummaryResource {
+            provider_id: "github".to_string(),
+            defaults: agena_api::resource::ProviderDefaultsResource {
+                adapter: Some("copilot".to_string()),
+                model: "gpt-5".to_string(),
+            },
+            adapters: vec![agena_api::resource::ProviderAdapterSummaryResource {
+                adapter_id: "copilot".to_string(),
+                enabled: true,
+                configured_model_count: 1,
+            }],
+            native_tools: None,
+        };
+        let provider_create = provider_list_create_item(&i18n);
+        assert_eq!(provider_create.label, "+ New Provider");
+        assert!(matches!(provider_create.value, PickerValue::ProviderCreate));
+        assert_eq!(
+            sanitize_terminal_text(&i18n_provider_list_detail(&i18n, &provider)),
+            "copilot / gpt-5 · 1 adapters"
+        );
     }
 
     #[test]

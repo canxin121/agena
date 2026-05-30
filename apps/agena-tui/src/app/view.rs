@@ -696,7 +696,9 @@ impl App {
         };
 
         match overlay {
-            Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
+            Overlay::TranscriptSearch(dialog)
+            | Overlay::SessionRename(dialog)
+            | Overlay::AgentCreate(dialog) => {
                 render_overlay_line_input_dialog(
                     frame,
                     area,

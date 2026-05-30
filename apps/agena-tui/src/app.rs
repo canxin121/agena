@@ -779,7 +779,6 @@ struct AgentStudioItem {
 #[derive(Debug, Clone)]
 enum AgentStudioAction {
     Edit(AgentStudioField),
-    SetDefault,
     OpenPermissionWorkbench,
     OpenSource,
 }
@@ -3408,19 +3407,6 @@ impl App {
                 self.open_agent_permission_studio(dialog.agent_name.as_str());
                 false
             }
-            KeyCode::Char('d') => {
-                match self.set_default_agent_value(dialog.agent_name.as_str()) {
-                    Ok(()) => {
-                        self.flash_success(default_agent_updated_message(
-                            &self.i18n,
-                            dialog.agent_name.as_str(),
-                        ));
-                        self.refresh_agent_studio_overlay(dialog);
-                    }
-                    Err(error) => self.flash_error(error),
-                }
-                false
-            }
             _ if dialog.workbench.list.handle_navigation_key(key, 10) => false,
             KeyCode::Enter => self.activate_agent_studio_selection(dialog),
             _ => false,
@@ -4070,18 +4056,6 @@ impl App {
                     return false;
                 }
                 self.open_agent_studio_editor(dialog, field);
-            }
-            AgentStudioAction::SetDefault => {
-                match self.set_default_agent_value(dialog.agent_name.as_str()) {
-                    Ok(()) => {
-                        self.flash_success(default_agent_updated_message(
-                            &self.i18n,
-                            dialog.agent_name.as_str(),
-                        ));
-                        self.refresh_agent_studio_overlay(dialog);
-                    }
-                    Err(error) => self.flash_error(error),
-                }
             }
             AgentStudioAction::OpenPermissionWorkbench => {
                 self.route_stack.push(Route::AgentStudio(dialog.clone()));
@@ -9306,8 +9280,7 @@ impl App {
         let storage = self.agent_profile_storage(&profile);
         let editable = storage.editable();
         let default_agent_name = self.backend.default_agent_name();
-        let items =
-            agent_studio_items(&self.i18n, &profile, storage, default_agent_name.as_deref());
+        let items = agent_studio_items(&self.i18n, &profile, storage);
         let selected = preferred_item_label
             .and_then(|label| items.iter().position(|item| item.label == label))
             .unwrap_or(0);
@@ -11025,14 +10998,6 @@ impl App {
             }
             Err(error) => self.flash_error(error),
         }
-    }
-
-    fn set_default_agent_value(&mut self, agent_name: &str) -> UiResult<()> {
-        self.block_on_async(
-            self.backend
-                .set_config_setting("agents.default", JsonValue::String(agent_name.to_string())),
-        )
-        .map(|_| ())
     }
 
     fn open_inspector_picker(
@@ -15077,13 +15042,6 @@ fn settings_path_cleared_message(i18n: &I18n, path: &str) -> String {
     i18n.text_args("flash-settings-cleared", &crate::fl_args!("path" => path))
 }
 
-fn default_agent_updated_message(i18n: &I18n, agent_name: &str) -> String {
-    i18n.text_args(
-        "flash-default-agent-updated",
-        &crate::fl_args!("agent" => agent_name),
-    )
-}
-
 fn agent_read_only_edit_message(i18n: &I18n) -> String {
     ui_text::t(i18n, "flash-agent-read-only-edit")
 }
@@ -16147,9 +16105,7 @@ fn agent_studio_items(
     i18n: &I18n,
     profile: &AgentProfile,
     storage: AgentProfileStorage,
-    default_agent_name: Option<&str>,
 ) -> Vec<AgentStudioItem> {
-    let is_default = default_agent_name.is_some_and(|name| name == profile.name.as_str());
     vec![
         AgentStudioItem {
             label: ui_text::t(i18n, "agent-studio-field-description"),
@@ -16205,16 +16161,6 @@ fn agent_studio_items(
             action: AgentStudioAction::OpenPermissionWorkbench,
         },
         AgentStudioItem {
-            label: ui_text::t(i18n, "agent-studio-item-default-agent-label"),
-            value: if is_default {
-                ui_text::t(i18n, "value-selected")
-            } else {
-                ui_text::t(i18n, "value-inactive")
-            },
-            detail: ui_text::t(i18n, "agent-studio-item-default-agent-detail"),
-            action: AgentStudioAction::SetDefault,
-        },
-        AgentStudioItem {
             label: match storage {
                 AgentProfileStorage::Markdown => {
                     ui_text::t(i18n, "agent-studio-item-open-source-file")
@@ -16251,7 +16197,6 @@ fn agent_studio_item_detail_text(
     profile: &AgentProfile,
     item: &AgentStudioItem,
     storage: AgentProfileStorage,
-    default_agent_name: Option<&str>,
 ) -> Text<'static> {
     match &item.action {
         AgentStudioAction::Edit(AgentStudioField::Description) => {
@@ -16295,36 +16240,29 @@ fn agent_studio_item_detail_text(
             lines.push(app_detail_plain_line(agent_editability_hint(i18n, storage)));
             build_app_detail_text(lines)
         }
-        AgentStudioAction::OpenPermissionWorkbench => build_app_detail_text(vec![
-            app_detail_labeled_line(
-                ui_text::t(i18n, "overlay-agent-overview-permission"),
-                agent_permission_summary(i18n, &profile.frontmatter.permission),
-            ),
-            app_detail_plain_line(String::new()),
-            app_detail_plain_line(permission_pretty_document_localized(
+        AgentStudioAction::OpenPermissionWorkbench => {
+            let mut lines = vec![
+                app_detail_labeled_line(
+                    ui_text::t(i18n, "overlay-agent-overview-permission"),
+                    agent_permission_summary(i18n, &profile.frontmatter.permission),
+                ),
+                app_detail_plain_line(String::new()),
+            ];
+            lines.extend(agent_permission_document_detail_lines(
                 i18n,
                 &profile.frontmatter.permission,
-            )),
-            app_detail_plain_line(String::new()),
-            app_detail_plain_line(ui_text::t(
+            ));
+            lines.push(app_detail_plain_line(String::new()));
+            lines.push(app_detail_plain_line(ui_text::t(
                 i18n,
                 if storage.editable() {
                     "overlay-agent-detail-open-permission"
                 } else {
                     "overlay-agent-detail-open-permission-read-only"
                 },
-            )),
-        ]),
-        AgentStudioAction::SetDefault => build_app_detail_text(vec![
-            app_detail_labeled_line(
-                ui_text::t(i18n, "overlay-agent-detail-current-default-agent"),
-                default_agent_name
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| ui_text::t(i18n, "value-unset")),
-            ),
-            app_detail_plain_line(String::new()),
-            app_detail_plain_line(ui_text::t(i18n, "overlay-agent-detail-set-default-hint")),
-        ]),
+            )));
+            build_app_detail_text(lines)
+        }
         AgentStudioAction::OpenSource => build_app_detail_text(vec![
             app_detail_labeled_line(
                 ui_text::t(i18n, "overlay-agent-overview-source"),
@@ -16425,6 +16363,16 @@ fn app_detail_labeled_line(
 fn app_detail_plain_line(text: impl Into<String>) -> DetailTextLine<'static> {
     let text = text.into();
     DetailTextLine::plain(sanitize_terminal_text(text.as_str()), Style::default())
+}
+
+fn app_detail_heading_line(text: impl Into<String>) -> DetailTextLine<'static> {
+    let text = text.into();
+    DetailTextLine::plain(
+        sanitize_terminal_text(text.as_str()),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )
 }
 
 fn localized_yes_no(i18n: &I18n, value: bool) -> String {
@@ -17489,14 +17437,6 @@ fn apply_permission_studio_text_input(
     Ok(page)
 }
 
-fn permission_pretty_document_localized(i18n: &I18n, permission: &PermissionConfig) -> String {
-    if permission.is_empty() {
-        ui_text::t(i18n, "overlay-agent-permission-document-unset")
-    } else {
-        pretty_json(permission)
-    }
-}
-
 fn permission_override_summary(i18n: &I18n, permission: &PermissionConfig) -> String {
     let mut parts = Vec::new();
     if permission.path.is_some() {
@@ -17669,6 +17609,180 @@ fn path_access_modes_summary(i18n: &I18n, modes: Option<&PathAccessModes>) -> St
     }
 }
 
+fn agent_permission_document_detail_lines(
+    i18n: &I18n,
+    permission: &PermissionConfig,
+) -> Vec<DetailTextLine<'static>> {
+    if permission.is_empty() {
+        return vec![app_detail_plain_line(ui_text::t(
+            i18n,
+            "overlay-agent-permission-document-unset",
+        ))];
+    }
+
+    let mut lines = Vec::new();
+    if let Some(path) = permission.path.as_ref() {
+        push_agent_permission_section_gap(&mut lines);
+        push_path_permission_detail_lines(i18n, &mut lines, path);
+    }
+    if let Some(network) = permission.network.as_ref() {
+        push_agent_permission_section_gap(&mut lines);
+        push_network_permission_detail_lines(i18n, &mut lines, network);
+    }
+    if let Some(tools) = permission.tools.as_ref() {
+        push_agent_permission_section_gap(&mut lines);
+        push_tool_permission_detail_lines(i18n, &mut lines, tools);
+    }
+    lines
+}
+
+fn push_agent_permission_section_gap(lines: &mut Vec<DetailTextLine<'static>>) {
+    if !lines.is_empty() {
+        lines.push(app_detail_plain_line(String::new()));
+    }
+}
+
+fn push_path_permission_detail_lines(
+    i18n: &I18n,
+    lines: &mut Vec<DetailTextLine<'static>>,
+    path: &PathPermissionConfig,
+) {
+    lines.push(app_detail_heading_line(ui_text::t(
+        i18n,
+        "agent-permission-field-path-section",
+    )));
+    if path.workspace.is_some() {
+        lines.push(app_detail_labeled_line(
+            ui_text::t(i18n, "value-workspace"),
+            path_access_modes_summary(i18n, path.workspace.as_ref()),
+        ));
+    }
+    if path.external.is_some() {
+        lines.push(app_detail_labeled_line(
+            ui_text::t(i18n, "value-external"),
+            path_access_modes_summary(i18n, path.external.as_ref()),
+        ));
+    }
+    if !path.rules.is_empty() {
+        lines.push(app_detail_labeled_line(
+            ui_text::t(i18n, "permission-studio-section-rules"),
+            permission_rule_count_summary(i18n, path.rules.len()),
+        ));
+        for (pattern, rule) in &path.rules {
+            lines.push(app_detail_labeled_line(
+                pattern.clone(),
+                path_rule_summary(i18n, Some(rule)),
+            ));
+        }
+    }
+}
+
+fn push_network_permission_detail_lines(
+    i18n: &I18n,
+    lines: &mut Vec<DetailTextLine<'static>>,
+    network: &NetworkPermissionConfig,
+) {
+    lines.push(app_detail_heading_line(ui_text::t(
+        i18n,
+        "agent-permission-field-network-section",
+    )));
+    if let Some(mode) = network.internet {
+        lines.push(app_detail_labeled_line(
+            ui_text::t(i18n, "value-internet"),
+            permission_mode_label(i18n, mode),
+        ));
+    }
+    if let Some(mode) = network.private {
+        lines.push(app_detail_labeled_line(
+            ui_text::t(i18n, "value-private"),
+            permission_mode_label(i18n, mode),
+        ));
+    }
+    if let Some(mode) = network.loopback {
+        lines.push(app_detail_labeled_line(
+            ui_text::t(i18n, "value-loopback"),
+            permission_mode_label(i18n, mode),
+        ));
+    }
+    push_permission_mode_entries(
+        i18n,
+        lines,
+        ui_text::t(i18n, "permission-studio-section-rules"),
+        network.rules.iter(),
+    );
+}
+
+fn push_tool_permission_detail_lines(
+    i18n: &I18n,
+    lines: &mut Vec<DetailTextLine<'static>>,
+    tools: &ToolPermissionConfig,
+) {
+    lines.push(app_detail_heading_line(ui_text::t(
+        i18n,
+        "agent-permission-field-tool-section",
+    )));
+    push_permission_mode_entries(
+        i18n,
+        lines,
+        ui_text::t(i18n, "permission-studio-field-tool-tags"),
+        tools.tags.iter(),
+    );
+    push_permission_mode_entries(
+        i18n,
+        lines,
+        ui_text::t(i18n, "permission-studio-field-tool-names"),
+        tools.names.iter(),
+    );
+    push_permission_mode_entries(
+        i18n,
+        lines,
+        ui_text::t(i18n, "value-plugin-tools"),
+        tools.plugin.iter(),
+    );
+    if !tools.rules.is_empty() {
+        lines.push(app_detail_labeled_line(
+            ui_text::t(i18n, "permission-studio-page-tool-rules"),
+            i18n.text_args(
+                "value-rule-set-count",
+                &crate::fl_args!("count" => tools.rules.len() as i64),
+            ),
+        ));
+        for (tool_name, rules) in &tools.rules {
+            lines.push(app_detail_labeled_line(
+                tool_name.clone(),
+                tool_permission_rules_summary(i18n, Some(rules)),
+            ));
+        }
+    }
+}
+
+fn push_permission_mode_entries<'a, I>(
+    i18n: &I18n,
+    lines: &mut Vec<DetailTextLine<'static>>,
+    label: String,
+    entries: I,
+) where
+    I: IntoIterator<Item = (&'a String, &'a PermissionMode)>,
+{
+    let entries = entries.into_iter().collect::<Vec<_>>();
+    if entries.is_empty() {
+        return;
+    }
+    lines.push(app_detail_labeled_line(
+        label,
+        i18n.text_args(
+            "value-item-count",
+            &crate::fl_args!("count" => entries.len() as i64),
+        ),
+    ));
+    for (name, mode) in entries {
+        lines.push(app_detail_labeled_line(
+            name.clone(),
+            permission_mode_label(i18n, *mode),
+        ));
+    }
+}
+
 fn network_defaults_summary(i18n: &I18n, network: Option<&NetworkPermissionConfig>) -> String {
     let Some(network) = network else {
         return ui_text::t(i18n, "value-unset");
@@ -17727,10 +17841,6 @@ fn permission_mode_token_text(mode: Option<PermissionMode>) -> String {
     mode.map(permission_mode_token)
         .unwrap_or_default()
         .to_string()
-}
-
-fn pretty_json<T: Serialize>(value: &T) -> String {
-    serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
 }
 
 fn permission_config_from_json_value(value: &JsonValue) -> UiResult<PermissionConfig> {
@@ -24483,6 +24593,74 @@ mod tests {
         assert_eq!(
             sanitize_terminal_text(&i18n_provider_list_detail(&i18n, &provider)),
             "copilot / gpt-5 · 1 adapters"
+        );
+    }
+
+    #[test]
+    fn agent_studio_items_keep_default_agent_as_settings_field() {
+        let i18n = I18n::english();
+        let profile = AgentProfile {
+            name: "build".to_string(),
+            frontmatter: AgentFrontmatter {
+                description: "Primary coding agent".to_string(),
+                ..Default::default()
+            },
+            prompt: "Implement the request.".to_string(),
+            source_path: None,
+            scope: AgentScope::Default,
+        };
+
+        let items = agent_studio_items(&i18n, &profile, AgentProfileStorage::BuiltIn);
+        let labels = items
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(labels.contains(&"Permission Policy"));
+        assert!(labels.contains(&"Source"));
+        assert!(
+            !labels.contains(&"agents.default"),
+            "agents.default belongs to Settings, not the Agent Studio field list"
+        );
+    }
+
+    #[test]
+    fn agent_permission_detail_lines_render_structured_summary() {
+        let i18n = I18n::english();
+        let permission = PermissionConfig {
+            path: Some(PathPermissionConfig {
+                workspace: Some(PathAccessModes {
+                    read: Some(PermissionMode::Allow),
+                    write: Some(PermissionMode::Ask),
+                }),
+                ..Default::default()
+            }),
+            tools: Some(ToolPermissionConfig {
+                names: BTreeMap::from([
+                    ("agent".to_string(), PermissionMode::Allow),
+                    ("workflow".to_string(), PermissionMode::Ask),
+                ]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let lines = agent_permission_document_detail_lines(&i18n, &permission);
+        let rendered = agena_tui_components::build_detail_text_plain(
+            &lines,
+            &DetailTextSpec::with_label_width(14),
+        );
+
+        assert!(rendered.contains("Path Section"));
+        assert!(rendered.contains("workspace"));
+        assert!(rendered.contains("read allow"));
+        assert!(rendered.contains("write ask"));
+        assert!(rendered.contains("Tool Section"));
+        assert!(rendered.contains("Tool Names"));
+        assert!(rendered.contains("agent"));
+        assert!(
+            !rendered.contains('{') && !rendered.contains("\"agent\""),
+            "permission detail should be TUI rows, not raw JSON: {rendered}"
         );
     }
 

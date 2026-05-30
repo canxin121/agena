@@ -1448,43 +1448,139 @@ impl App {
 
         let nav_width = inner
             .width
-            .saturating_mul(3)
-            .saturating_div(10)
-            .clamp(18, 30)
+            .saturating_mul(22)
+            .saturating_div(100)
+            .clamp(18, 28)
             .min(inner.width.saturating_sub(1));
-        let body = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(nav_width),
-                Constraint::Length(u16::from(inner.width > 0)),
-                Constraint::Min(24),
-            ])
-            .split(inner);
-        frame.render_widget(
-            Paragraph::new(settings_compact_sections_text(
-                &self.i18n,
-                dialog,
-                body[0].width,
-            ))
-            .wrap(Wrap { trim: false }),
-            body[0],
-        );
-        frame.render_widget(
-            Paragraph::new(settings_compact_vertical_divider(body[1].height))
+        let wide_inspector = inner.width >= 100 && inner.height >= 12;
+        let inspector_title = settings_compact_item_detail_title(&self.i18n, dialog);
+        let inspector_text = settings_compact_item_detail_text(&self.i18n, dialog);
+
+        if wide_inspector {
+            let available_after_nav = inner.width.saturating_sub(nav_width).saturating_sub(2);
+            let inspector_width = inner
+                .width
+                .saturating_mul(30)
+                .saturating_div(100)
+                .clamp(30, 44)
+                .min(available_after_nav.saturating_sub(32))
+                .max(28);
+            let body = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length(nav_width),
+                    Constraint::Length(1),
+                    Constraint::Min(32),
+                    Constraint::Length(1),
+                    Constraint::Length(inspector_width),
+                ])
+                .split(inner);
+            frame.render_widget(
+                Paragraph::new(settings_compact_sections_text(
+                    &self.i18n,
+                    dialog,
+                    body[0].width,
+                ))
                 .wrap(Wrap { trim: false }),
-            body[1],
-        );
-        frame.render_widget(
-            Paragraph::new(settings_compact_editor_text(
-                &self.i18n,
-                dialog,
-                current_section,
-                body[2].width,
-                body[2].height,
-            ))
-            .wrap(Wrap { trim: false }),
-            body[2],
-        );
+                body[0],
+            );
+            frame.render_widget(
+                Paragraph::new(settings_compact_vertical_divider(body[1].height))
+                    .wrap(Wrap { trim: false }),
+                body[1],
+            );
+            frame.render_widget(
+                Paragraph::new(settings_compact_editor_text(
+                    &self.i18n,
+                    dialog,
+                    current_section,
+                    body[2].width,
+                    body[2].height,
+                ))
+                .wrap(Wrap { trim: false }),
+                body[2],
+            );
+            frame.render_widget(
+                Paragraph::new(settings_compact_vertical_divider(body[3].height))
+                    .wrap(Wrap { trim: false }),
+                body[3],
+            );
+            render_text_panel(
+                frame,
+                body[4],
+                &TextPanelSpec {
+                    title: Some(inspector_title.into()),
+                    body: &inspector_text,
+                    wrap: true,
+                    scroll: None,
+                    alignment: None,
+                },
+            );
+        } else {
+            let body = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length(nav_width),
+                    Constraint::Length(u16::from(inner.width > 0)),
+                    Constraint::Min(24),
+                ])
+                .split(inner);
+            let detail_height = body[2]
+                .height
+                .saturating_mul(35)
+                .saturating_div(100)
+                .clamp(7, 14)
+                .min(body[2].height.saturating_sub(4));
+            let editor_rows = if detail_height > 0 {
+                Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Min(4), Constraint::Length(detail_height)])
+                    .split(body[2])
+            } else {
+                Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Min(1), Constraint::Length(0)])
+                    .split(body[2])
+            };
+            frame.render_widget(
+                Paragraph::new(settings_compact_sections_text(
+                    &self.i18n,
+                    dialog,
+                    body[0].width,
+                ))
+                .wrap(Wrap { trim: false }),
+                body[0],
+            );
+            frame.render_widget(
+                Paragraph::new(settings_compact_vertical_divider(body[1].height))
+                    .wrap(Wrap { trim: false }),
+                body[1],
+            );
+            frame.render_widget(
+                Paragraph::new(settings_compact_editor_text(
+                    &self.i18n,
+                    dialog,
+                    current_section,
+                    editor_rows[0].width,
+                    editor_rows[0].height,
+                ))
+                .wrap(Wrap { trim: false }),
+                editor_rows[0],
+            );
+            if editor_rows[1].height > 0 {
+                render_text_panel(
+                    frame,
+                    editor_rows[1],
+                    &TextPanelSpec {
+                        title: Some(inspector_title.into()),
+                        body: &inspector_text,
+                        wrap: true,
+                        scroll: None,
+                        alignment: None,
+                    },
+                );
+            }
+        }
         frame.render_widget(
             Paragraph::new(sanitize_display_text(dialog.footer.as_str()))
                 .wrap(Wrap { trim: false }),
@@ -2804,11 +2900,11 @@ fn settings_compact_editor_text(
     )));
     lines.push(Line::from(""));
 
-    let detail = settings_compact_item_detail_text(i18n, dialog, section);
-    let fixed_rows = 4usize
-        .saturating_add(2)
-        .saturating_add(detail.lines.len().max(1));
-    let visible_item_count = height.saturating_sub(fixed_rows as u16).max(1) as usize;
+    let fixed_rows = 3usize;
+    let visible_item_count = height
+        .saturating_sub(fixed_rows as u16)
+        .saturating_div(2)
+        .max(1) as usize;
 
     if section.items.is_empty() {
         lines.push(Line::from(sanitize_display_text(ui_text::t(
@@ -2816,20 +2912,6 @@ fn settings_compact_editor_text(
             "overlay-settings-empty-items",
         ))));
     } else {
-        let option_header = ui_text::t(i18n, "overlay-settings-compact-column-option");
-        let value_header = ui_text::t(i18n, "overlay-settings-compact-column-value");
-        let detail_header = ui_text::t(i18n, "overlay-settings-compact-column-detail");
-        lines.push(Line::from(Span::styled(
-            settings_compact_fixed_columns(
-                &[
-                    (option_header.as_str(), 34),
-                    (value_header.as_str(), 26),
-                    (detail_header.as_str(), 58),
-                ],
-                width,
-            ),
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
         let (start, end) = settings_compact_visible_range(
             section.items.len(),
             dialog.state.selected_item_index(),
@@ -2839,15 +2921,6 @@ fn settings_compact_editor_text(
             let index = start + index;
             let selected = index == dialog.state.selected_item_index();
             let marker = if selected { ">> " } else { "   " };
-            let label = format!("{marker}{}", item.label);
-            let line = settings_compact_fixed_columns(
-                &[
-                    (label.as_str(), 34),
-                    (item.value.as_str(), 26),
-                    (item.detail.as_str(), 58),
-                ],
-                width,
-            );
             let style = if selected && dialog.state.focus() == SettingsStudioFocus::Items {
                 selection_highlight_style()
             } else if selected {
@@ -2857,41 +2930,99 @@ fn settings_compact_editor_text(
             } else {
                 Style::default()
             };
-            lines.push(Line::from(Span::styled(line, style)));
+            lines.push(Line::from(Span::styled(
+                settings_compact_item_title_line(item, marker, width),
+                style,
+            )));
+            lines.push(Line::from(Span::styled(
+                settings_compact_item_subtitle_line(item, "   ", width),
+                Style::default().fg(Color::DarkGray),
+            )));
         }
     }
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        sanitize_display_text(ui_text::t(i18n, "overlay-workbench-details")),
-        Style::default().add_modifier(Modifier::BOLD),
-    )));
-    lines.extend(detail.lines);
     Text::from(lines)
 }
 
-fn settings_compact_item_detail_text(
-    i18n: &I18n,
-    dialog: &SettingsStudioOverlay,
-    _section: &SettingsStudioSection,
-) -> Text<'static> {
+fn settings_compact_item_title_line(item: &SettingsStudioItem, marker: &str, width: u16) -> String {
+    let width = width.max(1) as usize;
+    let marker = sanitize_display_text(marker);
+    let label = sanitize_display_text(item.label.as_str());
+    let value = sanitize_display_text(item.value.as_str());
+    if value.trim().is_empty() || width <= UnicodeWidthStr::width(marker.as_str()) + 4 {
+        return truncate_display_text(format!("{marker}{label}").as_str(), width);
+    }
+
+    let marker_width = UnicodeWidthStr::width(marker.as_str());
+    let max_value_width = width.saturating_mul(36).saturating_div(100).clamp(8, 28);
+    let value = truncate_display_text(value.as_str(), max_value_width);
+    let value_width = UnicodeWidthStr::width(value.as_str());
+    let label_budget = width
+        .saturating_sub(marker_width)
+        .saturating_sub(value_width)
+        .saturating_sub(2)
+        .max(1);
+    let label = truncate_display_text(label.as_str(), label_budget);
+    let label_width = UnicodeWidthStr::width(label.as_str());
+    let gap = width
+        .saturating_sub(marker_width)
+        .saturating_sub(label_width)
+        .saturating_sub(value_width)
+        .max(1);
+    format!("{marker}{label}{}{}", " ".repeat(gap), value)
+}
+
+fn settings_compact_item_subtitle_line(
+    item: &SettingsStudioItem,
+    indent: &str,
+    width: u16,
+) -> String {
+    let width = width.max(1) as usize;
+    let indent = sanitize_display_text(indent);
+    let indent_width = UnicodeWidthStr::width(indent.as_str()).min(width);
+    let budget = width.saturating_sub(indent_width).max(1);
+    format!(
+        "{indent}{}",
+        truncate_display_text(sanitize_display_text(item.detail.as_str()).as_str(), budget)
+    )
+}
+
+fn settings_compact_item_detail_title(i18n: &I18n, dialog: &SettingsStudioOverlay) -> String {
+    let detail_label = ui_text::t(i18n, "overlay-workbench-details");
+    dialog
+        .state
+        .selected_item()
+        .map(|item| format!("{detail_label}: {}", item.label))
+        .unwrap_or(detail_label)
+}
+
+fn settings_compact_item_detail_text(i18n: &I18n, dialog: &SettingsStudioOverlay) -> Text<'static> {
     dialog
         .state
         .selected_item()
         .map(|item| {
             let mut lines = vec![Line::from(sanitize_display_text(item.detail.as_str()))];
-            if let SettingsPickerAction::EditField(field) = &item.action {
-                lines.push(Line::from(sanitize_display_text(i18n.text_args(
-                    "overlay-settings-detail-path",
-                    &crate::fl_args!("path" => field.path),
-                ))));
-            }
-            if !item.value.trim().is_empty() {
+            if let Some(current_value) = item.current_value.as_deref() {
+                lines.push(Line::from(""));
                 lines.push(Line::from(sanitize_display_text(i18n.text_args(
                     "overlay-settings-detail-current",
-                    &crate::fl_args!("value" => item.value.clone()),
+                    &crate::fl_args!("value" => current_value.to_string()),
                 ))));
             }
+            if let Some(effective_value) = item.effective_value.as_deref() {
+                lines.push(Line::from(sanitize_display_text(i18n.text_args(
+                    "overlay-settings-edit-effective-value",
+                    &crate::fl_args!("value" => effective_value.to_string()),
+                ))));
+            }
+            if let Some(path) = item.path.as_deref() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(sanitize_display_text(i18n.text_args(
+                    "overlay-settings-detail-path",
+                    &crate::fl_args!("path" => path.to_string()),
+                ))));
+            }
+            lines.push(Line::from(""));
             lines.push(Line::from(sanitize_display_text(ui_text::t(
                 i18n,
                 "overlay-settings-detail-action",

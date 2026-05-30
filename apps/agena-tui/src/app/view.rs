@@ -26,7 +26,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, ListItem, Paragraph, Wrap},
+    widgets::{Borders, ListItem, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -1426,13 +1426,14 @@ impl App {
         let section_title = current_section
             .map(|section| section.label.clone())
             .unwrap_or_else(|| ui_text::t(&self.i18n, "overlay-settings-default-section-title"));
+        let frame_title = format!("{} / {}", dialog.title.as_str(), section_title.as_str());
 
         let framed = render_framed_surface(
             frame,
             area,
             surface,
             &FramedSurfaceSpec {
-                title: sanitize_display_text(dialog.title.as_str()).into(),
+                title: sanitize_display_text(frame_title).into(),
                 target_width: 150,
                 target_height: 42,
             },
@@ -1441,15 +1442,7 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(12), Constraint::Length(1)])
             .split(framed.inner);
-        let block = Block::default()
-            .title(format!(
-                " {} / {} ",
-                sanitize_display_text(dialog.title.as_str()),
-                sanitize_display_text(section_title.as_str())
-            ))
-            .borders(Borders::ALL);
-        let inner = block.inner(page_rows[0]);
-        frame.render_widget(block, page_rows[0]);
+        let inner = page_rows[0];
 
         let nav_width = inner
             .width

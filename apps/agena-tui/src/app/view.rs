@@ -1614,13 +1614,7 @@ impl App {
         let selected_item = dialog.workbench.list.selected_item();
         let detail_body = selected_item
             .map(|item| {
-                agent_studio_item_detail_text(
-                    &self.i18n,
-                    &dialog.profile,
-                    item,
-                    dialog.storage,
-                    dialog.default_agent_name.as_deref(),
-                )
+                agent_studio_item_detail_text(&self.i18n, &dialog.profile, item, dialog.storage)
             })
             .unwrap_or_else(|| {
                 Text::from(ui_text::t(&self.i18n, "overlay-agent-studio-empty-detail"))

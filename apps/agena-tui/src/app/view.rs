@@ -1451,38 +1451,20 @@ impl App {
         let inner = block.inner(page_rows[0]);
         frame.render_widget(block, page_rows[0]);
 
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Min(8),
-            ])
-            .split(inner);
-        frame.render_widget(
-            Paragraph::new(settings_compact_toolbar_text(&self.i18n, dialog))
-                .wrap(Wrap { trim: false }),
-            rows[0],
-        );
-        frame.render_widget(
-            Paragraph::new(settings_compact_divider(inner.width)).wrap(Wrap { trim: false }),
-            rows[1],
-        );
-
-        let nav_width = rows[2]
+        let nav_width = inner
             .width
             .saturating_mul(3)
             .saturating_div(10)
             .clamp(18, 30)
-            .min(rows[2].width.saturating_sub(1));
+            .min(inner.width.saturating_sub(1));
         let body = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
                 Constraint::Length(nav_width),
-                Constraint::Length(u16::from(rows[2].width > 0)),
+                Constraint::Length(u16::from(inner.width > 0)),
                 Constraint::Min(24),
             ])
-            .split(rows[2]);
+            .split(inner);
         frame.render_widget(
             Paragraph::new(settings_compact_sections_text(
                 &self.i18n,
@@ -2749,39 +2731,6 @@ fn sanitize_display_str(text: &str) -> String {
     sanitize_display_text(text)
 }
 
-fn settings_compact_toolbar_text(i18n: &I18n, dialog: &SettingsStudioOverlay) -> Text<'static> {
-    let items = vec![
-        (
-            ui_text::t(i18n, "overlay-settings-compact-toolbar-sections"),
-            dialog.state.focus() == SettingsStudioFocus::Navigation,
-        ),
-        (
-            ui_text::t(i18n, "overlay-settings-compact-toolbar-open"),
-            dialog.state.focus() == SettingsStudioFocus::Items,
-        ),
-        (
-            ui_text::t(i18n, "overlay-settings-compact-toolbar-refresh"),
-            false,
-        ),
-    ];
-    let mut spans = Vec::new();
-    for (index, (label, selected)) in items.into_iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::raw(" "));
-        }
-        let style = if selected {
-            selection_highlight_style()
-        } else {
-            Style::default()
-        };
-        spans.push(Span::styled(
-            sanitize_display_text(format!("[ {label} ]")),
-            style,
-        ));
-    }
-    Text::from(Line::from(spans))
-}
-
 fn settings_compact_sections_text(
     i18n: &I18n,
     dialog: &SettingsStudioOverlay,
@@ -2991,10 +2940,6 @@ fn settings_compact_visible_range(
         .saturating_sub(max_visible / 2)
         .min(item_count.saturating_sub(max_visible));
     (start, start + max_visible)
-}
-
-fn settings_compact_divider(width: u16) -> String {
-    "─".repeat(width as usize)
 }
 
 fn settings_compact_vertical_divider(height: u16) -> Text<'static> {

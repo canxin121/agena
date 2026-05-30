@@ -25,12 +25,12 @@ transcript-empty-session = このセッションにはまだメッセージが�
 no-session-selected = セッションが選択されていません。
 no-session-selected-hint = Alt+S でセッションを選ぶか、入力欄に入力を始めて新しいセッションを作成してください。
 composer-session-new = 新しいセッション
-composer-placeholder = Agena へ入力。Enter 送信。Alt+Up 履歴。/ コマンド。F3 添付。
+composer-placeholder = Agena へ入力。Alt+Up 履歴。/ コマンド。F3 添付。
 
 status-global = Alt+S セッション | Alt+P コマンド | ? ヘルプ | q/Ctrl+C 終了
 status-sessions = セッション: Alt+S 切替 | /sessions [検索] | /search [検索]
 status-transcript = 記録: j/k スクロール | / 検索 | c 最後をコピー | y コピー | v ページャ
-status-composer = 入力: Enter キュー/送信 | Ctrl+Enter 今すぐ送信 | Alt+Up/Down 履歴 | Shift+Enter 改行 | / コマンド | Tab チャット
+status-composer = 入力: Ctrl+Enter 今すぐ送信 | Ctrl+J 改行 | Alt+Up/Down 履歴 | / コマンド | Tab チャット
 
 help-title = ヘルプ
 help-header = Agena TUI
@@ -69,20 +69,20 @@ overlay-session-search-title = セッション検索
 overlay-session-search-prompt = セッションタイトルを検索
 overlay-transcript-search-title = トランスクリプト検索
 overlay-transcript-search-prompt = 読み込み済みメッセージ内を検索
-overlay-line-footer = Enter で適用 | Esc で閉じる
+overlay-line-footer = 入力して編集
 
 overlay-attach-title = ファイルを添付
 overlay-attach-prompt = パスまたは検索語を入力してください。Enter で選択中のファイルを添付します。
 overlay-attach-no-match = 一致するファイルがありません
 overlay-attach-matches = 一致結果
-overlay-attach-footer = Enter で添付 | Tab で選択パスを入力 | Up/Down で移動 | Esc で閉じる
+overlay-attach-footer = Tab で選択パスを入力
 
 overlay-user-input-title = 保留中のユーザー入力
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = カスタム値を許可
 overlay-user-input-reply-format = 返信形式: question_id=value;other_id=value1,value2
 overlay-user-input-cancel-hint = Ctrl+D でリクエストをキャンセル
-overlay-user-input-footer = Enter で送信 | Esc で閉じる | Ctrl+D でキャンセル
+overlay-user-input-footer = Ctrl+D でキャンセル
 
 flash-terminal-event-error = 端末イベントエラー: {$error}
 flash-created-session = セッションを作成しました {$title}

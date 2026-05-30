@@ -25,12 +25,12 @@ transcript-empty-session = Aucun message dans cette session pour le moment.
 no-session-selected = Aucune session selectionnee.
 no-session-selected-hint = Appuyez sur Alt+S pour choisir une session, ou commencez a saisir dans la zone de composition pour en creer une.
 composer-session-new = nouvelle session
-composer-placeholder = Message pour Agena. Enter envoie. Alt+Up historique. / commandes. F3 fichier.
+composer-placeholder = Message pour Agena. Alt+Up historique. / commandes. F3 fichier.
 
 status-global = Alt+S sessions | Alt+P commandes | ? aide | q/Ctrl+C quitter
 status-sessions = Sessions: Alt+S selecteur | /sessions [recherche] | /search [recherche]
 status-transcript = Transcript: j/k defile | / cherche | c copie dernier | y copie | v pager
-status-composer = Saisie: Enter file/envoie | Ctrl+Enter envoie maintenant | Alt+Up/Down historique | Shift+Enter nouvelle ligne | / commandes | Tab chat
+status-composer = Saisie: Ctrl+Enter envoie maintenant | Ctrl+J nouvelle ligne | Alt+Up/Down historique | / commandes | Tab chat
 
 help-title = Aide
 help-header = Agena TUI
@@ -69,20 +69,20 @@ overlay-session-search-title = Recherche de session
 overlay-session-search-prompt = Rechercher dans les titres de session
 overlay-transcript-search-title = Recherche du transcript
 overlay-transcript-search-prompt = Rechercher dans les messages charges
-overlay-line-footer = Enter applique | Esc ferme
+overlay-line-footer = Saisissez pour modifier
 
 overlay-attach-title = Joindre un fichier
 overlay-attach-prompt = Saisissez un chemin ou un terme de recherche. Enter joint le fichier selectionne.
 overlay-attach-no-match = Aucun fichier correspondant
 overlay-attach-matches = Correspondances
-overlay-attach-footer = Enter joindre | Tab remplit le chemin | Up/Down deplace | Esc ferme
+overlay-attach-footer = Tab remplit le chemin
 
 overlay-user-input-title = Entree utilisateur en attente
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = valeur personnalisee autorisee
 overlay-user-input-reply-format = Format de reponse : question_id=value;other_id=value1,value2
 overlay-user-input-cancel-hint = Ctrl+D annule la demande
-overlay-user-input-footer = Enter envoyer | Esc fermer | Ctrl+D annuler
+overlay-user-input-footer = Ctrl+D annuler
 
 flash-terminal-event-error = erreur d'evenement terminal : {$error}
 flash-created-session = session creee {$title}

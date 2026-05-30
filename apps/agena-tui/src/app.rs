@@ -24029,8 +24029,8 @@ mod tests {
     fn agent_editor_messages_follow_locale() {
         let i18n = I18n::resolve(Some("zh-CN"), None);
 
-        assert_eq!(editor_save_footer(&i18n, false), "Enter 保存 | Esc 取消");
-        assert_eq!(editor_save_footer(&i18n, true), "Ctrl+S 保存 | Esc 取消");
+        assert_eq!(editor_save_footer(&i18n, false), "输入以编辑");
+        assert_eq!(editor_save_footer(&i18n, true), "Ctrl+S 保存");
         assert_eq!(
             agent_studio_field_label(&i18n, AgentStudioField::DefaultModel),
             "默认 Model"

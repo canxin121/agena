@@ -25,12 +25,12 @@ transcript-empty-session = In dieser Sitzung gibt es noch keine Nachrichten.
 no-session-selected = Keine Sitzung ausgewaehlt.
 no-session-selected-hint = Alt+S waehlt eine Sitzung, oder tippen Sie direkt in die Eingabe, um eine neue Sitzung zu erstellen.
 composer-session-new = neue Sitzung
-composer-placeholder = Nachricht an Agena. Enter sendet. Alt+Up Verlauf. / Befehle. F3 Datei.
+composer-placeholder = Nachricht an Agena. Alt+Up Verlauf. / Befehle. F3 Datei.
 
 status-global = Alt+S Sitzungen | Alt+P Befehle | ? Hilfe | q/Ctrl+C beenden
 status-sessions = Sitzungen: Alt+S Wechsler | /sessions [Suche] | /search [Suche]
 status-transcript = Transkript: j/k scrollen | / suchen | c letzte kopieren | y kopieren | v Pager
-status-composer = Eingabe: Enter einreihen/senden | Ctrl+Enter jetzt senden | Alt+Up/Down Verlauf | Shift+Enter neue Zeile | / Befehle | Tab Chat
+status-composer = Eingabe: Ctrl+Enter jetzt senden | Ctrl+J neue Zeile | Alt+Up/Down Verlauf | / Befehle | Tab Chat
 
 help-title = Hilfe
 help-header = Agena TUI
@@ -69,20 +69,20 @@ overlay-session-search-title = Sitzungssuche
 overlay-session-search-prompt = Sitzungstitel durchsuchen
 overlay-transcript-search-title = Transkriptsuche
 overlay-transcript-search-prompt = Innerhalb geladener Nachrichten suchen
-overlay-line-footer = Enter anwenden | Esc schliessen
+overlay-line-footer = Tippen zum Bearbeiten
 
 overlay-attach-title = Datei anhaengen
 overlay-attach-prompt = Geben Sie einen Pfad oder Suchbegriff ein. Enter haengt die ausgewaehlte Datei an.
 overlay-attach-no-match = Keine passenden Dateien
 overlay-attach-matches = Treffer
-overlay-attach-footer = Enter anhaengen | Tab uebernimmt den Pfad | Up/Down bewegen | Esc schliessen
+overlay-attach-footer = Tab uebernimmt den Pfad
 
 overlay-user-input-title = Ausstehende Benutzereingabe
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = benutzerdefinierter Wert erlaubt
 overlay-user-input-reply-format = Antwortformat: question_id=value;other_id=value1,value2
 overlay-user-input-cancel-hint = Ctrl+D bricht die Anfrage ab
-overlay-user-input-footer = Enter senden | Esc schliessen | Ctrl+D abbrechen
+overlay-user-input-footer = Ctrl+D abbrechen
 
 flash-terminal-event-error = Terminalereignisfehler: {$error}
 flash-created-session = Sitzung erstellt {$title}

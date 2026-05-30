@@ -25,12 +25,12 @@ transcript-empty-session = Todavia no hay mensajes en esta sesion.
 no-session-selected = No hay ninguna sesion seleccionada.
 no-session-selected-hint = Pulse Alt+S para elegir una sesion, o empiece a escribir en el editor para crear una.
 composer-session-new = nueva sesion
-composer-placeholder = Mensaje para Agena. Enter envia. Alt+Up historial. / comandos. F3 archivo.
+composer-placeholder = Mensaje para Agena. Alt+Up historial. / comandos. F3 archivo.
 
 status-global = Alt+S sesiones | Alt+P comandos | ? ayuda | q/Ctrl+C salir
 status-sessions = Sesiones: Alt+S selector | /sessions [busqueda] | /search [busqueda]
 status-transcript = Transcripcion: j/k desplaza | / busca | c copia ultima | y copia | v visor
-status-composer = Entrada: Enter cola/envia | Ctrl+Enter envia ahora | Alt+Up/Down historial | Shift+Enter nueva linea | / comandos | Tab chat
+status-composer = Entrada: Ctrl+Enter envia ahora | Ctrl+J nueva linea | Alt+Up/Down historial | / comandos | Tab chat
 
 help-title = Ayuda
 help-header = Agena TUI
@@ -69,20 +69,20 @@ overlay-session-search-title = Busqueda de sesiones
 overlay-session-search-prompt = Buscar en los titulos de sesion
 overlay-transcript-search-title = Busqueda en la transcripcion
 overlay-transcript-search-prompt = Buscar dentro de los mensajes cargados
-overlay-line-footer = Enter aplica | Esc cierra
+overlay-line-footer = Escriba para editar
 
 overlay-attach-title = Adjuntar archivo
 overlay-attach-prompt = Escriba una ruta o termino de busqueda. Enter adjunta el archivo seleccionado.
 overlay-attach-no-match = No hay archivos coincidentes
 overlay-attach-matches = Coincidencias
-overlay-attach-footer = Enter adjunta | Tab rellena la ruta seleccionada | Up/Down mueve | Esc cierra
+overlay-attach-footer = Tab rellena la ruta seleccionada
 
 overlay-user-input-title = Entrada de usuario pendiente
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = valor personalizado permitido
 overlay-user-input-reply-format = Formato de respuesta: question_id=value;other_id=value1,value2
 overlay-user-input-cancel-hint = Ctrl+D cancela la solicitud
-overlay-user-input-footer = Enter enviar | Esc cerrar | Ctrl+D cancelar
+overlay-user-input-footer = Ctrl+D cancelar
 
 flash-terminal-event-error = error de evento del terminal: {$error}
 flash-created-session = sesion creada {$title}

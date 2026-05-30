@@ -942,7 +942,46 @@ struct SettingsStudioItem {
     label: String,
     value: String,
     detail: String,
+    path: Option<String>,
+    current_value: Option<String>,
+    effective_value: Option<String>,
     action: SettingsPickerAction,
+}
+
+impl SettingsStudioItem {
+    fn new(
+        label: impl Into<String>,
+        value: impl Into<String>,
+        detail: impl Into<String>,
+        action: SettingsPickerAction,
+    ) -> Self {
+        let value = value.into();
+        let current_value = (!value.trim().is_empty()).then(|| value.clone());
+        Self {
+            label: label.into(),
+            value,
+            detail: detail.into(),
+            path: None,
+            current_value,
+            effective_value: None,
+            action,
+        }
+    }
+
+    fn with_path(mut self, path: impl Into<String>) -> Self {
+        self.path = Some(path.into());
+        self
+    }
+
+    fn with_current_value(mut self, value: impl Into<String>) -> Self {
+        self.current_value = Some(value.into());
+        self
+    }
+
+    fn with_effective_value(mut self, value: impl Into<String>) -> Self {
+        self.effective_value = Some(value.into());
+        self
+    }
 }
 
 type SettingsStudioFocus = SectionedListFocus;
@@ -9009,37 +9048,40 @@ impl App {
         let harness_items = settings_studio_harness_items(&self.i18n, &sources);
         let model_catalog_items = settings_studio_model_catalog_items(&self.i18n, &model_catalog);
         let file_items = settings_studio_file_items(&self.i18n, &sources);
-        let permission_items = vec![SettingsStudioItem {
-            label: ui_text::t(&self.i18n, "settings-permission-global-label"),
-            value: permission_override_summary(&self.i18n, &global_permission),
-            detail: ui_text::t(&self.i18n, "settings-permission-global-detail"),
-            action: SettingsPickerAction::OpenGlobalPermissionWorkbench,
-        }];
+        let permission_items = vec![
+            SettingsStudioItem::new(
+                ui_text::t(&self.i18n, "settings-permission-global-label"),
+                permission_override_summary(&self.i18n, &global_permission),
+                ui_text::t(&self.i18n, "settings-permission-global-detail"),
+                SettingsPickerAction::OpenGlobalPermissionWorkbench,
+            )
+            .with_path("permission"),
+        ];
         let mut runtime_rule_items = Vec::new();
         if let Some(current_session_permission) = current_session_permission.as_ref() {
-            runtime_rule_items.push(SettingsStudioItem {
-                label: ui_text::t(&self.i18n, "settings-permission-current-label"),
-                value: permission_settings_value(
+            runtime_rule_items.push(SettingsStudioItem::new(
+                ui_text::t(&self.i18n, "settings-permission-current-label"),
+                permission_settings_value(
                     &self.i18n,
                     &current_session_permission.permission,
                     &current_session_permission.effective_permission,
                 ),
-                detail: self.i18n.text_args(
+                self.i18n.text_args(
                     "settings-permission-current-detail",
                     &crate::fl_args!("session" => current_session_permission.session_title.clone()),
                 ),
-                action: SettingsPickerAction::OpenCurrentSessionPermissionWorkbench,
-            });
+                SettingsPickerAction::OpenCurrentSessionPermissionWorkbench,
+            ));
         }
-        runtime_rule_items.push(SettingsStudioItem {
-            label: ui_text::t(&self.i18n, "overlay-settings-manage-permission-rules"),
-            value: permission_rule_count.to_string(),
-            detail: ui_text::t(
+        runtime_rule_items.push(SettingsStudioItem::new(
+            ui_text::t(&self.i18n, "overlay-settings-manage-permission-rules"),
+            permission_rule_count.to_string(),
+            ui_text::t(
                 &self.i18n,
                 "overlay-settings-manage-permission-rules-detail",
             ),
-            action: SettingsPickerAction::OpenPermissionRules,
-        });
+            SettingsPickerAction::OpenPermissionRules,
+        ));
         let agent_count = agents.len();
         let mut sections = vec![
             SettingsStudioSection {
@@ -15552,16 +15594,21 @@ fn settings_studio_field_items(
                 get_json_path(&sources.file, Some(field.path)).unwrap_or(JsonValue::Null);
             let effective_value =
                 get_json_path(&sources.effective, Some(field.path)).unwrap_or(JsonValue::Null);
-            SettingsStudioItem {
-                label: settings_field_display_label(i18n, *field),
-                value: format_setting_value_inline(&effective_value),
-                detail: format!(
-                    "{} / {}",
-                    settings_field_display_description(i18n, *field),
-                    format_setting_field_summary(i18n, &file_value, &effective_value)
-                ),
-                action: SettingsPickerAction::EditField(*field),
-            }
+            let effective_summary = format_setting_value_inline(&effective_value);
+            let current_summary = if file_value.is_null() {
+                ui_text::t(i18n, "settings-source-unset")
+            } else {
+                format_setting_value_inline(&file_value)
+            };
+            SettingsStudioItem::new(
+                settings_field_display_label(i18n, *field),
+                effective_summary.clone(),
+                settings_field_display_description(i18n, *field),
+                SettingsPickerAction::EditField(*field),
+            )
+            .with_path(field.path)
+            .with_current_value(current_summary)
+            .with_effective_value(effective_summary)
         })
         .collect()
 }
@@ -15583,17 +15630,21 @@ fn settings_studio_config_path_item(
 ) -> SettingsStudioItem {
     let file_value = get_json_path(&sources.file, Some(path)).unwrap_or(JsonValue::Null);
     let effective_value = get_json_path(&sources.effective, Some(path)).unwrap_or(JsonValue::Null);
-    SettingsStudioItem {
-        label: settings_config_path_display_label(i18n, path),
-        value: format_setting_value_inline(&effective_value),
-        detail: format!(
-            "{} / {} / {}",
-            ui_text::t(i18n, "settings-config-open-file-detail"),
-            path,
-            format_setting_field_summary(i18n, &file_value, &effective_value)
-        ),
-        action: SettingsPickerAction::OpenConfigFile,
-    }
+    let effective_summary = format_setting_value_inline(&effective_value);
+    let current_summary = if file_value.is_null() {
+        ui_text::t(i18n, "settings-source-unset")
+    } else {
+        format_setting_value_inline(&file_value)
+    };
+    SettingsStudioItem::new(
+        settings_config_path_display_label(i18n, path),
+        effective_summary.clone(),
+        ui_text::t(i18n, "settings-config-open-file-detail"),
+        SettingsPickerAction::OpenConfigFile,
+    )
+    .with_path(path)
+    .with_current_value(current_summary)
+    .with_effective_value(effective_summary)
 }
 
 fn settings_config_path_display_label(i18n: &I18n, path: &str) -> String {
@@ -15620,30 +15671,32 @@ fn settings_studio_runtime_items(
         .map(|model| model.provider_id.to_string())
         .unwrap_or_else(|| ui_text::t(i18n, "value-default"));
     let mut items = vec![
-        SettingsStudioItem {
-            label: ui_text::t(i18n, "settings-runtime-provider-override-label"),
-            value: runtime_provider,
-            detail: ui_text::t(i18n, "settings-runtime-provider-override-detail"),
-            action: SettingsPickerAction::OpenRuntimeProviderOverride,
-        },
-        SettingsStudioItem {
-            label: ui_text::t(i18n, "settings-runtime-model-override-label"),
-            value: runtime_model,
-            detail: ui_text::t(i18n, "settings-runtime-model-override-detail"),
-            action: SettingsPickerAction::OpenRuntimeModelOverride,
-        },
-        SettingsStudioItem {
-            label: ui_text::t(i18n, "settings-runtime-clear-stack-label"),
-            value: ui_text::t(i18n, "value-reset"),
-            detail: ui_text::t(i18n, "settings-runtime-clear-stack-detail"),
-            action: SettingsPickerAction::ClearRuntimeModelStack,
-        },
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-runtime-provider-override-label"),
+            runtime_provider,
+            ui_text::t(i18n, "settings-runtime-provider-override-detail"),
+            SettingsPickerAction::OpenRuntimeProviderOverride,
+        ),
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-runtime-model-override-label"),
+            runtime_model,
+            ui_text::t(i18n, "settings-runtime-model-override-detail"),
+            SettingsPickerAction::OpenRuntimeModelOverride,
+        ),
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-runtime-clear-stack-label"),
+            ui_text::t(i18n, "value-reset"),
+            ui_text::t(i18n, "settings-runtime-clear-stack-detail"),
+            SettingsPickerAction::ClearRuntimeModelStack,
+        ),
     ];
-    items.extend(RUNTIME_SETTINGS.iter().map(|field| SettingsStudioItem {
-        label: runtime_setting_display_label(i18n, *field),
-        value: run_options.runtime_setting_summary(i18n, *field),
-        detail: runtime_setting_display_description(i18n, *field),
-        action: SettingsPickerAction::EditRuntimeSetting(*field),
+    items.extend(RUNTIME_SETTINGS.iter().map(|field| {
+        SettingsStudioItem::new(
+            runtime_setting_display_label(i18n, *field),
+            run_options.runtime_setting_summary(i18n, *field),
+            runtime_setting_display_description(i18n, *field),
+            SettingsPickerAction::EditRuntimeSetting(*field),
+        )
     }));
     items
 }
@@ -15695,46 +15748,39 @@ fn settings_studio_plugin_items(
     let tool_override_count =
         settings_studio_plugins_count(sources, "plugins.policy.tool_presentation.tools");
     vec![
-        SettingsStudioItem {
-            label: ui_text::t(i18n, "settings-plugin-workbench-label"),
-            value: "/plugins".to_string(),
-            detail: ui_text::t(i18n, "settings-plugin-workbench-detail"),
-            action: SettingsPickerAction::OpenPluginWorkbench,
-        },
-        SettingsStudioItem {
-            label: ui_text::t(i18n, "settings-plugin-default-mode-label"),
-            value: settings_studio_tool_description_mode_label(i18n, default_mode.as_str()),
-            detail: format!(
-                "{} / {}",
-                ui_text::t(i18n, "settings-plugin-default-mode-detail"),
-                PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH
-            ),
-            action: SettingsPickerAction::ToggleToolDescriptionMode,
-        },
-        SettingsStudioItem {
-            label: ui_text::t(i18n, "settings-plugin-per-plugin-label"),
-            value: i18n.text_args(
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-plugin-workbench-label"),
+            "/plugins",
+            ui_text::t(i18n, "settings-plugin-workbench-detail"),
+            SettingsPickerAction::OpenPluginWorkbench,
+        ),
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-plugin-default-mode-label"),
+            settings_studio_tool_description_mode_label(i18n, default_mode.as_str()),
+            ui_text::t(i18n, "settings-plugin-default-mode-detail"),
+            SettingsPickerAction::ToggleToolDescriptionMode,
+        )
+        .with_path(PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH),
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-plugin-per-plugin-label"),
+            i18n.text_args(
                 "settings-plugin-override-count",
                 &crate::fl_args!("count" => plugin_override_count as i64),
             ),
-            detail: format!(
-                "{} / {PLUGIN_TOOL_PRESENTATION_PATH}.plugins",
-                ui_text::t(i18n, "settings-plugin-per-plugin-detail"),
-            ),
-            action: SettingsPickerAction::OpenConfigFile,
-        },
-        SettingsStudioItem {
-            label: ui_text::t(i18n, "settings-plugin-per-tool-label"),
-            value: i18n.text_args(
+            ui_text::t(i18n, "settings-plugin-per-plugin-detail"),
+            SettingsPickerAction::OpenConfigFile,
+        )
+        .with_path(format!("{PLUGIN_TOOL_PRESENTATION_PATH}.plugins")),
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-plugin-per-tool-label"),
+            i18n.text_args(
                 "settings-plugin-override-count",
                 &crate::fl_args!("count" => tool_override_count as i64),
             ),
-            detail: format!(
-                "{} / {PLUGIN_TOOL_PRESENTATION_PATH}.tools",
-                ui_text::t(i18n, "settings-plugin-per-tool-detail"),
-            ),
-            action: SettingsPickerAction::OpenConfigFile,
-        },
+            ui_text::t(i18n, "settings-plugin-per-tool-detail"),
+            SettingsPickerAction::OpenConfigFile,
+        )
+        .with_path(format!("{PLUGIN_TOOL_PRESENTATION_PATH}.tools")),
     ]
 }
 
@@ -15925,9 +15971,9 @@ fn settings_studio_agent_browser_item(
     agent_count: usize,
     default_agent: Option<&str>,
 ) -> SettingsStudioItem {
-    SettingsStudioItem {
-        label: ui_text::t(i18n, "settings-agent-browser-label"),
-        value: match default_agent {
+    SettingsStudioItem::new(
+        ui_text::t(i18n, "settings-agent-browser-label"),
+        match default_agent {
             Some(default) => i18n.text_args(
                 "settings-agent-browser-value-default",
                 &crate::fl_args!(
@@ -15940,9 +15986,9 @@ fn settings_studio_agent_browser_item(
                 &crate::fl_args!("count" => agent_count as i64),
             ),
         },
-        detail: ui_text::t(i18n, "settings-agent-browser-detail"),
-        action: SettingsPickerAction::OpenAgentList,
-    }
+        ui_text::t(i18n, "settings-agent-browser-detail"),
+        SettingsPickerAction::OpenAgentList,
+    )
 }
 
 fn agent_picker_item(
@@ -18093,42 +18139,46 @@ fn settings_studio_provider_workbench_item(
     i18n: &I18n,
     providers: &[ProviderSummaryResource],
 ) -> SettingsStudioItem {
-    SettingsStudioItem {
-        label: ui_text::t(i18n, "settings-provider-workbench-label"),
-        value: i18n.text_args(
+    SettingsStudioItem::new(
+        ui_text::t(i18n, "settings-provider-workbench-label"),
+        i18n.text_args(
             "settings-provider-workbench-value",
             &crate::fl_args!("count" => providers.len() as i64),
         ),
-        detail: ui_text::t(i18n, "settings-provider-workbench-detail"),
-        action: SettingsPickerAction::OpenProviderList,
-    }
+        ui_text::t(i18n, "settings-provider-workbench-detail"),
+        SettingsPickerAction::OpenProviderList,
+    )
 }
 
 fn settings_studio_model_catalog_items(
     i18n: &I18n,
     response: &ModelCatalogListResponse,
 ) -> Vec<SettingsStudioItem> {
-    vec![SettingsStudioItem {
-        label: ui_text::t(i18n, "settings-model-catalog-open-label"),
-        value: response.summary.model_count.to_string(),
-        detail: ui_text::t(i18n, "settings-model-catalog-open-detail"),
-        action: SettingsPickerAction::OpenModelCatalogWorkbench,
-    }]
+    vec![SettingsStudioItem::new(
+        ui_text::t(i18n, "settings-model-catalog-open-label"),
+        response.summary.model_count.to_string(),
+        ui_text::t(i18n, "settings-model-catalog-open-detail"),
+        SettingsPickerAction::OpenModelCatalogWorkbench,
+    )]
 }
 
 fn settings_studio_file_items(i18n: &I18n, sources: &ConfigJsonSources) -> Vec<SettingsStudioItem> {
-    vec![SettingsStudioItem {
-        label: ui_text::t(i18n, "settings-files-open-config-label"),
-        value: if sources.config_found {
-            ui_text::t(i18n, "settings-files-open-config-present")
-        } else {
-            ui_text::t(i18n, "settings-files-open-config-create")
-        },
-        detail: sources.config_path.display().to_string(),
-        action: SettingsPickerAction::OpenConfigFile,
-    }]
+    vec![
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-files-open-config-label"),
+            if sources.config_found {
+                ui_text::t(i18n, "settings-files-open-config-present")
+            } else {
+                ui_text::t(i18n, "settings-files-open-config-create")
+            },
+            sources.config_path.display().to_string(),
+            SettingsPickerAction::OpenConfigFile,
+        )
+        .with_path(sources.config_path.display().to_string()),
+    ]
 }
 
+#[cfg(test)]
 fn format_setting_field_summary(
     i18n: &I18n,
     file_value: &JsonValue,
@@ -24252,7 +24302,14 @@ mod tests {
         assert!(labels.contains(&"Tool Description Overrides"));
         let rendered_items = items
             .iter()
-            .map(|item| format!("{} {}", item.label, item.detail))
+            .map(|item| {
+                format!(
+                    "{} {} {}",
+                    item.label,
+                    item.detail,
+                    item.path.as_deref().unwrap_or_default()
+                )
+            })
             .collect::<Vec<_>>();
         assert!(
             rendered_items

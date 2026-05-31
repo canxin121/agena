@@ -389,6 +389,17 @@ pub struct SessionGoalResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionPlanResource {
+    pub slug: String,
+    pub file_path: String,
+    pub started_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preview_lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionResource {
     pub id: i64,
     pub parent_id: Option<i64>,
@@ -537,6 +548,8 @@ pub struct SessionExecutionResource {
     pub pending_user_input_requests: Vec<UserInputRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub goal: Option<SessionGoalResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan: Option<SessionPlanResource>,
     pub usage: SessionUsageResource,
 }
 

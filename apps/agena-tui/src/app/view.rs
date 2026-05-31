@@ -902,6 +902,8 @@ impl App {
     }
 
     fn render_permission_overlay(&self, frame: &mut Frame, area: Rect, dialog: &PermissionOverlay) {
+        let is_plan_approval =
+            dialog.plan.is_some() && permission_request_is_plan_approval(&dialog.request);
         let body_lines = permission_overlay_body_lines(&self.i18n, dialog);
         let choices = permission_overlay_choices(&self.i18n);
         let items = choices
@@ -909,10 +911,15 @@ impl App {
             .map(|label| ListItem::new(label.clone()))
             .collect::<Vec<_>>();
         let body = Text::from(body_lines);
+        let footer_base_key = if is_plan_approval {
+            "overlay-plan-approval-footer"
+        } else {
+            "overlay-permission-footer"
+        };
         let footer = Text::from(self.i18n.text_args(
             "overlay-permission-footer-edit-rule",
             &crate::fl_args!(
-                "footer" => ui_text::t(&self.i18n, "overlay-permission-footer")
+                "footer" => ui_text::t(&self.i18n, footer_base_key)
             ),
         ));
         render_decision_dialog(
@@ -920,15 +927,23 @@ impl App {
             area,
             SurfaceMode::Overlay,
             &DecisionDialogSpec::new(
-                ui_text::t(&self.i18n, "overlay-permission-title").into(),
+                ui_text::t(
+                    &self.i18n,
+                    if is_plan_approval {
+                        "overlay-plan-approval-title"
+                    } else {
+                        "overlay-permission-title"
+                    },
+                )
+                .into(),
                 &body,
                 items.as_slice(),
                 &footer,
-                84,
+                if is_plan_approval { 92 } else { 84 },
                 selection_highlight_style(),
                 ">> ".into(),
             )
-            .with_body_height_bounds((4, 14))
+            .with_body_height_bounds(if is_plan_approval { (6, 18) } else { (4, 14) })
             .with_list_state(Some(dialog.selection.selected), 1, (4, 8))
             .with_footer_height_bounds((1, 1)),
         );
@@ -3681,6 +3696,48 @@ fn provider_studio_detail_text_spec() -> DetailTextSpec<'static> {
 
 fn permission_overlay_body_lines(i18n: &I18n, dialog: &PermissionOverlay) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
+    if let Some(plan) = dialog
+        .plan
+        .as_ref()
+        .filter(|_| permission_request_is_plan_approval(&dialog.request))
+    {
+        lines.push(Line::from(Span::styled(
+            ui_text::t(i18n, "overlay-plan-approval-summary"),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
+        let mut facts = vec![i18n.text_args(
+            "overlay-plan-slug",
+            &crate::fl_args!("slug" => plan.slug.as_str()),
+        )];
+        if let Some(step_count) = plan.step_count
+            && step_count > 0
+        {
+            facts.push(i18n.text_args(
+                "overlay-plan-steps",
+                &crate::fl_args!("steps" => step_count as i64),
+            ));
+        }
+        lines.push(Line::from(join_inline_segments(facts)));
+        lines.push(Line::from(Span::styled(
+            sanitize_display_text(i18n.text_args(
+                "overlay-plan-path",
+                &crate::fl_args!("path" => plan.file_path.as_str()),
+            )),
+            Style::default().fg(Color::DarkGray),
+        )));
+        if !plan.preview_lines.is_empty() {
+            lines.push(Line::from(Span::styled(
+                ui_text::t(i18n, "overlay-plan-preview-heading"),
+                Style::default().add_modifier(Modifier::BOLD),
+            )));
+            for line in &plan.preview_lines {
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", sanitize_display_text(line)),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        }
+    }
     lines.push(Line::from(Span::styled(
         sanitize_display_text(i18n.text_args(
             "overlay-permission-request-id",

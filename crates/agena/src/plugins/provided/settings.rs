@@ -1,4 +1,4 @@
-//! `agena.settings` plugin: read and edit Agena's active `config.json`.
+//! `agena.settings` plugin: read and edit Agena's active `agena.json`.
 
 use std::{
     path::PathBuf,
@@ -112,7 +112,7 @@ fn settings_config_schema() -> JsonValue {
         (
             "/properties/edits",
             "Edits",
-            "Defaults applied when mutating config.json through set, delete, or patch.",
+            "Defaults applied when mutating agena.json through set, delete, or patch.",
         ),
         (
             "/properties/edits/properties/validate_by_default",
@@ -197,9 +197,9 @@ struct SettingsPatchToolInput {
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "settings",
-    description = "Settings command. Set action to get, list, validate, set, delete, or patch. Edits validate config.json and reload by default.",
+    description = "Settings command. Set action to get, list, validate, set, delete, or patch. Edits validate agena.json and reload by default.",
     summary = "Read, validate, or edit runtime settings.",
-    help = "Use action `get` to inspect one setting path, `list` to enumerate settings, `validate` to validate config text without applying it, and `set`, `delete`, or `patch` to mutate config.json. For effective reads, prefer explicit `scope = config|meta` with a relative `path` instead of relying on prefixed paths like `config.foo`.",
+    help = "Use action `get` to inspect one setting path, `list` to enumerate settings, `validate` to validate config text without applying it, and `set`, `delete`, or `patch` to mutate agena.json. For effective reads, prefer explicit `scope = config|meta` with a relative `path` instead of relying on prefixed paths like `config.foo`.",
     tags(
         ToolTag::ReadOnly,
         ToolTag::Mutating,
@@ -515,7 +515,7 @@ impl SettingsPlugin {
 impl Plugin for SettingsPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder(SETTINGS_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
-            .description("Read and edit Agena runtime settings in config.json.")
+            .description("Read and edit Agena runtime settings in agena.json.")
             .hooks(HookSubscription::TOOL_INVOKE)
             .config_schema(settings_config_schema())
             .tools(tools())

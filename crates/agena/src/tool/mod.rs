@@ -3754,7 +3754,9 @@ mod tests {
 
         assert!(path_actions.contains(&(
             "write".to_string(),
-            super::normalize_path_for_display(&workspace.root.join(".agena/plans")),
+            super::normalize_path_for_display(
+                &crate::project_paths::project_state_dir(&workspace.root).join("plans"),
+            ),
         )));
     }
 
@@ -3783,10 +3785,16 @@ mod tests {
                 _ => None,
             })
             .collect::<std::collections::HashSet<_>>();
-        assert!(named_paths.contains(&(
-            "write".to_string(),
-            super::normalize_path_for_display(&workspace.root.join(".agena/worktrees/demo"),),
-        )));
+        assert!(
+            named_paths.contains(&(
+                "write".to_string(),
+                super::normalize_path_for_display(
+                    &crate::project_paths::project_state_dir(&workspace.root)
+                        .join("worktrees")
+                        .join("demo"),
+                ),
+            ))
+        );
 
         let outside = workspace.root.with_file_name(format!(
             "{}-existing-worktree",
@@ -4431,7 +4439,9 @@ mod tests {
         registry.write().insert(
             7,
             PlanState {
-                file_path: workspace.root.join(".agena/plans/test.md"),
+                file_path: crate::project_paths::project_state_dir(&workspace.root)
+                    .join("plans")
+                    .join("test.md"),
                 slug: "test".to_string(),
                 started_at: chrono::Utc::now(),
             },
@@ -4479,7 +4489,10 @@ mod tests {
                 &ToolPayloadInput::ApplyPatch(ApplyPatchToolInput {
                     patch: format!(
                         "*** Begin Patch\n*** Update File: {}\n@@\n-# Plan\n+# Updated Plan\n*** End Patch",
-                        workspace.root.join(".agena/plans/test.md").display()
+                        crate::project_paths::project_state_dir(&workspace.root)
+                            .join("plans")
+                            .join("test.md")
+                            .display()
                     ),
                 })
                 .into_invocation(),
@@ -4524,7 +4537,9 @@ mod tests {
         registry.write().insert(
             42,
             PlanState {
-                file_path: workspace.root.join(".agena/plans/x.md"),
+                file_path: crate::project_paths::project_state_dir(&workspace.root)
+                    .join("plans")
+                    .join("x.md"),
                 slug: "x".to_string(),
                 started_at: chrono::Utc::now(),
             },

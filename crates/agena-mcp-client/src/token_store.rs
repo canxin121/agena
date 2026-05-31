@@ -1,7 +1,7 @@
 //! File-backed token store for MCP server credentials.
 //!
 //! Persists `(server_name → bearer_token)` to a JSON file (default
-//! `~/.agena/mcp-tokens.json`) so users don't have to keep the token in
+//! `~/agena/mcp-tokens.json`) so users don't have to keep the token in
 //! the agena config or an env var. Implements [`crate::TokenStore`] so
 //! [`crate::McpConnectionManager`] can resolve `HttpAuth::BearerFromStore`
 //! with one line of wiring.
@@ -9,7 +9,7 @@
 //! Storage is a flat object: `{ "<server>": { "bearer": "<token>" } }`.
 //! No keyring integration, no per-account multi-tenancy — that lives in a
 //! follow-up. The on-disk file is `chmod 600` on Unix so a stray
-//! `cat ~/.agena/mcp-tokens.json` from another user fails closed.
+//! `cat ~/agena/mcp-tokens.json` from another user fails closed.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -22,7 +22,7 @@ use thiserror::Error;
 
 use crate::TokenStore;
 
-const DEFAULT_RELATIVE_PATH: &str = ".agena/mcp-tokens.json";
+const DEFAULT_RELATIVE_PATH: &str = "agena/mcp-tokens.json";
 
 #[derive(Debug, Error)]
 pub enum TokenStoreError {
@@ -53,7 +53,7 @@ pub struct FileTokenStore {
 }
 
 impl FileTokenStore {
-    /// Open or create the token file at the default `~/.agena/mcp-tokens.json`
+    /// Open or create the token file at the default `~/agena/mcp-tokens.json`
     /// path. Returns Ok with an empty store if the file does not exist.
     pub fn open_default() -> Result<Self, TokenStoreError> {
         Self::open(&default_path())

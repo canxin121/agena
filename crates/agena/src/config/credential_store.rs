@@ -7,13 +7,14 @@ use std::{
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::{
-    config::{ConfigLoader, LoadConfigRequest, ProcessEnvironment},
+    config::ProcessEnvironment,
     error::AppError,
     provider::auth::{AuthData, AuthStore},
 };
 
 use super::{
     ProviderApiAuthConfig, ProviderAuthConfig, ProviderGitlabAuthConfig, ResolvedProviderConfig,
+    raw::{RawConfig, RawConfigFile},
 };
 
 #[derive(Debug, Clone)]
@@ -342,12 +343,23 @@ pub fn resolve_provider_device_auth_target(
 }
 
 fn load_provider_configs(path: &Path) -> Result<HashMap<String, ResolvedProviderConfig>, AppError> {
-    let loader = ConfigLoader::new(ProcessEnvironment);
-    let resolution = loader.load(&LoadConfigRequest {
-        config_path: Some(path.to_path_buf()),
-        ..LoadConfigRequest::default()
-    })?;
-    Ok(resolution.config.providers.into_iter().collect())
+    let env = ProcessEnvironment;
+    let file_state = RawConfigFile::read(path)?;
+    let env_overlay = RawConfig::from_env(&env)?;
+
+    let mut merged = RawConfig::default();
+    if file_state.found {
+        merged.merge_from(file_state.config);
+    }
+    if !env_overlay.is_empty() {
+        merged.merge_from(env_overlay);
+    }
+
+    Ok(merged
+        .resolve_with_env(&env)?
+        .providers
+        .into_iter()
+        .collect())
 }
 
 fn secret_auth_data(secret: &ProviderApiAuthConfig) -> Option<AuthData> {

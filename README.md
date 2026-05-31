@@ -4,7 +4,7 @@ Agena 是一个本地优先的 LLM agent runtime。仓库同时包含命令行�
 
 文档入口如下：
 
-- [配置说明](docs/configuration.md): `config.json`、环境变量、CLI 覆盖、provider、权限、插件和运行时默认值。
+- [配置说明](docs/configuration.md): `agena.json`、desktop 设置、环境变量、CLI 覆盖、provider、权限、插件和运行时默认值。
 - [Provider Auth 与 Credential](docs/provider-credentials.md): 新的 `provider.auth + provider.adapters` 结构、provider-local credential 语义和运行时刷新规则。
 - [Provider Auth + Adapters 重构说明](docs/provider-auth-adapters.md): provider/auth/adapter 的目标结构和配置迁移路径。
 - [OpenCode 接入](docs/opencode-go.md): 使用 OpenCode Go、OpenCode Zen 和免费公共模型。
@@ -47,7 +47,7 @@ examples/
 
 - Rust toolchain: 仓库使用 `rust-toolchain.toml`，workspace package 要求 Rust `1.93`。
 - Bun: Studio Web 使用 Bun、Vite、Vue 和 TypeScript。
-- SQLite: 后端和 TUI 使用 SQLite 数据库，默认路径为 `~/.agena/agena.db`。
+- SQLite: 后端和 TUI 使用 SQLite 数据库，默认路径为 `~/agena/agena.db`。
 - 可选: `gh` 用于部分 GitHub/PR 命令；Tauri 桌面构建需要对应平台的 Tauri 依赖。
 
 ## 快速开始
@@ -55,11 +55,11 @@ examples/
 准备最小配置：
 
 ```bash
-mkdir -p ~/.agena
-cp config.example.json ~/.agena/config.json
+mkdir -p ~/agena
+cp config.example.json ~/agena/agena.json
 ```
 
-编辑 `~/.agena/config.json`，至少保留一个 provider，并设置对应凭据。例如示例文件默认启用 Anthropic：
+编辑 `~/agena/agena.json`，至少保留一个 provider，并设置对应凭据。例如示例文件默认启用 Anthropic：
 
 ```bash
 export ANTHROPIC_API_KEY=...
@@ -132,7 +132,7 @@ Studio 服务公开：
 
 ## 配置入口
 
-默认配置路径为 `~/.agena/config.json`，也可以通过 `--config` 或 `AGENA_CONFIG` 指定。配置层级按以下顺序合并，后者覆盖前者：
+配置文件固定为 `~/agena/agena.json`。Desktop 壳自己的启动设置也写在同一个文件里。配置层级按以下顺序合并，后者覆盖前者：
 
 1. 内置默认值。
 2. JSON 配置文件。
@@ -143,7 +143,6 @@ Studio 服务公开：
 
 ```bash
 cargo run -p agena-cli -- \
-  --config ./config.example.json \
   --set default.provider=anthropic \
   --set default.adapter=anthropic \
   --set default.model=claude-sonnet-4-6 \
@@ -211,11 +210,11 @@ bun run --cwd packages/agena-studio-web typecheck
 
 ## 数据与状态位置
 
-- 主配置: `~/.agena/config.json`，可用 `AGENA_CONFIG` 或 `--config` 改写。
-- 数据库: 默认 `~/.agena/agena.db`，可用 `AGENA_DATABASE_URL` 或 `AGENA_DATABASE_PATH` 改写。
+- 主配置: 固定为 `~/agena/agena.json`。
+- 数据库: 默认 `~/agena/agena.db`，可用 `AGENA_DATABASE_URL` 或 `AGENA_DATABASE_PATH` 改写。
 - Provider 凭据: 保存在主配置的 `[providers.<id>.auth]` 下，登录和 refresh 会直接回写该 provider。
-- 插件存储: 默认 `~/.agena/plugin-storage`，可用 `AGENA_PLUGIN_STORAGE_DIR` 改写。
-- Marketplace cache: 默认 `~/.agena/marketplace`，可用 `AGENA_MARKETPLACE_DIR` 改写。
+- 插件存储: 默认 `~/agena/plugin-storage`，可用 `AGENA_PLUGIN_STORAGE_DIR` 改写。
+- Marketplace cache: 默认 `~/agena/marketplace`，可用 `AGENA_MARKETPLACE_DIR` 改写。
 
 ## 实现来源
 

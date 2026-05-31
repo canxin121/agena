@@ -16,7 +16,7 @@ Agena 的扩展能力统一通过 plugin host 接入。模型可见的 tools、M
 Runtime build 会构建一个 `PluginHost`。这个 host 加载 runtime 注册的 static plugin，以及用户在 `plugins.list.<id>` 中声明的 plugin。
 
 ```text
-config.json
+agena.json
   |
   +-- plugins ---------------------+
   |                                |
@@ -144,7 +144,7 @@ Runtime build 注册：
 | `agena.cron` | cron 和 one-shot wakeup 调度 tools |
 | `agena.memory` | memory 配置和项目记忆相关能力 |
 | `agena.mcp` | 已配置 MCP server 的 tool/resource/prompt tools |
-| `agena.settings` | 读取、列出、校验和编辑当前 `config.json` 的 settings tools |
+| `agena.settings` | 读取、列出、校验和编辑当前 `agena.json` 的 settings tools |
 
 内置 static plugin 使用少量领域级入口承载 action，避免把每个动作都展开成独立 tool。常见入口：
 
@@ -820,7 +820,7 @@ PluginToolDecl::new("download", schema)
         optional: false,
     })
     .path_access(PathAccessSpec {
-        path: ".agena/cache".to_string(),
+        path: "~/agena/plugin-cache".to_string(),
         kind: PathKind::Write,
     })
     .input_network(InputNetworkSpec {
@@ -979,7 +979,7 @@ Plugin storage 是 host 提供的统一 key/value 存储接口。它现在按两
 默认目录：
 
 ```text
-~/.agena/plugin-storage
+~/agena/plugin-storage
 ```
 
 覆盖目录：
@@ -1045,7 +1045,6 @@ agena plugin uninstall lint
 
 常用安装参数：
 
-- `--config <path>`: 写入指定 config。
 - `--force`: 覆盖已有同名 plugin tool。
 - `--dry-run`: 计算结果但不写文件。
 - `--allow-unverified`: 允许没有 sha256 的 artifact。
@@ -1055,7 +1054,7 @@ agena plugin uninstall lint
 Marketplace cache 默认目录：
 
 ```text
-~/.agena/marketplace
+~/agena/marketplace
 ```
 
 覆盖目录：
@@ -1113,7 +1112,7 @@ Studio/backend API：
 3. 在 `manifest()` 中声明 hooks、tools、commands、capabilities 和 config schema。
 4. 在 `tool_invoke` 或相关 hook 方法中实现行为。
 5. 按 transport 导出 plugin。
-6. 在 `config.json` 的 `plugins.list.<id>` 中配置。
+6. 在 `agena.json` 的 `plugins.list.<id>` 中配置。
 7. 用 `agena config validate` 验证配置。
 8. 用 `agena plugin status` 和 `agena plugin inspect <id>` 验证加载结果。
 

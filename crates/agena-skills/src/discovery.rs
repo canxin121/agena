@@ -5,29 +5,14 @@ use walkdir::WalkDir;
 use crate::error::SkillResult;
 use crate::skill::Skill;
 
-/// Default discovery roots in priority order.  Workspace skills win over
-/// user skills and bundled skills.
-pub fn default_roots(workspace: Option<&Path>) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(ws) = workspace {
-        roots.push(ws.join(".agena").join("skills"));
-    }
-    if let Some(home) = dirs::home_dir() {
-        roots.push(home.join(".agena").join("skills"));
-    }
-    roots
+/// Runtime defaults no longer scan implicit workspace or user directories.
+pub fn default_roots(_workspace: Option<&Path>) -> Vec<PathBuf> {
+    Vec::new()
 }
 
-/// Default user slash-command roots in priority order.
-pub fn default_command_roots(workspace: Option<&Path>) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(ws) = workspace {
-        roots.push(ws.join(".agena").join("commands"));
-    }
-    if let Some(home) = dirs::home_dir() {
-        roots.push(home.join(".agena").join("commands"));
-    }
-    roots
+/// Runtime defaults no longer scan implicit slash-command directories.
+pub fn default_command_roots(_workspace: Option<&Path>) -> Vec<PathBuf> {
+    Vec::new()
 }
 
 pub fn scan(roots: &[PathBuf]) -> SkillResult<Vec<Skill>> {
@@ -78,13 +63,3 @@ fn scan_matching(
     }
     Ok(skills)
 }
-
-mod dirs {
-    use std::path::PathBuf;
-    pub fn home_dir() -> Option<PathBuf> {
-        std::env::var_os("HOME").map(PathBuf::from)
-    }
-}
-
-// Re-export for callers that want to bypass default_roots logic.
-pub use dirs::home_dir;

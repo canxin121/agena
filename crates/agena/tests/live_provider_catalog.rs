@@ -1,11 +1,12 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use agena::{
     config::{
-        ConfigLoader, ConfigSettingsEditOptions, ConfigSettingsPatchInput, ConfigSettingsPathInput,
-        LoadConfigRequest, ProcessEnvironment, ProviderAdapterModelsResult,
-        list_provider_adapter_models_with_config, patch_file_settings_with_env,
-        provider_model_overlay_from_catalog_definition, saved_provider_adapter_models_target,
+        ConfigEnvironment, ConfigLoader, ConfigSettingsEditOptions, ConfigSettingsPatchInput,
+        ConfigSettingsPathInput, LoadConfigRequest, ProcessEnvironment,
+        ProviderAdapterModelsResult, list_provider_adapter_models_with_config,
+        patch_file_settings_with_env, provider_model_overlay_from_catalog_definition,
+        saved_provider_adapter_models_target,
     },
     db::init_schema,
     model_catalog::{
@@ -14,6 +15,27 @@ use agena::{
     provider::ProviderRegistry,
     tracing as tracing_config,
 };
+
+#[derive(Debug, Clone)]
+struct TestEnvironment {
+    home: PathBuf,
+}
+
+impl ConfigEnvironment for TestEnvironment {
+    fn var(&self, key: &str) -> Option<String> {
+        match key {
+            "HOME" => Some(self.home.display().to_string()),
+            _ => std::env::var(key).ok(),
+        }
+    }
+
+    fn vars(&self) -> Vec<(String, String)> {
+        let mut vars = std::env::vars().collect::<Vec<_>>();
+        vars.retain(|(key, _)| key != "HOME");
+        vars.push(("HOME".to_string(), self.home.display().to_string()));
+        vars
+    }
+}
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
 use tempfile::tempdir;
 use tokio::sync::OnceCell;
@@ -265,7 +287,10 @@ async fn run_live_provider_case(
 ) -> CaseResult {
     let public_catalog = public_catalog().await;
     let dir = tempdir().expect("tempdir for live provider test");
-    let config_path = dir.path().join("config.json");
+    let env = TestEnvironment {
+        home: dir.path().to_path_buf(),
+    };
+    let config_path = dir.path().join("agena").join("agena.json");
 
     let save_provider_response = patch_file_settings_with_env(
         &config_path,
@@ -280,7 +305,7 @@ async fn run_live_provider_case(
                 reload: false,
             },
         },
-        &ProcessEnvironment,
+        &env,
     )
     .expect("save provider patch");
 
@@ -293,7 +318,7 @@ async fn run_live_provider_case(
         "provider patch should validate successfully"
     );
 
-    let initial_resolution = load_config(&config_path);
+    let initial_resolution = load_config(&env);
     assert!(
         initial_resolution
             .config
@@ -413,7 +438,7 @@ async fn run_live_provider_case(
         "saving matched models should validate successfully"
     );
 
-    let saved_resolution = load_config(&config_path);
+    let saved_resolution = load_config(&env);
     let saved_provider = saved_resolution
         .config
         .providers
@@ -562,13 +587,10 @@ fn format_match_failure(label: &str, minimum_match_rate: f64, result: &MatchResu
     )
 }
 
-fn load_config(config_path: &std::path::Path) -> agena::config::ConfigResolution {
-    let loader = ConfigLoader::new(ProcessEnvironment);
+fn load_config(env: &TestEnvironment) -> agena::config::ConfigResolution {
+    let loader = ConfigLoader::new(env.clone());
     loader
-        .load(&LoadConfigRequest {
-            config_path: Some(config_path.to_path_buf()),
-            ..LoadConfigRequest::default()
-        })
+        .load(&LoadConfigRequest::default())
         .expect("load saved config")
 }
 

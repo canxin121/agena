@@ -1,25 +1,6 @@
 //! Custom subagent profile registry.
 //!
-//! Discovers Markdown files under `.agena/agents/` (project-local, walked
-//! up from the workspace root) and `~/.agena/agents/` (user-global). Each
-//! file describes a named subagent the dispatcher can route to: a system
-//! prompt, optional permission policy, and optional defaults.
-//! Mirrors
-//! the layout of `crates/agena/src/commands/` and the SKILL.md frontmatter
-//! convention `agena-skills` already exposes, so users who know one know
-//! the other.
-//!
-//! Example `.agena/agents/explorer.md`:
-//!
-//! ```markdown
-//! ---
-//! description: "Read-only repo explorer"
-//! defaults:
-//!   model: "claude-haiku-4-5"
-//! ---
-//! You are a focused codebase explorer. Read files, grep for symbols, and
-//! report concise findings. Do not edit anything.
-//! ```
+//! User-defined subagents are configured in the shared `~/agena/agena.json`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -147,26 +128,17 @@ impl SubagentRegistry {
         Self::default()
     }
 
-    /// Discover profiles rooted at `workspace_root` (walks up to find any
-    /// `.agena/agents/` ancestors) and `user_root` (typically
-    /// `~/.agena/agents`). Project entries win on name collisions.
-    pub fn discover(workspace_root: &Path, user_root: Option<&Path>) -> Self {
+    pub fn discover(_workspace_root: &Path, _user_root: Option<&Path>) -> Self {
         let registry = Self::default();
-        registry.reload_disk(workspace_root, user_root);
+        registry.reload_disk();
         registry
     }
 
-    pub fn reload_disk(&self, workspace_root: &Path, user_root: Option<&Path>) {
+    pub fn reload_disk(&self) {
         let mut inner = self.inner.write();
         inner.by_name.clear();
         for profile in default_profiles() {
             agents_upsert(&mut inner.by_name, profile, AgentScope::Default);
-        }
-        if let Some(user) = user_root {
-            agents_load_dir(&mut inner.by_name, user, AgentScope::User);
-        }
-        for dir in collect_project_agent_dirs(workspace_root) {
-            agents_load_dir(&mut inner.by_name, &dir, AgentScope::Project);
         }
     }
 
@@ -228,35 +200,6 @@ impl SubagentRegistry {
     }
 }
 
-fn agents_load_dir(by_name: &mut BTreeMap<String, AgentProfile>, dir: &Path, scope: AgentScope) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("md") {
-            continue;
-        }
-        let stem = match path.file_stem().and_then(|s| s.to_str()) {
-            Some(s) if !s.is_empty() => s.to_string(),
-            _ => continue,
-        };
-        match AgentProfile::from_path(&path, &stem, scope) {
-            Ok(profile) => {
-                agents_upsert(by_name, profile, scope);
-            }
-            Err(err) => {
-                tracing::warn!(
-                    target: "agena::agents",
-                    "skipping subagent profile `{}`: {err}",
-                    path.display()
-                );
-            }
-        }
-    }
-}
-
 fn agents_upsert(
     by_name: &mut BTreeMap<String, AgentProfile>,
     profile: AgentProfile,
@@ -278,13 +221,6 @@ fn agents_upsert(
 impl AgentProfile {
     pub fn is_exposed(&self) -> bool {
         self.name != "compaction"
-    }
-
-    pub fn from_path(path: &Path, stem: &str, scope: AgentScope) -> AgentResult<Self> {
-        let raw = std::fs::read_to_string(path)?;
-        let mut profile = Self::from_raw(&raw, stem, scope)?;
-        profile.source_path = Some(path.to_path_buf());
-        Ok(profile)
     }
 
     pub fn from_raw(raw: &str, default_name: &str, scope: AgentScope) -> AgentResult<Self> {
@@ -344,41 +280,12 @@ fn parse_frontmatter(raw: &str) -> AgentResult<(AgentFrontmatter, String)> {
     Ok((frontmatter, body))
 }
 
-fn collect_project_agent_dirs(workspace_root: &Path) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    let mut current = Some(workspace_root.to_path_buf());
-    while let Some(dir) = current {
-        let candidate = dir.join(".agena").join("agents");
-        if candidate.is_dir() {
-            dirs.push(candidate);
-        }
-        current = dir.parent().map(Path::to_path_buf);
-    }
-    dirs.reverse();
-    dirs
-}
-
 fn scope_priority(scope: AgentScope) -> u8 {
     match scope {
         AgentScope::Default => 0,
         AgentScope::User => 1,
         AgentScope::Project => 2,
     }
-}
-
-pub fn default_user_agents_dir() -> Option<PathBuf> {
-    home_dir().map(|home| home.join(".agena").join("agents"))
-}
-
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("USERPROFILE")
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-        })
 }
 
 fn default_permission(

@@ -48,7 +48,7 @@ pub fn run() {
         .setup(|app| {
             let app_handle = app.handle().clone();
 
-            // Ensure a user-editable runtime config file exists.
+            // Ensure the shared agena.json contains a desktop section.
             if let Ok(cfg) = config::load_or_create(&app_handle)
                 && let Err(err) = apply_autostart_on_boot(&app_handle, cfg.autostart_on_boot)
             {
@@ -74,13 +74,8 @@ pub fn run() {
                 None::<&str>,
             )?;
             let logs_i = MenuItem::with_id(app, "open_logs", "Open logs", true, None::<&str>)?;
-            let cfg_i = MenuItem::with_id(
-                app,
-                "open_config",
-                "Open runtime config",
-                true,
-                None::<&str>,
-            )?;
+            let cfg_i =
+                MenuItem::with_id(app, "open_config", "Open agena.json", true, None::<&str>)?;
             let autostart_i = MenuItem::with_id(
                 app,
                 "toggle_autostart_on_boot",

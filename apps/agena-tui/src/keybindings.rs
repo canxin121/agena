@@ -12,11 +12,9 @@
 //! * `edit_queue_key` — pull the queue back into the editor for edit.
 //!
 //! The defaults follow the user's stated preference (Enter = queue,
-//! Ctrl+Enter = submit) but every binding can be overridden via TOML
-//! (`[tui.keybindings.composer]`).
+//! Ctrl+Enter = submit).
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyChord {
@@ -93,33 +91,6 @@ impl Default for ComposerKeyBindings {
 }
 
 impl ComposerKeyBindings {
-    pub fn from_raw(raw: &RawComposerKeyBindings) -> Result<Self, String> {
-        let defaults = Self::default();
-        Ok(Self {
-            submit: parse_list(&raw.submit, &defaults.submit)?,
-            queue: parse_list(&raw.queue, &defaults.queue)?,
-            newline: parse_list(&raw.newline, &defaults.newline)?,
-            edit_queue: parse_list(&raw.edit_queue, &defaults.edit_queue)?,
-            history_search: parse_list(&raw.history_search, &defaults.history_search)?,
-            clear_input: parse_list(&raw.clear_input, &defaults.clear_input)?,
-            focus_items: parse_list(&raw.focus_items, &defaults.focus_items)?,
-            attach_file: parse_list(&raw.attach_file, &defaults.attach_file)?,
-            external_editor: parse_list(&raw.external_editor, &defaults.external_editor)?,
-            attach_clipboard_image: parse_list(
-                &raw.attach_clipboard_image,
-                &defaults.attach_clipboard_image,
-            )?,
-            open_pending_user_input: parse_list(
-                &raw.open_pending_user_input,
-                &defaults.open_pending_user_input,
-            )?,
-            open_pending_permission: parse_list(
-                &raw.open_pending_permission,
-                &defaults.open_pending_permission,
-            )?,
-        })
-    }
-
     pub fn match_action(&self, event: &KeyEvent) -> Option<ComposerAction> {
         // Order matters: more specific (with modifiers) wins. We list submit
         // first so Ctrl+Enter is detected before bare Enter.
@@ -185,81 +156,6 @@ pub enum ComposerAction {
     AttachClipboardImage,
     OpenPendingUserInput,
     OpenPendingPermission,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct RawComposerKeyBindings {
-    pub submit: Vec<String>,
-    pub queue: Vec<String>,
-    pub newline: Vec<String>,
-    pub edit_queue: Vec<String>,
-    pub history_search: Vec<String>,
-    pub clear_input: Vec<String>,
-    pub focus_items: Vec<String>,
-    pub attach_file: Vec<String>,
-    pub external_editor: Vec<String>,
-    pub attach_clipboard_image: Vec<String>,
-    pub open_pending_user_input: Vec<String>,
-    pub open_pending_permission: Vec<String>,
-}
-
-fn parse_list(raw: &[String], default: &[KeyChord]) -> Result<Vec<KeyChord>, String> {
-    if raw.is_empty() {
-        return Ok(default.to_vec());
-    }
-    raw.iter().map(|s| parse_chord(s)).collect()
-}
-
-/// Parse strings like `"ctrl+enter"`, `"shift+enter"`, `"alt+i"`, `"up"`,
-/// `"f3"`, `"esc"`. Case-insensitive.
-pub fn parse_chord(s: &str) -> Result<KeyChord, String> {
-    let s = s.trim().to_lowercase();
-    if s.is_empty() {
-        return Err("empty key chord".into());
-    }
-    let mut modifiers = KeyModifiers::empty();
-    let parts: Vec<&str> = s.split('+').map(str::trim).collect();
-    let (mods, key) = parts.split_at(parts.len().saturating_sub(1));
-    for m in mods {
-        match *m {
-            "ctrl" | "control" => modifiers |= KeyModifiers::CONTROL,
-            "alt" | "meta" | "option" => modifiers |= KeyModifiers::ALT,
-            "shift" => modifiers |= KeyModifiers::SHIFT,
-            other => return Err(format!("unknown modifier: {other}")),
-        }
-    }
-    let key = key.first().copied().unwrap_or("");
-    let code = match key {
-        "enter" | "return" => KeyCode::Enter,
-        "tab" => KeyCode::Tab,
-        "backtab" => KeyCode::BackTab,
-        "esc" | "escape" => KeyCode::Esc,
-        "space" => KeyCode::Char(' '),
-        "up" => KeyCode::Up,
-        "down" => KeyCode::Down,
-        "left" => KeyCode::Left,
-        "right" => KeyCode::Right,
-        "home" => KeyCode::Home,
-        "end" => KeyCode::End,
-        "pageup" => KeyCode::PageUp,
-        "pagedown" => KeyCode::PageDown,
-        "backspace" => KeyCode::Backspace,
-        "delete" | "del" => KeyCode::Delete,
-        "insert" | "ins" => KeyCode::Insert,
-        s if s.starts_with('f') && s.len() > 1 => {
-            let n: u8 = s[1..]
-                .parse()
-                .map_err(|_| format!("bad function key: {s}"))?;
-            KeyCode::F(n)
-        }
-        s if s.chars().count() == 1 => {
-            let c = s.chars().next().unwrap();
-            KeyCode::Char(c)
-        }
-        other => return Err(format!("unknown key: {other}")),
-    };
-    Ok(KeyChord { code, modifiers })
 }
 
 #[cfg(test)]

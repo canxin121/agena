@@ -86,8 +86,6 @@ pub struct MarketplaceInstallRequest {
     #[serde(flatten)]
     pub registry: MarketplaceRegistryRequest,
     #[serde(default)]
-    pub config_path: Option<String>,
-    #[serde(default)]
     pub force: bool,
     #[serde(default)]
     pub dry_run: bool,

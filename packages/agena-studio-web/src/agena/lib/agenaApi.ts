@@ -1222,7 +1222,6 @@ export async function installMarketplacePlugin(input: {
   spec: string
   registryId?: string
   registryUrl: string
-  configPath?: string
   force?: boolean
   dryRun?: boolean
   allowUnverified?: boolean
@@ -1236,7 +1235,6 @@ export async function installMarketplacePlugin(input: {
       spec: input.spec.trim(),
       ...(input.registryId?.trim() ? { registry_id: input.registryId.trim() } : {}),
       registry_url: input.registryUrl.trim(),
-      ...(input.configPath?.trim() ? { config_path: input.configPath.trim() } : {}),
       ...(input.force ? { force: true } : {}),
       ...(input.dryRun ? { dry_run: true } : {}),
       ...(input.allowUnverified ? { allow_unverified: true } : {}),

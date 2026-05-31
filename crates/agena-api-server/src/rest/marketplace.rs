@@ -155,19 +155,13 @@ pub async fn install_marketplace_plugin(
         None => (spec, None),
     };
     let registry_id = registry_id_or_default(request.registry.registry_id.as_deref());
-    let config_path = request
+    let config_path = state
+        .runtime()
+        .current_snapshot()
+        .config_resolution()
+        .meta
         .config_path
-        .clone()
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            state
-                .runtime()
-                .current_snapshot()
-                .config_resolution()
-                .meta
-                .config_path
-                .clone()
-        });
+        .clone();
     let task_title = if request.dry_run {
         format!("Dry-run install marketplace plugin {plugin_id}")
     } else {

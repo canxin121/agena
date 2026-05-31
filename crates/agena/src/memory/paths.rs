@@ -27,12 +27,12 @@ fn sanitize_path(path: &str) -> String {
     format!("{}-{}", &sanitized[..MAX_SANITIZED_LENGTH], hash)
 }
 
-/// Returns `~/.agena/projects/<sanitized-workspace-root>/memory/`.
+/// Returns `~/agena/projects/<sanitized-workspace-root>/memory/`.
 fn memory_base_dir() -> PathBuf {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".agena")
+    PathBuf::from(home).join("agena")
 }
 
 pub(crate) fn workspace_key(workspace_root: &Path) -> String {
@@ -47,7 +47,7 @@ pub struct MemoryDir {
 
 impl MemoryDir {
     /// Build the memory directory path for the given workspace root.
-    /// Path: `~/.agena/projects/<sanitized-workspace-root>/memory/`
+    /// Path: `~/agena/projects/<sanitized-workspace-root>/memory/`
     pub fn from_workspace(workspace_root: &Path) -> Self {
         Self {
             path: memory_base_dir()

@@ -126,7 +126,7 @@ pub trait PluginSecretStore: Send + Sync {
 /// provider auth service so the two surfaces don't collide on the same key.
 pub const PLUGIN_SECRETS_KEYRING_SERVICE: &str = "agena.plugin";
 
-/// Default plugin storage root: `$HOME/.agena/plugin-storage` unless
+/// Default plugin storage root: `$HOME/agena/plugin-storage` unless
 /// `AGENA_PLUGIN_STORAGE_DIR` overrides it.
 pub fn default_storage_root() -> PathBuf {
     if let Ok(path) = std::env::var("AGENA_PLUGIN_STORAGE_DIR") {
@@ -136,7 +136,7 @@ pub fn default_storage_root() -> PathBuf {
         .or_else(|_| std::env::var("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."));
-    base.push(".agena");
+    base.push("agena");
     base.push("plugin-storage");
     base
 }

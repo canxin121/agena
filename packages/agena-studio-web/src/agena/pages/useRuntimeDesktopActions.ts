@@ -23,7 +23,6 @@ export type RuntimeDesktopFormState = {
   host: string
   port: string
   workspace_root: string
-  agena_config_path: string
   database_path: string
   database_url: string
   backend_log_level: string
@@ -83,7 +82,6 @@ export function useRuntimeDesktopActions(
     input.desktopForm.host = config?.backend.host || ''
     input.desktopForm.port = config ? String(config.backend.port) : ''
     input.desktopForm.workspace_root = config?.backend.workspace_root || ''
-    input.desktopForm.agena_config_path = config?.backend.agena_config_path || ''
     input.desktopForm.database_path = config?.backend.database_path || ''
     input.desktopForm.database_url = config?.backend.database_url || ''
     input.desktopForm.backend_log_level = config?.backend.backend_log_level || ''
@@ -137,7 +135,6 @@ export function useRuntimeDesktopActions(
           host: input.desktopForm.host.trim() || input.desktopConfig.value.backend.host,
           port: normalizePort(input.desktopForm.port, input.desktopConfig.value.backend.port),
           workspace_root: normalizeOptionalText(input.desktopForm.workspace_root),
-          agena_config_path: normalizeOptionalText(input.desktopForm.agena_config_path),
           database_path: normalizeOptionalText(input.desktopForm.database_path),
           database_url: normalizeOptionalText(input.desktopForm.database_url),
           backend_log_level: normalizeOptionalText(input.desktopForm.backend_log_level),

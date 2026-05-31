@@ -9,14 +9,15 @@ Agena 使用 JSON 配置文件。最小可用配置见仓库根目录的 `config
 建议从最小配置开始：
 
 ```bash
-mkdir -p ~/.agena
-cp config.example.json ~/.agena/config.json
+mkdir -p ~/agena
+cp config.example.json ~/agena/agena.json
 agena config validate
 ```
 
 `config.example.json` 展示了最小启动面：
 
 - `tracing`: 日志过滤。
+- `desktop`: Agena Desktop 壳自己的启动配置，和主运行时配置一起保存在同一个 `agena.json` 里。
 - `providers.default`: 全局默认 provider 名称。
 - `providers.<id>.defaults`: provider-local 默认 adapter/model/thinking/speed/verbosity/parallel 设置。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".native_tools`: model-scoped provider-native 远程内置 tool 路由、默认 hosted 参数、harness 绑定和 connector 引用。
@@ -44,11 +45,11 @@ agena config validate
 
 ## 加载路径与优先级
 
-配置加载入口是 `ConfigLoader`。实际默认路径如下：
+配置加载入口是 `ConfigLoader`。共享 JSON 配置路径固定为：
 
-1. 如果显式传入 `--config <path>`，使用该路径。
-2. 否则如果设置 `AGENA_CONFIG`，使用该路径。
-3. 否则使用 `~/.agena/config.json`。
+```text
+~/agena/agena.json
+```
 
 缺失配置文件不是错误。没有文件时，Agena 仍会使用内置默认值、环境变量和 CLI 覆盖解析出配置。
 
@@ -159,10 +160,9 @@ agena \
 
 ## 环境变量
 
-### 配置加载与核心 overlay
+### 核心 overlay
 
 ```text
-AGENA_CONFIG
 AGENA_LOG
 AGENA_DATABASE_LOG
 AGENA_LOCALE
@@ -207,10 +207,10 @@ AGENA_DATABASE_URL
 AGENA_DATABASE_PATH
 ```
 
-默认数据库路径为 `~/.agena/agena.db`，最终 SQLite URL 形如：
+默认数据库路径为 `~/agena/agena.db`，最终 SQLite URL 形如：
 
 ```text
-sqlite://~/.agena/agena.db?mode=rwc
+sqlite://~/agena/agena.db?mode=rwc
 ```
 
 Studio server 参数：
@@ -233,7 +233,6 @@ TUI 参数：
 ```text
 AGENA_TUI_LOG_FILE
 AGENA_TUI_LOG_STDERR
-AGENA_TUI_CONFIG
 ```
 
 ### 插件、marketplace
@@ -243,9 +242,9 @@ AGENA_PLUGIN_STORAGE_DIR
 AGENA_MARKETPLACE_DIR
 ```
 
-`AGENA_PLUGIN_STORAGE_DIR` 覆盖插件存储根目录。默认是 `~/.agena/plugin-storage`。
+`AGENA_PLUGIN_STORAGE_DIR` 覆盖插件存储根目录。默认是 `~/agena/plugin-storage`。
 
-`AGENA_MARKETPLACE_DIR` 覆盖 marketplace cache。默认是 `~/.agena/marketplace`。
+`AGENA_MARKETPLACE_DIR` 覆盖 marketplace cache。默认是 `~/agena/marketplace`。
 
 ## Tracing
 
@@ -1043,7 +1042,7 @@ max
 
 ## Agents
 
-Agent 可通过 JSON 配置，也可通过 `.agena/agents/*.md` 和 `~/.agena/agents/*.md` 发现。
+Agent 只通过 `~/agena/agena.json` 中的 `agents` 配置。
 
 JSON 示例：
 
@@ -1642,7 +1641,7 @@ HTTP plugin auth 支持：
 
 Runtime-provided static plugins 由 runtime 注册，包括文件系统、shell、web、workflow、skills、LSP、cron、memory、MCP、settings 等。它们和用户配置的 plugin 一样进入 plugin host 与 tool registry。
 
-插件存储默认目录是 `~/.agena/plugin-storage`，可通过 `AGENA_PLUGIN_STORAGE_DIR` 覆盖。插件 secret 默认使用 `agena.plugin` keyring service，并可 fallback 到文件。
+插件存储默认目录是 `~/agena/plugin-storage`，可通过 `AGENA_PLUGIN_STORAGE_DIR` 覆盖。插件 secret 默认使用 `agena.plugin` keyring service，并可 fallback 到文件。
 
 ## MCP
 
@@ -1906,14 +1905,12 @@ Studio server 是 `agena-studio` 二进制，参数定义在 `apps/agena-studio-
 agena-studio \
   --host 127.0.0.1 \
   --port 3210 \
-  --workspace-root "$PWD" \
-  --config ~/.agena/config.json
+  --workspace-root "$PWD"
 ```
 
 服务参数：
 
 ```text
---config / AGENA_CONFIG
 --set key=value
 --host / AGENA_STUDIO_HOST
 --port / AGENA_STUDIO_PORT

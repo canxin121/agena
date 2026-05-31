@@ -2,14 +2,13 @@ Param(
   [string]$Archive = "",
   [string]$Repo = "canxin121/agena",
   [string]$Version = "",
-  [string]$InstallDir = "$HOME\.agena-studio",
+  [string]$InstallDir = "$HOME\agena\studio",
   [string]$ListenHost = "127.0.0.1",
   [int]$Port = 3210,
   [string]$UiPassword = "",
   [string]$WorkspaceRoot = "",
   [string]$DatabasePath = "",
   [string]$DatabaseUrl = "",
-  [string]$ConfigPath = "",
   [string[]]$Set = @()
 )
 
@@ -78,7 +77,6 @@ try {
   if ($WorkspaceRoot) { $ArgList += @("--workspace-root", $WorkspaceRoot) }
   if ($DatabasePath) { $ArgList += @("--database-path", $DatabasePath) }
   if ($DatabaseUrl) { $ArgList += @("--database-url", $DatabaseUrl) }
-  if ($ConfigPath) { $ArgList += @("--config", $ConfigPath) }
   foreach ($item in $Set) {
     $ArgList += @("--set", $item)
   }

@@ -14,6 +14,7 @@ pub mod model_catalog;
 pub mod permission;
 pub use agena_plugin_host as plugin;
 pub mod plugins;
+pub(crate) mod project_paths;
 pub mod provider;
 pub mod role;
 pub mod runtime;

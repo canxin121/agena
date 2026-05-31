@@ -1,4 +1,4 @@
-//! Local marketplace cache layout under `~/.agena/marketplace/` (override via
+//! Local marketplace cache layout under `~/agena/marketplace/` (override via
 //! `AGENA_MARKETPLACE_DIR`). Provides path helpers, atomic write, secure
 //! permissions, and persistence for `installed.json`.
 
@@ -167,7 +167,7 @@ pub struct InstalledRecord {
     pub archive_extracted: bool,
 }
 
-/// Default cache root: `$AGENA_MARKETPLACE_DIR` or `~/.agena/marketplace`.
+/// Default cache root: `$AGENA_MARKETPLACE_DIR` or `~/agena/marketplace`.
 pub fn default_cache_root() -> PathBuf {
     if let Ok(path) = std::env::var("AGENA_MARKETPLACE_DIR") {
         return PathBuf::from(path);
@@ -176,7 +176,7 @@ pub fn default_cache_root() -> PathBuf {
         .or_else(|_| std::env::var("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."));
-    base.push(".agena");
+    base.push("agena");
     base.push("marketplace");
     base
 }

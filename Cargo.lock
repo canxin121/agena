@@ -492,7 +492,6 @@ dependencies = [
  "tauri-plugin-single-instance",
  "thiserror 2.0.18",
  "tokio",
- "toml 1.1.2+spec-1.1.0",
  "zip",
 ]
 
@@ -513,7 +512,6 @@ dependencies = [
  "tauri-plugin-single-instance",
  "thiserror 2.0.18",
  "tokio",
- "toml 1.1.2+spec-1.1.0",
  "zip",
 ]
 
@@ -556,7 +554,6 @@ dependencies = [
  "time",
  "tokio",
  "tokio-tungstenite",
- "toml 1.1.2+spec-1.1.0",
  "tower",
  "tower-http",
  "tracing",
@@ -598,7 +595,6 @@ dependencies = [
  "tempfile",
  "textwrap",
  "tokio",
- "toml 1.1.2+spec-1.1.0",
  "tracing-subscriber",
  "tui-markdown",
  "unic-langid",

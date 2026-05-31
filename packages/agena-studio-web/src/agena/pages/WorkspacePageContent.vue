@@ -150,27 +150,6 @@ function workspaceBadge(workspace: WorkspaceResource) {
           Reset Path
         </button>
         <button
-          class="button"
-          :disabled="!props.workspace.selectedWorkspaceId.value"
-          @click="props.workspace.openRuntimeConfigRoot"
-        >
-          Open Config Root
-        </button>
-        <button
-          class="button"
-          :disabled="!props.workspace.selectedWorkspaceId.value"
-          @click="props.workspace.openWorktreeDirectory"
-        >
-          Open Worktrees
-        </button>
-        <button
-          class="button"
-          :disabled="!props.workspace.selectedWorkspaceId.value"
-          @click="props.workspace.openLogsDirectory"
-        >
-          Open Logs
-        </button>
-        <button
           class="button danger"
           :disabled="!props.workspace.selectedWorkspace.value || props.workspace.loading.value"
           @click="props.workspace.deleteSelectedWorkspace"

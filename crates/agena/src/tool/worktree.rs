@@ -2,7 +2,7 @@
 //!
 //! Thin wrappers around the `git` CLI; we don't pull in libgit2 for the
 //! sake of keeping the dependency surface tight.  Worktrees are created
-//! under `<workspace>/.agena/worktrees/<name>` with a fresh branch
+//! under `~/agena/projects/<workspace-key>/worktrees/<name>` with a fresh branch
 //! `agena/<name>` rooted at the current HEAD.
 //!
 //! State is held in a process-wide registry keyed by session id so
@@ -159,7 +159,7 @@ fn create_new(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(generate_slug);
-    let base = workspace.join(".agena").join("worktrees");
+    let base = crate::project_paths::project_state_dir(workspace).join("worktrees");
     executor.ensure_edit_permission(&base)?;
     std::fs::create_dir_all(&base)
         .map_err(|e| ToolError::Plugin(format!("enter_worktree: mkdir {base:?}: {e}")))?;
@@ -279,7 +279,7 @@ pub struct ActiveWorktree {
     pub created_here: bool,
 }
 
-/// One record from the on-disk `.agena/worktrees/` scan, cross-referenced
+/// One record from the on-disk managed worktrees scan, cross-referenced
 /// against the registry and `git worktree list`.
 #[derive(Debug, Clone)]
 pub struct ManagedWorktree {
@@ -313,10 +313,10 @@ pub fn list_active(registry: &WorktreeRegistry) -> Vec<ActiveWorktree> {
     out
 }
 
-/// Walk `<workspace>/.agena/worktrees/` and report every directory there,
+/// Walk the home-level managed worktrees directory and report every directory there,
 /// joined with what the registry / git know about it.
 pub fn list_managed(workspace: &Path, registry: &WorktreeRegistry) -> Vec<ManagedWorktree> {
-    let base = workspace.join(".agena").join("worktrees");
+    let base = crate::project_paths::project_state_dir(workspace).join("worktrees");
     let mut out: Vec<ManagedWorktree> = Vec::new();
     let Ok(entries) = std::fs::read_dir(&base) else {
         return out;

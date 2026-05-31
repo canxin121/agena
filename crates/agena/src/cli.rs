@@ -78,9 +78,9 @@ use crate::{
                   agena\n  \
                   agena exec \"summarise the README\"\n  \
                   agena sessions list\n\n\
-                  Configuration is loaded from $AGENA_CONFIG, the path passed \
-                  with --config, or `agena.json` in the workspace. \
-                  Run `agena config show` to inspect the resolved settings.",
+                  Configuration is loaded from the single home config \
+                  `~/agena/agena.json`. \
+                  Run `agena config resolve` to inspect the resolved settings.",
     after_help = "EXAMPLES:\n  \
                   Start the terminal UI:\n    \
                   agena\n\n  \
@@ -91,13 +91,11 @@ use crate::{
                   Resume the most recent session:\n    \
                   agena resume\n\n  \
                   Show effective config:\n    \
-                  agena config show --format json\n\n  \
+                  agena config resolve --format json\n\n  \
                   Run as an MCP server over stdio:\n    \
                   agena mcp-server --transport stdio"
 )]
 pub struct AgenaCli {
-    #[arg(long, env = "AGENA_CONFIG", global = true)]
-    pub config: Option<PathBuf>,
     #[arg(short = 'c', long = "set", global = true)]
     pub overrides: Vec<ConfigOverride>,
     #[arg(long, env = "AGENA_DATABASE_URL", global = true)]
@@ -437,9 +435,6 @@ pub struct PluginInstallArgs {
     /// Registry id, used as a cache key (defaults to "default").
     #[arg(long, default_value = "default")]
     pub registry_id: String,
-    /// Path to the agena config.json that should receive the plugin tool.
-    #[arg(long)]
-    pub config: Option<PathBuf>,
     /// Overwrite an existing plugin config with the same plugin id.
     #[arg(long, default_value_t = false)]
     pub force: bool,
@@ -806,8 +801,6 @@ pub struct TuiArgs {
     pub log_file: Option<PathBuf>,
     #[arg(long, env = "AGENA_TUI_LOG_STDERR")]
     pub log_stderr: bool,
-    #[arg(long, env = "AGENA_TUI_CONFIG")]
-    pub tui_config: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -1107,7 +1100,6 @@ struct DiagnosticsConfigOutput {
 
 #[derive(Debug, Serialize)]
 struct DiagnosticsEnvironmentOutput {
-    agena_config_set: bool,
     agena_database_url_set: bool,
     agena_database_path_set: bool,
     agena_adapter_log_set: bool,
@@ -1341,15 +1333,7 @@ impl AgenaCli {
                     Some((id, ver)) => (id.to_string(), Some(ver.to_string())),
                     None => (args.spec.clone(), None),
                 };
-                let config_path = args
-                    .config
-                    .clone()
-                    .or_else(default_user_config_path)
-                    .ok_or_else(|| {
-                        AppError::Config(
-                            "could not determine config path; pass --config".to_string(),
-                        )
-                    })?;
+                let config_path = ConfigLoader::default().default_config_path();
                 let outcome = client
                     .install(InstallRequest {
                         registry: RegistrySpec {
@@ -2576,7 +2560,6 @@ impl AgenaCli {
                     plugin_count: config.plugins.list.len(),
                 },
                 environment: DiagnosticsEnvironmentOutput {
-                    agena_config_set: std::env::var_os("AGENA_CONFIG").is_some(),
                     agena_database_url_set: std::env::var_os("AGENA_DATABASE_URL").is_some(),
                     agena_database_path_set: std::env::var_os("AGENA_DATABASE_PATH").is_some(),
                     agena_adapter_log_set: std::env::var_os("AGENA_ADAPTER_LOG").is_some(),
@@ -2864,7 +2847,6 @@ impl AgenaCli {
 
     pub fn load_request(&self) -> LoadConfigRequest {
         LoadConfigRequest {
-            config_path: self.config.clone(),
             overrides: self.overrides.clone(),
         }
     }
@@ -3358,14 +3340,6 @@ fn render_completion_command(args: CompletionArgs) -> Result<String, AppError> {
     clap_complete::generate(args.shell, &mut command, "agena", &mut buffer);
     String::from_utf8(buffer)
         .map_err(|err| AppError::Internal(format!("completion output was not utf-8: {err}")))
-}
-
-fn default_user_config_path() -> Option<PathBuf> {
-    let base = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .ok()
-        .map(PathBuf::from)?;
-    Some(base.join(".agena").join("config.json"))
 }
 
 fn render_serialized<T>(format: ConfigOutputFormat, value: &T) -> Result<String, AppError>

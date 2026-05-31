@@ -23,7 +23,6 @@ const props = defineProps<{
     host: string
     port: string
     workspace_root: string
-    agena_config_path: string
     database_path: string
     database_url: string
     backend_log_level: string
@@ -284,15 +283,6 @@ const backendState = computed(() => {
             v-model="props.desktopForm.workspace_root"
             class="input mono"
             placeholder="/workspace"
-          />
-        </div>
-        <div class="field">
-          <label class="label" for="desktop-config-path">Agena Config Path</label>
-          <input
-            id="desktop-config-path"
-            v-model="props.desktopForm.agena_config_path"
-            class="input mono"
-            placeholder="/workspace/.agena/config.json"
           />
         </div>
         <div class="field">

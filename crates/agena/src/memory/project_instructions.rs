@@ -19,9 +19,9 @@ pub struct ProjectInstructionLayer {
     pub truncated: bool,
 }
 
-/// Read a user-global instruction file from `~/.agena`, if one exists.
+/// Read a user-global instruction file from `~/agena`, if one exists.
 pub fn discover_global() -> Option<ProjectInstructionLayer> {
-    home_dir().and_then(|home| discover_global_in(home.join(".agena").as_path()))
+    home_dir().and_then(|home| discover_global_in(home.join("agena").as_path()))
 }
 
 fn discover_global_in(dir: &Path) -> Option<ProjectInstructionLayer> {

@@ -5,12 +5,11 @@ use super::{
     ConfigSource, RawConfig, RawConfigFile,
 };
 
-const DEFAULT_CONFIG_DIR_NAME: &str = ".agena";
-const DEFAULT_CONFIG_FILE_NAME: &str = "config.json";
+const DEFAULT_CONFIG_DIR_NAME: &str = "agena";
+const DEFAULT_CONFIG_FILE_NAME: &str = "agena.json";
 
 #[derive(Debug, Clone, Default)]
 pub struct LoadConfigRequest {
-    pub config_path: Option<PathBuf>,
     pub overrides: Vec<ConfigOverride>,
 }
 
@@ -51,10 +50,7 @@ where
     }
 
     pub fn default_config_path(&self) -> PathBuf {
-        self.env
-            .var("AGENA_CONFIG")
-            .map(PathBuf::from)
-            .unwrap_or_else(default_config_path)
+        default_config_path(&self.env)
     }
 
     pub fn environment(&self) -> &E {
@@ -62,10 +58,7 @@ where
     }
 
     pub fn load(&self, request: &LoadConfigRequest) -> Result<ConfigResolution, ConfigError> {
-        let config_path = request
-            .config_path
-            .clone()
-            .unwrap_or_else(|| self.default_config_path());
+        let config_path = self.default_config_path();
 
         if self.env.var("AGENA_MODE").is_some() {
             return Err(ConfigError::UnsupportedModeEnvironment);
@@ -118,16 +111,68 @@ where
     }
 }
 
-fn default_config_path() -> PathBuf {
-    let mut base = home_dir().unwrap_or_else(|| PathBuf::from("."));
+fn default_config_path(env: &impl ConfigEnvironment) -> PathBuf {
+    let mut base = home_dir(env).unwrap_or_else(|| PathBuf::from("."));
     base.push(DEFAULT_CONFIG_DIR_NAME);
     base.push(DEFAULT_CONFIG_FILE_NAME);
     base
 }
 
-fn home_dir() -> Option<PathBuf> {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .ok()
+fn home_dir(env: &impl ConfigEnvironment) -> Option<PathBuf> {
+    env.var("HOME")
+        .or_else(|| env.var("USERPROFILE"))
         .map(PathBuf::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Default)]
+    struct TestEnvironment {
+        vars: Vec<(String, String)>,
+    }
+
+    impl TestEnvironment {
+        fn with_var(mut self, key: &str, value: &str) -> Self {
+            self.vars.push((key.to_owned(), value.to_owned()));
+            self
+        }
+    }
+
+    impl ConfigEnvironment for TestEnvironment {
+        fn var(&self, key: &str) -> Option<String> {
+            self.vars
+                .iter()
+                .find(|(candidate, _)| candidate == key)
+                .map(|(_, value)| value.clone())
+        }
+
+        fn vars(&self) -> Vec<(String, String)> {
+            self.vars.clone()
+        }
+    }
+
+    #[test]
+    fn default_config_path_uses_single_home_agena_json() {
+        let loader = ConfigLoader::new(TestEnvironment::default().with_var("HOME", "/home/user"));
+
+        assert_eq!(
+            loader.default_config_path(),
+            PathBuf::from("/home/user/agena/agena.json")
+        );
+    }
+
+    #[test]
+    fn default_config_path_falls_back_to_userprofile() {
+        let loader =
+            ConfigLoader::new(TestEnvironment::default().with_var("USERPROFILE", "C:\\Users\\me"));
+
+        assert_eq!(
+            loader.default_config_path(),
+            PathBuf::from("C:\\Users\\me")
+                .join("agena")
+                .join("agena.json")
+        );
+    }
 }

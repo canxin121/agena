@@ -5,14 +5,8 @@
 //! and exposes discovery helpers. Runtime registration into the shared plugin
 //! tool registry lives in `agena` inside the bundled `SkillsPlugin`.
 //!
-//! Discovery roots, in priority order:
-//!
-//! 1. `<workspace>/.agena/skills/`
-//! 2. `~/.agena/skills/`
-//!
-//! User slash-command markdown is discovered from
-//! `<workspace>/.agena/commands/*.md` and `~/.agena/commands/*.md` with the
-//! same frontmatter format.
+//! Discovery helpers scan explicit roots supplied by callers. Runtime defaults
+//! do not include implicit workspace or user-global directories.
 
 pub mod bundled;
 pub mod discovery;

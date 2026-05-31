@@ -43,7 +43,6 @@ pub struct TuiLaunchArgs {
     pub locale: Option<String>,
     pub log_file: Option<PathBuf>,
     pub log_stderr: bool,
-    pub tui_config: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -54,8 +53,6 @@ pub struct TuiLaunchArgs {
     long_about = "Launch the Agena terminal UI."
 )]
 struct AgenaTuiCli {
-    #[arg(long, env = "AGENA_CONFIG", global = true)]
-    config: Option<PathBuf>,
     #[arg(short = 'c', long = "set", global = true)]
     overrides: Vec<ConfigOverride>,
     #[command(subcommand)]
@@ -85,8 +82,6 @@ struct RunCommand {
     log_file: Option<PathBuf>,
     #[arg(long, env = "AGENA_TUI_LOG_STDERR")]
     log_stderr: bool,
-    #[arg(long, env = "AGENA_TUI_CONFIG")]
-    tui_config: Option<PathBuf>,
 }
 
 impl AgenaTuiCli {
@@ -98,7 +93,6 @@ impl AgenaTuiCli {
 
     fn load_request(&self) -> LoadConfigRequest {
         LoadConfigRequest {
-            config_path: self.config.clone(),
             overrides: self.overrides.clone(),
         }
     }
@@ -235,7 +229,7 @@ pub async fn run_embedded(
 
     let backend = Backend::new(runtime, db, workspace_root.clone());
     let i18n = I18n::resolve(args.locale.as_deref(), config_locale.as_deref());
-    let tui_config = tui_config::TuiConfig::load(args.tui_config.clone());
+    let tui_config = tui_config::TuiConfig::load();
     let mut terminal =
         terminal::TerminalGuard::enter().map_err(|error| AppError::Internal(error.to_string()))?;
     let mut app = App::new(
@@ -269,7 +263,6 @@ fn launch_args_from_cli(cli: &AgenaTuiCli) -> TuiLaunchArgs {
             locale: command.locale,
             log_file: command.log_file,
             log_stderr: command.log_stderr,
-            tui_config: command.tui_config,
         },
     }
 }
@@ -309,6 +302,6 @@ fn default_agena_dir() -> PathBuf {
         .or_else(|_| env::var("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."));
-    base.push(".agena");
+    base.push("agena");
     base
 }

@@ -203,6 +203,7 @@ impl Merge for RawAgentsConfig {
 pub(crate) struct RawConfig {
     pub(crate) tracing: Option<RawTracingConfig>,
     pub(crate) ui: Option<RawUiConfig>,
+    pub(crate) desktop: Option<RawDesktopConfig>,
     pub(crate) runtime: Option<RawRuntimeConfig>,
     pub(crate) session: Option<RawSessionConfig>,
     pub(crate) permission: Option<crate::agent::PermissionConfig>,
@@ -216,6 +217,7 @@ impl RawConfig {
     pub(crate) fn merge_from(&mut self, overlay: Self) {
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.ui, overlay.ui);
+        merge_option_struct(&mut self.desktop, overlay.desktop);
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
@@ -228,6 +230,7 @@ impl RawConfig {
     pub(crate) fn is_empty(&self) -> bool {
         self.tracing.is_none()
             && self.ui.is_none()
+            && self.desktop.is_none()
             && self.runtime.is_none()
             && self.session.is_none()
             && self.permission.is_none()
@@ -393,6 +396,8 @@ impl RawConfig {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
         };
+        let desktop =
+            crate::config::types::DesktopConfig::from_raw(self.desktop.unwrap_or_default());
 
         let raw_runtime = self.runtime.unwrap_or_default();
         let raw_session = self.session.unwrap_or_default();
@@ -437,6 +442,7 @@ impl RawConfig {
             default_agent,
             tracing,
             ui,
+            desktop,
             runtime,
             session,
             permission,
@@ -600,6 +606,125 @@ fn validate_tracing_level(field: &str, value: &str) -> Result<(), ConfigError> {
 pub(crate) struct RawUiConfig {
     #[merge(strategy = option_override)]
     pub(crate) locale: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RawDesktopConfig {
+    #[merge(strategy = option_override)]
+    pub(crate) autostart_on_boot: Option<bool>,
+    #[merge(strategy = option_struct_merge)]
+    pub(crate) backend: Option<RawDesktopBackendConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RawDesktopBackendConfig {
+    #[merge(strategy = option_override)]
+    pub(crate) host: Option<String>,
+    #[merge(strategy = option_override)]
+    pub(crate) port: Option<u16>,
+    #[merge(strategy = option_override)]
+    pub(crate) ui_dir: Option<String>,
+    #[merge(strategy = option_override)]
+    pub(crate) cors_origins: Option<Vec<String>>,
+    #[merge(strategy = option_override)]
+    pub(crate) cors_allow_all: Option<bool>,
+    #[merge(strategy = option_override)]
+    pub(crate) backend_log_level: Option<String>,
+    #[merge(strategy = option_override)]
+    pub(crate) ui_password: Option<String>,
+    #[merge(strategy = option_override)]
+    pub(crate) ui_cookie_samesite: Option<String>,
+    #[merge(strategy = option_override)]
+    pub(crate) workspace_root: Option<String>,
+    #[merge(strategy = option_override)]
+    pub(crate) database_path: Option<String>,
+    #[merge(strategy = option_override)]
+    pub(crate) database_url: Option<String>,
+}
+
+impl crate::config::types::DesktopConfig {
+    pub(crate) fn from_raw(raw: RawDesktopConfig) -> Self {
+        let backend = raw.backend.unwrap_or_default();
+        let mut config = Self {
+            autostart_on_boot: raw.autostart_on_boot.unwrap_or(true),
+            backend: crate::config::types::DesktopBackendConfig {
+                host: normalize_host(backend.host.as_deref()),
+                port: normalize_desktop_port(backend.port),
+                ui_dir: normalize_optional_text(backend.ui_dir),
+                cors_origins: normalize_cors_origins(backend.cors_origins.unwrap_or_default()),
+                cors_allow_all: backend.cors_allow_all.unwrap_or(false),
+                backend_log_level: normalize_log_level(backend.backend_log_level),
+                ui_password: backend.ui_password.or_else(|| Some(String::new())),
+                ui_cookie_samesite: normalize_ui_cookie_samesite(backend.ui_cookie_samesite),
+                workspace_root: normalize_optional_text(backend.workspace_root),
+                database_path: normalize_optional_text(backend.database_path),
+                database_url: normalize_optional_text(backend.database_url),
+            },
+        };
+        config.backend.ui_password = Some(
+            config
+                .backend
+                .ui_password
+                .take()
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
+        );
+        config
+    }
+}
+
+fn normalize_optional_text(raw: Option<String>) -> Option<String> {
+    let value = raw?.trim().to_string();
+    if value.is_empty() { None } else { Some(value) }
+}
+
+fn normalize_host(raw: Option<&str>) -> String {
+    let value = raw.unwrap_or_default().trim();
+    if value.is_empty() {
+        "127.0.0.1".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn normalize_desktop_port(raw: Option<u16>) -> u16 {
+    match raw.unwrap_or(3210) {
+        0 => 3210,
+        value => value,
+    }
+}
+
+fn normalize_cors_origins(values: Vec<String>) -> Vec<String> {
+    let mut out = Vec::<String>::new();
+    for raw in values {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !out.iter().any(|value| value == trimmed) {
+            out.push(trimmed.to_string());
+        }
+    }
+    out
+}
+
+fn normalize_log_level(raw: Option<String>) -> Option<String> {
+    let level = raw?.trim().to_ascii_uppercase();
+    match level.as_str() {
+        "DEBUG" | "INFO" | "WARN" | "ERROR" => Some(level),
+        _ => None,
+    }
+}
+
+fn normalize_ui_cookie_samesite(raw: Option<String>) -> Option<String> {
+    let value = raw?.trim().to_ascii_lowercase();
+    match value.as_str() {
+        "auto" | "strict" | "lax" | "none" => Some(value),
+        _ => None,
+    }
 }
 
 impl Merge for crate::config::types::AgentConfig {
@@ -2061,6 +2186,8 @@ macro_rules! impl_local_merge_via_crate {
 impl_local_merge_via_crate!(
     RawTracingConfig,
     RawUiConfig,
+    RawDesktopConfig,
+    RawDesktopBackendConfig,
     RawRuntimeConfig,
     RawRuntimeProvidersConfig,
     RawSessionConfig,
@@ -2416,6 +2543,64 @@ mod tests {
     fn resolve_config(value: serde_json::Value) -> Result<ResolvedConfig, ConfigError> {
         let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
         raw.resolve_with_env(&TestEnvironment)
+    }
+
+    #[test]
+    fn resolve_config_accepts_desktop_section() {
+        let resolved = resolve_config(json!({
+            "desktop": {
+                "autostart_on_boot": false,
+                "backend": {
+                    "host": " 0.0.0.0 ",
+                    "port": 0,
+                    "cors_origins": [" https://studio.example ", "https://studio.example"],
+                    "backend_log_level": "debug",
+                    "ui_password": " secret ",
+                    "ui_cookie_samesite": "STRICT",
+                    "workspace_root": " /tmp/workspace ",
+                    "database_path": " /tmp/agena.db ",
+                    "database_url": " sqlite:///tmp/agena.db ",
+                    "ui_dir": " /tmp/dist "
+                }
+            }
+        }))
+        .expect("desktop config should resolve");
+
+        assert!(!resolved.desktop.autostart_on_boot);
+        assert_eq!(resolved.desktop.backend.host, "0.0.0.0");
+        assert_eq!(resolved.desktop.backend.port, 3210);
+        assert_eq!(
+            resolved.desktop.backend.cors_origins,
+            vec!["https://studio.example".to_string()]
+        );
+        assert_eq!(
+            resolved.desktop.backend.backend_log_level.as_deref(),
+            Some("DEBUG")
+        );
+        assert_eq!(
+            resolved.desktop.backend.ui_password.as_deref(),
+            Some("secret")
+        );
+        assert_eq!(
+            resolved.desktop.backend.ui_cookie_samesite.as_deref(),
+            Some("strict")
+        );
+        assert_eq!(
+            resolved.desktop.backend.workspace_root.as_deref(),
+            Some("/tmp/workspace")
+        );
+        assert_eq!(
+            resolved.desktop.backend.database_path.as_deref(),
+            Some("/tmp/agena.db")
+        );
+        assert_eq!(
+            resolved.desktop.backend.database_url.as_deref(),
+            Some("sqlite:///tmp/agena.db")
+        );
+        assert_eq!(
+            resolved.desktop.backend.ui_dir.as_deref(),
+            Some("/tmp/dist")
+        );
     }
 
     #[test]

@@ -11,7 +11,6 @@ export type RuntimeSkillsPageStateSource = {
   openRuntimeConfigRoot: Parameters<typeof useRuntimeSkillsState>[0]['openRuntimeConfigRoot']
   openRuntimeEntryInChat: Parameters<typeof useRuntimeSkillsState>[0]['openRuntimeEntryInChat']
   openRuntimeEntrySource: Parameters<typeof useRuntimeSkillsState>[0]['openRuntimeEntrySource']
-  openWorkspaceShortcut: Parameters<typeof useRuntimeSkillsState>[0]['openWorkspaceShortcut']
   runtimeSkillQuery: Parameters<typeof useRuntimeSkillsState>[0]['runtimeSkillQuery']
   skillCommands: Parameters<typeof useRuntimeSkillsState>[0]['skillCommands']
 }
@@ -44,7 +43,6 @@ export function createRuntimeSkillsPanelState(state: RuntimeSkillsPageStateSourc
     openRuntimeConfigRoot: state.openRuntimeConfigRoot,
     openRuntimeEntryInChat: state.openRuntimeEntryInChat,
     openRuntimeEntrySource: state.openRuntimeEntrySource,
-    openWorkspaceShortcut: state.openWorkspaceShortcut,
     runtimeSkillQuery: state.runtimeSkillQuery,
     skillCommands: state.skillCommands,
   })

@@ -1277,15 +1277,18 @@ impl SessionStore {
         Ok(())
     }
 
-    pub(crate) async fn resolve_permission_rule(
+    pub(crate) async fn resolve_permission_rules(
         &self,
         action_key: &str,
         session_id: Option<i64>,
-    ) -> Result<Option<PersistedPermissionRule>, AppError> {
+    ) -> Result<Vec<PersistedPermissionRule>, AppError> {
         let workspace_id = self.lookup_workspace_id().await?;
-        let rule: Option<crate::db::entities::permission_rule::Model> =
-            permission_rule::resolve_rule(&self.db, action_key, session_id, workspace_id).await?;
-        Ok(rule.and_then(|item| persisted_permission_rule_from_model(&item).ok()))
+        let rules =
+            permission_rule::resolve_rules(&self.db, action_key, session_id, workspace_id).await?;
+        rules
+            .iter()
+            .map(persisted_permission_rule_from_model)
+            .collect()
     }
 
     pub(crate) fn prune_cache(&self, cache_policy: SessionCachePolicy) {

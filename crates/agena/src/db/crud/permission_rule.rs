@@ -56,66 +56,50 @@ where
     .map(|model| (model, true))
 }
 
-pub async fn resolve_rule<C>(
+pub async fn resolve_rules<C>(
     db: &C,
     action_key: &str,
     session_id: Option<i64>,
     workspace_id: Option<i64>,
-) -> Result<Option<entities::permission_rule::Model>, DbErr>
+) -> Result<Vec<entities::permission_rule::Model>, DbErr>
 where
     C: ConnectionTrait,
 {
-    if let Some(session_id) = session_id
-        && let Some(item) = entities::permission_rule::Entity::find()
-            .filter(entities::permission_rule::Column::ActionKey.eq(action_key))
-            .filter(
-                entities::permission_rule::Column::Scope
-                    .eq(scope_to_string(PermissionScope::Session)),
-            )
-            .filter(entities::permission_rule::Column::SessionId.eq(session_id))
-            .filter(entities::permission_rule::Column::RevokedAtMs.is_null())
-            .order_by_desc(entities::permission_rule::Column::UpdatedAtMs)
-            .order_by_desc(entities::permission_rule::Column::Id)
-            .one(db)
-            .await?
+    let mut rules = Vec::new();
+
+    if let Some(item) =
+        resolve_latest_rule_for_scope(db, action_key, PermissionScope::Global, None, None).await?
     {
-        return Ok(Some(item));
+        rules.push(item);
     }
 
     if let Some(workspace_id) = workspace_id
-        && let Some(item) = entities::permission_rule::Entity::find()
-            .filter(entities::permission_rule::Column::ActionKey.eq(action_key))
-            .filter(
-                entities::permission_rule::Column::Scope
-                    .eq(scope_to_string(PermissionScope::Workspace)),
-            )
-            .filter(entities::permission_rule::Column::WorkspaceId.eq(workspace_id))
-            .filter(entities::permission_rule::Column::RevokedAtMs.is_null())
-            .order_by_desc(entities::permission_rule::Column::UpdatedAtMs)
-            .order_by_desc(entities::permission_rule::Column::Id)
-            .one(db)
-            .await?
-    {
-        return Ok(Some(item));
-    }
-
-    if let Some(item) = entities::permission_rule::Entity::find()
-        .filter(entities::permission_rule::Column::ActionKey.eq(action_key))
-        .filter(
-            entities::permission_rule::Column::Scope.eq(scope_to_string(PermissionScope::Global)),
+        && let Some(item) = resolve_latest_rule_for_scope(
+            db,
+            action_key,
+            PermissionScope::Workspace,
+            None,
+            Some(workspace_id),
         )
-        .filter(entities::permission_rule::Column::SessionId.is_null())
-        .filter(entities::permission_rule::Column::WorkspaceId.is_null())
-        .filter(entities::permission_rule::Column::RevokedAtMs.is_null())
-        .order_by_desc(entities::permission_rule::Column::UpdatedAtMs)
-        .order_by_desc(entities::permission_rule::Column::Id)
-        .one(db)
         .await?
     {
-        return Ok(Some(item));
+        rules.push(item);
     }
 
-    Ok(None)
+    if let Some(session_id) = session_id
+        && let Some(item) = resolve_latest_rule_for_scope(
+            db,
+            action_key,
+            PermissionScope::Session,
+            Some(session_id),
+            None,
+        )
+        .await?
+    {
+        rules.push(item);
+    }
+
+    Ok(rules)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,4 +161,36 @@ where
     active.revoked_by = Set(revoked_by);
     active.updated_at_ms = Set(Utc::now().timestamp_millis());
     active.update(db).await.map(Some)
+}
+
+async fn resolve_latest_rule_for_scope<C>(
+    db: &C,
+    action_key: &str,
+    scope: PermissionScope,
+    session_id: Option<i64>,
+    workspace_id: Option<i64>,
+) -> Result<Option<entities::permission_rule::Model>, DbErr>
+where
+    C: ConnectionTrait,
+{
+    let mut statement = entities::permission_rule::Entity::find()
+        .filter(entities::permission_rule::Column::ActionKey.eq(action_key))
+        .filter(entities::permission_rule::Column::Scope.eq(scope_to_string(scope)))
+        .filter(entities::permission_rule::Column::RevokedAtMs.is_null())
+        .order_by_desc(entities::permission_rule::Column::UpdatedAtMs)
+        .order_by_desc(entities::permission_rule::Column::Id);
+
+    statement = match scope {
+        PermissionScope::Session => statement
+            .filter(entities::permission_rule::Column::SessionId.eq(session_id))
+            .filter(entities::permission_rule::Column::WorkspaceId.is_null()),
+        PermissionScope::Workspace => statement
+            .filter(entities::permission_rule::Column::WorkspaceId.eq(workspace_id))
+            .filter(entities::permission_rule::Column::SessionId.is_null()),
+        PermissionScope::Global => statement
+            .filter(entities::permission_rule::Column::SessionId.is_null())
+            .filter(entities::permission_rule::Column::WorkspaceId.is_null()),
+    };
+
+    statement.one(db).await
 }

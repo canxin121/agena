@@ -18,6 +18,7 @@ pub use request::{
 };
 pub use resolver::{
     PermissionResolution, PermissionResolutionSource, resolve_permission_with_persisted_rule,
+    resolve_permission_with_persisted_rules,
 };
 pub use store::{PersistedPermissionRule, decide_from_mode};
 

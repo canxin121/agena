@@ -27,7 +27,7 @@ use crate::model::ModelSpeedModeRequestOverride;
 use crate::permission::{
     DecisionTraceStep, PermissionAction, PermissionDecision, PermissionMode, PermissionReply,
     PermissionReplyKind, PermissionRequest, PermissionRiskLevel, PermissionScope,
-    PersistedPermissionRule, PolicySourceKind, resolve_permission_with_persisted_rule,
+    PersistedPermissionRule, PolicySourceKind, resolve_permission_with_persisted_rules,
 };
 use crate::provider::ThinkingRequest;
 use crate::role::Role;

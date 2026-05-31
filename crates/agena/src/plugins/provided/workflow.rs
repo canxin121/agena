@@ -2,6 +2,7 @@
 //! todo_write, create_goal, get_goal, update_goal, ask_user, enter_plan_mode,
 //! exit_plan_mode, enter_worktree, exit_worktree).
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::message::{
@@ -21,9 +22,9 @@ use crate::plugin::sdk::host_api::{
     HostTodoWriteRequest, HostUpdateGoalRequest, SpawnSubtaskRequest, ToolDescriptor,
 };
 use crate::plugin::sdk::{
-    HookSubscription, HostCapability, InitContext, InitOutcome, NetworkRequest, PathAccessSpec,
-    PathKind, PathRequest, Plugin, PluginManifest, PluginToolDecl, Result as SdkResult,
-    ToolInvokeInput, ToolInvokeOutput, ToolTag,
+    HookSubscription, HostCapability, InitContext, InitOutcome, NetworkRequest, PathRequest,
+    Plugin, PluginManifest, PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
+    ToolTag,
 };
 use crate::search::tool_catalog::{ToolCatalogDocument, search_tool_catalog};
 use crate::tool::{ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ask_user};
@@ -559,6 +560,7 @@ fn goal_status_label(status: HostGoalStatus) -> &'static str {
 pub(crate) struct WorkflowPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
     config: OnceLock<WorkflowPluginConfig>,
+    workspace_root: OnceLock<PathBuf>,
 }
 
 impl WorkflowPlugin {
@@ -566,6 +568,7 @@ impl WorkflowPlugin {
         Self {
             host: RwLock::new(None),
             config: OnceLock::new(),
+            workspace_root: OnceLock::new(),
         }
     }
 
@@ -661,6 +664,13 @@ impl WorkflowPlugin {
             .map_err(|_| PluginError::new("workflow plugin host lock poisoned"))?
             .clone()
             .ok_or_else(|| PluginError::new("workflow plugin invoked before init"))
+    }
+
+    fn workspace_root(&self) -> SdkResult<&Path> {
+        self.workspace_root
+            .get()
+            .map(PathBuf::as_path)
+            .ok_or_else(|| PluginError::new("workflow plugin workspace root not initialized"))
     }
 
     fn host_ask_user_questions(input: &AskUserToolInput) -> Vec<HostAskUserQuestion> {
@@ -1186,6 +1196,9 @@ impl Plugin for WorkflowPlugin {
         self.config
             .set(config)
             .map_err(|_| PluginError::new("workflow plugin config already initialized"))?;
+        self.workspace_root
+            .set(ctx.workspace_root)
+            .map_err(|_| PluginError::new("workflow plugin workspace root already initialized"))?;
         *self
             .host
             .write()
@@ -1454,6 +1467,17 @@ impl Plugin for WorkflowPlugin {
         input: &serde_json::Value,
     ) -> SdkResult<Vec<PathRequest>> {
         match tool_name {
+            "plan" => {
+                let (action, _action_input) = PlanToolInput::resolve_tool("plan", input.clone())?;
+                if action != "enter" {
+                    return Ok(Vec::new());
+                }
+                let plans_dir =
+                    crate::project_paths::project_state_dir(self.workspace_root()?).join("plans");
+                Ok(vec![PathRequest::write(
+                    plans_dir.to_string_lossy().to_string(),
+                )])
+            }
             "worktree" => {
                 let (action, action_input) =
                     WorktreeToolInput::resolve_tool("worktree", input.clone())?;
@@ -1467,7 +1491,11 @@ impl Plugin for WorkflowPlugin {
                         PathRequest::write(path),
                     ]);
                 }
-                Ok(vec![PathRequest::write("~/agena/projects".to_string())])
+                let worktrees_dir = crate::project_paths::project_state_dir(self.workspace_root()?)
+                    .join("worktrees");
+                Ok(vec![PathRequest::write(
+                    worktrees_dir.to_string_lossy().to_string(),
+                )])
             }
             _ => Ok(Vec::new()),
         }
@@ -1524,10 +1552,7 @@ fn tools() -> Vec<PluginToolDecl> {
         SessionToolInput::tool_decl(),
         GoalToolInput::tool_decl(),
         UserToolInput::tool_decl(),
-        PlanToolInput::tool_decl().path_access(PathAccessSpec {
-            path: "~/agena/projects".to_string(),
-            kind: PathKind::Write,
-        }),
+        PlanToolInput::tool_decl(),
         WorktreeToolInput::tool_decl(),
     ]
 }

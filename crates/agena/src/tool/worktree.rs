@@ -151,7 +151,7 @@ pub(super) fn execute_exit(
 }
 
 fn create_new(
-    executor: &ToolExecutor,
+    _executor: &ToolExecutor,
     workspace: &Path,
     name: Option<&str>,
 ) -> Result<WorktreeSession, ToolError> {
@@ -160,11 +160,9 @@ fn create_new(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(generate_slug);
     let base = crate::project_paths::project_state_dir(workspace).join("worktrees");
-    executor.ensure_edit_permission(&base)?;
     std::fs::create_dir_all(&base)
         .map_err(|e| ToolError::Plugin(format!("enter_worktree: mkdir {base:?}: {e}")))?;
     let target = base.join(&slug);
-    executor.ensure_edit_permission(&target)?;
     if target.exists() {
         return Err(ToolError::Plugin(format!(
             "enter_worktree: target {target:?} already exists"
@@ -191,13 +189,11 @@ fn create_new(
 }
 
 fn enter_existing(
-    executor: &ToolExecutor,
+    _executor: &ToolExecutor,
     workspace: &Path,
     path: &str,
 ) -> Result<WorktreeSession, ToolError> {
     let path_buf = PathBuf::from(path);
-    executor.ensure_read_permission(&path_buf)?;
-    executor.ensure_edit_permission(&path_buf)?;
     if !path_buf.exists() {
         return Err(ToolError::Plugin(format!(
             "enter_worktree: path {path:?} does not exist"

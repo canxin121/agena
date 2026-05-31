@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use super::*;
 use crate::session::model::SessionPartRef;
 
@@ -2706,6 +2708,9 @@ impl SessionManager {
         if let Some(agent_permission) = agent_permission {
             effective.merge_from(agent_permission.clone());
         }
+        effective.merge_from(managed_project_state_permission(
+            state.tool_executor.workspace_root(),
+        ));
         effective.merge_from(session.runtime.execution.selection.permission.clone());
         effective
     }
@@ -3274,6 +3279,26 @@ impl SessionManager {
 
     pub(super) fn execution_state(&self) -> Arc<SessionManagerState> {
         self.execution.load_full()
+    }
+}
+
+fn managed_project_state_permission(workspace_root: &Path) -> crate::agent::PermissionConfig {
+    let managed_root = crate::project_paths::project_state_dir(workspace_root)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let read_write = crate::agent::PathAccessRuleConfig::Modes(crate::agent::PathAccessModes {
+        read: Some(PermissionMode::Allow),
+        write: Some(PermissionMode::Allow),
+    });
+    let mut rules = indexmap::IndexMap::new();
+    rules.insert(managed_root.clone(), read_write.clone());
+    rules.insert(format!("{managed_root}/**"), read_write);
+    crate::agent::PermissionConfig {
+        path: Some(crate::agent::PathPermissionConfig {
+            rules,
+            ..Default::default()
+        }),
+        ..Default::default()
     }
 }
 

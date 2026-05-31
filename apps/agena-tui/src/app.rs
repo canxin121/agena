@@ -33,8 +33,8 @@ use agena_api::{
     resource::{
         MessageResource, MessageRole, PendingInteractiveRequest, PermissionRuleResource,
         ProviderAdapterModelsResource, ProviderAdapterModelsResponse, ProviderSummaryResource,
-        RunOptions, SessionExecutionContextResource, SessionExecutionResource, SessionResource,
-        SessionRunState, SessionUsageResource,
+        RunOptions, SessionExecutionContextResource, SessionExecutionResource, SessionPlanResource,
+        SessionResource, SessionRunState, SessionUsageResource,
     },
 };
 use anyhow::Result;
@@ -1251,6 +1251,7 @@ struct UserInputOverlay {
 struct PermissionOverlay {
     session_id: i64,
     request: PermissionRequest,
+    plan: Option<SessionPlanResource>,
     selection: SelectionCursor,
 }
 
@@ -8453,6 +8454,13 @@ impl App {
         Some((session_id, request))
     }
 
+    fn current_execution_plan(&self) -> Option<SessionPlanResource> {
+        self.transcript
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.plan.clone())
+    }
+
     fn build_user_input_overlay(session_id: i64, request: UserInputRequest) -> UserInputOverlay {
         let mut overlay = UserInputOverlay {
             session_id,
@@ -8466,10 +8474,15 @@ impl App {
         overlay
     }
 
-    fn build_permission_overlay(session_id: i64, request: PermissionRequest) -> PermissionOverlay {
+    fn build_permission_overlay(
+        session_id: i64,
+        request: PermissionRequest,
+        plan: Option<SessionPlanResource>,
+    ) -> PermissionOverlay {
         PermissionOverlay {
             session_id,
             request,
+            plan,
             selection: SelectionCursor::default(),
         }
     }
@@ -8515,16 +8528,7 @@ impl App {
 
     fn current_session_wait_state_text(&self) -> Option<String> {
         let execution = self.transcript.execution.as_ref()?;
-        match pending_interactive_kind_for_execution(execution) {
-            Some(PendingInteractiveKind::Permission) => {
-                Some(ui_text::t(&self.i18n, "session-awaiting-approval"))
-            }
-            Some(PendingInteractiveKind::UserInput) => {
-                Some(ui_text::t(&self.i18n, "session-awaiting-user-input"))
-            }
-            None if execution.blocked => Some(ui_text::t(&self.i18n, "session-blocked")),
-            None => None,
-        }
+        execution_wait_state_key(execution).map(|key| ui_text::t(&self.i18n, key))
     }
 
     fn open_pending_interactive_overlay_for_kind(&mut self, kind: PendingInteractiveKind) {
@@ -8538,10 +8542,15 @@ impl App {
         let Some(kind) = self.pending_interactive_kind_for_session(session_id) else {
             return false;
         };
-        let key = match kind {
-            PendingInteractiveKind::Permission => "flash-session-awaiting-approval",
-            PendingInteractiveKind::UserInput => "flash-session-awaiting-user-input",
-        };
+        let key = self
+            .transcript
+            .execution
+            .as_ref()
+            .and_then(execution_pending_flash_key)
+            .unwrap_or(match kind {
+                PendingInteractiveKind::Permission => "flash-session-awaiting-approval",
+                PendingInteractiveKind::UserInput => "flash-session-awaiting-user-input",
+            });
         self.flash_warning(ui_text::t(&self.i18n, key));
         self.open_pending_interactive_overlay_for_kind(kind);
         true
@@ -8592,8 +8601,9 @@ impl App {
             }) => {
                 self.seen_permission_request_ids
                     .insert(request.request_id.clone());
+                let plan = self.current_execution_plan();
                 self.overlay = Some(Overlay::Permission(Self::build_permission_overlay(
-                    session_id, *request,
+                    session_id, *request, plan,
                 )));
             }
             Some(PendingInteractiveOverlayTarget::UserInput {
@@ -8617,8 +8627,9 @@ impl App {
         };
         self.seen_permission_request_ids
             .insert(request.request_id.clone());
+        let plan = self.current_execution_plan();
         self.overlay = Some(Overlay::Permission(Self::build_permission_overlay(
-            session_id, request,
+            session_id, request, plan,
         )));
     }
 
@@ -14525,6 +14536,9 @@ impl App {
                 parts.push(ui_text::t(&self.i18n, "transcript-header-busy"));
             } else if execution.run_state != SessionRunState::Idle {
                 parts.push(ui_text::t(&self.i18n, "session-running"));
+            }
+            if let Some(plan) = execution.plan.as_ref() {
+                parts.push(session_plan_status_text(&self.i18n, plan));
             }
             parts.extend(session_summary_status_parts(model_part, agent, token_usage));
             if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
@@ -21165,6 +21179,64 @@ fn pending_interactive_kind_for_execution(
     pending_interactive_kind(execution.pending_interactive_requests.as_slice())
 }
 
+fn permission_request_is_plan_approval(request: &PermissionRequest) -> bool {
+    matches!(
+        &request.action,
+        PermissionAction::Tool {
+            tool_name,
+            qualifier,
+        } if tool_name == "exit_plan_mode"
+            && qualifier
+                .as_deref()
+                .map(|value| value == "plan_review")
+                .unwrap_or(true)
+    )
+}
+
+fn execution_wait_state_key(execution: &SessionExecutionResource) -> Option<&'static str> {
+    match execution.pending_interactive_requests.first() {
+        Some(PendingInteractiveRequest::Permission { request })
+            if execution.plan.is_some() && permission_request_is_plan_approval(request) =>
+        {
+            Some("session-awaiting-plan-approval")
+        }
+        Some(PendingInteractiveRequest::Permission { .. }) => Some("session-awaiting-approval"),
+        Some(PendingInteractiveRequest::UserInput { .. }) => Some("session-awaiting-user-input"),
+        None if execution.blocked => Some("session-blocked"),
+        None => None,
+    }
+}
+
+fn execution_pending_flash_key(execution: &SessionExecutionResource) -> Option<&'static str> {
+    match execution.pending_interactive_requests.first() {
+        Some(PendingInteractiveRequest::Permission { request })
+            if execution.plan.is_some() && permission_request_is_plan_approval(request) =>
+        {
+            Some("flash-session-awaiting-plan-approval")
+        }
+        Some(PendingInteractiveRequest::Permission { .. }) => {
+            Some("flash-session-awaiting-approval")
+        }
+        Some(PendingInteractiveRequest::UserInput { .. }) => {
+            Some("flash-session-awaiting-user-input")
+        }
+        None => None,
+    }
+}
+
+fn session_plan_status_text(i18n: &I18n, plan: &SessionPlanResource) -> String {
+    match plan.step_count {
+        Some(step_count) if step_count > 0 => i18n.text_args(
+            "session-status-plan-with-steps",
+            &crate::fl_args!("slug" => plan.slug.as_str(), "steps" => step_count as i64),
+        ),
+        _ => i18n.text_args(
+            "session-status-plan",
+            &crate::fl_args!("slug" => plan.slug.as_str()),
+        ),
+    }
+}
+
 fn pending_interactive_counts_for_execution(
     execution: &SessionExecutionResource,
 ) -> (usize, usize) {
@@ -24463,6 +24535,7 @@ mod tests {
             pending_permission_requests: Vec::new(),
             pending_user_input_requests: Vec::new(),
             goal: None,
+            plan: None,
             usage: SessionUsageResource {
                 measured_prompt_tokens: None,
                 current_tokens: 0,
@@ -25308,6 +25381,28 @@ mod tests {
                 &session_execution_resource(SessionRunState::Idle, false),
             ),
             "空闲"
+        );
+
+        let mut execution = session_execution_resource(SessionRunState::Idle, false);
+        execution.plan = Some(SessionPlanResource {
+            slug: "20260531-alpaca".to_string(),
+            file_path: "/tmp/plan.md".to_string(),
+            started_at: Utc::now(),
+            step_count: Some(3),
+            preview_lines: vec!["- inspect tui flows".to_string()],
+        });
+        execution.pending_interactive_requests = vec![PendingInteractiveRequest::Permission {
+            request: PermissionRequest {
+                action: PermissionAction::Tool {
+                    tool_name: "exit_plan_mode".to_string(),
+                    qualifier: Some("plan_review".to_string()),
+                },
+                ..permission_request("perm-plan")
+            },
+        }];
+        assert_eq!(
+            ui_text::session_workflow_state_label(&i18n, &execution),
+            "等待计划审批"
         );
     }
 

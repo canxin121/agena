@@ -404,6 +404,9 @@ pub(super) struct ToolRuntimeContext {
 }
 
 static SYNTHETIC_TOOL_CALL_ID: AtomicI64 = AtomicI64::new(-1);
+const EXIT_PLAN_MODE_TOOL_NAME: &str = "exit_plan_mode";
+const PLAN_REVIEW_QUALIFIER: &str = "plan_review";
+const PLAN_REVIEW_REASON: &str = "approve the active plan before implementation continues";
 
 pub struct StreamingToolExecution {
     pub stream_id: String,
@@ -1125,7 +1128,10 @@ impl ToolExecutor {
         }
 
         if scoped_executor.permission_mode == PermissionEnforcementMode::Enforced {
-            for check in scoped_executor.collect_permission_checks_for_invocation(&invocation)? {
+            for check in scoped_executor.collect_permission_checks_for_invocation_in_session(
+                &invocation,
+                context.session_id,
+            )? {
                 match check.decision {
                     PermissionDecision::Allow => {}
                     PermissionDecision::Ask { reason } => {
@@ -1164,7 +1170,10 @@ impl ToolExecutor {
         &self,
         input: &ToolPayloadInput,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
-        self.collect_permission_checks_for_invocation(&input.clone().into_invocation())
+        self.collect_permission_checks_for_invocation_in_session(
+            &input.clone().into_invocation(),
+            None,
+        )
     }
 
     pub fn prepare_shell_command(
@@ -1263,6 +1272,14 @@ impl ToolExecutor {
         &self,
         invocation: &ToolInvocation,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
+        self.collect_permission_checks_for_invocation_in_session(invocation, None)
+    }
+
+    pub fn collect_permission_checks_for_invocation_in_session(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: Option<i64>,
+    ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
         let (tool_name, decision) = self.authorize_invocation(invocation)?;
         let command = shell_command_from_invocation(invocation);
         let action = crate::permission::tool_action(
@@ -1271,6 +1288,19 @@ impl ToolExecutor {
             Some(&self.agent.tool_policy),
         );
         let mut checks = vec![ToolPermissionCheck { action, decision }];
+        if let Some(session_id) = session_id
+            && self.invocation_requires_plan_review(invocation, session_id)
+        {
+            checks.push(ToolPermissionCheck {
+                action: PermissionAction::Tool {
+                    tool_name: EXIT_PLAN_MODE_TOOL_NAME.to_string(),
+                    qualifier: Some(PLAN_REVIEW_QUALIFIER.to_string()),
+                },
+                decision: PermissionDecision::Ask {
+                    reason: PLAN_REVIEW_REASON.to_string(),
+                },
+            });
+        }
 
         let input_value = invocation_input_value(invocation);
         if let Some(resolution) = self.plugin_resolution_for_invocation(invocation) {
@@ -1297,6 +1327,21 @@ impl ToolExecutor {
             self.collect_dynamic_network_checks(&mut checks, &resolution, &input_value)?;
         }
         Ok(checks)
+    }
+
+    fn invocation_requires_plan_review(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: i64,
+    ) -> bool {
+        self.permission_mode == PermissionEnforcementMode::Enforced
+            && matches!(
+                ToolPayloadInput::from_invocation(invocation),
+                Some(ToolPayloadInput::ExitPlanMode(_))
+            )
+            && self
+                .plan_registry()
+                .is_some_and(|registry| registry.read().contains_key(&session_id))
     }
 
     pub async fn execute_invocation_streaming(
@@ -2261,13 +2306,14 @@ mod tests {
     use uuid::Uuid;
 
     use crate::message::{
-        ApplyPatchToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, FileChangeKind,
-        FilesystemAccess, FilesystemEffect, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
-        LspPositionToolInput, Message, MonitorToolInput, NetworkEffect, PartContent, ReadToolInput,
-        ShellCommandInput, StructuredObject, TaskSubagentType, TaskToolInput, TodoItem,
-        TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation, WebFetchToolInput,
+        ApplyPatchToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput,
+        FileChangeKind, FilesystemAccess, FilesystemEffect, GlobToolInput, GrepToolInput,
+        LspDefinitionToolInput, LspPositionToolInput, Message, MonitorToolInput, NetworkEffect,
+        PartContent, ReadToolInput, ShellCommandInput, StructuredObject, TaskSubagentType,
+        TaskToolInput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation,
+        WebFetchToolInput,
     };
-    use crate::permission::PermissionPolicy;
+    use crate::permission::{PermissionAction, PermissionPolicy};
     use crate::plugin::sdk::host_api::{
         EventSubscription, HostTodoPriority, HostTodoStatus, LogLevel, SpawnSubtaskRequest,
         SpawnSubtaskResponse, ToolDescriptor,
@@ -4563,5 +4609,59 @@ mod tests {
         // Same session id — plan mode blocks.
         let err = executor.enforce_plan_mode_for(&inv, 42).unwrap_err();
         assert!(matches!(err, ToolError::PermissionDenied(_)));
+    }
+
+    #[test]
+    fn exit_plan_mode_collects_plan_review_permission_check() {
+        use crate::session::PlanState;
+
+        let workspace = TempWorkspace::new();
+        let registry = super::plan_registry_for_executor();
+        let executor = build_executor(&workspace.root).with_plan_registry(registry.clone());
+        registry.write().insert(
+            42,
+            PlanState {
+                file_path: crate::project_paths::project_state_dir(&workspace.root)
+                    .join("plans")
+                    .join("review.md"),
+                slug: "review".to_string(),
+                started_at: chrono::Utc::now(),
+            },
+        );
+
+        let invocation =
+            ToolPayloadInput::ExitPlanMode(ExitPlanModeToolInput::default()).into_invocation();
+        let checks = executor
+            .collect_permission_checks_for_invocation_in_session(&invocation, Some(42))
+            .expect("permission checks should resolve");
+
+        assert!(checks.iter().any(|check| {
+            matches!(
+                &check.action,
+                PermissionAction::Tool {
+                    tool_name,
+                    qualifier,
+                } if tool_name == "exit_plan_mode"
+                    && qualifier.as_deref() == Some("plan_review")
+            ) && matches!(
+                check.decision,
+                crate::permission::PermissionDecision::Ask { ref reason }
+                    if reason == super::PLAN_REVIEW_REASON
+            )
+        }));
+
+        let other_checks = executor
+            .collect_permission_checks_for_invocation_in_session(&invocation, Some(7))
+            .expect("other sessions should still resolve permission checks");
+        assert!(!other_checks.iter().any(|check| {
+            matches!(
+                &check.action,
+                PermissionAction::Tool {
+                    tool_name,
+                    qualifier,
+                } if tool_name == "exit_plan_mode"
+                    && qualifier.as_deref() == Some("plan_review")
+            )
+        }));
     }
 }

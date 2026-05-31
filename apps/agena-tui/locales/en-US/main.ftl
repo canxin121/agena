@@ -13,6 +13,7 @@ session-view-subtree-root = subtree #{$id}
 session-meta = #{$id}  {$message_count} msg  {$updated}
 session-running = running
 session-awaiting-approval = awaiting approval
+session-awaiting-plan-approval = awaiting plan approval
 session-awaiting-user-input = awaiting input
 session-awaiting-model = awaiting model
 session-blocked = blocked
@@ -139,6 +140,13 @@ overlay-path-browser-list-title = Browser
 overlay-attach-footer = Tab fill selected path
 
 overlay-permission-title = Permission Request
+overlay-plan-approval-title = Plan Approval
+overlay-plan-approval-summary = Review the active plan before implementation continues.
+overlay-plan-approval-footer = a approve once | s approve session | d reject
+overlay-plan-slug = plan={$slug}
+overlay-plan-path = path: {$path}
+overlay-plan-steps = steps={$steps}
+overlay-plan-preview-heading = Preview
 overlay-permission-request-id = request_id: {$request_id}
 overlay-permission-action-tool = tool: {$tool}
 overlay-permission-action-path = path {$access}: {$path}
@@ -1249,6 +1257,8 @@ status-part-tools = tools={$count}
 status-part-permission = permission={$value}
 status-part-permissions = perm={$count}
 status-part-user-input = input={$count}
+session-status-plan = plan {$slug}
+session-status-plan-with-steps = plan {$slug} · {$steps} steps
 session-status-thinking = thinking {$value}
 session-status-speed = speed {$value}
 inline-fact-provider = provider
@@ -1351,6 +1361,7 @@ flash-pr-created = pull request created: {$url}
 flash-attachment-inspect-failed = failed to inspect attachment {$path}: {$error}
 flash-session-busy = session is busy
 flash-session-awaiting-approval = session is awaiting approval
+flash-session-awaiting-plan-approval = session is awaiting plan approval
 flash-session-awaiting-user-input = session is awaiting user input
 flash-no-permission-request = no pending permission request
 flash-no-user-input-request = no pending user input request

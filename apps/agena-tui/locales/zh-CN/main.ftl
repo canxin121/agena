@@ -13,6 +13,7 @@ session-view-subtree-root = 子树 #{$id}
 session-meta = #{$id}  {$message_count} 条消息  {$updated}
 session-running = 运行中
 session-awaiting-approval = 等待权限审批
+session-awaiting-plan-approval = 等待计划审批
 session-awaiting-user-input = 等待用户输入
 session-awaiting-model = 等待模型
 session-blocked = 已阻塞
@@ -139,6 +140,13 @@ overlay-path-browser-list-title = 浏览器
 overlay-attach-footer = Tab 填入选中路径
 
 overlay-permission-title = 权限请求
+overlay-plan-approval-title = 计划审批
+overlay-plan-approval-summary = 在继续实现前，先检查当前计划。
+overlay-plan-approval-footer = a 仅本次批准 | s 本会话批准 | d 拒绝
+overlay-plan-slug = 计划={$slug}
+overlay-plan-path = 路径：{$path}
+overlay-plan-steps = 步骤={$steps}
+overlay-plan-preview-heading = 预览
 overlay-permission-request-id = request_id: {$request_id}
 overlay-permission-action-tool = 工具：{$tool}
 overlay-permission-action-path = 路径 {$access}：{$path}
@@ -748,6 +756,8 @@ status-part-tools = 工具={$count}
 status-part-permission = 权限={$value}
 status-part-permissions = 权限={$count}
 status-part-user-input = 输入={$count}
+session-status-plan = 计划 {$slug}
+session-status-plan-with-steps = 计划 {$slug} · {$steps} 步
 session-status-thinking = thinking {$value}
 session-status-speed = speed {$value}
 inline-fact-provider = provider
@@ -1351,6 +1361,7 @@ flash-pr-created = 已创建 pull request：{$url}
 flash-attachment-inspect-failed = 检查附件 {$path} 失败：{$error}
 flash-session-busy = 当前会话正忙
 flash-session-awaiting-approval = 当前会话正在等待权限审批
+flash-session-awaiting-plan-approval = 当前会话正在等待计划审批
 flash-session-awaiting-user-input = 当前会话正在等待用户输入
 flash-no-permission-request = 没有待处理的权限请求
 flash-no-user-input-request = 没有待处理的用户输入请求

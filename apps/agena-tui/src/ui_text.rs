@@ -265,6 +265,11 @@ pub fn transcript_footer_plugin_block(i18n: &I18n, label: &str, body: &str) -> S
 
 pub fn session_workflow_state_label(i18n: &I18n, execution: &SessionExecutionResource) -> String {
     match execution.pending_interactive_requests.first() {
+        Some(PendingInteractiveRequest::Permission { request })
+            if execution.plan.is_some() && permission_request_is_plan_approval(request) =>
+        {
+            t(i18n, "session-awaiting-plan-approval")
+        }
         Some(PendingInteractiveRequest::Permission { .. }) => t(i18n, "session-awaiting-approval"),
         Some(PendingInteractiveRequest::UserInput { .. }) => t(i18n, "session-awaiting-user-input"),
         None if execution.blocked => t(i18n, "session-blocked"),
@@ -273,6 +278,20 @@ pub fn session_workflow_state_label(i18n: &I18n, execution: &SessionExecutionRes
             SessionRunState::Idle => t(i18n, "session-idle"),
         },
     }
+}
+
+fn permission_request_is_plan_approval(request: &PermissionRequest) -> bool {
+    matches!(
+        &request.action,
+        agena::permission::PermissionAction::Tool {
+            tool_name,
+            qualifier,
+        } if tool_name == "exit_plan_mode"
+            && qualifier
+                .as_deref()
+                .map(|value| value == "plan_review")
+                .unwrap_or(true)
+    )
 }
 
 pub fn operation_search_heading(i18n: &I18n, query: Option<&str>) -> String {

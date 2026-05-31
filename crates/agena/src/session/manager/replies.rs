@@ -1394,21 +1394,24 @@ impl SessionManager {
             return Ok(None);
         }
 
-        let permission_checks =
-            match scoped_executor.collect_permission_checks_for_invocation(&resolved.invocation) {
-                Ok(checks) => checks,
-                Err(err) => {
-                    tracing::debug!(
-                        target: "agena::session::tools",
-                        session_id = session.id,
-                        call_id = resolved.call_id,
-                        error = %err,
-                        "deferring permission-check error to sequential failure handling"
-                    );
-                    *session = before_prepare;
-                    return Ok(None);
-                }
-            };
+        let permission_checks = match scoped_executor
+            .collect_permission_checks_for_invocation_in_session(
+                &resolved.invocation,
+                Some(session.id),
+            ) {
+            Ok(checks) => checks,
+            Err(err) => {
+                tracing::debug!(
+                    target: "agena::session::tools",
+                    session_id = session.id,
+                    call_id = resolved.call_id,
+                    error = %err,
+                    "deferring permission-check error to sequential failure handling"
+                );
+                *session = before_prepare;
+                return Ok(None);
+            }
+        };
 
         for check in permission_checks {
             if !matches!(
@@ -1552,20 +1555,23 @@ impl SessionManager {
             .await;
         }
 
-        let permission_checks =
-            match scoped_executor.collect_permission_checks_for_invocation(&resolved.invocation) {
-                Ok(checks) => checks,
-                Err(err) => {
-                    return Box::pin(self.apply_tool_failure(
-                        session,
-                        &resolved.pending,
-                        err.to_string(),
-                        None,
-                        state,
-                    ))
-                    .await;
-                }
-            };
+        let permission_checks = match scoped_executor
+            .collect_permission_checks_for_invocation_in_session(
+                &resolved.invocation,
+                Some(session.id),
+            ) {
+            Ok(checks) => checks,
+            Err(err) => {
+                return Box::pin(self.apply_tool_failure(
+                    session,
+                    &resolved.pending,
+                    err.to_string(),
+                    None,
+                    state,
+                ))
+                .await;
+            }
+        };
 
         match self
             .aggregate_permission_outcome(Some(session.id), permission_checks.as_slice())
@@ -1908,7 +1914,7 @@ impl SessionManager {
         invocation: &ToolInvocation,
     ) -> Result<(), AppError> {
         for check in executor
-            .collect_permission_checks_for_invocation(invocation)
+            .collect_permission_checks_for_invocation_in_session(invocation, Some(session_id))
             .map_err(tool_error_to_app_error)?
         {
             match self

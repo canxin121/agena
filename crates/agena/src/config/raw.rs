@@ -31,14 +31,17 @@ const DEFAULT_DATABASE_LOG_LEVEL: &str = "error";
 pub(crate) struct RawConfigFile {
     pub(crate) config: RawConfig,
     pub(crate) found: bool,
+    pub(crate) merge_keys: RawProjectMergeKeys,
 }
 
 impl RawConfigFile {
     pub(crate) fn read(path: &Path) -> Result<Self, ConfigError> {
         match fs::read_to_string(path) {
             Ok(text) => {
-                reject_unsupported_fields(path, &text)?;
-                let config = serde_json::from_str::<RawConfig>(&text).map_err(|source| {
+                let value = parse_config_value(path, &text)?;
+                reject_unsupported_fields_value(&value)?;
+                let merge_keys = RawProjectMergeKeys::from_value(&value);
+                let config = serde_json::from_value::<RawConfig>(value).map_err(|source| {
                     ConfigError::ParseFile {
                         path: path.to_path_buf(),
                         source,
@@ -47,11 +50,13 @@ impl RawConfigFile {
                 Ok(Self {
                     config,
                     found: true,
+                    merge_keys,
                 })
             }
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(Self {
                 config: RawConfig::default(),
                 found: false,
+                merge_keys: RawProjectMergeKeys::default(),
             }),
             Err(source) => Err(ConfigError::ReadFile {
                 path: path.to_path_buf(),
@@ -61,14 +66,62 @@ impl RawConfigFile {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct RawProjectMergeKeys {
+    plugins_host: bool,
+    plugins_host_timeouts: bool,
+    plugins_host_default_quota: bool,
+    plugins_host_quotas: bool,
+    plugins_host_trusted_keys: bool,
+    plugins_policy: bool,
+    plugins_policy_tool_presentation: bool,
+    plugins_policy_tool_presentation_default_mode: bool,
+    plugins_policy_tool_presentation_plugins: bool,
+    plugins_policy_tool_presentation_tools: bool,
+}
+
+impl RawProjectMergeKeys {
+    fn from_value(value: &Value) -> Self {
+        let plugins = value.get("plugins").and_then(Value::as_object);
+        let plugins_host = plugins
+            .and_then(|table| table.get("host"))
+            .and_then(Value::as_object);
+        let plugins_policy = plugins
+            .and_then(|table| table.get("policy"))
+            .and_then(Value::as_object);
+        let tool_presentation = plugins_policy
+            .and_then(|table| table.get("tool_presentation"))
+            .and_then(Value::as_object);
+        Self {
+            plugins_host: plugins.is_some_and(|table| table.contains_key("host")),
+            plugins_host_timeouts: plugins_host.is_some_and(|table| table.contains_key("timeouts")),
+            plugins_host_default_quota: plugins_host
+                .is_some_and(|table| table.contains_key("default_quota")),
+            plugins_host_quotas: plugins_host.is_some_and(|table| table.contains_key("quotas")),
+            plugins_host_trusted_keys: plugins_host
+                .is_some_and(|table| table.contains_key("trusted_keys")),
+            plugins_policy: plugins.is_some_and(|table| table.contains_key("policy")),
+            plugins_policy_tool_presentation: plugins_policy
+                .is_some_and(|table| table.contains_key("tool_presentation")),
+            plugins_policy_tool_presentation_default_mode: tool_presentation
+                .is_some_and(|table| table.contains_key("default_mode")),
+            plugins_policy_tool_presentation_plugins: tool_presentation
+                .is_some_and(|table| table.contains_key("plugins")),
+            plugins_policy_tool_presentation_tools: tool_presentation
+                .is_some_and(|table| table.contains_key("tools")),
+        }
+    }
+}
+
 pub(crate) fn validate_config_text(
     path: &Path,
     text: &str,
     env: &dyn ConfigEnvironment,
 ) -> Result<(), ConfigError> {
-    reject_unsupported_fields(path, text)?;
+    let value = parse_config_value(path, text)?;
+    reject_unsupported_fields_value(&value)?;
     let config =
-        serde_json::from_str::<RawConfig>(text).map_err(|source| ConfigError::ParseFile {
+        serde_json::from_value::<RawConfig>(value).map_err(|source| ConfigError::ParseFile {
             path: path.to_path_buf(),
             source,
         })?;
@@ -76,11 +129,14 @@ pub(crate) fn validate_config_text(
     Ok(())
 }
 
-fn reject_unsupported_fields(path: &Path, text: &str) -> Result<(), ConfigError> {
-    let value = serde_json::from_str::<Value>(text).map_err(|source| ConfigError::ParseFile {
+fn parse_config_value(path: &Path, text: &str) -> Result<Value, ConfigError> {
+    serde_json::from_str::<Value>(text).map_err(|source| ConfigError::ParseFile {
         path: path.to_path_buf(),
         source,
-    })?;
+    })
+}
+
+fn reject_unsupported_fields_value(value: &Value) -> Result<(), ConfigError> {
     let Some(table) = value.as_object() else {
         return Ok(());
     };
@@ -166,6 +222,18 @@ impl RawProvidersConfig {
     fn is_empty(&self) -> bool {
         self.default.is_none() && self.providers.is_empty()
     }
+
+    fn merge_project_from(&mut self, overlay: Self) {
+        merge_option(&mut self.default, overlay.default);
+        for (provider_id, provider) in overlay.providers {
+            match self.providers.get_mut(&provider_id) {
+                Some(existing) => existing.merge_project_from(provider),
+                None => {
+                    self.providers.insert(provider_id, provider);
+                }
+            }
+        }
+    }
 }
 
 impl Merge for RawProvidersConfig {
@@ -188,6 +256,11 @@ pub(crate) struct RawAgentsConfig {
 impl RawAgentsConfig {
     fn is_empty(&self) -> bool {
         self.default.is_none() && self.agents.is_empty()
+    }
+
+    fn merge_project_from(&mut self, overlay: Self) {
+        merge_option(&mut self.default, overlay.default);
+        self.agents.extend(overlay.agents);
     }
 }
 
@@ -225,6 +298,30 @@ impl RawConfig {
         merge_option_struct(&mut self.plugins, overlay.plugins);
         merge_option_struct(&mut self.harnesses, overlay.harnesses);
         self.providers.merge_from(overlay.providers);
+    }
+
+    /// Merge a project/workspace config layer.
+    ///
+    /// Project config is partial, but keyed entities use their natural key as
+    /// the conflict boundary: `agents.<name>` and `plugins.list.<id>` replace
+    /// the lower-priority entry, while provider `defaults` and `auth` replace
+    /// as whole selection/auth tuples. This keeps project overrides from
+    /// inheriting unrelated nested fields by accident.
+    pub(crate) fn merge_project_from_with_keys(
+        &mut self,
+        overlay: Self,
+        merge_keys: RawProjectMergeKeys,
+    ) {
+        merge_option_struct(&mut self.tracing, overlay.tracing);
+        merge_option_struct(&mut self.ui, overlay.ui);
+        merge_option_struct(&mut self.desktop, overlay.desktop);
+        merge_option_struct(&mut self.runtime, overlay.runtime);
+        merge_option_struct(&mut self.session, overlay.session);
+        merge_option_struct(&mut self.permission, overlay.permission);
+        self.agents.merge_project_from(overlay.agents);
+        merge_project_plugins(&mut self.plugins, overlay.plugins, merge_keys);
+        merge_option_struct(&mut self.harnesses, overlay.harnesses);
+        self.providers.merge_project_from(overlay.providers);
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -560,6 +657,107 @@ impl Merge for PluginConfig {
         if !overlay.policy.is_default() {
             self.policy = overlay.policy;
         }
+    }
+}
+
+fn merge_project_plugins(
+    base: &mut Option<PluginConfig>,
+    overlay: Option<PluginConfig>,
+    merge_keys: RawProjectMergeKeys,
+) {
+    let Some(overlay) = overlay else {
+        return;
+    };
+    match base.as_mut() {
+        Some(base) => merge_project_plugin_config(base, overlay, merge_keys),
+        None => *base = Some(overlay),
+    }
+}
+
+fn merge_project_plugin_config(
+    base: &mut PluginConfig,
+    overlay: PluginConfig,
+    merge_keys: RawProjectMergeKeys,
+) {
+    if merge_keys.plugins_host {
+        merge_project_plugin_host(&mut base.host, overlay.host, merge_keys);
+    }
+    if merge_keys.plugins_policy {
+        merge_project_plugin_policy(&mut base.policy, overlay.policy, merge_keys);
+    }
+    base.list.extend(overlay.list);
+}
+
+fn merge_project_plugin_host(
+    base: &mut crate::plugin::PluginHostConfig,
+    overlay: crate::plugin::PluginHostConfig,
+    merge_keys: RawProjectMergeKeys,
+) {
+    if merge_keys.plugins_host_timeouts {
+        merge_timeouts(&mut base.timeouts, overlay.timeouts);
+    }
+    if merge_keys.plugins_host_default_quota {
+        base.default_quota = overlay.default_quota;
+    }
+    if merge_keys.plugins_host_quotas {
+        base.quotas.extend(overlay.quotas);
+    }
+    if merge_keys.plugins_host_trusted_keys {
+        base.trusted_keys.extend(overlay.trusted_keys);
+    }
+}
+
+fn merge_project_plugin_policy(
+    base: &mut crate::plugin::PluginPolicyConfig,
+    overlay: crate::plugin::PluginPolicyConfig,
+    merge_keys: RawProjectMergeKeys,
+) {
+    if merge_keys.plugins_policy_tool_presentation {
+        merge_tool_presentation(
+            &mut base.tool_presentation,
+            overlay.tool_presentation,
+            merge_keys,
+        );
+    }
+}
+
+fn merge_tool_presentation(
+    base: &mut crate::plugin::ToolPresentationConfig,
+    overlay: crate::plugin::ToolPresentationConfig,
+    merge_keys: RawProjectMergeKeys,
+) {
+    if merge_keys.plugins_policy_tool_presentation_default_mode {
+        base.default_mode = overlay.default_mode;
+    }
+    if merge_keys.plugins_policy_tool_presentation_plugins {
+        base.plugins.extend(overlay.plugins);
+    }
+    if merge_keys.plugins_policy_tool_presentation_tools {
+        base.tools.extend(overlay.tools);
+    }
+}
+
+fn merge_timeouts(
+    base: &mut crate::plugin::TimeoutsConfig,
+    overlay: crate::plugin::TimeoutsConfig,
+) {
+    if overlay.init.is_some() {
+        base.init = overlay.init;
+    }
+    if overlay.tool_hook.is_some() {
+        base.tool_hook = overlay.tool_hook;
+    }
+    if overlay.tool_invoke.is_some() {
+        base.tool_invoke = overlay.tool_invoke;
+    }
+    if overlay.permission_ask.is_some() {
+        base.permission_ask = overlay.permission_ask;
+    }
+    if overlay.chat.is_some() {
+        base.chat = overlay.chat;
+    }
+    if overlay.fast.is_some() {
+        base.fast = overlay.fast;
     }
 }
 
@@ -1054,6 +1252,24 @@ impl std::str::FromStr for ProviderKind {
 }
 
 impl ProviderOverlay {
+    fn merge_project_from(&mut self, overlay: Self) {
+        merge_option(&mut self.enabled, overlay.enabled);
+        if overlay.defaults.is_some() {
+            self.defaults = overlay.defaults;
+        }
+        if overlay.auth.is_some() {
+            self.auth = overlay.auth;
+        }
+        for (adapter_id, adapter) in overlay.adapters {
+            match self.adapters.get_mut(&adapter_id) {
+                Some(existing) => existing.merge_from(adapter),
+                None => {
+                    self.adapters.insert(adapter_id, adapter);
+                }
+            }
+        }
+    }
+
     fn resolve(
         self,
         provider_id: String,
@@ -2543,6 +2759,451 @@ mod tests {
     fn resolve_config(value: serde_json::Value) -> Result<ResolvedConfig, ConfigError> {
         let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
         raw.resolve_with_env(&TestEnvironment)
+    }
+
+    fn raw_config(value: serde_json::Value) -> RawConfig {
+        serde_json::from_value::<RawConfig>(value).expect("config should parse")
+    }
+
+    #[test]
+    fn project_merge_replaces_agents_by_name() {
+        let mut global = raw_config(json!({
+            "agents": {
+                "default": "review",
+                "review": {
+                    "description": "Global review agent",
+                    "prompt": "Global prompt",
+                    "permission": {
+                        "tools": {
+                            "names": {
+                                "shell": "allow"
+                            }
+                        }
+                    }
+                }
+            }
+        }));
+        let project = raw_config(json!({
+            "agents": {
+                "review": {
+                    "description": "Project review agent"
+                }
+            }
+        }));
+
+        global.merge_project_from_with_keys(project, RawProjectMergeKeys::default());
+        let resolved = global
+            .resolve_with_env(&TestEnvironment)
+            .expect("project merged config should resolve");
+        let review = resolved.agents.get("review").expect("review agent");
+
+        assert_eq!(resolved.default_agent.as_deref(), Some("review"));
+        assert_eq!(review.description, "Project review agent");
+        assert!(review.prompt.is_empty());
+        assert!(review.permission.is_empty());
+    }
+
+    #[test]
+    fn project_merge_replaces_provider_defaults_as_selection_tuple() {
+        let mut global = raw_config(json!({
+            "providers": {
+                "default": "openai",
+                "openai": {
+                    "defaults": {
+                        "adapter": "openai",
+                        "model": "gpt-4.1",
+                        "thinking_mode": "high",
+                        "speed_mode": "fast"
+                    },
+                    "auth": {
+                        "mode": "api",
+                        "base_url": "https://api.openai.com",
+                        "api_key": "test"
+                    },
+                    "adapters": {
+                        "openai": {
+                            "enabled": true,
+                            "models": {
+                                "gpt-4.1": {},
+                                "gpt-5": {}
+                            }
+                        }
+                    }
+                }
+            }
+        }));
+        let project = raw_config(json!({
+            "providers": {
+                "openai": {
+                    "defaults": {
+                        "adapter": "openai",
+                        "model": "gpt-5"
+                    }
+                }
+            }
+        }));
+
+        global.merge_project_from_with_keys(project, RawProjectMergeKeys::default());
+        let resolved = global
+            .resolve_with_env(&TestEnvironment)
+            .expect("provider config should still inherit auth and adapters");
+
+        assert_eq!(resolved.default_selection.model.as_deref(), Some("gpt-5"));
+        assert_eq!(resolved.default_selection.thinking_mode, None);
+        assert_eq!(resolved.default_selection.speed_mode, None);
+        assert!(
+            resolved
+                .providers
+                .get("openai")
+                .is_some_and(|provider| provider.adapters.contains_key("openai"))
+        );
+    }
+
+    #[test]
+    fn project_merge_replaces_plugins_by_plugin_id() {
+        let mut global = raw_config(json!({
+            "plugins": {
+                "list": {
+                    "agena.web": {
+                        "package": {
+                            "kind": "static"
+                        },
+                        "config": {
+                            "source": "global"
+                        }
+                    },
+                    "agena.memory": {
+                        "package": {
+                            "kind": "static"
+                        },
+                        "config": {
+                            "source": "global"
+                        }
+                    }
+                }
+            }
+        }));
+        let project = raw_config(json!({
+            "plugins": {
+                "list": {
+                    "agena.web": {
+                        "package": {
+                            "kind": "static"
+                        },
+                        "config": {
+                            "source": "project"
+                        }
+                    }
+                }
+            }
+        }));
+
+        global.merge_project_from_with_keys(project, RawProjectMergeKeys::default());
+        let plugins = &global.plugins.as_ref().expect("plugins").list;
+
+        assert_eq!(plugins.len(), 2);
+        assert_eq!(
+            plugins
+                .get("agena.web")
+                .and_then(|plugin| plugin.config().get("source"))
+                .and_then(serde_json::Value::as_str),
+            Some("project")
+        );
+        assert_eq!(
+            plugins
+                .get("agena.memory")
+                .and_then(|plugin| plugin.config().get("source"))
+                .and_then(serde_json::Value::as_str),
+            Some("global")
+        );
+    }
+
+    #[test]
+    fn project_merge_can_reset_plugin_policy_to_default_when_policy_key_is_present() {
+        let mut global = raw_config(json!({
+            "plugins": {
+                "policy": {
+                    "tool_presentation": {
+                        "default_mode": "help"
+                    }
+                }
+            }
+        }));
+        let project = raw_config(json!({
+            "plugins": {
+                "policy": {
+                    "tool_presentation": {
+                        "default_mode": "detailed"
+                    }
+                }
+            }
+        }));
+
+        global.merge_project_from_with_keys(
+            project,
+            RawProjectMergeKeys {
+                plugins_policy: true,
+                plugins_policy_tool_presentation: true,
+                plugins_policy_tool_presentation_default_mode: true,
+                ..RawProjectMergeKeys::default()
+            },
+        );
+        let policy = &global.plugins.as_ref().expect("plugins").policy;
+
+        assert_eq!(
+            policy.tool_presentation.default_mode,
+            crate::plugin::ToolDescriptionMode::Detailed
+        );
+    }
+
+    #[test]
+    fn project_merge_merges_plugin_host_by_nested_keys() {
+        let mut global = raw_config(json!({
+            "plugins": {
+                "host": {
+                    "timeouts": {
+                        "init": "10s",
+                        "tool_invoke": "60s"
+                    },
+                    "default_quota": {
+                        "rate_per_sec": 5,
+                        "burst": 10,
+                        "max_concurrent": 2
+                    },
+                    "quotas": {
+                        "agena.web": {
+                            "rate_per_sec": 1
+                        },
+                        "agena.memory": {
+                            "rate_per_sec": 2
+                        }
+                    },
+                    "trusted_keys": {
+                        "global": "aaaa"
+                    }
+                }
+            }
+        }));
+        let project = raw_config(json!({
+            "plugins": {
+                "host": {
+                    "timeouts": {
+                        "tool_invoke": "30s"
+                    },
+                    "quotas": {
+                        "agena.web": {
+                            "rate_per_sec": 9,
+                            "max_concurrent": 1
+                        }
+                    },
+                    "trusted_keys": {
+                        "project": "bbbb"
+                    }
+                }
+            }
+        }));
+
+        global.merge_project_from_with_keys(
+            project,
+            RawProjectMergeKeys {
+                plugins_host: true,
+                plugins_host_timeouts: true,
+                plugins_host_quotas: true,
+                plugins_host_trusted_keys: true,
+                ..RawProjectMergeKeys::default()
+            },
+        );
+        let host = &global.plugins.as_ref().expect("plugins").host;
+
+        assert!(host.timeouts.init.is_some());
+        assert_eq!(
+            host.timeouts
+                .tool_invoke
+                .as_ref()
+                .map(|value| value.0.as_secs()),
+            Some(30)
+        );
+        assert_eq!(host.default_quota.rate_per_sec, 5);
+        assert_eq!(
+            host.quotas.get("agena.web").map(|quota| quota.rate_per_sec),
+            Some(9)
+        );
+        assert_eq!(
+            host.quotas
+                .get("agena.web")
+                .map(|quota| quota.max_concurrent),
+            Some(1)
+        );
+        assert_eq!(
+            host.quotas
+                .get("agena.memory")
+                .map(|quota| quota.rate_per_sec),
+            Some(2)
+        );
+        assert_eq!(
+            host.trusted_keys.get("global").map(String::as_str),
+            Some("aaaa")
+        );
+        assert_eq!(
+            host.trusted_keys.get("project").map(String::as_str),
+            Some("bbbb")
+        );
+    }
+
+    #[test]
+    fn project_merge_merges_tool_presentation_by_plugin_and_tool_keys() {
+        let mut global = raw_config(json!({
+            "plugins": {
+                "policy": {
+                    "tool_presentation": {
+                        "default_mode": "help",
+                        "plugins": {
+                            "agena.web": "help",
+                            "agena.memory": "help"
+                        },
+                        "tools": {
+                            "bash": "help"
+                        }
+                    }
+                }
+            }
+        }));
+        let project = raw_config(json!({
+            "plugins": {
+                "policy": {
+                    "tool_presentation": {
+                        "plugins": {
+                            "agena.web": "detailed"
+                        },
+                        "tools": {
+                            "read": "detailed"
+                        }
+                    }
+                }
+            }
+        }));
+
+        global.merge_project_from_with_keys(
+            project,
+            RawProjectMergeKeys {
+                plugins_policy: true,
+                plugins_policy_tool_presentation: true,
+                plugins_policy_tool_presentation_plugins: true,
+                plugins_policy_tool_presentation_tools: true,
+                ..RawProjectMergeKeys::default()
+            },
+        );
+        let presentation = &global
+            .plugins
+            .as_ref()
+            .expect("plugins")
+            .policy
+            .tool_presentation;
+
+        assert_eq!(
+            presentation.default_mode,
+            crate::plugin::ToolDescriptionMode::Help
+        );
+        assert_eq!(
+            presentation.plugins.get("agena.web").copied(),
+            Some(crate::plugin::ToolDescriptionMode::Detailed)
+        );
+        assert_eq!(
+            presentation.plugins.get("agena.memory").copied(),
+            Some(crate::plugin::ToolDescriptionMode::Help)
+        );
+        assert_eq!(
+            presentation.tools.get("bash").copied(),
+            Some(crate::plugin::ToolDescriptionMode::Help)
+        );
+        assert_eq!(
+            presentation.tools.get("read").copied(),
+            Some(crate::plugin::ToolDescriptionMode::Detailed)
+        );
+    }
+
+    #[test]
+    fn project_merge_merges_permission_and_harnesses_by_natural_keys() {
+        let mut global = raw_config(json!({
+            "permission": {
+                "path": {
+                    "rules": {
+                        "src/**": "read"
+                    }
+                },
+                "network": {
+                    "rules": {
+                        "api.example.com": "allow"
+                    }
+                },
+                "tools": {
+                    "names": {
+                        "bash": "ask"
+                    }
+                }
+            },
+            "harnesses": {
+                "shell": {
+                    "local": {
+                        "allow_commands": ["git status"]
+                    }
+                }
+            }
+        }));
+        let project = raw_config(json!({
+            "permission": {
+                "path": {
+                    "rules": {
+                        "src/**": "deny",
+                        "docs/**": "read"
+                    }
+                },
+                "network": {
+                    "rules": {
+                        "api.example.com": "deny"
+                    }
+                },
+                "tools": {
+                    "names": {
+                        "bash": "deny"
+                    }
+                }
+            },
+            "harnesses": {
+                "shell": {
+                    "local": {
+                        "deny_commands": ["rm -rf *"]
+                    }
+                }
+            }
+        }));
+
+        global.merge_project_from_with_keys(project, RawProjectMergeKeys::default());
+        let permission = global.permission.as_ref().expect("permission");
+        let path_rules = &permission.path.as_ref().expect("path permission").rules;
+        let network_rules = &permission
+            .network
+            .as_ref()
+            .expect("network permission")
+            .rules;
+        let tool_names = &permission.tools.as_ref().expect("tool permission").names;
+        let shell = &global.harnesses.as_ref().expect("harnesses").shell["local"];
+
+        assert!(matches!(
+            path_rules.get("src/**"),
+            Some(crate::agent::PathAccessRuleConfig::Shorthand(value)) if value == "deny"
+        ));
+        assert!(path_rules.contains_key("docs/**"));
+        assert_eq!(
+            network_rules.get("api.example.com"),
+            Some(&crate::permission::PermissionMode::Deny)
+        );
+        assert_eq!(
+            tool_names.get("bash"),
+            Some(&crate::permission::PermissionMode::Deny)
+        );
+        assert!(shell.allow_commands.is_empty());
+        assert_eq!(shell.deny_commands, vec!["rm -rf *"]);
     }
 
     #[test]

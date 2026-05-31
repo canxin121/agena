@@ -45,22 +45,39 @@ agena config validate
 
 ## 加载路径与优先级
 
-配置加载入口是 `ConfigLoader`。共享 JSON 配置路径固定为：
+配置加载入口是 `ConfigLoader`。全局 JSON 配置路径固定为：
 
 ```text
 ~/agena/agena.json
 ```
 
-缺失配置文件不是错误。没有文件时，Agena 仍会使用内置默认值、环境变量和 CLI 覆盖解析出配置。
+工作区可以额外提供一个局部 JSON 配置：
+
+```text
+<workspace>/.agena/agena.json
+```
+
+两个配置文件都可以只写部分字段。缺失配置文件不是错误。没有文件时，Agena 仍会使用内置默认值、环境变量和 CLI 覆盖解析出配置。
 
 合并优先级从低到高：
 
 1. 内置默认值。
-2. JSON 配置文件。
-3. 环境变量 overlay。
-4. CLI 全局 `--set key=value` 覆盖。
+2. 全局 JSON 配置文件 `~/agena/agena.json`。
+3. 工作区 JSON 配置文件 `<workspace>/.agena/agena.json`。
+4. 环境变量 overlay。
+5. CLI 全局 `--set key=value` 覆盖。
 
 配置始终解析为单个生效快照。
+
+工作区配置使用主键边界合并，避免同名实体被跨层深层混合：
+
+- `agents.<name>`: 同名 agent 整体替换，`agents.default` 单独按标量覆盖。
+- `plugins.list.<id>`: 同 plugin id 整体替换；`plugins.host.quotas.<plugin-id>`、`plugins.host.trusted_keys.<key-id>`、`plugins.policy.tool_presentation.plugins.<plugin-id>` 和 `plugins.policy.tool_presentation.tools.<tool>` 按各自主键覆盖，其他 plugin host/policy 标量按字段覆盖。
+- `providers.<id>.defaults`: 默认 provider/adapter/model/thinking/speed/verbosity/parallel 选择作为一个元组整体替换。
+- `providers.<id>.auth`: auth 配置整体替换。
+- `providers.<id>.adapters.<adapter-id>`: adapter 内的标量字段按字段覆盖，`models.<model-id>` 按 model id 整体替换。
+- `permission` 和 `harnesses`: 按各自配置里的自然键覆盖，例如 path/network/tool rules、tool tag/name、harness name。
+- 其他没有 map 主键的结构字段按已有 partial overlay 语义合并，标量和数组由高优先级覆盖。
 
 ## 查看与验证配置
 
@@ -76,7 +93,7 @@ agena config resolve --format json
 agena config validate
 ```
 
-诊断命令会输出配置路径、是否找到配置文件、应用层级、provider 数量、plugin 数量和相关环境变量是否设置：
+诊断命令会输出全局/工作区配置路径、是否找到配置文件、应用层级、provider 数量、plugin 数量和相关环境变量是否设置：
 
 ```bash
 agena diagnostics

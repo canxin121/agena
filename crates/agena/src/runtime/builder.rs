@@ -101,6 +101,10 @@ impl AgenaRuntimeBuilder {
             tracing_reload_handle,
         } = self;
         let workspace_root = workspace_root.unwrap_or(env::current_dir()?);
+        let mut load_request = load_request;
+        if load_request.workspace_root.is_none() {
+            load_request.workspace_root = Some(workspace_root.clone());
+        }
         let loader = ConfigLoader::new(ProcessEnvironment);
         let initial_resolution = loader.load(&load_request)?;
         let database = connect_database(

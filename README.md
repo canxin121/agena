@@ -132,12 +132,13 @@ Studio 服务公开：
 
 ## 配置入口
 
-配置文件固定为 `~/agena/agena.json`。Desktop 壳自己的启动设置也写在同一个文件里。配置层级按以下顺序合并，后者覆盖前者：
+全局配置文件固定为 `~/agena/agena.json`。工作区可以额外放置 `<workspace>/.agena/agena.json` 作为局部 partial 配置。Desktop 壳自己的启动设置也写在全局文件里。配置层级按以下顺序合并，后者覆盖前者：
 
 1. 内置默认值。
-2. JSON 配置文件。
-3. 环境变量 overlay。
-4. CLI 全局 `--set key=value` 覆盖。
+2. 全局 JSON 配置文件。
+3. 工作区 JSON 配置文件。
+4. 环境变量 overlay。
+5. CLI 全局 `--set key=value` 覆盖。
 
 常用覆盖示例：
 

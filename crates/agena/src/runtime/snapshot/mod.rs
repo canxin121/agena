@@ -257,10 +257,7 @@ impl RuntimeSnapshot {
                 .dispatch_config(crate::plugin::ConfigInput { current: value })
                 .await;
         }
-        let agents = crate::agents::SubagentRegistry::discover(
-            workspace_root,
-            crate::agents::default_user_agents_dir().as_deref(),
-        );
+        let agents = crate::agents::SubagentRegistry::discover(workspace_root, None);
         register_config_agents(&agents, &resolution, &resolution.config.agents);
         let reusing_session_manager = existing_session_manager.is_some();
         let lsp_config =

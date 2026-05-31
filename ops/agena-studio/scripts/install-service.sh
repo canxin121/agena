@@ -9,14 +9,13 @@ Options:
   --archive PATH_OR_URL    Backend package archive (.tar.gz)
   --repo OWNER/REPO        GitHub repo for release downloads (default: canxin121/agena)
   --version VERSION        Release version, e.g. 0.1.0 or v0.1.0
-  --install-dir DIR        Install directory (default: ~/.agena-studio)
+  --install-dir DIR        Install directory (default: ~/agena/studio)
   --host HOST              Backend host (default: 127.0.0.1)
   --port PORT              Backend port (default: 3210)
   --ui-password PASSWORD   Optional UI password
   --workspace-root PATH    Optional workspace root
   --database-path PATH     Optional SQLite database path
   --database-url URL       Optional database URL
-  --config PATH            Optional Agena config path
   --set KEY=VALUE          Additional Agena overrides (repeatable)
   -h, --help               Show help
 EOF
@@ -26,14 +25,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="canxin121/agena"
 VERSION=""
 ARCHIVE=""
-INSTALL_DIR="${HOME}/.agena-studio"
+INSTALL_DIR="${HOME}/agena/studio"
 HOST="127.0.0.1"
 PORT="3210"
 UI_PASSWORD=""
 WORKSPACE_ROOT=""
 DATABASE_PATH=""
 DATABASE_URL=""
-CONFIG_PATH=""
 SETS=()
 
 while [[ $# -gt 0 ]]; do
@@ -48,7 +46,6 @@ while [[ $# -gt 0 ]]; do
     --workspace-root) WORKSPACE_ROOT="${2:-}"; shift 2 ;;
     --database-path) DATABASE_PATH="${2:-}"; shift 2 ;;
     --database-url) DATABASE_URL="${2:-}"; shift 2 ;;
-    --config) CONFIG_PATH="${2:-}"; shift 2 ;;
     --set) SETS+=("${2:-}"); shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -127,9 +124,6 @@ LAUNCHER="$INSTALL_DIR/bin/run-agena-studio.sh"
   fi
   if [[ -n "$DATABASE_URL" ]]; then
     printf ' --database-url %q' "$DATABASE_URL"
-  fi
-  if [[ -n "$CONFIG_PATH" ]]; then
-    printf ' --config %q' "$CONFIG_PATH"
   fi
   for item in "${SETS[@]}"; do
     printf ' --set %q' "$item"

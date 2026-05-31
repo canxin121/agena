@@ -10,7 +10,6 @@ export type DesktopConfig = {
     backend_log_level?: string | null
     ui_password?: string | null
     ui_cookie_samesite?: string | null
-    agena_config_path?: string | null
     workspace_root?: string | null
     database_path?: string | null
     database_url?: string | null
@@ -83,8 +82,6 @@ function asDesktopConfig(value: unknown): DesktopConfig | null {
       ui_password: typeof backend.ui_password === 'string' ? backend.ui_password : null,
       ui_cookie_samesite:
         typeof backend.ui_cookie_samesite === 'string' ? backend.ui_cookie_samesite : null,
-      agena_config_path:
-        typeof backend.agena_config_path === 'string' ? backend.agena_config_path : null,
       workspace_root: typeof backend.workspace_root === 'string' ? backend.workspace_root : null,
       database_path: typeof backend.database_path === 'string' ? backend.database_path : null,
       database_url: typeof backend.database_url === 'string' ? backend.database_url : null,

@@ -23050,7 +23050,7 @@ fn default_draft_store_path() -> PathBuf {
         .or_else(|_| env::var("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."));
-    base.push(".agena");
+    base.push("agena");
     base.push("tui-drafts.json");
     base
 }
@@ -23060,7 +23060,7 @@ fn default_prompt_history_path() -> PathBuf {
         .or_else(|_| env::var("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."));
-    base.push(".agena");
+    base.push("agena");
     base.push("tui-prompt-history.jsonl");
     base
 }

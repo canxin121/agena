@@ -119,7 +119,7 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
             &mut plan,
         )?;
 
-        // Snapshot installed.json + the user's config.json before mutating
+        // Snapshot installed.json + the user's agena.json before mutating
         // anything so we can roll back if any step in the plan fails.
         let txn = InstallTransaction::begin(&self.cache, &req.config_path)?;
 

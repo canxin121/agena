@@ -15,7 +15,6 @@ mod git2_utils;
 mod path_utils;
 mod persistence_paths;
 mod providers;
-mod runtime_config;
 mod settings;
 mod settings_events;
 mod studio_db;
@@ -36,10 +35,6 @@ pub(crate) use error::{ApiResult, AppError};
     about = "Agena Studio (Rust + Vue) server"
 )]
 pub(crate) struct Args {
-    /// Agena runtime config file path.
-    #[arg(long, env = "AGENA_CONFIG", value_name = "PATH")]
-    pub(crate) config: Option<String>,
-
     /// Agena runtime overrides.
     #[arg(short = 'c', long = "set")]
     pub(crate) overrides: Vec<ConfigOverride>,
@@ -124,7 +119,6 @@ pub(crate) enum UiCookieSameSite {
 impl Args {
     pub(crate) fn load_request(&self) -> LoadConfigRequest {
         LoadConfigRequest {
-            config_path: self.config.as_ref().map(PathBuf::from),
             overrides: self.overrides.clone(),
         }
     }
@@ -148,13 +142,7 @@ fn main() {
 }
 
 async fn async_main() {
-    let args = match runtime_config::parse_args_with_runtime_config() {
-        Ok(args) => args,
-        Err(err) => {
-            eprintln!("{err}");
-            std::process::exit(2);
-        }
-    };
+    let args = Args::parse();
     let resolution = ConfigLoader::default().load(&args.load_request()).ok();
     let tracing = resolution
         .as_ref()

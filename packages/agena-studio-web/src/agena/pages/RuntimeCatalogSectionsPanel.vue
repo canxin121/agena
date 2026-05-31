@@ -5,7 +5,6 @@ import type { RuntimeSkillCatalogSection } from './useRuntimeSkillsState'
 
 const props = defineProps<{
   sections: RuntimeSkillCatalogSection[]
-  openWorkspaceShortcut: (shortcutId: string) => void
   openRuntimeEntryInChat: (entry: RuntimeSkill) => void
   openRuntimeEntrySource: (entry: RuntimeSkill) => void
 }>()
@@ -21,7 +20,6 @@ const props = defineProps<{
         </div>
         <div class="button-row" style="flex-wrap: wrap">
           <span class="badge">{{ section.filteredCount }}/{{ section.totalCount }}</span>
-          <button class="button" @click="props.openWorkspaceShortcut(section.openShortcutId)">{{ section.openShortcutLabel }}</button>
         </div>
       </div>
       <div v-if="section.entries.length" class="list">

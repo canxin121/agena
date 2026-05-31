@@ -261,29 +261,9 @@ export function useWorkspacePageState(
     void loadTree()
   }
 
-  function openRuntimeConfigRoot() {
-    openShortcut('.agena')
-  }
-
-  function openWorktreeDirectory() {
-    openShortcut('.agena/worktrees')
-  }
-
-  function openLogsDirectory() {
-    openShortcut('.agena/logs')
-  }
-
-  function openSettingsForShortcut(shortcutId: string) {
+  function openSettingsForShortcut(_shortcutId: string) {
     const workspace = selectedWorkspaceId.value ? String(selectedWorkspaceId.value) : undefined
-    if (shortcutId === 'hooks') {
-      void input.router.push({ path: buildRuntimeSectionPath('settings', 'permissions'), query: { workspace } })
-      return
-    }
-    if (shortcutId === 'worktrees') {
-      void input.router.push({ path: '/workspace', query: { workspace, path: '.agena/worktrees' } })
-      return
-    }
-    void input.router.push({ path: buildRuntimeSectionPath('runtime', 'skills'), query: { workspace } })
+    void input.router.push({ path: buildRuntimeSectionPath('runtime', 'workflow'), query: { workspace } })
   }
 
   function openChatForWorkspace() {
@@ -427,12 +407,9 @@ export function useWorkspacePageState(
     deleteWorkspaceAction,
     openChatForWorkspace,
     openDirectory,
-    openRuntimeConfigRoot,
     openRuntimeForWorkspace,
     openSettingsForShortcut,
     openShortcut,
-    openLogsDirectory,
-    openWorktreeDirectory,
     pageDescription,
     pageTitle,
     pathInput,

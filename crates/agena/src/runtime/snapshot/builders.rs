@@ -75,7 +75,7 @@ pub(super) fn build_tool_executor(
 
     // Drop any orphan worktrees left over from a previously-crashed
     // session so a clean startup does not accumulate
-    // .agena/worktrees/<slug> directories indefinitely. Stale = no live
+    // managed worktree directories indefinitely. Stale = no live
     // session and not registered with `git worktree list`.
     let pruned = crate::tool::worktree_prune_stale(workspace_root, &worktree_registry);
     if !pruned.is_empty() {

@@ -154,7 +154,7 @@ Reload builds a fresh runtime snapshot and preserves byte-identical plugin trans
 
 ```text
 LoadConfigRequest
-  config_path + CLI overrides
+  CLI overrides
         |
         v
 ConfigLoader
@@ -408,7 +408,7 @@ crates/agena runtime/session/event/db
 
 `agena-studio-server` builds `AgenaRuntime` with:
 
-- config request from `--config` and `--set`.
+- config from the fixed `~/agena/agena.json` file plus `--set` overrides.
 - workspace root from `--workspace-root` or current directory.
 - database URL/path from CLI/env/default.
 - optional UI password.
@@ -450,7 +450,7 @@ Default storage resolution:
 ```text
 AGENA_DATABASE_URL
 AGENA_DATABASE_PATH
-~/.agena/agena.db
+~/agena/agena.db
 ```
 
 `StorageConfig::ensure_parent` creates parent directories for file-backed SQLite URLs.
@@ -498,7 +498,7 @@ Use these extension points depending on what you need:
 
 - New model backend: add provider implementation under `crates/agena/src/provider/` and materialize it in `config/registry.rs`, or provide a plugin provider through `provider.list`.
 - New provided tool: implement plugin tool under `crates/agena/src/plugins/provided/` or an internal tool module and register it in plugin host build.
-- External plugin tool/plugin: use `agena-plugin-sdk` and configure `plugins.list.<id>` in `config.json`.
+- External plugin tool/plugin: use `agena-plugin-sdk` and configure `plugins.list.<id>` in `agena.json`.
 - New API operation: add type to `crates/agena-api`, map it in `crates/agena-api-server/src/dispatch.rs`, and expose REST route if Studio/Web needs direct HTTP.
 - New Studio UI feature: add API wrapper in `packages/agena-studio-web/src/agena/lib/agenaApi.ts`, then page/state/component code.
 - New config field: add raw type, merge behavior, env/override if needed, resolved type, validation, and example config coverage across the integration/e2e suite.

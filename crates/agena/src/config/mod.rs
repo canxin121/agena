@@ -21,8 +21,8 @@ pub use overrides::ConfigOverride;
 pub use types::{
     AgentConfig, AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer,
     BedrockSigv4AuthConfig, BrowserHarnessConfig, ConfigOutputFormat, ConfigResolution,
-    ConfigResolutionMeta, ConfigSource, EditorHarnessConfig, GeminiProviderOptions,
-    GitlabProviderOptions, HarnessViewportConfig, HarnessesConfig,
+    ConfigResolutionMeta, ConfigSource, DesktopBackendConfig, DesktopConfig, EditorHarnessConfig,
+    GeminiProviderOptions, GitlabProviderOptions, HarnessViewportConfig, HarnessesConfig,
     HostedCodeExecutionContainerConfig, HttpProviderAdapterConfig, NativeToolFreshness,
     NativeToolHarnessKind, NativeToolUserLocationConfig, OllamaProviderOptions,
     OpenAiApiModeConfig, OpenAiBackendConfig, OpenAiProviderOptions, PluginConfig,

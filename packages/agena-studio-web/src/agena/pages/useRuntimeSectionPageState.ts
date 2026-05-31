@@ -65,7 +65,6 @@ export function useRuntimeSectionPageState(input: { route: RouteLocationNormaliz
     openRuntimeConfigRoot: state.openRuntimeConfigRoot,
     openRuntimeEntryInChat: state.openRuntimeEntryInChat,
     openRuntimeEntrySource: state.openRuntimeEntrySource,
-    openWorkspaceShortcut: state.openWorkspaceShortcut,
     runtimeSkillQuery: state.runtimeSkillQuery,
     skillCommands: state.skillCommands,
   })

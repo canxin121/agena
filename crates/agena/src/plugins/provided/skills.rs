@@ -1,7 +1,5 @@
-//! `agena.skills` — discovery plugin that scans the standard skill
-//! roots (workspace `.agena/skills/` and user `~/.agena/skills/`) plus
-//! user slash-command markdown, and registers everything it finds as dynamic
-//! plugin tools.
+//! `agena.skills` — discovery plugin for explicit skill roots. Runtime defaults
+//! do not scan implicit workspace or user-global directories.
 //!
 //! Packaged skills from `agena-skills` are also projected here so a fresh
 //! install has workflow-like tools before any user-defined content exists.

@@ -45,7 +45,6 @@ async fn async_main() -> Result<(), agena::AppError> {
                 locale: args.locale,
                 log_file: args.log_file,
                 log_stderr: args.log_stderr,
-                tui_config: args.tui_config,
             },
         )
         .await;

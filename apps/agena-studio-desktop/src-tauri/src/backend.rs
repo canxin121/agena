@@ -297,10 +297,6 @@ async fn spawn_backend_service(
         cmd = cmd.args(["--ui-password", pw]);
     }
 
-    if let Some(config_path) = cfg.backend.agena_config_path.as_deref() {
-        cmd = cmd.args(["--config", config_path]);
-    }
-
     if let Some(workspace_root) = cfg.backend.workspace_root.as_deref() {
         cmd = cmd.args(["--workspace-root", workspace_root]);
     }
@@ -493,7 +489,7 @@ fn pick_port(preferred: u16) -> Result<u16, String> {
     }
 
     Err(format!(
-        "backend port {port} is not available. Edit the desktop runtime config file (agena-studio.toml) to change the port, or stop the other process using it."
+        "backend port {port} is not available. Edit `desktop.backend.port` in `~/agena/agena.json`, or stop the other process using it."
     ))
 }
 
@@ -745,7 +741,7 @@ fn backend_start_error_info(detail: impl Into<String>) -> BackendErrorInfo {
         )
         .with_detail(detail)
         .with_hint(Some(
-            "Change `backend.port` in agena-studio.toml or stop the process using that port."
+            "Change `desktop.backend.port` in `~/agena/agena.json` or stop the process using that port."
                 .to_string(),
         ));
     }

@@ -426,7 +426,7 @@ enum UserToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "plan",
-    description = "Plan mode command. Use action `enter` or `exit`; `enter` allocates a plan markdown file under .agena/plans/ and `exit` asks the user to approve the plan.",
+    description = "Plan mode command. Use action `enter` or `exit`; `enter` allocates a home-level plan markdown file and `exit` asks the user to approve the plan.",
     tags(ToolTag::ReadOnly, ToolTag::Planning, ToolTag::FilesystemWrite),
     host_capabilities(HostCapability::PlanRegistry, HostCapability::AgentRegistry),
     concurrency_safe = true
@@ -1467,14 +1467,7 @@ impl Plugin for WorkflowPlugin {
                         PathRequest::write(path),
                     ]);
                 }
-                let path = input
-                    .name
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|name| !name.is_empty())
-                    .map(|name| format!(".agena/worktrees/{name}"))
-                    .unwrap_or_else(|| ".agena/worktrees".to_string());
-                Ok(vec![PathRequest::write(path)])
+                Ok(vec![PathRequest::write("~/agena/projects".to_string())])
             }
             _ => Ok(Vec::new()),
         }
@@ -1532,7 +1525,7 @@ fn tools() -> Vec<PluginToolDecl> {
         GoalToolInput::tool_decl(),
         UserToolInput::tool_decl(),
         PlanToolInput::tool_decl().path_access(PathAccessSpec {
-            path: ".agena/plans".to_string(),
+            path: "~/agena/projects".to_string(),
             kind: PathKind::Write,
         }),
         WorktreeToolInput::tool_decl(),

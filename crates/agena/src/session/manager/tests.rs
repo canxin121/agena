@@ -4525,7 +4525,7 @@ while True:
                     serde_json::json!({
                         "action": "glob",
                         "pattern": "*.md",
-                        "path": ".agena/plans"
+                        "path": "~/agena/projects/<workspace>/plans"
                     })
                     .to_string(),
                 )])
@@ -4702,12 +4702,14 @@ while True:
                 ],
             );
 
-            let plan_path = std::fs::read_dir(workspace.root.join(".agena/plans"))
-                .expect("plans directory should exist")
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("md"))
-                .expect("plan tool should create exactly one markdown file");
+            let plan_path = std::fs::read_dir(
+                crate::project_paths::project_state_dir(&workspace.root).join("plans"),
+            )
+            .expect("plans directory should exist")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("md"))
+            .expect("plan tool should create exactly one markdown file");
             let plan_body = std::fs::read_to_string(&plan_path).expect("plan file should exist");
             assert!(
                 plan_body.contains("enter a throwaway worktree"),
@@ -4734,7 +4736,10 @@ while True:
                 "worktree mutation should not leak back into the original workspace"
             );
             assert!(
-                !workspace.root.join(".agena/worktrees/demo").exists(),
+                !crate::project_paths::project_state_dir(&workspace.root)
+                    .join("worktrees")
+                    .join("demo")
+                    .exists(),
                 "worktree exit remove should clean up the temporary worktree"
             );
         });

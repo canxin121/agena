@@ -10,7 +10,7 @@ use crate::error::AppError;
 /// Resolves the SQLite database URL from (in priority order):
 /// 1. An explicit `database_url` string (e.g. `sqlite::memory:` for tests)
 /// 2. A `database_path` file path
-/// 3. The default path `~/.agena/agena.db`
+/// 3. The default path `~/agena/agena.db`
 #[derive(Debug, Clone, Default)]
 pub struct StorageConfig {
     pub database_url: Option<String>,
@@ -53,10 +53,10 @@ impl StorageConfig {
         Ok(())
     }
 
-    /// Default SQLite file path: `~/.agena/agena.db`.
+    /// Default SQLite file path: `~/agena/agena.db`.
     pub fn default_path() -> PathBuf {
         let mut base = home_dir().unwrap_or_else(|| PathBuf::from("."));
-        base.push(".agena");
+        base.push("agena");
         base.push("agena.db");
         base
     }

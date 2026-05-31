@@ -1,5 +1,5 @@
 Param(
-  [string]$InstallDir = "$HOME\.agena-studio",
+  [string]$InstallDir = "$HOME\agena\studio",
   [switch]$RemoveInstallDir
 )
 

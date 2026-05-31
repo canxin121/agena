@@ -58,6 +58,7 @@ pub struct ResolvedConfig {
     pub default_agent: Option<String>,
     pub tracing: TracingConfig,
     pub ui: UiConfig,
+    pub desktop: DesktopConfig,
     pub runtime: RuntimeConfig,
     pub session: SessionConfig,
     #[serde(
@@ -201,6 +202,62 @@ pub enum PluginSecretsBackend {
 pub struct UiConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DesktopConfig {
+    pub autostart_on_boot: bool,
+    pub backend: DesktopBackendConfig,
+}
+
+impl Default for DesktopConfig {
+    fn default() -> Self {
+        Self {
+            autostart_on_boot: true,
+            backend: DesktopBackendConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DesktopBackendConfig {
+    pub host: String,
+    pub port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cors_origins: Vec<String>,
+    pub cors_allow_all: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend_log_level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_cookie_samesite: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database_url: Option<String>,
+}
+
+impl Default for DesktopBackendConfig {
+    fn default() -> Self {
+        Self {
+            host: "127.0.0.1".to_string(),
+            port: 3210,
+            ui_dir: None,
+            cors_origins: Vec::new(),
+            cors_allow_all: false,
+            backend_log_level: None,
+            ui_password: Some(String::new()),
+            ui_cookie_samesite: None,
+            workspace_root: None,
+            database_path: None,
+            database_url: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

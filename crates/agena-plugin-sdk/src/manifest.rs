@@ -214,7 +214,7 @@ pub struct PluginToolDecl {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_networks: Vec<InputNetworkSpec>,
     /// Static local filesystem targets used by this tool regardless of input.
-    /// Use this for fixed workspace paths like `.agena/plans`; use
+    /// Use this for fixed workspace paths owned by a plugin; use
     /// [`Plugin::permission_paths`] for targets that can only be derived
     /// dynamically.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

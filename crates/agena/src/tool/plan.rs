@@ -4,7 +4,7 @@
 //!
 //! 1. The model invokes `enter_plan_mode` to declare it's about to draft a
 //!    plan.  The executor allocates a fresh markdown file at
-//!    `<workspace>/.agena/plans/<slug>.md`, records the path on the
+//!    `~/agena/projects/<workspace-key>/plans/<slug>.md`, records the path on the
 //!    session, and the tool returns the path so the model knows where to
 //!    write its plan.
 //!
@@ -54,7 +54,8 @@ pub(super) fn execute_enter(
         .ok_or_else(|| ToolError::Plugin("enter_plan_mode: registry not configured".to_string()))?;
 
     let slug = generate_slug(session_id);
-    let plans_dir = executor.workspace_root().join(".agena").join("plans");
+    let plans_dir =
+        crate::project_paths::project_state_dir(executor.workspace_root()).join("plans");
     executor.ensure_edit_permission(&plans_dir)?;
     if let Err(e) = std::fs::create_dir_all(&plans_dir) {
         return Err(ToolError::Plugin(format!(

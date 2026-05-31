@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REMOVE_INSTALL_DIR=0
-INSTALL_DIR="${HOME}/.agena-studio"
+INSTALL_DIR="${HOME}/agena/studio"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

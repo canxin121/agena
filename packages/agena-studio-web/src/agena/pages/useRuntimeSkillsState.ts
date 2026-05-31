@@ -7,8 +7,6 @@ export type RuntimeSkillCatalogSection = {
   title: string
   description: string
   badgeLabel: 'skill' | 'command'
-  openShortcutId: 'skills' | 'commands'
-  openShortcutLabel: string
   totalCount: number
   filteredCount: number
   entries: RuntimeSkill[]
@@ -23,7 +21,6 @@ export type RuntimeSkillsStateInput = {
   openRuntimeConfigRoot: () => void
   openRuntimeEntryInChat: (entry: RuntimeSkill) => void
   openRuntimeEntrySource: (entry: RuntimeSkill) => void
-  openWorkspaceShortcut: (shortcutId: string) => void
   runtimeSkillQuery: Ref<string>
   skillCommands: ComputedRef<RuntimeSkill[]>
 }
@@ -33,10 +30,8 @@ export function useRuntimeSkillsState(input: RuntimeSkillsStateInput) {
     {
       id: 'skills',
       title: 'Skills',
-      description: 'Discovered runtime skills can be opened in Chat or traced back to their workspace sources.',
+      description: 'Runtime skills can be opened in Chat or inspected from their resolved source metadata.',
       badgeLabel: 'skill',
-      openShortcutId: 'skills',
-      openShortcutLabel: 'Open Skills Dir',
       totalCount: input.discoveredSkills.value.length,
       filteredCount: input.filteredDiscoveredSkills.value.length,
       entries: input.filteredDiscoveredSkills.value,
@@ -47,8 +42,6 @@ export function useRuntimeSkillsState(input: RuntimeSkillsStateInput) {
       title: 'Commands',
       description: 'Discovered runtime commands now share the same slash surface as Chat and the global command palette.',
       badgeLabel: 'command',
-      openShortcutId: 'commands',
-      openShortcutLabel: 'Open Commands Dir',
       totalCount: input.skillCommands.value.length,
       filteredCount: input.filteredSkillCommands.value.length,
       entries: input.filteredSkillCommands.value,
@@ -62,7 +55,6 @@ export function useRuntimeSkillsState(input: RuntimeSkillsStateInput) {
     openRuntimeConfigRoot: input.openRuntimeConfigRoot,
     openRuntimeEntryInChat: input.openRuntimeEntryInChat,
     openRuntimeEntrySource: input.openRuntimeEntrySource,
-    openWorkspaceShortcut: input.openWorkspaceShortcut,
     runtimeSkillQuery: input.runtimeSkillQuery,
   }
 }

@@ -2,11 +2,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
+use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::AppHandle;
 
-const RUNTIME_CONFIG_FILE_NAME: &str = "agena-studio.toml";
+const SHARED_CONFIG_DIR_NAME: &str = "agena";
+const SHARED_CONFIG_FILE_NAME: &str = "agena.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -27,7 +28,6 @@ pub struct BackendConfig {
     pub backend_log_level: Option<String>,
     pub ui_password: Option<String>,
     pub ui_cookie_samesite: Option<String>,
-    pub agena_config_path: Option<String>,
     pub workspace_root: Option<String>,
     pub database_path: Option<String>,
     pub database_url: Option<String>,
@@ -57,7 +57,6 @@ impl Default for BackendConfig {
             backend_log_level: None,
             ui_password: Some(String::new()),
             ui_cookie_samesite: None,
-            agena_config_path: None,
             workspace_root: None,
             database_path: None,
             database_url: None,
@@ -66,50 +65,51 @@ impl Default for BackendConfig {
 }
 
 pub fn runtime_config_path(app: &AppHandle) -> Option<PathBuf> {
-    let dir = app.path().app_config_dir().ok()?;
-    Some(dir.join(RUNTIME_CONFIG_FILE_NAME))
+    let _ = app;
+    Some(default_config_path())
 }
 
 pub fn load_or_create(app: &AppHandle) -> Result<DesktopConfig, String> {
-    let path =
-        runtime_config_path(app).ok_or_else(|| "unable to resolve app config dir".to_string())?;
+    let path = runtime_config_path(app)
+        .ok_or_else(|| "unable to resolve shared config path".to_string())?;
     ensure_parent_dir(&path)?;
+    let mut doc = read_shared_config_doc(&path)?;
+    let current = doc.get("desktop").cloned();
+    let normalized = normalize_config(match current.as_ref() {
+        Some(value) => parse_desktop_config(value)?,
+        None => DesktopConfig::default(),
+    });
+    let next = serde_json::to_value(&normalized)
+        .map_err(|e| format!("serialize shared desktop config: {e}"))?;
 
-    if path.exists() {
-        let txt = fs::read_to_string(&path).map_err(|e| format!("read runtime config: {e}"))?;
-        let cfg = normalize_config(
-            toml::from_str(&txt).map_err(|e| format!("parse runtime config: {e}"))?,
-        );
-        return Ok(cfg);
+    if current.as_ref() != Some(&next) || !path.exists() {
+        doc.insert("desktop".to_string(), next);
+        write_shared_config_doc(&path, JsonValue::Object(doc))?;
     }
 
-    let cfg = normalize_config(DesktopConfig::default());
-    let txt = toml::to_string_pretty(&cfg).map_err(|e| format!("serialize runtime config: {e}"))?;
-    fs::write(&path, format!("{txt}\n")).map_err(|e| format!("write runtime config: {e}"))?;
-    Ok(cfg)
+    Ok(normalized)
 }
 
 pub fn save(app: &AppHandle, cfg: DesktopConfig) -> Result<DesktopConfig, String> {
-    let path =
-        runtime_config_path(app).ok_or_else(|| "unable to resolve app config dir".to_string())?;
+    let path = runtime_config_path(app)
+        .ok_or_else(|| "unable to resolve shared config path".to_string())?;
     ensure_parent_dir(&path)?;
 
+    let mut doc = read_shared_config_doc(&path)?;
     let normalized = normalize_config(cfg);
-    let txt = toml::to_string_pretty(&normalized)
-        .map_err(|e| format!("serialize runtime config: {e}"))?;
-    fs::write(&path, format!("{txt}\n")).map_err(|e| format!("write runtime config: {e}"))?;
+    let next = serde_json::to_value(&normalized)
+        .map_err(|e| format!("serialize shared desktop config: {e}"))?;
+    doc.insert("desktop".to_string(), next);
+    write_shared_config_doc(&path, JsonValue::Object(doc))?;
     Ok(normalized)
 }
 
 pub fn open_runtime_config_file(app: &AppHandle) -> Result<(), String> {
-    let path =
-        runtime_config_path(app).ok_or_else(|| "unable to resolve app config dir".to_string())?;
+    let path = runtime_config_path(app)
+        .ok_or_else(|| "unable to resolve shared config path".to_string())?;
     ensure_parent_dir(&path)?;
 
-    // If the config does not exist yet, create it.
-    if !path.exists() {
-        let _ = load_or_create(app)?;
-    }
+    let _ = load_or_create(app)?;
 
     use tauri_plugin_opener::OpenerExt;
     let _ = app
@@ -125,26 +125,84 @@ fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn read_shared_config_doc(path: &Path) -> Result<JsonMap<String, JsonValue>, String> {
+    if !path.exists() {
+        return Ok(JsonMap::new());
+    }
+
+    let txt = fs::read_to_string(path).map_err(|e| format!("read shared config: {e}"))?;
+    if txt.trim().is_empty() {
+        return Ok(JsonMap::new());
+    }
+
+    let value =
+        serde_json::from_str::<JsonValue>(&txt).map_err(|e| format!("parse shared config: {e}"))?;
+    match value {
+        JsonValue::Object(map) => Ok(map),
+        _ => Err("shared config root must be a JSON object".to_string()),
+    }
+}
+
+fn write_shared_config_doc(path: &Path, doc: JsonValue) -> Result<(), String> {
+    let txt =
+        serde_json::to_string_pretty(&doc).map_err(|e| format!("serialize shared config: {e}"))?;
+    fs::write(path, format!("{txt}\n")).map_err(|e| format!("write shared config: {e}"))
+}
+
+fn parse_desktop_config(value: &JsonValue) -> Result<DesktopConfig, String> {
+    if value.is_null() {
+        return Ok(DesktopConfig::default());
+    }
+    serde_json::from_value::<DesktopConfig>(value.clone())
+        .map_err(|e| format!("parse shared config.desktop: {e}"))
+}
+
+fn default_config_path() -> PathBuf {
+    home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(SHARED_CONFIG_DIR_NAME)
+        .join(SHARED_CONFIG_FILE_NAME)
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var("HOME")
+        .ok()
+        .or_else(|| std::env::var("USERPROFILE").ok())
+        .map(PathBuf::from)
+}
+
 fn normalize_config(mut cfg: DesktopConfig) -> DesktopConfig {
     cfg.backend.host = normalize_host(&cfg.backend.host);
-    cfg.backend.ui_dir = normalize_optional_path(cfg.backend.ui_dir.take());
+    cfg.backend.port = normalize_port(cfg.backend.port);
+    cfg.backend.ui_dir = normalize_optional_text(cfg.backend.ui_dir.take());
     if cfg.backend.ui_password.is_none() {
         cfg.backend.ui_password = Some(String::new());
     }
+    cfg.backend.ui_password = Some(
+        cfg.backend
+            .ui_password
+            .take()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+    );
     cfg.backend.cors_origins = normalize_cors_origins(cfg.backend.cors_origins);
     cfg.backend.backend_log_level = normalize_log_level(cfg.backend.backend_log_level.take());
     cfg.backend.ui_cookie_samesite =
         normalize_ui_cookie_samesite(cfg.backend.ui_cookie_samesite.take());
-    cfg.backend.agena_config_path = normalize_optional_path(cfg.backend.agena_config_path.take());
-    cfg.backend.workspace_root = normalize_optional_path(cfg.backend.workspace_root.take());
-    cfg.backend.database_path = normalize_optional_path(cfg.backend.database_path.take());
-    cfg.backend.database_url = normalize_optional_path(cfg.backend.database_url.take());
+    cfg.backend.workspace_root = normalize_optional_text(cfg.backend.workspace_root.take());
+    cfg.backend.database_path = normalize_optional_text(cfg.backend.database_path.take());
+    cfg.backend.database_url = normalize_optional_text(cfg.backend.database_url.take());
     cfg
 }
 
-fn normalize_optional_path(raw: Option<String>) -> Option<String> {
+fn normalize_optional_text(raw: Option<String>) -> Option<String> {
     let value = raw?.trim().to_string();
     if value.is_empty() { None } else { Some(value) }
+}
+
+fn normalize_port(raw: u16) -> u16 {
+    if raw == 0 { 3210 } else { raw }
 }
 
 fn normalize_host(raw: &str) -> String {

@@ -5435,8 +5435,6 @@ mod tests {
     #[tokio::test]
     async fn plugin_statuses_include_bundled_plugins_from_effective_config() {
         let temp = tempdir().expect("temp workspace");
-        let config_path = temp.path().join("config.json");
-        fs::write(&config_path, b"{}\n").expect("write empty json config");
         let required = BTreeSet::from([
             tool::skills_plugin_id().to_string(),
             tool::lsp_plugin_id().to_string(),
@@ -5455,10 +5453,7 @@ mod tests {
             .await
             .expect("connect sqlite");
         let runtime = AgenaRuntime::builder()
-            .with_load_request(LoadConfigRequest {
-                config_path: Some(config_path),
-                overrides: Vec::new(),
-            })
+            .with_load_request(LoadConfigRequest::default())
             .with_workspace_root(temp.path())
             .with_database_connection(db.clone())
             .build()

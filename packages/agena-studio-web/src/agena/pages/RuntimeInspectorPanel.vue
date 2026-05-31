@@ -24,13 +24,11 @@ const emit = defineEmits<{
     <div class="page-header" style="align-items: flex-start">
       <div>
         <h3>MCP Servers</h3>
-        <p class="muted">Inspect connected MCP servers and jump directly to the likely config surfaces in the workspace.</p>
+        <p class="muted">Inspect connected MCP servers and their resolved runtime state.</p>
       </div>
       <div class="button-row" style="flex-wrap: wrap">
         <span class="badge">{{ props.filteredMcpServers.length }}/{{ props.runtime?.operator.mcp.servers.length || 0 }}</span>
-        <button class="button" @click="props.openRuntimeConfigRoot">Open Config Root</button>
-        <button class="button" @click="props.openWorkspaceShortcut('commands')">Open Commands</button>
-        <button class="button" @click="props.openWorkspaceShortcut('skills')">Open Skills</button>
+        <button class="button" @click="props.openRuntimeConfigRoot">Open Config</button>
       </div>
     </div>
     <div v-if="props.runtime" class="stack">
@@ -52,11 +50,10 @@ const emit = defineEmits<{
             <div>
               <div><strong>{{ server.name }}</strong></div>
               <div class="muted">tools {{ server.tool_count }}</div>
-              <div class="muted mono">config=.agena</div>
+              <div class="muted mono">config=~/agena/agena.json</div>
             </div>
             <div class="button-row" style="flex-wrap: wrap">
-              <button class="button" @click="props.openRuntimeConfigRoot">Open Config Root</button>
-              <button class="button" @click="props.openWorkspaceShortcut('agents')">Open Agents</button>
+              <button class="button" @click="props.openRuntimeConfigRoot">Open Config</button>
             </div>
           </div>
         </div>
@@ -69,11 +66,11 @@ const emit = defineEmits<{
     <div class="page-header" style="align-items: flex-start">
       <div>
         <h3>LSP Fleet</h3>
-        <p class="muted">Inspect configured LSP servers and jump to project config or source roots when diagnostics look wrong.</p>
+        <p class="muted">Inspect configured LSP servers and source roots when diagnostics look wrong.</p>
       </div>
       <div class="button-row" style="flex-wrap: wrap">
         <span class="badge">{{ props.filteredLspServers.length }}/{{ props.runtime?.operator.lsp.servers.length || 0 }}</span>
-        <button class="button" @click="props.openRuntimeConfigRoot">Open Config Root</button>
+        <button class="button" @click="props.openRuntimeConfigRoot">Open Config</button>
         <button class="button" @click="props.openWorkspacePath('src')">Open Source Root</button>
       </div>
     </div>
@@ -101,7 +98,7 @@ const emit = defineEmits<{
               <div class="muted">root markers: {{ server.root_markers.join(', ') || 'workspace root' }}</div>
             </div>
             <div class="button-row" style="flex-wrap: wrap">
-              <button class="button" @click="props.openRuntimeConfigRoot">Open Config Root</button>
+              <button class="button" @click="props.openRuntimeConfigRoot">Open Config</button>
               <button class="button" @click="props.openWorkspacePath('src')">Open Source Root</button>
             </div>
           </div>

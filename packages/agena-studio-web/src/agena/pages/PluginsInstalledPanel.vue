@@ -297,14 +297,11 @@ async function runStudioUiControl(control: ManifestStudioUiItem) {
       <div class="page-header" style="align-items: flex-start">
         <div>
           <h3>Plugin Detail</h3>
-          <p class="muted">Inspect manifest and recent logs, then jump to the corresponding workspace config areas.</p>
+          <p class="muted">Inspect manifest and recent logs, then jump to the shared plugin settings.</p>
         </div>
         <div class="button-row" style="flex-wrap: wrap">
           <button class="button" :disabled="!props.selectedPlugin" @click="props.openPluginManifestInWorkspace">
-            Open Plugin Dir
-          </button>
-          <button class="button" :disabled="!props.selectedPlugin" @click="props.openPluginLogsWorkspacePath">
-            Open Logs Dir
+            Open Plugin Settings
           </button>
           <button
             class="button warn"

@@ -3,6 +3,7 @@ import type { Router } from 'vue-router'
 
 import { workspaceShortcuts } from '../lib/runtimeWorkspaceShortcuts'
 import type { RuntimeSkill, WorkspaceResource } from '../lib/agenaApi'
+import { buildRuntimeSectionPath } from './runtimePageStateModel'
 
 export type RuntimeNavigationStateInput = {
   selectedSessionId: Ref<number | null>
@@ -42,16 +43,16 @@ export function useRuntimeNavigationState(input: RuntimeNavigationStateInput, de
   }
 
   function openRuntimeConfigRoot() {
-    openWorkspacePath('.agena')
+    void deps.router.push(buildRuntimeSectionPath('settings', 'plugins'))
   }
 
   function openPluginManifestInWorkspace() {
     if (!input.selectedPluginManifest.value) return
-    openWorkspacePath('.agena/plugins')
+    void deps.router.push(buildRuntimeSectionPath('settings', 'plugins'))
   }
 
   function openPluginLogsWorkspacePath() {
-    openWorkspacePath('.agena/logs')
+    void deps.router.push(buildRuntimeSectionPath('settings', 'plugins'))
   }
 
   function openRuntimeEntrySource(entry: RuntimeSkill) {

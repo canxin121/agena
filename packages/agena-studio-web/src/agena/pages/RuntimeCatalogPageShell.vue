@@ -10,7 +10,6 @@ const props = defineProps<{
   queryPlaceholder: string
   querySummary: string
   sections: RuntimeSkillCatalogSection[]
-  openWorkspaceShortcut: (shortcutId: string) => void
   openRuntimeConfigRoot: () => void
   openPluginLogsWorkspacePath: () => void
   openRuntimeEntryInChat: (entry: RuntimeSkill) => void
@@ -32,8 +31,8 @@ const emit = defineEmits<{
         </div>
         <div class="button-row" style="flex-wrap: wrap; justify-content: flex-end">
           <span class="badge mono">query={{ props.queryValue.trim() || 'all' }}</span>
-          <button class="button" @click="props.openRuntimeConfigRoot">Open Config Root</button>
-          <button class="button" @click="props.openPluginLogsWorkspacePath">Open Logs</button>
+          <button class="button" @click="props.openRuntimeConfigRoot">Open Config</button>
+          <button class="button" @click="props.openPluginLogsWorkspacePath">Open Plugin Settings</button>
         </div>
       </div>
       <div class="field" style="margin-top: 12px">
@@ -50,7 +49,6 @@ const emit = defineEmits<{
 
     <RuntimeCatalogSectionsPanel
       :sections="props.sections"
-      :open-workspace-shortcut="props.openWorkspaceShortcut"
       :open-runtime-entry-in-chat="props.openRuntimeEntryInChat"
       :open-runtime-entry-source="props.openRuntimeEntrySource"
     />

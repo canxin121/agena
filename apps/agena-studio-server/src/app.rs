@@ -151,7 +151,6 @@ async fn agena_studio_diagnostics(
             "USERPROFILE": std::env::var("USERPROFILE").ok(),
             "APPDATA": std::env::var("APPDATA").ok(),
             "LOCALAPPDATA": std::env::var("LOCALAPPDATA").ok(),
-            "AGENA_CONFIG": std::env::var("AGENA_CONFIG").ok(),
             "AGENA_STUDIO_DATA_DIR": std::env::var("AGENA_STUDIO_DATA_DIR").ok(),
             "AGENA_STUDIO_HOST": std::env::var("AGENA_STUDIO_HOST").ok(),
             "AGENA_STUDIO_PORT": std::env::var("AGENA_STUDIO_PORT").ok(),

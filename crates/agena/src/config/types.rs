@@ -19,6 +19,7 @@ use super::ConfigError;
 pub enum ConfigSource {
     Default,
     File,
+    Project,
     Environment,
     Cli,
 }
@@ -33,6 +34,8 @@ pub struct AppliedLayer {
 pub struct ConfigResolutionMeta {
     pub config_path: PathBuf,
     pub config_found: bool,
+    pub project_config_path: PathBuf,
+    pub project_config_found: bool,
     pub applied_layers: Vec<AppliedLayer>,
 }
 

@@ -120,6 +120,7 @@ impl Args {
     pub(crate) fn load_request(&self) -> LoadConfigRequest {
         LoadConfigRequest {
             overrides: self.overrides.clone(),
+            workspace_root: self.workspace_root.clone(),
         }
     }
 }

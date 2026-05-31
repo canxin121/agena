@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::{
     AppliedLayer, ConfigError, ConfigOverride, ConfigResolution, ConfigResolutionMeta,
@@ -11,6 +11,7 @@ const DEFAULT_CONFIG_FILE_NAME: &str = "agena.json";
 #[derive(Debug, Clone, Default)]
 pub struct LoadConfigRequest {
     pub overrides: Vec<ConfigOverride>,
+    pub workspace_root: Option<PathBuf>,
 }
 
 pub trait ConfigEnvironment: Send + Sync {
@@ -59,12 +60,18 @@ where
 
     pub fn load(&self, request: &LoadConfigRequest) -> Result<ConfigResolution, ConfigError> {
         let config_path = self.default_config_path();
+        let workspace_root = request
+            .workspace_root
+            .clone()
+            .unwrap_or_else(default_workspace_root);
+        let project_config_path = project_config_path(workspace_root.as_path());
 
         if self.env.var("AGENA_MODE").is_some() {
             return Err(ConfigError::UnsupportedModeEnvironment);
         }
 
         let file_state = RawConfigFile::read(&config_path)?;
+        let project_file_state = RawConfigFile::read(&project_config_path)?;
         let env_overlay = RawConfig::from_env(&self.env)?;
 
         let mut merged = RawConfig::default();
@@ -78,6 +85,17 @@ where
             applied_layers.push(AppliedLayer {
                 source: ConfigSource::File,
                 description: format!("file:{}", config_path.display()),
+            });
+        }
+
+        if project_file_state.found {
+            merged.merge_project_from_with_keys(
+                project_file_state.config.clone(),
+                project_file_state.merge_keys,
+            );
+            applied_layers.push(AppliedLayer {
+                source: ConfigSource::Project,
+                description: format!("project:{}", project_config_path.display()),
             });
         }
 
@@ -105,6 +123,8 @@ where
             meta: ConfigResolutionMeta {
                 config_path,
                 config_found: file_state.found,
+                project_config_path,
+                project_config_found: project_file_state.found,
                 applied_layers,
             },
         })
@@ -118,6 +138,16 @@ fn default_config_path(env: &impl ConfigEnvironment) -> PathBuf {
     base
 }
 
+fn default_workspace_root() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn project_config_path(workspace_root: &Path) -> PathBuf {
+    workspace_root
+        .join(format!(".{DEFAULT_CONFIG_DIR_NAME}"))
+        .join(DEFAULT_CONFIG_FILE_NAME)
+}
+
 fn home_dir(env: &impl ConfigEnvironment) -> Option<PathBuf> {
     env.var("HOME")
         .or_else(|| env.var("USERPROFILE"))
@@ -127,6 +157,7 @@ fn home_dir(env: &impl ConfigEnvironment) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[derive(Debug, Default)]
     struct TestEnvironment {
@@ -173,6 +204,85 @@ mod tests {
             PathBuf::from("C:\\Users\\me")
                 .join("agena")
                 .join("agena.json")
+        );
+    }
+
+    #[test]
+    fn load_applies_project_config_after_global_config() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let workspace = temp.path().join("workspace");
+        let global_config_dir = home.join("agena");
+        let project_config_dir = workspace.join(".agena");
+        fs::create_dir_all(&global_config_dir).expect("global config dir");
+        fs::create_dir_all(&project_config_dir).expect("project config dir");
+        fs::write(
+            global_config_dir.join("agena.json"),
+            r#"{
+              "agents": {
+                "default": "review",
+                "review": {
+                  "description": "Global review agent",
+                  "prompt": "Global prompt"
+                }
+              },
+              "tracing": {
+                "filter": "info"
+              }
+            }"#,
+        )
+        .expect("write global config");
+        fs::write(
+            project_config_dir.join("agena.json"),
+            r#"{
+              "agents": {
+                "review": {
+                  "description": "Project review agent"
+                }
+              },
+              "tracing": {
+                "filter": "debug"
+              }
+            }"#,
+        )
+        .expect("write project config");
+
+        let loader = ConfigLoader::new(
+            TestEnvironment::default().with_var("HOME", home.to_string_lossy().as_ref()),
+        );
+        let resolution = loader
+            .load(&LoadConfigRequest {
+                workspace_root: Some(workspace.clone()),
+                ..LoadConfigRequest::default()
+            })
+            .expect("config should load");
+        let review = resolution
+            .config
+            .agents
+            .get("review")
+            .expect("review agent");
+
+        assert!(resolution.meta.config_found);
+        assert!(resolution.meta.project_config_found);
+        assert_eq!(
+            resolution.meta.project_config_path,
+            workspace.join(".agena").join("agena.json")
+        );
+        assert_eq!(resolution.config.tracing.filter, "debug");
+        assert_eq!(review.description, "Project review agent");
+        assert!(review.prompt.is_empty());
+        assert_eq!(
+            resolution
+                .meta
+                .applied_layers
+                .iter()
+                .map(|layer| layer.source)
+                .collect::<Vec<_>>(),
+            vec![
+                ConfigSource::Default,
+                ConfigSource::File,
+                ConfigSource::Project
+            ]
         );
     }
 }

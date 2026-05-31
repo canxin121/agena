@@ -199,6 +199,7 @@ pub(super) fn build_profile_agent(
 pub(super) fn collect_watch_paths(resolution: &ConfigResolution) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     push_watch_path(&mut paths, resolution.meta.config_path.clone());
+    push_watch_path(&mut paths, resolution.meta.project_config_path.clone());
 
     let base_dir = resolution
         .meta

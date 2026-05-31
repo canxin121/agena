@@ -1093,6 +1093,8 @@ struct PrOutput {
 struct DiagnosticsConfigOutput {
     path: String,
     found: bool,
+    project_path: String,
+    project_found: bool,
     applied_layers: Vec<String>,
     provider_count: usize,
     plugin_count: usize,
@@ -2550,6 +2552,8 @@ impl AgenaCli {
                 config: DiagnosticsConfigOutput {
                     path: resolution.meta.config_path.display().to_string(),
                     found: resolution.meta.config_found,
+                    project_path: resolution.meta.project_config_path.display().to_string(),
+                    project_found: resolution.meta.project_config_found,
                     applied_layers: resolution
                         .meta
                         .applied_layers
@@ -2848,6 +2852,7 @@ impl AgenaCli {
     pub fn load_request(&self) -> LoadConfigRequest {
         LoadConfigRequest {
             overrides: self.overrides.clone(),
+            workspace_root: None,
         }
     }
 }

@@ -92,8 +92,12 @@ impl AgenaTuiCli {
     }
 
     fn load_request(&self) -> LoadConfigRequest {
+        let workspace_root = match self.resolved_command() {
+            TuiCommand::Run(command) => command.workspace_root,
+        };
         LoadConfigRequest {
             overrides: self.overrides.clone(),
+            workspace_root,
         }
     }
 }

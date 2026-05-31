@@ -2163,6 +2163,127 @@ fn duplicate_permission_reply_is_idempotent() {
 }
 
 #[test]
+fn workspace_permission_reply_persists_for_project_and_applies_to_new_sessions() {
+    run_async_with_large_stack(async move {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "workspace-permission-persist.db").await;
+        let tool_policy =
+            ToolPermissionPolicy::allow_all().with_tool_mode(TODO_TOOL, PermissionMode::Ask);
+
+        let first = build_manager_with_provider_on_db(
+            &workspace.root,
+            db.clone(),
+            PermissionPolicy::allow_all(),
+            tool_policy.clone(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+        )
+        .await;
+        let first_session = first
+            .create_session(SessionCreateRequest {
+                title: "workspace-permission-first".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create first session");
+        let blocked = first
+            .submit_user_message(SessionUserMessageRequest::new(
+                first_session.id,
+                run_options(),
+                vec![PartContent::text("permission todo")],
+            ))
+            .await
+            .expect("run should block on permission");
+        assert!(
+            blocked.blocked(),
+            "first session should block on permission"
+        );
+
+        let completed = first
+            .reply_permission(SessionPermissionReplyRequest::new(
+                first_session.id,
+                run_options(),
+                PermissionReply {
+                    request_id: pending_permission_request_id(&blocked),
+                    kind: PermissionReplyKind::AllowAlways,
+                    reason: None,
+                    scope: Some(crate::permission::PermissionScope::Workspace),
+                },
+                Some("test".to_string()),
+            ))
+            .await
+            .expect("workspace-scoped permission reply should continue session");
+        assert!(
+            completed
+                .messages
+                .iter()
+                .any(|message| message.as_text_lossy().contains("permission todo done")),
+            "session should complete after workspace allow reply: messages={:?}",
+            completed.messages
+        );
+
+        let rules = crate::db::entities::permission_rule::Entity::find()
+            .all(&db)
+            .await
+            .expect("permission rules should query");
+        assert_eq!(rules.len(), 1, "expected one persisted permission rule");
+        let rule = &rules[0];
+        assert_eq!(rule.scope, "workspace");
+        assert!(
+            rule.workspace_id.is_some(),
+            "workspace rule should store workspace_id"
+        );
+        assert_eq!(
+            rule.session_id, None,
+            "workspace rule should not store session_id"
+        );
+
+        drop(first);
+
+        let second = build_manager_with_provider_on_db(
+            &workspace.root,
+            db.clone(),
+            PermissionPolicy::allow_all(),
+            tool_policy,
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+        )
+        .await;
+        let second_session = second
+            .create_session(SessionCreateRequest {
+                title: "workspace-permission-second".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create second session");
+        let continued = second
+            .submit_user_message(SessionUserMessageRequest::new(
+                second_session.id,
+                run_options(),
+                vec![PartContent::text("permission todo")],
+            ))
+            .await
+            .expect("workspace permission should auto-allow in a new session");
+
+        assert!(
+            !continued.blocked(),
+            "workspace-scoped permission should apply to a new session in the same project: runtime={:?}",
+            continued.runtime()
+        );
+        assert!(
+            continued
+                .messages
+                .iter()
+                .any(|message| message.as_text_lossy().contains("permission todo done")),
+            "new session should complete without another permission prompt: messages={:?}",
+            continued.messages
+        );
+    });
+}
+
+#[test]
 fn duplicate_user_input_reply_is_idempotent() {
     run_async_with_large_stack(async move {
         let workspace = TempWorkspace::new();

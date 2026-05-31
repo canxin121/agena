@@ -1695,14 +1695,14 @@ impl SessionManager {
         check: &ToolPermissionCheck,
     ) -> Result<crate::permission::PermissionResolution, AppError> {
         let key = permission_action_key(&check.action)?;
-        let persisted_rule = self
+        let persisted_rules = self
             .store
-            .resolve_permission_rule(key.as_str(), session_id)
+            .resolve_permission_rules(key.as_str(), session_id)
             .await?;
         let mut resolution =
-            resolve_permission_with_persisted_rule(check.decision.clone(), persisted_rule.as_ref());
+            resolve_permission_with_persisted_rules(check.decision.clone(), &persisted_rules);
 
-        if persisted_rule.is_none() {
+        if persisted_rules.is_empty() {
             let plugins = self
                 .execution_state()
                 .tool_executor

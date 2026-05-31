@@ -135,6 +135,7 @@ pub struct MessagePartDeltaEvent {
 pub struct PermissionRequestedEvent {
     pub session_id: i64,
     pub request_id: String,
+    pub action: PermissionAction,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub related_actions: Vec<PermissionAction>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

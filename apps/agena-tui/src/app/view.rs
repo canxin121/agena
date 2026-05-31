@@ -3694,6 +3694,30 @@ fn provider_studio_detail_text_spec() -> DetailTextSpec<'static> {
     DetailTextSpec::with_label_width(16)
 }
 
+fn append_permission_action_lines(
+    i18n: &I18n,
+    lines: &mut Vec<Line<'static>>,
+    heading_key: &str,
+    actions: &[&PermissionAction],
+) {
+    if actions.is_empty() {
+        return;
+    }
+    lines.push(Line::from(Span::styled(
+        sanitize_display_text(ui_text::t(i18n, heading_key)),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    for action in actions {
+        lines.push(Line::from(Span::styled(
+            format!(
+                "  {}",
+                sanitize_display_text(permission_action_label(i18n, action))
+            ),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+}
+
 fn permission_overlay_body_lines(i18n: &I18n, dialog: &PermissionOverlay) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if let Some(plan) = dialog
@@ -3745,10 +3769,31 @@ fn permission_overlay_body_lines(i18n: &I18n, dialog: &PermissionOverlay) -> Vec
         )),
         Style::default().fg(Color::DarkGray),
     )));
-    lines.push(Line::from(permission_action_label(
+    lines.push(Line::from(sanitize_display_text(permission_action_label(
         i18n,
         &dialog.request.action,
-    )));
+    ))));
+    let requested_actions = permission_requested_actions_for_display(
+        Some(&dialog.request.action),
+        dialog.request.requested_actions.as_slice(),
+    );
+    append_permission_action_lines(
+        i18n,
+        &mut lines,
+        "overlay-permission-requested-actions",
+        requested_actions.as_slice(),
+    );
+    let related_actions = permission_related_actions_for_display(
+        Some(&dialog.request.action),
+        dialog.request.related_actions.as_slice(),
+        dialog.request.requested_actions.as_slice(),
+    );
+    append_permission_action_lines(
+        i18n,
+        &mut lines,
+        "overlay-permission-related-actions",
+        related_actions.as_slice(),
+    );
     lines.push(Line::from(sanitize_display_text(i18n.text_args(
         "overlay-permission-reason",
         &crate::fl_args!("reason" => sanitize_display_text(dialog.request.reason.as_str())),
@@ -4054,6 +4099,75 @@ mod tests {
         assert_eq!(
             default_provider_line.spans[0].style,
             selection_highlight_style()
+        );
+    }
+
+    #[test]
+    fn permission_overlay_body_lists_requested_and_related_actions() {
+        let i18n = I18n::english();
+        let lines = permission_overlay_body_lines(
+            &i18n,
+            &PermissionOverlay {
+                session_id: 1,
+                request: PermissionRequest {
+                    request_id: "perm-1".to_string(),
+                    session_id: Some(1),
+                    action: PermissionAction::Tool {
+                        tool_name: "bash".to_string(),
+                        qualifier: Some("npm test".to_string()),
+                    },
+                    related_actions: vec![
+                        PermissionAction::Tool {
+                            tool_name: "bash".to_string(),
+                            qualifier: Some("npm test".to_string()),
+                        },
+                        PermissionAction::PathAccess {
+                            access_kind: "read".to_string(),
+                            workspace_root: "/workspace".to_string(),
+                            target_path: "/workspace/notes.txt".to_string(),
+                        },
+                        PermissionAction::NetworkAccess {
+                            target: "https://api.example.com/health".to_string(),
+                            host: "api.example.com".to_string(),
+                            port: Some(443),
+                        },
+                    ],
+                    requested_actions: vec![
+                        PermissionAction::Tool {
+                            tool_name: "bash".to_string(),
+                            qualifier: Some("npm test".to_string()),
+                        },
+                        PermissionAction::PathAccess {
+                            access_kind: "read".to_string(),
+                            workspace_root: "/workspace".to_string(),
+                            target_path: "/workspace/notes.txt".to_string(),
+                        },
+                    ],
+                    reason: "needs approval".to_string(),
+                    explanation: String::new(),
+                    source: None,
+                    scope: None,
+                    operator: None,
+                    risk: PermissionRiskLevel::Medium,
+                    trace: Vec::new(),
+                    created_at: chrono::Utc::now(),
+                },
+                plan: None,
+                selection: SelectionCursor::default(),
+            },
+        );
+        let plain = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+
+        assert!(plain.contains("tool: bash · npm test"), "body was: {plain}");
+        assert!(plain.contains("Requested Actions"), "body was: {plain}");
+        assert!(
+            plain.contains("path read: /workspace/notes.txt"),
+            "body was: {plain}"
+        );
+        assert!(plain.contains("Related Actions"), "body was: {plain}");
+        assert!(
+            plain.contains("network: api.example.com:443"),
+            "body was: {plain}"
         );
     }
 }

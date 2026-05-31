@@ -154,6 +154,8 @@ overlay-permission-action-network = network: {$target}
 overlay-permission-reason = reason: {$reason}
 overlay-permission-explanation = explanation: {$explanation}
 overlay-permission-session = session: #{$session}
+overlay-permission-requested-actions = Requested Actions
+overlay-permission-related-actions = Related Actions
 overlay-permission-fact-risk = risk={$value}
 overlay-permission-fact-source = source={$value}
 overlay-permission-fact-scope = scope={$value}
@@ -1171,6 +1173,8 @@ timeline-label-explanation = explanation
 timeline-label-source = source
 timeline-label-scope = scope
 timeline-label-operator = operator
+timeline-label-requested-actions = requested actions
+timeline-label-related-actions = related actions
 timeline-label-reply-kind = reply kind
 timeline-label-rule-id = rule id
 timeline-label-action-key = action key

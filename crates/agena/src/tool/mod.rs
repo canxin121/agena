@@ -1680,12 +1680,15 @@ impl ToolExecutor {
         raw_path: &str,
         session_context: Option<&crate::session::SessionExecutionContext>,
     ) -> PathBuf {
+        let workspace_root = self.effective_workspace_root(session_context);
+        if let Some(path) = resolve_managed_project_path_alias(raw_path, workspace_root) {
+            return path;
+        }
         let candidate = PathBuf::from(raw_path);
         if candidate.is_absolute() {
             return candidate;
         }
-        self.effective_workspace_root(session_context)
-            .join(candidate)
+        workspace_root.join(candidate)
     }
 
     pub(crate) fn execute_shell_command(
@@ -1923,6 +1926,18 @@ fn command_from_input(input: &StructuredObject) -> Option<&str> {
     input
         .get("action")
         .and_then(crate::message::StructuredValue::as_text)
+}
+
+fn resolve_managed_project_path_alias(raw_path: &str, workspace_root: &Path) -> Option<PathBuf> {
+    let normalized = raw_path.trim().replace('\\', "/");
+    let prefix = "~/agena/projects/<workspace>";
+    let rest = normalized.strip_prefix(prefix)?;
+    let rest = rest.trim_start_matches('/');
+    let mut resolved = crate::project_paths::project_state_dir(workspace_root);
+    if !rest.is_empty() {
+        resolved = resolved.join(rest);
+    }
+    Some(resolved)
 }
 
 fn invocation_effective_tags(
@@ -3775,7 +3790,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_permission_checks_for_workflow_plan_uses_declared_path_access() {
+    fn collect_permission_checks_for_workflow_plan_use_project_state_paths_only() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
@@ -3798,16 +3813,20 @@ mod tests {
             })
             .collect::<std::collections::HashSet<_>>();
 
-        assert!(path_actions.contains(&(
-            "write".to_string(),
-            super::normalize_path_for_display(
-                &crate::project_paths::project_state_dir(&workspace.root).join("plans"),
-            ),
-        )));
+        assert_eq!(
+            path_actions,
+            std::collections::HashSet::from([(
+                "write".to_string(),
+                super::normalize_path_for_display(
+                    &crate::project_paths::project_state_dir(&workspace.root).join("plans"),
+                ),
+            )]),
+            "plan permission checks should only request the managed plans directory"
+        );
     }
 
     #[test]
-    fn collect_permission_checks_for_workflow_worktree_uses_dynamic_plugin_paths() {
+    fn collect_permission_checks_for_workflow_worktree_use_project_state_paths_only() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
@@ -3831,15 +3850,15 @@ mod tests {
                 _ => None,
             })
             .collect::<std::collections::HashSet<_>>();
-        assert!(
-            named_paths.contains(&(
+        assert_eq!(
+            named_paths,
+            std::collections::HashSet::from([(
                 "write".to_string(),
                 super::normalize_path_for_display(
-                    &crate::project_paths::project_state_dir(&workspace.root)
-                        .join("worktrees")
-                        .join("demo"),
+                    &crate::project_paths::project_state_dir(&workspace.root).join("worktrees"),
                 ),
-            ))
+            )]),
+            "new worktree creation should only request the managed worktrees directory"
         );
 
         let outside = workspace.root.with_file_name(format!(
@@ -3870,8 +3889,27 @@ mod tests {
             })
             .collect::<std::collections::HashSet<_>>();
         let outside_display = super::normalize_path_for_display(&outside);
-        assert!(existing_paths.contains(&("read".to_string(), outside_display.clone())));
-        assert!(existing_paths.contains(&("write".to_string(), outside_display)));
+        assert_eq!(
+            existing_paths,
+            std::collections::HashSet::from([
+                ("read".to_string(), outside_display.clone()),
+                ("write".to_string(), outside_display),
+            ]),
+            "existing worktrees should request read/write access to the selected path only"
+        );
+    }
+
+    #[test]
+    fn resolve_target_path_expands_managed_project_alias() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root);
+
+        let resolved = executor.resolve_target_path("~/agena/projects/<workspace>/plans");
+
+        assert_eq!(
+            resolved,
+            crate::project_paths::project_state_dir(&workspace.root).join("plans"),
+        );
     }
 
     #[test]

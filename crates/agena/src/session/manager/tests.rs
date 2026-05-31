@@ -4786,13 +4786,33 @@ while True:
 
             let created =
                 create_runtime_tool_session(manager.as_ref(), "runtime-fs-plan-worktree").await;
-            let session = submit_runtime_tool_prompt(
+            let blocked = submit_runtime_tool_prompt(
                 manager.as_ref(),
                 created.id,
                 "exercise fs plan and worktree tools",
                 "runtime tool run should succeed",
             )
             .await;
+            assert!(
+                blocked.blocked(),
+                "plan flow should pause for exit review approval: runtime={:?}",
+                blocked.runtime()
+            );
+
+            let session = manager
+                .reply_permission(SessionPermissionReplyRequest::new(
+                    created.id,
+                    runtime_tool_run_options(),
+                    PermissionReply {
+                        request_id: pending_permission_request_id(&blocked),
+                        kind: PermissionReplyKind::AllowOnce,
+                        reason: None,
+                        scope: None,
+                    },
+                    Some("test".to_string()),
+                ))
+                .await
+                .expect("plan review approval should continue the runtime flow");
 
             assert!(
                 session
@@ -4802,7 +4822,10 @@ while True:
                         && message
                             .as_text_lossy()
                             .contains("runtime tool flow finished")),
-                "assistant should acknowledge the flow completion"
+                "assistant should acknowledge the flow completion: blocked={} runtime={:?}\noperations:\n{}",
+                session.blocked(),
+                session.runtime(),
+                session_operation_summaries(&session).join("\n")
             );
 
             assert_operations_completed(
@@ -6212,6 +6235,85 @@ while True:
             assert_eq!(
                 network.private, None,
                 "default selection permission should not contribute to effective permission"
+            );
+        });
+    }
+
+    #[test]
+    fn effective_permission_allows_managed_project_state_for_agent_profiles() {
+        run_async_with_large_stack(async move {
+            let workspace = TempWorkspace::new();
+            let manager = build_manager(
+                &workspace.root,
+                PermissionPolicy::allow_all(),
+                SessionManagerConfig::default(),
+            )
+            .await;
+            manager
+                .tool_executor()
+                .subagent_registry()
+                .register_runtime(crate::agents::AgentProfile {
+                    name: "managed-project-test".to_string(),
+                    frontmatter: crate::agents::AgentFrontmatter {
+                        permission: crate::agent::PermissionConfig {
+                            path: Some(crate::agent::PathPermissionConfig {
+                                external: Some(crate::agent::PathAccessModes {
+                                    read: Some(PermissionMode::Ask),
+                                    write: Some(PermissionMode::Ask),
+                                }),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    prompt: "Managed project path test profile".to_string(),
+                    source_path: None,
+                    scope: crate::agents::AgentScope::Project,
+                });
+
+            let mut session = manager
+                .create_session(SessionCreateRequest {
+                    title: "managed-project-permission".to_string(),
+                    parent_session_id: None,
+                })
+                .await
+                .expect("session should be created");
+            session.runtime.execution.selection.agent = Some("managed-project-test".to_string());
+
+            let state = manager.execution_state();
+            let mut options = SessionRunOptions::new(scripted_model_ref());
+            let updated = manager
+                .apply_requested_agent_profile(session, &mut options, state)
+                .await
+                .expect("agent profile should apply");
+
+            let effective = updated.runtime.execution.effective_permission.clone();
+            let agent = manager
+                .tool_executor()
+                .agent()
+                .clone()
+                .with_permission_config(&effective);
+            let managed_dir =
+                crate::project_paths::project_state_dir(&workspace.root).join("plans");
+
+            assert_eq!(
+                agent.authorize_path_access(
+                    crate::permission::AccessKind::Read,
+                    &workspace.root,
+                    &managed_dir,
+                ),
+                crate::permission::PermissionDecision::Allow,
+                "managed project state reads should bypass agent external-path asks"
+            );
+            assert_eq!(
+                agent.authorize_path_access(
+                    crate::permission::AccessKind::Write,
+                    &workspace.root,
+                    &managed_dir,
+                ),
+                crate::permission::PermissionDecision::Allow,
+                "managed project state writes should bypass agent external-path asks"
             );
         });
     }

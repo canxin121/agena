@@ -585,10 +585,15 @@ fn render_tool_execution(
         width,
     );
 
-    if part.status == ExecutionStatus::Failed
-        && let Some(error_message) = tool.error_message()
-        && !error_message.trim().is_empty()
-    {
+    let failure_text = if part.status == ExecutionStatus::Failed {
+        tool.error_message()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+    } else {
+        None
+    };
+
+    if let Some(error_message) = failure_text {
         push_multiline(
             out,
             "    ",
@@ -598,7 +603,9 @@ fn render_tool_execution(
         );
     }
 
-    if !tool.model_output.text.trim().is_empty() {
+    if !tool.model_output.text.trim().is_empty()
+        && (failure_text != Some(tool.model_output.text.trim()))
+    {
         if expanded {
             push_limited_tool_text(
                 out,
@@ -649,7 +656,14 @@ fn render_tool_execution(
         }
     }
 
-    render_operation_blocks(tool.blocks.as_slice(), out, width, i18n, expanded);
+    render_operation_blocks(
+        tool.blocks.as_slice(),
+        out,
+        width,
+        i18n,
+        expanded,
+        failure_text,
+    );
 }
 
 fn render_operation_blocks(
@@ -658,10 +672,14 @@ fn render_operation_blocks(
     width: u16,
     i18n: &I18n,
     expanded: bool,
+    skipped_text: Option<&str>,
 ) {
     for block in blocks {
         match block {
             OperationBlock::Text { text } => {
+                if skipped_text.is_some_and(|candidate| text.trim() == candidate) {
+                    continue;
+                }
                 if expanded {
                     push_limited_tool_text(out, "    ", text, Style::default(), width, i18n);
                 } else {
@@ -669,6 +687,9 @@ fn render_operation_blocks(
                 }
             }
             OperationBlock::Markdown { text } => {
+                if skipped_text.is_some_and(|candidate| text.trim() == candidate) {
+                    continue;
+                }
                 if expanded {
                     push_limited_markdown(out, "    ", text, width, i18n);
                 } else {
@@ -2362,6 +2383,50 @@ mod tests {
                 .iter()
                 .any(|line| line.contains(&format!("line-{}", TOOL_EXPANDED_PREVIEW_LINES + 4))),
             "expected lines beyond the expanded cap to stay hidden"
+        );
+    }
+
+    #[test]
+    fn failed_tool_output_deduplicates_repeated_error_text() {
+        let failure = "plugin error: permission confirmation required";
+        let invocation = ToolInvocation::new(
+            "agena.workflow/plan",
+            serde_json::from_value(json!({ "action": "enter" })).expect("valid structured input"),
+        );
+        let tool = OperationPart::failed(
+            9,
+            invocation,
+            failure,
+            failure,
+            vec![OperationBlock::Text {
+                text: failure.to_string(),
+            }],
+            Vec::new(),
+            agena::message::ToolOutput::default(),
+            agena::message::TimeRange::default(),
+        );
+        let part = MessagePart::with_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Failed,
+            PartContent::Operation(tool.clone()),
+        );
+
+        let mut out = Vec::new();
+        render_tool_execution(&part, &tool, &mut out, 120, &I18n::english(), true);
+
+        let rendered = out
+            .into_iter()
+            .map(|line| sanitize_terminal_text(line.text.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|line| line.contains(failure))
+                .count(),
+            1,
+            "failed tool rendering should not repeat the same error text"
         );
     }
 

@@ -154,6 +154,8 @@ overlay-permission-action-network = 网络：{$target}
 overlay-permission-reason = 原因：{$reason}
 overlay-permission-explanation = 说明：{$explanation}
 overlay-permission-session = 会话：#{$session}
+overlay-permission-requested-actions = 本次确认将覆盖
+overlay-permission-related-actions = 同一次工具调用还涉及
 overlay-permission-fact-risk = 风险={$value}
 overlay-permission-fact-source = 来源={$value}
 overlay-permission-fact-scope = 作用域={$value}
@@ -1197,6 +1199,8 @@ timeline-label-explanation = 解释
 timeline-label-source = 来源
 timeline-label-scope = 范围
 timeline-label-operator = 操作者
+timeline-label-requested-actions = 本次确认将覆盖
+timeline-label-related-actions = 同一次工具调用还涉及
 timeline-label-reply-kind = 回复类型
 timeline-label-rule-id = 规则 ID
 timeline-label-action-key = 动作键

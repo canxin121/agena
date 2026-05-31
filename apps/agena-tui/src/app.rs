@@ -21365,10 +21365,21 @@ fn permission_overlay_choices(i18n: &I18n) -> [String; 8] {
 
 fn permission_action_label(i18n: &I18n, action: &PermissionAction) -> String {
     match action {
-        PermissionAction::Tool { tool_name, .. } => i18n.text_args(
-            "overlay-permission-action-tool",
-            &crate::fl_args!("tool" => tool_name.clone()),
-        ),
+        PermissionAction::Tool {
+            tool_name,
+            qualifier,
+        } => {
+            let base = i18n.text_args(
+                "overlay-permission-action-tool",
+                &crate::fl_args!("tool" => tool_name.clone()),
+            );
+            qualifier
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| format!("{base} · {value}"))
+                .unwrap_or(base)
+        }
         PermissionAction::PathAccess {
             access_kind,
             target_path,
@@ -21390,6 +21401,33 @@ fn permission_action_label(i18n: &I18n, action: &PermissionAction) -> String {
             ),
         ),
     }
+}
+
+fn permission_requested_actions_for_display<'a>(
+    primary: Option<&'a PermissionAction>,
+    requested: &'a [PermissionAction],
+) -> Vec<&'a PermissionAction> {
+    if requested.is_empty() {
+        return Vec::new();
+    }
+    if requested.len() == 1 && primary.is_some_and(|primary| requested.first() == Some(&primary)) {
+        return Vec::new();
+    }
+    requested.iter().collect()
+}
+
+fn permission_related_actions_for_display<'a>(
+    primary: Option<&'a PermissionAction>,
+    related: &'a [PermissionAction],
+    requested: &'a [PermissionAction],
+) -> Vec<&'a PermissionAction> {
+    related
+        .iter()
+        .filter(|action| {
+            !primary.is_some_and(|primary| *action == primary)
+                && !requested.iter().any(|candidate| candidate == *action)
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21873,6 +21911,7 @@ fn timeline_event_detail_lines(i18n: &I18n, record: &DomainEvent) -> Vec<DetailT
                     "timeline-label-request-id",
                     event.request_id.clone(),
                 ),
+                app_detail_plain_line(permission_action_label(i18n, &event.action)),
                 timeline_detail_labeled_line(i18n, "timeline-label-reason", event.reason.clone()),
                 timeline_detail_labeled_line(
                     i18n,
@@ -21906,6 +21945,27 @@ fn timeline_event_detail_lines(i18n: &I18n, record: &DomainEvent) -> Vec<DetailT
                     operator.to_string(),
                 ));
             }
+            append_permission_action_detail_lines(
+                i18n,
+                &mut lines,
+                "timeline-label-requested-actions",
+                permission_requested_actions_for_display(
+                    Some(&event.action),
+                    event.requested_actions.as_slice(),
+                )
+                .as_slice(),
+            );
+            append_permission_action_detail_lines(
+                i18n,
+                &mut lines,
+                "timeline-label-related-actions",
+                permission_related_actions_for_display(
+                    Some(&event.action),
+                    event.related_actions.as_slice(),
+                    event.requested_actions.as_slice(),
+                )
+                .as_slice(),
+            );
             append_permission_trace_detail_lines(i18n, &mut lines, &event.trace);
             lines
         }
@@ -22108,6 +22168,24 @@ fn timeline_command_output_stream_token(stream: agena::event::CommandOutputStrea
         agena::event::CommandOutputStream::Stdout => "stdout",
         agena::event::CommandOutputStream::Stderr => "stderr",
     }
+}
+
+fn append_permission_action_detail_lines(
+    i18n: &I18n,
+    lines: &mut Vec<DetailTextLine<'static>>,
+    label_key: &str,
+    actions: &[&PermissionAction],
+) {
+    if actions.is_empty() {
+        return;
+    }
+    lines.push(app_detail_plain_line(format!(
+        "{}:",
+        ui_text::t(i18n, label_key)
+    )));
+    lines.extend(actions.iter().map(|action| {
+        app_detail_plain_line(format!("  {}", permission_action_label(i18n, action)))
+    }));
 }
 
 fn append_permission_trace_detail_lines(
@@ -24859,6 +24937,22 @@ mod tests {
             permission_request_fingerprint(&first),
             permission_request_fingerprint(&second)
         );
+    }
+
+    #[test]
+    fn permission_action_label_includes_tool_qualifier() {
+        let i18n = I18n::english();
+        let label = permission_action_label(
+            &i18n,
+            &PermissionAction::Tool {
+                tool_name: "bash".to_string(),
+                qualifier: Some("npm test".to_string()),
+            },
+        );
+
+        assert!(label.contains("tool:"));
+        assert!(label.contains("bash"));
+        assert!(label.contains("npm test"));
     }
 
     #[test]

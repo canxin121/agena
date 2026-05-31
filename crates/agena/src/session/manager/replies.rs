@@ -2001,6 +2001,7 @@ impl SessionManager {
                 EventKind::PermissionRequested(PermissionRequestedEvent {
                     session_id: session.id,
                     request_id: resolved.operation_id.clone(),
+                    action: request.action.clone(),
                     related_actions,
                     requested_actions,
                     reason: reason.clone(),

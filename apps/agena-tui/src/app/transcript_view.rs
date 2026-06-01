@@ -603,15 +603,12 @@ fn render_tool_execution(
         );
     }
 
-    if !tool.model_output.text.trim().is_empty()
-        && (failure_text != Some(tool.model_output.text.trim()))
-    {
+    if should_render_tool_model_output(tool, failure_text) {
         if expanded {
-            push_limited_tool_text(
+            render_limited_tool_text_block(
                 out,
                 "    ",
                 tool.model_output.text.as_str(),
-                Style::default(),
                 width,
                 i18n,
             );
@@ -681,7 +678,7 @@ fn render_operation_blocks(
                     continue;
                 }
                 if expanded {
-                    push_limited_tool_text(out, "    ", text, Style::default(), width, i18n);
+                    render_limited_tool_text_block(out, "    ", text, width, i18n);
                 } else {
                     push_collapsible_text(out, "    ", text, Style::default(), width, i18n);
                 }
@@ -1207,7 +1204,7 @@ fn tool_output_copy_text(part: &MessagePart, tool: &OperationPart, i18n: &I18n) 
         tool.title.clone()
     };
     let mut sections = vec![tool_execution_preview(part, tool, i18n), label];
-    if !tool.model_output.text.trim().is_empty() {
+    if should_render_tool_model_output(tool, tool.error_message()) {
         sections.push(tool.model_output.text.trim().to_string());
     }
     if let Some(diff) = apply_patch_diff(&tool.details)
@@ -1354,6 +1351,98 @@ fn operation_block_copy_text(block: &OperationBlock, i18n: &I18n) -> String {
         | OperationBlock::Log { .. }
         | OperationBlock::Custom { .. } => String::new(),
     }
+}
+
+fn should_render_tool_model_output(tool: &OperationPart, skipped_text: Option<&str>) -> bool {
+    let model_output = normalized_tool_text(tool.model_output.text.as_str());
+    if model_output.is_empty() {
+        return false;
+    }
+    if skipped_text.is_some_and(|candidate| normalized_tool_text(candidate) == model_output) {
+        return false;
+    }
+    !tool
+        .blocks
+        .iter()
+        .filter_map(operation_text_block_text)
+        .any(|text| normalized_tool_text(text) == model_output)
+}
+
+fn operation_text_block_text(block: &OperationBlock) -> Option<&str> {
+    match block {
+        OperationBlock::Text { text } | OperationBlock::Markdown { text } => Some(text.as_str()),
+        _ => None,
+    }
+}
+
+fn normalized_tool_text(text: &str) -> String {
+    let sanitized = sanitize_terminal_text(text);
+    trim_empty_line_edges(sanitized.as_str()).to_string()
+}
+
+fn render_limited_tool_text_block(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    text: &str,
+    width: u16,
+    i18n: &I18n,
+) {
+    if tool_text_looks_like_markdown(text) {
+        push_limited_markdown(out, prefix, text, width, i18n);
+    } else {
+        push_limited_tool_text(out, prefix, text, Style::default(), width, i18n);
+    }
+}
+
+fn tool_text_looks_like_markdown(text: &str) -> bool {
+    let normalized = normalized_tool_text(text);
+    if normalized.is_empty() {
+        return false;
+    }
+    let lines = normalized.lines().collect::<Vec<_>>();
+    let unordered_item_count = lines
+        .iter()
+        .filter(|line| is_markdown_unordered_list_item(line))
+        .count();
+    let ordered_item_count = lines
+        .iter()
+        .filter(|line| is_markdown_ordered_list_item(line))
+        .count();
+
+    lines.iter().any(|line| {
+        let trimmed = line.trim_start();
+        markdown_fence_delimiter(trimmed).is_some()
+            || trimmed.starts_with("#")
+            || trimmed.starts_with("> ")
+            || trimmed.starts_with("- [")
+            || trimmed.starts_with("* [")
+            || trimmed.starts_with("+ [")
+    }) || lines
+        .windows(2)
+        .any(|window| is_markdown_table_header(window[0], window[1]))
+        || unordered_item_count >= 2
+        || ordered_item_count >= 2
+}
+
+fn is_markdown_unordered_list_item(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    ["- ", "* ", "+ "]
+        .into_iter()
+        .any(|prefix| trimmed.starts_with(prefix) && trimmed.len() > prefix.len())
+}
+
+fn is_markdown_ordered_list_item(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let digit_count = trimmed.chars().take_while(|c| c.is_ascii_digit()).count();
+    digit_count > 0
+        && trimmed
+            .chars()
+            .nth(digit_count)
+            .is_some_and(|delimiter| delimiter == '.')
+        && trimmed
+            .chars()
+            .nth(digit_count + 1)
+            .is_some_and(|separator| separator == ' ')
 }
 
 fn push_multiline(out: &mut Vec<RenderedLine>, prefix: &str, text: &str, style: Style, width: u16) {
@@ -2428,6 +2517,121 @@ mod tests {
             1,
             "failed tool rendering should not repeat the same error text"
         );
+    }
+
+    #[test]
+    fn completed_tool_output_deduplicates_matching_text_blocks() {
+        let plan_text = "Created a draft plan.\n\n# Plan Trial\n\n## Steps\n1. [ ] Create plan";
+        let invocation = ToolInvocation::new(
+            "agena.workflow/plan",
+            serde_json::from_value(json!({ "action": "create" })).expect("valid structured input"),
+        );
+        let tool = OperationPart::completed(
+            10,
+            invocation,
+            plan_text,
+            vec![OperationBlock::Text {
+                text: plan_text.to_string(),
+            }],
+            Vec::new(),
+            agena::message::ToolOutput::default(),
+            agena::message::TimeRange::default(),
+        );
+        let part = MessagePart::with_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(tool.clone()),
+        );
+
+        let mut out = Vec::new();
+        render_tool_execution(&part, &tool, &mut out, 120, &I18n::english(), true);
+
+        let rendered = out
+            .into_iter()
+            .map(|line| sanitize_terminal_text(line.text.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|line| line.contains("Created a draft plan."))
+                .count(),
+            1,
+            "completed tool rendering should not repeat identical model output and text blocks"
+        );
+    }
+
+    #[test]
+    fn markdown_like_text_blocks_render_with_markdown_styling() {
+        let plan_text = "Created a draft plan.\n\n# Plan Trial\n\n- [ ] Create plan";
+        let invocation = ToolInvocation::new(
+            "agena.workflow/plan",
+            serde_json::from_value(json!({ "action": "create" })).expect("valid structured input"),
+        );
+        let tool = OperationPart::completed(
+            11,
+            invocation,
+            String::new(),
+            vec![OperationBlock::Text {
+                text: plan_text.to_string(),
+            }],
+            Vec::new(),
+            agena::message::ToolOutput::default(),
+            agena::message::TimeRange::default(),
+        );
+        let part = MessagePart::with_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(tool.clone()),
+        );
+
+        let mut out = Vec::new();
+        render_tool_execution(&part, &tool, &mut out, 120, &I18n::english(), true);
+
+        assert!(out.iter().any(|line| {
+            line.rich_line.is_some()
+                && sanitize_terminal_text(line.text.as_str()).contains("Plan Trial")
+        }));
+    }
+
+    #[test]
+    fn tool_output_copy_text_deduplicates_matching_text_blocks() {
+        let plan_text = "Created a draft plan.\n\n# Plan Trial\n\n- [ ] Create plan";
+        let invocation = ToolInvocation::new(
+            "agena.workflow/plan",
+            serde_json::from_value(json!({ "action": "create" })).expect("valid structured input"),
+        );
+        let tool = OperationPart::completed(
+            12,
+            invocation,
+            plan_text,
+            vec![OperationBlock::Text {
+                text: plan_text.to_string(),
+            }],
+            Vec::new(),
+            agena::message::ToolOutput::default(),
+            agena::message::TimeRange::default(),
+        );
+        let part = MessagePart::with_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(tool),
+        );
+
+        let copied = tool_output_copy_text(
+            &part,
+            match transcript_part_content(&part) {
+                PartContent::Operation(tool) => tool,
+                _ => panic!("expected operation part"),
+            },
+            &I18n::english(),
+        );
+        assert_eq!(copied.matches("Created a draft plan.").count(), 1);
     }
 
     #[test]

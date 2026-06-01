@@ -8,9 +8,9 @@ use std::{collections::BTreeMap, future::Future, sync::Arc};
 use async_trait::async_trait;
 
 use crate::message::{
-    AskUserToolInput, EnterWorktreeToolInput, ExitWorktreeToolInput, MonitorStatus,
-    MonitorStream, StructuredObject, TaskSubagentType, TodoItem, TodoPriority, TodoStatus,
-    TodoWriteToolInput, ToolInvocation, UserInputOption, UserInputQuestion,
+    AskUserToolInput, EnterWorktreeToolInput, ExitWorktreeToolInput, MonitorStatus, MonitorStream,
+    StructuredObject, TaskSubagentType, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput,
+    ToolInvocation, UserInputOption, UserInputQuestion,
 };
 use crate::plugin::sdk::host_api::{
     AskUserRequest, AskUserResponse, EventSubscription, HostAgentDescriptor, HostAgentGetRequest,
@@ -20,21 +20,20 @@ use crate::plugin::sdk::host_api::{
     HostClient, HostConfigReloadResponse, HostEnterWorktreeRequest, HostExitWorktreeRequest,
     HostGetSessionRequest, HostGetSessionResponse, HostLspDiagnostic,
     HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
-    HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse,
-    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec,
-    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
-    HostPluginStatus, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
-    HostPluginStatusListResponse, HostRenameSessionRequest, HostRenameSessionResponse,
-    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
-    HostSchedulerDeleteResponse, HostSchedulerJob, HostSchedulerListResponse,
-    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
-    HostSecretSetRequest, HostSession, HostStorageDeleteRequest, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageRecord,
-    HostStorageSetRequest, HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest,
-    HostWorktreeListResponse, HostWorktreeSummary, LogLevel, MonitorEvent, MonitorHandle,
-    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
-    NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
-    current_host_callback_context,
+    HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    HostMcpRemoveServerResponse, HostMcpServerSpec, HostNetworkPermissionCheckRequest,
+    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPluginStatus,
+    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
+    HostRenameSessionRequest, HostRenameSessionResponse, HostSchedulerCreateRequest,
+    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
+    HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
+    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageRecord, HostStorageSetRequest,
+    HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostWorktreeListResponse,
+    HostWorktreeSummary, LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
+    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,

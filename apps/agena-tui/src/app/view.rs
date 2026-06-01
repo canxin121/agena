@@ -3165,10 +3165,7 @@ fn user_input_nav_line(
     }
     if !App::user_input_review_hidden(dialog) {
         spans.push(Span::styled(
-            format!(
-                " [>] {} ",
-                user_input_submit_label(i18n, &dialog.request)
-            ),
+            format!(" [>] {} ", user_input_submit_label(i18n, &dialog.request)),
             if dialog.state.screen() == QuestionFlowScreen::Review {
                 selection_highlight_style()
             } else {
@@ -3207,10 +3204,7 @@ fn user_input_footer_text(i18n: &I18n, request: &UserInputRequest, key: &str) ->
     footer
 }
 
-fn user_input_body_markdown_lines(
-    body_markdown: &str,
-    style: Option<Style>,
-) -> Vec<Line<'static>> {
+fn user_input_body_markdown_lines(body_markdown: &str, style: Option<Style>) -> Vec<Line<'static>> {
     let style = style.unwrap_or_default();
     body_markdown
         .lines()

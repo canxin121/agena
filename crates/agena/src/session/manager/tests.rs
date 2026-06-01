@@ -3102,9 +3102,8 @@ mod runtime_builtin_tool_tests {
         HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
         HostLspServer, HostNetworkPermissionCheckRequest, HostPermissionCheckResponse,
         HostRenameSessionRequest, HostRenameSessionResponse, HostSession, HostTodoPriority,
-        HostTodoStatus, HostTodoWriteRequest, LogLevel, SpawnSubtaskRequest,
-        SpawnSubtaskResponse, ToolDescriptor,
-        current_host_callback_context,
+        HostTodoStatus, HostTodoWriteRequest, LogLevel, SpawnSubtaskRequest, SpawnSubtaskResponse,
+        ToolDescriptor, current_host_callback_context,
     };
     use crate::plugin::sdk::{EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision};
     use axum::{Router, extract::State, response::Html, routing::get};

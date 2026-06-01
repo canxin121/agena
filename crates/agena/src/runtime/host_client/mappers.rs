@@ -290,7 +290,6 @@ pub(super) fn host_session_from_session(session: &crate::session::Session) -> Ho
     }
 }
 
-
 pub(super) fn workflow_tool_output(
     executor: &crate::tool::ToolExecutor,
     tool_name: &str,

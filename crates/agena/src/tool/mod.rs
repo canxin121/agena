@@ -779,11 +779,29 @@ impl ToolExecutor {
             )));
         }
         let command = shell_command_from_invocation(invocation);
+        let resolution = self.plugin_resolution_for_invocation(invocation);
+        let mut tool_name_aliases = vec![tool_name.as_str()];
+        if let Some(resolution) = resolution.as_ref()
+            && resolution.original_name != tool_name
+            && self.original_tool_name_is_unambiguous(resolution.original_name.as_str())
+        {
+            tool_name_aliases.push(resolution.original_name.as_str());
+        }
         Ok((
             tool_name.clone(),
             self.agent
-                .authorize_tool(tool_name.as_str(), command.as_deref(), &tags),
+                .authorize_tool_aliases(&tool_name_aliases, command.as_deref(), &tags),
         ))
+    }
+
+    fn original_tool_name_is_unambiguous(&self, original_name: &str) -> bool {
+        self.plugins
+            .registered_tools()
+            .into_iter()
+            .filter(|tool| tool.original_name == original_name)
+            .take(2)
+            .count()
+            == 1
     }
 
     fn plugin_resolution_for_invocation(
@@ -3935,6 +3953,40 @@ mod tests {
             ToolError::PermissionDenied(reason) => assert!(reason.contains("loopback")),
             other => panic!("expected network permission denial, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn short_tool_name_permissions_match_unambiguous_workflow_tools() {
+        let workspace = TempWorkspace::new();
+        let agent = crate::agent::Agent::new("build", PermissionPolicy::allow_all())
+            .try_with_permission_config(&crate::agent::PermissionConfig {
+                tools: Some(crate::agent::ToolPermissionConfig {
+                    default: Some(crate::permission::PermissionMode::Ask),
+                    names: std::collections::BTreeMap::from([(
+                        "plan".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    )]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .expect("tool permission config should compile");
+        let executor = ToolExecutor::new(workspace.root.clone(), agent)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+        let invocation = ToolInvocation::new(
+            "agena.workflow/plan",
+            StructuredObject::try_from(json!({ "action": "get" }))
+                .expect("plan invocation input should be valid"),
+        );
+
+        let checks = executor
+            .collect_permission_checks_for_invocation(&invocation)
+            .expect("permission collection should succeed");
+
+        assert!(matches!(
+            checks.first().map(|check| &check.decision),
+            Some(crate::permission::PermissionDecision::Allow)
+        ));
     }
 
     #[test]

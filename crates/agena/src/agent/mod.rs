@@ -575,6 +575,21 @@ impl Agent {
         self.tool_policy.check_tool(tool_name, command, tags)
     }
 
+    pub fn authorize_tool_aliases(
+        &self,
+        tool_names: &[&str],
+        command: Option<&str>,
+        tags: &[ToolTag],
+    ) -> PermissionDecision {
+        if self.disable {
+            return PermissionDecision::Deny {
+                reason: format!("agent '{}' is disabled", self.name),
+            };
+        }
+        self.tool_policy
+            .check_tool_with_aliases(tool_names, command, tags)
+    }
+
     pub fn authorize_tool_name(&self, tool_name: &str) -> PermissionDecision {
         self.authorize_tool_tags(tool_name, &[])
     }

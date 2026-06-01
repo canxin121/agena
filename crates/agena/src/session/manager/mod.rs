@@ -47,8 +47,7 @@ use super::history::{
 };
 use super::model::{
     PromptCompactionRuntime, PromptCompactionStrategy, ProviderPromptAnchor,
-    SessionExecutionContext, SessionListRequest, SessionPendingTool, SessionStatus,
-    SessionSummary,
+    SessionExecutionContext, SessionListRequest, SessionPendingTool, SessionStatus, SessionSummary,
 };
 use super::processor::SessionRunRequest;
 use super::prompt_window::{self, PromptRequestOptions};

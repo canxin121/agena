@@ -2209,9 +2209,9 @@ mod tests {
     use crate::message::{
         ApplyPatchToolInput, EnterWorktreeToolInput, FileChangeKind, FilesystemAccess,
         FilesystemEffect, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
-        LspPositionToolInput, Message, MonitorToolInput, NetworkEffect, PartContent,
-        ReadToolInput, ShellCommandInput, StructuredObject, TaskSubagentType, TaskToolInput,
-        TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation, WebFetchToolInput,
+        LspPositionToolInput, Message, MonitorToolInput, NetworkEffect, PartContent, ReadToolInput,
+        ShellCommandInput, StructuredObject, TaskSubagentType, TaskToolInput, TodoItem,
+        TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation, WebFetchToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
@@ -4360,5 +4360,4 @@ mod tests {
             other => panic!("expected bash output, got {other:?}"),
         }
     }
-
 }

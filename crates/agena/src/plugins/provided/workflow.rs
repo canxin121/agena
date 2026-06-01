@@ -4,7 +4,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
-use chrono::Utc;
 use crate::message::{
     AgentRestoreToolInput, AgentSwitchToolInput, AskUserToolInput, EnterWorktreeToolInput,
     ExitWorktreeToolInput, TaskToolInput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput,
@@ -16,9 +15,9 @@ use crate::plugin::sdk::host_api::{
     HostAgentRestoreRequest, HostAgentRestoreResponse, HostAgentSwitchRequest,
     HostAgentSwitchResponse, HostClient, HostEnterWorktreeRequest, HostExitWorktreeRequest,
     HostGetSessionRequest, HostRenameSessionRequest, HostSession, HostStatuslineContributeRequest,
-    HostStatuslineRemoveRequest, HostStorageDeleteRequest, HostStorageGetRequest,
-    HostStorageScope, HostStorageSetRequest, HostStorageVisibility, HostTodoItem,
-    HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, SpawnSubtaskRequest, ToolDescriptor,
+    HostStatuslineRemoveRequest, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageScope,
+    HostStorageSetRequest, HostStorageVisibility, HostTodoItem, HostTodoPriority, HostTodoStatus,
+    HostTodoWriteRequest, SpawnSubtaskRequest, ToolDescriptor,
 };
 use crate::plugin::sdk::{
     CommandBeforeInput, CommandBeforeResponse, HookSubscription, HostCapability, InitContext,
@@ -30,6 +29,7 @@ use crate::search::tool_catalog::{ToolCatalogDocument, search_tool_catalog};
 use crate::tool::{ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ask_user};
 use agena_macros::StaticToolSurface;
 use async_trait::async_trait;
+use chrono::Utc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -1127,7 +1127,10 @@ impl WorkflowPlugin {
     }
 
     fn default_plan_title(objective: &str) -> String {
-        let line = objective.lines().find(|line| !line.trim().is_empty()).unwrap_or(objective);
+        let line = objective
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or(objective);
         let title = line.trim();
         if title.chars().count() <= 80 {
             return title.to_string();
@@ -1163,7 +1166,13 @@ impl WorkflowPlugin {
                             .id
                             .clone()
                             .filter(|value| !value.trim().is_empty())
-                            .unwrap_or_else(|| format!("step_{}_checkpoint_{}", step_index + 1, checkpoint_index + 1)),
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "step_{}_checkpoint_{}",
+                                    step_index + 1,
+                                    checkpoint_index + 1
+                                )
+                            }),
                         text: text.to_string(),
                         status: checkpoint.status.unwrap_or_default(),
                     })
@@ -1273,13 +1282,14 @@ impl WorkflowPlugin {
             format!("# {}", plan.title),
             String::new(),
             format!("Objective: {}", plan.objective),
-            format!(
-                "Phase: {}",
-                Self::plan_phase_label(plan.phase)
-            ),
+            format!("Phase: {}", Self::plan_phase_label(plan.phase)),
             format!(
                 "Auto-continue: {}",
-                if plan.auto_continue.enabled { "on" } else { "off" }
+                if plan.auto_continue.enabled {
+                    "on"
+                } else {
+                    "off"
+                }
             ),
         ];
         if !plan.document_markdown.trim().is_empty() {
@@ -1331,8 +1341,7 @@ impl WorkflowPlugin {
             })
             .count();
         if total_steps == 0 {
-            return format!("plan:{}",
-                Self::plan_phase_label(plan.phase));
+            return format!("plan:{}", Self::plan_phase_label(plan.phase));
         }
         format!(
             "plan:{}/{} {} {}",
@@ -1361,17 +1370,22 @@ impl WorkflowPlugin {
             "Plan '{}' [{} | auto:{}]",
             plan.title,
             Self::plan_phase_label(plan.phase),
-            if plan.auto_continue.enabled { "on" } else { "off" }
+            if plan.auto_continue.enabled {
+                "on"
+            } else {
+                "off"
+            }
         )
     }
 
-    fn plan_auto_signature(plan: &WorkflowPlan, step_index: usize, step: &WorkflowPlanStep) -> String {
+    fn plan_auto_signature(
+        plan: &WorkflowPlan,
+        step_index: usize,
+        step: &WorkflowPlanStep,
+    ) -> String {
         format!(
             "{}:{}:{}:{}",
-            plan.plan_id,
-            plan.updated_at_ms,
-            step_index,
-            step.id
+            plan.plan_id, plan.updated_at_ms, step_index, step.id
         )
     }
 
@@ -1411,14 +1425,25 @@ impl WorkflowPlugin {
                 .is_some_and(|task| {
                     matches!(
                         task,
-                        TaskToolActionInput::Run { args: TaskToolInput { subagent_type: crate::message::TaskSubagentType::Explore | crate::message::TaskSubagentType::Verify, .. } }
+                        TaskToolActionInput::Run {
+                            args: TaskToolInput {
+                                subagent_type: crate::message::TaskSubagentType::Explore
+                                    | crate::message::TaskSubagentType::Verify,
+                                ..
+                            }
+                        }
                     )
                 });
         }
         if input.tags.iter().any(|tag| matches!(tag, ToolTag::Shell)) {
             return true;
         }
-        if input.tags.iter().any(|tag| matches!(tag, ToolTag::Mutating | ToolTag::FilesystemWrite | ToolTag::Worktree)) {
+        if input.tags.iter().any(|tag| {
+            matches!(
+                tag,
+                ToolTag::Mutating | ToolTag::FilesystemWrite | ToolTag::Worktree
+            )
+        }) {
             return false;
         }
         input.tags.iter().any(|tag| {
@@ -1456,8 +1481,8 @@ impl WorkflowPlugin {
             return true;
         };
         match command_name {
-            "cat" | "sed" | "grep" | "rg" | "ls" | "find" | "pwd" | "head" | "tail"
-            | "wc" | "stat" | "tree" | "readlink" | "realpath" | "file" | "echo" => true,
+            "cat" | "sed" | "grep" | "rg" | "ls" | "find" | "pwd" | "head" | "tail" | "wc"
+            | "stat" | "tree" | "readlink" | "realpath" | "file" | "echo" => true,
             "git" => matches!(
                 tokens.get(1).map(String::as_str),
                 Some(
@@ -1477,7 +1502,10 @@ impl WorkflowPlugin {
     }
 
     fn command_text_for_policy(input: &CommandBeforeInput) -> String {
-        if input.command == "sh" && input.args.len() >= 2 && input.args.first().is_some_and(|arg| arg == "-c") {
+        if input.command == "sh"
+            && input.args.len() >= 2
+            && input.args.first().is_some_and(|arg| arg == "-c")
+        {
             return input.args[1].clone();
         }
         std::iter::once(input.command.as_str())
@@ -1486,7 +1514,11 @@ impl WorkflowPlugin {
             .join(" ")
     }
 
-    fn auto_continue_prompt(plan: &WorkflowPlan, step_index: usize, step: &WorkflowPlanStep) -> String {
+    fn auto_continue_prompt(
+        plan: &WorkflowPlan,
+        step_index: usize,
+        step: &WorkflowPlanStep,
+    ) -> String {
         let mut lines = vec![
             "<plan_context>".to_string(),
             "Continue the active approved plan.".to_string(),
@@ -1522,7 +1554,9 @@ impl WorkflowPlugin {
     async fn invoke_plan_get(&self) -> SdkResult<ToolInvokeOutput> {
         let Some(plan) = self.load_active_plan().await? else {
             let payload = serde_json::json!({ "plan": serde_json::Value::Null });
-            return Ok(ToolInvokeOutput::text("No active plan.").with_title("plan").with_payload(payload));
+            return Ok(ToolInvokeOutput::text("No active plan.")
+                .with_title("plan")
+                .with_payload(payload));
         };
         let payload = Self::plan_payload(&plan)?;
         Ok(ToolInvokeOutput::text(format!(
@@ -1534,7 +1568,11 @@ impl WorkflowPlugin {
         .with_payload(payload))
     }
 
-    async fn invoke_plan_create(&self, session_id: i64, input: &PlanCreateInput) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_plan_create(
+        &self,
+        session_id: i64,
+        input: &PlanCreateInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let plan = self.build_plan(
             session_id,
             input.objective.as_str(),
@@ -1554,7 +1592,11 @@ impl WorkflowPlugin {
         .with_payload(payload))
     }
 
-    async fn invoke_plan_replace(&self, session_id: i64, input: &PlanReplaceInput) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_plan_replace(
+        &self,
+        session_id: i64,
+        input: &PlanReplaceInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let previous = self.load_active_plan().await?;
         let plan = self.build_plan(
             session_id,
@@ -1650,7 +1692,10 @@ impl WorkflowPlugin {
         .with_payload(payload))
     }
 
-    async fn invoke_plan_update_runtime(&self, input: &PlanUpdateRuntimeInput) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_plan_update_runtime(
+        &self,
+        input: &PlanUpdateRuntimeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let Some(mut plan) = self.load_active_plan().await? else {
             return Err(PluginError::invalid_params("no active plan to update"));
         };
@@ -1675,7 +1720,10 @@ impl WorkflowPlugin {
         .with_payload(payload))
     }
 
-    async fn invoke_plan_update_step(&self, input: &PlanUpdateStepInput) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_plan_update_step(
+        &self,
+        input: &PlanUpdateStepInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let Some(mut plan) = self.load_active_plan().await? else {
             return Err(PluginError::invalid_params("no active plan to update"));
         };
@@ -1747,12 +1795,19 @@ impl WorkflowPlugin {
         plan.phase = WorkflowPlanPhase::Completed;
         plan.approval_state = WorkflowPlanApprovalState::Approved;
         plan.completed_at_ms = Some(Utc::now().timestamp_millis());
-        if let Some(summary) = input.summary.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        if let Some(summary) = input
+            .summary
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             if plan.document_markdown.trim().is_empty() {
                 plan.document_markdown = format!("## Completion Summary\n\n{summary}");
             } else {
-                plan.document_markdown =
-                    format!("{}\n\n## Completion Summary\n\n{summary}", plan.document_markdown.trim());
+                plan.document_markdown = format!(
+                    "{}\n\n## Completion Summary\n\n{summary}",
+                    plan.document_markdown.trim()
+                );
             }
         }
         plan.updated_at_ms = Utc::now().timestamp_millis();
@@ -1777,13 +1832,17 @@ impl WorkflowPlugin {
         } else {
             "No active plan to clear."
         };
-        Ok(ToolInvokeOutput::text(text).with_title("plan").with_payload(payload))
+        Ok(ToolInvokeOutput::text(text)
+            .with_title("plan")
+            .with_payload(payload))
     }
 
     async fn invoke_plan_next(&self) -> SdkResult<ToolInvokeOutput> {
         let Some(plan) = self.load_active_plan().await? else {
             let payload = serde_json::json!({ "plan": serde_json::Value::Null, "next_step": serde_json::Value::Null });
-            return Ok(ToolInvokeOutput::text("No active plan.").with_title("plan").with_payload(payload));
+            return Ok(ToolInvokeOutput::text("No active plan.")
+                .with_title("plan")
+                .with_payload(payload));
         };
         let payload = match Self::next_actionable_step(&plan) {
             Some((index, step)) => serde_json::json!({
@@ -1805,7 +1864,9 @@ impl WorkflowPlugin {
             ),
             None => "The active plan has no remaining actionable steps.".to_string(),
         };
-        Ok(ToolInvokeOutput::text(text).with_title("plan next").with_payload(payload))
+        Ok(ToolInvokeOutput::text(text)
+            .with_title("plan next")
+            .with_payload(payload))
     }
 
     async fn invoke_ask_user(&self, input: &AskUserToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -2494,7 +2555,8 @@ impl Plugin for WorkflowPlugin {
         {
             return Ok(None);
         }
-        self.save_auto_continue_signature(signature.as_str()).await?;
+        self.save_auto_continue_signature(signature.as_str())
+            .await?;
         Ok(Some(crate::plugin::AgentStopPatch {
             continue_with_message: Some(Self::auto_continue_prompt(&plan, step_index, step)),
             reason: Some("workflow plan auto-continue".to_string()),

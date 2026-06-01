@@ -8503,10 +8503,7 @@ impl App {
         overlay
     }
 
-    fn build_permission_overlay(
-        session_id: i64,
-        request: PermissionRequest,
-    ) -> PermissionOverlay {
+    fn build_permission_overlay(session_id: i64, request: PermissionRequest) -> PermissionOverlay {
         PermissionOverlay {
             session_id,
             request,

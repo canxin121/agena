@@ -25,16 +25,15 @@ pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
 pub use manager::{
     SessionAutoCompactionConfig, SessionCacheStats, SessionCreateRequest,
     SessionExecutionReplyRequest, SessionExecutionRequest, SessionForkRequest,
-    SessionGoalCreateRequest, SessionGoalUpdateRequest, SessionManager, SessionManagerConfig,
-    SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions, SessionSubtaskRequest,
-    SessionSubtaskResponse, SessionUsage, SessionUsageLimitBasis, SessionUserMessageRequest,
+    SessionManager, SessionManagerConfig, SessionPermissionReplyRequest, SessionRewindRequest,
+    SessionRunOptions, SessionSubtaskRequest, SessionSubtaskResponse, SessionUsage,
+    SessionUsageLimitBasis, SessionUserMessageRequest,
 };
 pub use model::{
-    GoalStatus, MAX_SESSION_GOAL_OBJECTIVE_CHARS, PlanState, PromptCompactionRuntime,
-    PromptCompactionStrategy, PromptTokenRuntime, PromptTokenUsageSnapshot, PromptWindowRuntime,
-    ProviderPromptAnchor, RunStatus, Session, SessionExecutionContext, SessionGoal,
-    SessionListRequest, SessionRuntimeState, SessionStatus, SessionSummary,
-    validate_session_goal_objective,
+    PromptCompactionRuntime, PromptCompactionStrategy, PromptTokenRuntime,
+    PromptTokenUsageSnapshot, PromptWindowRuntime, ProviderPromptAnchor, RunStatus, Session,
+    SessionExecutionContext, SessionListRequest, SessionRuntimeState, SessionStatus,
+    SessionSummary,
 };
 pub use processor::SessionProcessor;
 

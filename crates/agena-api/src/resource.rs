@@ -15,7 +15,7 @@ use agena::{
         RuntimeBackgroundTask, RuntimeBackgroundTaskKind, RuntimeBackgroundTaskOrigin,
         RuntimeBackgroundTaskStatus,
     },
-    session::{GoalStatus, SessionStatus, SessionSummary},
+    session::{SessionStatus, SessionSummary},
 };
 
 // ─── Health / runtime ────────────────────────────────────────────────────
@@ -377,29 +377,6 @@ pub struct WorkspaceResource {
 // ─── Sessions ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionGoalResource {
-    pub id: i64,
-    pub session_id: i64,
-    pub objective: String,
-    pub status: GoalStatus,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub completed_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionPlanResource {
-    pub slug: String,
-    pub file_path: String,
-    pub started_at: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub step_count: Option<u32>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub preview_lines: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionResource {
     pub id: i64,
     pub parent_id: Option<i64>,
@@ -416,8 +393,6 @@ pub struct SessionResource {
     pub child_session_count: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_message_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub goal: Option<SessionGoalResource>,
 }
 
 impl From<SessionSummary> for SessionResource {
@@ -436,15 +411,6 @@ impl From<SessionSummary> for SessionResource {
             message_count: value.message_count,
             child_session_count: value.child_session_count,
             last_message_at: value.last_message_at,
-            goal: value.goal.map(|goal| SessionGoalResource {
-                id: goal.id,
-                session_id: goal.session_id,
-                objective: goal.objective,
-                status: goal.status,
-                created_at: goal.created_at,
-                updated_at: goal.updated_at,
-                completed_at: goal.completed_at,
-            }),
         }
     }
 }
@@ -546,10 +512,6 @@ pub struct SessionExecutionResource {
     pub pending_interactive_requests: Vec<PendingInteractiveRequest>,
     pub pending_permission_requests: Vec<PermissionRequest>,
     pub pending_user_input_requests: Vec<UserInputRequest>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub goal: Option<SessionGoalResource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub plan: Option<SessionPlanResource>,
     pub usage: SessionUsageResource,
 }
 

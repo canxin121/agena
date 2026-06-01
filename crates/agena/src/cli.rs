@@ -554,7 +554,6 @@ pub enum MemorySubcommand {
 #[derive(Debug, Clone, Subcommand)]
 pub enum SessionsSubcommand {
     List(SessionListArgs),
-    Goal(SessionGoalCommand),
     /// Export a session to a JSONL bundle (stdout). Pipe to a file to keep.
     Export(SessionExportArgs),
     /// Replay a JSONL bundle (read from stdin) as a fresh session in the
@@ -564,49 +563,6 @@ pub enum SessionsSubcommand {
     Tree(SessionTreeArgs),
     /// List rewind audit checkpoints for a session — what was dropped and when.
     Checkpoints(SessionCheckpointsArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct SessionGoalCommand {
-    #[command(subcommand)]
-    pub command: SessionGoalSubcommand,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum SessionGoalSubcommand {
-    Get(SessionGoalGetArgs),
-    Create(SessionGoalCreateArgs),
-    Complete(SessionGoalCompleteArgs),
-    Clear(SessionGoalClearArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct SessionGoalGetArgs {
-    pub session_id: i64,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
-    pub format: ConfigOutputFormat,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct SessionGoalCreateArgs {
-    pub session_id: i64,
-    pub objective: String,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
-    pub format: ConfigOutputFormat,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct SessionGoalCompleteArgs {
-    pub session_id: i64,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
-    pub format: ConfigOutputFormat,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct SessionGoalClearArgs {
-    pub session_id: i64,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
-    pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -918,18 +874,6 @@ struct SessionImportOutput {
 struct SessionCheckpointsOutput {
     session_id: i64,
     checkpoints: Vec<crate::session::RewindCheckpoint>,
-}
-
-#[derive(Debug, Serialize)]
-struct SessionGoalOutput {
-    session_id: i64,
-    goal: Option<crate::session::SessionGoal>,
-}
-
-#[derive(Debug, Serialize)]
-struct SessionGoalClearedOutput {
-    session_id: i64,
-    cleared: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1972,53 +1916,6 @@ impl AgenaCli {
                 let sessions = paginate_session_summaries(sessions, args.offset, args.limit);
                 render_serialized(args.format, &SessionListOutput { sessions })
             }
-            SessionsSubcommand::Goal(args) => match args.command {
-                SessionGoalSubcommand::Get(args) => {
-                    let goal = manager.get_goal(args.session_id).await?;
-                    render_serialized(
-                        args.format,
-                        &SessionGoalOutput {
-                            session_id: args.session_id,
-                            goal,
-                        },
-                    )
-                }
-                SessionGoalSubcommand::Create(args) => {
-                    let goal = manager
-                        .create_goal(crate::session::SessionGoalCreateRequest {
-                            session_id: args.session_id,
-                            objective: args.objective,
-                        })
-                        .await?;
-                    render_serialized(
-                        args.format,
-                        &SessionGoalOutput {
-                            session_id: args.session_id,
-                            goal: Some(goal),
-                        },
-                    )
-                }
-                SessionGoalSubcommand::Complete(args) => {
-                    let goal = manager.complete_goal(args.session_id).await?;
-                    render_serialized(
-                        args.format,
-                        &SessionGoalOutput {
-                            session_id: args.session_id,
-                            goal: Some(goal),
-                        },
-                    )
-                }
-                SessionGoalSubcommand::Clear(args) => {
-                    let cleared = manager.clear_goal(args.session_id).await?;
-                    render_serialized(
-                        args.format,
-                        &SessionGoalClearedOutput {
-                            session_id: args.session_id,
-                            cleared,
-                        },
-                    )
-                }
-            },
             SessionsSubcommand::Export(args) => {
                 let bundle = manager.export_session_jsonl(args.session_id).await?;
                 Ok(bundle)

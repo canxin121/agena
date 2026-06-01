@@ -262,6 +262,5 @@ fn session_resource(
             .and_then(|item| item.last_message_at_ms)
             .map(timestamp_millis_to_utc)
             .transpose()?,
-        goal: None,
     })
 }

@@ -63,7 +63,6 @@ pub enum RunSource {
     #[default]
     User,
     Continue,
-    Goal,
     Compaction,
     PermissionReply,
     UserInputReply,

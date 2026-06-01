@@ -5,10 +5,10 @@ use strum::Display;
 
 use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, AttachmentKind, CronCreateToolInput,
-    CronDeleteToolInput, CronListToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
-    ExitPlanModeToolInput, ExitWorktreeToolInput, FileChangeRecord, GlobToolInput, GrepToolInput,
-    LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput,
-    MonitorEvent, MonitorStatus, MonitorToolInput, NotebookEditToolInput, ReadToolInput,
+    CronDeleteToolInput, CronListToolInput, EnterWorktreeToolInput, ExitWorktreeToolInput,
+    FileChangeRecord, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
+    LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, MonitorEvent,
+    MonitorStatus, MonitorToolInput, NotebookEditToolInput, ReadToolInput,
     ScheduleWakeupToolInput, ShellCommandInput, StructuredObject, TodoItem, TodoWriteToolInput,
     ToolInvocation, ToolOutput, ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
 };
@@ -30,8 +30,6 @@ pub enum ToolPayloadInput {
     Monitor(MonitorToolInput),
     WebFetch(WebFetchToolInput),
     WebSearch(WebSearchToolInput),
-    EnterPlanMode(EnterPlanModeToolInput),
-    ExitPlanMode(ExitPlanModeToolInput),
     EnterWorktree(EnterWorktreeToolInput),
     ExitWorktree(ExitWorktreeToolInput),
     CronCreate(CronCreateToolInput),
@@ -62,8 +60,6 @@ impl ToolPayloadInput {
             Self::Monitor(_) => "monitor",
             Self::WebFetch(_) => "web_fetch",
             Self::WebSearch(_) => "web_search",
-            Self::EnterPlanMode(_) => "enter_plan_mode",
-            Self::ExitPlanMode(_) => "exit_plan_mode",
             Self::EnterWorktree(_) => "enter_worktree",
             Self::ExitWorktree(_) => "exit_worktree",
             Self::CronCreate(_) => "cron_create",
@@ -235,14 +231,6 @@ pub enum ToolPayloadOutput {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         results: Vec<WebSearchHit>,
     },
-    EnterPlanMode {
-        plan_path: String,
-        slug: String,
-    },
-    ExitPlanMode {
-        approved: bool,
-        plan_path: String,
-    },
     EnterWorktree {
         path: String,
         branch: String,
@@ -328,8 +316,6 @@ impl ToolPayloadOutput {
             Self::Monitor { .. } => "monitor",
             Self::WebFetch { .. } => "web_fetch",
             Self::WebSearch { .. } => "web_search",
-            Self::EnterPlanMode { .. } => "enter_plan_mode",
-            Self::ExitPlanMode { .. } => "exit_plan_mode",
             Self::EnterWorktree { .. } => "enter_worktree",
             Self::ExitWorktree { .. } => "exit_worktree",
             Self::CronCreate { .. } => "cron_create",
@@ -390,8 +376,6 @@ const DIRECT_GROUPED_TOOL_MAPPINGS: &[(&str, &str, &str, &str)] = &[
     ("tool_search", "agena.workflow", "tools", "search"),
     ("todo_write", "agena.workflow", "todo", "write"),
     ("ask_user", "agena.workflow", "user", "request_input"),
-    ("enter_plan_mode", "agena.workflow", "plan", "enter"),
-    ("exit_plan_mode", "agena.workflow", "plan", "exit"),
     ("exit_worktree", "agena.workflow", "worktree", "exit"),
     ("cron_create", "agena.cron", "schedule", "create"),
     ("cron_list", "agena.cron", "schedule", "list"),

@@ -112,36 +112,6 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Read the current persisted session goal, if any.
-    async fn get_goal(&self, _req: HostGetGoalRequest) -> Result<HostGetGoalResponse> {
-        Err(unavailable())
-    }
-
-    /// Create a new persisted session goal.
-    async fn create_goal(&self, _req: HostCreateGoalRequest) -> Result<HostCreateGoalResponse> {
-        Err(unavailable())
-    }
-
-    /// Mutate the current persisted session goal.
-    async fn update_goal(&self, _req: HostUpdateGoalRequest) -> Result<HostUpdateGoalResponse> {
-        Err(unavailable())
-    }
-
-    /// Clear the current persisted session goal, if any.
-    async fn clear_goal(&self, _req: HostClearGoalRequest) -> Result<HostClearGoalResponse> {
-        Err(unavailable())
-    }
-
-    /// Enter plan mode for the current session.
-    async fn enter_plan_mode(&self, _req: HostEnterPlanModeRequest) -> Result<ToolInvokeOutput> {
-        Err(unavailable())
-    }
-
-    /// Exit plan mode for the current session.
-    async fn exit_plan_mode(&self, _req: HostExitPlanModeRequest) -> Result<ToolInvokeOutput> {
-        Err(unavailable())
-    }
-
     /// Enter a git worktree for the current session.
     async fn enter_worktree(&self, _req: HostEnterWorktreeRequest) -> Result<ToolInvokeOutput> {
         Err(unavailable())
@@ -259,16 +229,6 @@ pub trait HostClient: Send + Sync + 'static {
         &self,
         _req: HostLspListDiagnosticsRequest,
     ) -> Result<HostLspListDiagnosticsResponse> {
-        Err(unavailable())
-    }
-
-    /// Plan registry — list active plan sessions.
-    async fn plan_list(&self) -> Result<HostPlanListResponse> {
-        Err(unavailable())
-    }
-
-    /// Plan registry — read a plan by session id.
-    async fn plan_get(&self, _req: HostPlanGetRequest) -> Result<HostPlanGetResponse> {
         Err(unavailable())
     }
 
@@ -554,6 +514,16 @@ pub struct AskUserQuestion {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AskUserRequest {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub body_markdown: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub submit_label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cancel_label: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<AskUserQuestion>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -681,69 +651,6 @@ pub struct HostRenameSessionRequest {
 pub struct HostRenameSessionResponse {
     pub session: HostSession,
 }
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum HostGoalStatus {
-    Active,
-    Paused,
-    Completed,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HostGoal {
-    pub id: i64,
-    pub objective: String,
-    pub status: HostGoalStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completed_at_ms: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HostGetGoalRequest {}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HostGetGoalResponse {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub goal: Option<HostGoal>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostCreateGoalRequest {
-    pub objective: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostCreateGoalResponse {
-    pub goal: HostGoal,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostUpdateGoalRequest {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub objective: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<HostGoalStatus>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostUpdateGoalResponse {
-    pub goal: HostGoal,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HostClearGoalRequest {}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostClearGoalResponse {
-    pub cleared: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HostEnterPlanModeRequest {}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HostExitPlanModeRequest {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HostEnterWorktreeRequest {
@@ -1093,34 +1000,7 @@ pub struct HostLspDiagnostic {
     pub code: Option<String>,
 }
 
-// ---------------- plan / worktree / scheduler ----------------
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HostPlanListResponse {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub plans: Vec<HostPlanSummary>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostPlanSummary {
-    pub session_id: i64,
-    pub slug: String,
-    pub file_path: String,
-    pub started_at_ms: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostPlanGetRequest {
-    pub session_id: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HostPlanGetResponse {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan: Option<HostPlanSummary>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub body: Option<String>,
-}
+// ---------------- worktree / scheduler ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HostWorktreeListResponse {

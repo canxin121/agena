@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::event::client::{
     CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, ExecutionFailedEvent,
     ExecutionStartedEvent, MessagePartDeltaEvent, MessagePartUpdatedEvent, PermissionRepliedEvent,
-    PermissionRequestedEvent, PermissionRuleEvent, SessionGoalEvent, StreamErrorEvent,
+    PermissionRequestedEvent, PermissionRuleEvent, StreamErrorEvent,
 };
 use crate::session::history::{
     AssistantMessageCompleted, RunAborted, RunCompleted, RunStarted, SystemNoticeAppended,
@@ -35,7 +35,6 @@ pub enum EventKind {
     PermissionRuleCreated(PermissionRuleEvent),
     PermissionRuleUpdated(PermissionRuleEvent),
     PermissionRuleRevoked(PermissionRuleEvent),
-    SessionGoalUpdated(SessionGoalEvent),
 
     // --- append-only history ---
     RunStarted(RunStarted),
@@ -77,7 +76,6 @@ impl EventKind {
             Self::PermissionRuleCreated(_) => "permission_rule_created",
             Self::PermissionRuleUpdated(_) => "permission_rule_updated",
             Self::PermissionRuleRevoked(_) => "permission_rule_revoked",
-            Self::SessionGoalUpdated(_) => "session_goal_updated",
             Self::RunStarted(_) => "run_started",
             Self::RunCompleted(_) => "run_completed",
             Self::RunAborted(_) => "run_aborted",
@@ -138,7 +136,6 @@ pub const HISTORY_KINDS: &[&str] = &[
     "permission_rule_created",
     "permission_rule_updated",
     "permission_rule_revoked",
-    "session_goal_updated",
     "run_started",
     "run_completed",
     "run_aborted",
@@ -166,7 +163,6 @@ pub const ALL_KINDS: &[&str] = &[
     "permission_rule_created",
     "permission_rule_updated",
     "permission_rule_revoked",
-    "session_goal_updated",
     "run_started",
     "run_completed",
     "run_aborted",

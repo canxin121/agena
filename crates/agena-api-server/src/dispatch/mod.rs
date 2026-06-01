@@ -15,14 +15,14 @@ use agena::event::EventKind;
 use agena::event::{EventStore, StoreRange};
 use agena_api::{
     commands::{
-        CancelRunParams, ClearSessionGoalParams, Command, CommandResult, CompactSessionParams,
-        CompleteSessionGoalParams, ContinueRunParams, CreateSessionGoalParams, CreateSessionParams,
-        CreateWorkspaceParams, DeletePermissionRuleParams, DeleteSessionParams,
-        DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams, ImportSessionParams,
-        ListRewindCheckpointsParams, ListSessionTreeParams, ReplacePermissionRuleParams,
-        ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-        RevokePermissionRuleParams, RewindSessionParams, SetSessionGoalParams, SubmitMessageParams,
-        UpdateSessionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
+        CancelRunParams, Command, CommandResult, CompactSessionParams, ContinueRunParams,
+        CreateSessionParams, CreateWorkspaceParams, DeletePermissionRuleParams,
+        DeleteSessionParams, DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams,
+        ImportSessionParams, ListRewindCheckpointsParams, ListSessionTreeParams,
+        ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
+        ResolveWorkspaceParams, RevokePermissionRuleParams, RewindSessionParams,
+        SubmitMessageParams, UpdateSessionParams, UpdateWorkspaceParams,
+        UpsertPermissionRuleParams,
     },
     pagination::{PageInfo, PaginatedResponse, normalize_limit},
     queries::{

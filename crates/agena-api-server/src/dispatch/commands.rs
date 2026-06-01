@@ -1,9 +1,7 @@
 use super::*;
 use crate::session_support::{
-    clear_session_goal_or_not_found, session_execution_reply_request, session_execution_request,
-    session_execution_resource, session_goal_resource as load_session_goal_resource,
+    session_execution_reply_request, session_execution_request, session_execution_resource,
     session_permission_reply_request, session_user_message_request,
-    set_session_goal as set_session_goal_request,
 };
 use agena_api::resource::SessionResource;
 
@@ -81,52 +79,6 @@ pub async fn dispatch_command(
                 .await
                 .server()?;
             Ok(CommandResult::Session(session.into()))
-        }
-        Command::CreateSessionGoal(CreateSessionGoalParams {
-            session_id,
-            objective,
-        }) => {
-            let goal = manager
-                .create_goal(agena::session::SessionGoalCreateRequest {
-                    session_id,
-                    objective,
-                })
-                .await?;
-            let resource =
-                load_session_goal_resource(state, manager.as_ref(), session_id, &goal).await?;
-            Ok(CommandResult::SessionGoal(resource.into()))
-        }
-        Command::SetSessionGoal(SetSessionGoalParams {
-            session_id,
-            objective,
-            status,
-            clear,
-        }) => {
-            let goal = match set_session_goal_request(
-                manager.as_ref(),
-                session_id,
-                objective,
-                status,
-                clear,
-            )
-            .await?
-            {
-                Some(goal) => goal,
-                None => return Ok(CommandResult::SessionGoalCleared { session_id }),
-            };
-            let resource =
-                load_session_goal_resource(state, manager.as_ref(), session_id, &goal).await?;
-            Ok(CommandResult::SessionGoal(resource.into()))
-        }
-        Command::CompleteSessionGoal(CompleteSessionGoalParams { session_id }) => {
-            let goal = manager.complete_goal(session_id).await?;
-            let resource =
-                load_session_goal_resource(state, manager.as_ref(), session_id, &goal).await?;
-            Ok(CommandResult::SessionGoal(resource.into()))
-        }
-        Command::ClearSessionGoal(ClearSessionGoalParams { session_id }) => {
-            clear_session_goal_or_not_found(manager.as_ref(), session_id).await?;
-            Ok(CommandResult::SessionGoalCleared { session_id })
         }
         Command::SubmitMessage(SubmitMessageParams {
             session_id,

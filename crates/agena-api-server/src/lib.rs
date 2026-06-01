@@ -237,16 +237,6 @@ pub fn router(state: AppState) -> Router {
                 get(rest::get_session_state),
             )
             .route(
-                "/api/v1/sessions/{session_id}/goal",
-                get(rest::get_session_goal)
-                    .put(rest::set_session_goal)
-                    .delete(rest::clear_session_goal),
-            )
-            .route(
-                "/api/v1/sessions/{session_id}/goal/complete",
-                post(rest::complete_session_goal),
-            )
-            .route(
                 "/api/v1/sessions/{session_id}/events",
                 get(rest::list_session_events),
             )

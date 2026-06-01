@@ -64,8 +64,6 @@ impl ToolOutputTruncator {
             | ToolPayloadOutput::Monitor { .. }
             | ToolPayloadOutput::WebFetch { .. }
             | ToolPayloadOutput::WebSearch { .. }
-            | ToolPayloadOutput::EnterPlanMode { .. }
-            | ToolPayloadOutput::ExitPlanMode { .. }
             | ToolPayloadOutput::EnterWorktree { .. }
             | ToolPayloadOutput::ExitWorktree { .. }
             | ToolPayloadOutput::CronCreate { .. }

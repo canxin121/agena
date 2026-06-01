@@ -160,7 +160,7 @@ pub fn render_question_flow_dialog(
             footer,
         } => {
             sections.push(StackedDialogSection::TextPanel(TextPanelSection {
-                height: StackedDialogSectionHeight::AutoText { min: 4, max: 12 },
+                height: StackedDialogSectionHeight::AutoText { min: 4, max: 18 },
                 spec: TextPanelSpec {
                     title: Some(summary_title.clone()),
                     body: summary_body,
@@ -188,7 +188,7 @@ pub fn render_question_flow_dialog(
             footer,
         } => {
             sections.push(StackedDialogSection::TextPanel(TextPanelSection {
-                height: StackedDialogSectionHeight::AutoText { min: 3, max: 6 },
+                height: StackedDialogSectionHeight::AutoText { min: 4, max: 12 },
                 spec: TextPanelSpec {
                     title: Some(prompt_title.clone()),
                     body: prompt_body,

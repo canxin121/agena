@@ -13,7 +13,6 @@ pub(crate) mod monitor_tool;
 pub(crate) mod notebook_edit;
 pub(crate) mod orchestrator;
 pub(crate) mod payload;
-pub(crate) mod plan;
 pub(crate) mod powershell;
 pub(crate) mod read;
 pub(crate) mod result;
@@ -67,7 +66,6 @@ pub use monitor::{
     ReadParams as MonitorReadParams, StartParams as MonitorStartParams,
 };
 pub use payload::{CronJobSummary, ToolPayloadInput, ToolPayloadOutput, WebSearchHit};
-pub use plan::{PlanRegistry, registry_for_executor as plan_registry_for_executor};
 pub use result::{ToolExecutionView, ToolInvocationExecution, ToolPayloadExecution};
 pub use shell::{ShellError, ShellOutput, ShellRequest};
 pub use truncation::{ToolOutputTruncationPolicy, ToolOutputTruncator};
@@ -404,9 +402,6 @@ pub(super) struct ToolRuntimeContext {
 }
 
 static SYNTHETIC_TOOL_CALL_ID: AtomicI64 = AtomicI64::new(-1);
-const EXIT_PLAN_MODE_TOOL_NAME: &str = "exit_plan_mode";
-const PLAN_REVIEW_QUALIFIER: &str = "plan_review";
-const PLAN_REVIEW_REASON: &str = "approve the active plan before implementation continues";
 
 pub struct StreamingToolExecution {
     pub stream_id: String,
@@ -491,7 +486,6 @@ pub struct ToolExecutor {
     monitor_registry: Option<Arc<dyn MonitorService>>,
     truncator: ToolOutputTruncator,
     plugins: Arc<PluginHost>,
-    plan_registry: Option<plan::PlanRegistry>,
     worktree_registry: Option<worktree::WorktreeRegistry>,
     scheduler: Option<Arc<agena_scheduler::Scheduler>>,
     lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
@@ -509,7 +503,6 @@ impl ToolExecutor {
             monitor_registry: monitor::default_registry(),
             truncator: ToolOutputTruncator::default(),
             plugins: PluginHost::new_empty(),
-            plan_registry: None,
             worktree_registry: None,
             scheduler: None,
             lsp_registry: None,
@@ -555,15 +548,6 @@ impl ToolExecutor {
         self
     }
 
-    pub fn with_plan_registry(mut self, reg: plan::PlanRegistry) -> Self {
-        self.plan_registry = Some(reg);
-        self
-    }
-
-    pub fn plan_registry(&self) -> Option<&plan::PlanRegistry> {
-        self.plan_registry.as_ref()
-    }
-
     pub fn with_worktree_registry(mut self, reg: worktree::WorktreeRegistry) -> Self {
         self.worktree_registry = Some(reg);
         self
@@ -589,52 +573,6 @@ impl ToolExecutor {
 
     pub fn lsp_registry(&self) -> Option<&Arc<agena_lsp::LspRegistry>> {
         self.lsp_registry.as_ref()
-    }
-
-    /// Refuse mutating invocations while plan mode is active for this
-    /// session.  Returns Ok when the invocation is safe (read-only) or
-    /// when plan mode is off.  Returns `PermissionDenied` otherwise.
-    pub fn enforce_plan_mode_for(
-        &self,
-        invocation: &ToolInvocation,
-        session_id: i64,
-    ) -> Result<(), ToolError> {
-        let Some(reg) = self.plan_registry() else {
-            return Ok(());
-        };
-        let Some(plan_state) = reg.read().get(&session_id).cloned() else {
-            return Ok(());
-        };
-
-        let tool_name = invocation_name(invocation);
-        if plan_mode_allows_plan_file_edit(self, invocation, &plan_state.file_path)? {
-            return Ok(());
-        }
-        let tags = self
-            .invocation_definition(invocation)
-            .map(|entry| invocation_effective_tags(&entry, invocation))
-            .unwrap_or_default();
-
-        if tags
-            .iter()
-            .any(|tag| tag == &crate::plugin::sdk::ToolTag::ReadOnly)
-        {
-            return Ok(());
-        }
-
-        if tags
-            .iter()
-            .any(|tag| tag == &crate::plugin::sdk::ToolTag::Shell)
-            && shell_command_from_invocation(invocation)
-                .as_deref()
-                .is_some_and(shell_tools::is_read_only_command)
-        {
-            return Ok(());
-        }
-
-        Err(ToolError::PermissionDenied(format!(
-            "tool '{tool_name}' is blocked in plan mode; call exit_plan_mode first"
-        )))
     }
 
     pub fn with_truncation_policy(mut self, policy: ToolOutputTruncationPolicy) -> Self {
@@ -1235,10 +1173,16 @@ impl ToolExecutor {
             .plugin_resolution_for_invocation(invocation)
             .map(|entry| entry.original_name)
             .unwrap_or_else(|| exposed_tool_name.clone());
+        let definition = self.invocation_definition(invocation);
         let plugin_name = self.invocation_plugin_name_for(invocation);
         let input_json = invocation_input_json(invocation)?;
         let input_value: serde_json::Value = serde_json::from_str(&input_json)
             .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
+
+        let effective_tags = definition
+            .as_ref()
+            .map(|definition| invocation_effective_tags(definition, invocation))
+            .unwrap_or_default();
 
         let hooked = self
             .plugins
@@ -1248,6 +1192,7 @@ impl ToolExecutor {
                 session_id,
                 call_id,
                 workspace_root: self.workspace_root.to_string_lossy().to_string(),
+                tags: effective_tags,
                 input: input_value,
                 title_override: None,
                 metadata: Default::default(),
@@ -1278,7 +1223,7 @@ impl ToolExecutor {
     pub fn collect_permission_checks_for_invocation_in_session(
         &self,
         invocation: &ToolInvocation,
-        session_id: Option<i64>,
+        _session_id: Option<i64>,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
         let (tool_name, decision) = self.authorize_invocation(invocation)?;
         let command = shell_command_from_invocation(invocation);
@@ -1288,19 +1233,6 @@ impl ToolExecutor {
             Some(&self.agent.tool_policy),
         );
         let mut checks = vec![ToolPermissionCheck { action, decision }];
-        if let Some(session_id) = session_id
-            && self.invocation_requires_plan_review(invocation, session_id)
-        {
-            checks.push(ToolPermissionCheck {
-                action: PermissionAction::Tool {
-                    tool_name: EXIT_PLAN_MODE_TOOL_NAME.to_string(),
-                    qualifier: Some(PLAN_REVIEW_QUALIFIER.to_string()),
-                },
-                decision: PermissionDecision::Ask {
-                    reason: PLAN_REVIEW_REASON.to_string(),
-                },
-            });
-        }
 
         let input_value = invocation_input_value(invocation);
         if let Some(resolution) = self.plugin_resolution_for_invocation(invocation) {
@@ -1327,21 +1259,6 @@ impl ToolExecutor {
             self.collect_dynamic_network_checks(&mut checks, &resolution, &input_value)?;
         }
         Ok(checks)
-    }
-
-    fn invocation_requires_plan_review(
-        &self,
-        invocation: &ToolInvocation,
-        session_id: i64,
-    ) -> bool {
-        self.permission_mode == PermissionEnforcementMode::Enforced
-            && matches!(
-                ToolPayloadInput::from_invocation(invocation),
-                Some(ToolPayloadInput::ExitPlanMode(_))
-            )
-            && self
-                .plan_registry()
-                .is_some_and(|registry| registry.read().contains_key(&session_id))
     }
 
     pub async fn execute_invocation_streaming(
@@ -1974,12 +1891,6 @@ fn invocation_effective_tags(
         ("agena.workflow/session", "rename") => {
             set_invocation_access_tags(&mut tags, false, true, false, false)
         }
-        ("agena.workflow/goal", "get") => {
-            set_invocation_access_tags(&mut tags, true, false, false, false)
-        }
-        ("agena.workflow/goal", "create" | "clear" | "complete") => {
-            set_invocation_access_tags(&mut tags, false, true, false, false)
-        }
         ("agena.mcp/mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => {
             set_invocation_access_tags(&mut tags, true, false, false, false)
         }
@@ -2039,8 +1950,6 @@ fn is_concurrency_safe_tool_invocation(
         ("agena.cron/schedule", "create" | "delete" | "wakeup") => false,
         ("agena.workflow/session", "get") => true,
         ("agena.workflow/session", "rename") => false,
-        ("agena.workflow/goal", "get") => true,
-        ("agena.workflow/goal", "create" | "clear" | "complete") => false,
         ("agena.mcp/mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => {
             true
         }
@@ -2098,29 +2007,6 @@ fn apply_patch_execution_from_tool_output(output: &ToolOutput) -> Option<ApplyPa
         diff,
         progress,
     })
-}
-
-fn plan_mode_allows_plan_file_edit(
-    executor: &ToolExecutor,
-    invocation: &ToolInvocation,
-    plan_path: &Path,
-) -> Result<bool, ToolError> {
-    let Some(payload) = ToolPayloadInput::from_invocation(invocation) else {
-        return Ok(false);
-    };
-    let ToolPayloadInput::ApplyPatch(input) = payload else {
-        return Ok(false);
-    };
-
-    let planned_paths = apply_patch::planned_paths(&input.patch)?;
-    if planned_paths.is_empty() {
-        return Ok(false);
-    }
-
-    Ok(planned_paths
-        .iter()
-        .map(|path| executor.resolve_target_path(path))
-        .all(|path| path == plan_path))
 }
 
 fn invocation_input_json(invocation: &ToolInvocation) -> Result<String, ToolError> {
@@ -2321,14 +2207,13 @@ mod tests {
     use uuid::Uuid;
 
     use crate::message::{
-        ApplyPatchToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput,
-        FileChangeKind, FilesystemAccess, FilesystemEffect, GlobToolInput, GrepToolInput,
-        LspDefinitionToolInput, LspPositionToolInput, Message, MonitorToolInput, NetworkEffect,
-        PartContent, ReadToolInput, ShellCommandInput, StructuredObject, TaskSubagentType,
-        TaskToolInput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation,
-        WebFetchToolInput,
+        ApplyPatchToolInput, EnterWorktreeToolInput, FileChangeKind, FilesystemAccess,
+        FilesystemEffect, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
+        LspPositionToolInput, Message, MonitorToolInput, NetworkEffect, PartContent,
+        ReadToolInput, ShellCommandInput, StructuredObject, TaskSubagentType, TaskToolInput,
+        TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation, WebFetchToolInput,
     };
-    use crate::permission::{PermissionAction, PermissionPolicy};
+    use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
         EventSubscription, HostTodoPriority, HostTodoStatus, LogLevel, SpawnSubtaskRequest,
         SpawnSubtaskResponse, ToolDescriptor,
@@ -2622,6 +2507,7 @@ mod tests {
             new_input["message"] = serde_json::Value::String(format!("{message} prepared"));
             Ok(Some(ToolBeforePatch {
                 input: Some(new_input),
+                abort_reason: None,
                 title_override: Some("Prepared plugin echo".to_string()),
                 metadata: Default::default(),
             }))
@@ -3790,42 +3676,6 @@ mod tests {
     }
 
     #[test]
-    fn collect_permission_checks_for_workflow_plan_use_project_state_paths_only() {
-        let workspace = TempWorkspace::new();
-        let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
-        let invocation =
-            ToolPayloadInput::EnterPlanMode(EnterPlanModeToolInput::default()).into_invocation();
-
-        let checks = executor
-            .collect_permission_checks_for_invocation(&invocation)
-            .expect("workflow permission collection should succeed");
-
-        let path_actions = checks
-            .iter()
-            .filter_map(|check| match &check.action {
-                crate::permission::PermissionAction::PathAccess {
-                    access_kind,
-                    target_path,
-                    ..
-                } => Some((access_kind.clone(), target_path.clone())),
-                _ => None,
-            })
-            .collect::<std::collections::HashSet<_>>();
-
-        assert_eq!(
-            path_actions,
-            std::collections::HashSet::from([(
-                "write".to_string(),
-                super::normalize_path_for_display(
-                    &crate::project_paths::project_state_dir(&workspace.root).join("plans"),
-                ),
-            )]),
-            "plan permission checks should only request the managed plans directory"
-        );
-    }
-
-    #[test]
     fn collect_permission_checks_for_workflow_worktree_use_project_state_paths_only() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
@@ -4511,195 +4361,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn enforce_plan_mode_allows_read_only_bash_and_blocks_mutating_bash() {
-        use crate::session::PlanState;
-
-        let workspace = TempWorkspace::new();
-        let registry = super::plan_registry_for_executor();
-        let executor = build_executor(&workspace.root).with_plan_registry(registry.clone());
-
-        // Activate plan mode for session 7.
-        registry.write().insert(
-            7,
-            PlanState {
-                file_path: crate::project_paths::project_state_dir(&workspace.root)
-                    .join("plans")
-                    .join("test.md"),
-                slug: "test".to_string(),
-                started_at: chrono::Utc::now(),
-            },
-        );
-
-        let bash_input = |cmd: &str| -> ToolInvocation {
-            ToolPayloadInput::Bash(ShellCommandInput {
-                command: cmd.to_string(),
-                description: String::new(),
-                timeout_ms: None,
-                workdir: None,
-                filesystem_effects: Vec::new(),
-                network_effects: Vec::new(),
-            })
-            .into_invocation()
-        };
-
-        // Read-only bash is allowed in plan mode.
-        executor
-            .enforce_plan_mode_for(&bash_input("git status"), 7)
-            .expect("git status is read-only and should be allowed");
-        executor
-            .enforce_plan_mode_for(&bash_input("ls -la"), 7)
-            .expect("ls -la is read-only and should be allowed");
-        executor
-            .enforce_plan_mode_for(
-                &ToolPayloadInput::Read(ReadToolInput {
-                    file_path: "Cargo.toml".to_string(),
-                    offset: None,
-                    limit: None,
-                    mode: crate::message::ReadMode::Auto,
-                })
-                .into_invocation(),
-                7,
-            )
-            .expect("fs read is read-only and should be allowed");
-
-        // Mutating bash is blocked.
-        let err = executor
-            .enforce_plan_mode_for(&bash_input("rm -rf node_modules"), 7)
-            .unwrap_err();
-        assert!(matches!(err, ToolError::PermissionDenied(_)));
-        executor
-            .enforce_plan_mode_for(
-                &ToolPayloadInput::ApplyPatch(ApplyPatchToolInput {
-                    patch: format!(
-                        "*** Begin Patch\n*** Update File: {}\n@@\n-# Plan\n+# Updated Plan\n*** End Patch",
-                        crate::project_paths::project_state_dir(&workspace.root)
-                            .join("plans")
-                            .join("test.md")
-                            .display()
-                    ),
-                })
-                .into_invocation(),
-                7,
-            )
-            .expect("editing the active plan file should stay allowed in plan mode");
-        let err = executor
-            .enforce_plan_mode_for(
-                &ToolPayloadInput::ApplyPatch(ApplyPatchToolInput {
-                    patch: "*** Begin Patch\n*** Add File: plan-mode.txt\n+blocked\n*** End Patch"
-                        .to_string(),
-                })
-                .into_invocation(),
-                7,
-            )
-            .expect_err("mutating fs subcommands should be blocked in plan mode");
-        assert!(matches!(err, ToolError::PermissionDenied(_)));
-
-        // Unknown / unclassified bash is blocked (safety default).
-        let err = executor
-            .enforce_plan_mode_for(&bash_input("./unknown-binary --do-it"), 7)
-            .unwrap_err();
-        assert!(matches!(err, ToolError::PermissionDenied(_)));
-
-        // After leaving plan mode, everything is allowed again.
-        registry.write().remove(&7);
-        executor
-            .enforce_plan_mode_for(&bash_input("rm -rf node_modules"), 7)
-            .expect("plan mode is off, mutating bash should be allowed");
-
-        // Drop guard
-        let _ = bash_input;
-    }
-
-    #[test]
-    fn enforce_plan_mode_uses_session_lookup() {
-        use crate::session::PlanState;
-
-        let workspace = TempWorkspace::new();
-        let registry = super::plan_registry_for_executor();
-        let executor = build_executor(&workspace.root).with_plan_registry(registry.clone());
-        registry.write().insert(
-            42,
-            PlanState {
-                file_path: crate::project_paths::project_state_dir(&workspace.root)
-                    .join("plans")
-                    .join("x.md"),
-                slug: "x".to_string(),
-                started_at: chrono::Utc::now(),
-            },
-        );
-
-        let inv = ToolPayloadInput::Bash(ShellCommandInput {
-            command: "rm -rf /".to_string(),
-            description: String::new(),
-            timeout_ms: None,
-            workdir: None,
-            filesystem_effects: Vec::new(),
-            network_effects: Vec::new(),
-        })
-        .into_invocation();
-
-        // Different session id — plan mode does not apply.
-        executor
-            .enforce_plan_mode_for(&inv, 1)
-            .expect("session 1 is not in plan mode");
-
-        // Same session id — plan mode blocks.
-        let err = executor.enforce_plan_mode_for(&inv, 42).unwrap_err();
-        assert!(matches!(err, ToolError::PermissionDenied(_)));
-    }
-
-    #[test]
-    fn exit_plan_mode_collects_plan_review_permission_check() {
-        use crate::session::PlanState;
-
-        let workspace = TempWorkspace::new();
-        let registry = super::plan_registry_for_executor();
-        let executor = build_executor(&workspace.root).with_plan_registry(registry.clone());
-        registry.write().insert(
-            42,
-            PlanState {
-                file_path: crate::project_paths::project_state_dir(&workspace.root)
-                    .join("plans")
-                    .join("review.md"),
-                slug: "review".to_string(),
-                started_at: chrono::Utc::now(),
-            },
-        );
-
-        let invocation =
-            ToolPayloadInput::ExitPlanMode(ExitPlanModeToolInput::default()).into_invocation();
-        let checks = executor
-            .collect_permission_checks_for_invocation_in_session(&invocation, Some(42))
-            .expect("permission checks should resolve");
-
-        assert!(checks.iter().any(|check| {
-            matches!(
-                &check.action,
-                PermissionAction::Tool {
-                    tool_name,
-                    qualifier,
-                } if tool_name == "exit_plan_mode"
-                    && qualifier.as_deref() == Some("plan_review")
-            ) && matches!(
-                check.decision,
-                crate::permission::PermissionDecision::Ask { ref reason }
-                    if reason == super::PLAN_REVIEW_REASON
-            )
-        }));
-
-        let other_checks = executor
-            .collect_permission_checks_for_invocation_in_session(&invocation, Some(7))
-            .expect("other sessions should still resolve permission checks");
-        assert!(!other_checks.iter().any(|check| {
-            matches!(
-                &check.action,
-                PermissionAction::Tool {
-                    tool_name,
-                    qualifier,
-                } if tool_name == "exit_plan_mode"
-                    && qualifier.as_deref() == Some("plan_review")
-            )
-        }));
-    }
 }

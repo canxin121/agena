@@ -1,5 +1,5 @@
 use super::*;
-use crate::session_support::{session_execution_resource, session_goal_resource_for_session};
+use crate::session_support::session_execution_resource;
 
 // ─── Query dispatch ─────────────────────────────────────────────────────
 
@@ -173,18 +173,6 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
             let state_resource =
                 session_execution_resource(state, manager.as_ref(), &session).await?;
             Ok(QueryResult::SessionState(state_resource.into()))
-        }
-        Query::GetSessionGoal(GetSessionParams { session_id }) => {
-            let session = manager.get_session(session_id).await?;
-            let goal = match session.goal.as_ref() {
-                Some(goal) => Some(
-                    session_goal_resource_for_session(state, manager.as_ref(), &session, goal)
-                        .await?
-                        .into(),
-                ),
-                None => None,
-            };
-            Ok(QueryResult::SessionGoal(goal))
         }
         Query::ListPermissionRules(ListPermissionRulesParams {
             cursor,

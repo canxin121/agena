@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::attachment::AttachmentItem;
+use crate::manifest::ToolTag;
 
 // ── tool.execute.before ────────────────────────────────────────────────────
 
@@ -13,6 +14,8 @@ pub struct ToolBeforeInput {
     pub session_id: i64,
     pub call_id: i64,
     pub workspace_root: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<ToolTag>,
     pub input: serde_json::Value,
     /// Carry-through: accumulated title override from prior plugins in the chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -27,6 +30,9 @@ pub struct ToolBeforePatch {
     /// Override the tool's argument JSON before execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<serde_json::Value>,
+    /// Abort execution before the tool runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub abort_reason: Option<String>,
     /// Override the pending-state title shown in the UI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_override: Option<String>,

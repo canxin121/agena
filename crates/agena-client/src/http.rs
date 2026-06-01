@@ -749,15 +749,12 @@ impl AgenaClient {
                     self.parse_json(self.http.get(url).send().await?).await?,
                 ))
             }
-            Query::GetPermissionRule(GetPermissionRuleParams { rule_id }) => {
-                Ok(QueryResult::PermissionRule(
+            Query::GetPermissionRule(GetPermissionRuleParams { rule_id }) => Ok(
+                QueryResult::PermissionRule(
                     self.get_json(&format!("/api/v1/permission-rules/{rule_id}"))
                         .await?,
-                ))
-            }
-            _ => Err(ClientError::Protocol(
-                "unsupported query in generic HTTP client".to_string(),
-            )),
+                ),
+            ),
         }
     }
 }

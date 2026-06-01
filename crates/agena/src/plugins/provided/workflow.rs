@@ -1,29 +1,29 @@
-//! `agena.workflow` plugin: orchestration tools (task, tool_search,
-//! todo_write, create_goal, get_goal, update_goal, ask_user, enter_plan_mode,
-//! exit_plan_mode, enter_worktree, exit_worktree).
+//! `agena.workflow` plugin: orchestration tools (task, tool catalog, todo,
+//! session, user input, plan, worktree, and workflow prompts).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
+use chrono::Utc;
 use crate::message::{
-    AgentRestoreToolInput, AgentSwitchToolInput, AskUserToolInput, ClearGoalToolInput,
-    CreateGoalToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput,
-    ExitWorktreeToolInput, GetGoalToolInput, TaskToolInput, TodoItem, TodoPriority, TodoStatus,
-    TodoWriteToolInput, ToolSearchToolInput, WorkflowPromptToolInput,
+    AgentRestoreToolInput, AgentSwitchToolInput, AskUserToolInput, EnterWorktreeToolInput,
+    ExitWorktreeToolInput, TaskToolInput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput,
+    ToolSearchToolInput, WorkflowPromptToolInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{
     AskUserOption as HostAskUserOption, AskUserQuestion as HostAskUserQuestion, AskUserRequest,
     HostAgentRestoreRequest, HostAgentRestoreResponse, HostAgentSwitchRequest,
-    HostAgentSwitchResponse, HostClearGoalRequest, HostClient, HostCreateGoalRequest,
-    HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostExitPlanModeRequest,
-    HostExitWorktreeRequest, HostGetGoalRequest, HostGetSessionRequest, HostGoal, HostGoalStatus,
-    HostRenameSessionRequest, HostSession, HostTodoItem, HostTodoPriority, HostTodoStatus,
-    HostTodoWriteRequest, HostUpdateGoalRequest, SpawnSubtaskRequest, ToolDescriptor,
+    HostAgentSwitchResponse, HostClient, HostEnterWorktreeRequest, HostExitWorktreeRequest,
+    HostGetSessionRequest, HostRenameSessionRequest, HostSession, HostStatuslineContributeRequest,
+    HostStatuslineRemoveRequest, HostStorageDeleteRequest, HostStorageGetRequest,
+    HostStorageScope, HostStorageSetRequest, HostStorageVisibility, HostTodoItem,
+    HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, SpawnSubtaskRequest, ToolDescriptor,
 };
 use crate::plugin::sdk::{
-    HookSubscription, HostCapability, InitContext, InitOutcome, NetworkRequest, PathRequest,
-    Plugin, PluginManifest, PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
+    CommandBeforeInput, CommandBeforeResponse, HookSubscription, HostCapability, InitContext,
+    InitOutcome, NetworkRequest, PathRequest, Plugin, PluginManifest, PluginToolDecl,
+    Result as SdkResult, ToolBeforeInput, ToolBeforePatch, ToolInvokeInput, ToolInvokeOutput,
     ToolTag,
 };
 use crate::search::tool_catalog::{ToolCatalogDocument, search_tool_catalog};
@@ -38,6 +38,7 @@ pub(crate) const WORKFLOW_PLUGIN_ID: &str = "agena.workflow";
 #[serde(default, deny_unknown_fields)]
 struct WorkflowPluginConfig {
     tool_catalog: WorkflowToolCatalogConfig,
+    plan: WorkflowPlanConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -86,6 +87,20 @@ impl Default for WorkflowToolCatalogHelpConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+struct WorkflowPlanConfig {
+    default_auto_continue: bool,
+}
+
+impl Default for WorkflowPlanConfig {
+    fn default() -> Self {
+        Self {
+            default_auto_continue: true,
+        }
+    }
+}
+
 fn workflow_config_schema() -> serde_json::Value {
     let mut schema =
         crate::tool::definition::json_schema_for_with_default(WorkflowPluginConfig::default());
@@ -125,6 +140,16 @@ fn workflow_config_schema() -> serde_json::Value {
             "Include Schema by Default",
             "When enabled, tool help includes the registered input schema unless the caller opts out.",
         ),
+        (
+            "/properties/plan",
+            "Plan",
+            "Defaults for the workflow plugin's shared-storage plan state machine.",
+        ),
+        (
+            "/properties/plan/properties/default_auto_continue",
+            "Default Auto Continue",
+            "Default auto-continue value applied when plan.create omits the override.",
+        ),
     ] {
         crate::tool::definition::set_schema_metadata(
             &mut schema,
@@ -135,9 +160,6 @@ fn workflow_config_schema() -> serde_json::Value {
     }
     schema
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-struct CompleteGoalToolInput {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
@@ -380,38 +402,6 @@ enum SessionToolInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    tool = "goal",
-    description = "Goal command. Use action `get`, `create`, `clear`, or `complete`. Use `complete` only once the objective is actually finished.",
-    tags(ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Goal),
-    host_capabilities(HostCapability::GoalRegistry),
-    concurrency_safe = false
-)]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum GoalToolInput {
-    #[tool(exec = "get")]
-    Get {
-        #[serde(flatten)]
-        args: GetGoalToolInput,
-    },
-    #[tool(exec = "create")]
-    Create {
-        #[serde(flatten)]
-        args: CreateGoalToolInput,
-    },
-    #[tool(exec = "clear")]
-    Clear {
-        #[serde(flatten)]
-        args: ClearGoalToolInput,
-    },
-    #[tool(exec = "complete")]
-    Complete {
-        #[serde(flatten)]
-        args: CompleteGoalToolInput,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
     tool = "user",
     description = "User interaction command. Use action `request_input` to request structured short answers.",
     tags(ToolTag::ReadOnly, ToolTag::Interactive),
@@ -424,26 +414,254 @@ enum UserToolInput {
     RequestInput(AskUserToolInput),
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+enum WorkflowPlanPhase {
+    #[default]
+    Draft,
+    AwaitingReview,
+    Executing,
+    Paused,
+    Blocked,
+    Completed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+enum WorkflowPlanApprovalState {
+    #[default]
+    NotRequested,
+    Pending,
+    Approved,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+enum WorkflowPlanExecutor {
+    #[default]
+    Ai,
+    Human,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+enum WorkflowPlanStepStatus {
+    #[default]
+    Pending,
+    InProgress,
+    Blocked,
+    Completed,
+    Skipped,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(default, deny_unknown_fields)]
+struct WorkflowPlanAutoContinue {
+    enabled: bool,
+    source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(default, deny_unknown_fields)]
+struct WorkflowPlanCheckpoint {
+    id: String,
+    text: String,
+    status: WorkflowPlanStepStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(default, deny_unknown_fields)]
+struct WorkflowPlanStep {
+    id: String,
+    title: String,
+    description: String,
+    executor: WorkflowPlanExecutor,
+    status: WorkflowPlanStepStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wait_until_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    note: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    checkpoints: Vec<WorkflowPlanCheckpoint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(default, deny_unknown_fields)]
+struct WorkflowPlan {
+    schema_version: u32,
+    plan_id: String,
+    session_id: i64,
+    title: String,
+    objective: String,
+    phase: WorkflowPlanPhase,
+    approval_state: WorkflowPlanApprovalState,
+    auto_continue: WorkflowPlanAutoContinue,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    document_markdown: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    steps: Vec<WorkflowPlanStep>,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    submitted_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    completed_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(default, deny_unknown_fields)]
+struct WorkflowPlanCheckpointInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    status: Option<WorkflowPlanStepStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(default, deny_unknown_fields)]
+struct WorkflowPlanStepInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    executor: WorkflowPlanExecutor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    status: Option<WorkflowPlanStepStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wait_until_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    checkpoints: Vec<WorkflowPlanCheckpointInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PlanCreateInput {
+    objective: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    document_markdown: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    steps: Vec<WorkflowPlanStepInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auto_continue: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PlanReplaceInput {
+    objective: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    document_markdown: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    steps: Vec<WorkflowPlanStepInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auto_continue: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(default, deny_unknown_fields)]
+struct PlanSubmitInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(default, deny_unknown_fields)]
+struct PlanUpdateRuntimeInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phase: Option<WorkflowPlanPhase>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auto_continue: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PlanUpdateStepInput {
+    step_id: String,
+    status: WorkflowPlanStepStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wait_until_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PlanUpdateCheckpointInput {
+    step_id: String,
+    checkpoint_id: String,
+    status: WorkflowPlanStepStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(default, deny_unknown_fields)]
+struct PlanCompleteInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "plan",
-    description = "Plan mode command. Use action `enter` or `exit`; `enter` allocates a home-level plan markdown file and `exit` asks the user to approve the plan.",
-    tags(ToolTag::ReadOnly, ToolTag::Planning, ToolTag::FilesystemWrite),
-    host_capabilities(HostCapability::PlanRegistry, HostCapability::AgentRegistry),
-    concurrency_safe = true
+    description = "Plan command backed by shared plugin storage. Use it to create, replace, review, execute, and clear the active session plan.",
+    tags(ToolTag::Planning, ToolTag::Mutating),
+    host_capabilities(
+        HostCapability::AskUser,
+        HostCapability::PluginStorage,
+        HostCapability::Statusline
+    ),
+    concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum PlanToolInput {
-    #[tool(exec = "enter")]
-    Enter {
+    #[tool(exec = "get")]
+    Get,
+    #[tool(exec = "create")]
+    Create {
         #[serde(flatten)]
-        args: EnterPlanModeToolInput,
+        args: PlanCreateInput,
     },
-    #[tool(exec = "exit")]
-    Exit {
+    #[tool(exec = "replace")]
+    Replace {
         #[serde(flatten)]
-        args: ExitPlanModeToolInput,
+        args: PlanReplaceInput,
     },
+    #[tool(exec = "submit")]
+    Submit {
+        #[serde(flatten)]
+        args: PlanSubmitInput,
+    },
+    #[tool(exec = "update_runtime")]
+    UpdateRuntime {
+        #[serde(flatten)]
+        args: PlanUpdateRuntimeInput,
+    },
+    #[tool(exec = "update_step")]
+    UpdateStep {
+        #[serde(flatten)]
+        args: PlanUpdateStepInput,
+    },
+    #[tool(exec = "update_checkpoint")]
+    UpdateCheckpoint {
+        #[serde(flatten)]
+        args: PlanUpdateCheckpointInput,
+    },
+    #[tool(exec = "complete")]
+    Complete {
+        #[serde(flatten)]
+        args: PlanCompleteInput,
+    },
+    #[tool(exec = "clear")]
+    Clear,
+    #[tool(exec = "next")]
+    Next,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
@@ -534,28 +752,20 @@ fn parse_worktree_exit_input(input: serde_json::Value) -> SdkResult<ExitWorktree
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct GoalToolResponse {
-    goal: Option<HostGoal>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct SessionToolResponse {
     session: HostSession,
 }
 
-impl GoalToolResponse {
-    fn new(goal: Option<HostGoal>) -> Self {
-        Self { goal }
-    }
-}
-
-fn goal_status_label(status: HostGoalStatus) -> &'static str {
-    match status {
-        HostGoalStatus::Active => "active",
-        HostGoalStatus::Paused => "paused",
-        HostGoalStatus::Completed => "completed",
-    }
-}
+const PLAN_NAMESPACE: &str = "workflow_plan";
+const PLAN_KEY_ACTIVE: &str = "active";
+const PLAN_RUNTIME_NAMESPACE: &str = "workflow_plan_runtime";
+const PLAN_RUNTIME_AUTO_SIGNATURE_KEY: &str = "last_auto_signature";
+const PLAN_STATUSLINE_SEGMENT_ID: &str = "plan";
+const PLAN_SCHEMA_VERSION: u32 = 1;
+const PLAN_REVIEW_DECISION_APPROVE_RUN: &str = "Approve and run";
+const PLAN_REVIEW_DECISION_APPROVE_PAUSE: &str = "Approve with auto-continue off";
+const PLAN_REVIEW_DECISION_KEEP_PLANNING: &str = "Keep in planning";
+const PLAN_REVIEW_DECISION_REJECT: &str = "Reject";
 
 pub(crate) struct WorkflowPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
@@ -727,17 +937,8 @@ impl WorkflowPlugin {
         }
     }
 
-    fn goal_payload_text(payload: &serde_json::Value) -> String {
+    fn pretty_json_text(payload: &serde_json::Value) -> String {
         serde_json::to_string_pretty(payload).unwrap_or_else(|_| payload.to_string())
-    }
-
-    fn goal_tool_payload(goal: Option<HostGoal>) -> SdkResult<serde_json::Value> {
-        serde_json::to_value(GoalToolResponse::new(goal))
-            .map_err(|err| PluginError::new(err.to_string()))
-    }
-
-    fn goal_summary(goal: &HostGoal) -> String {
-        format!("Goal {} is {}.", goal.id, goal_status_label(goal.status),)
     }
 
     fn session_tool_payload(session: HostSession) -> SdkResult<serde_json::Value> {
@@ -768,7 +969,7 @@ impl WorkflowPlugin {
         Ok(ToolInvokeOutput::text(format!(
             "{}\n\n{}",
             Self::session_summary(&response.session),
-            Self::goal_payload_text(&payload)
+            Self::pretty_json_text(&payload)
         ))
         .with_title("session")
         .with_payload(payload))
@@ -796,87 +997,815 @@ impl WorkflowPlugin {
             "Renamed session #{} to {}.\n\n{}",
             response.session.id,
             response.session.title,
-            Self::goal_payload_text(&payload)
+            Self::pretty_json_text(&payload)
         ))
         .with_title("session")
         .with_payload(payload))
     }
 
-    async fn invoke_get_goal(&self, _input: &GetGoalToolInput) -> SdkResult<ToolInvokeOutput> {
-        let response = self.host()?.get_goal(HostGetGoalRequest::default()).await?;
-        let payload = Self::goal_tool_payload(response.goal.clone())?;
-        let text = match response.goal.as_ref() {
-            Some(goal) => format!(
-                "{}\n\n{}",
-                Self::goal_summary(goal),
-                Self::goal_payload_text(&payload)
-            ),
-            None => Self::goal_payload_text(&payload),
-        };
-        Ok(ToolInvokeOutput::text(text)
-            .with_title("goal")
-            .with_payload(payload))
-    }
-
-    async fn invoke_create_goal(&self, input: &CreateGoalToolInput) -> SdkResult<ToolInvokeOutput> {
+    async fn load_active_plan(&self) -> SdkResult<Option<WorkflowPlan>> {
         let response = self
             .host()?
-            .create_goal(HostCreateGoalRequest {
-                objective: input.objective.clone(),
+            .storage_get(HostStorageGetRequest {
+                scope: HostStorageScope::Session,
+                visibility: HostStorageVisibility::Shared,
+                namespace: PLAN_NAMESPACE.to_string(),
+                key: PLAN_KEY_ACTIVE.to_string(),
             })
             .await?;
-        let payload = Self::goal_tool_payload(Some(response.goal.clone()))?;
-        Ok(ToolInvokeOutput::text(format!(
-            "{}\n\n{}",
-            Self::goal_summary(&response.goal),
-            Self::goal_payload_text(&payload)
-        ))
-        .with_title("goal")
-        .with_payload(payload))
-    }
-
-    async fn invoke_clear_goal(&self, _input: &ClearGoalToolInput) -> SdkResult<ToolInvokeOutput> {
-        let response = self
-            .host()?
-            .clear_goal(HostClearGoalRequest::default())
-            .await?;
-        let payload =
-            serde_json::to_value(&response).map_err(|err| PluginError::new(err.to_string()))?;
-        let text = if response.cleared {
-            format!(
-                "Cleared the current goal.\n\n{}",
-                Self::goal_payload_text(&payload)
-            )
-        } else {
-            format!(
-                "No current goal to clear.\n\n{}",
-                Self::goal_payload_text(&payload)
-            )
+        let Some(value) = response.value else {
+            return Ok(None);
         };
-        Ok(ToolInvokeOutput::text(text)
-            .with_title("goal")
-            .with_payload(payload))
+        serde_json::from_str::<WorkflowPlan>(&value)
+            .map(Some)
+            .map_err(|err| PluginError::new(format!("invalid stored plan payload: {err}")))
     }
 
-    async fn invoke_complete_goal(
+    async fn save_active_plan(&self, plan: &WorkflowPlan) -> SdkResult<()> {
+        let value =
+            serde_json::to_string_pretty(plan).map_err(|err| PluginError::new(err.to_string()))?;
+        let host = self.host()?;
+        host.storage_set(HostStorageSetRequest {
+            scope: HostStorageScope::Session,
+            visibility: HostStorageVisibility::Shared,
+            namespace: PLAN_NAMESPACE.to_string(),
+            key: PLAN_KEY_ACTIVE.to_string(),
+            value,
+        })
+        .await?;
+        self.clear_auto_continue_signature().await?;
+        self.sync_plan_statusline(Some(plan)).await?;
+        Ok(())
+    }
+
+    async fn clear_active_plan(&self) -> SdkResult<()> {
+        let host = self.host()?;
+        host.storage_delete(HostStorageDeleteRequest {
+            scope: HostStorageScope::Session,
+            visibility: HostStorageVisibility::Shared,
+            namespace: PLAN_NAMESPACE.to_string(),
+            key: PLAN_KEY_ACTIVE.to_string(),
+        })
+        .await?;
+        self.clear_auto_continue_signature().await?;
+        self.sync_plan_statusline(None).await?;
+        Ok(())
+    }
+
+    async fn load_auto_continue_signature(&self) -> SdkResult<Option<String>> {
+        Ok(self
+            .host()?
+            .storage_get(HostStorageGetRequest {
+                scope: HostStorageScope::Session,
+                visibility: HostStorageVisibility::Private,
+                namespace: PLAN_RUNTIME_NAMESPACE.to_string(),
+                key: PLAN_RUNTIME_AUTO_SIGNATURE_KEY.to_string(),
+            })
+            .await?
+            .value)
+    }
+
+    async fn save_auto_continue_signature(&self, signature: &str) -> SdkResult<()> {
+        self.host()?
+            .storage_set(HostStorageSetRequest {
+                scope: HostStorageScope::Session,
+                visibility: HostStorageVisibility::Private,
+                namespace: PLAN_RUNTIME_NAMESPACE.to_string(),
+                key: PLAN_RUNTIME_AUTO_SIGNATURE_KEY.to_string(),
+                value: signature.to_string(),
+            })
+            .await
+    }
+
+    async fn clear_auto_continue_signature(&self) -> SdkResult<()> {
+        self.host()?
+            .storage_delete(HostStorageDeleteRequest {
+                scope: HostStorageScope::Session,
+                visibility: HostStorageVisibility::Private,
+                namespace: PLAN_RUNTIME_NAMESPACE.to_string(),
+                key: PLAN_RUNTIME_AUTO_SIGNATURE_KEY.to_string(),
+            })
+            .await
+    }
+
+    async fn sync_plan_statusline(&self, plan: Option<&WorkflowPlan>) -> SdkResult<()> {
+        let host = self.host()?;
+        match plan {
+            Some(plan) => {
+                host.ui_statusline_contribute(HostStatuslineContributeRequest {
+                    segment_id: PLAN_STATUSLINE_SEGMENT_ID.to_string(),
+                    content: Self::plan_statusline_content(plan),
+                    priority: 120,
+                    color: None,
+                })
+                .await?;
+            }
+            None => {
+                let _ = host
+                    .ui_statusline_remove(HostStatuslineRemoveRequest {
+                        segment_id: PLAN_STATUSLINE_SEGMENT_ID.to_string(),
+                    })
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    fn plan_payload(plan: &WorkflowPlan) -> SdkResult<serde_json::Value> {
+        serde_json::to_value(serde_json::json!({ "plan": plan }))
+            .map_err(|err| PluginError::new(err.to_string()))
+    }
+
+    fn validate_plan_objective(value: &str) -> SdkResult<String> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(PluginError::invalid_params(
+                "plan objective must not be empty",
+            ));
+        }
+        Ok(trimmed.to_string())
+    }
+
+    fn default_plan_title(objective: &str) -> String {
+        let line = objective.lines().find(|line| !line.trim().is_empty()).unwrap_or(objective);
+        let title = line.trim();
+        if title.chars().count() <= 80 {
+            return title.to_string();
+        }
+        title.chars().take(80).collect()
+    }
+
+    fn normalize_plan_steps(inputs: &[WorkflowPlanStepInput]) -> SdkResult<Vec<WorkflowPlanStep>> {
+        let mut steps = Vec::with_capacity(inputs.len());
+        for (step_index, step) in inputs.iter().enumerate() {
+            let title = step.title.trim();
+            if title.is_empty() {
+                return Err(PluginError::invalid_params(format!(
+                    "plan step {} requires a non-empty title",
+                    step_index + 1
+                )));
+            }
+            let checkpoints = step
+                .checkpoints
+                .iter()
+                .enumerate()
+                .map(|(checkpoint_index, checkpoint)| {
+                    let text = checkpoint.text.trim();
+                    if text.is_empty() {
+                        return Err(PluginError::invalid_params(format!(
+                            "plan checkpoint {}.{} requires non-empty text",
+                            step_index + 1,
+                            checkpoint_index + 1
+                        )));
+                    }
+                    Ok(WorkflowPlanCheckpoint {
+                        id: checkpoint
+                            .id
+                            .clone()
+                            .filter(|value| !value.trim().is_empty())
+                            .unwrap_or_else(|| format!("step_{}_checkpoint_{}", step_index + 1, checkpoint_index + 1)),
+                        text: text.to_string(),
+                        status: checkpoint.status.unwrap_or_default(),
+                    })
+                })
+                .collect::<SdkResult<Vec<_>>>()?;
+            steps.push(WorkflowPlanStep {
+                id: step
+                    .id
+                    .clone()
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| format!("step_{}", step_index + 1)),
+                title: title.to_string(),
+                description: step.description.trim().to_string(),
+                executor: step.executor,
+                status: step.status.unwrap_or_default(),
+                wait_until_ms: step.wait_until_ms,
+                note: step.note.clone().unwrap_or_default().trim().to_string(),
+                checkpoints,
+            });
+        }
+        Ok(steps)
+    }
+
+    fn build_plan(
         &self,
-        _input: &CompleteGoalToolInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let response = self
-            .host()?
-            .update_goal(HostUpdateGoalRequest {
-                objective: None,
-                status: Some(HostGoalStatus::Completed),
+        session_id: i64,
+        objective: &str,
+        title: Option<&str>,
+        document_markdown: Option<&str>,
+        steps: &[WorkflowPlanStepInput],
+        auto_continue: Option<bool>,
+        previous: Option<&WorkflowPlan>,
+    ) -> SdkResult<WorkflowPlan> {
+        let objective = Self::validate_plan_objective(objective)?;
+        let now_ms = Utc::now().timestamp_millis();
+        let title = title
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| Self::default_plan_title(&objective));
+        let auto_continue_enabled = match auto_continue {
+            Some(value) => value,
+            None => previous
+                .map(|plan| plan.auto_continue.enabled)
+                .unwrap_or(self.config()?.plan.default_auto_continue),
+        };
+        let auto_continue_source = if auto_continue.is_some() {
+            "tool_override".to_string()
+        } else if previous.is_some() {
+            previous
+                .map(|plan| plan.auto_continue.source.clone())
+                .unwrap_or_else(|| "config_default".to_string())
+        } else {
+            "config_default".to_string()
+        };
+        Ok(WorkflowPlan {
+            schema_version: PLAN_SCHEMA_VERSION,
+            plan_id: previous
+                .map(|plan| plan.plan_id.clone())
+                .unwrap_or_else(|| format!("plan_{now_ms}")),
+            session_id,
+            title,
+            objective,
+            phase: WorkflowPlanPhase::Draft,
+            approval_state: WorkflowPlanApprovalState::NotRequested,
+            auto_continue: WorkflowPlanAutoContinue {
+                enabled: auto_continue_enabled,
+                source: auto_continue_source,
+            },
+            document_markdown: document_markdown
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .unwrap_or_default(),
+            steps: Self::normalize_plan_steps(steps)?,
+            created_at_ms: previous.map(|plan| plan.created_at_ms).unwrap_or(now_ms),
+            updated_at_ms: now_ms,
+            submitted_at_ms: None,
+            completed_at_ms: None,
+        })
+    }
+
+    fn plan_phase_label(phase: WorkflowPlanPhase) -> &'static str {
+        match phase {
+            WorkflowPlanPhase::Draft => "draft",
+            WorkflowPlanPhase::AwaitingReview => "awaiting_review",
+            WorkflowPlanPhase::Executing => "executing",
+            WorkflowPlanPhase::Paused => "paused",
+            WorkflowPlanPhase::Blocked => "blocked",
+            WorkflowPlanPhase::Completed => "completed",
+            WorkflowPlanPhase::Cancelled => "cancelled",
+        }
+    }
+
+    fn step_status_marker(status: WorkflowPlanStepStatus) -> &'static str {
+        match status {
+            WorkflowPlanStepStatus::Pending => "[ ]",
+            WorkflowPlanStepStatus::InProgress => "[>]",
+            WorkflowPlanStepStatus::Blocked => "[!]",
+            WorkflowPlanStepStatus::Completed => "[x]",
+            WorkflowPlanStepStatus::Skipped => "[-]",
+        }
+    }
+
+    fn workflow_plan_markdown(plan: &WorkflowPlan) -> String {
+        let mut sections = vec![
+            format!("# {}", plan.title),
+            String::new(),
+            format!("Objective: {}", plan.objective),
+            format!(
+                "Phase: {}",
+                Self::plan_phase_label(plan.phase)
+            ),
+            format!(
+                "Auto-continue: {}",
+                if plan.auto_continue.enabled { "on" } else { "off" }
+            ),
+        ];
+        if !plan.document_markdown.trim().is_empty() {
+            sections.push(String::new());
+            sections.push(plan.document_markdown.trim().to_string());
+        }
+        if !plan.steps.is_empty() {
+            sections.push(String::new());
+            sections.push("## Steps".to_string());
+            for (index, step) in plan.steps.iter().enumerate() {
+                sections.push(format!(
+                    "{}. {} {} ({})",
+                    index + 1,
+                    Self::step_status_marker(step.status),
+                    step.title,
+                    match step.executor {
+                        WorkflowPlanExecutor::Ai => "ai",
+                        WorkflowPlanExecutor::Human => "human",
+                    }
+                ));
+                if !step.description.trim().is_empty() {
+                    sections.push(format!("   {}", step.description.trim()));
+                }
+                for checkpoint in &step.checkpoints {
+                    sections.push(format!(
+                        "   - {} {}",
+                        Self::step_status_marker(checkpoint.status),
+                        checkpoint.text
+                    ));
+                }
+                if !step.note.trim().is_empty() {
+                    sections.push(format!("   note: {}", step.note.trim()));
+                }
+            }
+        }
+        sections.join("\n")
+    }
+
+    fn plan_statusline_content(plan: &WorkflowPlan) -> String {
+        let total_steps = plan.steps.len();
+        let completed_steps = plan
+            .steps
+            .iter()
+            .filter(|step| {
+                matches!(
+                    step.status,
+                    WorkflowPlanStepStatus::Completed | WorkflowPlanStepStatus::Skipped
+                )
             })
-            .await?;
-        let payload = Self::goal_tool_payload(Some(response.goal.clone()))?;
+            .count();
+        if total_steps == 0 {
+            return format!("plan:{}",
+                Self::plan_phase_label(plan.phase));
+        }
+        format!(
+            "plan:{}/{} {} {}",
+            completed_steps,
+            total_steps,
+            Self::plan_phase_label(plan.phase),
+            if plan.auto_continue.enabled {
+                "auto:on"
+            } else {
+                "auto:off"
+            }
+        )
+    }
+
+    fn next_actionable_step(plan: &WorkflowPlan) -> Option<(usize, &WorkflowPlanStep)> {
+        plan.steps.iter().enumerate().find(|(_, step)| {
+            !matches!(
+                step.status,
+                WorkflowPlanStepStatus::Completed | WorkflowPlanStepStatus::Skipped
+            )
+        })
+    }
+
+    fn plan_summary_text(plan: &WorkflowPlan) -> String {
+        format!(
+            "Plan '{}' [{} | auto:{}]",
+            plan.title,
+            Self::plan_phase_label(plan.phase),
+            if plan.auto_continue.enabled { "on" } else { "off" }
+        )
+    }
+
+    fn plan_auto_signature(plan: &WorkflowPlan, step_index: usize, step: &WorkflowPlanStep) -> String {
+        format!(
+            "{}:{}:{}:{}",
+            plan.plan_id,
+            plan.updated_at_ms,
+            step_index,
+            step.id
+        )
+    }
+
+    fn review_decision(response: &crate::plugin::sdk::host_api::AskUserResponse) -> Option<String> {
+        response
+            .answers
+            .get("reply")
+            .and_then(|values| values.first())
+            .cloned()
+            .or_else(|| {
+                let reply = response.reply.trim();
+                (!reply.is_empty()).then_some(reply.to_string())
+            })
+    }
+
+    fn plan_lock_active(plan: &WorkflowPlan) -> bool {
+        matches!(
+            plan.phase,
+            WorkflowPlanPhase::Draft | WorkflowPlanPhase::AwaitingReview
+        )
+    }
+
+    fn tool_allowed_during_planning(input: &ToolBeforeInput) -> bool {
+        if input.tool_name == "plan"
+            || input.tool_name == "user"
+            || input.tool_name == "tools"
+            || input.tool_name == "workflow"
+            || input.tool_name == "session"
+            || input.tool_name == "agent"
+            || input.tool_name == "todo"
+        {
+            return true;
+        }
+        if input.tool_name == "task" {
+            return serde_json::from_value::<TaskToolActionInput>(input.input.clone())
+                .ok()
+                .is_some_and(|task| {
+                    matches!(
+                        task,
+                        TaskToolActionInput::Run { args: TaskToolInput { subagent_type: crate::message::TaskSubagentType::Explore | crate::message::TaskSubagentType::Verify, .. } }
+                    )
+                });
+        }
+        if input.tags.iter().any(|tag| matches!(tag, ToolTag::Shell)) {
+            return true;
+        }
+        if input.tags.iter().any(|tag| matches!(tag, ToolTag::Mutating | ToolTag::FilesystemWrite | ToolTag::Worktree)) {
+            return false;
+        }
+        input.tags.iter().any(|tag| {
+            matches!(
+                tag,
+                ToolTag::ReadOnly | ToolTag::Discovery | ToolTag::Interactive | ToolTag::Planning
+            )
+        })
+    }
+
+    fn is_probably_read_only_shell(command: &str) -> bool {
+        let trimmed = command.trim();
+        if trimmed.is_empty() {
+            return true;
+        }
+        if trimmed.contains('>')
+            || trimmed.contains(">>")
+            || trimmed.contains("<<")
+            || trimmed.contains("rm ")
+            || trimmed.contains("mv ")
+            || trimmed.contains("cp ")
+            || trimmed.contains("chmod ")
+            || trimmed.contains("chown ")
+            || trimmed.contains("touch ")
+            || trimmed.contains(';')
+            || trimmed.contains("&&")
+            || trimmed.contains("||")
+        {
+            return false;
+        }
+        let Some(tokens) = shlex::split(trimmed) else {
+            return false;
+        };
+        let Some(command_name) = tokens.first().map(String::as_str) else {
+            return true;
+        };
+        match command_name {
+            "cat" | "sed" | "grep" | "rg" | "ls" | "find" | "pwd" | "head" | "tail"
+            | "wc" | "stat" | "tree" | "readlink" | "realpath" | "file" | "echo" => true,
+            "git" => matches!(
+                tokens.get(1).map(String::as_str),
+                Some(
+                    "status"
+                        | "diff"
+                        | "show"
+                        | "log"
+                        | "branch"
+                        | "rev-parse"
+                        | "remote"
+                        | "ls-files"
+                        | "grep"
+                )
+            ),
+            _ => false,
+        }
+    }
+
+    fn command_text_for_policy(input: &CommandBeforeInput) -> String {
+        if input.command == "sh" && input.args.len() >= 2 && input.args.first().is_some_and(|arg| arg == "-c") {
+            return input.args[1].clone();
+        }
+        std::iter::once(input.command.as_str())
+            .chain(input.args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn auto_continue_prompt(plan: &WorkflowPlan, step_index: usize, step: &WorkflowPlanStep) -> String {
+        let mut lines = vec![
+            "<plan_context>".to_string(),
+            "Continue the active approved plan.".to_string(),
+            format!("Plan: {}", plan.title),
+            format!("Objective: {}", plan.objective),
+            format!("Current step {}: {}", step_index + 1, step.title),
+        ];
+        if !step.description.trim().is_empty() {
+            lines.push(format!("Step details: {}", step.description.trim()));
+        }
+        let pending_checkpoints = step
+            .checkpoints
+            .iter()
+            .filter(|checkpoint| {
+                !matches!(
+                    checkpoint.status,
+                    WorkflowPlanStepStatus::Completed | WorkflowPlanStepStatus::Skipped
+                )
+            })
+            .map(|checkpoint| format!("- {}", checkpoint.text))
+            .collect::<Vec<_>>();
+        if !pending_checkpoints.is_empty() {
+            lines.push("Pending checkpoints:".to_string());
+            lines.extend(pending_checkpoints);
+        }
+        lines.push(
+            "Update the plan state as you make progress. If the next step needs human input, stop and say exactly what is needed.".to_string(),
+        );
+        lines.push("</plan_context>".to_string());
+        lines.join("\n")
+    }
+
+    async fn invoke_plan_get(&self) -> SdkResult<ToolInvokeOutput> {
+        let Some(plan) = self.load_active_plan().await? else {
+            let payload = serde_json::json!({ "plan": serde_json::Value::Null });
+            return Ok(ToolInvokeOutput::text("No active plan.").with_title("plan").with_payload(payload));
+        };
+        let payload = Self::plan_payload(&plan)?;
         Ok(ToolInvokeOutput::text(format!(
             "{}\n\n{}",
-            Self::goal_summary(&response.goal),
-            Self::goal_payload_text(&payload)
+            Self::plan_summary_text(&plan),
+            Self::workflow_plan_markdown(&plan)
         ))
-        .with_title("goal")
+        .with_title("plan")
         .with_payload(payload))
+    }
+
+    async fn invoke_plan_create(&self, session_id: i64, input: &PlanCreateInput) -> SdkResult<ToolInvokeOutput> {
+        let plan = self.build_plan(
+            session_id,
+            input.objective.as_str(),
+            input.title.as_deref(),
+            input.document_markdown.as_deref(),
+            input.steps.as_slice(),
+            input.auto_continue,
+            None,
+        )?;
+        self.save_active_plan(&plan).await?;
+        let payload = Self::plan_payload(&plan)?;
+        Ok(ToolInvokeOutput::text(format!(
+            "Created a draft plan.\n\n{}",
+            Self::workflow_plan_markdown(&plan)
+        ))
+        .with_title("plan")
+        .with_payload(payload))
+    }
+
+    async fn invoke_plan_replace(&self, session_id: i64, input: &PlanReplaceInput) -> SdkResult<ToolInvokeOutput> {
+        let previous = self.load_active_plan().await?;
+        let plan = self.build_plan(
+            session_id,
+            input.objective.as_str(),
+            input.title.as_deref(),
+            input.document_markdown.as_deref(),
+            input.steps.as_slice(),
+            input.auto_continue,
+            previous.as_ref(),
+        )?;
+        self.save_active_plan(&plan).await?;
+        let payload = Self::plan_payload(&plan)?;
+        Ok(ToolInvokeOutput::text(format!(
+            "Replaced the active plan and returned it to draft.\n\n{}",
+            Self::workflow_plan_markdown(&plan)
+        ))
+        .with_title("plan")
+        .with_payload(payload))
+    }
+
+    async fn invoke_plan_submit(&self, _input: &PlanSubmitInput) -> SdkResult<ToolInvokeOutput> {
+        let Some(mut plan) = self.load_active_plan().await? else {
+            return Err(PluginError::invalid_params("no active plan to submit"));
+        };
+        let now_ms = Utc::now().timestamp_millis();
+        plan.phase = WorkflowPlanPhase::AwaitingReview;
+        plan.approval_state = WorkflowPlanApprovalState::Pending;
+        plan.submitted_at_ms = Some(now_ms);
+        plan.updated_at_ms = now_ms;
+        self.save_active_plan(&plan).await?;
+
+        let response = self
+            .host()?
+            .ask_user(AskUserRequest {
+                title: "Review Plan".to_string(),
+                body_markdown: Self::workflow_plan_markdown(&plan),
+                kind: "review".to_string(),
+                submit_label: "Submit decision".to_string(),
+                cancel_label: "Keep in planning".to_string(),
+                questions: Vec::new(),
+                prompt: "Plan decision".to_string(),
+                options: vec![
+                    PLAN_REVIEW_DECISION_APPROVE_RUN.to_string(),
+                    PLAN_REVIEW_DECISION_APPROVE_PAUSE.to_string(),
+                    PLAN_REVIEW_DECISION_KEEP_PLANNING.to_string(),
+                    PLAN_REVIEW_DECISION_REJECT.to_string(),
+                ],
+                allow_free_text: false,
+            })
+            .await?;
+
+        let decision = if response.cancelled {
+            PLAN_REVIEW_DECISION_KEEP_PLANNING.to_string()
+        } else {
+            Self::review_decision(&response)
+                .unwrap_or_else(|| PLAN_REVIEW_DECISION_KEEP_PLANNING.to_string())
+        };
+
+        let now_ms = Utc::now().timestamp_millis();
+        match decision.as_str() {
+            PLAN_REVIEW_DECISION_APPROVE_RUN => {
+                plan.phase = WorkflowPlanPhase::Executing;
+                plan.approval_state = WorkflowPlanApprovalState::Approved;
+            }
+            PLAN_REVIEW_DECISION_APPROVE_PAUSE => {
+                plan.phase = WorkflowPlanPhase::Executing;
+                plan.approval_state = WorkflowPlanApprovalState::Approved;
+                plan.auto_continue.enabled = false;
+                plan.auto_continue.source = "review_override".to_string();
+            }
+            PLAN_REVIEW_DECISION_REJECT => {
+                plan.phase = WorkflowPlanPhase::Draft;
+                plan.approval_state = WorkflowPlanApprovalState::Rejected;
+            }
+            _ => {
+                plan.phase = WorkflowPlanPhase::Draft;
+                plan.approval_state = WorkflowPlanApprovalState::NotRequested;
+            }
+        }
+        plan.updated_at_ms = now_ms;
+        self.save_active_plan(&plan).await?;
+
+        let payload = serde_json::json!({
+            "plan": plan,
+            "decision": decision,
+        });
+        Ok(ToolInvokeOutput::text(format!(
+            "Plan review decision: {}.\n\n{}",
+            decision,
+            Self::workflow_plan_markdown(&plan)
+        ))
+        .with_title("plan review")
+        .with_payload(payload))
+    }
+
+    async fn invoke_plan_update_runtime(&self, input: &PlanUpdateRuntimeInput) -> SdkResult<ToolInvokeOutput> {
+        let Some(mut plan) = self.load_active_plan().await? else {
+            return Err(PluginError::invalid_params("no active plan to update"));
+        };
+        if let Some(phase) = input.phase {
+            plan.phase = phase;
+            if matches!(phase, WorkflowPlanPhase::Completed) {
+                plan.completed_at_ms = Some(Utc::now().timestamp_millis());
+            }
+        }
+        if let Some(auto_continue) = input.auto_continue {
+            plan.auto_continue.enabled = auto_continue;
+            plan.auto_continue.source = "tool_override".to_string();
+        }
+        plan.updated_at_ms = Utc::now().timestamp_millis();
+        self.save_active_plan(&plan).await?;
+        let payload = Self::plan_payload(&plan)?;
+        Ok(ToolInvokeOutput::text(format!(
+            "Updated plan runtime.\n\n{}",
+            Self::workflow_plan_markdown(&plan)
+        ))
+        .with_title("plan")
+        .with_payload(payload))
+    }
+
+    async fn invoke_plan_update_step(&self, input: &PlanUpdateStepInput) -> SdkResult<ToolInvokeOutput> {
+        let Some(mut plan) = self.load_active_plan().await? else {
+            return Err(PluginError::invalid_params("no active plan to update"));
+        };
+        let Some(step) = plan.steps.iter_mut().find(|step| step.id == input.step_id) else {
+            return Err(PluginError::invalid_params(format!(
+                "unknown plan step '{}'",
+                input.step_id
+            )));
+        };
+        step.status = input.status;
+        step.wait_until_ms = input.wait_until_ms;
+        if let Some(note) = input.note.as_deref() {
+            step.note = note.trim().to_string();
+        }
+        let step_title = step.title.clone();
+        plan.updated_at_ms = Utc::now().timestamp_millis();
+        self.save_active_plan(&plan).await?;
+        let payload = Self::plan_payload(&plan)?;
+        Ok(ToolInvokeOutput::text(format!(
+            "Updated step '{}'.\n\n{}",
+            step_title,
+            Self::workflow_plan_markdown(&plan)
+        ))
+        .with_title("plan")
+        .with_payload(payload))
+    }
+
+    async fn invoke_plan_update_checkpoint(
+        &self,
+        input: &PlanUpdateCheckpointInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let Some(mut plan) = self.load_active_plan().await? else {
+            return Err(PluginError::invalid_params("no active plan to update"));
+        };
+        let Some(step) = plan.steps.iter_mut().find(|step| step.id == input.step_id) else {
+            return Err(PluginError::invalid_params(format!(
+                "unknown plan step '{}'",
+                input.step_id
+            )));
+        };
+        let Some(checkpoint) = step
+            .checkpoints
+            .iter_mut()
+            .find(|checkpoint| checkpoint.id == input.checkpoint_id)
+        else {
+            return Err(PluginError::invalid_params(format!(
+                "unknown checkpoint '{}' for step '{}'",
+                input.checkpoint_id, input.step_id
+            )));
+        };
+        checkpoint.status = input.status;
+        let checkpoint_text = checkpoint.text.clone();
+        plan.updated_at_ms = Utc::now().timestamp_millis();
+        self.save_active_plan(&plan).await?;
+        let payload = Self::plan_payload(&plan)?;
+        Ok(ToolInvokeOutput::text(format!(
+            "Updated checkpoint '{}'.\n\n{}",
+            checkpoint_text,
+            Self::workflow_plan_markdown(&plan)
+        ))
+        .with_title("plan")
+        .with_payload(payload))
+    }
+
+    async fn invoke_plan_complete(&self, input: &PlanCompleteInput) -> SdkResult<ToolInvokeOutput> {
+        let Some(mut plan) = self.load_active_plan().await? else {
+            return Err(PluginError::invalid_params("no active plan to complete"));
+        };
+        plan.phase = WorkflowPlanPhase::Completed;
+        plan.approval_state = WorkflowPlanApprovalState::Approved;
+        plan.completed_at_ms = Some(Utc::now().timestamp_millis());
+        if let Some(summary) = input.summary.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+            if plan.document_markdown.trim().is_empty() {
+                plan.document_markdown = format!("## Completion Summary\n\n{summary}");
+            } else {
+                plan.document_markdown =
+                    format!("{}\n\n## Completion Summary\n\n{summary}", plan.document_markdown.trim());
+            }
+        }
+        plan.updated_at_ms = Utc::now().timestamp_millis();
+        self.save_active_plan(&plan).await?;
+        let payload = Self::plan_payload(&plan)?;
+        Ok(ToolInvokeOutput::text(format!(
+            "Marked the plan complete.\n\n{}",
+            Self::workflow_plan_markdown(&plan)
+        ))
+        .with_title("plan")
+        .with_payload(payload))
+    }
+
+    async fn invoke_plan_clear(&self) -> SdkResult<ToolInvokeOutput> {
+        let existing = self.load_active_plan().await?;
+        self.clear_active_plan().await?;
+        let payload = serde_json::json!({
+            "cleared": existing.is_some(),
+        });
+        let text = if existing.is_some() {
+            "Cleared the active plan."
+        } else {
+            "No active plan to clear."
+        };
+        Ok(ToolInvokeOutput::text(text).with_title("plan").with_payload(payload))
+    }
+
+    async fn invoke_plan_next(&self) -> SdkResult<ToolInvokeOutput> {
+        let Some(plan) = self.load_active_plan().await? else {
+            let payload = serde_json::json!({ "plan": serde_json::Value::Null, "next_step": serde_json::Value::Null });
+            return Ok(ToolInvokeOutput::text("No active plan.").with_title("plan").with_payload(payload));
+        };
+        let payload = match Self::next_actionable_step(&plan) {
+            Some((index, step)) => serde_json::json!({
+                "plan": plan,
+                "next_step": step,
+                "next_step_index": index,
+            }),
+            None => serde_json::json!({
+                "plan": plan,
+                "next_step": serde_json::Value::Null,
+            }),
+        };
+        let text = match Self::next_actionable_step(&plan) {
+            Some((index, step)) => format!(
+                "Next step {} is '{}' ({:?}).",
+                index + 1,
+                step.title,
+                step.executor
+            ),
+            None => "The active plan has no remaining actionable steps.".to_string(),
+        };
+        Ok(ToolInvokeOutput::text(text).with_title("plan next").with_payload(payload))
     }
 
     async fn invoke_ask_user(&self, input: &AskUserToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -884,6 +1813,11 @@ impl WorkflowPlugin {
         let host = self.host()?;
         let response = host
             .ask_user(AskUserRequest {
+                title: input.title.clone(),
+                body_markdown: input.body_markdown.clone(),
+                kind: input.kind.clone(),
+                submit_label: input.submit_label.clone(),
+                cancel_label: input.cancel_label.clone(),
                 questions: Self::host_ask_user_questions(input),
                 prompt: String::new(),
                 options: Vec::new(),
@@ -1179,8 +2113,15 @@ impl Plugin for WorkflowPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder(WORKFLOW_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
             .description("Workflow orchestration tools.")
-            .hooks(HookSubscription::TOOL_INVOKE | HookSubscription::AGENT_STOP)
+            .hooks(
+                HookSubscription::TOOL_INVOKE
+                    | HookSubscription::TOOL_BEFORE
+                    | HookSubscription::COMMAND_BEFORE
+                    | HookSubscription::AGENT_STOP,
+            )
             .plugin_capability(HostCapability::AgentRegistry)
+            .plugin_capability(HostCapability::PluginStorage)
+            .plugin_capability(HostCapability::Statusline)
             .tools(tools())
             .config_schema(workflow_config_schema())
             .build()
@@ -1303,43 +2244,6 @@ impl Plugin for WorkflowPlugin {
                     ))),
                 }
             }
-            "goal" => {
-                let (action, action_input) =
-                    GoalToolInput::resolve_tool(input.tool_name.as_str(), input.input)?;
-                match action.as_str() {
-                    "get" => {
-                        self.invoke_get_goal(
-                            &serde_json::from_value(action_input)
-                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
-                        )
-                        .await
-                    }
-                    "create" => {
-                        self.invoke_create_goal(
-                            &serde_json::from_value(action_input)
-                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
-                        )
-                        .await
-                    }
-                    "clear" => {
-                        self.invoke_clear_goal(
-                            &serde_json::from_value(action_input)
-                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
-                        )
-                        .await
-                    }
-                    "complete" => {
-                        self.invoke_complete_goal(
-                            &serde_json::from_value(action_input)
-                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
-                        )
-                        .await
-                    }
-                    other => Err(PluginError::invalid_params(format!(
-                        "unknown goal action '{other}'"
-                    ))),
-                }
-            }
             "user" => {
                 let (action, action_input) = UserToolInput::resolve_tool("user", input.input)?;
                 match action.as_str() {
@@ -1356,38 +2260,62 @@ impl Plugin for WorkflowPlugin {
                 }
             }
             "plan" => {
-                let (action, _action_input) = PlanToolInput::resolve_tool("plan", input.input)?;
+                let (action, action_input) = PlanToolInput::resolve_tool("plan", input.input)?;
                 match action.as_str() {
-                    "enter" => {
-                        let switch = self
-                            .switch_agent_for_tool(Some("planner".to_string()), true)
-                            .await?;
-                        let mut output = self
-                            .host()?
-                            .enter_plan_mode(HostEnterPlanModeRequest::default())
-                            .await?;
-                        output = output
-                            .with_metadata("workflow_agent", "planner")
-                            .with_metadata("agent_stack_depth", switch.stack_depth.to_string());
-                        if let Some(previous) = switch.previous_agent {
-                            output = output.with_metadata("previous_agent", previous);
-                        }
-                        Ok(output)
+                    "get" => self.invoke_plan_get().await,
+                    "create" => {
+                        self.invoke_plan_create(
+                            input.session_id,
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
+                        .await
                     }
-                    "exit" => {
-                        let mut output = self
-                            .host()?
-                            .exit_plan_mode(HostExitPlanModeRequest::default())
-                            .await?;
-                        let restore = self.restore_agent_for_tool().await?;
-                        output = output
-                            .with_metadata("agent_restored", restore.restored.to_string())
-                            .with_metadata("agent_stack_depth", restore.stack_depth.to_string());
-                        if let Some(current) = restore.current_agent {
-                            output = output.with_metadata("current_agent", current);
-                        }
-                        Ok(output)
+                    "replace" => {
+                        self.invoke_plan_replace(
+                            input.session_id,
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
+                        .await
                     }
+                    "submit" => {
+                        self.invoke_plan_submit(
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
+                        .await
+                    }
+                    "update_runtime" => {
+                        self.invoke_plan_update_runtime(
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
+                        .await
+                    }
+                    "update_step" => {
+                        self.invoke_plan_update_step(
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
+                        .await
+                    }
+                    "update_checkpoint" => {
+                        self.invoke_plan_update_checkpoint(
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
+                        .await
+                    }
+                    "complete" => {
+                        self.invoke_plan_complete(
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
+                        .await
+                    }
+                    "clear" => self.invoke_plan_clear().await,
+                    "next" => self.invoke_plan_next().await,
                     other => Err(PluginError::invalid_params(format!(
                         "unknown plan action '{other}'"
                     ))),
@@ -1467,17 +2395,6 @@ impl Plugin for WorkflowPlugin {
         input: &serde_json::Value,
     ) -> SdkResult<Vec<PathRequest>> {
         match tool_name {
-            "plan" => {
-                let (action, _action_input) = PlanToolInput::resolve_tool("plan", input.clone())?;
-                if action != "enter" {
-                    return Ok(Vec::new());
-                }
-                let plans_dir =
-                    crate::project_paths::project_state_dir(self.workspace_root()?).join("plans");
-                Ok(vec![PathRequest::write(
-                    plans_dir.to_string_lossy().to_string(),
-                )])
-            }
             "worktree" => {
                 let (action, action_input) =
                     WorktreeToolInput::resolve_tool("worktree", input.clone())?;
@@ -1501,6 +2418,44 @@ impl Plugin for WorkflowPlugin {
         }
     }
 
+    async fn tool_execute_before(
+        &self,
+        input: ToolBeforeInput,
+    ) -> SdkResult<Option<ToolBeforePatch>> {
+        let Some(plan) = self.load_active_plan().await? else {
+            return Ok(None);
+        };
+        if !Self::plan_lock_active(&plan) || Self::tool_allowed_during_planning(&input) {
+            return Ok(None);
+        }
+        Ok(Some(ToolBeforePatch {
+            abort_reason: Some(
+                "the active plan is still in planning; submit, approve, or clear the plan before using mutating tools"
+                    .to_string(),
+            ),
+            ..ToolBeforePatch::default()
+        }))
+    }
+
+    async fn command_execute_before(
+        &self,
+        input: CommandBeforeInput,
+    ) -> SdkResult<Option<CommandBeforeResponse>> {
+        let Some(_session_id) = input.session_id else {
+            return Ok(None);
+        };
+        let Some(plan) = self.load_active_plan().await? else {
+            return Ok(None);
+        };
+        let command_text = Self::command_text_for_policy(&input);
+        if !Self::plan_lock_active(&plan) || Self::is_probably_read_only_shell(&command_text) {
+            return Ok(None);
+        }
+        Ok(Some(CommandBeforeResponse::Abort {
+            reason: "the active plan is still in planning; only read-only shell commands are allowed until the plan is approved or cleared".to_string(),
+        }))
+    }
+
     async fn agent_stop(
         &self,
         input: crate::plugin::AgentStopInput,
@@ -1508,22 +2463,42 @@ impl Plugin for WorkflowPlugin {
         if input.stop_hook_active {
             return Ok(None);
         }
-        match self
-            .host()?
-            .agent_restore(HostAgentRestoreRequest {
-                session_id: Some(input.session_id),
-            })
-            .await
+        let Some(plan) = self.load_active_plan().await? else {
+            let _ = self.sync_plan_statusline(None).await;
+            return Ok(None);
+        };
+        self.sync_plan_statusline(Some(&plan)).await?;
+        if plan.phase != WorkflowPlanPhase::Executing
+            || plan.approval_state != WorkflowPlanApprovalState::Approved
+            || !plan.auto_continue.enabled
         {
-            Ok(_) => Ok(None),
-            Err(err)
-                if err.code == crate::plugin::sdk::PluginErrorCode::HostUnavailable
-                    || err.message.contains("No agent restore point") =>
-            {
-                Ok(None)
-            }
-            Err(err) => Err(err),
+            return Ok(None);
         }
+        let Some((step_index, step)) = Self::next_actionable_step(&plan) else {
+            return Ok(None);
+        };
+        if step.executor != WorkflowPlanExecutor::Ai {
+            return Ok(None);
+        }
+        if step
+            .wait_until_ms
+            .is_some_and(|wait_until_ms| wait_until_ms > Utc::now().timestamp_millis())
+        {
+            return Ok(None);
+        }
+        let signature = Self::plan_auto_signature(&plan, step_index, step);
+        if self
+            .load_auto_continue_signature()
+            .await?
+            .is_some_and(|current| current == signature)
+        {
+            return Ok(None);
+        }
+        self.save_auto_continue_signature(signature.as_str()).await?;
+        Ok(Some(crate::plugin::AgentStopPatch {
+            continue_with_message: Some(Self::auto_continue_prompt(&plan, step_index, step)),
+            reason: Some("workflow plan auto-continue".to_string()),
+        }))
     }
 
     async fn permission_networks(
@@ -1550,7 +2525,6 @@ fn tools() -> Vec<PluginToolDecl> {
         AgentToolInput::tool_decl(),
         TodoToolInput::tool_decl(),
         SessionToolInput::tool_decl(),
-        GoalToolInput::tool_decl(),
         UserToolInput::tool_decl(),
         PlanToolInput::tool_decl(),
         WorktreeToolInput::tool_decl(),

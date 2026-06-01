@@ -48,7 +48,6 @@ const LSP_TOOL: &str = "agena.lsp/lsp";
 const WORKFLOW_TOOL: &str = "agena.workflow/workflow";
 const AGENT_TOOL: &str = "agena.workflow/agent";
 const SESSION_TOOL: &str = "agena.workflow/session";
-const GOAL_TOOL: &str = "agena.workflow/goal";
 const SETTINGS_TOOL: &str = "agena.settings/settings";
 const SCHEDULE_TOOL: &str = "agena.cron/schedule";
 const STREAM_FIXTURE_PLUGIN: &str = "streaming-fixture";
@@ -574,6 +573,11 @@ impl ModelRuntime for ScriptedProvider {
                     arguments_delta: serde_json::json!({
                         "action": "request_input",
                         "questions": AskUserToolInput {
+                            title: String::new(),
+                            body_markdown: String::new(),
+                            kind: String::new(),
+                            submit_label: String::new(),
+                            cancel_label: String::new(),
                             questions: vec![UserInputQuestion {
                                 id: "model_choice".to_string(),
                                 header: "Model".to_string(),
@@ -1068,36 +1072,6 @@ async fn resume_event_sequence(manager: &SessionManager) {
         .resume_from_store()
         .await
         .expect("event sequence should resume from persisted history");
-}
-
-async fn persist_goal_without_auto_run(
-    manager: &SessionManager,
-    session_id: i64,
-    objective: &str,
-    _ignored_goal_limit: Option<u64>,
-) -> SessionGoal {
-    let state = manager.execution_state();
-    let mut updated = manager
-        .store
-        .upsert_goal(session_id, objective.to_string(), state.cache_policy())
-        .await
-        .expect("upsert goal without auto run");
-    let goal = updated
-        .goal
-        .clone()
-        .expect("upserted goal should be present");
-    updated.runtime.goal.clear();
-    updated
-        .runtime
-        .goal
-        .set_pending_steering(goal.id, GoalSteeringKind::ObjectiveUpdated);
-    let updated = manager
-        .persist_session_changes(updated, Vec::new(), Vec::new(), None, state)
-        .await
-        .expect("persist runtime goal state without auto run");
-    updated
-        .goal
-        .expect("persisted goal should remain attached to session")
 }
 
 fn pending_permission_request_id(session: &Session) -> String {
@@ -2368,6 +2342,11 @@ fn duplicate_user_input_reply_is_idempotent() {
                 session,
                 &pending_tool,
                 AskUserToolInput {
+                    title: String::new(),
+                    body_markdown: String::new(),
+                    kind: String::new(),
+                    submit_label: String::new(),
+                    cancel_label: String::new(),
                     questions: vec![UserInputQuestion {
                         id: "model_choice".to_string(),
                         header: "Model".to_string(),
@@ -2519,6 +2498,11 @@ fn replied_host_user_input_survives_restart_and_restores_answer_from_history() {
                 session,
                 &pending_tool,
                 AskUserToolInput {
+                    title: String::new(),
+                    body_markdown: String::new(),
+                    kind: String::new(),
+                    submit_label: String::new(),
+                    cancel_label: String::new(),
                     questions: vec![UserInputQuestion {
                         id: "confirm".to_string(),
                         header: "Confirm".to_string(),
@@ -2941,339 +2925,6 @@ fn pending_permission_request_aggregates_invocation_actions() {
     });
 }
 
-#[tokio::test]
-async fn create_goal_on_idle_session_starts_one_persisted_goal_turn() {
-    let workspace = TempWorkspace::new();
-    let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
-    let manager = build_manager_with_provider(
-        &workspace.root,
-        PermissionPolicy::allow_all(),
-        SessionManagerConfig::default(),
-        ContextPolicy::default(),
-        RecordingProvider::new(Arc::clone(&requests)),
-    )
-    .await;
-
-    let created = manager
-        .create_session(SessionCreateRequest {
-            title: "goal-auto-start".to_string(),
-            parent_session_id: None,
-        })
-        .await
-        .expect("create session");
-    let state = manager.execution_state();
-    let mut seeded = manager
-        .get_session(created.id)
-        .await
-        .expect("reload session to seed execution overrides");
-    seeded.runtime.execution.system_prompt_override = Some("system".to_string());
-    let _ = manager
-        .persist_session_changes(seeded, Vec::new(), Vec::new(), None, state)
-        .await
-        .expect("persist seeded execution overrides");
-
-    manager
-        .create_goal(SessionGoalCreateRequest {
-            session_id: created.id,
-            objective: "keep shipping".to_string(),
-        })
-        .await
-        .expect("create goal");
-
-    let started = async {
-        for _ in 0..500 {
-            if !requests
-                .lock()
-                .expect("recording provider request lock should succeed")
-                .is_empty()
-            {
-                return true;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        false
-    }
-    .await;
-    assert!(
-        started,
-        "idle goal creation should start one goal-triggered run"
-    );
-
-    let final_session = async {
-        for _ in 0..500 {
-            let session = manager
-                .get_session(created.id)
-                .await
-                .expect("reload session during goal run");
-            if session.status() == SessionStatus::Idle
-                && !manager.is_run_active(created.id).await
-                && session
-                    .messages
-                    .iter()
-                    .any(|message| message.role == Role::Assistant)
-            {
-                return session;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        panic!("goal run should settle within 10s");
-    }
-    .await;
-
-    let recorded = requests
-        .lock()
-        .expect("recording provider request lock should succeed");
-    assert_eq!(
-        recorded.len(),
-        1,
-        "goal creation should trigger exactly one goal run"
-    );
-    let request = &recorded[0];
-    assert_eq!(request.system.as_deref(), Some("system"));
-
-    let goal_directive_message = request
-        .messages
-        .iter()
-        .find(|message| message.role == Role::User)
-        .expect("provider request should include persisted goal context");
-    let goal_directive_text = goal_directive_message.as_text_lossy();
-    assert!(
-        goal_directive_text.contains("An active runtime goal has been set or updated."),
-        "unexpected goal prompt: {}",
-        goal_directive_text
-    );
-    assert!(
-        goal_directive_text.contains("keep shipping"),
-        "goal prompt should include the objective"
-    );
-
-    let persisted_goal_messages = final_session
-        .messages
-        .iter()
-        .filter(|message| {
-            message.role == Role::User
-                && message.metadata.source == MessageSource::System
-                && message
-                    .as_text_lossy()
-                    .contains("An active runtime goal has been set or updated.")
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        persisted_goal_messages.len(),
-        1,
-        "goal context must be persisted so future provider prompts stay append-only"
-    );
-    assert!(
-        persisted_goal_messages[0]
-            .as_text_lossy()
-            .contains("keep shipping")
-    );
-    assert_eq!(
-        final_session
-            .messages
-            .iter()
-            .filter(|message| message.role == Role::User)
-            .count(),
-        1
-    );
-    assert_eq!(
-        final_session
-            .messages
-            .iter()
-            .filter(|message| message.role == Role::Assistant)
-            .count(),
-        1
-    );
-}
-
-#[test]
-fn goal_runtime_resumed_session_can_continue_active_goal_after_restart() {
-    run_async_with_large_stack(async move {
-        let workspace = TempWorkspace::new();
-        let db = open_temp_database(&workspace.root, "goal-resume.db").await;
-        let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
-        let first = build_manager_with_provider_on_db(
-            &workspace.root,
-            db.clone(),
-            PermissionPolicy::allow_all(),
-            ToolPermissionPolicy::allow_all(),
-            SessionManagerConfig::default(),
-            ContextPolicy::default(),
-            RecordingProvider::new(Arc::clone(&requests)),
-        )
-        .await;
-        let created = first
-            .create_session(SessionCreateRequest {
-                title: "goal-resume".to_string(),
-                parent_session_id: None,
-            })
-            .await
-            .expect("create session");
-        let session_id = created.id;
-        persist_goal_without_auto_run(
-            &first,
-            session_id,
-            "Resume this goal after restart",
-            Some(100),
-        )
-        .await;
-        drop(first);
-
-        let second = build_manager_with_provider_on_db(
-            &workspace.root,
-            db,
-            PermissionPolicy::allow_all(),
-            ToolPermissionPolicy::allow_all(),
-            SessionManagerConfig::default(),
-            ContextPolicy::default(),
-            RecordingProvider::new(Arc::clone(&requests)),
-        )
-        .await;
-        resume_event_sequence(&second).await;
-
-        let _ = second
-            .continue_session(SessionExecutionRequest::new(
-                session_id,
-                recording_run_options(),
-            ))
-            .await
-            .expect("continue after restart should observe persisted goal");
-
-        let recorded = requests
-            .lock()
-            .expect("recording requests lock should succeed");
-        let request = recorded
-            .last()
-            .expect("goal continuation request should be recorded after restart");
-        assert!(request.messages.iter().any(|message| {
-            message
-                .as_text_lossy()
-                .contains("Resume this goal after restart")
-        }));
-    });
-}
-
-#[tokio::test]
-async fn goal_runtime_external_goal_clear_stops_next_continue_run() {
-    let workspace = TempWorkspace::new();
-    let db = open_temp_database(&workspace.root, "goal-external-clear.db").await;
-    let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
-    let first = build_manager_with_provider_on_db(
-        &workspace.root,
-        db.clone(),
-        PermissionPolicy::allow_all(),
-        ToolPermissionPolicy::allow_all(),
-        SessionManagerConfig::default(),
-        ContextPolicy::default(),
-        RecordingProvider::new(Arc::clone(&requests)),
-    )
-    .await;
-    let created = first
-        .create_session(SessionCreateRequest {
-            title: "external-clear".to_string(),
-            parent_session_id: None,
-        })
-        .await
-        .expect("create session");
-    persist_goal_without_auto_run(
-        &first,
-        created.id,
-        "This should be cleared before continuation",
-        Some(100),
-    )
-    .await;
-
-    let second = build_manager_with_provider_on_db(
-        &workspace.root,
-        db,
-        PermissionPolicy::allow_all(),
-        ToolPermissionPolicy::allow_all(),
-        SessionManagerConfig::default(),
-        ContextPolicy::default(),
-        RecordingProvider::new(Arc::clone(&requests)),
-    )
-    .await;
-    resume_event_sequence(&second).await;
-    assert!(
-        second
-            .clear_goal(created.id)
-            .await
-            .expect("external clear goal should succeed")
-    );
-
-    let _ = first
-        .continue_session(SessionExecutionRequest::new(
-            created.id,
-            recording_run_options(),
-        ))
-        .await
-        .expect("continue after external clear should stop cleanly");
-
-    assert!(
-        requests
-            .lock()
-            .expect("recording requests lock should succeed")
-            .is_empty(),
-        "cleared goal should prevent idle continuation"
-    );
-}
-
-#[tokio::test]
-async fn goal_runtime_external_goal_set_refreshes_cached_session() {
-    let workspace = TempWorkspace::new();
-    let db = open_temp_database(&workspace.root, "goal-external-cache-refresh.db").await;
-    let first = build_manager_with_provider_on_db(
-        &workspace.root,
-        db.clone(),
-        PermissionPolicy::allow_all(),
-        ToolPermissionPolicy::allow_all(),
-        SessionManagerConfig::default(),
-        ContextPolicy::default(),
-        ScriptedProvider,
-    )
-    .await;
-    let created = first
-        .create_session(SessionCreateRequest {
-            title: "goal-cache-refresh".to_string(),
-            parent_session_id: None,
-        })
-        .await
-        .expect("create session");
-    let cached = first
-        .get_session(created.id)
-        .await
-        .expect("prime cached session");
-    assert!(cached.goal.is_none(), "session should start without a goal");
-
-    let second = build_manager_with_provider_on_db(
-        &workspace.root,
-        db,
-        PermissionPolicy::allow_all(),
-        ToolPermissionPolicy::allow_all(),
-        SessionManagerConfig::default(),
-        ContextPolicy::default(),
-        ScriptedProvider,
-    )
-    .await;
-    resume_event_sequence(&second).await;
-    persist_goal_without_auto_run(
-        &second,
-        created.id,
-        "Refresh the cached session goal",
-        Some(100),
-    )
-    .await;
-
-    let refreshed = first
-        .get_session(created.id)
-        .await
-        .expect("reload cached session");
-    let goal = refreshed
-        .goal
-        .expect("cached session should refresh its goal");
-    assert_eq!(goal.objective, "Refresh the cached session goal");
-}
-
 /// Cancel a run while the provider stream is still pending. The
 /// processor must observe the cancellation token and surface a
 /// terminal error rather than running to completion.
@@ -3445,16 +3096,14 @@ mod runtime_builtin_tool_tests {
     use crate::message::{EnterWorktreeToolInput, ExitWorktreeToolInput};
     use crate::plugin::sdk::host_api::{
         AskUserRequest, AskUserResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
-        HostAgentSwitchRequest, HostAgentSwitchResponse, HostCallbackContext, HostClearGoalRequest,
-        HostClearGoalResponse, HostClient, HostConfigReloadResponse, HostCreateGoalRequest,
-        HostCreateGoalResponse, HostEnterPlanModeRequest, HostEnterWorktreeRequest,
-        HostExitPlanModeRequest, HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse,
-        HostGetSessionRequest, HostGetSessionResponse, HostGoal, HostGoalStatus, HostLspDiagnostic,
+        HostAgentSwitchRequest, HostAgentSwitchResponse, HostCallbackContext, HostClient,
+        HostConfigReloadResponse, HostEnterWorktreeRequest, HostExitWorktreeRequest,
+        HostGetSessionRequest, HostGetSessionResponse, HostLspDiagnostic,
         HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
         HostLspServer, HostNetworkPermissionCheckRequest, HostPermissionCheckResponse,
         HostRenameSessionRequest, HostRenameSessionResponse, HostSession, HostTodoPriority,
-        HostTodoStatus, HostTodoWriteRequest, HostUpdateGoalRequest, HostUpdateGoalResponse,
-        LogLevel, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+        HostTodoStatus, HostTodoWriteRequest, LogLevel, SpawnSubtaskRequest,
+        SpawnSubtaskResponse, ToolDescriptor,
         current_host_callback_context,
     };
     use crate::plugin::sdk::{EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision};
@@ -3785,83 +3434,6 @@ mod runtime_builtin_tool_tests {
             })
         }
 
-        async fn get_goal(
-            &self,
-            _req: HostGetGoalRequest,
-        ) -> crate::plugin::sdk::Result<HostGetGoalResponse> {
-            let session_id = self
-                .callback_context()?
-                .session_id
-                .ok_or_else(|| crate::plugin::PluginError::new("missing session_id"))?;
-            let manager = self.manager().await?;
-            let goal = manager
-                .get_goal(session_id)
-                .await
-                .map_err(|err| crate::plugin::PluginError::new(err.to_string()))?
-                .map(host_goal_from_session_goal);
-            Ok(HostGetGoalResponse { goal })
-        }
-
-        async fn create_goal(
-            &self,
-            req: HostCreateGoalRequest,
-        ) -> crate::plugin::sdk::Result<HostCreateGoalResponse> {
-            let session_id = self
-                .callback_context()?
-                .session_id
-                .ok_or_else(|| crate::plugin::PluginError::new("missing session_id"))?;
-            let manager = self.manager().await?;
-            let goal = manager
-                .create_goal(SessionGoalCreateRequest {
-                    session_id,
-                    objective: req.objective,
-                })
-                .await
-                .map_err(|err| crate::plugin::PluginError::new(err.to_string()))?;
-            Ok(HostCreateGoalResponse {
-                goal: host_goal_from_session_goal(goal),
-            })
-        }
-
-        async fn update_goal(
-            &self,
-            req: HostUpdateGoalRequest,
-        ) -> crate::plugin::sdk::Result<HostUpdateGoalResponse> {
-            let session_id = self
-                .callback_context()?
-                .session_id
-                .ok_or_else(|| crate::plugin::PluginError::new("missing session_id"))?;
-            let manager = self.manager().await?;
-            let goal = manager
-                .update_goal(SessionGoalUpdateRequest {
-                    session_id,
-                    objective: req.objective,
-                    status: req.status.map(host_goal_status_to_session_goal_status),
-                    expected_goal_id: None,
-                })
-                .await
-                .map_err(|err| crate::plugin::PluginError::new(err.to_string()))?;
-            Ok(HostUpdateGoalResponse {
-                goal: host_goal_from_session_goal(goal),
-            })
-        }
-
-        async fn clear_goal(
-            &self,
-            _req: HostClearGoalRequest,
-        ) -> crate::plugin::sdk::Result<HostClearGoalResponse> {
-            let session_id = self
-                .callback_context()?
-                .session_id
-                .ok_or_else(|| crate::plugin::PluginError::new("missing session_id"))?;
-            let manager = self.manager().await?;
-            let cleared = manager
-                .clear_goal(session_id)
-                .await
-                .map_err(|err| crate::plugin::PluginError::new(err.to_string()))?;
-            Ok(HostClearGoalResponse { cleared })
-        }
-
         async fn lsp_list_servers(&self) -> crate::plugin::sdk::Result<HostLspListServersResponse> {
             let registry = self
                 .executor
@@ -3927,22 +3499,6 @@ mod runtime_builtin_tool_tests {
             Ok(HostLspListDiagnosticsResponse {
                 diagnostics: diagnostics_out,
             })
-        }
-
-        async fn enter_plan_mode(
-            &self,
-            _req: HostEnterPlanModeRequest,
-        ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
-            self.workflow_tool_output("enter_plan_mode", serde_json::json!({}))
-                .await
-        }
-
-        async fn exit_plan_mode(
-            &self,
-            _req: HostExitPlanModeRequest,
-        ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
-            self.workflow_tool_output("exit_plan_mode", serde_json::json!({}))
-                .await
         }
 
         async fn enter_worktree(
@@ -4030,27 +3586,6 @@ mod runtime_builtin_tool_tests {
         }
     }
 
-    fn host_goal_status_to_session_goal_status(status: HostGoalStatus) -> GoalStatus {
-        match status {
-            HostGoalStatus::Active => GoalStatus::Active,
-            HostGoalStatus::Paused => GoalStatus::Paused,
-            HostGoalStatus::Completed => GoalStatus::Completed,
-        }
-    }
-
-    fn host_goal_from_session_goal(goal: SessionGoal) -> HostGoal {
-        HostGoal {
-            id: goal.id,
-            objective: goal.objective,
-            status: match goal.status {
-                GoalStatus::Active => HostGoalStatus::Active,
-                GoalStatus::Paused => HostGoalStatus::Paused,
-                GoalStatus::Completed => HostGoalStatus::Completed,
-            },
-            completed_at_ms: goal.completed_at.map(|ts| ts.timestamp_millis()),
-        }
-    }
-
     fn parse_subagent_type(raw: &str) -> Option<crate::message::TaskSubagentType> {
         match raw.trim() {
             "explore" => Some(crate::message::TaskSubagentType::Explore),
@@ -4098,7 +3633,6 @@ mod runtime_builtin_tool_tests {
                     .with_tool_policy(ToolPermissionPolicy::allow_all()),
             )
             .with_subagent_registry(agents)
-            .with_plan_registry(crate::tool::plan_registry_for_executor())
             .with_worktree_registry(crate::tool::worktree_registry_for_executor())
             .with_scheduler(scheduler)
             .with_lsp_registry(Arc::new(agena_lsp::LspRegistry::new(
@@ -5886,35 +5420,6 @@ while True:
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_goal_create_1"]) == 0 {
-                scripted_tool_call_events(vec![(
-                    "call_goal_create_1",
-                    GOAL_TOOL,
-                    serde_json::json!({
-                        "action": "create",
-                        "objective": "Close runtime mutation coverage"
-                    })
-                    .to_string(),
-                )])
-            } else if completed_or_failed_operation_count(&request, &["call_goal_complete_1"]) == 0
-            {
-                scripted_tool_call_events(vec![(
-                    "call_goal_complete_1",
-                    GOAL_TOOL,
-                    serde_json::json!({
-                        "action": "complete"
-                    })
-                    .to_string(),
-                )])
-            } else if completed_or_failed_operation_count(&request, &["call_goal_clear_1"]) == 0 {
-                scripted_tool_call_events(vec![(
-                    "call_goal_clear_1",
-                    GOAL_TOOL,
-                    serde_json::json!({
-                        "action": "clear"
-                    })
-                    .to_string(),
-                )])
             } else if completed_or_failed_operation_count(
                 &request,
                 &["call_workflow_security_review_1"],
@@ -6010,9 +5515,6 @@ while True:
                     "call_workflow_review_1",
                     "call_agent_restore_1",
                     "call_session_rename_1",
-                    "call_goal_create_1",
-                    "call_goal_complete_1",
-                    "call_goal_clear_1",
                     "call_agent_switch_1",
                     "call_workflow_security_review_1",
                     "call_agent_restore_2",
@@ -6061,25 +5563,6 @@ while True:
                 serde_json::Value::Null
             );
             assert_eq!(restore_after_review["stack_depth"].as_u64(), Some(0));
-
-            let goal_create_payload = session_operation_payload(&session, "call_goal_create_1");
-            assert_eq!(
-                goal_create_payload["goal"]["objective"].as_str(),
-                Some("Close runtime mutation coverage")
-            );
-            assert_eq!(
-                goal_create_payload["goal"]["status"].as_str(),
-                Some("active")
-            );
-
-            let goal_complete_payload = session_operation_payload(&session, "call_goal_complete_1");
-            assert_eq!(
-                goal_complete_payload["goal"]["status"].as_str(),
-                Some("completed")
-            );
-
-            let goal_clear_payload = session_operation_payload(&session, "call_goal_clear_1");
-            assert_eq!(goal_clear_payload["cleared"].as_bool(), Some(true));
 
             let security_review_text = session
                 .messages
@@ -6145,10 +5628,6 @@ while True:
             assert_eq!(restore_to_default["stack_depth"].as_u64(), Some(0));
 
             assert_eq!(session.title, "runtime-mutation-renamed");
-            assert!(
-                session.goal.is_none(),
-                "goal clear should remove the active goal from the session"
-            );
             assert_eq!(
                 session.runtime.execution.selection.agent, None,
                 "final agent restore should return the session to the default runtime context"
@@ -6397,15 +5876,6 @@ while True:
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_goal_get_1"]) == 0 {
-                scripted_tool_call_events(vec![(
-                    "call_goal_get_1",
-                    GOAL_TOOL,
-                    serde_json::json!({
-                        "action": "get"
-                    })
-                    .to_string(),
-                )])
             } else if completed_or_failed_operation_count(&request, &["call_user_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_user_1",
@@ -6582,13 +6052,6 @@ while True:
 
             let created =
                 create_runtime_tool_session(manager.as_ref(), "runtime-workflow-settings").await;
-            persist_goal_without_auto_run(
-                manager.as_ref(),
-                created.id,
-                "Finish workflow runtime coverage",
-                None,
-            )
-            .await;
             let session = submit_runtime_tool_prompt(
                 manager.as_ref(),
                 created.id,
@@ -6614,7 +6077,6 @@ while True:
                     "call_workflow_init_1",
                     "call_tools_help_1",
                     "call_session_get_1",
-                    "call_goal_get_1",
                     "call_user_1",
                     "call_todo_1",
                     "call_settings_get_1",
@@ -6676,12 +6138,6 @@ while True:
             assert_eq!(
                 session_get_payload["session"]["title"].as_str(),
                 Some("runtime-workflow-settings")
-            );
-
-            let goal_payload = session_operation_payload(&session, "call_goal_get_1");
-            assert_eq!(
-                goal_payload["goal"]["objective"].as_str(),
-                Some("Finish workflow runtime coverage")
             );
 
             let user_payload = session_operation_payload(&session, "call_user_1");
@@ -6766,14 +6222,6 @@ while True:
             let delete_payload = session_operation_payload(&session, "call_schedule_delete_1");
             assert_eq!(delete_payload["id"].as_str(), Some(created_job_id));
             assert_eq!(delete_payload["removed"].as_bool(), Some(true));
-
-            assert!(
-                session
-                    .goal
-                    .as_ref()
-                    .is_some_and(|goal| goal.objective == "Finish workflow runtime coverage"),
-                "seeded goal should remain attached to the session"
-            );
         });
     }
 }

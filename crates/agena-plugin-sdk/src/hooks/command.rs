@@ -7,6 +7,12 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandBeforeInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
     pub command: String,
     pub args: Vec<String>,
     pub cwd: PathBuf,

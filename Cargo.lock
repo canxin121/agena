@@ -171,6 +171,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "shlex",
  "simhash",
  "smol_str",
  "strum 0.28.0",

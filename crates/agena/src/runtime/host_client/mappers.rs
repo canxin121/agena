@@ -217,7 +217,14 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
                 allow_custom: question.allow_custom,
             })
             .collect();
-        return Ok(AskUserToolInput { questions });
+        return Ok(AskUserToolInput {
+            title: req.title,
+            body_markdown: req.body_markdown,
+            kind: req.kind,
+            submit_label: req.submit_label,
+            cancel_label: req.cancel_label,
+            questions,
+        });
     }
 
     if req.prompt.trim().is_empty() {
@@ -239,6 +246,11 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
         })
         .collect();
     Ok(AskUserToolInput {
+        title: req.title,
+        body_markdown: req.body_markdown,
+        kind: req.kind,
+        submit_label: req.submit_label,
+        cancel_label: req.cancel_label,
         questions: vec![UserInputQuestion {
             id: "reply".to_string(),
             header: String::new(),
@@ -278,38 +290,6 @@ pub(super) fn host_session_from_session(session: &crate::session::Session) -> Ho
     }
 }
 
-pub(super) fn host_goal_from_session_goal(goal: crate::session::SessionGoal) -> HostGoal {
-    HostGoal {
-        id: goal.id,
-        objective: goal.objective,
-        status: match goal.status {
-            crate::session::GoalStatus::Active => HostGoalStatus::Active,
-            crate::session::GoalStatus::Paused => HostGoalStatus::Paused,
-            crate::session::GoalStatus::Completed => HostGoalStatus::Completed,
-        },
-        completed_at_ms: goal.completed_at.map(|value| value.timestamp_millis()),
-    }
-}
-
-pub(super) fn session_goal_status_from_host(status: HostGoalStatus) -> crate::session::GoalStatus {
-    match status {
-        HostGoalStatus::Active => crate::session::GoalStatus::Active,
-        HostGoalStatus::Paused => crate::session::GoalStatus::Paused,
-        HostGoalStatus::Completed => crate::session::GoalStatus::Completed,
-    }
-}
-
-pub(super) fn map_create_goal_error(err: crate::AppError) -> PluginError {
-    match err {
-        crate::AppError::Internal(message)
-            if message.contains("goal objective must not be empty")
-                || message.contains("already has an active goal") =>
-        {
-            PluginError::invalid_params(message)
-        }
-        other => PluginError::new(other.to_string()),
-    }
-}
 
 pub(super) fn workflow_tool_output(
     executor: &crate::tool::ToolExecutor,

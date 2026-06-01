@@ -17,8 +17,8 @@ use crate::local_api::{
     PermissionRuleWriteRequest, PluginInspectResponse, PluginLogListQuery, PluginLogListResponse,
     PluginUiCatalogResponse, PluginUiInvokeToolRequest, PluginUiRequestContext,
     RuntimeBackgroundTaskCancelResponse, RuntimeBackgroundTaskStartResponse, SearchPaginationQuery,
-    SessionCreateRequest, SessionEventStreamQuery, SessionGoalSetRequest, SessionHierarchyRequest,
-    SessionListQuery, SessionMessageRequest, SessionReplyRequestBody, SessionRewindRequestBody,
+    SessionCreateRequest, SessionEventStreamQuery, SessionHierarchyRequest, SessionListQuery,
+    SessionMessageRequest, SessionReplyRequestBody, SessionRewindRequestBody,
     SessionRunRequestBody, WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspacePathRequest,
     WorkspaceResolveRequest,
 };

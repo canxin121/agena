@@ -144,15 +144,6 @@ pub(crate) fn powershell_command_for_windows(command: &str) -> Vec<String> {
     ]
 }
 
-/// Classify a shell command line as definitely read-only. Returns `false`
-/// for mutating commands and for anything we cannot prove is read-only.
-pub fn is_read_only_command(command: &str) -> bool {
-    matches!(
-        analyze_command(command).classification,
-        CommandClassification::ReadOnly
-    )
-}
-
 pub(crate) fn mutating_command_reason(command: &str) -> Option<String> {
     match analyze_command(command).classification {
         CommandClassification::Mutating { reason } => Some(reason),

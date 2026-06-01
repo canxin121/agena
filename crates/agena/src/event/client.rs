@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
     message::{ExecutionStatus, MessagePart, MessageStatus},
@@ -131,7 +131,7 @@ pub struct MessagePartDeltaEvent {
     pub ts_ms: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PermissionRequestedEvent {
     pub session_id: i64,
     pub request_id: String,
@@ -154,6 +154,62 @@ pub struct PermissionRequestedEvent {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trace: Vec<DecisionTraceStep>,
     pub ts_ms: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct PermissionRequestedEventWire {
+    session_id: i64,
+    request_id: String,
+    #[serde(default)]
+    action: Option<PermissionAction>,
+    #[serde(default)]
+    related_actions: Vec<PermissionAction>,
+    #[serde(default)]
+    requested_actions: Vec<PermissionAction>,
+    reason: String,
+    #[serde(default)]
+    explanation: String,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    operator: Option<String>,
+    #[serde(default)]
+    risk: PermissionRiskLevel,
+    #[serde(default)]
+    trace: Vec<DecisionTraceStep>,
+    ts_ms: i64,
+}
+
+impl<'de> Deserialize<'de> for PermissionRequestedEvent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = PermissionRequestedEventWire::deserialize(deserializer)?;
+        let action = wire
+            .action
+            .or_else(|| wire.requested_actions.first().cloned())
+            .or_else(|| wire.related_actions.first().cloned())
+            .ok_or_else(|| serde::de::Error::missing_field("action"))?;
+
+        Ok(Self {
+            session_id: wire.session_id,
+            request_id: wire.request_id,
+            action,
+            related_actions: wire.related_actions,
+            requested_actions: wire.requested_actions,
+            reason: wire.reason,
+            explanation: wire.explanation,
+            source: wire.source,
+            scope: wire.scope,
+            operator: wire.operator,
+            risk: wire.risk,
+            trace: wire.trace,
+            ts_ms: wire.ts_ms,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -187,21 +243,53 @@ pub struct PermissionRuleEvent {
     pub ts_ms: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SessionGoalEvent {
-    pub session_id: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub goal_id: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub objective: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completed_at_ms: Option<i64>,
-    pub ts_ms: i64,
-}
-
 // NOTE: the wrapper enum `SessionEvent` has been removed in favor of the
 // unified `crate::event::EventKind`. The payload structs above are still the
 // canonical definitions — they are referenced verbatim by the corresponding
 // `EventKind` variants.
+
+#[cfg(test)]
+mod tests {
+    use super::PermissionRequestedEvent;
+    use crate::permission::PermissionAction;
+    use serde_json::json;
+
+    #[test]
+    fn permission_requested_event_deserializes_legacy_payload_without_action() {
+        let payload = json!({
+            "session_id": 1,
+            "request_id": "call_legacy",
+            "related_actions": [
+                {
+                    "kind": "tool",
+                    "tool_name": "agena.workflow/plan"
+                }
+            ],
+            "requested_actions": [
+                {
+                    "kind": "tool",
+                    "tool_name": "agena.workflow/plan"
+                }
+            ],
+            "reason": "tool requires confirmation",
+            "explanation": "legacy payload omitted top-level action",
+            "source": "static_policy",
+            "risk": "medium",
+            "trace": [],
+            "ts_ms": 123
+        });
+
+        let event: PermissionRequestedEvent =
+            serde_json::from_value(payload).expect("deserialize legacy permission request");
+
+        assert_eq!(
+            event.action,
+            PermissionAction::Tool {
+                tool_name: "agena.workflow/plan".to_string(),
+                qualifier: None,
+            }
+        );
+        assert_eq!(event.requested_actions.len(), 1);
+        assert_eq!(event.related_actions.len(), 1);
+    }
+}

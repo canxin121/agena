@@ -24,24 +24,24 @@ use crate::sdk::host_api::{
     HostAgentGetResponse, HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
     HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
     HostAgentSwitchRequest, HostAgentSwitchResponse, HostCallbackContext, HostClient,
-    HostConfigReloadResponse, HostEnterPlanModeRequest, HostEnterWorktreeRequest,
-    HostExitPlanModeRequest, HostExitWorktreeRequest, HostHookListResponse, HostHookRegistration,
-    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
-    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
-    HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-    HostPermissionCheckResponse, HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse,
-    HostPluginStatus, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
-    HostPluginStatusListResponse, HostRegisteredToolDescriptor, HostRegisteredToolListResponse,
-    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
-    HostSchedulerDeleteResponse, HostSchedulerListResponse, HostSecretDeleteRequest,
-    HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
-    HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveRequest,
-    HostStatuslineRemoveResponse, HostStatuslineSegment, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
-    HostStorageSetRequest, HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest,
-    HostThemeRemoveRequest, HostThemeRemoveResponse, HostTodoWriteRequest,
-    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
-    HostToolUpdateRequest, HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest,
+    HostConfigReloadResponse, HostEnterWorktreeRequest, HostExitWorktreeRequest,
+    HostHookListResponse, HostHookRegistration, HostLspListDiagnosticsRequest,
+    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
+    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
+    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
+    HostPermissionCheckResponse, HostPluginStatus, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredToolDescriptor,
+    HostRegisteredToolListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
+    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
+    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
+    HostSecretSetRequest, HostStatuslineContributeRequest, HostStatuslineListResponse,
+    HostStatuslineRemoveRequest, HostStatuslineRemoveResponse, HostStatuslineSegment,
+    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
+    HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest,
+    HostThemeRemoveResponse, HostTodoWriteRequest, HostToolMutationResponse,
+    HostToolRegisterRequest, HostToolRemoveRequest, HostToolUpdateRequest,
+    HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest,
     MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
     SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
 };
@@ -566,36 +566,50 @@ impl PluginHost {
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let plugins = self.plugins.clone();
         let res = self.block_on_static(async move {
-            dispatcher::chain_patch_with_context::<ToolBeforeInput, ToolBeforePatch, _, _>(
-                &plugins,
-                method::HOOK_TOOL_BEFORE,
-                HookSubscription::TOOL_BEFORE,
-                timeout,
-                input,
-                |inp, patch| {
-                    if let Some(v) = patch.input {
-                        inp.input = v;
-                    }
-                    if let Some(t) = patch.title_override {
-                        inp.title_override = Some(t);
-                    }
-                    for (k, v) in patch.metadata {
-                        inp.metadata.insert(k, v);
-                    }
-                },
-                |plugin, input| {
-                    Some(tool_hook_context(
-                        plugin,
-                        &input.tool_name,
-                        Some(input.session_id),
-                        Some(input.call_id),
-                        Some(input.workspace_root.clone()),
-                    ))
-                },
-            )
-            .await
+            let mut current = input;
+            for plugin in &plugins {
+                if !plugin.subscribes(HookSubscription::TOOL_BEFORE) {
+                    continue;
+                }
+                let params = serde_json::to_value(&current)
+                    .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+                let context = tool_hook_context(
+                    plugin,
+                    &current.tool_name,
+                    Some(current.session_id),
+                    Some(current.call_id),
+                    Some(current.workspace_root.clone()),
+                );
+                let value = host_api::with_host_callback_context(
+                    context,
+                    call_with_timeout(plugin, method::HOOK_TOOL_BEFORE, params, timeout),
+                )
+                .await
+                .map_err(transport_to_plugin_error)?;
+                if matches!(&value, serde_json::Value::Null) {
+                    continue;
+                }
+                let patch: Option<ToolBeforePatch> = serde_json::from_value(value)
+                    .map_err(|e| PluginError::invalid_params(e.to_string()))?;
+                let Some(patch) = patch else {
+                    continue;
+                };
+                if let Some(reason) = patch.abort_reason {
+                    return Err(PluginError::new(reason));
+                }
+                if let Some(v) = patch.input {
+                    current.input = v;
+                }
+                if let Some(t) = patch.title_override {
+                    current.title_override = Some(t);
+                }
+                for (k, v) in patch.metadata {
+                    current.metadata.insert(k, v);
+                }
+            }
+            Ok(current)
         });
-        res.map_err(transport_to_plugin_error)
+        res
     }
 
     pub fn dispatch_tool_after(
@@ -2745,38 +2759,6 @@ impl HostHandle {
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
-                    method::HOST_PLAN_ENTER => {
-                        self.require_capability(
-                            plugin_id.as_deref(),
-                            method,
-                            HostCapability::PlanRegistry,
-                        )
-                        .await?;
-                        let p: HostEnterPlanModeParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
-                            scoped_context(plugin_id, p.context),
-                            inner.enter_plan_mode(p.request),
-                        )
-                        .await?;
-                        serde_json::to_value(&out)
-                            .map_err(|e| PluginError::invalid_params(e.to_string()))
-                    }
-                    method::HOST_PLAN_EXIT => {
-                        self.require_capability(
-                            plugin_id.as_deref(),
-                            method,
-                            HostCapability::PlanRegistry,
-                        )
-                        .await?;
-                        let p: HostExitPlanModeParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
-                            scoped_context(plugin_id, p.context),
-                            inner.exit_plan_mode(p.request),
-                        )
-                        .await?;
-                        serde_json::to_value(&out)
-                            .map_err(|e| PluginError::invalid_params(e.to_string()))
-                    }
                     method::HOST_WORKTREE_ENTER => {
                         self.require_capability(
                             plugin_id.as_deref(),
@@ -3107,38 +3089,6 @@ impl HostHandle {
                         let out = host_api::with_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.lsp_list_diagnostics(p.request),
-                        )
-                        .await?;
-                        serde_json::to_value(&out)
-                            .map_err(|e| PluginError::invalid_params(e.to_string()))
-                    }
-                    method::HOST_PLAN_LIST => {
-                        self.require_capability(
-                            plugin_id.as_deref(),
-                            method,
-                            HostCapability::PlanRegistry,
-                        )
-                        .await?;
-                        let p: HostPlanListParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
-                            scoped_context(plugin_id, p.context),
-                            inner.plan_list(),
-                        )
-                        .await?;
-                        serde_json::to_value(&out)
-                            .map_err(|e| PluginError::invalid_params(e.to_string()))
-                    }
-                    method::HOST_PLAN_GET => {
-                        self.require_capability(
-                            plugin_id.as_deref(),
-                            method,
-                            HostCapability::PlanRegistry,
-                        )
-                        .await?;
-                        let p: HostPlanGetParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
-                            scoped_context(plugin_id, p.context),
-                            inner.plan_get(p.request),
                         )
                         .await?;
                         serde_json::to_value(&out)
@@ -3729,22 +3679,6 @@ struct HostTodoWriteParams {
 }
 
 #[derive(serde::Deserialize, Default)]
-struct HostEnterPlanModeParams {
-    #[serde(default)]
-    request: HostEnterPlanModeRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize, Default)]
-struct HostExitPlanModeParams {
-    #[serde(default)]
-    request: HostExitPlanModeRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize, Default)]
 struct HostEnterWorktreeParams {
     #[serde(default)]
     request: HostEnterWorktreeRequest,
@@ -3880,19 +3814,6 @@ struct HostLspListServersParams {
 struct HostLspListDiagnosticsParams {
     #[serde(default)]
     request: HostLspListDiagnosticsRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize, Default)]
-struct HostPlanListParams {
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostPlanGetParams {
-    request: HostPlanGetRequest,
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
@@ -4218,66 +4139,6 @@ impl HostClient for ScopedHostClient {
         host_api::with_host_callback_context(self.context(), inner.rename_session(req)).await
     }
 
-    async fn get_goal(
-        &self,
-        req: crate::sdk::host_api::HostGetGoalRequest,
-    ) -> crate::sdk::Result<crate::sdk::host_api::HostGetGoalResponse> {
-        self.require_capability("host/goal.get", HostCapability::GoalRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.get_goal(req)).await
-    }
-
-    async fn create_goal(
-        &self,
-        req: crate::sdk::host_api::HostCreateGoalRequest,
-    ) -> crate::sdk::Result<crate::sdk::host_api::HostCreateGoalResponse> {
-        self.require_capability("host/goal.create", HostCapability::GoalRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.create_goal(req)).await
-    }
-
-    async fn update_goal(
-        &self,
-        req: crate::sdk::host_api::HostUpdateGoalRequest,
-    ) -> crate::sdk::Result<crate::sdk::host_api::HostUpdateGoalResponse> {
-        self.require_capability("host/goal.update", HostCapability::GoalRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.update_goal(req)).await
-    }
-
-    async fn clear_goal(
-        &self,
-        req: crate::sdk::host_api::HostClearGoalRequest,
-    ) -> crate::sdk::Result<crate::sdk::host_api::HostClearGoalResponse> {
-        self.require_capability("host/goal.clear", HostCapability::GoalRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.clear_goal(req)).await
-    }
-
-    async fn enter_plan_mode(
-        &self,
-        req: HostEnterPlanModeRequest,
-    ) -> crate::sdk::Result<ToolInvokeOutput> {
-        self.require_capability(method::HOST_PLAN_ENTER, HostCapability::PlanRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.enter_plan_mode(req)).await
-    }
-
-    async fn exit_plan_mode(
-        &self,
-        req: HostExitPlanModeRequest,
-    ) -> crate::sdk::Result<ToolInvokeOutput> {
-        self.require_capability(method::HOST_PLAN_EXIT, HostCapability::PlanRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.exit_plan_mode(req)).await
-    }
-
     async fn enter_worktree(
         &self,
         req: HostEnterWorktreeRequest,
@@ -4481,20 +4342,6 @@ impl HostClient for ScopedHostClient {
         .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.lsp_list_diagnostics(req)).await
-    }
-
-    async fn plan_list(&self) -> crate::sdk::Result<HostPlanListResponse> {
-        self.require_capability(method::HOST_PLAN_LIST, HostCapability::PlanRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.plan_list()).await
-    }
-
-    async fn plan_get(&self, req: HostPlanGetRequest) -> crate::sdk::Result<HostPlanGetResponse> {
-        self.require_capability(method::HOST_PLAN_GET, HostCapability::PlanRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.plan_get(req)).await
     }
 
     async fn worktree_list(&self) -> crate::sdk::Result<HostWorktreeListResponse> {

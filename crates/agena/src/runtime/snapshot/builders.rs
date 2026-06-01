@@ -90,7 +90,6 @@ pub(super) fn build_tool_executor(
         .with_plugin_manager(plugins)
         .with_tool_presentation(resolution.config.plugins.policy.tool_presentation.clone())
         .with_subagent_registry(agents)
-        .with_plan_registry(crate::tool::plan_registry_for_executor())
         .with_worktree_registry(worktree_registry);
 
     if let Some(manager) = session_manager {

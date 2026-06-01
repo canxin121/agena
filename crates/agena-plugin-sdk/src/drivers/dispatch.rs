@@ -185,7 +185,19 @@ impl<P: Plugin> PluginDispatcher<P> {
             }
             method::HOOK_COMMAND_BEFORE => {
                 let i: CommandBeforeInput = serde_json::from_value(params)?;
-                ok_json(&plugin.command_execute_before(i).await?)
+                let ctx = crate::host_api::HostCallbackContext {
+                    session_id: i.session_id,
+                    call_id: i.call_id,
+                    workspace_root: i.workspace_root.clone(),
+                    ..crate::host_api::HostCallbackContext::default()
+                };
+                ok_json(
+                    &crate::host_api::with_host_callback_context(
+                        ctx,
+                        plugin.command_execute_before(i),
+                    )
+                    .await?,
+                )
             }
             method::HOOK_SHELL_ENV => {
                 let i: ShellEnvInput = serde_json::from_value(params)?;

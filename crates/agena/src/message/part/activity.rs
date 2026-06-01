@@ -375,6 +375,16 @@ pub struct UserInputQuestion {
 pub struct UserInputRequest {
     pub request_id: String,
     pub session_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub body_markdown: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub submit_label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cancel_label: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<UserInputQuestion>,
     pub created_at: chrono::DateTime<chrono::Utc>,

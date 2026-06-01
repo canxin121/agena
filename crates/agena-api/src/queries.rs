@@ -8,7 +8,7 @@ use crate::pagination::{PageInfo, PaginatedResponse};
 use crate::resource::{
     HealthResponse, MessageResource, PartLoadMode, PermissionRuleResource,
     ProviderAdapterModelsResponse, ProviderModelsResponse, ProviderSummaryResource,
-    RuntimeStatusResponse, SessionGoalResource, SessionResource, WorkspaceResource,
+    RuntimeStatusResponse, SessionResource, WorkspaceResource,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,7 +25,6 @@ pub enum Query {
     ListSessions(ListSessionsParams),
     GetSession(GetSessionParams),
     GetSessionState(GetSessionParams),
-    GetSessionGoal(GetSessionParams),
     ListMessages(ListMessagesParams),
     GetMessage(GetMessageParams),
     ListEvents(ListEventsParams),
@@ -47,7 +46,6 @@ pub enum QueryResult {
     Sessions(PaginatedResponse<SessionResource>),
     Session(SessionResource),
     SessionState(crate::resource::SessionExecutionResource),
-    SessionGoal(Option<SessionGoalResource>),
     Messages(PaginatedResponse<MessageResource>),
     Message(MessageResource),
     Events(PaginatedEvents),

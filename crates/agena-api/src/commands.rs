@@ -7,11 +7,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use agena::session::GoalStatus;
-
 use crate::resource::{
     MessagePartContent, PermissionMode, PermissionReply, RunOptions, SessionExecutionResource,
-    SessionGoalResource, SessionResource, UserInputReply, WorkspaceResource,
+    SessionResource, UserInputReply, WorkspaceResource,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,10 +25,6 @@ pub enum Command {
     CreateSession(CreateSessionParams),
     UpdateSession(UpdateSessionParams),
     DeleteSession(DeleteSessionParams),
-    SetSessionGoal(SetSessionGoalParams),
-    CreateSessionGoal(CreateSessionGoalParams),
-    CompleteSessionGoal(CompleteSessionGoalParams),
-    ClearSessionGoal(ClearSessionGoalParams),
 
     // ── message / run ──
     SubmitMessage(SubmitMessageParams),
@@ -65,8 +59,6 @@ pub enum CommandResult {
     WorkspaceDeleted { id: i64 },
     Session(SessionResource),
     SessionDeleted { id: i64 },
-    SessionGoal(SessionGoalResource),
-    SessionGoalCleared { session_id: i64 },
     SessionTree(Vec<SessionResource>),
     SessionExport { jsonl: String },
     RewindCheckpoints(Vec<crate::resource::RewindCheckpointResource>),
@@ -129,33 +121,6 @@ pub struct DeleteSessionParams {
     pub session_id: i64,
     #[serde(default)]
     pub expected_version: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateSessionGoalParams {
-    pub session_id: i64,
-    pub objective: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SetSessionGoalParams {
-    pub session_id: i64,
-    #[serde(default)]
-    pub objective: Option<String>,
-    #[serde(default)]
-    pub status: Option<GoalStatus>,
-    #[serde(default)]
-    pub clear: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CompleteSessionGoalParams {
-    pub session_id: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClearSessionGoalParams {
-    pub session_id: i64,
 }
 
 // ─── message / run ──────────────────────────────────────────────────────────

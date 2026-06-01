@@ -8,25 +8,21 @@ use std::{collections::BTreeMap, future::Future, sync::Arc};
 use async_trait::async_trait;
 
 use crate::message::{
-    AskUserToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput,
-    ExitWorktreeToolInput, MonitorStatus, MonitorStream, StructuredObject, TaskSubagentType,
-    TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation, UserInputOption,
-    UserInputQuestion,
+    AskUserToolInput, EnterWorktreeToolInput, ExitWorktreeToolInput, MonitorStatus,
+    MonitorStream, StructuredObject, TaskSubagentType, TodoItem, TodoPriority, TodoStatus,
+    TodoWriteToolInput, ToolInvocation, UserInputOption, UserInputQuestion,
 };
 use crate::plugin::sdk::host_api::{
     AskUserRequest, AskUserResponse, EventSubscription, HostAgentDescriptor, HostAgentGetRequest,
     HostAgentGetResponse, HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
     HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
     HostAgentSelectionConfig, HostAgentSwitchRequest, HostAgentSwitchResponse, HostCallbackContext,
-    HostClearGoalRequest, HostClearGoalResponse, HostClient, HostConfigReloadResponse,
-    HostCreateGoalRequest, HostCreateGoalResponse, HostEnterPlanModeRequest,
-    HostEnterWorktreeRequest, HostExitPlanModeRequest, HostExitWorktreeRequest, HostGetGoalRequest,
-    HostGetGoalResponse, HostGetSessionRequest, HostGetSessionResponse, HostGoal, HostGoalStatus,
-    HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
-    HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse,
+    HostClient, HostConfigReloadResponse, HostEnterWorktreeRequest, HostExitWorktreeRequest,
+    HostGetSessionRequest, HostGetSessionResponse, HostLspDiagnostic,
+    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
+    HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse,
     HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec,
     HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
-    HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPlanSummary,
     HostPluginStatus, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
     HostPluginStatusListResponse, HostRenameSessionRequest, HostRenameSessionResponse,
     HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
@@ -35,10 +31,10 @@ use crate::plugin::sdk::host_api::{
     HostSecretSetRequest, HostSession, HostStorageDeleteRequest, HostStorageGetRequest,
     HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageRecord,
     HostStorageSetRequest, HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest,
-    HostUpdateGoalRequest, HostUpdateGoalResponse, HostWorktreeListResponse, HostWorktreeSummary,
-    LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
-    MonitorStartRequest, MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest,
-    SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
+    HostWorktreeListResponse, HostWorktreeSummary, LogLevel, MonitorEvent, MonitorHandle,
+    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
+    NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -268,10 +264,6 @@ impl RuntimeHostClient {
                 ))
             }),
         }
-    }
-
-    fn callback_session_id_for(&self, action: &str) -> Result<i64, PluginError> {
-        self.callback_or_requested_session_id(None, action)
     }
 
     async fn run_workflow_tool<T>(
@@ -604,99 +596,6 @@ impl HostClient for RuntimeHostClient {
         })
     }
 
-    async fn get_goal(&self, _req: HostGetGoalRequest) -> Result<HostGetGoalResponse, PluginError> {
-        let session_id = self.callback_session_id_for("get_goal")?;
-        let goal = self
-            .with_session_manager(|manager| async move { manager.get_goal(session_id).await })
-            .await?
-            .map(host_goal_from_session_goal);
-        Ok(HostGetGoalResponse { goal })
-    }
-
-    async fn create_goal(
-        &self,
-        req: HostCreateGoalRequest,
-    ) -> Result<HostCreateGoalResponse, PluginError> {
-        let session_id = self.callback_session_id_for("create_goal")?;
-        if req.objective.trim().is_empty() {
-            return Err(PluginError::invalid_params(
-                "goal objective must not be empty",
-            ));
-        }
-
-        let manager = self.session_manager()?;
-        if manager
-            .get_goal(session_id)
-            .await
-            .map_err(plugin_error)?
-            .is_some()
-        {
-            return Err(PluginError::invalid_params(format!(
-                "session {session_id} already has an active goal"
-            )));
-        }
-
-        let goal = manager
-            .create_goal(crate::session::SessionGoalCreateRequest {
-                session_id,
-                objective: req.objective,
-            })
-            .await
-            .map_err(map_create_goal_error)?;
-        Ok(HostCreateGoalResponse {
-            goal: host_goal_from_session_goal(goal),
-        })
-    }
-
-    async fn update_goal(
-        &self,
-        req: HostUpdateGoalRequest,
-    ) -> Result<HostUpdateGoalResponse, PluginError> {
-        let session_id = self.callback_session_id_for("update_goal")?;
-        let goal = self
-            .with_session_manager(|manager| async move {
-                manager
-                    .update_goal(crate::session::SessionGoalUpdateRequest {
-                        session_id,
-                        objective: req.objective,
-                        status: req.status.map(session_goal_status_from_host),
-                        expected_goal_id: None,
-                    })
-                    .await
-            })
-            .await?;
-        Ok(HostUpdateGoalResponse {
-            goal: host_goal_from_session_goal(goal),
-        })
-    }
-
-    async fn clear_goal(
-        &self,
-        _req: HostClearGoalRequest,
-    ) -> Result<HostClearGoalResponse, PluginError> {
-        let session_id = self.callback_session_id_for("clear_goal")?;
-        let cleared = self
-            .with_session_manager(|manager| async move { manager.clear_goal(session_id).await })
-            .await?;
-        Ok(HostClearGoalResponse { cleared })
-    }
-
-    async fn enter_plan_mode(
-        &self,
-        _req: HostEnterPlanModeRequest,
-    ) -> Result<ToolInvokeOutput, PluginError> {
-        self.run_workflow_tool("enter_plan_mode", EnterPlanModeToolInput::default())
-            .await
-    }
-
-    async fn exit_plan_mode(
-        &self,
-        _req: HostExitPlanModeRequest,
-    ) -> Result<ToolInvokeOutput, PluginError> {
-        self.run_workflow_tool("exit_plan_mode", ExitPlanModeToolInput::default())
-            .await
-    }
-
     async fn enter_worktree(
         &self,
         req: HostEnterWorktreeRequest,
@@ -946,45 +845,6 @@ impl HostClient for RuntimeHostClient {
         }
         Ok(HostLspListDiagnosticsResponse {
             diagnostics: diagnostics_out,
-        })
-    }
-
-    async fn plan_list(&self) -> Result<HostPlanListResponse, PluginError> {
-        let (_, registry) = self.executor_feature(
-            |executor| executor.plan_registry().cloned(),
-            "plan registry is not enabled in this runtime",
-        )?;
-        let plans: Vec<HostPlanSummary> = registry
-            .read()
-            .iter()
-            .map(|(session_id, plan)| HostPlanSummary {
-                session_id: *session_id,
-                slug: plan.slug.clone(),
-                file_path: plan.file_path.display().to_string(),
-                started_at_ms: plan.started_at.timestamp_millis(),
-            })
-            .collect();
-        Ok(HostPlanListResponse { plans })
-    }
-
-    async fn plan_get(&self, req: HostPlanGetRequest) -> Result<HostPlanGetResponse, PluginError> {
-        let (_, registry) = self.executor_feature(
-            |executor| executor.plan_registry().cloned(),
-            "plan registry is not enabled in this runtime",
-        )?;
-        let plan = registry.read().get(&req.session_id).cloned();
-        let Some(plan) = plan else {
-            return Ok(HostPlanGetResponse::default());
-        };
-        let body = std::fs::read_to_string(&plan.file_path).ok();
-        Ok(HostPlanGetResponse {
-            plan: Some(HostPlanSummary {
-                session_id: req.session_id,
-                slug: plan.slug.clone(),
-                file_path: plan.file_path.display().to_string(),
-                started_at_ms: plan.started_at.timestamp_millis(),
-            }),
-            body,
         })
     }
 

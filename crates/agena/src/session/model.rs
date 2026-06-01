@@ -389,82 +389,6 @@ impl PromptTokenRuntime {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum GoalStatus {
-    #[default]
-    Active,
-    Paused,
-    Completed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GoalSteeringKind {
-    ObjectiveUpdated,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
-pub struct GoalSteeringState {
-    pub goal_id: i64,
-    pub kind: GoalSteeringKind,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
-pub struct GoalRuntimeState {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pending_steering: Option<GoalSteeringState>,
-}
-
-impl GoalRuntimeState {
-    pub fn is_empty(&self) -> bool {
-        self.pending_steering.is_none()
-    }
-
-    pub fn pending_steering(&self) -> Option<&GoalSteeringState> {
-        self.pending_steering.as_ref()
-    }
-
-    pub fn set_pending_steering(&mut self, goal_id: i64, kind: GoalSteeringKind) {
-        self.pending_steering = Some(GoalSteeringState { goal_id, kind });
-    }
-
-    pub fn clear_pending_steering(&mut self) {
-        self.pending_steering = None;
-    }
-
-    pub fn clear(&mut self) {
-        *self = Self::default();
-    }
-}
-
-pub const MAX_SESSION_GOAL_OBJECTIVE_CHARS: usize = 4_000;
-
-pub fn validate_session_goal_objective(value: &str) -> Result<(), String> {
-    if value.trim().is_empty() {
-        return Err("goal objective must not be empty".to_string());
-    }
-    if value.chars().count() > MAX_SESSION_GOAL_OBJECTIVE_CHARS {
-        return Err(format!(
-            "goal objective must be at most {MAX_SESSION_GOAL_OBJECTIVE_CHARS} characters"
-        ));
-    }
-    Ok(())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
-pub struct SessionGoal {
-    pub id: i64,
-    pub session_id: i64,
-    pub objective: String,
-    #[serde(default)]
-    pub status: GoalStatus,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completed_at: Option<DateTime<Utc>>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
 pub struct ProviderPromptAnchor {
     pub provider_id: String,
@@ -495,14 +419,6 @@ pub struct SessionRuntimeState {
     pub provider_anchors: BTreeMap<String, ProviderPromptAnchor>,
     #[serde(default, skip_serializing_if = "SessionExecutionContext::is_empty")]
     pub execution: SessionExecutionContext,
-    #[serde(default, skip_serializing_if = "GoalRuntimeState::is_empty")]
-    pub goal: GoalRuntimeState,
-    /// When `Some`, the session is in plan mode: writes/mutating tools
-    /// are blocked, the LLM is expected to draft its plan into the
-    /// referenced file, and `ExitPlanMode` then asks the user to approve
-    /// it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan: Option<PlanState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
@@ -539,15 +455,6 @@ impl SessionExecutionContext {
             && self.effective_workspace_root.is_none()
             && self.task_id.is_none()
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PlanState {
-    /// Absolute path to the plan markdown file.
-    pub file_path: PathBuf,
-    /// Slug used in the path (e.g. "fluffy-dancing-comet").
-    pub slug: String,
-    pub started_at: DateTime<Utc>,
 }
 
 impl SessionRuntimeState {
@@ -731,8 +638,6 @@ pub struct SessionSummary {
     pub child_session_count: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_message_at: Option<DateTime<Utc>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub goal: Option<SessionGoal>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
@@ -750,8 +655,6 @@ pub struct Session {
     pub is_subagent: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub goal: Option<SessionGoal>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub messages: Vec<Message>,
     #[serde(skip, default)]
@@ -775,7 +678,6 @@ impl Session {
             is_subagent: false,
             created_at: now,
             updated_at: now,
-            goal: None,
             messages: Vec::new(),
             runtime: SessionRuntimeState::default(),
             approx_bytes: 0,
@@ -883,7 +785,6 @@ impl Session {
         self.is_subagent = persisted.is_subagent;
         self.created_at = persisted.created_at;
         self.updated_at = persisted.updated_at;
-        self.goal = persisted.goal.clone();
         self.runtime = persisted.runtime.clone();
     }
 

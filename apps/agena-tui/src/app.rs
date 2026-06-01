@@ -33,8 +33,8 @@ use agena_api::{
     resource::{
         MessageResource, MessageRole, PendingInteractiveRequest, PermissionRuleResource,
         ProviderAdapterModelsResource, ProviderAdapterModelsResponse, ProviderSummaryResource,
-        RunOptions, SessionExecutionContextResource, SessionExecutionResource, SessionPlanResource,
-        SessionResource, SessionRunState, SessionUsageResource,
+        RunOptions, SessionExecutionContextResource, SessionExecutionResource, SessionResource,
+        SessionRunState, SessionUsageResource,
     },
 };
 use anyhow::Result;
@@ -1251,7 +1251,6 @@ struct UserInputOverlay {
 struct PermissionOverlay {
     session_id: i64,
     request: PermissionRequest,
-    plan: Option<SessionPlanResource>,
     selection: SelectionCursor,
 }
 
@@ -6679,9 +6678,10 @@ impl App {
         match result {
             Ok(execution) => {
                 let session_id = execution.session.id;
-                self.apply_transcript_execution(execution);
-                self.sync_pending_interactive_after_execution(session_id);
-                self.sync_session_list_selection_to_current_execution();
+                if self.apply_transcript_execution(execution) {
+                    self.sync_pending_interactive_after_execution(session_id);
+                    self.sync_session_list_selection_to_current_execution();
+                }
             }
             Err(error) => self.flash_error(error),
         }
@@ -6732,11 +6732,18 @@ impl App {
 
         match result {
             Ok(refresh) => {
+                if execution_update_is_stale(
+                    self.transcript.last_event_seq,
+                    refresh.latest_event_seq,
+                ) {
+                    return;
+                }
                 if let Some(execution) = refresh.execution {
                     let session_id = execution.session.id;
-                    self.apply_transcript_execution(execution);
-                    self.sync_pending_interactive_after_execution(session_id);
-                    self.sync_session_list_selection_to_current_execution();
+                    if self.apply_transcript_execution(execution) {
+                        self.sync_pending_interactive_after_execution(session_id);
+                        self.sync_session_list_selection_to_current_execution();
+                    }
                 }
                 if let Some(page) = refresh.latest_messages {
                     self.transcript.merge_latest_messages(
@@ -6775,9 +6782,10 @@ impl App {
                 if self.transcript.session_id != Some(session_id) {
                     self.open_session(session_id, execution.session.title.clone());
                 }
-                self.apply_transcript_execution(execution);
-                self.sync_pending_interactive_after_execution(session_id);
-                self.sync_session_list_selection_to_current_execution();
+                if self.apply_transcript_execution(execution) {
+                    self.sync_pending_interactive_after_execution(session_id);
+                    self.sync_session_list_selection_to_current_execution();
+                }
                 self.request_refresh(session_id, true);
                 self.request_sessions(false);
                 // Pop the next pending message and submit it after the run.
@@ -6873,9 +6881,10 @@ impl App {
         let transcript_is_target = self.transcript.session_id == Some(session_id);
         if transcript_is_target {
             self.transcript.submitting = false;
-            self.apply_transcript_execution(execution);
-            self.sync_pending_interactive_after_execution(session_id);
-            self.sync_session_list_selection_to_current_execution();
+            if self.apply_transcript_execution(execution) {
+                self.sync_pending_interactive_after_execution(session_id);
+                self.sync_session_list_selection_to_current_execution();
+            }
         }
         self.submitting_session_ids.remove(&session_id);
         if refresh && transcript_is_target {
@@ -6947,9 +6956,10 @@ impl App {
                 let transcript_is_target = self.transcript.session_id == Some(session_id);
                 if transcript_is_target {
                     self.transcript.submitting = false;
-                    self.apply_transcript_execution(execution);
-                    self.sync_pending_interactive_after_execution(session_id);
-                    self.sync_session_list_selection_to_current_execution();
+                    if self.apply_transcript_execution(execution) {
+                        self.sync_pending_interactive_after_execution(session_id);
+                        self.sync_session_list_selection_to_current_execution();
+                    }
                 }
                 self.submitting_session_ids.remove(&session_id);
                 if transcript_is_target {
@@ -7543,9 +7553,10 @@ impl App {
                     self.replace_composer_draft(draft);
                     self.persist_draft_store_with_feedback(true);
                 }
-                self.apply_transcript_execution(execution);
-                self.sync_pending_interactive_after_execution(rewound_session_id);
-                self.sync_session_list_selection_to_current_execution();
+                if self.apply_transcript_execution(execution) {
+                    self.sync_pending_interactive_after_execution(rewound_session_id);
+                    self.sync_session_list_selection_to_current_execution();
+                }
                 self.submitting_session_ids.remove(&session_id);
                 self.focus = Focus::Composer;
                 self.request_sessions(false);
@@ -8055,9 +8066,34 @@ impl App {
         self.active_subscription = Some(handle);
     }
 
-    fn apply_transcript_execution(&mut self, execution: SessionExecutionResource) {
+    fn apply_transcript_execution(&mut self, execution: SessionExecutionResource) -> bool {
+        if execution_update_is_stale(self.transcript.last_event_seq, execution.latest_event_seq) {
+            return false;
+        }
         self.transcript.apply_execution(execution);
         self.sync_seen_pending_request_ids();
+        self.sync_open_pending_interactive_overlay();
+        true
+    }
+
+    fn sync_open_pending_interactive_overlay(&mut self) {
+        let keep_overlay = match self.overlay.as_ref() {
+            Some(Overlay::Permission(dialog)) => permission_overlay_matches_pending_request(
+                dialog,
+                self.transcript.session_id,
+                self.transcript.execution.as_ref(),
+            ),
+            Some(Overlay::UserInputReply(dialog)) => user_input_overlay_matches_pending_request(
+                dialog,
+                self.transcript.session_id,
+                self.transcript.execution.as_ref(),
+            ),
+            _ => true,
+        };
+
+        if !keep_overlay {
+            self.overlay = None;
+        }
     }
 
     fn sync_seen_pending_request_ids(&mut self) {
@@ -8454,13 +8490,6 @@ impl App {
         Some((session_id, request))
     }
 
-    fn current_execution_plan(&self) -> Option<SessionPlanResource> {
-        self.transcript
-            .execution
-            .as_ref()
-            .and_then(|execution| execution.plan.clone())
-    }
-
     fn build_user_input_overlay(session_id: i64, request: UserInputRequest) -> UserInputOverlay {
         let mut overlay = UserInputOverlay {
             session_id,
@@ -8477,12 +8506,10 @@ impl App {
     fn build_permission_overlay(
         session_id: i64,
         request: PermissionRequest,
-        plan: Option<SessionPlanResource>,
     ) -> PermissionOverlay {
         PermissionOverlay {
             session_id,
             request,
-            plan,
             selection: SelectionCursor::default(),
         }
     }
@@ -8601,9 +8628,8 @@ impl App {
             }) => {
                 self.seen_permission_request_ids
                     .insert(request.request_id.clone());
-                let plan = self.current_execution_plan();
                 self.overlay = Some(Overlay::Permission(Self::build_permission_overlay(
-                    session_id, *request, plan,
+                    session_id, *request,
                 )));
             }
             Some(PendingInteractiveOverlayTarget::UserInput {
@@ -8627,9 +8653,8 @@ impl App {
         };
         self.seen_permission_request_ids
             .insert(request.request_id.clone());
-        let plan = self.current_execution_plan();
         self.overlay = Some(Overlay::Permission(Self::build_permission_overlay(
-            session_id, request, plan,
+            session_id, request,
         )));
     }
 
@@ -9606,7 +9631,7 @@ impl App {
                     .block_on_async(self.backend.set_session_permission(*session_id, permission))
                     .map_err(|error| error.to_string())?;
                 if self.transcript.session_id == Some(*session_id) {
-                    self.apply_transcript_execution(execution);
+                    let _ = self.apply_transcript_execution(execution);
                 }
                 self.flash_success(ui_text::t(&self.i18n, "flash-session-permission-updated"));
             }
@@ -9943,7 +9968,9 @@ impl App {
             return;
         };
         match self.block_on_async(self.backend.get_session_state(session_id)) {
-            Ok(execution) => self.apply_transcript_execution(execution),
+            Ok(execution) => {
+                let _ = self.apply_transcript_execution(execution);
+            }
             Err(error) => self.flash_error(error.to_string()),
         }
     }
@@ -14536,9 +14563,6 @@ impl App {
                 parts.push(ui_text::t(&self.i18n, "transcript-header-busy"));
             } else if execution.run_state != SessionRunState::Idle {
                 parts.push(ui_text::t(&self.i18n, "session-running"));
-            }
-            if let Some(plan) = execution.plan.as_ref() {
-                parts.push(session_plan_status_text(&self.i18n, plan));
             }
             parts.extend(session_summary_status_parts(model_part, agent, token_usage));
             if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
@@ -21179,27 +21203,57 @@ fn pending_interactive_kind_for_execution(
     pending_interactive_kind(execution.pending_interactive_requests.as_slice())
 }
 
-fn permission_request_is_plan_approval(request: &PermissionRequest) -> bool {
-    matches!(
-        &request.action,
-        PermissionAction::Tool {
-            tool_name,
-            qualifier,
-        } if tool_name == "exit_plan_mode"
-            && qualifier
-                .as_deref()
-                .map(|value| value == "plan_review")
-                .unwrap_or(true)
+fn execution_update_is_stale(
+    current_latest_event_seq: Option<i64>,
+    incoming_latest_event_seq: Option<i64>,
+) -> bool {
+    match (current_latest_event_seq, incoming_latest_event_seq) {
+        (Some(current), Some(incoming)) => incoming < current,
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
+}
+
+fn permission_overlay_matches_pending_request(
+    overlay: &PermissionOverlay,
+    session_id: Option<i64>,
+    execution: Option<&SessionExecutionResource>,
+) -> bool {
+    if session_id != Some(overlay.session_id) {
+        return false;
+    }
+
+    first_pending_interactive_request_by_kind(
+        execution
+            .map(|resource| resource.pending_interactive_requests.as_slice())
+            .unwrap_or(&[]),
+        PendingInteractiveKind::Permission,
     )
+    .and_then(PendingInteractiveRequest::as_permission)
+    .is_some_and(|request| request.request_id == overlay.request.request_id)
+}
+
+fn user_input_overlay_matches_pending_request(
+    overlay: &UserInputOverlay,
+    session_id: Option<i64>,
+    execution: Option<&SessionExecutionResource>,
+) -> bool {
+    if session_id != Some(overlay.session_id) {
+        return false;
+    }
+
+    first_pending_interactive_request_by_kind(
+        execution
+            .map(|resource| resource.pending_interactive_requests.as_slice())
+            .unwrap_or(&[]),
+        PendingInteractiveKind::UserInput,
+    )
+    .and_then(PendingInteractiveRequest::as_user_input)
+    .is_some_and(|request| request.request_id == overlay.request.request_id)
 }
 
 fn execution_wait_state_key(execution: &SessionExecutionResource) -> Option<&'static str> {
     match execution.pending_interactive_requests.first() {
-        Some(PendingInteractiveRequest::Permission { request })
-            if execution.plan.is_some() && permission_request_is_plan_approval(request) =>
-        {
-            Some("session-awaiting-plan-approval")
-        }
         Some(PendingInteractiveRequest::Permission { .. }) => Some("session-awaiting-approval"),
         Some(PendingInteractiveRequest::UserInput { .. }) => Some("session-awaiting-user-input"),
         None if execution.blocked => Some("session-blocked"),
@@ -21209,11 +21263,6 @@ fn execution_wait_state_key(execution: &SessionExecutionResource) -> Option<&'st
 
 fn execution_pending_flash_key(execution: &SessionExecutionResource) -> Option<&'static str> {
     match execution.pending_interactive_requests.first() {
-        Some(PendingInteractiveRequest::Permission { request })
-            if execution.plan.is_some() && permission_request_is_plan_approval(request) =>
-        {
-            Some("flash-session-awaiting-plan-approval")
-        }
         Some(PendingInteractiveRequest::Permission { .. }) => {
             Some("flash-session-awaiting-approval")
         }
@@ -21221,19 +21270,6 @@ fn execution_pending_flash_key(execution: &SessionExecutionResource) -> Option<&
             Some("flash-session-awaiting-user-input")
         }
         None => None,
-    }
-}
-
-fn session_plan_status_text(i18n: &I18n, plan: &SessionPlanResource) -> String {
-    match plan.step_count {
-        Some(step_count) if step_count > 0 => i18n.text_args(
-            "session-status-plan-with-steps",
-            &crate::fl_args!("slug" => plan.slug.as_str(), "steps" => step_count as i64),
-        ),
-        _ => i18n.text_args(
-            "session-status-plan",
-            &crate::fl_args!("slug" => plan.slug.as_str()),
-        ),
     }
 }
 
@@ -21450,12 +21486,6 @@ fn format_timestamp(timestamp: DateTime<Utc>) -> String {
         .to_string()
 }
 
-fn format_timestamp_ms(timestamp_ms: i64) -> String {
-    DateTime::<Utc>::from_timestamp_millis(timestamp_ms)
-        .map(format_timestamp)
-        .unwrap_or_else(|| timestamp_ms.to_string())
-}
-
 fn build_timeline_item(i18n: &I18n, record: &DomainEvent) -> TimelineItem {
     let event_type = timeline_event_type_label(i18n, record);
     let summary_suffix = timeline_event_summary(i18n, record);
@@ -21539,7 +21569,6 @@ fn timeline_event_message_id(record: &DomainEvent) -> Option<i64> {
         | AgenaSessionEvent::PermissionRuleCreated(_)
         | AgenaSessionEvent::PermissionRuleUpdated(_)
         | AgenaSessionEvent::PermissionRuleRevoked(_)
-        | AgenaSessionEvent::SessionGoalUpdated(_)
         | AgenaSessionEvent::RunStarted(_)
         | AgenaSessionEvent::RunCompleted(_)
         | AgenaSessionEvent::RunAborted(_)
@@ -21564,7 +21593,6 @@ fn timeline_event_type_key(record: &DomainEvent) -> &'static str {
         AgenaSessionEvent::PermissionRuleCreated(_) => "timeline-type-permission-rule-created",
         AgenaSessionEvent::PermissionRuleUpdated(_) => "timeline-type-permission-rule-updated",
         AgenaSessionEvent::PermissionRuleRevoked(_) => "timeline-type-permission-rule-revoked",
-        AgenaSessionEvent::SessionGoalUpdated(_) => "timeline-type-session-goal-updated",
         AgenaSessionEvent::RunStarted(_) => "timeline-type-run-started",
         AgenaSessionEvent::RunCompleted(_) => "timeline-type-run-completed",
         AgenaSessionEvent::RunAborted(_) => "timeline-type-run-aborted",
@@ -21671,21 +21699,6 @@ fn timeline_event_summary(i18n: &I18n, record: &DomainEvent) -> String {
             "timeline-summary-permission-rule-revoked",
             &crate::fl_args!("id" => event.rule_id),
         ),
-        AgenaSessionEvent::SessionGoalUpdated(event) => {
-            let objective = event
-                .objective
-                .as_deref()
-                .map(|value| timeline_excerpt(i18n, value, 56))
-                .unwrap_or_else(|| ui_text::t(i18n, "value-none"));
-            let status = timeline_value_or_unknown(i18n, event.status.as_deref());
-            i18n.text_args(
-                "timeline-summary-session-goal-updated",
-                &crate::fl_args!(
-                    "status" => status,
-                    "objective" => objective,
-                ),
-            )
-        }
         AgenaSessionEvent::RunStarted(p) => i18n.text_args(
             "timeline-summary-run-started",
             &crate::fl_args!("id" => p.run_id),
@@ -22012,36 +22025,6 @@ fn timeline_event_detail_lines(i18n: &I18n, record: &DomainEvent) -> Vec<DetailT
             ),
             timeline_detail_labeled_line(i18n, "timeline-label-source", event.source.clone()),
         ],
-        AgenaSessionEvent::SessionGoalUpdated(event) => vec![
-            timeline_detail_labeled_line(
-                i18n,
-                "timeline-label-session-id",
-                event.session_id.to_string(),
-            ),
-            timeline_detail_labeled_line(
-                i18n,
-                "timeline-label-goal-id",
-                timeline_value_or_none(i18n, event.goal_id),
-            ),
-            timeline_detail_labeled_line(
-                i18n,
-                "timeline-label-objective",
-                timeline_value_or_none(i18n, event.objective.clone()),
-            ),
-            timeline_detail_labeled_line(
-                i18n,
-                "timeline-label-status",
-                timeline_value_or_none(i18n, event.status.clone()),
-            ),
-            timeline_detail_labeled_line(
-                i18n,
-                "timeline-label-completed-at",
-                event
-                    .completed_at_ms
-                    .map(format_timestamp_ms)
-                    .unwrap_or_else(|| ui_text::t(i18n, "value-none")),
-            ),
-        ],
         AgenaSessionEvent::RunStarted(p) => vec![
             timeline_detail_labeled_line(i18n, "timeline-label-run-id", p.run_id.to_string()),
             timeline_detail_labeled_line(
@@ -22142,13 +22125,6 @@ fn timeline_value_or_none<T: ToString>(i18n: &I18n, value: Option<T>) -> String 
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| ui_text::t(i18n, "value-none"))
-}
-
-fn timeline_value_or_unknown(i18n: &I18n, value: Option<&str>) -> String {
-    value
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| ui_text::t(i18n, "value-unknown"))
 }
 
 fn timeline_part_delta_field_token(field: &agena::event::PartDeltaField) -> String {
@@ -24452,6 +24428,11 @@ mod tests {
         UserInputRequest {
             request_id: request_id.to_string(),
             session_id: Some(1),
+            title: String::new(),
+            body_markdown: String::new(),
+            kind: String::new(),
+            submit_label: String::new(),
+            cancel_label: String::new(),
             questions: Vec::new(),
             created_at: Utc::now(),
         }
@@ -24580,7 +24561,6 @@ mod tests {
             message_count: 0,
             child_session_count: 0,
             last_message_at: None,
-            goal: None,
         }
     }
 
@@ -24612,8 +24592,6 @@ mod tests {
             pending_interactive_requests: Vec::new(),
             pending_permission_requests: Vec::new(),
             pending_user_input_requests: Vec::new(),
-            goal: None,
-            plan: None,
             usage: SessionUsageResource {
                 measured_prompt_tokens: None,
                 current_tokens: 0,
@@ -24863,10 +24841,57 @@ mod tests {
     }
 
     #[test]
+    fn execution_update_is_stale_when_latest_event_seq_moves_backwards() {
+        assert!(execution_update_is_stale(Some(10), Some(9)));
+        assert!(execution_update_is_stale(Some(10), None));
+        assert!(!execution_update_is_stale(Some(10), Some(10)));
+        assert!(!execution_update_is_stale(Some(10), Some(11)));
+        assert!(!execution_update_is_stale(None, Some(1)));
+    }
+
+    #[test]
+    fn permission_overlay_only_matches_same_pending_request() {
+        let request = permission_request("perm-1");
+        let overlay = PermissionOverlay {
+            session_id: 1,
+            request: request.clone(),
+            selection: SelectionCursor::default(),
+        };
+        let mut execution = session_execution_resource(SessionRunState::Idle, false);
+
+        execution.pending_interactive_requests =
+            vec![PendingInteractiveRequest::Permission { request }];
+        assert!(permission_overlay_matches_pending_request(
+            &overlay,
+            Some(1),
+            Some(&execution),
+        ));
+
+        execution.pending_interactive_requests = vec![pending_permission_request("perm-2")];
+        assert!(!permission_overlay_matches_pending_request(
+            &overlay,
+            Some(1),
+            Some(&execution),
+        ));
+
+        execution.pending_interactive_requests.clear();
+        assert!(!permission_overlay_matches_pending_request(
+            &overlay,
+            Some(1),
+            Some(&execution),
+        ));
+    }
+
+    #[test]
     fn user_input_selection_helpers_clamp_questions_and_options() {
         let request = UserInputRequest {
             request_id: "input-1".to_string(),
             session_id: Some(1),
+            title: String::new(),
+            body_markdown: String::new(),
+            kind: String::new(),
+            submit_label: String::new(),
+            cancel_label: String::new(),
             questions: vec![
                 user_input_question("q1", &["One", "Two"], false),
                 user_input_question("q2", &["Only"], true),
@@ -25478,25 +25503,18 @@ mod tests {
         );
 
         let mut execution = session_execution_resource(SessionRunState::Idle, false);
-        execution.plan = Some(SessionPlanResource {
-            slug: "20260531-alpaca".to_string(),
-            file_path: "/tmp/plan.md".to_string(),
-            started_at: Utc::now(),
-            step_count: Some(3),
-            preview_lines: vec!["- inspect tui flows".to_string()],
-        });
         execution.pending_interactive_requests = vec![PendingInteractiveRequest::Permission {
             request: PermissionRequest {
                 action: PermissionAction::Tool {
-                    tool_name: "exit_plan_mode".to_string(),
-                    qualifier: Some("plan_review".to_string()),
+                    tool_name: "read".to_string(),
+                    qualifier: None,
                 },
                 ..permission_request("perm-plan")
             },
         }];
         assert_eq!(
             ui_text::session_workflow_state_label(&i18n, &execution),
-            "等待计划审批"
+            "等待审批"
         );
     }
 

@@ -11,9 +11,9 @@ use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 use crate::{
     AppError,
     db::{
-        crud::{permission_rule, session, session_goal, session_goal::GoalUpdate, workspace},
+        crud::{permission_rule, session, workspace},
         entities,
-        tx::{with_transaction_and_app_effects, with_transaction_and_effects},
+        tx::with_transaction_and_effects,
     },
     event::{
         DomainEvent, EventKind, EventPublisher, MessagePartUpdatedEvent, PermissionRuleEvent,
@@ -22,14 +22,14 @@ use crate::{
     message::Message,
     permission::{PermissionMode, PermissionScope, PersistedPermissionRule},
     role::Role,
-    session::cost::{SessionCostSummary, UsageStatRecord, UsageStats, UsageStatsQuery},
+    session::cost::{UsageStatRecord, UsageStats, UsageStatsQuery},
 };
 
 use super::{
     Session,
     cache::{SessionCache, SessionCachePolicy, SessionCacheStats},
     history::SessionHistoryStore,
-    model::{GoalStatus, SessionGoal, SessionListRequest, SessionSummary},
+    model::{SessionListRequest, SessionSummary},
 };
 
 pub(crate) struct SessionCommit {
@@ -169,8 +169,6 @@ impl SessionStore {
             })
         })
         .await?;
-        let mut session = session;
-        session.goal = load_session_goal(&self.db, session.id).await?;
         Ok(session)
     }
 
@@ -359,7 +357,6 @@ impl SessionStore {
                 message_count,
                 child_session_count,
                 last_message_at,
-                goal: load_session_goal(&self.db, model.id).await?,
             });
         }
         Ok(out)
@@ -432,7 +429,6 @@ impl SessionStore {
                 message_count,
                 child_session_count,
                 last_message_at,
-                goal: load_session_goal(&self.db, model.id).await?,
             });
         }
         Ok(out)
@@ -456,7 +452,6 @@ impl SessionStore {
             }
 
             let mut refreshed = session_from_model(session_model)?;
-            refreshed.goal = load_session_goal(&self.db, session_id).await?;
             let projection = self
                 .history
                 .load_projection(session_id, refreshed.runtime.clone())
@@ -476,7 +471,6 @@ impl SessionStore {
             .await?
             .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
         let mut session = session_from_model(session_model)?;
-        session.goal = load_session_goal(&self.db, session_id).await?;
         let projection = self
             .history
             .load_projection(session_id, session.runtime.clone())
@@ -502,7 +496,6 @@ impl SessionStore {
             .await?
             .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
         let mut session = session_from_model(updated)?;
-        session.goal = load_session_goal(&self.db, session_id).await?;
         let projection = self
             .history
             .load_projection(session_id, session.runtime.clone())
@@ -576,220 +569,6 @@ impl SessionStore {
         // Silent: subscribers should not observe a fork copy as fresh activity.
         self.append_history_items_silent(child, items, cache_policy)
             .await
-    }
-
-    pub(crate) async fn upsert_goal(
-        &self,
-        session_id: i64,
-        objective: String,
-        cache_policy: SessionCachePolicy,
-    ) -> Result<Session, AppError> {
-        with_transaction_and_app_effects(&self.db, move |txn, _effects| {
-            let objective = objective.clone();
-            Box::pin(async move {
-                session::get_session_by_id(txn, session_id)
-                    .await?
-                    .ok_or_else(|| {
-                        AppError::Internal(format!("session not found: {session_id}"))
-                    })?;
-                session_goal::upsert_goal(txn, session_id, objective).await?;
-                let _ = session::touch_session_updated_at(
-                    txn,
-                    session_id,
-                    session::get_session_by_id(txn, session_id)
-                        .await?
-                        .ok_or_else(|| {
-                            AppError::Internal(format!("session not found: {session_id}"))
-                        })?
-                        .runtime_state
-                        .unwrap_or_default(),
-                )
-                .await?
-                .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
-                Ok::<(), AppError>(())
-            })
-        })
-        .await?;
-        self.load_session(session_id, cache_policy).await
-    }
-
-    pub(crate) async fn complete_goal(
-        &self,
-        session_id: i64,
-        cache_policy: SessionCachePolicy,
-    ) -> Result<Option<Session>, AppError> {
-        let completed = with_transaction_and_app_effects(&self.db, move |txn, _effects| {
-            Box::pin(async move {
-                if session_goal::mark_completed(txn, session_id)
-                    .await?
-                    .is_none()
-                {
-                    return Ok::<Option<()>, AppError>(None);
-                }
-                session::touch_session_updated_at(
-                    txn,
-                    session_id,
-                    session::get_session_by_id(txn, session_id)
-                        .await?
-                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?
-                        .runtime_state
-                        .unwrap_or_default(),
-                )
-                .await?
-                .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
-                Ok::<Option<()>, AppError>(Some(()))
-            })
-        })
-        .await?;
-        if completed.is_none() {
-            return Ok(None);
-        }
-        Ok(Some(self.load_session(session_id, cache_policy).await?))
-    }
-
-    pub(crate) async fn pause_goal_if_active(
-        &self,
-        session_id: i64,
-        cache_policy: SessionCachePolicy,
-    ) -> Result<Option<Session>, AppError> {
-        let paused = with_transaction_and_app_effects(&self.db, move |txn, _effects| {
-            Box::pin(async move {
-                if session_goal::pause_active(txn, session_id).await?.is_none() {
-                    return Ok::<Option<()>, AppError>(None);
-                }
-                session::touch_session_updated_at(
-                    txn,
-                    session_id,
-                    session::get_session_by_id(txn, session_id)
-                        .await?
-                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?
-                        .runtime_state
-                        .unwrap_or_default(),
-                )
-                .await?
-                .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
-                Ok::<Option<()>, AppError>(Some(()))
-            })
-        })
-        .await?;
-        if paused.is_none() {
-            return Ok(None);
-        }
-        Ok(Some(self.load_session(session_id, cache_policy).await?))
-    }
-
-    pub(crate) async fn resume_goal_if_paused(
-        &self,
-        session_id: i64,
-        cache_policy: SessionCachePolicy,
-    ) -> Result<Option<Session>, AppError> {
-        let resumed = with_transaction_and_app_effects(&self.db, move |txn, _effects| {
-            Box::pin(async move {
-                if session_goal::resume_paused(txn, session_id)
-                    .await?
-                    .is_none()
-                {
-                    return Ok::<Option<()>, AppError>(None);
-                }
-                session::touch_session_updated_at(
-                    txn,
-                    session_id,
-                    session::get_session_by_id(txn, session_id)
-                        .await?
-                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?
-                        .runtime_state
-                        .unwrap_or_default(),
-                )
-                .await?
-                .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
-                Ok::<Option<()>, AppError>(Some(()))
-            })
-        })
-        .await?;
-        if resumed.is_none() {
-            return Ok(None);
-        }
-        Ok(Some(self.load_session(session_id, cache_policy).await?))
-    }
-
-    pub(crate) async fn update_goal(
-        &self,
-        session_id: i64,
-        update: GoalUpdate,
-        cache_policy: SessionCachePolicy,
-    ) -> Result<Option<Session>, AppError> {
-        let updated = with_transaction_and_app_effects(&self.db, move |txn, _effects| {
-            let update = update.clone();
-            Box::pin(async move {
-                if session_goal::update_goal(txn, session_id, update)
-                    .await?
-                    .is_none()
-                {
-                    return Ok::<Option<()>, AppError>(None);
-                }
-                session::touch_session_updated_at(
-                    txn,
-                    session_id,
-                    session::get_session_by_id(txn, session_id)
-                        .await?
-                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?
-                        .runtime_state
-                        .unwrap_or_default(),
-                )
-                .await?
-                .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
-                Ok::<Option<()>, AppError>(Some(()))
-            })
-        })
-        .await?;
-        if updated.is_none() {
-            return Ok(None);
-        }
-        Ok(Some(self.load_session(session_id, cache_policy).await?))
-    }
-
-    pub(crate) async fn load_goal(&self, session_id: i64) -> Result<Option<SessionGoal>, AppError> {
-        load_session_goal(&self.db, session_id).await
-    }
-
-    pub(crate) async fn clear_goal(
-        &self,
-        session_id: i64,
-        cache_policy: SessionCachePolicy,
-    ) -> Result<bool, AppError> {
-        let cleared = with_transaction_and_app_effects(&self.db, move |txn, _effects| {
-            Box::pin(async move {
-                let cleared = session_goal::clear_by_session_id(txn, session_id).await?;
-                if cleared {
-                    let runtime = session::get_session_by_id(txn, session_id)
-                        .await?
-                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?
-                        .runtime_state
-                        .unwrap_or_default();
-                    let model = session::touch_session_updated_at(txn, session_id, runtime)
-                        .await?
-                        .ok_or_else(|| {
-                            AppError::Internal(format!("session not found: {session_id}"))
-                        })?;
-                    let _ = session_from_model(model)?;
-                }
-                Ok::<bool, AppError>(cleared)
-            })
-        })
-        .await?;
-        if cleared {
-            let _ = self.load_session(session_id, cache_policy).await?;
-        }
-        Ok(cleared)
-    }
-
-    pub(crate) async fn goal_cost_summary(
-        &self,
-        session_id: i64,
-        cache_policy: SessionCachePolicy,
-    ) -> Result<SessionCostSummary, AppError> {
-        let session = self.load_session(session_id, cache_policy).await?;
-        Ok(super::cost::summarize(&session.messages))
     }
 
     pub(crate) async fn usage_stats(&self, query: UsageStatsQuery) -> Result<UsageStats, AppError> {
@@ -1033,7 +812,6 @@ impl SessionStore {
         if !meta.runtime_state.prompt_tokens.is_empty()
             || !meta.runtime_state.provider_anchors.is_empty()
             || !meta.runtime_state.execution.is_empty()
-            || !meta.runtime_state.goal.is_empty()
             || !meta.runtime_state.prompt_window.is_empty()
         {
             let runtime = meta.runtime_state.clone();
@@ -1050,8 +828,7 @@ impl SessionStore {
                 })
             })
             .await?;
-            let mut persisted = session_from_model_db(updated)?;
-            persisted.goal = load_session_goal(&self.db, new_session_id).await?;
+            let persisted = session_from_model_db(updated)?;
             session.apply_persisted_metadata(&persisted);
             session.runtime = meta.runtime_state;
             session.refresh_derived();
@@ -1148,7 +925,6 @@ impl SessionStore {
             .load_projection(session_id, updated.runtime.clone())
             .await?;
         session.apply_persisted_metadata(&updated);
-        session.goal = load_session_goal(&self.db, session_id).await?;
         session.replace_messages(projection.messages);
         session.runtime = projection.runtime;
 
@@ -1191,12 +967,10 @@ impl SessionStore {
         }
         let cache = Arc::clone(&self.cache);
         let session_for_cache = session.clone();
-        let session_goal = session.goal.clone();
         let session_runtime = session.runtime.clone();
         let (updated_session, persisted_rules_for_event) =
             with_transaction_and_effects(&self.db, move |txn, effects| {
                 let cache = Arc::clone(&cache);
-                let session_goal = session_goal.clone();
                 Box::pin(async move {
                     let mut persisted_rules_for_event = Vec::new();
                     for rule in &persisted_rules {
@@ -1214,10 +988,7 @@ impl SessionStore {
                             .ok_or_else(|| {
                                 DbErr::Custom(format!("session not found: {session_id}"))
                             })?;
-                    let mut updated_session = session_from_model_db(updated_session)?;
-                    if updated_session.goal.is_none() {
-                        updated_session.goal = session_goal;
-                    }
+                    let updated_session = session_from_model_db(updated_session)?;
 
                     let updated_session_for_cache = updated_session.clone();
                     effects.push(async move {
@@ -1596,44 +1367,6 @@ fn session_from_model_db(model: crate::db::entities::session::Model) -> Result<S
     Ok(session)
 }
 
-async fn load_session_goal(
-    db: &DatabaseConnection,
-    session_id: i64,
-) -> Result<Option<SessionGoal>, AppError> {
-    let Some(model) = session_goal::get_by_session_id(db, session_id).await? else {
-        return Ok(None);
-    };
-    Ok(Some(session_goal_from_model(model)?))
-}
-
-fn session_goal_from_model(
-    model: crate::db::entities::session_goal::Model,
-) -> Result<SessionGoal, AppError> {
-    let status = match model.status.as_str() {
-        "active" => GoalStatus::Active,
-        "paused" => GoalStatus::Paused,
-        "completed" => GoalStatus::Completed,
-        other => {
-            return Err(AppError::Internal(format!(
-                "invalid goal status in persisted goal {}: {other}",
-                model.id
-            )));
-        }
-    };
-    Ok(SessionGoal {
-        id: model.id,
-        session_id: model.session_id,
-        objective: model.objective,
-        status,
-        created_at: timestamp_millis_to_utc(model.created_at_ms)?,
-        updated_at: timestamp_millis_to_utc(model.updated_at_ms)?,
-        completed_at: model
-            .completed_at_ms
-            .map(timestamp_millis_to_utc)
-            .transpose()?,
-    })
-}
-
 fn timestamp_millis_to_utc(timestamp_ms: i64) -> Result<DateTime<Utc>, AppError> {
     DateTime::from_timestamp_millis(timestamp_ms)
         .ok_or_else(|| AppError::Internal(format!("invalid timestamp millis: {timestamp_ms}")))
@@ -1724,7 +1457,6 @@ fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
         | EventKind::PermissionRuleCreated(_)
         | EventKind::PermissionRuleUpdated(_)
         | EventKind::PermissionRuleRevoked(_)
-        | EventKind::SessionGoalUpdated(_)
         | EventKind::RunStarted(_)
         | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
@@ -1783,7 +1515,6 @@ fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
         | EventKind::PermissionRuleCreated(_)
         | EventKind::PermissionRuleUpdated(_)
         | EventKind::PermissionRuleRevoked(_)
-        | EventKind::SessionGoalUpdated(_)
         | EventKind::RunStarted(_)
         | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
@@ -1846,7 +1577,6 @@ fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64
         | EventKind::PermissionRuleCreated(_)
         | EventKind::PermissionRuleUpdated(_)
         | EventKind::PermissionRuleRevoked(_)
-        | EventKind::SessionGoalUpdated(_)
         | EventKind::RunStarted(_)
         | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
@@ -1912,7 +1642,6 @@ fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64) {
         | EventKind::PermissionRuleCreated(_)
         | EventKind::PermissionRuleUpdated(_)
         | EventKind::PermissionRuleRevoked(_)
-        | EventKind::SessionGoalUpdated(_)
         | EventKind::RunStarted(_)
         | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
@@ -1946,7 +1675,6 @@ fn rewrite_event_session_ids(kind: &mut EventKind, session_id: i64) {
                 p.session_id = Some(session_id);
             }
         }
-        EventKind::SessionGoalUpdated(p) => p.session_id = session_id,
         EventKind::RunStarted(_)
         | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)

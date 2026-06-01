@@ -29,6 +29,9 @@ pub(super) fn prepare_command(
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect::<std::collections::BTreeMap<String, String>>();
     let hook_input = CommandBeforeInput {
+        session_id: Some(session_id),
+        call_id: Some(call_id),
+        workspace_root: Some(executor.workspace_root().to_string_lossy().to_string()),
         command: "sh".to_string(),
         args: vec!["-c".to_string(), input.command.clone()],
         cwd: cwd.clone(),

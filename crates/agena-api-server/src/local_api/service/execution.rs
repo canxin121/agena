@@ -1,5 +1,4 @@
 use super::*;
-use agena_api::resource::SessionPlanResource;
 
 impl ApiService {
     pub async fn assert_session_version(
@@ -215,7 +214,6 @@ impl ApiService {
 
         let scheduler_jobs = list_scheduled_jobs(manager).await;
         let pending_interactive_requests = pending_interactive_requests(session);
-        let plan = session_plan_resource(manager, session.id);
 
         Ok(SessionExecutionResource {
             session: session_resource,
@@ -252,29 +250,7 @@ impl ApiService {
             pending_user_input_requests: pending_user_input_requests(
                 pending_interactive_requests.as_slice(),
             ),
-            goal: match session.goal.as_ref() {
-                Some(goal) => Some(self.session_goal_resource(manager, session, goal).await?),
-                None => None,
-            },
-            plan,
             usage: session_usage_resource(manager, session).map_err(api_error_from_app)?,
-        })
-    }
-
-    pub async fn session_goal_resource(
-        &self,
-        _manager: &SessionManager,
-        _session: &Session,
-        goal: &SessionGoal,
-    ) -> ApiResult<SessionGoalResource> {
-        Ok(SessionGoalResource {
-            id: goal.id,
-            session_id: goal.session_id,
-            objective: goal.objective.clone(),
-            status: goal.status,
-            created_at: goal.created_at,
-            updated_at: goal.updated_at,
-            completed_at: goal.completed_at,
         })
     }
 }
@@ -294,30 +270,6 @@ fn session_usage_resource(
         model_context_window_tokens: usage.model_context_window_tokens,
         model_max_input_tokens: usage.model_max_input_tokens,
         model_max_output_tokens: usage.model_max_output_tokens,
-    })
-}
-
-fn session_plan_resource(manager: &SessionManager, session_id: i64) -> Option<SessionPlanResource> {
-    let executor = manager.tool_executor();
-    let registry = executor.plan_registry()?;
-    let plan = registry.read().get(&session_id).cloned()?;
-    let body = std::fs::read_to_string(&plan.file_path).ok();
-    let preview_lines = body
-        .as_deref()
-        .map(|value| plan_preview_lines(value, 4))
-        .unwrap_or_default();
-    let step_count = body
-        .as_deref()
-        .map(plan_step_count)
-        .filter(|count| *count > 0)
-        .map(|count| count.min(u32::MAX as usize) as u32);
-
-    Some(SessionPlanResource {
-        slug: plan.slug,
-        file_path: plan.file_path.display().to_string(),
-        started_at: plan.started_at,
-        step_count,
-        preview_lines,
     })
 }
 
@@ -443,45 +395,4 @@ fn pending_user_input_requests(
         .iter()
         .filter_map(|request| request.as_user_input().cloned())
         .collect()
-}
-
-fn plan_step_count(body: &str) -> usize {
-    body.lines().filter(|line| markdown_plan_step(line)).count()
-}
-
-fn plan_preview_lines(body: &str, limit: usize) -> Vec<String> {
-    body.lines()
-        .map(str::trim)
-        .filter(|line| {
-            !line.is_empty()
-                && !line.eq_ignore_ascii_case("# plan")
-                && *line != "_(write your plan here)_"
-        })
-        .take(limit)
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
-fn markdown_plan_step(line: &str) -> bool {
-    let trimmed = line.trim_start();
-    if trimmed.starts_with("- ")
-        || trimmed.starts_with("* ")
-        || trimmed.starts_with("- [ ]")
-        || trimmed.starts_with("- [x]")
-        || trimmed.starts_with("* [ ]")
-        || trimmed.starts_with("* [x]")
-    {
-        return true;
-    }
-
-    let digit_count = trimmed.chars().take_while(|ch| ch.is_ascii_digit()).count();
-    digit_count > 0
-        && trimmed
-            .chars()
-            .nth(digit_count)
-            .is_some_and(|ch| matches!(ch, '.' | ')'))
-        && trimmed
-            .chars()
-            .nth(digit_count + 1)
-            .is_some_and(char::is_whitespace)
 }

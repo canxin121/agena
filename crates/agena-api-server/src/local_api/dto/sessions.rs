@@ -2,19 +2,9 @@ use super::*;
 
 pub use agena_api::resource::{
     RunOptions as SessionRunOptionsRequest, SessionExecutionContextResource,
-    SessionExecutionResource, SessionGoalResource, SessionResource, SessionRunState,
-    SessionUsageLimitBasis, SessionUsageResource,
+    SessionExecutionResource, SessionResource, SessionRunState, SessionUsageLimitBasis,
+    SessionUsageResource,
 };
-
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct SessionGoalSetRequest {
-    #[serde(default)]
-    pub objective: Option<String>,
-    #[serde(default)]
-    pub status: Option<GoalStatus>,
-    #[serde(default)]
-    pub clear: bool,
-}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SessionListQuery {

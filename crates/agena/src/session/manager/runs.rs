@@ -171,9 +171,6 @@ impl SessionManager {
         session = self
             .apply_requested_agent_profile(session, &mut request.options, state.clone())
             .await?;
-        session = self
-            .resume_paused_goal_if_needed(session, state.clone())
-            .await?;
         let options = self.apply_execution_context_to_run_options(&session, request.options)?;
         if self.apply_run_selection_to_session(&mut session, &options) {
             session = self

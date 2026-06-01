@@ -1,9 +1,7 @@
 use super::*;
 use crate::session_support::{
-    clear_session_goal_or_not_found, session_execution_reply_request, session_execution_request,
-    session_execution_resource, session_goal_resource as load_session_goal_resource,
-    session_goal_resource_for_session, session_permission_reply_request,
-    session_user_message_request, set_session_goal as set_session_goal_request,
+    session_execution_reply_request, session_execution_request, session_execution_resource,
+    session_permission_reply_request, session_user_message_request,
 };
 
 async fn session_execution_json(
@@ -64,74 +62,6 @@ pub async fn get_session_state(
 ) -> Result<impl IntoResponse, ServerError> {
     let manager = state.session_manager()?;
     session_execution_json_result(&state, manager.as_ref(), manager.get_session(session_id)).await
-}
-
-pub async fn get_session_goal(
-    State(state): State<AppState>,
-    Path(session_id): Path<i64>,
-) -> Result<impl IntoResponse, ServerError> {
-    let manager = state.session_manager()?;
-    let session = manager
-        .get_session(session_id)
-        .await
-        .map_err(ServerError::Core)?;
-    let goal = match session.goal.as_ref() {
-        Some(goal) => {
-            Some(session_goal_resource_for_session(&state, manager.as_ref(), &session, goal).await?)
-        }
-        None => None,
-    };
-    Ok(Json(goal))
-}
-
-pub async fn set_session_goal(
-    State(state): State<AppState>,
-    Path(session_id): Path<i64>,
-    Json(request): Json<SessionGoalSetRequest>,
-) -> Result<impl IntoResponse, ServerError> {
-    let manager = state.session_manager()?;
-    let goal = match set_session_goal_request(
-        manager.as_ref(),
-        session_id,
-        request.objective,
-        request.status,
-        request.clear,
-    )
-    .await?
-    {
-        Some(goal) => goal,
-        None => {
-            return Ok(Json(serde_json::Value::Null));
-        }
-    };
-
-    let resource = load_session_goal_resource(&state, manager.as_ref(), session_id, &goal).await?;
-    Ok(Json(serde_json::to_value(resource).map_err(|error| {
-        ServerError::Internal(error.to_string())
-    })?))
-}
-
-pub async fn complete_session_goal(
-    State(state): State<AppState>,
-    Path(session_id): Path<i64>,
-) -> Result<impl IntoResponse, ServerError> {
-    let manager = state.session_manager()?;
-    let goal = manager
-        .complete_goal(session_id)
-        .await
-        .map_err(ServerError::Core)?;
-    Ok(Json(
-        load_session_goal_resource(&state, manager.as_ref(), session_id, &goal).await?,
-    ))
-}
-
-pub async fn clear_session_goal(
-    State(state): State<AppState>,
-    Path(session_id): Path<i64>,
-) -> Result<impl IntoResponse, ServerError> {
-    let manager = state.session_manager()?;
-    clear_session_goal_or_not_found(manager.as_ref(), session_id).await?;
-    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 #[tracing::instrument(skip_all)]

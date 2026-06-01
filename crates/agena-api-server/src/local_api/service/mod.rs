@@ -28,7 +28,7 @@ use agena::{
     model::{AdapterId, ModelRef, ModelSpeedModeRequestOverride},
     permission::{PermissionAction, PermissionMode, PermissionScope, PersistedPermissionRule},
     provider::ProviderRegistry,
-    session::{Session, SessionGoal, SessionManager},
+    session::{Session, SessionManager},
 };
 
 use super::{
@@ -37,10 +37,10 @@ use super::{
         PermissionRuleResource, PermissionRuleWriteRequest, ScheduledJobResource,
         ScheduledJobRunResource, SearchPaginationQuery, SessionAutomationResource,
         SessionCreateRequest, SessionExecutionContextResource, SessionExecutionResource,
-        SessionGoalResource, SessionHierarchyRequest, SessionResource, SessionRunOptionsRequest,
-        SessionRunState, SessionUsageResource, WorkspaceFileKind, WorkspaceFileNode,
-        WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceListQuery,
-        WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource,
+        SessionHierarchyRequest, SessionResource, SessionRunOptionsRequest, SessionRunState,
+        SessionUsageResource, WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery,
+        WorkspaceFileTreeResource, WorkspaceListQuery, WorkspacePathRequest,
+        WorkspaceResolveRequest, WorkspaceResource,
     },
     error::ApiError,
     pagination::{

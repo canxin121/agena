@@ -902,8 +902,6 @@ impl App {
     }
 
     fn render_permission_overlay(&self, frame: &mut Frame, area: Rect, dialog: &PermissionOverlay) {
-        let is_plan_approval =
-            dialog.plan.is_some() && permission_request_is_plan_approval(&dialog.request);
         let body_lines = permission_overlay_body_lines(&self.i18n, dialog);
         let choices = permission_overlay_choices(&self.i18n);
         let items = choices
@@ -911,15 +909,10 @@ impl App {
             .map(|label| ListItem::new(label.clone()))
             .collect::<Vec<_>>();
         let body = Text::from(body_lines);
-        let footer_base_key = if is_plan_approval {
-            "overlay-plan-approval-footer"
-        } else {
-            "overlay-permission-footer"
-        };
         let footer = Text::from(self.i18n.text_args(
             "overlay-permission-footer-edit-rule",
             &crate::fl_args!(
-                "footer" => ui_text::t(&self.i18n, footer_base_key)
+                "footer" => ui_text::t(&self.i18n, "overlay-permission-footer")
             ),
         ));
         render_decision_dialog(
@@ -927,23 +920,15 @@ impl App {
             area,
             SurfaceMode::Overlay,
             &DecisionDialogSpec::new(
-                ui_text::t(
-                    &self.i18n,
-                    if is_plan_approval {
-                        "overlay-plan-approval-title"
-                    } else {
-                        "overlay-permission-title"
-                    },
-                )
-                .into(),
+                ui_text::t(&self.i18n, "overlay-permission-title").into(),
                 &body,
                 items.as_slice(),
                 &footer,
-                if is_plan_approval { 92 } else { 84 },
+                84,
                 selection_highlight_style(),
                 ">> ".into(),
             )
-            .with_body_height_bounds(if is_plan_approval { (6, 18) } else { (4, 14) })
+            .with_body_height_bounds((4, 14))
             .with_list_state(Some(dialog.selection.selected), 1, (4, 8))
             .with_footer_height_bounds((1, 1)),
         );
@@ -951,10 +936,18 @@ impl App {
 
     fn render_user_input_overlay(&self, frame: &mut Frame, area: Rect, dialog: &UserInputOverlay) {
         let target_width = adaptive_modal_width(area.width, 92);
-        let footer_review = ui_text::t(&self.i18n, "overlay-user-input-footer-review");
-        let footer_question = ui_text::t(&self.i18n, "overlay-user-input-footer-question");
+        let footer_review = user_input_footer_text(
+            &self.i18n,
+            &dialog.request,
+            "overlay-user-input-footer-review",
+        );
+        let footer_question = user_input_footer_text(
+            &self.i18n,
+            &dialog.request,
+            "overlay-user-input-footer-question",
+        );
         let nav_color = self.theme_color("flash_info", Color::Cyan);
-        let title = ui_text::t(&self.i18n, "overlay-user-input-title");
+        let title = user_input_overlay_title(&self.i18n, &dialog.request);
         if dialog.state.screen() == QuestionFlowScreen::Review {
             let nav_body = Text::from(vec![
                 Line::from(Span::styled(
@@ -967,10 +960,15 @@ impl App {
                 user_input_nav_line(&self.i18n, dialog, nav_color),
             ]);
 
-            let mut review_lines = vec![Line::from(Span::styled(
+            let mut review_lines =
+                user_input_body_markdown_lines(dialog.request.body_markdown.as_str(), None);
+            if !review_lines.is_empty() {
+                review_lines.push(Line::default());
+            }
+            review_lines.push(Line::from(Span::styled(
                 ui_text::t(&self.i18n, "overlay-user-input-review-intro"),
                 Style::default().add_modifier(Modifier::BOLD),
-            ))];
+            )));
             for (index, question) in dialog.request.questions.iter().enumerate() {
                 let values = dialog
                     .answers
@@ -1028,10 +1026,14 @@ impl App {
             .questions
             .get(dialog.state.selected_question())
         else {
-            let detail_body = Text::from(sanitize_display_text(ui_text::t(
-                &self.i18n,
-                "overlay-user-input-no-questions",
-            )));
+            let detail_body = Text::from(if dialog.request.body_markdown.trim().is_empty() {
+                vec![Line::from(sanitize_display_text(ui_text::t(
+                    &self.i18n,
+                    "overlay-user-input-no-questions",
+                )))]
+            } else {
+                user_input_body_markdown_lines(dialog.request.body_markdown.as_str(), None)
+            });
             render_question_flow_dialog(
                 frame,
                 area,
@@ -1068,7 +1070,12 @@ impl App {
             .unwrap_or_default();
         let answer_summary = user_input_answer_summary(&self.i18n, question, &draft);
         let unanswered = ui_text::t(&self.i18n, "overlay-user-input-unanswered");
-        let prompt_body = Text::from(vec![
+        let mut prompt_lines =
+            user_input_body_markdown_lines(dialog.request.body_markdown.as_str(), None);
+        if !prompt_lines.is_empty() {
+            prompt_lines.push(Line::default());
+        }
+        prompt_lines.extend(vec![
             Line::from(Span::styled(
                 sanitize_display_text(question.question.as_str()),
                 Style::default().add_modifier(Modifier::BOLD),
@@ -1106,6 +1113,7 @@ impl App {
                 ),
             ]),
         ]);
+        let prompt_body = Text::from(prompt_lines);
 
         let mut option_lines = Vec::new();
         let choice_preview_width = target_width.saturating_sub(8);
@@ -3157,7 +3165,10 @@ fn user_input_nav_line(
     }
     if !App::user_input_review_hidden(dialog) {
         spans.push(Span::styled(
-            format!(" [>] {} ", ui_text::t(i18n, "overlay-user-input-submit")),
+            format!(
+                " [>] {} ",
+                user_input_submit_label(i18n, &dialog.request)
+            ),
             if dialog.state.screen() == QuestionFlowScreen::Review {
                 selection_highlight_style()
             } else {
@@ -3166,6 +3177,46 @@ fn user_input_nav_line(
         ));
     }
     Line::from(spans)
+}
+
+fn user_input_overlay_title(i18n: &I18n, request: &UserInputRequest) -> String {
+    let title = request.title.trim();
+    if title.is_empty() {
+        ui_text::t(i18n, "overlay-user-input-title")
+    } else {
+        sanitize_display_text(title)
+    }
+}
+
+fn user_input_submit_label(i18n: &I18n, request: &UserInputRequest) -> String {
+    let label = request.submit_label.trim();
+    if label.is_empty() {
+        ui_text::t(i18n, "overlay-user-input-submit")
+    } else {
+        sanitize_display_text(label)
+    }
+}
+
+fn user_input_footer_text(i18n: &I18n, request: &UserInputRequest, key: &str) -> String {
+    let mut footer = ui_text::t(i18n, key);
+    let cancel = request.cancel_label.trim();
+    if !cancel.is_empty() {
+        footer.push_str(" · Esc ");
+        footer.push_str(sanitize_display_text(cancel).as_str());
+    }
+    footer
+}
+
+fn user_input_body_markdown_lines(
+    body_markdown: &str,
+    style: Option<Style>,
+) -> Vec<Line<'static>> {
+    let style = style.unwrap_or_default();
+    body_markdown
+        .lines()
+        .map(sanitize_display_text)
+        .map(|line| Line::from(Span::styled(line, style)))
+        .collect()
 }
 
 fn user_input_answer_summary(
@@ -3720,48 +3771,6 @@ fn append_permission_action_lines(
 
 fn permission_overlay_body_lines(i18n: &I18n, dialog: &PermissionOverlay) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    if let Some(plan) = dialog
-        .plan
-        .as_ref()
-        .filter(|_| permission_request_is_plan_approval(&dialog.request))
-    {
-        lines.push(Line::from(Span::styled(
-            ui_text::t(i18n, "overlay-plan-approval-summary"),
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
-        let mut facts = vec![i18n.text_args(
-            "overlay-plan-slug",
-            &crate::fl_args!("slug" => plan.slug.as_str()),
-        )];
-        if let Some(step_count) = plan.step_count
-            && step_count > 0
-        {
-            facts.push(i18n.text_args(
-                "overlay-plan-steps",
-                &crate::fl_args!("steps" => step_count as i64),
-            ));
-        }
-        lines.push(Line::from(join_inline_segments(facts)));
-        lines.push(Line::from(Span::styled(
-            sanitize_display_text(i18n.text_args(
-                "overlay-plan-path",
-                &crate::fl_args!("path" => plan.file_path.as_str()),
-            )),
-            Style::default().fg(Color::DarkGray),
-        )));
-        if !plan.preview_lines.is_empty() {
-            lines.push(Line::from(Span::styled(
-                ui_text::t(i18n, "overlay-plan-preview-heading"),
-                Style::default().add_modifier(Modifier::BOLD),
-            )));
-            for line in &plan.preview_lines {
-                lines.push(Line::from(Span::styled(
-                    format!("  {}", sanitize_display_text(line)),
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-        }
-    }
     lines.push(Line::from(Span::styled(
         sanitize_display_text(i18n.text_args(
             "overlay-permission-request-id",
@@ -4152,7 +4161,6 @@ mod tests {
                     trace: Vec::new(),
                     created_at: chrono::Utc::now(),
                 },
-                plan: None,
                 selection: SelectionCursor::default(),
             },
         );

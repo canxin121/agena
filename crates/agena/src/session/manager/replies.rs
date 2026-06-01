@@ -526,98 +526,6 @@ impl SessionManager {
         result
     }
 
-    pub(super) fn spawn_idle_goal_run_if_needed(
-        &self,
-        session_id: i64,
-        allow_goal_continuation: bool,
-    ) {
-        let manager = self.background_handle();
-        tokio::spawn(async move {
-            if manager.run_registry.is_active(session_id).await {
-                return;
-            }
-
-            let state = manager.execution_state();
-            let session = match manager
-                .store
-                .load_session(session_id, state.cache_policy())
-                .await
-            {
-                Ok(session) => session,
-                Err(err) => {
-                    tracing::warn!(
-                        target: "agena::session::goal_runtime",
-                        session_id,
-                        error = %err,
-                        "failed to load session for idle goal continuation"
-                    );
-                    return;
-                }
-            };
-
-            if session.status() != SessionStatus::Idle {
-                return;
-            }
-            match session.goal.as_ref() {
-                None => return,
-                Some(goal) if matches!(goal.status, GoalStatus::Completed | GoalStatus::Paused) => {
-                    return;
-                }
-                _ => {}
-            }
-            if manager
-                .goal_run_directive(&session, allow_goal_continuation)
-                .is_none()
-            {
-                return;
-            }
-
-            let options = match manager.resolve_scheduled_run_options(session_id).await {
-                Ok(options) => options,
-                Err(err) => {
-                    tracing::warn!(
-                        target: "agena::session::goal_runtime",
-                        session_id,
-                        error = %err,
-                        "failed to resolve options for idle goal continuation"
-                    );
-                    return;
-                }
-            };
-
-            let Some((control, steer_rx)) = manager
-                .run_registry
-                .try_register_if_inactive(session_id)
-                .await
-            else {
-                return;
-            };
-            let result = manager
-                .run_until_stable(
-                    session,
-                    &options,
-                    allow_goal_continuation,
-                    RunSource::Goal,
-                    state,
-                    control.clone(),
-                    steer_rx,
-                )
-                .await;
-            if let Err(err) = result {
-                tracing::warn!(
-                    target: "agena::session::goal_runtime",
-                    session_id,
-                    error = %err,
-                    "idle goal continuation failed"
-                );
-            }
-            manager
-                .run_registry
-                .unregister_if_matches(session_id, &control)
-                .await;
-        });
-    }
-
     pub(super) async fn run_until_stable(
         &self,
         mut session: Session,
@@ -628,7 +536,7 @@ impl SessionManager {
         control: Arc<RunControl>,
         mut steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
     ) -> Result<Session, AppError> {
-        let mut continuation_available = allow_goal_continuation;
+        let _ = allow_goal_continuation;
         loop {
             let current_options =
                 self.apply_execution_context_to_run_options(&session, options.clone())?;
@@ -642,12 +550,6 @@ impl SessionManager {
                     state.clone(),
                 )
                 .await?;
-                if let Some(paused) = self
-                    .pause_active_goal_if_needed(session.id, state.clone())
-                    .await?
-                {
-                    return Ok(paused);
-                }
                 return Ok(session);
             }
 
@@ -660,12 +562,6 @@ impl SessionManager {
             session.refresh_derived();
             if session.blocked() {
                 return Ok(session);
-            }
-
-            if self.reconcile_goal_runtime(&mut session) {
-                session = self
-                    .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
-                    .await?;
             }
 
             if let Some(hit) = crate::session::doom_loop::detect(
@@ -692,75 +588,72 @@ impl SessionManager {
                 continue;
             }
 
-            let goal_run_directive = self.goal_run_directive(&session, continuation_available);
             match session.status() {
                 SessionStatus::Idle => {
-                    if goal_run_directive.is_none() {
-                        let last_assistant_text = session
-                            .messages
-                            .iter()
-                            .rev()
-                            .find(|m| m.role == crate::role::Role::Assistant)
-                            .map(|m| m.as_text_lossy());
-                        let stop_input = crate::plugin::AgentStopInput {
-                            session_id: session.id,
-                            stop_hook_active: false,
-                            last_assistant_message: last_assistant_text,
-                        };
-                        match state
-                            .tool_executor
-                            .plugin_manager()
-                            .dispatch_agent_stop(stop_input)
-                            .await
-                        {
-                            Ok(patch) if patch.continue_with_message.is_some() => {
-                                let follow_up = patch.continue_with_message.unwrap_or_default();
-                                let ids = self.store.reserve_message_ids(1).await?;
-                                let user_message = build_message(
-                                    ids,
-                                    Role::User,
-                                    MessageStatus::Completed,
-                                    vec![PartContent::text(follow_up)],
-                                    MessageMetadata {
-                                        source: MessageSource::System,
-                                        parent_message_id: session
-                                            .last_conversation_message()
-                                            .map(|m| m.id),
-                                        generated_by_call_id: None,
-                                        model_provider_id: current_options
-                                            .model
-                                            .provider_id
-                                            .to_string(),
-                                        model_adapter_id: current_options
-                                            .model
-                                            .adapter_id
-                                            .as_ref()
-                                            .map(ToString::to_string),
-                                        model_id: current_options.model.model_id.to_string(),
-                                        model_thinking_mode: current_options.thinking_mode.clone(),
-                                        model_speed_mode: current_options.speed_mode.clone(),
-                                    },
-                                );
-                                session.messages.push(user_message.clone());
-                                session = self
-                                    .persist_session_changes(
-                                        session,
-                                        vec![user_message],
-                                        Vec::new(),
-                                        None,
-                                        state.clone(),
-                                    )
-                                    .await?;
-                                continue;
-                            }
-                            Ok(_) => return Ok(session),
-                            Err(err) => {
-                                tracing::warn!(
-                                    target: "agena_plugin_host::agent_stop",
-                                    "agent.stop hook failed (stopping normally): {err}"
-                                );
-                                return Ok(session);
-                            }
+                    let last_assistant_text = session
+                        .messages
+                        .iter()
+                        .rev()
+                        .find(|m| m.role == crate::role::Role::Assistant)
+                        .map(|m| m.as_text_lossy());
+                    let stop_input = crate::plugin::AgentStopInput {
+                        session_id: session.id,
+                        stop_hook_active: false,
+                        last_assistant_message: last_assistant_text,
+                    };
+                    match state
+                        .tool_executor
+                        .plugin_manager()
+                        .dispatch_agent_stop(stop_input)
+                        .await
+                    {
+                        Ok(patch) if patch.continue_with_message.is_some() => {
+                            let follow_up = patch.continue_with_message.unwrap_or_default();
+                            let ids = self.store.reserve_message_ids(1).await?;
+                            let user_message = build_message(
+                                ids,
+                                Role::User,
+                                MessageStatus::Completed,
+                                vec![PartContent::text(follow_up)],
+                                MessageMetadata {
+                                    source: MessageSource::System,
+                                    parent_message_id: session
+                                        .last_conversation_message()
+                                        .map(|m| m.id),
+                                    generated_by_call_id: None,
+                                    model_provider_id: current_options
+                                        .model
+                                        .provider_id
+                                        .to_string(),
+                                    model_adapter_id: current_options
+                                        .model
+                                        .adapter_id
+                                        .as_ref()
+                                        .map(ToString::to_string),
+                                    model_id: current_options.model.model_id.to_string(),
+                                    model_thinking_mode: current_options.thinking_mode.clone(),
+                                    model_speed_mode: current_options.speed_mode.clone(),
+                                },
+                            );
+                            session.messages.push(user_message.clone());
+                            session = self
+                                .persist_session_changes(
+                                    session,
+                                    vec![user_message],
+                                    Vec::new(),
+                                    None,
+                                    state.clone(),
+                                )
+                                .await?;
+                            continue;
+                        }
+                        Ok(_) => return Ok(session),
+                        Err(err) => {
+                            tracing::warn!(
+                                target: "agena_plugin_host::agent_stop",
+                                "agent.stop hook failed (stopping normally): {err}"
+                            );
+                            return Ok(session);
                         }
                     }
                 }
@@ -823,51 +716,16 @@ impl SessionManager {
                 .broadcast_pre_run(pre_run_input)
                 .await;
 
-            let mut model_session = session;
-            if let Some(directive) = goal_run_directive.as_ref() {
-                model_session = self
-                    .append_goal_run_directive_message(
-                        model_session,
-                        directive,
-                        &current_options,
-                        state.clone(),
-                    )
-                    .await?;
-            }
-            let current_run_source = if goal_run_directive.is_some() {
-                RunSource::Goal
-            } else {
-                base_run_source
-            };
-
             match Box::pin(self.run_model_turn(
-                model_session,
+                session,
                 &current_options,
-                current_run_source,
+                base_run_source,
                 state.clone(),
                 control.clone(),
             ))
             .await
             {
-                Ok(mut next_session) => {
-                    if goal_run_directive.as_ref().is_some_and(|directive| {
-                        directive.kind == GoalRunDirectiveKind::Continuation
-                    }) {
-                        continuation_available = false;
-                    }
-                    if let Some(directive) = goal_run_directive.as_ref()
-                        && self.apply_goal_run_directive(&mut next_session, directive)
-                    {
-                        next_session = self
-                            .persist_session_changes(
-                                next_session,
-                                Vec::new(),
-                                Vec::new(),
-                                None,
-                                state.clone(),
-                            )
-                            .await?;
-                    }
+                Ok(next_session) => {
                     session = next_session;
                     let post_run_input = crate::plugin::PostRunInput {
                         session_id: session.id,
@@ -1185,12 +1043,6 @@ impl SessionManager {
                             if control.is_superseded() {
                                 return Ok(persisted_session);
                             }
-                            if let Some(paused) = self
-                                .pause_active_goal_if_needed(persisted_session.id, state.clone())
-                                .await?
-                            {
-                                persisted_session = paused;
-                            }
                         }
                         self.persist_run_failed_event(persisted_session.id, err.to_string(), state)
                             .await?;
@@ -1204,9 +1056,6 @@ impl SessionManager {
                         if control.is_superseded() {
                             return Ok(session);
                         }
-                        let _ = self
-                            .pause_active_goal_if_needed(session.id, state.clone())
-                            .await?;
                     }
                     self.persist_run_failed_event(session.id, err.to_string(), state)
                         .await?;
@@ -1379,18 +1228,6 @@ impl SessionManager {
             )));
         }
 
-        if let Err(err) = scoped_executor.enforce_plan_mode_for(&resolved.invocation, session.id) {
-            tracing::debug!(
-                target: "agena::session::tools",
-                session_id = session.id,
-                call_id = resolved.call_id,
-                error = %err,
-                "deferring plan-mode tool refusal to sequential failure handling"
-            );
-            *session = before_prepare;
-            return Ok(None);
-        }
-
         if !scoped_executor.is_concurrency_safe_invocation(&resolved.invocation) {
             *session = before_prepare;
             return Ok(None);
@@ -1542,19 +1379,6 @@ impl SessionManager {
                 resolved.lifecycle.clone(),
             )));
             session_changed = true;
-        }
-
-        // Plan-mode guardrail: refuse mutating tools while the session
-        // is in plan mode.
-        if let Err(err) = scoped_executor.enforce_plan_mode_for(&resolved.invocation, session.id) {
-            return Box::pin(self.apply_tool_failure(
-                session,
-                &resolved.pending,
-                err.to_string(),
-                None,
-                state,
-            ))
-            .await;
         }
 
         let permission_checks = match scoped_executor
@@ -2052,6 +1876,11 @@ impl SessionManager {
         let request = UserInputRequest {
             request_id,
             session_id: Some(session.id),
+            title: input.title,
+            body_markdown: input.body_markdown,
+            kind: input.kind,
+            submit_label: input.submit_label,
+            cancel_label: input.cancel_label,
             questions: input.questions,
             created_at: Utc::now(),
         };
@@ -2348,206 +2177,6 @@ impl SessionManager {
                 state.cache_policy(),
             )
             .await
-    }
-
-    fn reconcile_goal_runtime(&self, session: &mut Session) -> bool {
-        let Some(goal) = session.goal.as_ref() else {
-            if session.runtime.goal.is_empty() {
-                return false;
-            }
-            session.runtime.goal.clear();
-            return true;
-        };
-
-        if goal.status == GoalStatus::Completed {
-            if session.runtime.goal.is_empty() {
-                return false;
-            }
-            session.runtime.goal.clear();
-            return true;
-        }
-
-        let mut changed = false;
-        if session
-            .runtime
-            .goal
-            .pending_steering()
-            .is_some_and(|pending| pending.goal_id != goal.id)
-        {
-            session.runtime.goal.clear_pending_steering();
-            changed = true;
-        }
-
-        changed
-    }
-
-    pub(super) fn goal_run_directive(
-        &self,
-        session: &Session,
-        allow_continuation: bool,
-    ) -> Option<GoalRunDirective> {
-        let goal = session.goal.as_ref()?;
-        match goal.status {
-            GoalStatus::Completed => None,
-            GoalStatus::Paused => None,
-            GoalStatus::Active => {
-                if let Some(pending) = session.runtime.goal.pending_steering()
-                    && pending.goal_id == goal.id
-                    && pending.kind == GoalSteeringKind::ObjectiveUpdated
-                {
-                    return Some(GoalRunDirective {
-                        goal_id: goal.id,
-                        kind: GoalRunDirectiveKind::ObjectiveUpdated,
-                        prompt: self
-                            .render_goal_context(goal, GoalRunDirectiveKind::ObjectiveUpdated),
-                    });
-                }
-                if allow_continuation && session.status() == SessionStatus::Idle {
-                    return Some(GoalRunDirective {
-                        goal_id: goal.id,
-                        kind: GoalRunDirectiveKind::Continuation,
-                        prompt: self.render_goal_context(goal, GoalRunDirectiveKind::Continuation),
-                    });
-                }
-                None
-            }
-        }
-    }
-
-    pub(super) async fn append_goal_run_directive_message(
-        &self,
-        mut session: Session,
-        directive: &GoalRunDirective,
-        options: &SessionRunOptions,
-        state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError> {
-        let ids = self.store.reserve_message_ids(1).await?;
-        let text = format!(
-            "<goal_context>\n{}\n</goal_context>",
-            directive.prompt.trim()
-        );
-        let goal_message = build_message(
-            ids,
-            Role::User,
-            MessageStatus::Completed,
-            vec![PartContent::text(text)],
-            MessageMetadata {
-                source: MessageSource::System,
-                parent_message_id: session
-                    .last_conversation_message()
-                    .map(|message| message.id),
-                generated_by_call_id: None,
-                model_provider_id: options.model.provider_id.to_string(),
-                model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
-                model_id: options.model.model_id.to_string(),
-                model_thinking_mode: options.thinking_mode.clone(),
-                model_speed_mode: options.speed_mode.clone(),
-            },
-        );
-        session.messages.push(goal_message.clone());
-        session = self
-            .persist_session_changes(
-                session,
-                vec![goal_message.clone()],
-                Vec::new(),
-                None,
-                state.clone(),
-            )
-            .await?;
-
-        let run_id = HistoryRunId::new();
-        let history_items = vec![
-            EventKind::RunStarted(RunStarted {
-                run_id,
-                source: RunSource::Goal,
-                model_id: options.model.model_id.as_str().into(),
-                provider_id: options.model.provider_id.as_str().into(),
-                request_digest: None,
-            }),
-            EventKind::UserMessageAppended(UserMessageAppended {
-                message_id: HistoryMessageId(goal_message.id),
-                run_id,
-                created_at: goal_message.created_at,
-                content: TranscriptContent::from_message_lossy(&goal_message),
-                parts: goal_message.parts.clone(),
-                metadata: goal_message.metadata.clone(),
-                provider_state: goal_message.provider_state.clone(),
-            }),
-            EventKind::RunCompleted(RunCompleted {
-                run_id,
-                finish_reason: FinishReason::Stop,
-            }),
-        ];
-        self.store
-            .append_history_items(session, history_items, state.cache_policy())
-            .await
-    }
-
-    fn apply_goal_run_directive(
-        &self,
-        session: &mut Session,
-        directive: &GoalRunDirective,
-    ) -> bool {
-        match directive.kind {
-            GoalRunDirectiveKind::Continuation => false,
-            GoalRunDirectiveKind::ObjectiveUpdated => {
-                if session
-                    .runtime
-                    .goal
-                    .pending_steering()
-                    .is_some_and(|pending| {
-                        pending.goal_id == directive.goal_id
-                            && pending.kind == GoalSteeringKind::ObjectiveUpdated
-                    })
-                {
-                    session.runtime.goal.clear_pending_steering();
-                    return true;
-                }
-                false
-            }
-        }
-    }
-
-    fn render_goal_context(&self, goal: &SessionGoal, kind: GoalRunDirectiveKind) -> String {
-        let objective = goal.objective.trim();
-        match kind {
-            GoalRunDirectiveKind::ObjectiveUpdated => join_runtime_context_lines(&[
-                "An active runtime goal has been set or updated.".to_string(),
-                format!("Objective:\n{objective}"),
-                "Continue making concrete progress toward this goal without waiting for additional user input. Use tools when needed, keep the work grounded in the current workspace, and call `update_goal` with `status = complete` once the objective is actually finished.".to_string(),
-            ]),
-            GoalRunDirectiveKind::Continuation => join_runtime_context_lines(&[
-                "Continue working toward the active runtime goal.".to_string(),
-                format!("Objective:\n{objective}"),
-                "Do not wait for the user just because the last run ended. Make the next concrete move toward finishing the objective, explain the blocker if you are truly blocked, and call `update_goal` with `status = complete` once the objective is actually done.".to_string(),
-            ]),
-        }
-    }
-
-    pub(super) async fn publish_goal_event(
-        &self,
-        goal: &SessionGoal,
-        session_id: i64,
-    ) -> Result<(), AppError> {
-        self.publisher
-            .publish(
-                crate::event::PublishContext::for_session(session_id),
-                EventKind::SessionGoalUpdated(SessionGoalEvent {
-                    session_id,
-                    goal_id: Some(goal.id),
-                    objective: Some(goal.objective.clone()),
-                    status: Some(match goal.status {
-                        GoalStatus::Active => "active".to_string(),
-                        GoalStatus::Paused => "paused".to_string(),
-                        GoalStatus::Completed => "completed".to_string(),
-                    }),
-                    completed_at_ms: goal.completed_at.map(|ts| ts.timestamp_millis()),
-                    ts_ms: Utc::now().timestamp_millis(),
-                }),
-            )
-            .await
-            .map_err(|err| AppError::Internal(format!("publish goal event failed: {err}")))?;
-        Ok(())
     }
 
     pub(super) fn apply_run_selection_to_session(
@@ -3021,55 +2650,6 @@ impl SessionManager {
         }
     }
 
-    async fn pause_active_goal_if_needed(
-        &self,
-        session_id: i64,
-        state: Arc<SessionManagerState>,
-    ) -> Result<Option<Session>, AppError> {
-        let Some(updated) = self
-            .store
-            .pause_goal_if_active(session_id, state.cache_policy())
-            .await?
-        else {
-            return Ok(None);
-        };
-        let goal = updated.goal.as_ref().ok_or_else(|| {
-            AppError::Internal(format!("goal missing after pause for session {session_id}"))
-        })?;
-        self.publish_goal_event(goal, session_id).await?;
-        Ok(Some(updated))
-    }
-
-    pub(super) async fn resume_paused_goal_if_needed(
-        &self,
-        session: Session,
-        state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError> {
-        if !session
-            .goal
-            .as_ref()
-            .is_some_and(|goal| goal.status == GoalStatus::Paused)
-        {
-            return Ok(session);
-        }
-
-        let session_id = session.id;
-        let Some(updated) = self
-            .store
-            .resume_goal_if_paused(session_id, state.cache_policy())
-            .await?
-        else {
-            return Ok(session);
-        };
-        let goal = updated.goal.as_ref().ok_or_else(|| {
-            AppError::Internal(format!(
-                "goal missing after resume for session {session_id}"
-            ))
-        })?;
-        self.publish_goal_event(goal, session_id).await?;
-        Ok(updated)
-    }
-
     async fn persist_run_failed_event(
         &self,
         session_id: i64,
@@ -3303,6 +2883,7 @@ fn managed_project_state_permission(workspace_root: &Path) -> crate::agent::Perm
     }
 }
 
+#[allow(dead_code)]
 fn join_runtime_context_lines(lines: &[String]) -> String {
     lines
         .iter()

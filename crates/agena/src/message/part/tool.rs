@@ -266,6 +266,16 @@ pub struct MonitorSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct AskUserToolInput {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub body_markdown: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub submit_label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cancel_label: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<UserInputQuestion>,
 }
@@ -300,12 +310,6 @@ pub struct WebSearchToolInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-pub struct EnterPlanModeToolInput {}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-pub struct ExitPlanModeToolInput {}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 pub struct AgentSwitchToolInput {
     /// Target agent profile. Omit or pass an empty string to clear the
     /// explicit runtime agent selection.
@@ -324,32 +328,6 @@ pub struct AgentRestoreToolInput {}
 pub struct WorkflowPromptToolInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-pub struct GetGoalToolInput {}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-pub struct ClearGoalToolInput {}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-pub struct CreateGoalToolInput {
-    pub objective: String,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum UpdateGoalStatus {
-    Active,
-    Paused,
-    Complete,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-pub struct UpdateGoalToolInput {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub objective: Option<String>,
-    pub status: UpdateGoalStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]

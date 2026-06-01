@@ -25,12 +25,11 @@ use crate::host_api::{
     HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
     HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
     HostAgentSwitchRequest, HostAgentSwitchResponse, HostClient, HostConfigReloadResponse,
-    HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostExitPlanModeRequest,
-    HostExitWorktreeRequest, HostHookListResponse, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
-    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
-    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
-    HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatusGetRequest,
+    HostEnterWorktreeRequest, HostExitWorktreeRequest, HostHookListResponse,
+    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
+    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest,
+    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPluginStatusGetRequest,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredToolListResponse,
     HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
     HostSchedulerDeleteResponse, HostSchedulerListResponse, HostSecretDeleteRequest,
@@ -489,34 +488,6 @@ impl HostClient for StdioHostClient {
         .await
     }
 
-    async fn enter_plan_mode(
-        &self,
-        req: HostEnterPlanModeRequest,
-    ) -> crate::error::Result<ToolInvokeOutput> {
-        self.call(
-            method::HOST_PLAN_ENTER,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn exit_plan_mode(
-        &self,
-        req: HostExitPlanModeRequest,
-    ) -> crate::error::Result<ToolInvokeOutput> {
-        self.call(
-            method::HOST_PLAN_EXIT,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
     async fn enter_worktree(
         &self,
         req: HostEnterWorktreeRequest,
@@ -787,27 +758,6 @@ impl HostClient for StdioHostClient {
     ) -> crate::error::Result<HostLspListDiagnosticsResponse> {
         self.call(
             method::HOST_LSP_LIST_DIAGNOSTICS,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn plan_list(&self) -> crate::error::Result<HostPlanListResponse> {
-        self.call(
-            method::HOST_PLAN_LIST,
-            serde_json::json!({
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn plan_get(&self, req: HostPlanGetRequest) -> crate::error::Result<HostPlanGetResponse> {
-        self.call(
-            method::HOST_PLAN_GET,
             serde_json::json!({
                 "request": req,
                 "context": crate::host_api::current_host_callback_context(),

@@ -86,6 +86,7 @@ impl RunRegistry {
 
     /// Allocate a new control for `session_id` only when there is no current
     /// in-flight run. Returns `None` instead of cancelling a newer run.
+    #[allow(dead_code)]
     pub async fn try_register_if_inactive(
         &self,
         session_id: i64,

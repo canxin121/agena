@@ -12,7 +12,6 @@ use agena::{
         RuntimeBackgroundTask, RuntimeBackgroundTaskKind, RuntimeBackgroundTaskOrigin,
         RuntimeBackgroundTaskStatus,
     },
-    session::GoalStatus,
 };
 
 mod access;

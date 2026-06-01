@@ -11,10 +11,9 @@ use tracing::Instrument;
 
 use crate::AppError;
 use crate::config::ProviderNativeToolsConfig;
-use crate::db::crud::session_goal::GoalUpdate;
 use crate::event::{
     ErrorInfo, EventKind, ExecutionFailedEvent, ExecutionStartedEvent, PermissionRepliedEvent,
-    PermissionRequestedEvent, SessionGoalEvent,
+    PermissionRequestedEvent,
 };
 use crate::message::{
     AttachmentItem, ExecutionStatus, InteractiveRequestPart, Message, MessageMetadata, MessagePart,
@@ -40,16 +39,16 @@ use std::path::PathBuf;
 use super::cache::SessionCachePolicy;
 pub use super::cache::SessionCacheStats;
 use super::control::{RunControl, RunControlError, RunRegistry};
-use super::cost::{SessionCostSummary, UsageStats, UsageStatsQuery};
+use super::cost::{UsageStats, UsageStatsQuery};
 use super::history::{
     FinishReason, MessageId as HistoryMessageId, RunAbortReason, RunAborted, RunCompleted,
     RunId as HistoryRunId, RunSource, RunStarted, ToolCallCompleted,
     ToolCallId as HistoryToolCallId, TranscriptContent, TranscriptToolOutput, UserMessageAppended,
 };
 use super::model::{
-    GoalStatus, GoalSteeringKind, PromptCompactionRuntime, PromptCompactionStrategy,
-    ProviderPromptAnchor, SessionExecutionContext, SessionGoal, SessionListRequest,
-    SessionPendingTool, SessionStatus, SessionSummary, validate_session_goal_objective,
+    PromptCompactionRuntime, PromptCompactionStrategy, ProviderPromptAnchor,
+    SessionExecutionContext, SessionListRequest, SessionPendingTool, SessionStatus,
+    SessionSummary,
 };
 use super::processor::SessionRunRequest;
 use super::prompt_window::{self, PromptRequestOptions};
@@ -370,33 +369,6 @@ pub struct SessionSubtaskResponse {
     pub model_id: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct SessionGoalCreateRequest {
-    pub session_id: i64,
-    pub objective: String,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct SessionGoalUpdateRequest {
-    pub session_id: i64,
-    pub objective: Option<String>,
-    pub status: Option<GoalStatus>,
-    pub expected_goal_id: Option<i64>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GoalRunDirectiveKind {
-    ObjectiveUpdated,
-    Continuation,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct GoalRunDirective {
-    goal_id: i64,
-    kind: GoalRunDirectiveKind,
-    prompt: String,
-}
-
 #[derive(Debug, Clone, Copy)]
 struct PromptTurnBudget {
     max_prompt_chars: usize,
@@ -456,11 +428,11 @@ struct SessionManagerState {
 }
 
 mod compact;
-mod goals;
 mod history;
 mod replies;
 mod runs;
 mod sessions;
+mod stats;
 
 impl SessionManagerState {
     fn new(
@@ -657,9 +629,6 @@ impl SessionManager {
             .map_err(tool_error_to_app_error)?;
         let (invocation, prepared_shell_command) = scoped_executor
             .prepare_bash_invocation(&prepared.invocation, session.id, call_id)
-            .map_err(tool_error_to_app_error)?;
-        scoped_executor
-            .enforce_plan_mode_for(&invocation, session.id)
             .map_err(tool_error_to_app_error)?;
         self.require_immediate_tool_permissions(session.id, &scoped_executor, &invocation)
             .await?;
@@ -1156,6 +1125,9 @@ fn permission_risk_rank(risk: PermissionRiskLevel) -> u8 {
 }
 
 fn ask_user_title(request: &UserInputRequest) -> String {
+    if !request.title.trim().is_empty() {
+        return request.title.trim().to_string();
+    }
     match request.questions.len() {
         0 => "Ask user".to_string(),
         1 => {

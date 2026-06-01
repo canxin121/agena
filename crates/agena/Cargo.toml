@@ -57,7 +57,6 @@ indexmap = { workspace = true }
 urlencoding = { workspace = true }
 log = { workspace = true }
 sea-orm = { workspace = true }
-sea-orm-migration = { workspace = true }
 schemars = { workspace = true, features = ["derive"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

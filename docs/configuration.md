@@ -290,7 +290,7 @@ debug
 trace
 ```
 
-它会独立应用到 `sqlx`、`sea_orm` 和 `sea_orm_migration`，避免数据库日志淹没主应用日志。
+它会独立应用到 `sqlx` 和 `sea_orm`，避免数据库日志淹没主应用日志。
 
 ## Provider Auth
 

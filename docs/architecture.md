@@ -112,7 +112,7 @@ Vue 前端。主要通过 `packages/agena-studio-web/src/agena/lib/agenaApi.ts` 
 - `runtime`: runtime builder、snapshot、reload、background tasks。
 - `session`: session manager、processor、history、store、cache、append-only prompt assembly。
 - `event`: event bus、publisher、store、filter、envelope。
-- `db`: SeaORM entities、migration、CRUD。
+- `db`: SeaORM entities、schema bootstrap、CRUD。
 - `provider`: model providers、credential、auth、runtime retry、streaming。
 - `permission`: path/network/tool permission、persisted rule、runtime request/reply。
 - `agent` / `agents`: default agent policy、disk/runtime subagent registry。
@@ -129,7 +129,7 @@ Runtime construction starts with `AgenaRuntime::builder()` in `crates/agena/src/
 1. Resolve workspace root, defaulting to current directory.
 2. Load config through `ConfigLoader`.
 3. Connect database if a database URL/connection is supplied.
-4. Run schema migration when auto-migrate is enabled.
+4. Initialize the latest database schema when auto-migrate is enabled.
 5. Build initial `RuntimeSnapshot` generation 1.
 6. Install runtime-backed host client into plugin host.
 7. Apply tracing filter.
@@ -439,7 +439,7 @@ Database access uses SeaORM with SQLite by default.
 
 Key areas:
 
-- migrations: `crates/agena/src/db/migrate/`
+- schema bootstrap: `crates/agena/src/db/migrate/`
 - entities: `crates/agena/src/db/entities/`
 - CRUD helpers: `crates/agena/src/db/crud/`
 - event store: `crates/agena/src/db/sea_event_store.rs`

@@ -167,7 +167,7 @@ impl Default for TracingConfig {
 impl TracingConfig {
     pub fn env_filter(&self) -> Result<EnvFilter, tracing_subscriber::filter::ParseError> {
         let mut filter = EnvFilter::try_new(self.filter.as_str())?;
-        for target in ["sqlx", "sea_orm", "sea_orm_migration"] {
+        for target in ["sqlx", "sea_orm"] {
             filter = filter.add_directive(format!("{target}={}", self.database).parse()?);
         }
         filter = filter.add_directive(format!("agena::adapter={}", self.adapter).parse()?);

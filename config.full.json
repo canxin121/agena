@@ -63,7 +63,12 @@
         "tools": {
           "names": {
             "plan": "allow",
-            "todo": "allow"
+            "todo": "allow",
+            "tools": "allow",
+            "user": "allow",
+            "agent": "allow",
+            "session": "allow",
+            "workflow": "allow"
           }
         }
       }

@@ -1171,7 +1171,12 @@ Agent 也可以有自己的权限：
         "tools": {
           "names": {
             "plan": "allow",
-            "todo": "allow"
+            "todo": "allow",
+            "tools": "allow",
+            "user": "allow",
+            "agent": "allow",
+            "session": "allow",
+            "workflow": "allow"
           }
         }
       }

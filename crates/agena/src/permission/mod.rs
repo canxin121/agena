@@ -339,13 +339,13 @@ impl ToolPermissionPolicy {
         self.check_tool(name, None, &[])
     }
 
-    pub fn check_tool(
+    pub fn check_tool_with_aliases(
         &self,
-        name: &str,
+        names: &[&str],
         command: Option<&str>,
         tags: &[ToolTag],
     ) -> PermissionDecision {
-        if name == "bash"
+        if names.contains(&"bash")
             && let Some(command) = command
         {
             if let Some(decision) = self.evaluate_bash_deny(command) {
@@ -358,18 +358,33 @@ impl ToolPermissionPolicy {
                 return decision;
             }
         }
-        self.check_tool_mode_with_tags(name, tags)
+        self.check_tool_mode_with_aliases(names, tags)
     }
 
-    fn check_tool_mode_with_tags(&self, name: &str, tags: &[ToolTag]) -> PermissionDecision {
-        if let Some(mode) = self.tool_modes.get(name).copied() {
-            return self.decision_for_mode(name, mode);
+    pub fn check_tool(
+        &self,
+        name: &str,
+        command: Option<&str>,
+        tags: &[ToolTag],
+    ) -> PermissionDecision {
+        self.check_tool_with_aliases(&[name], command, tags)
+    }
+
+    fn check_tool_mode_with_aliases(&self, names: &[&str], tags: &[ToolTag]) -> PermissionDecision {
+        if let Some((matched_name, mode)) = names.iter().find_map(|name| {
+            self.tool_modes
+                .get(*name)
+                .copied()
+                .map(|mode| (*name, mode))
+        }) {
+            return self.decision_for_mode(matched_name, mode);
         }
         let matched = tags
             .iter()
             .filter_map(|tag| self.tag_modes.get(tag.as_str()).copied())
             .reduce(combine_permission_modes);
         let mode = matched.unwrap_or(self.default_mode);
+        let name = names.first().copied().unwrap_or("tool");
         self.decision_for_mode(name, mode)
     }
 

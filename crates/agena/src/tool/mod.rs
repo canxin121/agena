@@ -3679,6 +3679,26 @@ mod tests {
         assert!(
             !tools
                 .iter()
+                .any(|tool| tool.exposed_name == "agena.workflow/plan.get")
+        );
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.exposed_name == "agena.workflow/plan.submit")
+        );
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.exposed_name == "agena.workflow/plan.next")
+        );
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.exposed_name == "agena.workflow/plan.replace")
+        );
+        assert!(
+            !tools
+                .iter()
                 .any(|tool| tool.exposed_name == "agena.workflow/worktree")
         );
 
@@ -3686,10 +3706,14 @@ mod tests {
             .iter()
             .find(|tool| tool.exposed_name == "agena.workflow/plan.set_status")
             .expect("plan.set_status alias should be model-visible");
-        let checkpoint_update = tools
+        let plan_current = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena.workflow/plan.update_checkpoint")
-            .expect("plan.update_checkpoint alias should be model-visible");
+            .find(|tool| tool.exposed_name == "agena.workflow/plan.current")
+            .expect("plan.current alias should be model-visible");
+        let check_update = tools
+            .iter()
+            .find(|tool| tool.exposed_name == "agena.workflow/plan.update_check")
+            .expect("plan.update_check alias should be model-visible");
         let worktree_existing = tools
             .iter()
             .find(|tool| tool.exposed_name == "agena.workflow/worktree.enter.existing")
@@ -3697,8 +3721,7 @@ mod tests {
 
         let plan_set_schema =
             super::model_safe_tool_schema(&plan_set_status.sanitized_input_schema());
-        let checkpoint_schema =
-            super::model_safe_tool_schema(&checkpoint_update.sanitized_input_schema());
+        let check_schema = super::model_safe_tool_schema(&check_update.sanitized_input_schema());
         let worktree_schema =
             super::model_safe_tool_schema(&worktree_existing.sanitized_input_schema());
 
@@ -3706,10 +3729,10 @@ mod tests {
             .get("properties")
             .and_then(serde_json::Value::as_object)
             .expect("plan.set_status schema should expose properties");
-        let checkpoint_properties = checkpoint_schema
+        let check_properties = check_schema
             .get("properties")
             .and_then(serde_json::Value::as_object)
-            .expect("plan.update_checkpoint schema should expose properties");
+            .expect("plan.update_check schema should expose properties");
         let worktree_properties = worktree_schema
             .get("properties")
             .and_then(serde_json::Value::as_object)
@@ -3720,10 +3743,18 @@ mod tests {
             plan_set_properties.contains_key("phase") || plan_set_properties.contains_key("status")
         );
         assert!(!plan_set_properties.contains_key("step_id"));
-        assert!(checkpoint_properties.contains_key("step_id"));
-        assert!(checkpoint_properties.contains_key("checkpoint_id"));
-        assert!(checkpoint_properties.contains_key("status"));
-        assert!(!checkpoint_properties.contains_key("phase"));
+        assert!(
+            plan_current
+                .sanitized_input_schema()
+                .get("required")
+                .and_then(serde_json::Value::as_array)
+                .is_none_or(|required| required.is_empty()),
+            "plan.current should not require any input fields"
+        );
+        assert!(check_properties.contains_key("step_id"));
+        assert!(check_properties.contains_key("check_id"));
+        assert!(check_properties.contains_key("status"));
+        assert!(!check_properties.contains_key("phase"));
         assert_eq!(
             worktree_properties
                 .get("path")
@@ -3757,8 +3788,8 @@ mod tests {
         assert!(
             plan_create
                 .description_text()
-                .contains("steps[].checkpoints[].text"),
-            "plan.create description should explain checkpoint text explicitly"
+                .contains("steps[].checks[].text"),
+            "plan.create description should explain check text explicitly"
         );
         assert!(
             plan_set_status
@@ -4757,7 +4788,7 @@ mod tests {
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
         let invocation = ToolInvocation::new(
             "agena.workflow/plan",
-            StructuredObject::try_from(json!({ "action": "get" }))
+            StructuredObject::try_from(json!({ "action": "current" }))
                 .expect("plan invocation input should be valid"),
         );
 

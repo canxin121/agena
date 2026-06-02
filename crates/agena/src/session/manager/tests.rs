@@ -42,14 +42,20 @@ const TOOLS_TOOL: &str = "agena.workflow/tools";
 const TODO_TOOL: &str = "agena.workflow/todo";
 const USER_TOOL: &str = "agena.workflow/user";
 const PLAN_TOOL: &str = "agena.workflow/plan";
-const WORKTREE_TOOL: &str = "agena.workflow/worktree";
+const PLAN_CREATE_TOOL: &str = "agena.workflow/plan.create";
+const PLAN_UPDATE_STEP_TOOL: &str = "agena.workflow/plan.update_step";
+const PLAN_SET_STATUS_TOOL: &str = "agena.workflow/plan.set_status";
+const WORKTREE_ENTER_NEW_TOOL: &str = "agena.workflow/worktree.enter.new";
+const WORKTREE_EXIT_TOOL: &str = "agena.workflow/worktree.exit";
 const TASK_TOOL: &str = "agena.workflow/task";
 const LSP_TOOL: &str = "agena.lsp/lsp";
 const WORKFLOW_TOOL: &str = "agena.workflow/workflow";
 const AGENT_TOOL: &str = "agena.workflow/agent";
 const SESSION_TOOL: &str = "agena.workflow/session";
 const SETTINGS_TOOL: &str = "agena.settings/settings";
-const SCHEDULE_TOOL: &str = "agena.cron/schedule";
+const SETTINGS_GET_TOOL: &str = "agena.settings/settings.get";
+const SETTINGS_VALIDATE_TOOL: &str = "agena.settings/settings.validate";
+const SCHEDULE_LIST_TOOL: &str = "agena.cron/schedule.list";
 const STREAM_FIXTURE_PLUGIN: &str = "streaming-fixture";
 const STREAM_FIXTURE_TOOL: &str = "streaming-fixture/stream_fixture_count";
 
@@ -1448,7 +1454,8 @@ fn unsupported_tool_call_is_returned_to_model() {
         assert!(
             error
                 .as_deref()
-                .is_some_and(|value| value.contains("unknown tool: agena.web/unsupported"))
+                .is_some_and(|value| value.contains("agena.web/unsupported")),
+            "unexpected unsupported-tool error: error={error:?} output={output:?}"
         );
         assert!(output.contains("agena.web/unsupported"));
         assert!(
@@ -3088,8 +3095,10 @@ async fn steer_with_no_active_run_is_a_clean_error() {
 
 mod runtime_builtin_tool_tests {
     use super::*;
+    use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -3101,7 +3110,13 @@ mod runtime_builtin_tool_tests {
         HostGetSessionRequest, HostGetSessionResponse, HostLspDiagnostic,
         HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
         HostLspServer, HostNetworkPermissionCheckRequest, HostPermissionCheckResponse,
-        HostRenameSessionRequest, HostRenameSessionResponse, HostSession, HostTodoPriority,
+        HostRenameSessionRequest, HostRenameSessionResponse, HostSchedulerCreateRequest,
+        HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
+        HostSchedulerJob, HostSchedulerListResponse, HostSession, HostStatuslineContributeRequest,
+        HostStatuslineListResponse, HostStatuslineRemoveRequest, HostStatuslineRemoveResponse,
+        HostStatuslineSegment, HostStorageDeleteRequest, HostStorageGetRequest,
+        HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageRecord,
+        HostStorageScope, HostStorageSetRequest, HostStorageVisibility, HostTodoPriority,
         HostTodoStatus, HostTodoWriteRequest, LogLevel, SpawnSubtaskRequest, SpawnSubtaskResponse,
         ToolDescriptor, current_host_callback_context,
     };
@@ -3131,6 +3146,8 @@ mod runtime_builtin_tool_tests {
         executor: ToolExecutor,
         manager: Arc<tokio::sync::RwLock<Option<Arc<SessionManager>>>>,
         config: Arc<TestConfigState>,
+        storage: Arc<Mutex<BTreeMap<(String, String, String, String), String>>>,
+        statusline: Arc<Mutex<BTreeMap<(String, String), HostStatuslineSegment>>>,
     }
 
     impl RuntimeToolTestHostClient {
@@ -3142,6 +3159,8 @@ mod runtime_builtin_tool_tests {
                     path: config_path,
                     generation: AtomicU64::new(1),
                 }),
+                storage: Arc::new(Mutex::new(BTreeMap::new())),
+                statusline: Arc::new(Mutex::new(BTreeMap::new())),
             }
         }
 
@@ -3177,6 +3196,29 @@ mod runtime_builtin_tool_tests {
                     None,
                 )
                 .map_err(|err| crate::plugin::PluginError::new(err.to_string()))
+        }
+
+        fn storage_key(
+            scope: HostStorageScope,
+            visibility: HostStorageVisibility,
+            namespace: &str,
+            key: &str,
+        ) -> (String, String, String, String) {
+            let scope = match scope {
+                HostStorageScope::Session => "session",
+                HostStorageScope::Workspace => "workspace",
+                HostStorageScope::Global => "global",
+            };
+            let visibility = match visibility {
+                HostStorageVisibility::Private => "private",
+                HostStorageVisibility::Shared => "shared",
+            };
+            (
+                scope.to_string(),
+                visibility.to_string(),
+                namespace.to_string(),
+                key.to_string(),
+            )
         }
 
         fn config_document(&self) -> serde_json::Value {
@@ -3244,6 +3286,230 @@ mod runtime_builtin_tool_tests {
                 generation,
                 loaded_at: chrono::Utc::now().to_rfc3339(),
             })
+        }
+
+        async fn scheduler_list(&self) -> crate::plugin::sdk::Result<HostSchedulerListResponse> {
+            let scheduler = self
+                .executor
+                .scheduler()
+                .cloned()
+                .ok_or_else(|| crate::plugin::PluginError::new("scheduler not configured"))?;
+            Ok(HostSchedulerListResponse {
+                jobs: scheduler
+                    .list()
+                    .await
+                    .into_iter()
+                    .map(host_scheduler_job)
+                    .collect(),
+            })
+        }
+
+        async fn scheduler_create(
+            &self,
+            req: HostSchedulerCreateRequest,
+        ) -> crate::plugin::sdk::Result<HostSchedulerCreateResponse> {
+            let scheduler = self
+                .executor
+                .scheduler()
+                .cloned()
+                .ok_or_else(|| crate::plugin::PluginError::new("scheduler not configured"))?;
+            let job = match req {
+                HostSchedulerCreateRequest::Cron {
+                    expression,
+                    prompt,
+                    max_age_days,
+                    owner_session_id,
+                } => {
+                    let mut job = agena_scheduler::ScheduledJob::new_cron(
+                        expression,
+                        prompt,
+                        max_age_days.unwrap_or(7),
+                    )
+                    .map_err(|err| crate::plugin::PluginError::invalid_params(err.to_string()))?;
+                    if let Some(session_id) = owner_session_id {
+                        job = job.with_owner(session_id);
+                    }
+                    job
+                }
+                HostSchedulerCreateRequest::Once {
+                    at_ms,
+                    prompt,
+                    owner_session_id,
+                } => {
+                    let at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(at_ms)
+                        .ok_or_else(|| {
+                            crate::plugin::PluginError::invalid_params("invalid at_ms")
+                        })?;
+                    let mut job = agena_scheduler::ScheduledJob::new_once(at, prompt);
+                    if let Some(session_id) = owner_session_id {
+                        job = job.with_owner(session_id);
+                    }
+                    job
+                }
+            };
+            let id = job.id.to_string();
+            scheduler.add(job).await;
+            Ok(HostSchedulerCreateResponse { id })
+        }
+
+        async fn scheduler_delete(
+            &self,
+            req: HostSchedulerDeleteRequest,
+        ) -> crate::plugin::sdk::Result<HostSchedulerDeleteResponse> {
+            let scheduler = self
+                .executor
+                .scheduler()
+                .cloned()
+                .ok_or_else(|| crate::plugin::PluginError::new("scheduler not configured"))?;
+            let id = uuid::Uuid::parse_str(&req.id).map_err(|err| {
+                crate::plugin::PluginError::invalid_params(format!("invalid scheduler id: {err}"))
+            })?;
+            Ok(HostSchedulerDeleteResponse {
+                removed: scheduler.remove(id).await,
+            })
+        }
+
+        async fn storage_get(
+            &self,
+            req: HostStorageGetRequest,
+        ) -> crate::plugin::sdk::Result<HostStorageGetResponse> {
+            let value = self
+                .storage
+                .lock()
+                .expect("runtime test storage lock")
+                .get(&Self::storage_key(
+                    req.scope,
+                    req.visibility,
+                    req.namespace.as_str(),
+                    req.key.as_str(),
+                ))
+                .cloned();
+            Ok(HostStorageGetResponse { value })
+        }
+
+        async fn storage_set(&self, req: HostStorageSetRequest) -> crate::plugin::sdk::Result<()> {
+            self.storage
+                .lock()
+                .expect("runtime test storage lock")
+                .insert(
+                    Self::storage_key(
+                        req.scope,
+                        req.visibility,
+                        req.namespace.as_str(),
+                        req.key.as_str(),
+                    ),
+                    req.value,
+                );
+            Ok(())
+        }
+
+        async fn storage_delete(
+            &self,
+            req: HostStorageDeleteRequest,
+        ) -> crate::plugin::sdk::Result<()> {
+            self.storage
+                .lock()
+                .expect("runtime test storage lock")
+                .remove(&Self::storage_key(
+                    req.scope,
+                    req.visibility,
+                    req.namespace.as_str(),
+                    req.key.as_str(),
+                ));
+            Ok(())
+        }
+
+        async fn storage_list(
+            &self,
+            req: HostStorageListRequest,
+        ) -> crate::plugin::sdk::Result<HostStorageListResponse> {
+            let scope = match req.scope {
+                HostStorageScope::Session => "session",
+                HostStorageScope::Workspace => "workspace",
+                HostStorageScope::Global => "global",
+            };
+            let visibility = match req.visibility {
+                HostStorageVisibility::Private => "private",
+                HostStorageVisibility::Shared => "shared",
+            };
+            let records = self
+                .storage
+                .lock()
+                .expect("runtime test storage lock")
+                .keys()
+                .filter(|(slot_scope, slot_visibility, namespace, key)| {
+                    slot_scope == scope
+                        && slot_visibility == visibility
+                        && req
+                            .namespace
+                            .as_ref()
+                            .is_none_or(|expected| namespace == expected)
+                        && req
+                            .prefix
+                            .as_ref()
+                            .is_none_or(|expected| key.starts_with(expected))
+                })
+                .map(|(_, _, namespace, key)| HostStorageRecord {
+                    namespace: namespace.clone(),
+                    key: key.clone(),
+                })
+                .collect();
+            Ok(HostStorageListResponse { records })
+        }
+
+        async fn ui_statusline_contribute(
+            &self,
+            req: HostStatuslineContributeRequest,
+        ) -> crate::plugin::sdk::Result<()> {
+            let plugin_id = self
+                .callback_context()?
+                .plugin_id
+                .unwrap_or_else(|| "runtime-test".to_string());
+            self.statusline
+                .lock()
+                .expect("runtime test statusline lock")
+                .insert(
+                    (plugin_id.clone(), req.segment_id.clone()),
+                    HostStatuslineSegment {
+                        plugin_id,
+                        segment_id: req.segment_id,
+                        content: req.content,
+                        priority: req.priority,
+                        color: req.color,
+                    },
+                );
+            Ok(())
+        }
+
+        async fn ui_statusline_list(
+            &self,
+        ) -> crate::plugin::sdk::Result<HostStatuslineListResponse> {
+            let mut segments = self
+                .statusline
+                .lock()
+                .expect("runtime test statusline lock")
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
+            segments.sort_by_key(|segment| (segment.priority, segment.segment_id.clone()));
+            Ok(HostStatuslineListResponse { segments })
+        }
+
+        async fn ui_statusline_remove(
+            &self,
+            req: HostStatuslineRemoveRequest,
+        ) -> crate::plugin::sdk::Result<HostStatuslineRemoveResponse> {
+            let plugin_id = self
+                .callback_context()?
+                .plugin_id
+                .unwrap_or_else(|| "runtime-test".to_string());
+            let removed = self
+                .statusline
+                .lock()
+                .expect("runtime test statusline lock")
+                .remove(&(plugin_id, req.segment_id))
+                .is_some();
+            Ok(HostStatuslineRemoveResponse { removed })
         }
 
         async fn invoke_tool(
@@ -3594,6 +3860,31 @@ mod runtime_builtin_tool_tests {
         }
     }
 
+    fn host_scheduler_job(job: agena_scheduler::ScheduledJob) -> HostSchedulerJob {
+        let (kind, cron_expression, fire_at_ms) = match &job.kind {
+            agena_scheduler::JobKind::Cron { expression, .. } => {
+                ("cron".to_string(), Some(expression.clone()), None)
+            }
+            agena_scheduler::JobKind::Once { at } => {
+                ("once".to_string(), None, Some(at.timestamp_millis()))
+            }
+        };
+        HostSchedulerJob {
+            id: job.id.to_string(),
+            kind,
+            prompt: job.prompt,
+            cron_expression,
+            fire_at_ms,
+            owner_session_id: job.owner_session_id,
+            next_fire_at_ms: job
+                .next_fire_at
+                .map(|timestamp| timestamp.timestamp_millis()),
+            last_fired_at_ms: job
+                .last_fired_at
+                .map(|timestamp| timestamp.timestamp_millis()),
+        }
+    }
+
     async fn build_runtime_tool_manager_with_provider<P>(
         root: &Path,
         db: DatabaseConnection,
@@ -3729,29 +4020,6 @@ mod runtime_builtin_tool_tests {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-    }
-
-    fn request_operation_text(request: &CompletionRequest, operation_id: &str) -> Option<String> {
-        request
-            .messages
-            .iter()
-            .flat_map(|message| message.parts.iter())
-            .find_map(|part| {
-                if part.operation_id.as_deref() != Some(operation_id) {
-                    return None;
-                }
-                match part.content.as_ref() {
-                    Some(PartContent::Operation(operation))
-                        if matches!(
-                            part.status,
-                            ExecutionStatus::Completed | ExecutionStatus::Failed
-                        ) =>
-                    {
-                        Some(operation.model_output.text.clone())
-                    }
-                    _ => None,
-                }
-            })
     }
 
     fn request_operation_debug(request: &CompletionRequest, operation_id: &str) -> String {
@@ -4166,63 +4434,58 @@ while True:
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_plan_enter_1"]) == 0 {
+            } else if completed_or_failed_operation_count(&request, &["call_plan_create_1"]) == 0 {
                 scripted_tool_call_events(vec![(
-                    "call_plan_enter_1",
-                    PLAN_TOOL,
-                    serde_json::json!({ "action": "enter" }).to_string(),
-                )])
-            } else if completed_or_failed_operation_count(&request, &["call_plan_glob_1"]) == 0 {
-                scripted_tool_call_events(vec![(
-                    "call_plan_glob_1",
-                    FS_TOOL,
+                    "call_plan_create_1",
+                    PLAN_CREATE_TOOL,
                     serde_json::json!({
-                        "action": "glob",
-                        "pattern": "*.md",
-                        "path": "~/agena/projects/<workspace>/plans"
+                        "objective": "Exercise the runtime plan host bridge before worktree edits.",
+                        "title": "Runtime Plan",
+                        "document_markdown": "# Runtime Plan\n\n- inspect the repo state\n- enter a throwaway worktree\n- verify edits stay isolated\n",
+                        "steps": [{
+                            "id": "step_runtime_plan",
+                            "title": "Inspect the repo state",
+                            "executor": "ai",
+                            "checkpoints": [{
+                                "id": "checkpoint_runtime_plan",
+                                "text": "Inspect the repo state"
+                            }]
+                        }],
+                        "auto_continue": false
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_plan_patch_1"]) == 0 {
-                let plan_path = request_operation_text(&request, "call_plan_glob_1")
-                    .and_then(|text| {
-                        text.lines()
-                            .map(str::trim)
-                            .find(|line| line.ends_with(".md"))
-                            .map(str::to_string)
-                    })
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "plan path should be rendered in output text: glob={} enter={}",
-                            request_operation_debug(&request, "call_plan_glob_1"),
-                            request_operation_debug(&request, "call_plan_enter_1")
-                        )
-                    });
+            } else if completed_or_failed_operation_count(&request, &["call_plan_update_step_1"])
+                == 0
+            {
                 scripted_tool_call_events(vec![(
-                    "call_plan_patch_1",
-                    FS_TOOL,
+                    "call_plan_update_step_1",
+                    PLAN_UPDATE_STEP_TOOL,
                     serde_json::json!({
-                        "action": "apply_patch",
-                        "patch": format!(
-                            "*** Begin Patch\n*** Update File: {plan_path}\n@@\n-# Plan\n-\n-_(write your plan here)_\n+# Plan\n+\n+- inspect the repo state\n+- enter a throwaway worktree\n+- verify edits stay isolated\n*** End Patch"
-                        ),
+                        "step_id": "step_runtime_plan",
+                        "status": "completed",
+                        "note": "Runtime coverage reached the plan step."
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_plan_exit_1"]) == 0 {
+            } else if completed_or_failed_operation_count(&request, &["call_plan_set_status_1"])
+                == 0
+            {
                 scripted_tool_call_events(vec![(
-                    "call_plan_exit_1",
-                    PLAN_TOOL,
-                    serde_json::json!({ "action": "exit" }).to_string(),
+                    "call_plan_set_status_1",
+                    PLAN_SET_STATUS_TOOL,
+                    serde_json::json!({
+                        "phase": "completed",
+                        "summary": "Runtime plan finished before entering the worktree."
+                    })
+                    .to_string(),
                 )])
             } else if completed_or_failed_operation_count(&request, &["call_worktree_enter_1"]) == 0
             {
                 scripted_tool_call_events(vec![(
                     "call_worktree_enter_1",
-                    WORKTREE_TOOL,
+                    WORKTREE_ENTER_NEW_TOOL,
                     serde_json::json!({
-                        "action": "enter",
-                        "target": "new",
                         "name": "demo"
                     })
                     .to_string(),
@@ -4286,9 +4549,8 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_worktree_exit_1",
-                    WORKTREE_TOOL,
+                    WORKTREE_EXIT_TOOL,
                     serde_json::json!({
-                        "action": "exit",
                         "exit_action": "remove",
                         "discard_changes": true
                     })
@@ -4319,33 +4581,13 @@ while True:
 
             let created =
                 create_runtime_tool_session(manager.as_ref(), "runtime-fs-plan-worktree").await;
-            let blocked = submit_runtime_tool_prompt(
+            let session = submit_runtime_tool_prompt(
                 manager.as_ref(),
                 created.id,
                 "exercise fs plan and worktree tools",
                 "runtime tool run should succeed",
             )
             .await;
-            assert!(
-                blocked.blocked(),
-                "plan flow should pause for exit review approval: runtime={:?}",
-                blocked.runtime()
-            );
-
-            let session = manager
-                .reply_permission(SessionPermissionReplyRequest::new(
-                    created.id,
-                    runtime_tool_run_options(),
-                    PermissionReply {
-                        request_id: pending_permission_request_id(&blocked),
-                        kind: PermissionReplyKind::AllowOnce,
-                        reason: None,
-                        scope: None,
-                    },
-                    Some("test".to_string()),
-                ))
-                .await
-                .expect("plan review approval should continue the runtime flow");
 
             assert!(
                 session
@@ -4365,10 +4607,9 @@ while True:
                 &session,
                 &[
                     "call_tools_1",
-                    "call_plan_enter_1",
-                    "call_plan_glob_1",
-                    "call_plan_patch_1",
-                    "call_plan_exit_1",
+                    "call_plan_create_1",
+                    "call_plan_update_step_1",
+                    "call_plan_set_status_1",
                     "call_worktree_enter_1",
                     "call_fs_patch_1",
                     "call_fs_glob_1",
@@ -4379,18 +4620,42 @@ while True:
                 ],
             );
 
-            let plan_path = std::fs::read_dir(
-                crate::project_paths::project_state_dir(&workspace.root).join("plans"),
-            )
-            .expect("plans directory should exist")
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("md"))
-            .expect("plan tool should create exactly one markdown file");
-            let plan_body = std::fs::read_to_string(&plan_path).expect("plan file should exist");
+            let created_plan = session_operation_payload(&session, "call_plan_create_1");
+            let created_plan = &created_plan["plan"];
+            assert_eq!(
+                created_plan["title"].as_str(),
+                Some("Runtime Plan"),
+                "plan create should return the runtime plan title"
+            );
+            assert_eq!(
+                created_plan["phase"].as_str(),
+                Some("draft"),
+                "new runtime plans should start in draft"
+            );
+
+            let updated_plan = session_operation_payload(&session, "call_plan_update_step_1");
+            let updated_plan = &updated_plan["plan"];
+            assert_eq!(
+                updated_plan["steps"][0]["status"].as_str(),
+                Some("completed"),
+                "plan update_step should complete the scripted step"
+            );
+            assert_eq!(
+                updated_plan["steps"][0]["checkpoints"][0]["status"].as_str(),
+                Some("completed"),
+                "completing the step should also complete its checkpoint"
+            );
+
+            let completed_plan = session_operation_payload(&session, "call_plan_set_status_1");
+            let completed_plan = &completed_plan["plan"];
+            assert_eq!(
+                completed_plan["phase"].as_str(),
+                Some("completed"),
+                "plan set_status should finalize the runtime plan"
+            );
             assert!(
-                plan_body.contains("enter a throwaway worktree"),
-                "plan file should contain the patched checklist"
+                completed_plan["completed_at_ms"].as_i64().is_some(),
+                "completed plans should record completed_at_ms"
             );
 
             let read_payload = session_operation_payload(&session, "call_fs_read_1");
@@ -5925,23 +6190,10 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_settings_get_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_settings_get_1",
-                    SETTINGS_TOOL,
+                    SETTINGS_GET_TOOL,
                     serde_json::json!({
-                        "action": "get",
                         "path": "agents.default",
                         "source": "file"
-                    })
-                    .to_string(),
-                )])
-            } else if completed_or_failed_operation_count(&request, &["call_settings_set_1"]) == 0 {
-                scripted_tool_call_events(vec![(
-                    "call_settings_set_1",
-                    SETTINGS_TOOL,
-                    serde_json::json!({
-                        "action": "set",
-                        "path": "agents.default",
-                        "value": "planner",
-                        "reload": true
                     })
                     .to_string(),
                 )])
@@ -5950,81 +6202,15 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_settings_validate_1",
-                    SETTINGS_TOOL,
-                    serde_json::json!({
-                        "action": "validate"
-                    })
-                    .to_string(),
+                    SETTINGS_VALIDATE_TOOL,
+                    serde_json::json!({}).to_string(),
                 )])
             } else if completed_or_failed_operation_count(&request, &["call_schedule_list_1"]) == 0
             {
                 scripted_tool_call_events(vec![(
                     "call_schedule_list_1",
-                    SCHEDULE_TOOL,
-                    serde_json::json!({
-                        "action": "list"
-                    })
-                    .to_string(),
-                )])
-            } else if completed_or_failed_operation_count(&request, &["call_schedule_wakeup_1"])
-                == 0
-            {
-                scripted_tool_call_events(vec![(
-                    "call_schedule_wakeup_1",
-                    SCHEDULE_TOOL,
-                    serde_json::json!({
-                        "action": "wakeup",
-                        "delay_seconds": 60,
-                        "prompt": "wake me up later",
-                        "reason": "runtime coverage"
-                    })
-                    .to_string(),
-                )])
-            } else if completed_or_failed_operation_count(&request, &["call_schedule_create_1"])
-                == 0
-            {
-                scripted_tool_call_events(vec![(
-                    "call_schedule_create_1",
-                    SCHEDULE_TOOL,
-                    serde_json::json!({
-                        "action": "create",
-                        "expression": "0 0 * * * *",
-                        "prompt": "hourly coverage check",
-                        "max_age_days": 1
-                    })
-                    .to_string(),
-                )])
-            } else if completed_or_failed_operation_count(&request, &["call_schedule_list_2"]) == 0
-            {
-                scripted_tool_call_events(vec![(
-                    "call_schedule_list_2",
-                    SCHEDULE_TOOL,
-                    serde_json::json!({
-                        "action": "list"
-                    })
-                    .to_string(),
-                )])
-            } else if completed_or_failed_operation_count(&request, &["call_schedule_delete_1"])
-                == 0
-            {
-                let schedule_id = request_operation_payload(&request, "call_schedule_create_1")
-                    .get("id")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "schedule create should return an id: {}",
-                            request_operation_debug(&request, "call_schedule_create_1")
-                        )
-                    });
-                scripted_tool_call_events(vec![(
-                    "call_schedule_delete_1",
-                    SCHEDULE_TOOL,
-                    serde_json::json!({
-                        "action": "delete",
-                        "id": schedule_id
-                    })
-                    .to_string(),
+                    SCHEDULE_LIST_TOOL,
+                    serde_json::json!({}).to_string(),
                 )])
             } else {
                 scripted_text_events("runtime workflow flow finished")
@@ -6042,7 +6228,7 @@ while True:
             let db =
                 open_runtime_tool_database(&workspace.root, "runtime-tools-workflow-settings.db")
                     .await;
-            let (manager, _host) = build_runtime_tool_manager_with_provider(
+            let (manager, host) = build_runtime_tool_manager_with_provider(
                 &workspace.root,
                 db,
                 WorkflowSettingsScheduleProvider,
@@ -6079,13 +6265,8 @@ while True:
                     "call_user_1",
                     "call_todo_1",
                     "call_settings_get_1",
-                    "call_settings_set_1",
                     "call_settings_validate_1",
                     "call_schedule_list_1",
-                    "call_schedule_wakeup_1",
-                    "call_schedule_create_1",
-                    "call_schedule_list_2",
-                    "call_schedule_delete_1",
                 ],
             );
 
@@ -6152,19 +6333,7 @@ while True:
             assert_eq!(
                 settings_get_payload["value"].as_str(),
                 Some("build"),
-                "settings get should read the file-backed default agent before mutation"
-            );
-
-            let settings_set_payload = session_operation_payload(&session, "call_settings_set_1");
-            assert_eq!(
-                settings_set_payload["current"].as_str(),
-                Some("planner"),
-                "settings set should update the default agent"
-            );
-            assert_eq!(
-                settings_set_payload["reload"]["generation"].as_u64(),
-                Some(2),
-                "settings set should trigger a config reload"
+                "settings get should read the file-backed default agent"
             );
 
             let config_json: serde_json::Value = serde_json::from_str(
@@ -6176,8 +6345,8 @@ while True:
                 config_json
                     .pointer("/agents/default")
                     .and_then(serde_json::Value::as_str),
-                Some("planner"),
-                "settings set should persist the updated config file"
+                Some("build"),
+                "settings get should not mutate the config file"
             );
 
             let schedule_list_1_payload =
@@ -6190,37 +6359,78 @@ while True:
                 "scheduler should start empty for the runtime test"
             );
 
-            let wakeup_payload = session_operation_payload(&session, "call_schedule_wakeup_1");
-            assert!(
-                wakeup_payload["id"]
-                    .as_str()
-                    .is_some_and(|id| !id.trim().is_empty()),
-                "schedule wakeup should create an id"
+            let mut edited_config = config_json.clone();
+            edited_config["agents"]["default"] = serde_json::Value::String("planner".to_string());
+            std::fs::write(
+                workspace.root.join("config.json"),
+                serde_json::to_string_pretty(&edited_config).expect("config json should serialize"),
+            )
+            .expect("edited config should be written");
+
+            let reload = host
+                .reload_config()
+                .await
+                .expect("host reload_config should succeed");
+            assert_eq!(reload.generation, 2);
+            let reloaded_agent = host
+                .read_config(Some("config.agents.default".to_string()))
+                .await
+                .expect("host read_config should reflect the reloaded config");
+            assert_eq!(
+                reloaded_agent.as_str(),
+                Some("planner"),
+                "reload_config should expose the updated default agent"
             );
 
-            let create_payload = session_operation_payload(&session, "call_schedule_create_1");
-            let created_job_id = create_payload["id"]
-                .as_str()
-                .expect("schedule create should return an id");
-            let schedule_list_2_payload =
-                session_operation_payload(&session, "call_schedule_list_2");
-            let listed_jobs = schedule_list_2_payload["jobs"]
-                .as_array()
-                .expect("second schedule list should return jobs");
+            let wakeup = host
+                .scheduler_create(HostSchedulerCreateRequest::Once {
+                    at_ms: (chrono::Utc::now() + chrono::Duration::seconds(60)).timestamp_millis(),
+                    prompt: "wake me up later".to_string(),
+                    owner_session_id: Some(created.id),
+                })
+                .await
+                .expect("scheduler wakeup should succeed");
+            let created = host
+                .scheduler_create(HostSchedulerCreateRequest::Cron {
+                    expression: "0 0 * * * *".to_string(),
+                    prompt: "hourly coverage check".to_string(),
+                    max_age_days: Some(1),
+                    owner_session_id: Some(created.id),
+                })
+                .await
+                .expect("scheduler cron create should succeed");
+            let listed_jobs = host
+                .scheduler_list()
+                .await
+                .expect("scheduler list should succeed")
+                .jobs;
             assert!(
                 listed_jobs.len() >= 2,
-                "scheduler should list both wakeup and cron jobs"
+                "scheduler should list both wakeup and cron jobs after direct host calls"
             );
             assert!(
-                listed_jobs.iter().any(|job| {
-                    job.get("id").and_then(serde_json::Value::as_str) == Some(created_job_id)
-                }),
-                "second schedule list should include the created cron job"
+                listed_jobs
+                    .iter()
+                    .any(|job| job.id == wakeup.id && job.kind == "once"),
+                "scheduler list should include the one-shot wakeup"
+            );
+            assert!(
+                listed_jobs
+                    .iter()
+                    .any(|job| job.id == created.id && job.kind == "cron"),
+                "scheduler list should include the cron job"
             );
 
-            let delete_payload = session_operation_payload(&session, "call_schedule_delete_1");
-            assert_eq!(delete_payload["id"].as_str(), Some(created_job_id));
-            assert_eq!(delete_payload["removed"].as_bool(), Some(true));
+            let delete = host
+                .scheduler_delete(HostSchedulerDeleteRequest {
+                    id: created.id.clone(),
+                })
+                .await
+                .expect("scheduler delete should succeed");
+            assert!(
+                delete.removed,
+                "scheduler delete should remove the cron job"
+            );
         });
     }
 }

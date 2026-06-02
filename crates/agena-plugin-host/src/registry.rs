@@ -30,6 +30,10 @@ pub struct RegisteredTool {
     pub original_name: String,
     pub exposed_name: String,
     pub decl: PluginToolDecl,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_exposed_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_input: Option<serde_json::Value>,
 }
 
 impl RegisteredTool {
@@ -53,6 +57,32 @@ impl RegisteredTool {
             original_name: original_name.clone(),
             exposed_name,
             decl,
+            base_exposed_name: None,
+            fixed_input: None,
+        }
+    }
+
+    pub fn behavior_exposed_name(&self) -> &str {
+        self.base_exposed_name
+            .as_deref()
+            .unwrap_or(self.exposed_name.as_str())
+    }
+
+    pub fn with_model_alias(
+        &self,
+        alias_name: impl Into<String>,
+        decl: PluginToolDecl,
+        fixed_input: serde_json::Value,
+    ) -> Self {
+        let alias_name = alias_name.into();
+        Self {
+            plugin_id: self.plugin_id.clone(),
+            plugin_name: self.plugin_name.clone(),
+            original_name: self.original_name.clone(),
+            exposed_name: exposed_tool_name(&self.plugin_name, &alias_name),
+            decl,
+            base_exposed_name: Some(self.behavior_exposed_name().to_string()),
+            fixed_input: Some(fixed_input),
         }
     }
 
@@ -118,6 +148,8 @@ impl PluginToolRegistry {
             original_name: original_name.clone(),
             exposed_name: exposed_tool_name(plugin_name, &original_name),
             decl,
+            base_exposed_name: None,
+            fixed_input: None,
         });
         self.rebuild(tools);
         self.generation += 1;

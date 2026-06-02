@@ -776,7 +776,7 @@ impl SessionManager {
             let scoped_executor = state
                 .tool_executor
                 .for_session_context(&session.runtime.execution);
-            let tools = scoped_executor.available_tools();
+            let tools = scoped_executor.available_model_tools();
             let request_tools = tools.clone();
             let prompt_budget =
                 self.prompt_budget_for_run(&session, options, tools.as_slice(), state.as_ref());

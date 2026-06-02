@@ -155,7 +155,7 @@ fn workflow_config_schema() -> serde_json::Value {
         (
             "/properties/plan/properties/allow_direct_approval",
             "Allow Direct Approval",
-            "When enabled, plan.set_status and legacy status actions may move an unapproved plan directly into active, blocked, or completed. Disable this to make plan.set_status automatically request review before an unapproved plan first enters an approved phase.",
+            "When enabled, plan.set_status and legacy status actions may move a draft or cancelled plan directly into active, blocked, or completed. Disable this to make plan.set_status automatically request review before those transitions.",
         ),
     ] {
         crate::tool::definition::set_schema_metadata(
@@ -441,16 +441,6 @@ enum WorkflowPlanPhase {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
-enum WorkflowPlanApprovalState {
-    #[default]
-    NotRequested,
-    Pending,
-    Approved,
-    Rejected,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-#[serde(rename_all = "snake_case")]
 enum WorkflowPlanExecutor {
     #[default]
     Ai,
@@ -466,13 +456,6 @@ enum WorkflowPlanStepStatus {
     Blocked,
     Completed,
     Skipped,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-#[serde(default, deny_unknown_fields)]
-struct WorkflowPlanAutoContinue {
-    enabled: bool,
-    source: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
@@ -502,24 +485,14 @@ struct WorkflowPlanStep {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(default, deny_unknown_fields)]
 struct WorkflowPlan {
-    schema_version: u32,
-    plan_id: String,
-    session_id: i64,
     title: String,
     objective: String,
     phase: WorkflowPlanPhase,
-    approval_state: WorkflowPlanApprovalState,
-    auto_continue: WorkflowPlanAutoContinue,
+    auto_continue: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     document_markdown: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     steps: Vec<WorkflowPlanStep>,
-    created_at_ms: i64,
-    updated_at_ms: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    submitted_at_ms: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    completed_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
@@ -664,7 +637,7 @@ struct PlanUpdateCheckpointInput {
     tool = "plan",
     description = "Plan command backed by shared plugin storage. Use it to create, replace, review, and manage the active session plan.",
     summary = "Create plans, update steps, and prefer action `set_status` for plan phase changes.",
-    help = "Use action `set_status` to move the plan between draft, active, blocked, completed, or cancelled. Review-pending plans are represented as draft with approval_state=pending, and auto-continue on/off distinguishes active plans that should continue automatically. If workflow plan config disables direct approval, plan.set_status automatically requests review before moving an unapproved plan into active, blocked, or completed. Legacy actions and legacy phase names such as `complete`, `cancel`, `restore`, `update_runtime`, `awaiting_review`, `executing`, and `paused` remain accepted for compatibility and are normalized to `set_status`.",
+    help = "Use action `set_status` to move the plan between draft, active, blocked, completed, or cancelled. Auto-continue on/off distinguishes active plans that should continue automatically. If workflow plan config disables direct approval, plan.set_status automatically requests review before moving a draft or cancelled plan into active, blocked, or completed. Legacy actions and legacy phase names such as `complete`, `cancel`, `restore`, `update_runtime`, `awaiting_review`, `executing`, and `paused` remain accepted for compatibility and are normalized to `set_status`.",
     tags(ToolTag::Planning, ToolTag::Mutating),
     host_capabilities(
         HostCapability::AskUser,
@@ -877,7 +850,6 @@ const PLAN_KEY_ACTIVE: &str = "active";
 const PLAN_RUNTIME_NAMESPACE: &str = "workflow_plan_runtime";
 const PLAN_RUNTIME_AUTO_SIGNATURE_KEY: &str = "last_auto_signature";
 const PLAN_STATUSLINE_SEGMENT_ID: &str = "plan";
-const PLAN_SCHEMA_VERSION: u32 = 1;
 const PLAN_REVIEW_DECISION_APPROVE_RUN: &str = "Approve and run";
 const PLAN_REVIEW_DECISION_APPROVE_PAUSE: &str = "Approve with auto-continue off";
 const PLAN_REVIEW_DECISION_APPROVE_REQUESTED: &str = "Approve requested status";
@@ -1323,7 +1295,6 @@ impl WorkflowPlugin {
 
     fn build_plan(
         &self,
-        session_id: i64,
         objective: &str,
         title: Option<&str>,
         document_markdown: Option<&str>,
@@ -1332,51 +1303,28 @@ impl WorkflowPlugin {
         previous: Option<&WorkflowPlan>,
     ) -> SdkResult<WorkflowPlan> {
         let objective = Self::validate_plan_objective(objective)?;
-        let now_ms = Utc::now().timestamp_millis();
         let title = title
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| Self::default_plan_title(&objective));
-        let auto_continue_enabled = match auto_continue {
+        let auto_continue = match auto_continue {
             Some(value) => value,
             None => previous
-                .map(|plan| plan.auto_continue.enabled)
+                .map(|plan| plan.auto_continue)
                 .unwrap_or(self.config()?.plan.default_auto_continue),
         };
-        let auto_continue_source = if auto_continue.is_some() {
-            "tool_override".to_string()
-        } else if previous.is_some() {
-            previous
-                .map(|plan| plan.auto_continue.source.clone())
-                .unwrap_or_else(|| "config_default".to_string())
-        } else {
-            "config_default".to_string()
-        };
         Ok(WorkflowPlan {
-            schema_version: PLAN_SCHEMA_VERSION,
-            plan_id: previous
-                .map(|plan| plan.plan_id.clone())
-                .unwrap_or_else(|| format!("plan_{now_ms}")),
-            session_id,
             title,
             objective,
             phase: WorkflowPlanPhase::Draft,
-            approval_state: WorkflowPlanApprovalState::NotRequested,
-            auto_continue: WorkflowPlanAutoContinue {
-                enabled: auto_continue_enabled,
-                source: auto_continue_source,
-            },
+            auto_continue,
             document_markdown: document_markdown
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
                 .unwrap_or_default(),
             steps: Self::normalize_plan_steps(steps)?,
-            created_at_ms: previous.map(|plan| plan.created_at_ms).unwrap_or(now_ms),
-            updated_at_ms: now_ms,
-            submitted_at_ms: None,
-            completed_at_ms: None,
         })
     }
 
@@ -1387,15 +1335,6 @@ impl WorkflowPlugin {
             WorkflowPlanPhase::Blocked => "blocked",
             WorkflowPlanPhase::Completed => "completed",
             WorkflowPlanPhase::Cancelled => "cancelled",
-        }
-    }
-
-    fn plan_approval_state_label(state: WorkflowPlanApprovalState) -> &'static str {
-        match state {
-            WorkflowPlanApprovalState::NotRequested => "not_requested",
-            WorkflowPlanApprovalState::Pending => "pending",
-            WorkflowPlanApprovalState::Approved => "approved",
-            WorkflowPlanApprovalState::Rejected => "rejected",
         }
     }
 
@@ -1549,23 +1488,10 @@ impl WorkflowPlugin {
             sections.push(document_markdown.to_string());
         }
 
-        let mut metadata = vec![format!(
+        let metadata = vec![format!(
             "Auto-continue: {}",
-            if plan.auto_continue.enabled {
-                "on"
-            } else {
-                "off"
-            }
+            if plan.auto_continue { "on" } else { "off" }
         )];
-        if matches!(
-            plan.approval_state,
-            WorkflowPlanApprovalState::Pending | WorkflowPlanApprovalState::Rejected
-        ) {
-            metadata.push(format!(
-                "Review: {}",
-                Self::plan_approval_state_label(plan.approval_state)
-            ));
-        }
         sections.push(String::new());
         sections.push(format!("_{}_", metadata.join(" · ")));
 
@@ -1605,38 +1531,19 @@ impl WorkflowPlugin {
 
     fn plan_statusline_content(plan: &WorkflowPlan) -> String {
         let (completed_steps, total_steps, _, _) = Self::plan_progress_counts(plan);
-        let review_segment = match plan.approval_state {
-            WorkflowPlanApprovalState::Pending | WorkflowPlanApprovalState::Rejected => {
-                format!(
-                    " review:{}",
-                    Self::plan_approval_state_label(plan.approval_state)
-                )
-            }
-            _ => String::new(),
-        };
         if total_steps == 0 {
             return format!(
-                "plan:{}{} auto:{}",
+                "plan:{} auto:{}",
                 Self::plan_phase_label(plan.phase),
-                review_segment,
-                if plan.auto_continue.enabled {
-                    "on"
-                } else {
-                    "off"
-                }
+                if plan.auto_continue { "on" } else { "off" }
             );
         }
         format!(
-            "plan:{}{} steps:{}/{} auto:{}",
+            "plan:{} steps:{}/{} auto:{}",
             Self::plan_phase_label(plan.phase),
-            review_segment,
             completed_steps,
             total_steps,
-            if plan.auto_continue.enabled {
-                "on"
-            } else {
-                "off"
-            }
+            if plan.auto_continue { "on" } else { "off" }
         )
     }
 
@@ -1660,15 +1567,6 @@ impl WorkflowPlugin {
             format!("Status: {}", Self::plan_phase_label(plan.phase)),
             format!("Steps: {completed_steps}/{total_steps} complete"),
         ];
-        if matches!(
-            plan.approval_state,
-            WorkflowPlanApprovalState::Pending | WorkflowPlanApprovalState::Rejected
-        ) {
-            parts.push(format!(
-                "Review: {}",
-                Self::plan_approval_state_label(plan.approval_state)
-            ));
-        }
         if total_checkpoints > 0 {
             parts.push(format!(
                 "Checkpoints: {completed_checkpoints}/{total_checkpoints} complete"
@@ -1676,11 +1574,7 @@ impl WorkflowPlugin {
         }
         parts.push(format!(
             "Auto-continue: {}",
-            if plan.auto_continue.enabled {
-                "on"
-            } else {
-                "off"
-            }
+            if plan.auto_continue { "on" } else { "off" }
         ));
         parts.join(" | ")
     }
@@ -1799,25 +1693,6 @@ impl WorkflowPlugin {
         plan.document_markdown = format!("{}\n\n{summary_section}", plan.document_markdown.trim());
     }
 
-    fn plan_approval_state_for_phase(
-        phase: WorkflowPlanPhase,
-        current: WorkflowPlanApprovalState,
-    ) -> WorkflowPlanApprovalState {
-        match phase {
-            WorkflowPlanPhase::Draft => WorkflowPlanApprovalState::NotRequested,
-            WorkflowPlanPhase::Active
-            | WorkflowPlanPhase::Blocked
-            | WorkflowPlanPhase::Completed => WorkflowPlanApprovalState::Approved,
-            WorkflowPlanPhase::Cancelled => {
-                if current == WorkflowPlanApprovalState::Pending {
-                    WorkflowPlanApprovalState::NotRequested
-                } else {
-                    current
-                }
-            }
-        }
-    }
-
     fn plan_phase_requires_approval(phase: WorkflowPlanPhase) -> bool {
         matches!(
             phase,
@@ -1825,28 +1700,16 @@ impl WorkflowPlugin {
         )
     }
 
-    fn validate_plan_approval_transition(
-        plan: &WorkflowPlan,
-        phase: WorkflowPlanPhase,
-        allow_direct_approval: bool,
-    ) -> SdkResult<()> {
-        if Self::plan_phase_requires_approval(phase)
-            && plan.approval_state != WorkflowPlanApprovalState::Approved
-            && !allow_direct_approval
-        {
-            return Err(PluginError::invalid_params(format!(
-                "cannot set plan status to {}: direct approval is disabled by workflow.plan.allow_direct_approval; submit the plan for review first",
-                Self::plan_phase_label(phase)
-            )));
-        }
-        Ok(())
+    fn plan_phase_is_approved(phase: WorkflowPlanPhase) -> bool {
+        matches!(
+            phase,
+            WorkflowPlanPhase::Active | WorkflowPlanPhase::Blocked | WorkflowPlanPhase::Completed
+        )
     }
 
     fn mark_plan_completed(plan: &mut WorkflowPlan, summary: Option<&str>) -> SdkResult<()> {
         Self::ensure_plan_ready_for_completion(plan)?;
         plan.phase = WorkflowPlanPhase::Completed;
-        plan.approval_state = WorkflowPlanApprovalState::Approved;
-        plan.completed_at_ms = Some(Utc::now().timestamp_millis());
         Self::append_completion_summary(plan, summary);
         Ok(())
     }
@@ -1871,16 +1734,12 @@ impl WorkflowPlugin {
         plan: &mut WorkflowPlan,
         phase: WorkflowPlanPhase,
         completion_summary: Option<&str>,
-        allow_direct_approval: bool,
     ) -> SdkResult<()> {
         Self::validate_plan_phase_change(plan, phase)?;
-        Self::validate_plan_approval_transition(plan, phase, allow_direct_approval)?;
         if phase == WorkflowPlanPhase::Completed {
             return Self::mark_plan_completed(plan, completion_summary);
         }
         plan.phase = phase;
-        plan.approval_state = Self::plan_approval_state_for_phase(phase, plan.approval_state);
-        plan.completed_at_ms = None;
         Ok(())
     }
 
@@ -1888,19 +1747,31 @@ impl WorkflowPlugin {
         plan: &WorkflowPlan,
         step_index: usize,
         step: &WorkflowPlanStep,
-    ) -> String {
-        format!(
-            "{}:{}:{}:{}",
-            plan.plan_id, plan.updated_at_ms, step_index, step.id
-        )
+    ) -> SdkResult<String> {
+        let serialized =
+            serde_json::to_string(plan).map_err(|err| PluginError::new(err.to_string()))?;
+        Ok(format!("{serialized}:{step_index}:{}", step.id))
     }
 
     fn review_decision(response: &crate::plugin::sdk::host_api::AskUserResponse) -> Option<String> {
         response
             .answers
-            .get("reply")
+            .get("decision")
             .and_then(|values| values.first())
             .cloned()
+            .or_else(|| {
+                response
+                    .answers
+                    .values()
+                    .find_map(|values| values.first().cloned())
+            })
+            .or_else(|| {
+                response
+                    .answers
+                    .get("reply")
+                    .and_then(|values| values.first())
+                    .cloned()
+            })
             .or_else(|| {
                 let reply = response.reply.trim();
                 (!reply.is_empty()).then_some(reply.to_string())
@@ -1937,7 +1808,7 @@ impl WorkflowPlugin {
         requested_auto_continue: Option<bool>,
         completion_summary: Option<&str>,
     ) -> String {
-        let effective_auto_continue = requested_auto_continue.unwrap_or(plan.auto_continue.enabled);
+        let effective_auto_continue = requested_auto_continue.unwrap_or(plan.auto_continue);
         let mut sections = vec![
             "## Requested Status Change".to_string(),
             String::new(),
@@ -1969,7 +1840,7 @@ impl WorkflowPlugin {
             description: match phase {
                 WorkflowPlanPhase::Active => format!(
                     "Approve the plan and move it to active with auto-continue {}.",
-                    if requested_auto_continue.unwrap_or(plan.auto_continue.enabled) {
+                    if requested_auto_continue.unwrap_or(plan.auto_continue) {
                         "on"
                     } else {
                         "off"
@@ -1986,7 +1857,7 @@ impl WorkflowPlugin {
             },
         }];
         if phase == WorkflowPlanPhase::Active
-            && requested_auto_continue.unwrap_or(plan.auto_continue.enabled)
+            && requested_auto_continue.unwrap_or(plan.auto_continue)
         {
             options.push(HostAskUserOption {
                 label: PLAN_REVIEW_DECISION_APPROVE_REQUESTED_PAUSE.to_string(),
@@ -2044,11 +1915,7 @@ impl WorkflowPlugin {
         requested_auto_continue: Option<bool>,
         completion_summary: Option<&str>,
     ) -> SdkResult<ToolInvokeOutput> {
-        let now_ms = Utc::now().timestamp_millis();
-        Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Draft, None, true)?;
-        plan.approval_state = WorkflowPlanApprovalState::Pending;
-        plan.submitted_at_ms = Some(now_ms);
-        plan.updated_at_ms = now_ms;
+        Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Draft, None)?;
         self.save_active_plan(&plan).await?;
 
         let response = self
@@ -2068,33 +1935,24 @@ impl WorkflowPlugin {
                 .unwrap_or_else(|| PLAN_REVIEW_DECISION_KEEP_PLANNING.to_string())
         };
 
-        let now_ms = Utc::now().timestamp_millis();
         match decision.as_str() {
             PLAN_REVIEW_DECISION_APPROVE_REQUESTED => {
-                Self::set_plan_phase(&mut plan, phase, completion_summary, true)?;
+                Self::set_plan_phase(&mut plan, phase, completion_summary)?;
                 if let Some(auto_continue) = requested_auto_continue {
-                    plan.auto_continue.enabled = auto_continue;
-                    plan.auto_continue.source = "tool_override".to_string();
+                    plan.auto_continue = auto_continue;
                 }
             }
             PLAN_REVIEW_DECISION_APPROVE_REQUESTED_PAUSE => {
-                Self::set_plan_phase(&mut plan, phase, completion_summary, true)?;
-                plan.auto_continue.enabled = false;
-                plan.auto_continue.source = "review_override".to_string();
-            }
-            PLAN_REVIEW_DECISION_REJECT => {
-                plan.phase = WorkflowPlanPhase::Draft;
-                plan.approval_state = WorkflowPlanApprovalState::Rejected;
+                Self::set_plan_phase(&mut plan, phase, completion_summary)?;
+                plan.auto_continue = false;
             }
             PLAN_REVIEW_DECISION_CANCELLED => {
-                Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Cancelled, None, true)?;
+                Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Cancelled, None)?;
             }
             _ => {
                 plan.phase = WorkflowPlanPhase::Draft;
-                plan.approval_state = WorkflowPlanApprovalState::NotRequested;
             }
         }
-        plan.updated_at_ms = now_ms;
         self.save_active_plan(&plan).await?;
 
         let output_text =
@@ -2272,13 +2130,8 @@ impl WorkflowPlugin {
         .with_payload(payload))
     }
 
-    async fn invoke_plan_create(
-        &self,
-        session_id: i64,
-        input: &PlanCreateInput,
-    ) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_plan_create(&self, input: &PlanCreateInput) -> SdkResult<ToolInvokeOutput> {
         let plan = self.build_plan(
-            session_id,
             input.objective.as_str(),
             input.title.as_deref(),
             input.document_markdown.as_deref(),
@@ -2295,14 +2148,9 @@ impl WorkflowPlugin {
         )
     }
 
-    async fn invoke_plan_replace(
-        &self,
-        session_id: i64,
-        input: &PlanReplaceInput,
-    ) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_plan_replace(&self, input: &PlanReplaceInput) -> SdkResult<ToolInvokeOutput> {
         let previous = self.load_active_plan().await?;
         let plan = self.build_plan(
-            session_id,
             input.objective.as_str(),
             input.title.as_deref(),
             input.document_markdown.as_deref(),
@@ -2324,11 +2172,7 @@ impl WorkflowPlugin {
         let Some(mut plan) = self.load_active_plan().await? else {
             return Err(PluginError::invalid_params("no active plan to submit"));
         };
-        let now_ms = Utc::now().timestamp_millis();
-        Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Draft, None, true)?;
-        plan.approval_state = WorkflowPlanApprovalState::Pending;
-        plan.submitted_at_ms = Some(now_ms);
-        plan.updated_at_ms = now_ms;
+        Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Draft, None)?;
         self.save_active_plan(&plan).await?;
 
         let response = self
@@ -2388,29 +2232,21 @@ impl WorkflowPlugin {
                 .unwrap_or_else(|| PLAN_REVIEW_DECISION_KEEP_PLANNING.to_string())
         };
 
-        let now_ms = Utc::now().timestamp_millis();
         match decision.as_str() {
             PLAN_REVIEW_DECISION_APPROVE_RUN => {
-                Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Active, None, true)?;
+                Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Active, None)?;
             }
             PLAN_REVIEW_DECISION_APPROVE_PAUSE => {
-                Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Active, None, true)?;
-                plan.auto_continue.enabled = false;
-                plan.auto_continue.source = "review_override".to_string();
-            }
-            PLAN_REVIEW_DECISION_REJECT => {
-                plan.phase = WorkflowPlanPhase::Draft;
-                plan.approval_state = WorkflowPlanApprovalState::Rejected;
+                Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Active, None)?;
+                plan.auto_continue = false;
             }
             PLAN_REVIEW_DECISION_CANCELLED => {
-                Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Cancelled, None, true)?;
+                Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Cancelled, None)?;
             }
             _ => {
                 plan.phase = WorkflowPlanPhase::Draft;
-                plan.approval_state = WorkflowPlanApprovalState::NotRequested;
             }
         }
-        plan.updated_at_ms = now_ms;
         self.save_active_plan(&plan).await?;
 
         let payload = serde_json::json!({
@@ -2445,7 +2281,7 @@ impl WorkflowPlugin {
         if let Some(status) = input.phase {
             Self::validate_plan_phase_change(&plan, status)?;
             if Self::plan_phase_requires_approval(status)
-                && plan.approval_state != WorkflowPlanApprovalState::Approved
+                && !Self::plan_phase_is_approved(plan.phase)
                 && !allow_direct_approval
             {
                 return self
@@ -2457,11 +2293,10 @@ impl WorkflowPlugin {
                     )
                     .await;
             }
-            Self::set_plan_phase(&mut plan, status, completion_summary, allow_direct_approval)?;
+            Self::set_plan_phase(&mut plan, status, completion_summary)?;
         }
         if let Some(auto_continue) = input.auto_continue {
-            plan.auto_continue.enabled = auto_continue;
-            plan.auto_continue.source = "tool_override".to_string();
+            plan.auto_continue = auto_continue;
         }
         let message = match input.phase {
             Some(status) => format!(
@@ -2470,7 +2305,6 @@ impl WorkflowPlugin {
             ),
             None => "Updated the plan status settings.".to_string(),
         };
-        plan.updated_at_ms = Utc::now().timestamp_millis();
         self.save_active_plan(&plan).await?;
         let payload = Self::plan_payload(&plan)?;
         Ok(
@@ -2511,7 +2345,6 @@ impl WorkflowPlugin {
             step.note = note.trim().to_string();
         }
         let step_title = step.title.clone();
-        plan.updated_at_ms = Utc::now().timestamp_millis();
         self.save_active_plan(&plan).await?;
         let payload = Self::plan_payload(&plan)?;
         Ok(ToolInvokeOutput::text(Self::plan_output_text(
@@ -2571,7 +2404,6 @@ impl WorkflowPlugin {
             checkpoint.text.clone()
         };
         Self::reconcile_step_status_from_checkpoints(step);
-        plan.updated_at_ms = Utc::now().timestamp_millis();
         self.save_active_plan(&plan).await?;
         let payload = Self::plan_payload(&plan)?;
         Ok(ToolInvokeOutput::text(Self::plan_output_text(
@@ -3088,7 +2920,6 @@ impl Plugin for WorkflowPlugin {
                     "get" => self.invoke_plan_get().await,
                     "create" => {
                         self.invoke_plan_create(
-                            input.session_id,
                             &serde_json::from_value(action_input)
                                 .map_err(|err| PluginError::invalid_params(err.to_string()))?,
                         )
@@ -3096,7 +2927,6 @@ impl Plugin for WorkflowPlugin {
                     }
                     "replace" => {
                         self.invoke_plan_replace(
-                            input.session_id,
                             &serde_json::from_value(action_input)
                                 .map_err(|err| PluginError::invalid_params(err.to_string()))?,
                         )
@@ -3287,10 +3117,7 @@ impl Plugin for WorkflowPlugin {
             return Ok(None);
         };
         self.sync_plan_statusline(Some(&plan)).await?;
-        if plan.phase != WorkflowPlanPhase::Active
-            || plan.approval_state != WorkflowPlanApprovalState::Approved
-            || !plan.auto_continue.enabled
-        {
+        if plan.phase != WorkflowPlanPhase::Active || !plan.auto_continue {
             return Ok(None);
         }
         let Some((step_index, step)) = Self::next_actionable_step(&plan) else {
@@ -3305,7 +3132,7 @@ impl Plugin for WorkflowPlugin {
         {
             return Ok(None);
         }
-        let signature = Self::plan_auto_signature(&plan, step_index, step);
+        let signature = Self::plan_auto_signature(&plan, step_index, step)?;
         if self
             .load_auto_continue_signature()
             .await?
@@ -3871,7 +3698,6 @@ mod tests {
 
         let plan = plugin
             .build_plan(
-                2,
                 args.objective.as_str(),
                 args.title.as_deref(),
                 args.document_markdown.as_deref(),
@@ -3914,7 +3740,6 @@ mod tests {
 
         let plan = plugin
             .build_plan(
-                2,
                 args.objective.as_str(),
                 args.title.as_deref(),
                 args.document_markdown.as_deref(),
@@ -4068,10 +3893,7 @@ mod tests {
             title: "Demonstrate creating a plan".to_string(),
             objective: "Demonstrate creating a plan".to_string(),
             document_markdown: "# Plan Demo\n\nUser requested to try the plan tool.".to_string(),
-            auto_continue: WorkflowPlanAutoContinue {
-                enabled: false,
-                source: "tool_override".to_string(),
-            },
+            auto_continue: false,
             ..WorkflowPlan::default()
         };
 
@@ -4089,10 +3911,7 @@ mod tests {
         let plan = WorkflowPlan {
             title: "Plan Demo".to_string(),
             objective: "Plan Demo".to_string(),
-            auto_continue: WorkflowPlanAutoContinue {
-                enabled: true,
-                source: "config_default".to_string(),
-            },
+            auto_continue: true,
             steps: vec![WorkflowPlanStep {
                 id: "step_1".to_string(),
                 title: "Create a simple demo plan".to_string(),
@@ -4266,10 +4085,6 @@ mod tests {
         );
         let completed_plan = output_plan(&completed);
         assert_eq!(completed_plan.phase, WorkflowPlanPhase::Completed);
-        assert_eq!(
-            completed_plan.approval_state,
-            WorkflowPlanApprovalState::Approved
-        );
         assert!(completed.output_text.contains("Status: completed | Steps: 1/1 complete | Checkpoints: 1/1 complete | Auto-continue: off"));
         assert!(completed.output_text.contains("## Completion Summary"));
         assert_eq!(
@@ -4424,8 +4239,7 @@ mod tests {
 
         let plan = output_plan(&reviewed);
         assert_eq!(plan.phase, WorkflowPlanPhase::Active);
-        assert_eq!(plan.approval_state, WorkflowPlanApprovalState::Approved);
-        assert!(!plan.auto_continue.enabled);
+        assert!(!plan.auto_continue);
         assert!(
             reviewed
                 .output_text
@@ -4468,7 +4282,6 @@ mod tests {
         );
         let plan = output_plan(&reviewed);
         assert_eq!(plan.phase, WorkflowPlanPhase::Draft);
-        assert_eq!(plan.approval_state, WorkflowPlanApprovalState::NotRequested);
         assert!(
             reviewed
                 .output_text
@@ -4504,10 +4317,6 @@ mod tests {
         let submitted = invoke_plan(&runtime, &plugin, json!({ "action": "submit" }));
         let submitted_plan = output_plan(&submitted);
         assert_eq!(submitted_plan.phase, WorkflowPlanPhase::Active);
-        assert_eq!(
-            submitted_plan.approval_state,
-            WorkflowPlanApprovalState::Approved
-        );
 
         let blocked = invoke_plan(
             &runtime,
@@ -4519,10 +4328,6 @@ mod tests {
         );
         let blocked_plan = output_plan(&blocked);
         assert_eq!(blocked_plan.phase, WorkflowPlanPhase::Blocked);
-        assert_eq!(
-            blocked_plan.approval_state,
-            WorkflowPlanApprovalState::Approved
-        );
     }
 
     #[test]
@@ -4550,10 +4355,6 @@ mod tests {
         let cancelled = invoke_plan(&runtime, &plugin, json!({ "action": "cancel" }));
         let cancelled_plan = output_plan(&cancelled);
         assert_eq!(cancelled_plan.phase, WorkflowPlanPhase::Cancelled);
-        assert_eq!(
-            cancelled_plan.approval_state,
-            WorkflowPlanApprovalState::NotRequested
-        );
         assert!(
             cancelled
                 .output_text
@@ -4582,11 +4383,7 @@ mod tests {
         );
         let restored_plan = output_plan(&restored);
         assert_eq!(restored_plan.phase, WorkflowPlanPhase::Active);
-        assert_eq!(
-            restored_plan.approval_state,
-            WorkflowPlanApprovalState::Approved
-        );
-        assert!(restored_plan.auto_continue.enabled);
+        assert!(restored_plan.auto_continue);
         assert!(
             restored
                 .output_text
@@ -4601,10 +4398,6 @@ mod tests {
         let reset_to_draft = invoke_plan(&runtime, &plugin, json!({ "action": "restore" }));
         let reset_plan = output_plan(&reset_to_draft);
         assert_eq!(reset_plan.phase, WorkflowPlanPhase::Draft);
-        assert_eq!(
-            reset_plan.approval_state,
-            WorkflowPlanApprovalState::NotRequested
-        );
 
         let completed_cancel = invoke_plan(
             &runtime,
@@ -4659,7 +4452,6 @@ mod tests {
         );
         let completed_plan = output_plan(&completed);
         assert_eq!(completed_plan.phase, WorkflowPlanPhase::Completed);
-        assert!(completed_plan.completed_at_ms.is_some());
 
         let restored = invoke_plan(
             &runtime,
@@ -4671,11 +4463,6 @@ mod tests {
         );
         let restored_plan = output_plan(&restored);
         assert_eq!(restored_plan.phase, WorkflowPlanPhase::Draft);
-        assert_eq!(
-            restored_plan.approval_state,
-            WorkflowPlanApprovalState::NotRequested
-        );
-        assert_eq!(restored_plan.completed_at_ms, None);
         assert!(
             restored
                 .output_text
@@ -4715,10 +4502,6 @@ mod tests {
         );
         let blocked_plan = output_plan(&blocked);
         assert_eq!(blocked_plan.phase, WorkflowPlanPhase::Blocked);
-        assert_eq!(
-            blocked_plan.approval_state,
-            WorkflowPlanApprovalState::Approved
-        );
     }
 
     #[test]
@@ -4747,11 +4530,7 @@ mod tests {
         let submitted = invoke_plan(&runtime, &plugin, json!({ "action": "submit" }));
         let submitted_plan = output_plan(&submitted);
         assert_eq!(submitted_plan.phase, WorkflowPlanPhase::Active);
-        assert_eq!(
-            submitted_plan.approval_state,
-            WorkflowPlanApprovalState::Approved
-        );
-        assert!(submitted_plan.auto_continue.enabled);
+        assert!(submitted_plan.auto_continue);
 
         let first_patch = runtime
             .block_on(Plugin::agent_stop(
@@ -4812,7 +4591,7 @@ mod tests {
         let submitted = invoke_plan(&runtime, &plugin, json!({ "action": "submit" }));
         let submitted_plan = output_plan(&submitted);
         assert_eq!(submitted_plan.phase, WorkflowPlanPhase::Active);
-        assert!(!submitted_plan.auto_continue.enabled);
+        assert!(!submitted_plan.auto_continue);
 
         let patch = runtime
             .block_on(Plugin::agent_stop(

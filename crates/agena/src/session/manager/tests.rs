@@ -4653,10 +4653,6 @@ while True:
                 Some("completed"),
                 "plan set_status should finalize the runtime plan"
             );
-            assert!(
-                completed_plan["completed_at_ms"].as_i64().is_some(),
-                "completed plans should record completed_at_ms"
-            );
 
             let read_payload = session_operation_payload(&session, "call_fs_read_1");
             let preview = read_payload["preview"]

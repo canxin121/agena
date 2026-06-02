@@ -4446,12 +4446,12 @@ while True:
                             "id": "step_runtime_plan",
                             "title": "Inspect the repo state",
                             "executor": "ai",
-                            "checkpoints": [{
-                                "id": "checkpoint_runtime_plan",
+                            "checks": [{
+                                "id": "check_runtime_plan",
                                 "text": "Inspect the repo state"
                             }]
                         }],
-                        "auto_continue": false
+                        "autorun": false
                     })
                     .to_string(),
                 )])
@@ -4641,9 +4641,9 @@ while True:
                 "plan update_step should complete the scripted step"
             );
             assert_eq!(
-                updated_plan["steps"][0]["checkpoints"][0]["status"].as_str(),
+                updated_plan["steps"][0]["checks"][0]["status"].as_str(),
                 Some("completed"),
-                "completing the step should also complete its checkpoint"
+                "completing the step should also complete its check"
             );
 
             let completed_plan = session_operation_payload(&session, "call_plan_set_status_1");

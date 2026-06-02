@@ -166,7 +166,7 @@ Runtime build 注册：
 | `agena.workflow/session` | `get`, `rename` |
 | `agena.workflow/goal` | `get`, `create`, `clear`, `complete` |
 | `agena.workflow/user` | `request_input` |
-| `agena.workflow/plan` | `enter`, `exit` |
+| `agena.workflow/plan` | `get`, `create`, `replace`, `submit`, `set_status`, `update_step`, `update_checkpoint`, `clear`, `next` |
 | `agena.workflow/worktree` | `enter`, `exit` |
 
 这些入口现在统一使用扁平 `{"action": "...", ...}` 形状。当前内置 static plugin 倾向把同域动作尽量收进一个顶层 tool，再通过 action 区分读、写、调度或交互行为。

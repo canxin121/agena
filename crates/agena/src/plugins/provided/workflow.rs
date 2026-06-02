@@ -420,7 +420,12 @@ enum WorkflowPlanPhase {
     #[default]
     #[serde(alias = "awaiting_review")]
     Draft,
-    #[serde(rename = "active", alias = "executing", alias = "paused")]
+    #[serde(
+        rename = "active",
+        alias = "executing",
+        alias = "paused",
+        alias = "execution"
+    )]
     Active,
     Blocked,
     Completed,
@@ -512,9 +517,16 @@ struct WorkflowPlan {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(default, deny_unknown_fields)]
+#[schemars(
+    description = "Plan checkpoint input. Each checkpoint item should use `text`; `title` and `description` are accepted only as compatibility aliases."
+)]
 struct WorkflowPlanCheckpointInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     id: Option<String>,
+    #[schemars(
+        description = "Checkpoint text. Models should send `text`; `title` and `description` are accepted only for compatibility."
+    )]
+    #[serde(alias = "title", alias = "description")]
     text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     status: Option<WorkflowPlanStepStatus>,
@@ -522,12 +534,25 @@ struct WorkflowPlanCheckpointInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(default, deny_unknown_fields)]
+#[schemars(
+    description = "Plan step input. Each step uses `title`; nested checkpoints under `checkpoints` use `text`."
+)]
 struct WorkflowPlanStepInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     id: Option<String>,
+    #[schemars(
+        description = "Human-readable step title. Models should send `title`; legacy `text` is accepted only for compatibility."
+    )]
+    #[serde(alias = "text")]
     title: String,
+    #[schemars(
+        description = "Optional longer explanation for the step. If omitted, the step title can serve as the short description."
+    )]
     #[serde(default)]
     description: String,
+    #[schemars(
+        description = "Who should execute the step. Use `ai` for agent work and `human` for manual work."
+    )]
     #[serde(default)]
     executor: WorkflowPlanExecutor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -536,18 +561,27 @@ struct WorkflowPlanStepInput {
     wait_until_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     note: Option<String>,
+    #[schemars(
+        description = "Optional checklist checkpoints for this step. Each checkpoint item uses `text`, not `title`."
+    )]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     checkpoints: Vec<WorkflowPlanCheckpointInput>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(
+    description = "Create a new active-session plan. Use `steps[].title` for steps, `steps[].checkpoints[].text` for checkpoints, and `auto_continue` to control whether approved active plans should continue automatically."
+)]
 struct PlanCreateInput {
     objective: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     document_markdown: Option<String>,
+    #[schemars(
+        description = "Ordered plan steps. Each step item uses `title`; nested checkpoints use `text`."
+    )]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     steps: Vec<WorkflowPlanStepInput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -556,12 +590,18 @@ struct PlanCreateInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(
+    description = "Replace the current active-session plan. Use the same structure as `create`: `steps[].title` for steps and `steps[].checkpoints[].text` for checkpoints."
+)]
 struct PlanReplaceInput {
     objective: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     document_markdown: Option<String>,
+    #[schemars(
+        description = "Ordered replacement plan steps. Each step item uses `title`; nested checkpoints use `text`."
+    )]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     steps: Vec<WorkflowPlanStepInput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -574,11 +614,21 @@ struct PlanSubmitInput {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(default, deny_unknown_fields)]
+#[schemars(
+    description = "Set the plan phase or auto-continue flag. Canonical phase values are `draft`, `active`, `blocked`, `completed`, and `cancelled`."
+)]
 struct PlanSetStatusInput {
+    #[schemars(
+        description = "Canonical plan phase. Use `draft`, `active`, `blocked`, `completed`, or `cancelled`."
+    )]
     #[serde(default, alias = "status", skip_serializing_if = "Option::is_none")]
     phase: Option<WorkflowPlanPhase>,
+    #[schemars(description = "Whether an approved active plan should continue automatically.")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     auto_continue: Option<bool>,
+    #[schemars(
+        description = "Optional completion summary. This is only applied when `phase` is `completed`."
+    )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     summary: Option<String>,
 }
@@ -3557,6 +3607,50 @@ mod tests {
     }
 
     #[test]
+    fn plan_create_accepts_step_text_and_checkpoint_title_aliases() {
+        let plugin = WorkflowPlugin::new();
+        let (action, action_input) = resolve_plan_tool_input(json!({
+            "action": "create",
+            "objective": "Exercise mixed legacy field names.",
+            "auto_continue": false,
+            "steps": [
+                {
+                    "id": "step_1",
+                    "text": "创建计划",
+                    "executor": "ai",
+                    "checkpoints": [
+                        {
+                            "id": "cp_1",
+                            "title": "检查计划内容"
+                        }
+                    ]
+                }
+            ]
+        }))
+        .expect("plan payload should parse");
+        assert_eq!(action, "create");
+        let args: PlanCreateInput =
+            serde_json::from_value(action_input).expect("plan create input should deserialize");
+
+        let plan = plugin
+            .build_plan(
+                2,
+                args.objective.as_str(),
+                args.title.as_deref(),
+                args.document_markdown.as_deref(),
+                args.steps.as_slice(),
+                args.auto_continue,
+                None,
+            )
+            .expect("plan should build");
+
+        assert_eq!(plan.steps.len(), 1);
+        assert_eq!(plan.steps[0].title, "创建计划");
+        assert_eq!(plan.steps[0].checkpoints.len(), 1);
+        assert_eq!(plan.steps[0].checkpoints[0].text, "检查计划内容");
+    }
+
+    #[test]
     fn resolve_plan_tool_input_normalizes_legacy_status_actions() {
         let (status_action, status_input) = resolve_plan_tool_input(json!({
             "action": "set_status",
@@ -3603,6 +3697,11 @@ mod tests {
             serde_json::from_value(runtime_input).expect("runtime input should deserialize");
         assert_eq!(runtime_args.phase, None);
         assert_eq!(runtime_args.auto_continue, Some(false));
+
+        let execution_args: PlanSetStatusInput =
+            serde_json::from_value(json!({ "phase": "execution" }))
+                .expect("execution alias should deserialize");
+        assert_eq!(execution_args.phase, Some(WorkflowPlanPhase::Active));
     }
 
     fn schema_string_literals(
@@ -3673,6 +3772,10 @@ mod tests {
 
         assert!(phase_literals.contains("active"));
         assert!(phase_literals.contains("completed"));
+        assert!(!phase_literals.contains("awaiting_review"));
+        assert!(!phase_literals.contains("executing"));
+        assert!(!phase_literals.contains("paused"));
+        assert!(!phase_literals.contains("execution"));
         assert!(status_literals.contains("pending"));
         assert!(status_literals.contains("in_progress"));
         assert!(!status_literals.contains("active"));

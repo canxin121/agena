@@ -409,13 +409,26 @@ fn fixed_input_summary(fixed_input: &serde_json::Value) -> Option<String> {
     (!parts.is_empty()).then_some(parts.join(", "))
 }
 
-fn model_alias_description(base: &RegisteredTool, fixed_input: &serde_json::Value) -> String {
+fn schema_description_text(schema: &serde_json::Value) -> Option<&str> {
+    schema
+        .get("description")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn model_alias_description(
+    base: &RegisteredTool,
+    fixed_input: &serde_json::Value,
+    schema: &serde_json::Value,
+) -> String {
     let fixed = fixed_input_summary(fixed_input)
         .map(|summary| {
             format!(" This specialized model-visible alias is fixed to {summary}; provide only the remaining arguments.")
         })
         .unwrap_or_default();
-    let base_description = base.description_text().trim();
+    let base_description =
+        schema_description_text(schema).unwrap_or_else(|| base.description_text().trim());
     if base_description.is_empty() {
         return format!(
             "Specialized model-visible alias for `{}`.{}",
@@ -516,7 +529,11 @@ fn expand_registered_tool_for_model_inner(
     let mut decl = base.decl.clone();
     decl.name = alias_name.clone();
     decl.input_schema = schema;
-    decl.description = Some(model_alias_description(base, &fixed_input_value));
+    decl.description = Some(model_alias_description(
+        base,
+        &fixed_input_value,
+        &decl.input_schema,
+    ));
     decl.help = model_alias_help(base, &fixed_input_value);
 
     let mut alias = base.with_model_alias(alias_name, decl, fixed_input_value.clone());
@@ -3715,6 +3732,44 @@ mod tests {
             Some("string")
         );
         assert!(!worktree_properties.contains_key("target"));
+    }
+
+    #[test]
+    fn model_alias_descriptions_prefer_action_specific_schema_guidance() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+
+        let tools = executor.available_model_tools();
+        let plan_create = tools
+            .iter()
+            .find(|tool| tool.exposed_name == "agena.workflow/plan.create")
+            .expect("plan.create alias should be model-visible");
+        let plan_set_status = tools
+            .iter()
+            .find(|tool| tool.exposed_name == "agena.workflow/plan.set_status")
+            .expect("plan.set_status alias should be model-visible");
+
+        assert!(
+            plan_create.description_text().contains("steps[].title"),
+            "plan.create description should explain step titles explicitly"
+        );
+        assert!(
+            plan_create
+                .description_text()
+                .contains("steps[].checkpoints[].text"),
+            "plan.create description should explain checkpoint text explicitly"
+        );
+        assert!(
+            plan_set_status
+                .description_text()
+                .contains("`draft`, `active`, `blocked`, `completed`, and `cancelled`"),
+            "plan.set_status description should emphasize canonical phases"
+        );
+        assert!(
+            !plan_set_status.description_text().contains("executing"),
+            "plan.set_status description should not lead with legacy phase names"
+        );
     }
 
     #[test]

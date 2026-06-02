@@ -272,6 +272,265 @@ fn string_literals(value: &serde_json::Value) -> Option<BTreeSet<String>> {
         })
 }
 
+#[derive(Debug, Clone)]
+struct DiscriminatedSchemaVariant {
+    field: String,
+    value: String,
+    schema: serde_json::Value,
+}
+
+fn top_level_discriminated_variants(
+    schema: &serde_json::Value,
+) -> Option<Vec<DiscriminatedSchemaVariant>> {
+    let object = schema.as_object()?;
+    let variants = ["oneOf", "anyOf", "allOf"]
+        .into_iter()
+        .find_map(|key| object.get(key).and_then(serde_json::Value::as_array))?;
+    if variants.len() <= 1 {
+        return None;
+    }
+
+    let variant_objects = variants
+        .iter()
+        .map(json_schema_object)
+        .collect::<Option<Vec<_>>>()?;
+    let discriminant = variant_objects
+        .iter()
+        .fold(None::<BTreeSet<String>>, |candidates, variant| {
+            let fields = variant
+                .get("properties")
+                .and_then(serde_json::Value::as_object)
+                .map(|properties| {
+                    properties
+                        .iter()
+                        .filter_map(|(name, property)| {
+                            let literals = string_literals(property)?;
+                            (literals.len() == 1).then_some(name.clone())
+                        })
+                        .collect::<BTreeSet<_>>()
+                })
+                .unwrap_or_default();
+            Some(match candidates {
+                Some(existing) => existing
+                    .intersection(&fields)
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
+                None => fields,
+            })
+        })
+        .and_then(|candidates| {
+            ["action", "target"]
+                .into_iter()
+                .find_map(|preferred| candidates.contains(preferred).then_some(preferred))
+                .map(ToOwned::to_owned)
+                .or_else(|| candidates.into_iter().next())
+        })?;
+
+    let mut seen_values = BTreeSet::new();
+    let mut expanded = Vec::with_capacity(variant_objects.len());
+    for variant in variant_objects {
+        let value = variant
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|properties| properties.get(discriminant.as_str()))
+            .and_then(string_literals)
+            .and_then(|literals| literals.into_iter().next())?;
+        if !seen_values.insert(value.clone()) {
+            return None;
+        }
+        expanded.push(DiscriminatedSchemaVariant {
+            field: discriminant.clone(),
+            value,
+            schema: strip_discriminant_from_variant(variant, discriminant.as_str()),
+        });
+    }
+
+    Some(expanded)
+}
+
+fn strip_discriminant_from_variant(
+    variant: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> serde_json::Value {
+    let mut stripped = variant.clone();
+    if let Some(properties) = stripped
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        properties.remove(field);
+    }
+    if let Some(required) = stripped
+        .get_mut("required")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        required.retain(|item| item.as_str() != Some(field));
+        if required.is_empty() {
+            stripped.remove("required");
+        }
+    }
+    stripped
+        .entry("type".to_string())
+        .or_insert_with(|| serde_json::Value::String("object".to_string()));
+    stripped
+        .entry("properties".to_string())
+        .or_insert_with(|| serde_json::Value::Object(Default::default()));
+    serde_json::Value::Object(stripped)
+}
+
+fn merge_fixed_tool_input(
+    input: serde_json::Value,
+    fixed_input: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let Some(fixed_input) = fixed_input else {
+        return input;
+    };
+    let mut merged = match input {
+        serde_json::Value::Object(object) => object,
+        _ => serde_json::Map::new(),
+    };
+    let Some(fixed_object) = fixed_input.as_object() else {
+        return serde_json::Value::Object(merged);
+    };
+    for (key, value) in fixed_object {
+        merged.insert(key.clone(), value.clone());
+    }
+    serde_json::Value::Object(merged)
+}
+
+fn fixed_input_summary(fixed_input: &serde_json::Value) -> Option<String> {
+    let object = fixed_input.as_object()?;
+    let parts = object
+        .iter()
+        .map(|(key, value)| match value {
+            serde_json::Value::String(text) => format!("`{key}` = `{text}`"),
+            other => format!("`{key}` = `{other}`"),
+        })
+        .collect::<Vec<_>>();
+    (!parts.is_empty()).then_some(parts.join(", "))
+}
+
+fn model_alias_description(base: &RegisteredTool, fixed_input: &serde_json::Value) -> String {
+    let fixed = fixed_input_summary(fixed_input)
+        .map(|summary| {
+            format!(" This specialized model-visible alias is fixed to {summary}; provide only the remaining arguments.")
+        })
+        .unwrap_or_default();
+    let base_description = base.description_text().trim();
+    if base_description.is_empty() {
+        return format!(
+            "Specialized model-visible alias for `{}`.{}",
+            base.behavior_exposed_name(),
+            fixed
+        )
+        .trim()
+        .to_string();
+    }
+    format!("{base_description}{fixed}")
+}
+
+fn model_alias_help(base: &RegisteredTool, fixed_input: &serde_json::Value) -> Option<String> {
+    let fixed = fixed_input_summary(fixed_input)?;
+    let prefix = format!(
+        "This model-visible alias dispatches to `{}` with fixed {}.",
+        base.behavior_exposed_name(),
+        fixed
+    );
+    Some(match base.help_text() {
+        Some(help) => format!("{prefix}\n\n{help}"),
+        None => prefix,
+    })
+}
+
+fn allocate_model_alias_name(
+    base: &RegisteredTool,
+    alias_segments: &[String],
+    used_exposed_names: &mut BTreeSet<String>,
+) -> String {
+    let stem = format!("{}.{}", base.original_name, alias_segments.join("."));
+    let mut candidate = stem.clone();
+    let mut suffix = 2usize;
+    loop {
+        let exposed = crate::plugin::registry::exposed_tool_name(
+            base.plugin_name.as_str(),
+            candidate.as_str(),
+        );
+        if used_exposed_names.insert(exposed) {
+            return candidate;
+        }
+        candidate = format!("{stem}_{suffix}");
+        suffix += 1;
+    }
+}
+
+fn expand_registered_tool_for_model(
+    base: &RegisteredTool,
+    used_exposed_names: &mut BTreeSet<String>,
+    out: &mut Vec<RegisteredTool>,
+) {
+    expand_registered_tool_for_model_inner(
+        base,
+        base.sanitized_input_schema(),
+        serde_json::Map::new(),
+        Vec::new(),
+        used_exposed_names,
+        out,
+    );
+}
+
+fn expand_registered_tool_for_model_inner(
+    base: &RegisteredTool,
+    schema: serde_json::Value,
+    fixed_input: serde_json::Map<String, serde_json::Value>,
+    alias_segments: Vec<String>,
+    used_exposed_names: &mut BTreeSet<String>,
+    out: &mut Vec<RegisteredTool>,
+) {
+    if let Some(variants) = top_level_discriminated_variants(&schema) {
+        for variant in variants {
+            let mut next_fixed_input = fixed_input.clone();
+            next_fixed_input.insert(
+                variant.field.clone(),
+                serde_json::Value::String(variant.value.clone()),
+            );
+            let mut next_alias_segments = alias_segments.clone();
+            next_alias_segments.push(variant.value);
+            expand_registered_tool_for_model_inner(
+                base,
+                variant.schema,
+                next_fixed_input,
+                next_alias_segments,
+                used_exposed_names,
+                out,
+            );
+        }
+        return;
+    }
+
+    if alias_segments.is_empty() {
+        out.push(base.clone());
+        return;
+    }
+
+    let alias_name = allocate_model_alias_name(base, &alias_segments, used_exposed_names);
+    let fixed_input_value = serde_json::Value::Object(fixed_input);
+    let mut decl = base.decl.clone();
+    decl.name = alias_name.clone();
+    decl.input_schema = schema;
+    decl.description = Some(model_alias_description(base, &fixed_input_value));
+    decl.help = model_alias_help(base, &fixed_input_value);
+
+    let mut alias = base.with_model_alias(alias_name, decl, fixed_input_value.clone());
+    let fixed_input_object = StructuredObject::try_from(fixed_input_value)
+        .expect("model tool alias fixed input should always be an object");
+    let invocation = ToolInvocation::new(alias.exposed_name.as_str(), fixed_input_object);
+    alias.decl.tags = invocation_effective_tags(&alias, &invocation);
+    alias.decl.concurrency_safe = is_concurrency_safe_tool_invocation(
+        &alias,
+        &PluginInvocation::from_tool_invocation(&invocation),
+    );
+    out.push(alias);
+}
+
 pub fn new_skills_plugin() -> impl crate::plugin::sdk::Plugin {
     skills::SkillsPlugin::new()
 }
@@ -457,6 +716,20 @@ fn present_registered_tool(
 }
 
 fn compact_tool_description(registered_tool: &RegisteredTool) -> String {
+    if let Some(base_tool) = registered_tool.base_exposed_name.as_deref() {
+        let alias_note = registered_tool
+            .fixed_input
+            .as_ref()
+            .and_then(fixed_input_summary)
+            .map(|summary| format!(" This model-visible alias is fixed to {summary}."))
+            .unwrap_or_default();
+        return format!(
+            "{} Full usage is available from the `tools` tool: call action `help` with tool `{}`.{}",
+            tool_summary(registered_tool),
+            base_tool,
+            alias_note
+        );
+    }
     format!(
         "{} Full usage is available from the `tools` tool: call action `help` with tool `{}`.",
         tool_summary(registered_tool),
@@ -626,13 +899,11 @@ impl ToolExecutor {
         ToolCatalog::for_model(self.model_id.as_deref())
     }
 
-    fn catalogued_tools_raw(&self) -> Vec<RegisteredTool> {
-        let catalog = self.tool_catalog();
+    fn registered_tools_with_definition_overrides(&self) -> Vec<RegisteredTool> {
         let mut tools = self
             .plugins
             .registered_tools()
             .into_iter()
-            .filter(|entry| catalog.is_tool_enabled(entry))
             .collect::<Vec<_>>();
 
         tools.sort_by(|left, right| {
@@ -681,8 +952,44 @@ impl ToolExecutor {
         tools
     }
 
+    fn catalogued_tools_raw(&self) -> Vec<RegisteredTool> {
+        let catalog = self.tool_catalog();
+        self.registered_tools_with_definition_overrides()
+            .into_iter()
+            .filter(|entry| catalog.is_tool_enabled(entry))
+            .collect()
+    }
+
+    fn catalogued_model_tools_raw(&self) -> Vec<RegisteredTool> {
+        let mut used_exposed_names = self
+            .plugins
+            .registered_tools()
+            .into_iter()
+            .map(|tool| tool.exposed_name.clone())
+            .collect::<BTreeSet<_>>();
+        let mut expanded = Vec::new();
+        for tool in self.registered_tools_with_definition_overrides() {
+            expand_registered_tool_for_model(&tool, &mut used_exposed_names, &mut expanded);
+        }
+        let catalog = self.tool_catalog();
+        expanded.retain(|entry| catalog.is_tool_enabled(entry));
+        expanded.sort_by(|left, right| {
+            left.exposed_name
+                .cmp(&right.exposed_name)
+                .then_with(|| left.description_text().cmp(right.description_text()))
+        });
+        expanded
+    }
+
     fn catalogued_tools(&self) -> Vec<RegisteredTool> {
         self.catalogued_tools_raw()
+            .into_iter()
+            .map(|entry| present_registered_tool(entry, &self.tool_presentation))
+            .collect()
+    }
+
+    fn catalogued_model_tools(&self) -> Vec<RegisteredTool> {
+        self.catalogued_model_tools_raw()
             .into_iter()
             .map(|entry| present_registered_tool(entry, &self.tool_presentation))
             .collect()
@@ -698,6 +1005,10 @@ impl ToolExecutor {
 
     pub fn available_tools(&self) -> Vec<RegisteredTool> {
         self.catalogued_tools()
+    }
+
+    pub fn available_model_tools(&self) -> Vec<RegisteredTool> {
+        self.catalogued_model_tools()
     }
 
     pub fn is_concurrency_safe_invocation(&self, invocation: &ToolInvocation) -> bool {
@@ -727,8 +1038,19 @@ impl ToolExecutor {
             .into_iter()
             .find(|entry| tool_matches_model_name(entry, invocation.tool_name.as_str()))
             .or_else(|| {
+                self.catalogued_model_tools()
+                    .into_iter()
+                    .find(|entry| tool_matches_model_name(entry, invocation.tool_name.as_str()))
+            })
+            .or_else(|| {
                 let canonical = canonical_tool_name(invocation.tool_name.as_str());
                 self.catalogued_tools()
+                    .into_iter()
+                    .find(|entry| tool_matches_model_name(entry, canonical))
+            })
+            .or_else(|| {
+                let canonical = canonical_tool_name(invocation.tool_name.as_str());
+                self.catalogued_model_tools()
                     .into_iter()
                     .find(|entry| tool_matches_model_name(entry, canonical))
             })
@@ -826,6 +1148,11 @@ impl ToolExecutor {
             .or_else(|| {
                 self.plugins
                     .registered_tools()
+                    .into_iter()
+                    .find(|tool| tool_matches_model_name(tool, invocation.tool_name.as_str()))
+            })
+            .or_else(|| {
+                self.catalogued_model_tools_raw()
                     .into_iter()
                     .find(|tool| tool_matches_model_name(tool, invocation.tool_name.as_str()))
             })
@@ -1187,15 +1514,30 @@ impl ToolExecutor {
         call_id: i64,
     ) -> Result<PreparedToolInvocation, ToolError> {
         let exposed_tool_name = invocation_name(invocation).to_owned();
+        let definition = self.invocation_definition(invocation);
+        let plugin_name = self.invocation_plugin_name_for(invocation);
+        if definition.is_none() {
+            let mut prepared_invocation = invocation.clone();
+            prepared_invocation.plugin_name = Some(plugin_name);
+            return Ok(PreparedToolInvocation {
+                invocation: prepared_invocation,
+                title_override: None,
+                metadata: Default::default(),
+            });
+        }
         let hook_tool_name = self
             .plugin_resolution_for_invocation(invocation)
             .map(|entry| entry.original_name)
             .unwrap_or_else(|| exposed_tool_name.clone());
-        let definition = self.invocation_definition(invocation);
-        let plugin_name = self.invocation_plugin_name_for(invocation);
         let input_json = invocation_input_json(invocation)?;
-        let input_value: serde_json::Value = serde_json::from_str(&input_json)
+        let parsed_input_value: serde_json::Value = serde_json::from_str(&input_json)
             .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
+        let input_value = definition
+            .as_ref()
+            .map(|definition| {
+                merge_fixed_tool_input(parsed_input_value.clone(), definition.fixed_input.as_ref())
+            })
+            .unwrap_or(parsed_input_value);
 
         let effective_tags = definition
             .as_ref()
@@ -1252,8 +1594,8 @@ impl ToolExecutor {
         );
         let mut checks = vec![ToolPermissionCheck { action, decision }];
 
-        let input_value = invocation_input_value(invocation);
         if let Some(resolution) = self.plugin_resolution_for_invocation(invocation) {
+            let input_value = resolved_tool_input_value(&resolution, invocation);
             if resolution.has_tag(crate::plugin::sdk::ToolTag::Shell) {
                 self.collect_declared_filesystem_effect_checks(
                     &mut checks,
@@ -1311,7 +1653,7 @@ impl ToolExecutor {
                     session_id,
                     call_id,
                     workspace_root: self.workspace_root.to_string_lossy().to_string(),
-                    input: plugin_invocation_input_value(&plugin_invocation),
+                    input: resolved_plugin_invocation_input_value(&resolution, &plugin_invocation),
                 },
             )
             .await
@@ -1410,7 +1752,7 @@ impl ToolExecutor {
                     session_id,
                     call_id,
                     workspace_root: self.workspace_root.to_string_lossy().to_string(),
-                    input: plugin_invocation_input_value(&plugin_invocation),
+                    input: resolved_plugin_invocation_input_value(&resolution, &plugin_invocation),
                 },
             )
             .map_err(|err| ToolError::Plugin(err.message))?;
@@ -1857,10 +2199,28 @@ fn canonical_tool_name(name: &str) -> &str {
     name
 }
 
-fn command_from_input(input: &StructuredObject) -> Option<&str> {
-    input
-        .get("action")
-        .and_then(crate::message::StructuredValue::as_text)
+fn command_from_input_value(input: &serde_json::Value) -> Option<&str> {
+    input.get("action").and_then(serde_json::Value::as_str)
+}
+
+fn resolved_tool_input_value(
+    registered_tool: &RegisteredTool,
+    invocation: &ToolInvocation,
+) -> serde_json::Value {
+    merge_fixed_tool_input(
+        invocation_input_value(invocation),
+        registered_tool.fixed_input.as_ref(),
+    )
+}
+
+fn resolved_plugin_invocation_input_value(
+    registered_tool: &RegisteredTool,
+    invocation: &PluginInvocation,
+) -> serde_json::Value {
+    merge_fixed_tool_input(
+        plugin_invocation_input_value(invocation),
+        registered_tool.fixed_input.as_ref(),
+    )
 }
 
 fn resolve_managed_project_path_alias(raw_path: &str, workspace_root: &Path) -> Option<PathBuf> {
@@ -1880,11 +2240,12 @@ fn invocation_effective_tags(
     invocation: &ToolInvocation,
 ) -> Vec<crate::plugin::sdk::ToolTag> {
     let mut tags = definition.effective_tags();
-    let Some(command) = command_from_input(&invocation.input) else {
+    let input = resolved_tool_input_value(definition, invocation);
+    let Some(command) = command_from_input_value(&input) else {
         return tags;
     };
 
-    match (definition.exposed_name.as_str(), command) {
+    match (definition.behavior_exposed_name(), command) {
         ("agena.fs/fs", "read" | "glob" | "grep") => {
             set_invocation_access_tags(&mut tags, true, false, true, false)
         }
@@ -1955,11 +2316,12 @@ fn is_concurrency_safe_tool_invocation(
     registered_tool: &RegisteredTool,
     invocation: &PluginInvocation,
 ) -> bool {
-    let Some(command) = command_from_input(&invocation.input) else {
+    let input = resolved_plugin_invocation_input_value(registered_tool, invocation);
+    let Some(command) = command_from_input_value(&input) else {
         return registered_tool.decl.concurrency_safe;
     };
 
-    match (registered_tool.exposed_name.as_str(), command) {
+    match (registered_tool.behavior_exposed_name(), command) {
         ("agena.fs/fs", "read" | "glob" | "grep") => true,
         ("agena.fs/fs", "apply_patch" | "notebook_edit") => false,
         ("agena.settings/settings", "get" | "list" | "validate") => true,
@@ -2215,9 +2577,10 @@ enum InputJsonPathSegment {
 #[cfg(test)]
 mod tests {
 
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use chrono::Utc;
@@ -2233,8 +2596,10 @@ mod tests {
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
-        EventSubscription, HostTodoPriority, HostTodoStatus, LogLevel, SpawnSubtaskRequest,
-        SpawnSubtaskResponse, ToolDescriptor,
+        EventSubscription, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+        HostStorageListRequest, HostStorageListResponse, HostStorageRecord, HostStorageScope,
+        HostStorageSetRequest, HostStorageVisibility, HostTodoPriority, HostTodoStatus, LogLevel,
+        SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
     };
     use crate::plugin::sdk::prelude::*;
     use crate::plugin::sdk::{
@@ -2329,8 +2694,39 @@ mod tests {
         ToolExecutor::new(root, agent).with_plugin_manager(build_default_plugin_manager(root))
     }
 
-    #[derive(Debug)]
-    struct TestToolHost;
+    #[derive(Debug, Default)]
+    struct TestToolHost {
+        storage: Mutex<BTreeMap<(String, String, String, String), String>>,
+    }
+
+    fn storage_scope_key(scope: HostStorageScope) -> &'static str {
+        match scope {
+            HostStorageScope::Session => "session",
+            HostStorageScope::Workspace => "workspace",
+            HostStorageScope::Global => "global",
+        }
+    }
+
+    fn storage_visibility_key(visibility: HostStorageVisibility) -> &'static str {
+        match visibility {
+            HostStorageVisibility::Private => "private",
+            HostStorageVisibility::Shared => "shared",
+        }
+    }
+
+    fn storage_slot_key(
+        scope: HostStorageScope,
+        visibility: HostStorageVisibility,
+        namespace: &str,
+        key: &str,
+    ) -> (String, String, String, String) {
+        (
+            storage_scope_key(scope).to_string(),
+            storage_visibility_key(visibility).to_string(),
+            namespace.to_string(),
+            key.to_string(),
+        )
+    }
 
     #[async_trait::async_trait]
     impl HostClient for TestToolHost {
@@ -2350,6 +2746,79 @@ mod tests {
 
         async fn read_config(&self, _path: Option<String>) -> SdkResult<serde_json::Value> {
             Ok(serde_json::Value::Null)
+        }
+
+        async fn storage_get(
+            &self,
+            req: HostStorageGetRequest,
+        ) -> SdkResult<HostStorageGetResponse> {
+            let value = self
+                .storage
+                .lock()
+                .expect("test storage lock should not be poisoned")
+                .get(&storage_slot_key(
+                    req.scope,
+                    req.visibility,
+                    &req.namespace,
+                    &req.key,
+                ))
+                .cloned();
+            Ok(HostStorageGetResponse { value })
+        }
+
+        async fn storage_set(&self, req: HostStorageSetRequest) -> SdkResult<()> {
+            self.storage
+                .lock()
+                .expect("test storage lock should not be poisoned")
+                .insert(
+                    storage_slot_key(req.scope, req.visibility, &req.namespace, &req.key),
+                    req.value,
+                );
+            Ok(())
+        }
+
+        async fn storage_delete(&self, req: HostStorageDeleteRequest) -> SdkResult<()> {
+            self.storage
+                .lock()
+                .expect("test storage lock should not be poisoned")
+                .remove(&storage_slot_key(
+                    req.scope,
+                    req.visibility,
+                    &req.namespace,
+                    &req.key,
+                ));
+            Ok(())
+        }
+
+        async fn storage_list(
+            &self,
+            req: HostStorageListRequest,
+        ) -> SdkResult<HostStorageListResponse> {
+            let scope = storage_scope_key(req.scope);
+            let visibility = storage_visibility_key(req.visibility);
+            let records = self
+                .storage
+                .lock()
+                .expect("test storage lock should not be poisoned")
+                .keys()
+                .filter(|(slot_scope, slot_visibility, namespace, key)| {
+                    slot_scope == scope
+                        && slot_visibility == visibility
+                        && req
+                            .namespace
+                            .as_ref()
+                            .is_none_or(|expected| namespace == expected)
+                        && req
+                            .prefix
+                            .as_ref()
+                            .is_none_or(|expected| key.starts_with(expected))
+                })
+                .map(|(_, _, namespace, key)| HostStorageRecord {
+                    namespace: namespace.clone(),
+                    key: key.clone(),
+                })
+                .collect();
+            Ok(HostStorageListResponse { records })
         }
 
         async fn invoke_tool(
@@ -2643,7 +3112,7 @@ mod tests {
         test_plugin_runtime().block_on(async {
             PluginHostBuilder::new(root, "test")
                 .with_config(config)
-                .with_host_client(Arc::new(TestToolHost))
+                .with_host_client(Arc::new(TestToolHost::default()))
                 .register_static(skills_id, super::new_skills_plugin())
                 .register_static(lsp_id, super::new_lsp_plugin())
                 .register_static(cron_id, super::new_cron_plugin())
@@ -2702,7 +3171,7 @@ mod tests {
         test_plugin_runtime().block_on(async {
             PluginHostBuilder::new(root, "test")
                 .with_config(config)
-                .with_host_client(Arc::new(TestToolHost))
+                .with_host_client(Arc::new(TestToolHost::default()))
                 .register_static(skills_id, super::new_skills_plugin())
                 .register_static(lsp_id, super::new_lsp_plugin())
                 .register_static(cron_id, super::new_cron_plugin())
@@ -2716,6 +3185,63 @@ mod tests {
                 .build()
                 .await
                 .expect("default plugin host should build")
+        })
+    }
+
+    fn build_default_plugin_manager_without_host(root: &Path) -> Arc<PluginHost> {
+        use std::collections::BTreeMap;
+
+        let skills_id = super::skills_plugin_id().to_string();
+        let lsp_id = super::lsp_plugin_id().to_string();
+        let cron_id = super::cron_plugin_id().to_string();
+        let code_id = super::code_plugin_id().to_string();
+        let fs_id = super::fs_plugin_id().to_string();
+        let settings_id = super::settings_plugin_id().to_string();
+        let shell_id = super::shell_plugin_id().to_string();
+        let workflow_id = super::workflow_plugin_id().to_string();
+        let schema_lab_id = super::schema_lab_plugin_id().to_string();
+        let web_id = crate::web::web_plugin_id().to_string();
+        let mut list = BTreeMap::new();
+        for id in [
+            &skills_id,
+            &lsp_id,
+            &cron_id,
+            &code_id,
+            &fs_id,
+            &settings_id,
+            &shell_id,
+            &workflow_id,
+            &schema_lab_id,
+            &web_id,
+        ] {
+            let config = if id == &workflow_id {
+                serde_json::json!({})
+            } else {
+                serde_json::Value::Null
+            };
+            list.insert((*id).clone(), ConfiguredPlugin::static_config(config));
+        }
+        let config = PluginsConfig {
+            host: Default::default(),
+            policy: Default::default(),
+            list,
+        };
+        test_plugin_runtime().block_on(async {
+            PluginHostBuilder::new(root, "test")
+                .with_config(config)
+                .register_static(skills_id, super::new_skills_plugin())
+                .register_static(lsp_id, super::new_lsp_plugin())
+                .register_static(cron_id, super::new_cron_plugin())
+                .register_static(code_id, super::new_code_plugin())
+                .register_static(fs_id, super::new_fs_plugin())
+                .register_static(settings_id, super::new_settings_plugin())
+                .register_static(shell_id, super::new_shell_plugin())
+                .register_static(workflow_id, super::new_workflow_plugin())
+                .register_static(schema_lab_id, super::new_schema_lab_plugin())
+                .register_static(web_id, crate::web::new_web_plugin())
+                .build()
+                .await
+                .expect("default plugin host without host client should build")
         })
     }
 
@@ -3119,6 +3645,177 @@ mod tests {
             .filter(|tool| tool.exposed_name == FS_TOOL)
             .count();
         assert_eq!(fs_count, 1);
+    }
+
+    #[test]
+    fn available_model_tools_split_multi_action_and_nested_tagged_unions() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+
+        let tools = executor.available_model_tools();
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.exposed_name == "agena.workflow/plan")
+        );
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool.exposed_name == "agena.workflow/worktree")
+        );
+
+        let plan_set_status = tools
+            .iter()
+            .find(|tool| tool.exposed_name == "agena.workflow/plan.set_status")
+            .expect("plan.set_status alias should be model-visible");
+        let checkpoint_update = tools
+            .iter()
+            .find(|tool| tool.exposed_name == "agena.workflow/plan.update_checkpoint")
+            .expect("plan.update_checkpoint alias should be model-visible");
+        let worktree_existing = tools
+            .iter()
+            .find(|tool| tool.exposed_name == "agena.workflow/worktree.enter.existing")
+            .expect("nested worktree.enter.existing alias should be model-visible");
+
+        let plan_set_schema =
+            super::model_safe_tool_schema(&plan_set_status.sanitized_input_schema());
+        let checkpoint_schema =
+            super::model_safe_tool_schema(&checkpoint_update.sanitized_input_schema());
+        let worktree_schema =
+            super::model_safe_tool_schema(&worktree_existing.sanitized_input_schema());
+
+        let plan_set_properties = plan_set_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("plan.set_status schema should expose properties");
+        let checkpoint_properties = checkpoint_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("plan.update_checkpoint schema should expose properties");
+        let worktree_properties = worktree_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("worktree.enter.existing schema should expose properties");
+
+        assert!(!plan_set_properties.contains_key("action"));
+        assert!(
+            plan_set_properties.contains_key("phase") || plan_set_properties.contains_key("status")
+        );
+        assert!(!plan_set_properties.contains_key("step_id"));
+        assert!(checkpoint_properties.contains_key("step_id"));
+        assert!(checkpoint_properties.contains_key("checkpoint_id"));
+        assert!(checkpoint_properties.contains_key("status"));
+        assert!(!checkpoint_properties.contains_key("phase"));
+        assert_eq!(
+            worktree_properties
+                .get("path")
+                .and_then(|value| value.get("type"))
+                .and_then(serde_json::Value::as_str),
+            Some("string")
+        );
+        assert!(!worktree_properties.contains_key("target"));
+    }
+
+    #[test]
+    fn readonly_model_tools_filter_mutating_action_aliases() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root))
+            .with_model_id("gpt-readonly");
+
+        let names = executor
+            .available_model_tools()
+            .into_iter()
+            .map(|tool| tool.exposed_name)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert!(names.contains("agena.settings/settings.get"));
+        assert!(names.contains("agena.settings/settings.list"));
+        assert!(names.contains("agena.settings/settings.validate"));
+        assert!(!names.contains("agena.settings/settings.set"));
+        assert!(!names.contains("agena.settings/settings.delete"));
+        assert!(!names.contains("agena.settings/settings.patch"));
+
+        assert!(names.contains("agena.fs/fs.read"));
+        assert!(names.contains("agena.fs/fs.glob"));
+        assert!(names.contains("agena.fs/fs.grep"));
+        assert!(!names.contains("agena.fs/fs.apply_patch"));
+        assert!(!names.contains("agena.fs/fs.notebook_edit"));
+    }
+
+    #[test]
+    fn model_tool_aliases_dispatch_back_to_original_plugin_tools() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+        fs::write(workspace.root.join("main.rs"), "fn main() {}\n")
+            .expect("test source should be written");
+
+        let invocation = ToolInvocation::new(
+            "agena.code/code.syntax_tree",
+            StructuredObject::try_from(json!({
+                "path": "main.rs"
+            }))
+            .expect("syntax_tree alias input should serialize"),
+        );
+        let result = executor
+            .execute_invocation_detailed(&invocation, 7, 9)
+            .expect("code.syntax_tree alias should dispatch successfully");
+
+        assert!(!result.view.title.trim().is_empty());
+        assert!(!result.view.output_text.trim().is_empty());
+    }
+
+    #[test]
+    fn model_tool_aliases_round_trip_through_provider_tool_parsing() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+        fs::write(workspace.root.join("main.rs"), "fn main() {}\n")
+            .expect("test source should be written");
+
+        let tools = executor.available_model_tools();
+        let invocation = crate::session::parse_tool_invocation(
+            "agena.code/code.syntax_tree",
+            r#"{"path":"main.rs"}"#,
+            tools.as_slice(),
+        )
+        .expect("provider tool parsing should accept model alias names");
+
+        let result = executor
+            .execute_invocation_detailed(&invocation, 7, 9)
+            .expect("parsed alias invocation should execute successfully");
+
+        assert_eq!(invocation.name, "agena.code/code.syntax_tree");
+        assert!(!result.view.output_text.trim().is_empty());
+    }
+
+    #[test]
+    fn help_mode_compacts_model_aliases_back_to_base_tool_help() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root))
+            .with_tool_presentation(crate::plugin::ToolPresentationConfig {
+                default_mode: crate::plugin::ToolDescriptionMode::Help,
+                ..Default::default()
+            });
+
+        let alias = executor
+            .available_model_tools()
+            .into_iter()
+            .find(|tool| tool.exposed_name == "agena.settings/settings.get")
+            .expect("settings.get alias should be model-visible");
+        assert!(
+            alias
+                .description_text()
+                .contains("tool `agena.settings/settings`")
+        );
+        assert!(
+            alias
+                .description_text()
+                .contains("fixed to `action` = `get`")
+        );
     }
 
     #[test]
@@ -3589,6 +4286,36 @@ mod tests {
         assert_eq!(plugin_name.as_deref(), Some("custom"));
         let payload = serde_json::Value::from(input);
         assert_eq!(payload["query"], "plugin host");
+    }
+
+    #[test]
+    fn prepare_unknown_invocation_skips_plugin_hooks_without_host_context() {
+        let workspace = TempWorkspace::new();
+        let agent = crate::agent::Agent::new("build", PermissionPolicy::allow_all());
+        let executor = ToolExecutor::new(&workspace.root, agent)
+            .with_plugin_manager(build_default_plugin_manager_without_host(&workspace.root));
+        let invocation = ToolInvocation {
+            name: "agena.web/unsupported".to_string(),
+            plugin_name: None,
+            input: StructuredObject::default(),
+        };
+
+        let prepared = executor
+            .prepare_invocation(&invocation, 7, 9)
+            .expect("unknown tools should not trigger plugin before hooks");
+
+        assert_eq!(prepared.invocation.name, "agena.web/unsupported");
+        assert_eq!(prepared.invocation.plugin_name.as_deref(), Some("custom"));
+        assert!(prepared.title_override.is_none());
+        assert!(prepared.metadata.is_empty());
+
+        let err = executor
+            .execute_invocation_detailed(&prepared.invocation, 7, 9)
+            .expect_err("unknown tools should still fail as unknown at execution time");
+        assert!(matches!(
+            err,
+            ToolError::UnknownTool(name) if name == "agena.web/unsupported"
+        ));
     }
 
     #[test]

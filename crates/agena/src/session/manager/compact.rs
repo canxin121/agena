@@ -177,7 +177,7 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
-        let tools = scoped_executor.available_tools();
+        let tools = scoped_executor.available_model_tools();
         let native_tools = state
             .processor
             .provider_registry()

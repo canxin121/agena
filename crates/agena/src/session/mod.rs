@@ -36,6 +36,8 @@ pub use model::{
     SessionSummary,
 };
 pub use processor::SessionProcessor;
+#[cfg(test)]
+pub(crate) use processor::parse_tool_invocation;
 
 pub use history::ProjectedMessageHeader;
 /// Audit-only payload carried by `RewindCheckpoint` system notices.

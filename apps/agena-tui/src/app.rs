@@ -1245,6 +1245,8 @@ struct UserInputOverlay {
     state: QuestionFlowState,
     editing_custom: bool,
     custom_input: Editor,
+    review_option: usize,
+    review_scroll: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -2776,6 +2778,9 @@ impl App {
         key: KeyEvent,
         dialog: &mut UserInputOverlay,
     ) -> bool {
+        if Self::user_input_overlay_is_review(dialog) {
+            return self.handle_user_input_review_decision_key(key, dialog);
+        }
         if dialog.editing_custom {
             return match key.code {
                 KeyCode::Esc => {
@@ -2808,6 +2813,48 @@ impl App {
         match dialog.state.screen() {
             QuestionFlowScreen::Question => self.handle_user_input_question_key(key, dialog),
             QuestionFlowScreen::Review => self.handle_user_input_review_key(key, dialog),
+        }
+    }
+
+    fn handle_user_input_review_decision_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut UserInputOverlay,
+    ) -> bool {
+        let option_count = Self::user_input_review_question(&dialog.request)
+            .map(|question| question.options.len())
+            .unwrap_or(0);
+        match key.code {
+            KeyCode::Esc => true,
+            KeyCode::Enter => self.submit_user_input_overlay(dialog),
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cancel_user_input_overlay(dialog)
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                move_selected_index(&mut dialog.review_option, option_count, -1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                move_selected_index(&mut dialog.review_option, option_count, 1);
+                false
+            }
+            KeyCode::PageUp => {
+                dialog.review_scroll = dialog.review_scroll.saturating_sub(12);
+                false
+            }
+            KeyCode::PageDown => {
+                dialog.review_scroll = dialog.review_scroll.saturating_add(12);
+                false
+            }
+            KeyCode::Home => {
+                dialog.review_scroll = 0;
+                false
+            }
+            KeyCode::End => {
+                dialog.review_scroll = u16::MAX;
+                false
+            }
+            _ => false,
         }
     }
 
@@ -3219,6 +3266,18 @@ impl App {
         i18n: &I18n,
         dialog: &mut UserInputOverlay,
     ) -> std::result::Result<UserInputReply, String> {
+        if let Some(question) = Self::user_input_review_question(&dialog.request) {
+            let Some(option) = question.options.get(dialog.review_option) else {
+                return Err(ui_text::t(i18n, "overlay-user-input-no-questions"));
+            };
+            return Ok(UserInputReply {
+                request_id: dialog.request.request_id.clone(),
+                kind: UserInputReplyKind::Submit,
+                answers: BTreeMap::from([(question.id.clone(), vec![option.label.clone()])]),
+                reason: None,
+            });
+        }
+
         let mut answers = BTreeMap::new();
         for index in 0..dialog.request.questions.len() {
             let question = &dialog.request.questions[index];
@@ -8498,9 +8557,23 @@ impl App {
             state: QuestionFlowState::default(),
             editing_custom: false,
             custom_input: Editor::default(),
+            review_option: 0,
+            review_scroll: 0,
         };
         Self::sync_user_input_option_selection(&mut overlay);
         overlay
+    }
+
+    fn user_input_review_question(request: &UserInputRequest) -> Option<&UserInputQuestion> {
+        let question = request.questions.first()?;
+        if request.kind.trim() != "review" || request.questions.len() != 1 || question.multiple {
+            return None;
+        }
+        (!question.options.is_empty()).then_some(question)
+    }
+
+    fn user_input_overlay_is_review(dialog: &UserInputOverlay) -> bool {
+        Self::user_input_review_question(&dialog.request).is_some()
     }
 
     fn build_permission_overlay(session_id: i64, request: PermissionRequest) -> PermissionOverlay {
@@ -24922,6 +24995,47 @@ mod tests {
     }
 
     #[test]
+    fn review_user_input_overlay_uses_fullscreen_decision_mode() {
+        let request = UserInputRequest {
+            request_id: "input-review".to_string(),
+            session_id: Some(1),
+            title: "Review Plan".to_string(),
+            body_markdown: "# Plan\n\n- inspect the plan body".to_string(),
+            kind: "review".to_string(),
+            submit_label: "Submit decision".to_string(),
+            cancel_label: "Keep in planning".to_string(),
+            questions: vec![UserInputQuestion {
+                id: "decision".to_string(),
+                header: "Decision".to_string(),
+                question: "Choose what should happen next.".to_string(),
+                options: vec![
+                    UserInputOption {
+                        label: "Approve and run".to_string(),
+                        description: "Approve the plan and run it.".to_string(),
+                    },
+                    UserInputOption {
+                        label: "Keep in planning".to_string(),
+                        description: "Return to draft for edits.".to_string(),
+                    },
+                ],
+                multiple: false,
+                allow_custom: false,
+            }],
+            created_at: Utc::now(),
+        };
+        let mut overlay = App::build_user_input_overlay(1, request);
+        assert!(App::user_input_overlay_is_review(&overlay));
+
+        overlay.review_option = 1;
+        let reply = App::build_structured_user_input_reply(&I18n::english(), &mut overlay)
+            .expect("review overlays should build a reply from the selected decision");
+        assert_eq!(
+            reply.answers.get("decision"),
+            Some(&vec!["Keep in planning".to_string()])
+        );
+    }
+
+    #[test]
     fn composer_input_is_active_only_when_the_composer_is_engaged() {
         assert!(composer_input_is_active(Focus::Composer, true, false));
         assert!(composer_input_is_active(Focus::Composer, false, true));
@@ -25511,7 +25625,7 @@ mod tests {
         }];
         assert_eq!(
             ui_text::session_workflow_state_label(&i18n, &execution),
-            "等待审批"
+            "等待权限审批"
         );
     }
 

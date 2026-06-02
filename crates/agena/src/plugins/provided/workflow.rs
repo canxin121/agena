@@ -825,6 +825,7 @@ const PLAN_REVIEW_DECISION_APPROVE_RUN: &str = "Approve and run";
 const PLAN_REVIEW_DECISION_APPROVE_PAUSE: &str = "Approve with auto-continue off";
 const PLAN_REVIEW_DECISION_KEEP_PLANNING: &str = "Keep in planning";
 const PLAN_REVIEW_DECISION_REJECT: &str = "Reject";
+const PLAN_REVIEW_DECISION_CANCELLED: &str = "Cancel plan";
 
 pub(crate) struct WorkflowPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
@@ -1363,6 +1364,89 @@ impl WorkflowPlugin {
             status,
             WorkflowPlanStepStatus::Completed | WorkflowPlanStepStatus::Skipped
         )
+    }
+
+    fn normalize_identifier(value: &str) -> String {
+        value
+            .trim()
+            .chars()
+            .filter_map(|ch| {
+                if ch.is_ascii_alphanumeric() {
+                    Some(ch.to_ascii_lowercase())
+                } else if ch.is_whitespace() || matches!(ch, '_' | '-') {
+                    Some('_')
+                } else {
+                    None
+                }
+            })
+            .collect::<String>()
+            .trim_matches('_')
+            .to_string()
+    }
+
+    fn parse_1_based_index_hint(value: &str, prefixes: &[&str]) -> Option<usize> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if let Ok(index) = trimmed.parse::<usize>() {
+            return index.checked_sub(1);
+        }
+        let normalized = Self::normalize_identifier(trimmed);
+        for prefix in prefixes {
+            for candidate in [
+                prefix.to_string(),
+                format!("{prefix}_"),
+                format!("{prefix}-"),
+            ] {
+                if let Some(rest) = normalized.strip_prefix(candidate.as_str())
+                    && let Ok(index) = rest.parse::<usize>()
+                {
+                    return index.checked_sub(1);
+                }
+            }
+        }
+        None
+    }
+
+    fn resolve_plan_step_index(plan: &WorkflowPlan, step_id: &str) -> Option<usize> {
+        let normalized_target = Self::normalize_identifier(step_id);
+        plan.steps
+            .iter()
+            .position(|step| step.id == step_id)
+            .or_else(|| {
+                plan.steps.iter().position(|step| {
+                    let title = Self::normalize_identifier(step.title.as_str());
+                    let description = Self::normalize_identifier(step.description.as_str());
+                    !normalized_target.is_empty()
+                        && (title == normalized_target || description == normalized_target)
+                })
+            })
+            .or_else(|| Self::parse_1_based_index_hint(step_id, &["step", "s"]))
+            .filter(|index| *index < plan.steps.len())
+    }
+
+    fn resolve_checkpoint_index(step: &WorkflowPlanStep, checkpoint_id: &str) -> Option<usize> {
+        let normalized_target = Self::normalize_identifier(checkpoint_id);
+        step.checkpoints
+            .iter()
+            .position(|checkpoint| checkpoint.id == checkpoint_id)
+            .or_else(|| {
+                step.checkpoints.iter().position(|checkpoint| {
+                    let text = Self::normalize_identifier(checkpoint.text.as_str());
+                    !normalized_target.is_empty() && text == normalized_target
+                })
+            })
+            .or_else(|| Self::parse_1_based_index_hint(checkpoint_id, &["checkpoint", "cp", "c"]))
+            .filter(|index| *index < step.checkpoints.len())
+    }
+
+    fn plan_step_identifier_hint(step: &WorkflowPlanStep, index: usize) -> String {
+        format!("step_id={} (step {})", step.id, index + 1)
+    }
+
+    fn checkpoint_identifier_hint(checkpoint: &WorkflowPlanCheckpoint, index: usize) -> String {
+        format!("checkpoint_id={} (checkpoint {})", checkpoint.id, index + 1)
     }
 
     fn plan_progress_counts(plan: &WorkflowPlan) -> (usize, usize, usize, usize) {
@@ -1968,14 +2052,44 @@ impl WorkflowPlugin {
                 kind: "review".to_string(),
                 submit_label: "Submit decision".to_string(),
                 cancel_label: "Keep in planning".to_string(),
-                questions: Vec::new(),
-                prompt: "Plan decision".to_string(),
-                options: vec![
-                    PLAN_REVIEW_DECISION_APPROVE_RUN.to_string(),
-                    PLAN_REVIEW_DECISION_APPROVE_PAUSE.to_string(),
-                    PLAN_REVIEW_DECISION_KEEP_PLANNING.to_string(),
-                    PLAN_REVIEW_DECISION_REJECT.to_string(),
-                ],
+                questions: vec![HostAskUserQuestion {
+                    id: "decision".to_string(),
+                    header: "Decision".to_string(),
+                    question: "Choose what should happen to this plan next.".to_string(),
+                    options: vec![
+                        HostAskUserOption {
+                            label: PLAN_REVIEW_DECISION_APPROVE_RUN.to_string(),
+                            description: "Approve the plan and keep auto-continue enabled."
+                                .to_string(),
+                        },
+                        HostAskUserOption {
+                            label: PLAN_REVIEW_DECISION_APPROVE_PAUSE.to_string(),
+                            description:
+                                "Approve the plan but keep it paused for manual execution."
+                                    .to_string(),
+                        },
+                        HostAskUserOption {
+                            label: PLAN_REVIEW_DECISION_KEEP_PLANNING.to_string(),
+                            description: "Return to draft so the plan can be edited further."
+                                .to_string(),
+                        },
+                        HostAskUserOption {
+                            label: PLAN_REVIEW_DECISION_REJECT.to_string(),
+                            description:
+                                "Reject the current draft and mark the review as rejected."
+                                    .to_string(),
+                        },
+                        HostAskUserOption {
+                            label: PLAN_REVIEW_DECISION_CANCELLED.to_string(),
+                            description: "Cancel the plan entirely and stop work on it."
+                                .to_string(),
+                        },
+                    ],
+                    multiple: false,
+                    allow_custom: false,
+                }],
+                prompt: String::new(),
+                options: Vec::new(),
                 allow_free_text: false,
             })
             .await?;
@@ -2000,6 +2114,9 @@ impl WorkflowPlugin {
             PLAN_REVIEW_DECISION_REJECT => {
                 plan.phase = WorkflowPlanPhase::Draft;
                 plan.approval_state = WorkflowPlanApprovalState::Rejected;
+            }
+            PLAN_REVIEW_DECISION_CANCELLED => {
+                Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Cancelled, None)?;
             }
             _ => {
                 plan.phase = WorkflowPlanPhase::Draft;
@@ -2028,18 +2145,17 @@ impl WorkflowPlugin {
         let Some(mut plan) = self.load_active_plan().await? else {
             return Err(PluginError::invalid_params("no active plan to update"));
         };
-        if input.summary.is_some() && input.phase != Some(WorkflowPlanPhase::Completed) {
-            return Err(PluginError::invalid_params(
-                "plan status summary is only allowed when status is completed",
-            ));
-        }
         if input.phase.is_none() && input.auto_continue.is_none() {
             return Err(PluginError::invalid_params(
                 "plan set_status requires at least one of phase/status or auto_continue",
             ));
         }
+        let completion_summary = match input.phase {
+            Some(WorkflowPlanPhase::Completed) => input.summary.as_deref(),
+            _ => None,
+        };
         if let Some(status) = input.phase {
-            Self::set_plan_phase(&mut plan, status, input.summary.as_deref())?;
+            Self::set_plan_phase(&mut plan, status, completion_summary)?;
         }
         if let Some(auto_continue) = input.auto_continue {
             plan.auto_continue.enabled = auto_continue;
@@ -2069,12 +2185,23 @@ impl WorkflowPlugin {
         let Some(mut plan) = self.load_active_plan().await? else {
             return Err(PluginError::invalid_params("no active plan to update"));
         };
-        let Some(step) = plan.steps.iter_mut().find(|step| step.id == input.step_id) else {
+        let Some(step_index) = Self::resolve_plan_step_index(&plan, input.step_id.as_str()) else {
             return Err(PluginError::invalid_params(format!(
-                "unknown plan step '{}'",
-                input.step_id
+                "unknown plan step '{}'; available steps: {}",
+                input.step_id,
+                plan.steps
+                    .iter()
+                    .enumerate()
+                    .map(|(index, step)| format!(
+                        "'{}' [{}]",
+                        step.title,
+                        Self::plan_step_identifier_hint(step, index)
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )));
         };
+        let step = &mut plan.steps[step_index];
         step.status = input.status;
         Self::cascade_terminal_step_status(step, input.status);
         step.wait_until_ms = input.wait_until_ms;
@@ -2100,23 +2227,44 @@ impl WorkflowPlugin {
         let Some(mut plan) = self.load_active_plan().await? else {
             return Err(PluginError::invalid_params("no active plan to update"));
         };
-        let Some(step) = plan.steps.iter_mut().find(|step| step.id == input.step_id) else {
+        let Some(step_index) = Self::resolve_plan_step_index(&plan, input.step_id.as_str()) else {
             return Err(PluginError::invalid_params(format!(
-                "unknown plan step '{}'",
-                input.step_id
+                "unknown plan step '{}'; available steps: {}",
+                input.step_id,
+                plan.steps
+                    .iter()
+                    .enumerate()
+                    .map(|(index, step)| format!(
+                        "'{}' [{}]",
+                        step.title,
+                        Self::plan_step_identifier_hint(step, index)
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )));
         };
+        let step = &mut plan.steps[step_index];
         let checkpoint_text = {
-            let Some(checkpoint) = step
-                .checkpoints
-                .iter_mut()
-                .find(|checkpoint| checkpoint.id == input.checkpoint_id)
+            let Some(checkpoint_index) =
+                Self::resolve_checkpoint_index(step, input.checkpoint_id.as_str())
             else {
                 return Err(PluginError::invalid_params(format!(
-                    "unknown checkpoint '{}' for step '{}'",
-                    input.checkpoint_id, input.step_id
+                    "unknown checkpoint '{}' for step '{}'; available checkpoints: {}",
+                    input.checkpoint_id,
+                    input.step_id,
+                    step.checkpoints
+                        .iter()
+                        .enumerate()
+                        .map(|(index, checkpoint)| format!(
+                            "'{}' [{}]",
+                            checkpoint.text,
+                            Self::checkpoint_identifier_hint(checkpoint, index)
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )));
             };
+            let checkpoint = &mut step.checkpoints[checkpoint_index];
             checkpoint.status = input.status;
             checkpoint.text.clone()
         };
@@ -2168,10 +2316,11 @@ impl WorkflowPlugin {
         };
         let text = match Self::next_actionable_step(&plan) {
             Some((index, step)) => format!(
-                "Next step {} is '{}' ({:?}).",
+                "Next step {} is '{}' ({:?}) [{}].",
                 index + 1,
                 step.title,
-                step.executor
+                step.executor,
+                Self::plan_step_identifier_hint(step, index)
             ),
             None => "The active plan has no remaining actionable steps.".to_string(),
         };
@@ -2912,6 +3061,7 @@ mod tests {
     #[derive(Default)]
     struct WorkflowTestHostClient {
         ask_user_reply: Mutex<Option<String>>,
+        ask_user_request: Mutex<Option<crate::plugin::sdk::host_api::AskUserRequest>>,
         statusline: Mutex<BTreeMap<String, String>>,
         storage: Mutex<BTreeMap<(String, String, String, String), String>>,
     }
@@ -2953,6 +3103,13 @@ mod tests {
                 .expect("statusline lock")
                 .get(segment_id)
                 .cloned()
+        }
+
+        fn last_ask_user_request(&self) -> Option<crate::plugin::sdk::host_api::AskUserRequest> {
+            self.ask_user_request
+                .lock()
+                .expect("ask_user_request lock")
+                .clone()
         }
     }
 
@@ -3008,8 +3165,9 @@ mod tests {
 
         async fn ask_user(
             &self,
-            _req: crate::plugin::sdk::host_api::AskUserRequest,
+            req: crate::plugin::sdk::host_api::AskUserRequest,
         ) -> crate::plugin::sdk::Result<crate::plugin::sdk::host_api::AskUserResponse> {
+            *self.ask_user_request.lock().expect("ask_user_request lock") = Some(req);
             Ok(crate::plugin::sdk::host_api::AskUserResponse {
                 reply: self
                     .ask_user_reply
@@ -3579,6 +3737,47 @@ mod tests {
     }
 
     #[test]
+    fn plan_submit_uses_review_question_options_with_descriptions() {
+        let (plugin, host, runtime) =
+            init_test_plugin(false, Some(PLAN_REVIEW_DECISION_KEEP_PLANNING));
+
+        invoke_plan(
+            &runtime,
+            &plugin,
+            json!({
+                "action": "create",
+                "objective": "Review the plan.",
+                "title": "Reviewable Plan",
+                "auto_continue": false,
+                "steps": [
+                    {
+                        "id": "step_review",
+                        "title": "Review the draft",
+                        "executor": "ai"
+                    }
+                ]
+            }),
+        );
+
+        invoke_plan(&runtime, &plugin, json!({ "action": "submit" }));
+        let request = host
+            .last_ask_user_request()
+            .expect("submit should issue a host review request");
+        assert_eq!(request.kind, "review");
+        assert!(request.prompt.is_empty());
+        assert!(request.options.is_empty());
+        assert_eq!(request.questions.len(), 1);
+        assert_eq!(request.questions[0].id, "decision");
+        assert!(
+            request.questions[0]
+                .options
+                .iter()
+                .any(|option| option.label == PLAN_REVIEW_DECISION_CANCELLED
+                    && !option.description.trim().is_empty())
+        );
+    }
+
+    #[test]
     fn plan_tool_flow_blocks_premature_completion_and_reports_status() {
         let (plugin, host, runtime) = init_test_plugin(false, None);
 
@@ -3705,6 +3904,88 @@ mod tests {
                 .contains("The active plan has no remaining actionable steps.")
         );
         assert!(next.payload.expect("next output should include payload")["next_step"].is_null());
+    }
+
+    #[test]
+    fn plan_update_checkpoint_accepts_checkpoint_index_hints() {
+        let (plugin, _host, runtime) = init_test_plugin(false, None);
+
+        invoke_plan(
+            &runtime,
+            &plugin,
+            json!({
+                "action": "create",
+                "objective": "Exercise checkpoint matching.",
+                "title": "Checkpoint Plan",
+                "auto_continue": false,
+                "steps": [
+                    {
+                        "id": "step_review",
+                        "title": "Review the plan",
+                        "executor": "ai",
+                        "checkpoints": [
+                            {
+                                "id": "checkpoint_review",
+                                "text": "Look over the draft"
+                            }
+                        ]
+                    }
+                ]
+            }),
+        );
+
+        let updated = invoke_plan(
+            &runtime,
+            &plugin,
+            json!({
+                "action": "update_checkpoint",
+                "step_id": "step1",
+                "checkpoint_id": "cp1",
+                "status": "completed"
+            }),
+        );
+        let plan = output_plan(&updated);
+        assert_eq!(
+            plan.steps[0].checkpoints[0].status,
+            WorkflowPlanStepStatus::Completed
+        );
+        assert_eq!(plan.steps[0].status, WorkflowPlanStepStatus::Completed);
+    }
+
+    #[test]
+    fn plan_set_status_ignores_summary_until_completed() {
+        let (plugin, _host, runtime) = init_test_plugin(false, None);
+
+        invoke_plan(
+            &runtime,
+            &plugin,
+            json!({
+                "action": "create",
+                "objective": "Exercise summary tolerance.",
+                "title": "Summary Plan",
+                "auto_continue": false,
+                "steps": [
+                    {
+                        "id": "step_summary",
+                        "title": "Finish the work",
+                        "executor": "ai"
+                    }
+                ]
+            }),
+        );
+
+        let blocked = invoke_plan(
+            &runtime,
+            &plugin,
+            json!({
+                "action": "set_status",
+                "phase": "blocked",
+                "summary": "This should be ignored."
+            }),
+        );
+        let plan = output_plan(&blocked);
+        assert_eq!(plan.phase, WorkflowPlanPhase::Blocked);
+        assert!(!plan.document_markdown.contains("Completion Summary"));
     }
 
     #[test]

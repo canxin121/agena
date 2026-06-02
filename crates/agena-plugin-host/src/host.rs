@@ -665,7 +665,7 @@ impl PluginHost {
             .ok_or_else(|| {
                 PluginError::new(format!("plugin `{}` not loaded", registered_tool.plugin_id))
             })?;
-        let timeout = self.timeouts.tool_invoke_or(Duration::from_secs(300));
+        let timeout = self.tool_invoke_timeout(registered_tool);
         let mut input = input;
         // ensure tool name is the plugin-original name (in case caller passed exposed)
         input.tool_name = registered_tool.original_name.clone();
@@ -691,6 +691,19 @@ impl PluginHost {
         });
         let value = result.map_err(transport_to_plugin_error)?;
         serde_json::from_value(value).map_err(|e| PluginError::invalid_params(e.to_string()))
+    }
+
+    fn tool_invoke_timeout(&self, registered_tool: &RegisteredTool) -> Duration {
+        let base = self.timeouts.tool_invoke_or(Duration::from_secs(300));
+        if registered_tool
+            .decl
+            .host_capabilities
+            .iter()
+            .any(|capability| *capability == HostCapability::AskUser)
+        {
+            return base.max(Duration::from_secs(60 * 60 * 24));
+        }
+        base
     }
 
     pub fn dispatch_tool_permission_paths(

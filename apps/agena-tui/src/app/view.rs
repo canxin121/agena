@@ -6,21 +6,24 @@ use agena_tui_components::{
     DashboardWorkbenchOverlaySpec, DashboardWorkbenchSpec, DecisionDialogSpec,
     DetailTextDialogSpec, DetailTextLine, DetailTextSpec, EditorDialogSpec,
     EditorPreviewDialogSpec, EditorPreviewHelpSpec, FramedSurfaceSpec,
-    HeaderBodyFooterTextSurfaceSpec, HeaderRowSpec, LineTextDialogSpec, ListPanelSpec,
-    ListWorkbenchDialogSpec, ListWorkbenchPanelState, QuerySuggestionPopupSpec,
-    QuestionFlowCustomInputSpec, QuestionFlowDialogMode, QuestionFlowDialogSpec,
-    SearchListDialogSpec, SearchPanelsDialogSpec, SearchPanelsDialogState, SuggestionPopupItem,
-    SuggestionPopupSpec, SurfaceMode, TextDialogLine, TextPanelSpec, VerticalSectionSize,
-    WorkbenchTextSection, WrappedTextSpec, adaptive_detail_split, adaptive_modal_width,
-    build_accented_two_line_list_item, build_detail_two_line_list_item, build_wrapped_text_lines,
-    format_key_value_segment, inset_rect, join_inline_segments, layout_composer_surface,
-    layout_header_body_footer_surface, pane_header_height, render_composer_editor_surface,
-    render_dashboard_workbench_dialog, render_decision_dialog, render_editor_dialog,
-    render_editor_preview_dialog, render_framed_surface, render_header_body_footer_text_surface,
-    render_header_row, render_line_text_dialog, render_list_panel, render_list_workbench_dialog,
+    HeaderBodyFooterTextSurfaceSpec, HeaderRowSpec, LineTextDialogSpec, ListPanelSection,
+    ListPanelSpec, ListWorkbenchDialogSpec, ListWorkbenchPanelState, ParagraphSection,
+    QuerySuggestionPopupSpec, QuestionFlowCustomInputSpec, QuestionFlowDialogMode,
+    QuestionFlowDialogSpec, SearchListDialogSpec, SearchPanelsDialogSpec, SearchPanelsDialogState,
+    StackedDialogSection, StackedDialogSectionHeight, StackedDialogSpec, SuggestionPopupItem,
+    SuggestionPopupSpec, SurfaceMode, TextDialogLine, TextPanelSection, TextPanelSpec,
+    VerticalSectionSize, WorkbenchTextSection, WrappedTextSpec, adaptive_detail_split,
+    adaptive_modal_width, build_accented_two_line_list_item, build_detail_two_line_list_item,
+    build_wrapped_text_lines, format_key_value_segment, inset_rect, join_inline_segments,
+    layout_composer_surface, layout_header_body_footer_surface, list_panel_height,
+    pane_header_height, render_composer_editor_surface, render_dashboard_workbench_dialog,
+    render_decision_dialog, render_editor_dialog, render_editor_preview_dialog,
+    render_framed_surface, render_header_body_footer_text_surface, render_header_row,
+    render_line_text_dialog, render_list_panel, render_list_workbench_dialog,
     render_overlay_line_input_dialog, render_query_suggestion_popup, render_question_flow_dialog,
-    render_search_list_dialog, render_search_panels_dialog, render_suggestion_popup,
-    render_text_panel, render_wrapped_text, split_vertical_sections, truncate_display_text,
+    render_search_list_dialog, render_search_panels_dialog, render_stacked_dialog,
+    render_suggestion_popup, render_text_panel, render_wrapped_text, split_vertical_sections,
+    truncate_display_text, wrapped_text_height_for_text,
 };
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
@@ -28,6 +31,7 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Borders, ListItem, Paragraph, Wrap},
 };
+use tui_markdown::from_str as markdown_to_text;
 use unicode_width::UnicodeWidthStr;
 
 impl App {
@@ -935,6 +939,10 @@ impl App {
     }
 
     fn render_user_input_overlay(&self, frame: &mut Frame, area: Rect, dialog: &UserInputOverlay) {
+        if user_input_request_is_review(&dialog.request) {
+            self.render_user_input_review_overlay(frame, area, dialog);
+            return;
+        }
         let target_width = adaptive_modal_width(area.width, 92);
         let footer_review = user_input_footer_text(
             &self.i18n,
@@ -1239,6 +1247,105 @@ impl App {
         if let Some(cursor) = result.cursor {
             frame.set_cursor_position(cursor);
         }
+    }
+
+    fn render_user_input_review_overlay(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        dialog: &UserInputOverlay,
+    ) {
+        let Some(question) = user_input_review_question(&dialog.request) else {
+            return;
+        };
+        let target_width = area.width;
+        let content_width = SurfaceMode::Route
+            .content_width(area, target_width)
+            .saturating_sub(2)
+            .max(1);
+        let title = user_input_overlay_title(&self.i18n, &dialog.request);
+        let plan_body = review_request_body_markdown(dialog.request.body_markdown.as_str());
+        let body_content_width = content_width.saturating_sub(2).max(1);
+        let natural_body_height = wrapped_text_height_for_text(&plan_body, body_content_width);
+        let decision_items = question
+            .options
+            .iter()
+            .map(|option| {
+                build_detail_two_line_list_item(
+                    option.label.clone().into(),
+                    (!option.description.trim().is_empty())
+                        .then_some(option.description.clone().into()),
+                    Style::default().fg(Color::DarkGray),
+                )
+            })
+            .collect::<Vec<ListItem<'static>>>();
+        let cancel_label = {
+            let label = dialog.request.cancel_label.trim();
+            if label.is_empty() { "cancel" } else { label }
+        };
+        let footer = Text::from(vec![Line::from(Span::styled(
+            sanitize_display_text(format!(
+                "Enter {} · Ctrl+D {} · ↑/↓ choose · PgUp/PgDn scroll · Home/End jump",
+                user_input_submit_label(&self.i18n, &dialog.request),
+                cancel_label
+            )),
+            Style::default().fg(Color::DarkGray),
+        ))]);
+        let decision_height = list_panel_height(question.options.len(), 2, 4, 10);
+        let footer_height = wrapped_text_height_for_text(&footer, content_width).clamp(1, 2);
+        let body_height = area
+            .height
+            .saturating_sub(2)
+            .saturating_sub(decision_height)
+            .saturating_sub(footer_height)
+            .max(1);
+        let max_scroll = natural_body_height.saturating_sub(body_height.saturating_sub(2));
+        let scroll = dialog.review_scroll.min(max_scroll);
+
+        render_stacked_dialog(
+            frame,
+            area,
+            SurfaceMode::Route,
+            &StackedDialogSpec {
+                title: title.into(),
+                target_width,
+                sections: vec![
+                    StackedDialogSection::ListPanel(ListPanelSection {
+                        height: StackedDialogSectionHeight::AutoList {
+                            lines_per_item: 2,
+                            min_body: 4,
+                            max_body: 10,
+                        },
+                        spec: ListPanelSpec::new(
+                            Some("Decisions".into()),
+                            decision_items.as_slice(),
+                            Some(dialog.review_option),
+                            selection_highlight_style(),
+                            ">> ".into(),
+                        ),
+                    }),
+                    StackedDialogSection::TextPanel(TextPanelSection {
+                        height: StackedDialogSectionHeight::Fixed(body_height),
+                        spec: TextPanelSpec {
+                            title: Some("Plan".into()),
+                            body: &plan_body,
+                            wrap: true,
+                            scroll: Some((scroll, 0)),
+                            alignment: None,
+                        },
+                    }),
+                    StackedDialogSection::Paragraph(ParagraphSection {
+                        height: StackedDialogSectionHeight::AutoText { min: 1, max: 2 },
+                        title: None,
+                        borders: Borders::NONE,
+                        body: footer,
+                        wrap: true,
+                        scroll: None,
+                        alignment: None,
+                    }),
+                ],
+            },
+        );
     }
 
     fn render_confirm_overlay(&self, frame: &mut Frame, area: Rect, dialog: &ConfirmOverlay) {
@@ -3185,6 +3292,18 @@ fn user_input_overlay_title(i18n: &I18n, request: &UserInputRequest) -> String {
     }
 }
 
+fn user_input_review_question(request: &UserInputRequest) -> Option<&UserInputQuestion> {
+    let question = request.questions.first()?;
+    if request.kind.trim() != "review" || request.questions.len() != 1 || question.multiple {
+        return None;
+    }
+    (!question.options.is_empty()).then_some(question)
+}
+
+fn user_input_request_is_review(request: &UserInputRequest) -> bool {
+    user_input_review_question(request).is_some()
+}
+
 fn user_input_submit_label(i18n: &I18n, request: &UserInputRequest) -> String {
     let label = request.submit_label.trim();
     if label.is_empty() {
@@ -3202,6 +3321,28 @@ fn user_input_footer_text(i18n: &I18n, request: &UserInputRequest, key: &str) ->
         footer.push_str(sanitize_display_text(cancel).as_str());
     }
     footer
+}
+
+fn review_request_body_markdown(body_markdown: &str) -> Text<'static> {
+    let markdown = body_markdown.trim();
+    if markdown.is_empty() {
+        return Text::from(vec![Line::from("")]);
+    }
+    let rendered = markdown_to_text(markdown);
+    Text::from(
+        rendered
+            .lines
+            .into_iter()
+            .map(|line| {
+                let spans = line
+                    .spans
+                    .into_iter()
+                    .map(|span| Span::styled(sanitize_display_text(span.content), span.style))
+                    .collect::<Vec<_>>();
+                Line::from(spans)
+            })
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn user_input_body_markdown_lines(body_markdown: &str, style: Option<Style>) -> Vec<Line<'static>> {

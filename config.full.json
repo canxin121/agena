@@ -174,7 +174,12 @@
         "package": {
           "kind": "static"
         },
-        "config": {}
+        "config": {
+          "plan": {
+            "default_auto_continue": true,
+            "allow_direct_approval": true
+          }
+        }
       },
       "agena.memory": {
         "package": {

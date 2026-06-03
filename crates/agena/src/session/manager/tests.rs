@@ -1103,6 +1103,22 @@ fn pending_permission_request_ids(session: &Session) -> Vec<String> {
         .collect()
 }
 
+fn raw_pending_permission_part_count(session: &Session, request_id: &str) -> usize {
+    session
+        .messages
+        .iter()
+        .flat_map(|message| message.parts.iter())
+        .filter(|part| {
+            part.status == ExecutionStatus::Pending
+                && matches!(
+                    part.content.as_ref(),
+                    Some(PartContent::Request(crate::message::RequestPart::Permission(request)))
+                        if request.request.request_id == request_id && request.reply.is_none()
+                )
+        })
+        .count()
+}
+
 fn pending_user_input_request_id(session: &Session) -> String {
     pending_user_input_request_ids(session)
         .into_iter()
@@ -1124,6 +1140,22 @@ fn pending_user_input_request_ids(session: &Session) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+fn raw_pending_user_input_part_count(session: &Session, request_id: &str) -> usize {
+    session
+        .messages
+        .iter()
+        .flat_map(|message| message.parts.iter())
+        .filter(|part| {
+            part.status == ExecutionStatus::Pending
+                && matches!(
+                    part.content.as_ref(),
+                    Some(PartContent::Request(crate::message::RequestPart::UserInput(request)))
+                        if request.request.request_id == request_id && request.reply.is_none()
+                )
+        })
+        .count()
 }
 
 fn run_options() -> SessionRunOptions {
@@ -2144,6 +2176,208 @@ fn duplicate_permission_reply_is_idempotent() {
 }
 
 #[test]
+fn duplicate_pending_permission_parts_are_resolved_by_single_reply() {
+    run_async_with_large_stack(async move {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "permission-duplicate-parts.db").await;
+        let manager = build_manager_with_provider_on_db(
+            &workspace.root,
+            db,
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all().with_tool_mode(TODO_TOOL, PermissionMode::Ask),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+        )
+        .await;
+        let created = manager
+            .create_session(SessionCreateRequest {
+                title: "permission-duplicate-parts".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let blocked = manager
+            .submit_user_message(SessionUserMessageRequest::new(
+                created.id,
+                run_options(),
+                vec![PartContent::text("permission todo")],
+            ))
+            .await
+            .expect("run should block on permission");
+        let request_id = pending_permission_request_id(&blocked);
+        let state = manager.execution_state();
+        let duplicate_part_id = manager
+            .store
+            .reserve_part_id()
+            .await
+            .expect("part id should reserve");
+
+        let mut duplicated = blocked.clone();
+        let assistant_index = duplicated
+            .messages
+            .iter()
+            .position(|message| {
+                message.parts.iter().any(|part| {
+                    matches!(
+                        part.content.as_ref(),
+                        Some(PartContent::Request(crate::message::RequestPart::Permission(request)))
+                            if request.request.request_id == request_id && request.reply.is_none()
+                    )
+                })
+            })
+            .expect("assistant message should contain the permission request");
+        let mut duplicate_part = duplicated.messages[assistant_index]
+            .parts
+            .iter()
+            .find(|part| {
+                matches!(
+                    part.content.as_ref(),
+                    Some(PartContent::Request(crate::message::RequestPart::Permission(request)))
+                        if request.request.request_id == request_id && request.reply.is_none()
+                )
+            })
+            .cloned()
+            .expect("pending permission part should exist");
+        duplicate_part.id = duplicate_part_id;
+        duplicate_part.part_index = duplicated.messages[assistant_index].parts.len() as i32;
+        duplicated.messages[assistant_index]
+            .parts
+            .push(duplicate_part);
+        let touched_message = duplicated.messages[assistant_index].clone();
+        duplicated = manager
+            .persist_session_changes(
+                duplicated,
+                vec![touched_message],
+                Vec::new(),
+                None,
+                state.clone(),
+            )
+            .await
+            .expect("duplicated permission request should persist");
+
+        assert_eq!(
+            raw_pending_permission_part_count(&duplicated, request_id.as_str()),
+            2,
+            "raw message parts should contain the duplicated pending permission request"
+        );
+        assert_eq!(
+            duplicated.pending_interactive_requests().len(),
+            1,
+            "session should surface a single logical pending permission request"
+        );
+
+        let completed = manager
+            .reply_permission(SessionPermissionReplyRequest::new(
+                created.id,
+                run_options(),
+                PermissionReply {
+                    request_id: request_id.clone(),
+                    kind: PermissionReplyKind::AllowOnce,
+                    reason: None,
+                    scope: None,
+                },
+                Some("test".to_string()),
+            ))
+            .await
+            .expect("single permission reply should resolve duplicated pending parts");
+
+        assert!(
+            !completed.blocked(),
+            "session should not remain blocked after resolving duplicated permission parts: runtime={:?}",
+            completed.runtime()
+        );
+        assert_eq!(
+            raw_pending_permission_part_count(&completed, request_id.as_str()),
+            0,
+            "permission reply should complete every duplicated pending permission part"
+        );
+    });
+}
+
+#[test]
+fn permission_requested_event_is_persisted_after_request_part_update() {
+    run_async_with_large_stack(async move {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "permission-event-order.db").await;
+        let manager = build_manager_with_provider_on_db(
+            &workspace.root,
+            db,
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all().with_tool_mode(TODO_TOOL, PermissionMode::Ask),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+        )
+        .await;
+        let created = manager
+            .create_session(SessionCreateRequest {
+                title: "permission-event-order".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let blocked = manager
+            .submit_user_message(SessionUserMessageRequest::new(
+                created.id,
+                run_options(),
+                vec![PartContent::text("permission todo")],
+            ))
+            .await
+            .expect("run should block on permission");
+        let request_id = pending_permission_request_id(&blocked);
+        let request_part_id = blocked
+            .messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .find_map(|part| match part.content.as_ref() {
+                Some(PartContent::Request(crate::message::RequestPart::Permission(request)))
+                    if request.request.request_id == request_id && request.reply.is_none() =>
+                {
+                    Some(part.id)
+                }
+                _ => None,
+            })
+            .expect("pending permission request part should exist");
+        let history = manager
+            .list_session_events(created.id)
+            .await
+            .expect("history should load");
+
+        let request_part_event_index = history
+            .iter()
+            .position(|record| {
+                matches!(
+                    &record.kind,
+                    EventKind::MessagePartUpdated(event)
+                        if event.part.id == request_part_id
+                            && matches!(
+                                event.part.content.as_ref(),
+                                Some(PartContent::Request(crate::message::RequestPart::Permission(_)))
+                            )
+                )
+            })
+            .expect("request part update should be persisted");
+        let permission_event_index = history
+            .iter()
+            .position(|record| {
+                matches!(
+                    &record.kind,
+                    EventKind::PermissionRequested(event) if event.request_id == request_id
+                )
+            })
+            .expect("permission requested event should be persisted");
+
+        assert!(
+            request_part_event_index < permission_event_index,
+            "request part update must be visible before permission_requested: history={history:?}"
+        );
+    });
+}
+
+#[test]
 fn workspace_permission_reply_persists_for_project_and_applies_to_new_sessions() {
     run_async_with_large_stack(async move {
         let workspace = TempWorkspace::new();
@@ -2415,6 +2649,210 @@ fn duplicate_user_input_reply_is_idempotent() {
                 }),
             "user input operation should complete after duplicate reply: messages={:?}",
             session.messages,
+        );
+    });
+}
+
+#[test]
+fn duplicate_pending_user_input_parts_are_resolved_by_single_reply() {
+    run_async_with_large_stack(async move {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "user-input-duplicate-parts.db").await;
+        let manager = build_manager_with_provider_on_db(
+            &workspace.root,
+            db,
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+        )
+        .await;
+        let created = manager
+            .create_session(SessionCreateRequest {
+                title: "user-input-duplicate-parts".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let state = manager.execution_state();
+        let session = manager
+            .get_session(created.id)
+            .await
+            .expect("session should load");
+        let ids = manager
+            .store
+            .reserve_message_ids(1)
+            .await
+            .expect("message ids should reserve");
+        let invocation = ToolInvocation::new(
+            USER_TOOL,
+            crate::message::StructuredObject::try_from(serde_json::json!({
+                "action": "request_input",
+                "questions": [],
+            }))
+            .expect("tool input should serialize"),
+        );
+        let mut assistant_message = build_message(
+            ids,
+            Role::Assistant,
+            MessageStatus::Pending,
+            vec![PartContent::Operation(OperationPart::pending(
+                1,
+                invocation,
+                "Ask user",
+                TimeRange::default(),
+            ))],
+            MessageMetadata::default(),
+        );
+        assistant_message.parts[0].operation_id = Some("call_manual_user_input_1".to_string());
+        let session = manager
+            .store
+            .append_history_items(
+                session,
+                vec![EventKind::AssistantMessageCompleted(
+                    crate::session::history::AssistantMessageCompleted {
+                        message_id: HistoryMessageId(assistant_message.id),
+                        run_id: HistoryRunId::new(),
+                        created_at: assistant_message.created_at,
+                        content: TranscriptContent::from_message_lossy(&assistant_message),
+                        parts: assistant_message.parts.clone(),
+                        usage: None,
+                        finish_reason: FinishReason::Stop,
+                        metadata: assistant_message.metadata.clone(),
+                        provider_state: assistant_message.provider_state.clone(),
+                    },
+                )],
+                state.cache_policy(),
+            )
+            .await
+            .expect("pending tool should persist through history");
+        let pending_tool = session
+            .pending_tools()
+            .into_iter()
+            .next()
+            .expect("session should expose the pending tool");
+        let blocked = manager
+            .apply_user_input_request_with_id(
+                session,
+                &pending_tool,
+                AskUserToolInput {
+                    title: String::new(),
+                    body_markdown: String::new(),
+                    kind: String::new(),
+                    submit_label: String::new(),
+                    cancel_label: String::new(),
+                    questions: vec![UserInputQuestion {
+                        id: "model_choice".to_string(),
+                        header: "Model".to_string(),
+                        question: "Which model should we use?".to_string(),
+                        options: vec![
+                            UserInputOption {
+                                label: "gpt-5".to_string(),
+                                description: "Use the flagship reasoning model.".to_string(),
+                            },
+                            UserInputOption {
+                                label: "gpt-4.1".to_string(),
+                                description: "Use the faster general-purpose model.".to_string(),
+                            },
+                        ],
+                        multiple: false,
+                        allow_custom: false,
+                    }],
+                },
+                "call_manual_user_input_1".to_string(),
+                state.clone(),
+            )
+            .await
+            .expect("user input request should persist");
+        let request_id = pending_user_input_request_id(&blocked);
+        let duplicate_part_id = manager
+            .store
+            .reserve_part_id()
+            .await
+            .expect("part id should reserve");
+
+        let mut duplicated = blocked.clone();
+        let assistant_index = duplicated
+            .messages
+            .iter()
+            .position(|message| {
+                message.parts.iter().any(|part| {
+                    matches!(
+                        part.content.as_ref(),
+                        Some(PartContent::Request(crate::message::RequestPart::UserInput(request)))
+                            if request.request.request_id == request_id && request.reply.is_none()
+                    )
+                })
+            })
+            .expect("assistant message should contain the user input request");
+        let mut duplicate_part = duplicated.messages[assistant_index]
+            .parts
+            .iter()
+            .find(|part| {
+                matches!(
+                    part.content.as_ref(),
+                    Some(PartContent::Request(crate::message::RequestPart::UserInput(request)))
+                        if request.request.request_id == request_id && request.reply.is_none()
+                )
+            })
+            .cloned()
+            .expect("pending user input part should exist");
+        duplicate_part.id = duplicate_part_id;
+        duplicate_part.part_index = duplicated.messages[assistant_index].parts.len() as i32;
+        duplicated.messages[assistant_index]
+            .parts
+            .push(duplicate_part);
+        let touched_message = duplicated.messages[assistant_index].clone();
+        duplicated = manager
+            .persist_session_changes(
+                duplicated,
+                vec![touched_message],
+                Vec::new(),
+                None,
+                state.clone(),
+            )
+            .await
+            .expect("duplicated user input request should persist");
+
+        assert_eq!(
+            raw_pending_user_input_part_count(&duplicated, request_id.as_str()),
+            2,
+            "raw message parts should contain the duplicated pending user input request"
+        );
+        assert_eq!(
+            duplicated.pending_interactive_requests().len(),
+            1,
+            "session should surface a single logical pending user input request"
+        );
+
+        let completed = manager
+            .reply_user_input(SessionExecutionReplyRequest::new(
+                created.id,
+                run_options(),
+                UserInputReply {
+                    request_id: request_id.clone(),
+                    kind: UserInputReplyKind::Submit,
+                    reason: None,
+                    answers: BTreeMap::from([(
+                        "model_choice".to_string(),
+                        vec!["gpt-5".to_string()],
+                    )]),
+                },
+            ))
+            .await
+            .expect("single user input reply should resolve duplicated pending parts");
+
+        assert!(
+            !completed.blocked(),
+            "session should not remain blocked after resolving duplicated user input parts: runtime={:?}",
+            completed.runtime()
+        );
+        assert_eq!(
+            raw_pending_user_input_part_count(&completed, request_id.as_str()),
+            0,
+            "user input reply should complete every duplicated pending user input part"
         );
     });
 }

@@ -952,19 +952,24 @@ impl SessionStore {
         let touched_messages = ordered_unique_touched_messages(&session, touched_messages);
         let now = Utc::now();
         let ts_ms = now.timestamp_millis();
+        let mut ordered_client_events = Vec::new();
         for message in &touched_messages {
             for part in &message.parts {
-                client_events.push(EventKind::MessagePartUpdated(MessagePartUpdatedEvent {
-                    session_id,
-                    message_id: message.id,
-                    message_role: message.role,
-                    message_state: message.state,
-                    message_created_at: message.created_at,
-                    part: part.clone(),
-                    ts_ms,
-                }));
+                ordered_client_events.push(EventKind::MessagePartUpdated(
+                    MessagePartUpdatedEvent {
+                        session_id,
+                        message_id: message.id,
+                        message_role: message.role,
+                        message_state: message.state,
+                        message_created_at: message.created_at,
+                        part: part.clone(),
+                        ts_ms,
+                    },
+                ));
             }
         }
+        ordered_client_events.extend(client_events);
+        client_events = ordered_client_events;
         let cache = Arc::clone(&self.cache);
         let session_for_cache = session.clone();
         let session_runtime = session.runtime.clone();

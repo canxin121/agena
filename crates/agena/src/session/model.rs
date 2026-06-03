@@ -9,7 +9,8 @@ use crate::{
     execution_prefs::ExecutionSelection,
     message::{
         ExecutionStatus, InteractiveRequestPart, Message, MessagePart, MessageStatus, PartContent,
-        PendingInteractiveRequest, RequestPart, TimeRange, ToolInvocation, UserInputRequest,
+        PendingInteractiveRequest, PendingInteractiveRequestKind, RequestPart, TimeRange,
+        ToolInvocation, UserInputRequest,
     },
     model::ModelRef,
     role::Role,
@@ -889,20 +890,42 @@ impl Session {
     }
 
     pub fn pending_interactive_requests(&self) -> Vec<PendingInteractiveRequest> {
-        self.messages
-            .iter()
-            .flat_map(|message| message.parts.iter())
-            .filter_map(|part| {
-                if part.status != ExecutionStatus::Pending {
-                    return None;
-                }
+        let mut seen = HashSet::new();
+        let mut requests = Vec::new();
 
-                match part.content.as_ref()? {
-                    PartContent::Request(request) => request.pending_interactive_request(),
-                    _ => None,
+        for pending in &self.pending_operations {
+            match pending {
+                SessionPendingOperation::Permission { pending } => {
+                    let Some(request) = self.pending_permission_request(pending).cloned() else {
+                        continue;
+                    };
+                    let key = format!(
+                        "{:?}:{}",
+                        PendingInteractiveRequestKind::Permission,
+                        request.request_id
+                    );
+                    if seen.insert(key) {
+                        requests.push(PendingInteractiveRequest::from(request));
+                    }
                 }
-            })
-            .collect()
+                SessionPendingOperation::UserInput { pending } => {
+                    let Some(request) = self.pending_user_input_request(pending).cloned() else {
+                        continue;
+                    };
+                    let key = format!(
+                        "{:?}:{}",
+                        PendingInteractiveRequestKind::UserInput,
+                        request.request_id
+                    );
+                    if seen.insert(key) {
+                        requests.push(PendingInteractiveRequest::from(request));
+                    }
+                }
+                SessionPendingOperation::Tool { .. } => {}
+            }
+        }
+
+        requests
     }
 
     pub(crate) fn user_input_request_for_operation(

@@ -92,6 +92,89 @@ fn append_resolved_message_part(
     assistant_message_for_part(session, &resolved.pending.part)
 }
 
+fn interactive_request_kind_label(
+    request_kind: crate::message::PendingInteractiveRequestKind,
+) -> &'static str {
+    match request_kind {
+        crate::message::PendingInteractiveRequestKind::Permission => "permission",
+        crate::message::PendingInteractiveRequestKind::UserInput => "user input",
+    }
+}
+
+fn matching_request_part_refs(
+    session: &Session,
+    request_id: &str,
+    request_kind: crate::message::PendingInteractiveRequestKind,
+    pending_only: bool,
+) -> Vec<SessionPartRef> {
+    session
+        .messages
+        .iter()
+        .enumerate()
+        .flat_map(|(message_index, message)| {
+            message
+                .parts
+                .iter()
+                .enumerate()
+                .filter_map(move |(part_index, part)| {
+                    if pending_only && part.status != ExecutionStatus::Pending {
+                        return None;
+                    }
+
+                    let Some(_operation_id) = part.operation_id.as_deref() else {
+                        return None;
+                    };
+                    let matches_request = match (request_kind, part.content.as_ref()) {
+                        (
+                            crate::message::PendingInteractiveRequestKind::Permission,
+                            Some(PartContent::Request(RequestPart::Permission(request))),
+                        ) => request.request_id() == request_id,
+                        (
+                            crate::message::PendingInteractiveRequestKind::UserInput,
+                            Some(PartContent::Request(RequestPart::UserInput(request))),
+                        ) => request.request_id() == request_id,
+                        _ => false,
+                    };
+                    matches_request.then(|| SessionPartRef {
+                        message_index,
+                        part_index,
+                        message_id: message.id,
+                        part_id: part.id,
+                    })
+                })
+        })
+        .collect()
+}
+
+fn supersede_duplicate_request_parts(
+    session: &mut Session,
+    request_parts: &[SessionPartRef],
+    request_kind: crate::message::PendingInteractiveRequestKind,
+    request_id: &str,
+) -> Result<(), AppError> {
+    if request_parts.len() < 2 {
+        return Ok(());
+    }
+
+    let summary = format!(
+        "Superseded duplicate {} request: {}",
+        interactive_request_kind_label(request_kind),
+        request_id
+    );
+    for duplicate in request_parts.iter().skip(1) {
+        let part = session.part_mut(duplicate).ok_or_else(|| {
+            pending_reply_part_missing_error(
+                interactive_request_kind_label(request_kind),
+                request_id,
+            )
+        })?;
+        part.status = ExecutionStatus::Cancelled;
+        part.summary = Some(summary.clone());
+    }
+
+    Ok(())
+}
+
 fn push_unique_permission_action(actions: &mut Vec<PermissionAction>, action: PermissionAction) {
     if !actions.iter().any(|existing| existing == &action) {
         actions.push(action);
@@ -152,20 +235,67 @@ impl SessionManager {
             .ok_or_else(|| pending_reply_payload_missing_error(request_kind, request_id))
     }
 
-    fn complete_reply_request_part(
+    fn complete_reply_request_parts(
         &self,
         session: &mut Session,
-        request_part: &SessionPartRef,
         request_id: &str,
-        request_kind: &str,
+        request_kind: crate::message::PendingInteractiveRequestKind,
         content: PartContent,
     ) -> Result<(), AppError> {
-        let part = session
-            .part_mut(request_part)
-            .ok_or_else(|| pending_reply_part_missing_error(request_kind, request_id))?;
-        part.set_content(content);
-        part.status = ExecutionStatus::Completed;
+        let request_parts = matching_request_part_refs(session, request_id, request_kind, true);
+        if request_parts.is_empty() {
+            return Err(pending_reply_part_missing_error(
+                interactive_request_kind_label(request_kind),
+                request_id,
+            ));
+        }
+
+        for request_part in request_parts {
+            let part = session.part_mut(&request_part).ok_or_else(|| {
+                pending_reply_part_missing_error(
+                    interactive_request_kind_label(request_kind),
+                    request_id,
+                )
+            })?;
+            part.set_content(content.clone());
+            part.status = ExecutionStatus::Completed;
+        }
         Ok(())
+    }
+
+    fn upsert_existing_pending_request_part(
+        &self,
+        session: &mut Session,
+        resolved: &ResolvedPendingTool,
+        request_id: &str,
+        request_kind: crate::message::PendingInteractiveRequestKind,
+        request: RequestPart,
+    ) -> Result<Option<Message>, AppError> {
+        let request_parts = matching_request_part_refs(session, request_id, request_kind, true);
+        let Some(primary) = request_parts.first() else {
+            return Ok(None);
+        };
+
+        supersede_duplicate_request_parts(
+            session,
+            request_parts.as_slice(),
+            request_kind,
+            request_id,
+        )?;
+
+        let part = session.part_mut(primary).ok_or_else(|| {
+            pending_reply_part_missing_error(
+                interactive_request_kind_label(request_kind),
+                request_id,
+            )
+        })?;
+        let status = request.status();
+        part.set_content(PartContent::Request(request));
+        part.status = status;
+        Ok(Some(assistant_message_for_part(
+            session,
+            &resolved.pending.part,
+        )?))
     }
 
     async fn load_reply_session(
@@ -287,16 +417,16 @@ impl SessionManager {
             .clone()
             .unwrap_or_else(|| permission_request.reason.clone());
 
-        self.complete_reply_request_part(
+        self.complete_reply_request_parts(
             &mut session,
-            &pending.request,
             request_id.as_str(),
-            "permission",
+            crate::message::PendingInteractiveRequestKind::Permission,
             PartContent::request(RequestPart::Permission(
                 InteractiveRequestPart::pending(permission_request.clone())
                     .with_reply(request.request.reply.clone()),
             )),
         )?;
+        let replied_assistant_message = assistant_message_for_part(&session, &pending.tool.part)?;
 
         let persisted_actions = if permission_request.requested_actions.is_empty() {
             vec![permission_request.action.clone()]
@@ -311,20 +441,22 @@ impl SessionManager {
             request.operator.as_deref(),
         )
         .await?;
-        self.publisher
-            .publish(
-                crate::event::PublishContext::for_session(request.request.session_id),
-                EventKind::PermissionReplied(PermissionRepliedEvent {
+        session = self
+            .persist_session_changes_with_rules(
+                session,
+                vec![replied_assistant_message],
+                vec![EventKind::PermissionReplied(PermissionRepliedEvent {
                     session_id: request.request.session_id,
                     request_id: request.request.reply.request_id.clone(),
                     kind: request.request.reply.kind,
                     reason: request.request.reply.reason.clone(),
                     scope: request.request.reply.scope.map(permission_scope_label),
                     ts_ms: Utc::now().timestamp_millis(),
-                }),
+                })],
+                persisted_rules.clone(),
+                state.clone(),
             )
-            .await
-            .map_err(|err| AppError::Internal(format!("publish permission reply failed: {err}")))?;
+            .await?;
 
         match request.request.reply.kind {
             PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
@@ -340,7 +472,7 @@ impl SessionManager {
                                 session,
                                 &pending.tool,
                                 execution,
-                                persisted_rules.clone(),
+                                Vec::new(),
                                 state.clone(),
                             )
                             .await?;
@@ -356,7 +488,7 @@ impl SessionManager {
                                 session,
                                 &pending.tool,
                                 err.to_string(),
-                                persisted_rules.clone(),
+                                Vec::new(),
                                 state.clone(),
                             )
                             .await?;
@@ -369,7 +501,7 @@ impl SessionManager {
                         session,
                         &pending.tool,
                         reply_reason,
-                        persisted_rules.clone(),
+                        Vec::new(),
                         state.clone(),
                     )
                     .await?;
@@ -416,11 +548,10 @@ impl SessionManager {
             "user input",
             |session, pending| session.pending_user_input_request(pending).cloned(),
         )?;
-        self.complete_reply_request_part(
+        self.complete_reply_request_parts(
             &mut session,
-            &pending.request,
             request_id.as_str(),
-            "user input",
+            crate::message::PendingInteractiveRequestKind::UserInput,
             PartContent::request(RequestPart::UserInput(
                 InteractiveRequestPart::pending(user_input_request.clone())
                     .with_reply(request.reply.clone()),
@@ -1808,44 +1939,49 @@ impl SessionManager {
                 tool_part.summary = Some(reason.clone());
             })?;
 
-        let permission_part_id = self.store.reserve_part_id().await?;
-        let assistant_message = append_resolved_message_part(
+        let permission_request_part =
+            RequestPart::Permission(InteractiveRequestPart::pending(request.clone()));
+        let assistant_message = match self.upsert_existing_pending_request_part(
             &mut session,
             &resolved,
-            build_request_part(
-                permission_part_id,
-                resolved.pending.part.message_id,
-                resolved.operation_id.as_str(),
-                RequestPart::Permission(InteractiveRequestPart::pending(request.clone())),
-            ),
-        )?;
-        self.publisher
-            .publish(
-                crate::event::PublishContext::for_session(session.id),
-                EventKind::PermissionRequested(PermissionRequestedEvent {
-                    session_id: session.id,
-                    request_id: resolved.operation_id.clone(),
-                    action: request.action.clone(),
-                    related_actions,
-                    requested_actions,
-                    reason: reason.clone(),
-                    explanation,
-                    source: request.source.clone(),
-                    scope: request.scope.map(permission_scope_label),
-                    operator: request.operator.clone(),
-                    risk: request.risk,
-                    trace,
-                    ts_ms: Utc::now().timestamp_millis(),
-                }),
-            )
-            .await
-            .map_err(|err| {
-                AppError::Internal(format!("publish permission request failed: {err}"))
-            })?;
+            request.request_id.as_str(),
+            crate::message::PendingInteractiveRequestKind::Permission,
+            permission_request_part,
+        )? {
+            Some(message) => message,
+            None => {
+                let permission_part_id = self.store.reserve_part_id().await?;
+                append_resolved_message_part(
+                    &mut session,
+                    &resolved,
+                    build_request_part(
+                        permission_part_id,
+                        resolved.pending.part.message_id,
+                        resolved.operation_id.as_str(),
+                        RequestPart::Permission(InteractiveRequestPart::pending(request.clone())),
+                    ),
+                )?
+            }
+        };
+        let session_id = session.id;
         self.persist_session_changes(
             session,
             vec![assistant_message],
-            Vec::new(),
+            vec![EventKind::PermissionRequested(PermissionRequestedEvent {
+                session_id,
+                request_id: resolved.operation_id.clone(),
+                action: request.action.clone(),
+                related_actions,
+                requested_actions,
+                reason: reason.clone(),
+                explanation,
+                source: request.source.clone(),
+                scope: request.scope.map(permission_scope_label),
+                operator: request.operator.clone(),
+                risk: request.risk,
+                trace,
+                ts_ms: Utc::now().timestamp_millis(),
+            })],
             None,
             state.clone(),
         )
@@ -1901,17 +2037,30 @@ impl SessionManager {
                 });
             })?;
 
-        let input_part_id = self.store.reserve_part_id().await?;
-        let assistant_message = append_resolved_message_part(
+        let user_input_request_part =
+            RequestPart::UserInput(InteractiveRequestPart::pending(request.clone()));
+        let assistant_message = match self.upsert_existing_pending_request_part(
             &mut session,
             &resolved,
-            build_request_part(
-                input_part_id,
-                resolved.pending.part.message_id,
-                resolved.operation_id.as_str(),
-                RequestPart::UserInput(InteractiveRequestPart::pending(request.clone())),
-            ),
-        )?;
+            request.request_id.as_str(),
+            crate::message::PendingInteractiveRequestKind::UserInput,
+            user_input_request_part,
+        )? {
+            Some(message) => message,
+            None => {
+                let input_part_id = self.store.reserve_part_id().await?;
+                append_resolved_message_part(
+                    &mut session,
+                    &resolved,
+                    build_request_part(
+                        input_part_id,
+                        resolved.pending.part.message_id,
+                        resolved.operation_id.as_str(),
+                        RequestPart::UserInput(InteractiveRequestPart::pending(request.clone())),
+                    ),
+                )?
+            }
+        };
         self.persist_session_changes(session, vec![assistant_message], Vec::new(), None, state)
             .await
     }

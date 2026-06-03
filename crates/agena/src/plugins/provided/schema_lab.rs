@@ -46,12 +46,12 @@ struct SchemaLabEchoArgs {
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum SchemaLabToolInput {
-    #[tool(exec = "schema_lab")]
+    #[tool(exec = "inspect")]
     Inspect {
         #[serde(flatten)]
         args: SchemaLabInspectArgs,
     },
-    #[tool(exec = "schema_lab")]
+    #[tool(exec = "echo")]
     Echo {
         #[serde(flatten)]
         args: SchemaLabEchoArgs,
@@ -1197,6 +1197,8 @@ fn schema_lab_config_schema() -> JsonValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin::sdk::{Plugin, ToolInvokeInput};
+    use serde_json::json;
 
     #[test]
     fn schema_lab_manifest_exposes_complex_config_schema_and_commands() {
@@ -1257,5 +1259,104 @@ mod tests {
             .expect("experiments properties");
         assert!(experiments.contains_key("enabled_regions"));
         assert!(experiments.contains_key("audit"));
+    }
+
+    #[test]
+    fn schema_lab_tool_resolve_tool_preserves_declared_actions() {
+        let (inspect_action, inspect_args) = SchemaLabToolInput::resolve_tool(
+            "schema_lab",
+            json!({
+                "action": "inspect",
+                "section": "identity",
+                "include_defaults": true
+            }),
+        )
+        .expect("inspect action should resolve");
+        assert_eq!(inspect_action, "inspect");
+        assert_eq!(
+            inspect_args,
+            json!({
+                "section": "identity",
+                "include_defaults": true
+            })
+        );
+
+        let (echo_action, echo_args) = SchemaLabToolInput::resolve_tool(
+            "schema_lab",
+            json!({
+                "action": "echo",
+                "label": "fixture",
+                "payload": { "ok": true }
+            }),
+        )
+        .expect("echo action should resolve");
+        assert_eq!(echo_action, "echo");
+        assert_eq!(
+            echo_args,
+            json!({
+                "label": "fixture",
+                "payload": { "ok": true }
+            })
+        );
+    }
+
+    #[test]
+    fn schema_lab_tool_invoke_supports_inspect_and_echo() {
+        let plugin = SchemaLabPlugin::new();
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+
+        let inspect = runtime
+            .block_on(Plugin::tool_invoke(
+                &plugin,
+                ToolInvokeInput {
+                    tool_name: "schema_lab".to_string(),
+                    session_id: 0,
+                    call_id: 0,
+                    workspace_root: ".".to_string(),
+                    input: json!({
+                        "action": "inspect",
+                        "section": "maps",
+                        "include_defaults": false
+                    }),
+                },
+            ))
+            .expect("inspect invocation should succeed");
+        assert_eq!(inspect.title, "Schema Lab");
+        assert!(inspect.output_text.contains("Requested section: maps"));
+        assert_eq!(
+            inspect.payload,
+            Some(json!({
+                "section": "maps",
+                "include_defaults": false,
+                "mode": "inspect"
+            }))
+        );
+
+        let echo = runtime
+            .block_on(Plugin::tool_invoke(
+                &plugin,
+                ToolInvokeInput {
+                    tool_name: "schema_lab".to_string(),
+                    session_id: 0,
+                    call_id: 0,
+                    workspace_root: ".".to_string(),
+                    input: json!({
+                        "action": "echo",
+                        "label": "probe",
+                        "payload": { "depth": 2 }
+                    }),
+                },
+            ))
+            .expect("echo invocation should succeed");
+        assert_eq!(echo.title, "Schema Lab");
+        assert!(echo.output_text.contains("Schema lab echo for `probe`"));
+        assert_eq!(
+            echo.payload,
+            Some(json!({
+                "label": "probe",
+                "payload": { "depth": 2 },
+                "mode": "echo"
+            }))
+        );
     }
 }

@@ -199,15 +199,17 @@ enum WorkflowToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "tools",
-    description = "Tool catalog command. Use action `search` to find tools or `help` to fetch detailed usage for a tool. This tool does not execute the target tool for you.",
-    summary = "Search tools or fetch detailed tool help.",
-    help = "Use action `search` with `query` and optional `limit` to discover tools. Use action `help` with `tool` to retrieve the full registered help text and input schema for any model-visible tool. To actually run a tool, call that tool directly after reading its help.",
+    description = "Tool catalog command. Use action `usage` for examples, `search` to find tools, or `help` to fetch detailed usage for a tool. This tool does not execute the target tool for you.",
+    summary = "Show usage examples, search tools, or fetch detailed tool help.",
+    help = "Use action `usage` or pass `{}` to see quick examples. Use action `search` with `query` and optional `limit` to discover tools. Use action `help` with `tool` to retrieve the full registered help text and input schema for any model-visible tool. To actually run a tool, call that tool directly after reading its help.",
     tags(ToolTag::ReadOnly, ToolTag::Discovery),
     host_capabilities(HostCapability::ListTools),
     concurrency_safe = true
 )]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum ToolsToolInput {
+    #[tool(exec = "usage")]
+    Usage,
     #[tool(exec = "search")]
     Search {
         #[serde(flatten)]
@@ -230,10 +232,12 @@ struct ToolsHelpInput {
 
 fn resolve_tools_tool_input(input: serde_json::Value) -> SdkResult<(String, serde_json::Value)> {
     if input.as_object().is_some_and(serde_json::Map::is_empty) {
-        return Ok((
-            "usage".to_string(),
-            serde_json::Value::Object(serde_json::Map::new()),
-        ));
+        return ToolsToolInput::resolve_tool(
+            "tools",
+            serde_json::json!({
+                "action": "usage"
+            }),
+        );
     }
 
     match ToolsToolInput::resolve_tool("tools", input.clone()) {
@@ -2671,6 +2675,7 @@ impl WorkflowPlugin {
         ToolInvokeOutput::text(
             [
                 "Tool catalog usage:",
+                r#"- Usage: {"action":"usage"} or {}"#,
                 r#"- Search: {"action":"search","query":"web","limit":8}"#,
                 r#"- Help: {"action":"help","tool":"agena.web/search"}"#,
                 "This command only inspects tool help; call the target tool directly to execute it.",
@@ -3470,6 +3475,24 @@ mod tests {
 
         assert_eq!(action, "usage");
         assert_eq!(action_input, json!({}));
+    }
+
+    #[test]
+    fn tools_usage_action_is_declared_and_resolves() {
+        let (action, action_input) = ToolsToolInput::resolve_tool(
+            "tools",
+            json!({
+                "action": "usage"
+            }),
+        )
+        .expect("usage action should resolve");
+
+        assert_eq!(action, "usage");
+        assert_eq!(action_input, json!({}));
+
+        let schema = ToolsToolInput::tool_decl().sanitized_input_schema();
+        let literals = schema_string_literals(&schema, &schema);
+        assert!(literals.contains("usage"));
     }
 
     #[test]

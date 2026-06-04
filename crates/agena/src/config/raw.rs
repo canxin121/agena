@@ -78,6 +78,10 @@ pub(crate) struct RawProjectMergeKeys {
     plugins_policy_tool_presentation_default_mode: bool,
     plugins_policy_tool_presentation_plugins: bool,
     plugins_policy_tool_presentation_tools: bool,
+    plugins_policy_ui_presentation: bool,
+    plugins_policy_ui_presentation_default_mode: bool,
+    plugins_policy_ui_presentation_plugins: bool,
+    plugins_policy_ui_presentation_tools: bool,
 }
 
 impl RawProjectMergeKeys {
@@ -91,6 +95,9 @@ impl RawProjectMergeKeys {
             .and_then(Value::as_object);
         let tool_presentation = plugins_policy
             .and_then(|table| table.get("tool_presentation"))
+            .and_then(Value::as_object);
+        let ui_presentation = plugins_policy
+            .and_then(|table| table.get("ui_presentation"))
             .and_then(Value::as_object);
         Self {
             plugins_host: plugins.is_some_and(|table| table.contains_key("host")),
@@ -108,6 +115,14 @@ impl RawProjectMergeKeys {
             plugins_policy_tool_presentation_plugins: tool_presentation
                 .is_some_and(|table| table.contains_key("plugins")),
             plugins_policy_tool_presentation_tools: tool_presentation
+                .is_some_and(|table| table.contains_key("tools")),
+            plugins_policy_ui_presentation: plugins_policy
+                .is_some_and(|table| table.contains_key("ui_presentation")),
+            plugins_policy_ui_presentation_default_mode: ui_presentation
+                .is_some_and(|table| table.contains_key("default_mode")),
+            plugins_policy_ui_presentation_plugins: ui_presentation
+                .is_some_and(|table| table.contains_key("plugins")),
+            plugins_policy_ui_presentation_tools: ui_presentation
                 .is_some_and(|table| table.contains_key("tools")),
         }
     }
@@ -719,6 +734,13 @@ fn merge_project_plugin_policy(
             merge_keys,
         );
     }
+    if merge_keys.plugins_policy_ui_presentation {
+        merge_ui_presentation(
+            &mut base.ui_presentation,
+            overlay.ui_presentation,
+            merge_keys,
+        );
+    }
 }
 
 fn merge_tool_presentation(
@@ -733,6 +755,22 @@ fn merge_tool_presentation(
         base.plugins.extend(overlay.plugins);
     }
     if merge_keys.plugins_policy_tool_presentation_tools {
+        base.tools.extend(overlay.tools);
+    }
+}
+
+fn merge_ui_presentation(
+    base: &mut crate::plugin::UiPresentationConfig,
+    overlay: crate::plugin::UiPresentationConfig,
+    merge_keys: RawProjectMergeKeys,
+) {
+    if merge_keys.plugins_policy_ui_presentation_default_mode {
+        base.default_mode = overlay.default_mode;
+    }
+    if merge_keys.plugins_policy_ui_presentation_plugins {
+        base.plugins.extend(overlay.plugins);
+    }
+    if merge_keys.plugins_policy_ui_presentation_tools {
         base.tools.extend(overlay.tools);
     }
 }
@@ -3102,23 +3140,95 @@ mod tests {
 
         assert_eq!(
             presentation.default_mode,
-            crate::plugin::ToolDescriptionMode::Help
+            crate::plugin::ToolDescriptionMode::Brief
         );
         assert_eq!(
             presentation.plugins.get("agena.web").copied(),
-            Some(crate::plugin::ToolDescriptionMode::Detailed)
+            Some(crate::plugin::ToolDescriptionOverride::Detailed)
         );
         assert_eq!(
             presentation.plugins.get("agena.memory").copied(),
-            Some(crate::plugin::ToolDescriptionMode::Help)
+            Some(crate::plugin::ToolDescriptionOverride::Brief)
         );
         assert_eq!(
             presentation.tools.get("bash").copied(),
-            Some(crate::plugin::ToolDescriptionMode::Help)
+            Some(crate::plugin::ToolDescriptionOverride::Brief)
         );
         assert_eq!(
             presentation.tools.get("read").copied(),
-            Some(crate::plugin::ToolDescriptionMode::Detailed)
+            Some(crate::plugin::ToolDescriptionOverride::Detailed)
+        );
+    }
+
+    #[test]
+    fn project_merge_merges_ui_presentation_by_plugin_and_tool_keys() {
+        let mut global = raw_config(json!({
+            "plugins": {
+                "policy": {
+                    "ui_presentation": {
+                        "default_mode": "summary",
+                        "plugins": {
+                            "agena.web": "summary",
+                            "agena.memory": "summary"
+                        },
+                        "tools": {
+                            "agena.web/fetch": "summary"
+                        }
+                    }
+                }
+            }
+        }));
+        let project = raw_config(json!({
+            "plugins": {
+                "policy": {
+                    "ui_presentation": {
+                        "plugins": {
+                            "agena.web": "detailed"
+                        },
+                        "tools": {
+                            "agena.web/open": "detailed"
+                        }
+                    }
+                }
+            }
+        }));
+
+        global.merge_project_from_with_keys(
+            project,
+            RawProjectMergeKeys {
+                plugins_policy: true,
+                plugins_policy_ui_presentation: true,
+                plugins_policy_ui_presentation_plugins: true,
+                plugins_policy_ui_presentation_tools: true,
+                ..RawProjectMergeKeys::default()
+            },
+        );
+        let presentation = &global
+            .plugins
+            .as_ref()
+            .expect("plugins")
+            .policy
+            .ui_presentation;
+
+        assert_eq!(
+            presentation.default_mode,
+            crate::plugin::UiTextDisplayMode::Summary
+        );
+        assert_eq!(
+            presentation.plugins.get("agena.web").copied(),
+            Some(crate::plugin::UiPresentationOverride::Detailed)
+        );
+        assert_eq!(
+            presentation.plugins.get("agena.memory").copied(),
+            Some(crate::plugin::UiPresentationOverride::Summary)
+        );
+        assert_eq!(
+            presentation.tools.get("agena.web/fetch").copied(),
+            Some(crate::plugin::UiPresentationOverride::Summary)
+        );
+        assert_eq!(
+            presentation.tools.get("agena.web/open").copied(),
+            Some(crate::plugin::UiPresentationOverride::Detailed)
         );
     }
 

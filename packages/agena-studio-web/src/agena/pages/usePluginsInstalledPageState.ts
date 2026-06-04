@@ -10,6 +10,7 @@ export type PluginsInstalledPageStateSource = {
   openPluginManifestInWorkspace: Parameters<typeof usePluginsInstalledState>[0]['openPluginManifestInWorkspace']
   pluginLoading: Parameters<typeof usePluginsInstalledState>[0]['pluginLoading']
   pluginLogs: Parameters<typeof usePluginsInstalledState>[0]['pluginLogs']
+  pluginUiPresentation: Parameters<typeof usePluginsInstalledState>[0]['pluginUiPresentation']
   plugins: Parameters<typeof usePluginsInstalledState>[0]['plugins']
   selectedPlugin: Parameters<typeof usePluginsInstalledState>[0]['selectedPlugin']
   setSelectedPluginDisabled: Parameters<typeof usePluginsInstalledState>[0]['setSelectedPluginDisabled']
@@ -42,6 +43,7 @@ export function createPluginsInstalledPanelState(state: PluginsInstalledPageStat
     openPluginManifestInWorkspace: state.openPluginManifestInWorkspace,
     pluginLoading: state.pluginLoading,
     pluginLogs: state.pluginLogs,
+    pluginUiPresentation: state.pluginUiPresentation,
     plugins: state.plugins,
     selectedPlugin: state.selectedPlugin,
     setSelectedPluginDisabled: state.setSelectedPluginDisabled,

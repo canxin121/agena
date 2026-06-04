@@ -2020,6 +2020,8 @@ impl PluginHostBuilder {
                         &reused.id,
                         &reused.manifest.name,
                         &reused.manifest.tools,
+                        reused.manifest.tool_description_mode,
+                        reused.manifest.ui_display_mode,
                     );
                 }
                 if let Ok(mut names) = plugin_names.write() {
@@ -2073,6 +2075,8 @@ impl PluginHostBuilder {
                             &plugin.id,
                             &plugin.manifest.name,
                             &plugin.manifest.tools,
+                            plugin.manifest.tool_description_mode,
+                            plugin.manifest.ui_display_mode,
                         );
                     }
                     if let Ok(mut names) = plugin_names.write() {

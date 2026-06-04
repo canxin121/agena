@@ -16,8 +16,8 @@ use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostLspListServersResponse};
 use crate::plugin::sdk::{
     HookSubscription, HostCapability, InitContext, InitOutcome, PathRequest, Plugin,
-    PluginManifest, PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
-    ToolTag,
+    PluginManifest, PluginToolDecl, Result as SdkResult, ToolDescriptionMode, ToolInvokeInput,
+    ToolInvokeOutput, ToolTag, UiTextDisplayMode,
 };
 use crate::plugins::provided::router;
 
@@ -245,6 +245,8 @@ impl LspPlugin {
     description = "LSP command dispatcher. Set action to servers, definition, references, hover, or diagnostics.",
     summary = "Query configured language servers.",
     help = "Use action `servers` to list configured LSP servers, `definition` and `references` for symbol navigation, `hover` for hover text, and `diagnostics` for diagnostics.",
+    description_mode = "brief",
+    ui_display_mode = "summary",
     tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp),
     host_capabilities(HostCapability::LspRegistry),
     concurrency_safe = true
@@ -293,6 +295,8 @@ impl Plugin for LspPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder(LSP_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
             .description("LSP read-only observability and navigation tools.")
+            .tool_description_mode(ToolDescriptionMode::Brief)
+            .ui_display_mode(UiTextDisplayMode::Summary)
             .hooks(HookSubscription::TOOL_INVOKE)
             .config_schema(lsp_config_schema())
             .tool(lsp_decl())

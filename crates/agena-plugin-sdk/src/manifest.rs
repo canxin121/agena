@@ -14,6 +14,21 @@ pub struct PluginManifest {
     pub version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Short plugin summary used when hosts only need a compact overview.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// Detailed plugin help shown by inspect/catalog surfaces when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
+    /// Preferred default presentation mode for tools exposed by this plugin
+    /// when an individual tool declaration does not specify its own mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_description_mode: Option<ToolDescriptionMode>,
+    /// Preferred default text density for UI surfaces that render this plugin
+    /// or its tools when an individual tool declaration does not specify its
+    /// own mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_display_mode: Option<UiTextDisplayMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub authors: Vec<String>,
     #[serde(default)]
@@ -196,9 +211,15 @@ pub struct PluginToolDecl {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
     /// Preferred model-visible description mode for this tool. Host config can
-    /// override it per plugin or per tool.
+    /// override it per plugin or per tool, or explicitly follow this tool's
+    /// default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description_mode: Option<ToolDescriptionMode>,
+    /// Preferred text density for UI surfaces that render this tool. Host UI
+    /// config can override it per plugin or per tool, or explicitly follow
+    /// this tool's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_display_mode: Option<UiTextDisplayMode>,
     #[serde(default)]
     pub input_schema: serde_json::Value,
     /// Declarative path-permission specs. The host extracts paths from the
@@ -258,6 +279,14 @@ impl PluginToolDecl {
             .filter(|value| !value.is_empty())
     }
 
+    pub fn preferred_description_mode(&self) -> Option<ToolDescriptionMode> {
+        self.description_mode
+    }
+
+    pub fn preferred_ui_display_mode(&self) -> Option<UiTextDisplayMode> {
+        self.ui_display_mode
+    }
+
     pub fn sanitized_input_schema(&self) -> serde_json::Value {
         sanitize_schema_json(self.input_schema.clone())
     }
@@ -309,7 +338,16 @@ pub enum ToolStreamingMode {
 pub enum ToolDescriptionMode {
     #[default]
     Detailed,
-    Help,
+    #[serde(alias = "help")]
+    Brief,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum UiTextDisplayMode {
+    #[default]
+    Detailed,
+    Summary,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -774,6 +812,10 @@ impl PluginManifest {
                 name: name.into(),
                 version: version.into(),
                 description: None,
+                summary: None,
+                help: None,
+                tool_description_mode: None,
+                ui_display_mode: None,
                 authors: Vec::new(),
                 transports: Vec::new(),
                 hooks: HookSubscription::INIT | HookSubscription::SHUTDOWN,
@@ -786,11 +828,49 @@ impl PluginManifest {
             },
         }
     }
+
+    pub fn description_text(&self) -> &str {
+        self.description.as_deref().unwrap_or("")
+    }
+
+    pub fn summary_text(&self) -> Option<&str> {
+        self.summary
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn help_text(&self) -> Option<&str> {
+        self.help
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
 }
 
 impl PluginManifestBuilder {
     pub fn description(mut self, d: impl Into<String>) -> Self {
         self.inner.description = Some(d.into());
+        self
+    }
+
+    pub fn summary(mut self, summary: impl Into<String>) -> Self {
+        self.inner.summary = Some(summary.into());
+        self
+    }
+
+    pub fn help(mut self, help: impl Into<String>) -> Self {
+        self.inner.help = Some(help.into());
+        self
+    }
+
+    pub fn tool_description_mode(mut self, mode: ToolDescriptionMode) -> Self {
+        self.inner.tool_description_mode = Some(mode);
+        self
+    }
+
+    pub fn ui_display_mode(mut self, mode: UiTextDisplayMode) -> Self {
+        self.inner.ui_display_mode = Some(mode);
         self
     }
 
@@ -913,6 +993,7 @@ impl PluginToolDecl {
             summary: None,
             help: None,
             description_mode: None,
+            ui_display_mode: None,
             input_schema: schema,
             input_paths: Vec::new(),
             input_networks: Vec::new(),
@@ -943,6 +1024,11 @@ impl PluginToolDecl {
 
     pub fn description_mode(mut self, mode: ToolDescriptionMode) -> Self {
         self.description_mode = Some(mode);
+        self
+    }
+
+    pub fn ui_display_mode(mut self, mode: UiTextDisplayMode) -> Self {
+        self.ui_display_mode = Some(mode);
         self
     }
 

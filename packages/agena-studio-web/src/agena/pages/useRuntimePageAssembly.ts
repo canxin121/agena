@@ -196,6 +196,7 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
     permissionRules: input.permissionRules,
     permissionSearch: input.permissionSearch,
     pluginLogs: input.pluginLogs,
+    pluginUiPresentation: input.pluginUiPresentation,
     plugins: input.plugins,
     settingsPlugins: input.settingsPlugins,
     providers: input.providers,

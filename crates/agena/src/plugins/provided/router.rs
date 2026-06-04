@@ -18,7 +18,8 @@ use crate::message::{
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
     HookSubscription, InitContext, InitOutcome, NetworkRequest, Plugin, PluginManifest,
-    PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
+    PluginToolDecl, Result as SdkResult, ToolDescriptionMode, ToolInvokeInput, ToolInvokeOutput,
+    UiTextDisplayMode,
 };
 use crate::tool::result::ToolPayloadExecution;
 use crate::tool::{ToolExecutor, ToolPayloadOutput, ToolRuntimeContext, orchestrator};
@@ -38,7 +39,7 @@ static IN_PROCESS_TOOL_CTX_BY_CALL: LazyLock<Mutex<HashMap<InProcessContextKey, 
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub(crate) struct ExecutorContextGuard {
-    key: InProcessContextKey,
+    keys: Vec<InProcessContextKey>,
     previous: Option<ToolExecutor>,
 }
 
@@ -48,7 +49,9 @@ impl Drop for ExecutorContextGuard {
             *cell.borrow_mut() = self.previous.take();
         });
         if let Ok(mut contexts) = IN_PROCESS_TOOL_CTX_BY_CALL.lock() {
-            contexts.remove(&self.key);
+            for key in &self.keys {
+                contexts.remove(key);
+            }
         }
     }
 }
@@ -59,16 +62,25 @@ pub(crate) fn install_executor_context(
     call_id: i64,
     tool_name: String,
 ) -> ExecutorContextGuard {
-    let key = InProcessContextKey {
+    let mut keys = vec![InProcessContextKey {
         session_id,
         call_id,
         tool_name,
-    };
+    }];
+    if let Some(alias) = routed_internal_tool_name(keys[0].tool_name.as_str()) {
+        keys.push(InProcessContextKey {
+            session_id,
+            call_id,
+            tool_name: alias.to_string(),
+        });
+    }
     if let Ok(mut contexts) = IN_PROCESS_TOOL_CTX_BY_CALL.lock() {
-        contexts.insert(key.clone(), executor.clone());
+        for key in &keys {
+            contexts.insert(key.clone(), executor.clone());
+        }
     }
     let previous = IN_PROCESS_TOOL_CTX.with(|cell| cell.replace(Some(executor.clone())));
-    ExecutorContextGuard { key, previous }
+    ExecutorContextGuard { keys, previous }
 }
 
 fn current_executor(
@@ -104,11 +116,28 @@ fn current_executor(
 fn routed_tool_name(tool_name: &str) -> Option<&'static str> {
     match tool_name {
         "read" | "glob" | "grep" | "apply_patch" | "notebook_edit" => Some("fs"),
-        "bash" | "powershell" | "monitor" => Some("shell"),
-        "cron_list" | "cron_create" | "cron_delete" | "schedule_wakeup" => Some("schedule"),
+        "bash" => Some("exec.bash"),
+        "powershell" => Some("exec.powershell"),
+        "cron_list" => Some("schedule.list"),
+        "cron_create" => Some("schedule.create"),
+        "cron_delete" => Some("schedule.delete"),
+        "schedule_wakeup" => Some("schedule.wakeup"),
         "lsp_servers" | "lsp_definition" | "lsp_references" | "lsp_hover" | "lsp_diagnostics" => {
             Some("lsp")
         }
+        _ => None,
+    }
+}
+
+fn routed_internal_tool_name(tool_name: &str) -> Option<&'static str> {
+    match tool_name {
+        "exec.bash" => Some("bash"),
+        "exec.powershell" => Some("powershell"),
+        "monitor.start" | "monitor.list" | "monitor.read" | "monitor.stop" => Some("monitor"),
+        "schedule.list" => Some("cron_list"),
+        "schedule.create" => Some("cron_create"),
+        "schedule.delete" => Some("cron_delete"),
+        "schedule.wakeup" => Some("schedule_wakeup"),
         _ => None,
     }
 }
@@ -118,6 +147,8 @@ pub(crate) struct InProcessToolPlugin {
     description: &'static str,
     tools: Vec<PluginToolDecl>,
     resolver: Option<ToolInputResolver>,
+    tool_description_mode: Option<ToolDescriptionMode>,
+    ui_display_mode: Option<UiTextDisplayMode>,
 }
 
 impl InProcessToolPlugin {
@@ -132,7 +163,19 @@ impl InProcessToolPlugin {
             description,
             tools,
             resolver: Some(resolver),
+            tool_description_mode: None,
+            ui_display_mode: None,
         }
+    }
+
+    pub fn tool_description_mode(mut self, mode: ToolDescriptionMode) -> Self {
+        self.tool_description_mode = Some(mode);
+        self
+    }
+
+    pub fn ui_display_mode(mut self, mode: UiTextDisplayMode) -> Self {
+        self.ui_display_mode = Some(mode);
+        self
     }
 
     fn resolve_tool_input(
@@ -156,6 +199,12 @@ impl Plugin for InProcessToolPlugin {
             .description(self.description)
             .hooks(HookSubscription::TOOL_INVOKE)
             .config_schema(crate::tool::definition::empty_config_schema());
+        if let Some(mode) = self.tool_description_mode {
+            builder = builder.tool_description_mode(mode);
+        }
+        if let Some(mode) = self.ui_display_mode {
+            builder = builder.ui_display_mode(mode);
+        }
         for tool in &self.tools {
             builder = builder.tool(tool.clone());
         }

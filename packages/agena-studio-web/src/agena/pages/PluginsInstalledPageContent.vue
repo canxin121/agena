@@ -11,10 +11,11 @@ const props = defineProps<{
 <template>
   <PluginsInstalledPanel
     :can-toggle-plugin-config="props.installed.canTogglePluginConfig.value"
-    :plugins="props.installed.plugins"
     :selected-plugin="props.installed.selectedPlugin"
     :plugin-logs="props.installed.pluginLogs"
     :plugin-loading="props.installed.pluginLoading"
+    :plugin-ui-presentation="props.installed.pluginUiPresentation.value"
+    :plugins="props.installed.plugins"
     :load-plugin-details="props.installed.loadPluginDetails"
     :open-plugin-manifest-in-workspace="props.installed.openPluginManifestInWorkspace"
     :open-plugin-logs-workspace-path="props.installed.openPluginLogsWorkspacePath"

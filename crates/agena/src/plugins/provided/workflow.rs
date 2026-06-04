@@ -22,8 +22,8 @@ use crate::plugin::sdk::host_api::{
 use crate::plugin::sdk::{
     CommandBeforeInput, CommandBeforeResponse, HookSubscription, HostCapability, InitContext,
     InitOutcome, NetworkRequest, PathRequest, Plugin, PluginManifest, PluginToolDecl,
-    Result as SdkResult, ToolBeforeInput, ToolBeforePatch, ToolInvokeInput, ToolInvokeOutput,
-    ToolTag,
+    Result as SdkResult, ToolBeforeInput, ToolBeforePatch, ToolDescriptionMode, ToolInvokeInput,
+    ToolInvokeOutput, ToolTag, UiTextDisplayMode,
 };
 use crate::search::tool_catalog::{ToolCatalogDocument, search_tool_catalog};
 use crate::tool::{ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ask_user};
@@ -173,6 +173,9 @@ fn workflow_config_schema() -> serde_json::Value {
 #[tool_surface(
     tool = "workflow",
     description = "Workflow scaffold command. Use action `init`, `review`, or `security_review` to generate reusable workflow instructions; this tool does not execute shell or filesystem actions by itself.",
+    summary = "Generate reusable workflow instructions.",
+    description_mode = "brief",
+    ui_display_mode = "summary",
     tags(ToolTag::ReadOnly),
     host_capabilities(HostCapability::AgentRegistry),
     concurrency_safe = true
@@ -202,6 +205,7 @@ enum WorkflowToolInput {
     description = "Tool catalog command. Use action `usage` for examples, `search` to find tools, or `help` to fetch detailed usage for a tool. This tool does not execute the target tool for you.",
     summary = "Show usage examples, search tools, or fetch detailed tool help.",
     help = "Use action `usage` or pass `{}` to see quick examples. Use action `search` with `query` and optional `limit` to discover tools. Use action `help` with `tool` to retrieve the full registered help text and input schema for any model-visible tool. To actually run a tool, call that tool directly after reading its help.",
+    ui_display_mode = "detailed",
     tags(ToolTag::ReadOnly, ToolTag::Discovery),
     host_capabilities(HostCapability::ListTools),
     concurrency_safe = true
@@ -338,6 +342,9 @@ fn normalize_tools_help_input(
 #[tool_surface(
     tool = "agent",
     description = "Runtime agent profile command. Use action `switch` to change the current session's active agent profile or `restore` to bring back a saved profile. This tool does not spawn delegated subagent work; use `task` for that.",
+    summary = "Switch or restore the current runtime agent profile.",
+    description_mode = "brief",
+    ui_display_mode = "summary",
     host_capabilities(HostCapability::AgentRegistry),
     concurrency_safe = false
 )]
@@ -359,6 +366,9 @@ enum AgentToolInput {
 #[tool_surface(
     tool = "todo",
     description = "Todo command. Use action `write` to replace the session todo list.",
+    summary = "Replace the session todo list.",
+    description_mode = "brief",
+    ui_display_mode = "summary",
     tags(ToolTag::Mutating, ToolTag::Planning),
     concurrency_safe = false
 )]
@@ -375,6 +385,9 @@ enum TodoToolInput {
 #[tool_surface(
     tool = "task",
     description = "Delegated subagent task command. Use action `run` to create or resume a typed child task session for explore, implement, or verify work. This tool launches or resumes a separate task session; it does not switch the current runtime agent profile.",
+    summary = "Create or resume a delegated subagent task.",
+    description_mode = "detailed",
+    ui_display_mode = "detailed",
     tags(ToolTag::Task, ToolTag::Subtask),
     host_capabilities(HostCapability::SpawnSubtask, HostCapability::PluginStorage),
     concurrency_safe = false
@@ -397,6 +410,9 @@ struct SessionRenameToolInput {
 #[tool_surface(
     tool = "session",
     description = "Session metadata command. Use action `get` to inspect the current session metadata or `rename` to update the session title. This tool does not read chat history or execute workflow actions.",
+    summary = "Inspect or rename the current session.",
+    description_mode = "brief",
+    ui_display_mode = "summary",
     tags(ToolTag::ReadOnly, ToolTag::Mutating),
     host_capabilities(HostCapability::SessionRegistry),
     concurrency_safe = false
@@ -416,6 +432,9 @@ enum SessionToolInput {
 #[tool_surface(
     tool = "user",
     description = "User interaction command. Use action `request_input` to request structured short answers.",
+    summary = "Request short structured input from the user.",
+    description_mode = "brief",
+    ui_display_mode = "summary",
     tags(ToolTag::ReadOnly, ToolTag::Interactive),
     host_capabilities(HostCapability::AskUser),
     concurrency_safe = false
@@ -639,6 +658,8 @@ struct PlanUpdateCheckpointInput {
     description = "Plan command backed by shared plugin storage. Use it to create or overwrite the current draft plan, inspect the current step, and manage the active session plan.",
     summary = "Create or overwrite plans, inspect the current step, update steps/checks, and use `set_status` for phase changes.",
     help = "Use action `create` to write the current draft plan; if a plan already exists, `create` overwrites it and returns it to draft. Use action `current` to inspect the current actionable step and its goal. Use action `set_status` to move the plan between draft, active, blocked, completed, or cancelled. Use action `update_check` to update an individual check inside a step. Autorun on/off distinguishes active plans that should keep running automatically. If workflow plan config disables direct approval, plan.set_status automatically requests review before moving a draft or cancelled plan into active, blocked, or completed. Legacy action `replace`, legacy status actions, legacy field names such as `auto_continue`, and legacy phase names such as `complete`, `cancel`, `restore`, `update_runtime`, `awaiting_review`, `executing`, and `paused` remain accepted for compatibility and are normalized to the canonical actions.",
+    description_mode = "brief",
+    ui_display_mode = "summary",
     tags(ToolTag::Planning, ToolTag::Mutating),
     host_capabilities(
         HostCapability::AskUser,
@@ -803,6 +824,9 @@ fn plan_set_status_value(
 #[tool_surface(
     tool = "worktree",
     description = "Worktree command. Use action `enter` or `exit`; `enter` uses `target = new|existing` to create or attach to a git worktree and `exit` uses enum `exit_action = keep|remove`.",
+    summary = "Enter or exit a git worktree.",
+    description_mode = "brief",
+    ui_display_mode = "summary",
     tags(ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Worktree),
     host_capabilities(HostCapability::WorktreeRegistry, HostCapability::PluginStorage),
     concurrency_safe = false
@@ -2695,6 +2719,8 @@ impl Plugin for WorkflowPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder(WORKFLOW_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
             .description("Workflow orchestration tools.")
+            .tool_description_mode(ToolDescriptionMode::Brief)
+            .ui_display_mode(UiTextDisplayMode::Detailed)
             .hooks(
                 HookSubscription::TOOL_INVOKE
                     | HookSubscription::TOOL_BEFORE
@@ -3493,6 +3519,29 @@ mod tests {
         let schema = ToolsToolInput::tool_decl().sanitized_input_schema();
         let literals = schema_string_literals(&schema, &schema);
         assert!(literals.contains("usage"));
+    }
+
+    #[test]
+    fn workflow_manifest_defaults_to_brief_but_keeps_task_detailed() {
+        let manifest = new_plugin().manifest();
+        assert_eq!(
+            manifest.tool_description_mode,
+            Some(ToolDescriptionMode::Brief)
+        );
+
+        let task = manifest
+            .tools
+            .iter()
+            .find(|tool| tool.name == "task")
+            .expect("task tool should be declared");
+        assert_eq!(task.description_mode, Some(ToolDescriptionMode::Detailed));
+
+        let tools = manifest
+            .tools
+            .iter()
+            .find(|tool| tool.name == "tools")
+            .expect("tools catalog should be declared");
+        assert_eq!(tools.description_mode, None);
     }
 
     #[test]

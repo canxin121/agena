@@ -35,9 +35,14 @@ use super::*;
 use crate::session::cache::SessionCachePolicy;
 
 const FS_TOOL: &str = "agena.fs/fs";
-const SHELL_TOOL: &str = "agena.shell/shell";
+const SHELL_BASH_TOOL: &str = "agena.shell/exec.bash";
+const SHELL_POWERSHELL_TOOL: &str = "agena.shell/exec.powershell";
+const SHELL_MONITOR_START_TOOL: &str = "agena.shell/monitor.start";
+const SHELL_MONITOR_LIST_TOOL: &str = "agena.shell/monitor.list";
+const SHELL_MONITOR_READ_TOOL: &str = "agena.shell/monitor.read";
+const SHELL_MONITOR_STOP_TOOL: &str = "agena.shell/monitor.stop";
 const WEB_FETCH_TOOL: &str = "agena.web/fetch";
-const WEB_QUERY_TOOL: &str = "agena.web/query";
+const WEB_QUERY_TOOL: &str = "agena.web/store.query";
 const TOOLS_TOOL: &str = "agena.workflow/tools";
 const TODO_TOOL: &str = "agena.workflow/todo";
 const USER_TOOL: &str = "agena.workflow/user";
@@ -3319,8 +3324,10 @@ fn pending_permission_request_aggregates_invocation_actions() {
                 PermissionAction::Tool { tool_name, .. }
                     if tool_name == "shell"
                         || tool_name == "bash"
+                        || tool_name == "exec.bash"
                         || tool_name.ends_with("/shell")
                         || tool_name.ends_with("/bash")
+                        || tool_name.ends_with("/exec.bash")
             )),
             "aggregated request should include the shell tool action: {:?}",
             request.related_actions
@@ -5176,7 +5183,7 @@ while True:
                     TOOLS_TOOL,
                     serde_json::json!({
                         "action": "help",
-                        "tool": SHELL_TOOL,
+                        "tool": SHELL_BASH_TOOL,
                         "include_schema": false
                     })
                     .to_string(),
@@ -5184,10 +5191,8 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_shell_exec_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_shell_exec_1",
-                    SHELL_TOOL,
+                    SHELL_BASH_TOOL,
                     serde_json::json!({
-                        "action": "exec",
-                        "shell": "bash",
                         "command": bash_command,
                         "description": "read notes via shell",
                         "workdir": ".",
@@ -5202,10 +5207,8 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_shell_powershell_1",
-                    SHELL_TOOL,
+                    SHELL_POWERSHELL_TOOL,
                     serde_json::json!({
-                        "action": "exec",
-                        "shell": "powershell",
                         "command": "Get-Location",
                         "description": "probe powershell availability",
                         "filesystem_effects": [],
@@ -5217,9 +5220,8 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_monitor_start_1",
-                    SHELL_TOOL,
+                    SHELL_MONITOR_START_TOOL,
                     serde_json::json!({
-                        "action": "monitor_start",
                         "command": monitor_command,
                         "description": "tick monitor",
                         "timeout_ms": 10_000,
@@ -5233,11 +5235,8 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_monitor_list_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_monitor_list_1",
-                    SHELL_TOOL,
-                    serde_json::json!({
-                        "action": "monitor_list"
-                    })
-                    .to_string(),
+                    SHELL_MONITOR_LIST_TOOL,
+                    serde_json::json!({}).to_string(),
                 )])
             } else if completed_or_failed_operation_count(&request, &["call_monitor_read_1"]) == 0 {
                 let monitor_id = request_operation_payload(&request, "call_monitor_start_1")
@@ -5252,9 +5251,8 @@ while True:
                     });
                 scripted_tool_call_events(vec![(
                     "call_monitor_read_1",
-                    SHELL_TOOL,
+                    SHELL_MONITOR_READ_TOOL,
                     serde_json::json!({
-                        "action": "monitor_read",
                         "monitor_id": monitor_id,
                         "since_seq": 0,
                         "wait_ms": 1_000
@@ -5274,9 +5272,8 @@ while True:
                     });
                 scripted_tool_call_events(vec![(
                     "call_monitor_stop_1",
-                    SHELL_TOOL,
+                    SHELL_MONITOR_STOP_TOOL,
                     serde_json::json!({
-                        "action": "monitor_stop",
                         "monitor_id": monitor_id
                     })
                     .to_string(),

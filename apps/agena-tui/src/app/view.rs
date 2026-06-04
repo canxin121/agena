@@ -812,6 +812,9 @@ impl App {
             Route::Timeline(dialog) => {
                 self.render_timeline_overlay(frame, area, dialog, SurfaceMode::Route);
             }
+            Route::PluginPolicyStudio(dialog) => {
+                self.render_plugin_policy_studio(frame, area, dialog, SurfaceMode::Route);
+            }
             Route::PluginWorkbench(dialog) => {
                 self.render_plugin_workbench(frame, area, dialog, SurfaceMode::Route);
             }
@@ -4002,7 +4005,6 @@ mod tests {
         SettingsStudioOverlay {
             title: "Settings".to_string(),
             footer: String::new(),
-            plugins_default_mode: "help".to_string(),
             state: SectionedListState::new(
                 vec![
                     SettingsStudioSection {

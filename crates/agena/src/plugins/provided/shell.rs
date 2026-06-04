@@ -1,10 +1,12 @@
-//! `agena.shell` plugin: exec, monitor.
+//! `agena.shell` plugin: exec and monitor subcommands.
 
 use crate::message::{MonitorToolInput, ShellCommandInput};
 use crate::plugin::PluginError;
-use crate::plugin::sdk::{HostCapability, ToolTag};
+use crate::plugin::sdk::{
+    HostCapability, PluginToolDecl, Result as SdkResult, ToolDescriptionMode, ToolStreamingMode,
+    ToolTag, UiTextDisplayMode,
+};
 use crate::plugins::provided::router::InProcessToolPlugin;
-use agena_macros::StaticToolSurface;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -15,64 +17,11 @@ pub(crate) fn new_plugin() -> InProcessToolPlugin {
     InProcessToolPlugin::new_with_resolver(
         SHELL_PLUGIN_ID,
         "Shell command tools backed by the in-process executor bridge.",
-        vec![ShellToolInput::tool_decl()],
-        ShellToolInput::resolve_tool,
+        shell_tool_decls(),
+        resolve_shell_tool_input,
     )
-}
-
-#[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "shell",
-    description = "Shell command dispatcher. Set action to exec, monitor_start, monitor_list, monitor_read, or monitor_stop. Exec payloads must declare `shell = bash|powershell` plus filesystem_effects and network_effects for every path or network target the command may access.",
-    summary = "Run shell, PowerShell, or monitor commands.",
-    help = "Use action `exec` for one-shot shell commands, with `shell = bash|powershell`. Use `monitor_start`, `monitor_list`, `monitor_read`, and `monitor_stop` for long-running processes. Shell execution payloads must declare `filesystem_effects` and `network_effects` for any paths or outbound targets the command may access; pass empty arrays when there is no filesystem or network effect beyond entering `workdir`.",
-    tags(ToolTag::Mutating, ToolTag::Shell),
-    host_capabilities(HostCapability::MonitorRegistry),
-    concurrency_safe = false,
-    streaming = "streaming"
-)]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum ShellToolInput {
-    #[tool(map = shell_exec_tool_args)]
-    Exec {
-        #[serde(flatten)]
-        args: ShellExecInput,
-    },
-    #[tool(map = shell_monitor_start_tool_args)]
-    MonitorStart {
-        #[serde(flatten)]
-        args: ShellMonitorStartInput,
-    },
-    #[tool(map = shell_monitor_list_tool_args)]
-    MonitorList {
-        #[serde(flatten)]
-        args: ShellMonitorListInput,
-    },
-    #[tool(map = shell_monitor_read_tool_args)]
-    MonitorRead {
-        #[serde(flatten)]
-        args: ShellMonitorReadInput,
-    },
-    #[tool(map = shell_monitor_stop_tool_args)]
-    MonitorStop {
-        #[serde(flatten)]
-        args: ShellMonitorStopInput,
-    },
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-enum ShellExecKind {
-    Bash,
-    #[serde(rename = "powershell")]
-    PowerShell,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct ShellExecInput {
-    shell: ShellExecKind,
-    #[serde(flatten)]
-    command: ShellCommandInput,
+    .tool_description_mode(ToolDescriptionMode::Detailed)
+    .ui_display_mode(UiTextDisplayMode::Detailed)
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -112,65 +61,144 @@ fn default_capture_stderr() -> bool {
     true
 }
 
-fn tool_args<T: serde::Serialize>(
-    tool: &str,
-    args: T,
-) -> crate::plugin::sdk::Result<(String, JsonValue)> {
+fn shell_tool_decls() -> Vec<PluginToolDecl> {
+    vec![
+        PluginToolDecl::new(
+            "exec.bash",
+            crate::tool::definition::json_schema_for::<ShellCommandInput>(),
+        )
+        .description(
+            "Run one Bash command. Declare filesystem_effects and network_effects for every accessed path or outbound target.",
+        )
+        .summary("Run one Bash command.")
+        .help(
+            "Runs one Bash command through the in-process executor. Declare filesystem_effects and network_effects for all accessed paths or outbound targets; pass empty arrays when there are none beyond entering workdir.",
+        )
+        .ui_display_mode(UiTextDisplayMode::Detailed)
+        .tags([ToolTag::Mutating, ToolTag::Shell])
+        .concurrency_safe(false)
+        .streaming(ToolStreamingMode::Streaming),
+        PluginToolDecl::new(
+            "exec.powershell",
+            crate::tool::definition::json_schema_for::<ShellCommandInput>(),
+        )
+        .description(
+            "Run one PowerShell command. Declare filesystem_effects and network_effects for every accessed path or outbound target.",
+        )
+        .summary("Run one PowerShell command.")
+        .help(
+            "Runs one PowerShell command through the in-process executor. Declare filesystem_effects and network_effects for all accessed paths or outbound targets; pass empty arrays when there are none beyond entering workdir.",
+        )
+        .ui_display_mode(UiTextDisplayMode::Detailed)
+        .tags([ToolTag::Mutating, ToolTag::Shell])
+        .concurrency_safe(false)
+        .streaming(ToolStreamingMode::Streaming),
+        PluginToolDecl::new(
+            "monitor.start",
+            crate::tool::definition::json_schema_for::<ShellMonitorStartInput>(),
+        )
+        .description("Start a long-running monitored shell command.")
+        .summary("Start one monitored shell command.")
+        .help(
+            "Starts a monitored shell command with the declared filesystem_effects and network_effects. Use monitor.list, monitor.read, and monitor.stop to inspect or end it.",
+        )
+        .ui_display_mode(UiTextDisplayMode::Detailed)
+        .tags([ToolTag::Mutating, ToolTag::Shell])
+        .host_capability(HostCapability::MonitorRegistry)
+        .concurrency_safe(false),
+        PluginToolDecl::new(
+            "monitor.list",
+            crate::tool::definition::json_schema_for::<ShellMonitorListInput>(),
+        )
+        .description("List active shell monitors.")
+        .summary("List active shell monitors.")
+        .help("Lists the active shell monitors tracked by the runtime.")
+        .ui_display_mode(UiTextDisplayMode::Detailed)
+        .tags([ToolTag::ReadOnly, ToolTag::Shell])
+        .host_capability(HostCapability::MonitorRegistry)
+        .concurrency_safe(true),
+        PluginToolDecl::new(
+            "monitor.read",
+            crate::tool::definition::json_schema_for::<ShellMonitorReadInput>(),
+        )
+        .description("Read buffered output from one shell monitor.")
+        .summary("Read one shell monitor buffer.")
+        .help(
+            "Reads buffered output from one shell monitor by monitor_id. Use since_seq and wait_ms to tail incrementally.",
+        )
+        .ui_display_mode(UiTextDisplayMode::Detailed)
+        .tags([ToolTag::ReadOnly, ToolTag::Shell])
+        .host_capability(HostCapability::MonitorRegistry)
+        .concurrency_safe(true),
+        PluginToolDecl::new(
+            "monitor.stop",
+            crate::tool::definition::json_schema_for::<ShellMonitorStopInput>(),
+        )
+        .description("Stop one shell monitor by id.")
+        .summary("Stop one shell monitor.")
+        .help("Stops one shell monitor by monitor_id and returns its final handle state.")
+        .ui_display_mode(UiTextDisplayMode::Detailed)
+        .tags([ToolTag::Mutating, ToolTag::Shell])
+        .host_capability(HostCapability::MonitorRegistry)
+        .concurrency_safe(false),
+    ]
+}
+
+fn parse_input<T>(input: JsonValue) -> SdkResult<T>
+where
+    T: for<'de> serde::Deserialize<'de>,
+{
+    serde_json::from_value(input).map_err(|err| PluginError::invalid_params(err.to_string()))
+}
+
+fn tool_args<T: serde::Serialize>(tool: &str, args: T) -> SdkResult<(String, JsonValue)> {
     Ok((
         tool.to_string(),
         serde_json::to_value(args).map_err(|err| PluginError::invalid_params(err.to_string()))?,
     ))
 }
 
-fn shell_exec_tool_args(input: ShellExecInput) -> crate::plugin::sdk::Result<(String, JsonValue)> {
-    match input.shell {
-        ShellExecKind::Bash => tool_args("bash", input.command),
-        ShellExecKind::PowerShell => tool_args("powershell", input.command),
+fn resolve_shell_tool_input(tool_name: &str, input: JsonValue) -> SdkResult<(String, JsonValue)> {
+    match tool_name {
+        "exec.bash" => tool_args("bash", parse_input::<ShellCommandInput>(input)?),
+        "exec.powershell" => tool_args("powershell", parse_input::<ShellCommandInput>(input)?),
+        "monitor.start" => {
+            let args: ShellMonitorStartInput = parse_input(input)?;
+            tool_args(
+                "monitor",
+                MonitorToolInput::Start {
+                    command: args.command,
+                    persistent: args.persistent,
+                    include_pattern: args.include_pattern,
+                    max_buffered_lines: args.max_buffered_lines,
+                    capture_stderr: args.capture_stderr,
+                },
+            )
+        }
+        "monitor.list" => tool_args("monitor", MonitorToolInput::List {}),
+        "monitor.read" => {
+            let args: ShellMonitorReadInput = parse_input(input)?;
+            tool_args(
+                "monitor",
+                MonitorToolInput::Read {
+                    monitor_id: args.monitor_id,
+                    since_seq: args.since_seq,
+                    limit: args.limit,
+                    wait_ms: args.wait_ms,
+                },
+            )
+        }
+        "monitor.stop" => {
+            let args: ShellMonitorStopInput = parse_input(input)?;
+            tool_args(
+                "monitor",
+                MonitorToolInput::Stop {
+                    monitor_id: args.monitor_id,
+                },
+            )
+        }
+        other => Err(PluginError::invalid_params(format!(
+            "unknown shell tool '{other}'"
+        ))),
     }
-}
-
-fn shell_monitor_start_tool_args(
-    args: ShellMonitorStartInput,
-) -> crate::plugin::sdk::Result<(String, JsonValue)> {
-    tool_args(
-        "monitor",
-        MonitorToolInput::Start {
-            command: args.command,
-            persistent: args.persistent,
-            include_pattern: args.include_pattern,
-            max_buffered_lines: args.max_buffered_lines,
-            capture_stderr: args.capture_stderr,
-        },
-    )
-}
-
-fn shell_monitor_list_tool_args(
-    _args: ShellMonitorListInput,
-) -> crate::plugin::sdk::Result<(String, JsonValue)> {
-    tool_args("monitor", MonitorToolInput::List {})
-}
-
-fn shell_monitor_read_tool_args(
-    args: ShellMonitorReadInput,
-) -> crate::plugin::sdk::Result<(String, JsonValue)> {
-    tool_args(
-        "monitor",
-        MonitorToolInput::Read {
-            monitor_id: args.monitor_id,
-            since_seq: args.since_seq,
-            limit: args.limit,
-            wait_ms: args.wait_ms,
-        },
-    )
-}
-
-fn shell_monitor_stop_tool_args(
-    args: ShellMonitorStopInput,
-) -> crate::plugin::sdk::Result<(String, JsonValue)> {
-    tool_args(
-        "monitor",
-        MonitorToolInput::Stop {
-            monitor_id: args.monitor_id,
-        },
-    )
 }

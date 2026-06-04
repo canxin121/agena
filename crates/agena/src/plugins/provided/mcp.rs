@@ -20,8 +20,8 @@ use crate::message::{AttachmentItem, OperationBlock};
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
     HookSubscription, InitContext, InitOutcome, NetworkAccessSpec, NetworkRequest, Plugin,
-    PluginManifest, PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
-    ToolTag,
+    PluginManifest, PluginToolDecl, Result as SdkResult, ToolDescriptionMode, ToolInvokeInput,
+    ToolInvokeOutput, ToolTag, UiTextDisplayMode,
 };
 
 pub(crate) const MCP_PLUGIN_ID: &str = "agena.mcp";
@@ -503,6 +503,7 @@ impl McpToolTarget {
     description = "MCP bridge command. Use action `list_resources`, `read_resource`, `list_prompts`, `get_prompt`, or `call` to access capabilities exposed by configured MCP servers.",
     summary = "Read MCP resources or prompt templates, or call discovered MCP tools.",
     help = "Use action `list_resources`, `read_resource`, `list_prompts`, `get_prompt`, or `call`. MCP prompts here are server-provided prompt templates/messages, not Agena chat prompts or permission prompts.",
+    ui_display_mode = "summary",
     tags(ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Mcp),
     concurrency_safe = false
 )]
@@ -551,38 +552,73 @@ struct CallToolInput {
 }
 
 pub(super) fn target_from_invocation(tool: &str, input: Value) -> SdkResult<McpToolTarget> {
-    let (action, args) = McpToolInput::resolve_tool(tool, input)?;
-    match action.as_str() {
-        "list_resources" => {
-            let args: McpServerInput = serde_json::from_value(args)?;
+    match tool {
+        "resources.list" => {
+            let args: McpServerInput = serde_json::from_value(input)?;
             Ok(McpToolTarget::ListResources {
                 server: args.server,
             })
         }
-        "read_resource" => {
-            let args: ReadResourceInput = serde_json::from_value(args)?;
+        "resources.read" => {
+            let args: ReadResourceInput = serde_json::from_value(input)?;
             Ok(McpToolTarget::ReadResource { server: args })
         }
-        "list_prompts" => {
-            let args: McpServerInput = serde_json::from_value(args)?;
+        "prompts.list" => {
+            let args: McpServerInput = serde_json::from_value(input)?;
             Ok(McpToolTarget::ListPrompts {
                 server: args.server,
             })
         }
-        "get_prompt" => {
-            let args: GetPromptInput = serde_json::from_value(args)?;
+        "prompts.get" => {
+            let args: GetPromptInput = serde_json::from_value(input)?;
             Ok(McpToolTarget::GetPrompt { server: args })
         }
-        "call" => {
-            let args: CallToolInput = serde_json::from_value(args)?;
+        "tools.call" => {
+            let args: CallToolInput = serde_json::from_value(input)?;
             Ok(McpToolTarget::Tool {
                 server: args.server,
                 tool: args.name,
                 arguments: empty_object_to_none(args.arguments),
             })
         }
+        "mcp" => {
+            let (action, args) = McpToolInput::resolve_tool(tool, input)?;
+            match action.as_str() {
+                "list_resources" => {
+                    let args: McpServerInput = serde_json::from_value(args)?;
+                    Ok(McpToolTarget::ListResources {
+                        server: args.server,
+                    })
+                }
+                "read_resource" => {
+                    let args: ReadResourceInput = serde_json::from_value(args)?;
+                    Ok(McpToolTarget::ReadResource { server: args })
+                }
+                "list_prompts" => {
+                    let args: McpServerInput = serde_json::from_value(args)?;
+                    Ok(McpToolTarget::ListPrompts {
+                        server: args.server,
+                    })
+                }
+                "get_prompt" => {
+                    let args: GetPromptInput = serde_json::from_value(args)?;
+                    Ok(McpToolTarget::GetPrompt { server: args })
+                }
+                "call" => {
+                    let args: CallToolInput = serde_json::from_value(args)?;
+                    Ok(McpToolTarget::Tool {
+                        server: args.server,
+                        tool: args.name,
+                        arguments: empty_object_to_none(args.arguments),
+                    })
+                }
+                other => Err(PluginError::invalid_params(format!(
+                    "invalid MCP action '{other}'"
+                ))),
+            }
+        }
         other => Err(PluginError::invalid_params(format!(
-            "invalid MCP action '{other}'"
+            "unknown MCP tool '{other}'"
         ))),
     }
 }
@@ -592,12 +628,15 @@ fn manifest_from_snapshot(
     tools: Vec<(String, ToolDescriptor)>,
     network_access: &BTreeMap<String, NetworkAccessSpec>,
 ) -> PluginManifest {
-    let mut tool_decls = Vec::new();
-    if !servers.is_empty() || !tools.is_empty() {
-        tool_decls.push(mcp_decl(&servers, &tools, !network_access.is_empty()));
-    }
+    let tool_decls = if servers.is_empty() && tools.is_empty() {
+        Vec::new()
+    } else {
+        mcp_decls(&servers, &tools, !network_access.is_empty())
+    };
     PluginManifest::builder(MCP_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
         .description("Agena MCP bridge exposed as hierarchical plugin commands.")
+        .tool_description_mode(ToolDescriptionMode::Brief)
+        .ui_display_mode(UiTextDisplayMode::Summary)
         .hooks(HookSubscription::TOOL_INVOKE)
         .config_schema(mcp_config_schema())
         .tools(tool_decls)
@@ -615,28 +654,90 @@ async fn network_access_by_server(
         .collect()
 }
 
-fn mcp_decl(
+fn mcp_decls(
     servers: &[String],
     tools: &[(String, ToolDescriptor)],
     has_network_servers: bool,
-) -> PluginToolDecl {
+) -> Vec<PluginToolDecl> {
     let server_count = servers.len();
     let tool_count = tools.len();
-    let tool_decl = McpToolInput::tool_decl()
-    .description(format!(
-        "MCP command for {server_count} configured server(s) and {tool_count} discovered tool(s). Set action to list_resources, read_resource, list_prompts, get_prompt, or call. MCP prompts are server-provided prompt templates/messages, not Agena chat prompts."
-    ))
-    .summary(format!(
-        "Read MCP resources/prompts or call discovered MCP tools across {server_count} server(s)."
-    ))
-    .help(mcp_help(servers, tools))
-    .tags([ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Mcp]);
-    maybe_network_tag(tool_decl, has_network_servers)
+    let common_help = mcp_help(servers, tools);
+    vec![
+        maybe_network_tag(
+            PluginToolDecl::new(
+                "resources.list",
+                crate::tool::definition::json_schema_for::<McpServerInput>(),
+            )
+            .description(format!(
+                "List resource descriptors from one configured MCP server. {server_count} server(s) are currently configured."
+            ))
+            .summary("List MCP resources from one server.")
+            .help(common_help.clone())
+            .ui_display_mode(UiTextDisplayMode::Summary)
+            .tags([ToolTag::ReadOnly, ToolTag::Mcp])
+            .concurrency_safe(true),
+            has_network_servers,
+        ),
+        maybe_network_tag(
+            PluginToolDecl::new(
+                "resources.read",
+                crate::tool::definition::json_schema_for::<ReadResourceInput>(),
+            )
+            .description("Read one MCP resource by URI from one configured server.")
+            .summary("Read one MCP resource by URI.")
+            .help(common_help.clone())
+            .ui_display_mode(UiTextDisplayMode::Summary)
+            .tags([ToolTag::ReadOnly, ToolTag::Mcp])
+            .concurrency_safe(true),
+            has_network_servers,
+        ),
+        maybe_network_tag(
+            PluginToolDecl::new(
+                "prompts.list",
+                crate::tool::definition::json_schema_for::<McpServerInput>(),
+            )
+            .description("List server-provided MCP prompt templates from one configured server.")
+            .summary("List MCP prompt templates from one server.")
+            .help(common_help.clone())
+            .ui_display_mode(UiTextDisplayMode::Summary)
+            .tags([ToolTag::ReadOnly, ToolTag::Mcp])
+            .concurrency_safe(true),
+            has_network_servers,
+        ),
+        maybe_network_tag(
+            PluginToolDecl::new(
+                "prompts.get",
+                crate::tool::definition::json_schema_for::<GetPromptInput>(),
+            )
+            .description("Fetch one server-provided MCP prompt template by name.")
+            .summary("Fetch one MCP prompt template.")
+            .help(common_help.clone())
+            .ui_display_mode(UiTextDisplayMode::Summary)
+            .tags([ToolTag::ReadOnly, ToolTag::Mcp])
+            .concurrency_safe(true),
+            has_network_servers,
+        ),
+        maybe_network_tag(
+            PluginToolDecl::new(
+                "tools.call",
+                crate::tool::definition::json_schema_for::<CallToolInput>(),
+            )
+            .description(format!(
+                "Call one discovered MCP tool on one configured server. {tool_count} discovered tool(s) are currently available across {server_count} server(s)."
+            ))
+            .summary("Call one discovered MCP tool.")
+            .help(common_help)
+            .ui_display_mode(UiTextDisplayMode::Summary)
+            .tags([ToolTag::Mutating, ToolTag::Mcp])
+            .concurrency_safe(false),
+            has_network_servers,
+        ),
+    ]
 }
 
 fn mcp_help(servers: &[String], tools: &[(String, ToolDescriptor)]) -> String {
     let mut lines = vec![
-        "Use action `list_resources` to list resources, `read_resource` to read a resource URI, `list_prompts` to list prompts, `get_prompt` to fetch a prompt, and `call` with `server`, `name`, and optional `arguments` to call a discovered MCP tool.".to_string(),
+        "Use `resources.list` to list resources, `resources.read` to read a resource URI, `prompts.list` to list prompt templates, `prompts.get` to fetch a prompt template, and `tools.call` with `server`, `name`, and optional `arguments` to call a discovered MCP tool.".to_string(),
         "Configured servers:".to_string(),
     ];
     for server in servers {
@@ -994,9 +1095,8 @@ mod tests {
     fn mcp_invocation_routes_hierarchical_commands() {
         assert_eq!(
             target_from_invocation(
-                "mcp",
+                "tools.call",
                 serde_json::json!({
-                    "action": "call",
                     "server": "docs",
                     "name": "search",
                     "arguments": { "q": "rust" }
@@ -1010,23 +1110,16 @@ mod tests {
             }
         );
         assert_eq!(
-            target_from_invocation(
-                "mcp",
-                serde_json::json!({
-                    "action": "list_resources",
-                    "server": "docs"
-                })
-            )
-            .expect("mcp resources list target"),
+            target_from_invocation("resources.list", serde_json::json!({ "server": "docs" }))
+                .expect("mcp resources list target"),
             McpToolTarget::ListResources {
                 server: "docs".to_string()
             }
         );
         assert_eq!(
             target_from_invocation(
-                "mcp",
+                "resources.read",
                 serde_json::json!({
-                    "action": "read_resource",
                     "server": "docs",
                     "uri": "file:///README.md"
                 })
@@ -1040,23 +1133,16 @@ mod tests {
             }
         );
         assert_eq!(
-            target_from_invocation(
-                "mcp",
-                serde_json::json!({
-                    "action": "list_prompts",
-                    "server": "docs"
-                })
-            )
-            .expect("mcp prompts list target"),
+            target_from_invocation("prompts.list", serde_json::json!({ "server": "docs" }))
+                .expect("mcp prompts list target"),
             McpToolTarget::ListPrompts {
                 server: "docs".to_string()
             }
         );
         assert_eq!(
             target_from_invocation(
-                "mcp",
+                "prompts.get",
                 serde_json::json!({
-                    "action": "get_prompt",
                     "server": "docs",
                     "name": "summarize"
                 })
@@ -1073,12 +1159,8 @@ mod tests {
         assert!(target_from_invocation("mcp:docs:search", serde_json::json!({})).is_err());
         assert!(
             target_from_invocation(
-                "mcp",
-                serde_json::json!({
-                    "action": "tool",
-                    "server": "docs",
-                    "name": "search"
-                })
+                "unknown.tool",
+                serde_json::json!({ "server": "docs", "name": "search" })
             )
             .is_err()
         );
@@ -1183,7 +1265,16 @@ mod tests {
             .map(|tool_decl| tool_decl.name.as_str())
             .collect::<BTreeSet<_>>();
 
-        assert_eq!(names, BTreeSet::from(["mcp"]));
+        assert_eq!(
+            names,
+            BTreeSet::from([
+                "prompts.get",
+                "prompts.list",
+                "resources.list",
+                "resources.read",
+                "tools.call",
+            ])
+        );
     }
 
     #[test]
@@ -1218,7 +1309,7 @@ mod tests {
             &network_access,
         );
 
-        assert_eq!(manifest.tools.len(), 1);
+        assert_eq!(manifest.tools.len(), 5);
         for tool_decl in &manifest.tools {
             assert!(tool_decl.network_access.is_empty());
             assert!(tool_decl.tags.iter().any(|tag| tag == &ToolTag::Network));

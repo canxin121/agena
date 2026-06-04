@@ -1,6 +1,7 @@
 import type { Ref } from 'vue'
 
 import type { PluginInspect, PluginLogEntry, PluginStatus } from '../lib/agenaApi'
+import type { SettingsPluginUiPresentationSnapshot } from './runtimePageLoaders'
 
 export type PluginsInstalledStateInput = {
   canTogglePluginConfig: Ref<boolean>
@@ -9,6 +10,7 @@ export type PluginsInstalledStateInput = {
   openPluginManifestInWorkspace: () => void
   pluginLoading: Ref<boolean>
   pluginLogs: Ref<PluginLogEntry[]>
+  pluginUiPresentation: Ref<SettingsPluginUiPresentationSnapshot | null>
   plugins: Ref<PluginStatus[]>
   selectedPlugin: Ref<PluginInspect | null>
   setSelectedPluginDisabled: (disabled: boolean) => void | Promise<void>
@@ -22,6 +24,7 @@ export function usePluginsInstalledState(input: PluginsInstalledStateInput) {
     openPluginManifestInWorkspace: input.openPluginManifestInWorkspace,
     pluginLoading: input.pluginLoading,
     pluginLogs: input.pluginLogs,
+    pluginUiPresentation: input.pluginUiPresentation,
     plugins: input.plugins,
     selectedPlugin: input.selectedPlugin,
     setSelectedPluginDisabled: input.setSelectedPluginDisabled,

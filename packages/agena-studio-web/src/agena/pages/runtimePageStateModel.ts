@@ -183,11 +183,11 @@ export const sectionTabNavigationItems: SectionTabNavigationItem[] = [
   {
     id: 'nav.settings.plugins',
     title: 'Open Plugin Settings',
-    description: 'Manage plugin entries and the default tool description mode.',
+    description: 'Manage grouped per-plugin and per-tool prompt policies plus web/TUI display modes.',
     section: 'settings',
     tab: 'plugins',
     slash: '/settings-plugins',
-    aliases: ['plugins', 'tool descriptions', 'help mode'],
+    aliases: ['plugins', 'tool descriptions', 'brief mode', 'display mode'],
     shortcutSlash: '/plugins-settings',
   },
   {

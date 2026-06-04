@@ -29,7 +29,7 @@ import type {
   DesktopRuntimeInfo,
   DesktopUpdateProgress,
 } from '../../lib/desktopConfig'
-import type { SettingsPluginsConfigSnapshot } from './runtimePageLoaders'
+import type { SettingsPluginUiPresentationSnapshot, SettingsPluginsConfigSnapshot } from './runtimePageLoaders'
 import type { PluginsTab, RuntimeTab, SettingsTab } from './runtimePageStateModel'
 
 export function useRuntimePageStore() {
@@ -44,6 +44,7 @@ export function useRuntimePageStore() {
   const permissionRules = ref<PermissionRuleResource[]>([])
   const plugins = ref<PluginStatus[]>([])
   const settingsPlugins = ref<SettingsPluginsConfigSnapshot | null>(null)
+  const pluginUiPresentation = ref<SettingsPluginUiPresentationSnapshot | null>(null)
   const workspaces = ref<WorkspaceResource[]>([])
   const sessions = ref<SessionResource[]>([])
   const selectedWorkspaceId = ref<number | null>(null)
@@ -190,6 +191,7 @@ export function useRuntimePageStore() {
     pluginLogPollTimer,
     pluginLogs,
     plugins,
+    pluginUiPresentation,
     settingsPlugins,
     providerModels,
     providers,

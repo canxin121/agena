@@ -3,10 +3,12 @@ import { computed, inject, ref } from 'vue'
 import { routerKey } from 'vue-router'
 
 import { runPluginUiAction, type PluginInspect, type PluginLogEntry, type PluginStatus } from '@/agena/lib/agenaApi'
+import type { SettingsPluginUiPresentationSnapshot } from './runtimePageLoaders'
 
 const props = defineProps<{
   canTogglePluginConfig: boolean
   plugins: PluginStatus[]
+  pluginUiPresentation: SettingsPluginUiPresentationSnapshot | null
   selectedPlugin: PluginInspect | null
   pluginLogs: PluginLogEntry[]
   pluginLoading: boolean
@@ -46,6 +48,8 @@ type ManifestEntrySummary = {
   name: string
   description: string
   help: string
+  effectiveUiDisplayMode: 'detailed' | 'summary'
+  effectiveUiDisplaySource: string
   summary: string
   tags: string[]
   facts: string[]
@@ -81,18 +85,141 @@ function readStringArray(value: unknown): string[] {
     .filter((item) => item.length > 0)
 }
 
+function readOptionalUiDisplayMode(value: unknown): 'detailed' | 'summary' | null {
+  return value === 'detailed' || value === 'summary' ? value : null
+}
+
+function readOptionalUiDisplayOverride(value: unknown): 'default' | 'detailed' | 'summary' | null {
+  if (value === 'default' || value === 'inherit') return 'default'
+  if (value === 'detailed' || value === 'summary') return value
+  return null
+}
+
+function globalDisplayMode(): 'detailed' | 'summary' {
+  return readOptionalUiDisplayMode(props.pluginUiPresentation?.defaultMode) || 'detailed'
+}
+
+function resolveDisplayOverride(
+  override: 'default' | 'detailed' | 'summary',
+  fallback: 'detailed' | 'summary',
+): 'detailed' | 'summary' {
+  if (override === 'summary') return 'summary'
+  if (override === 'detailed') return 'detailed'
+  return fallback
+}
+
+function toolOverrideKeys(pluginId: string, toolName: string): string[] {
+  const exposedName = `${pluginId}/${toolName}`
+  return [exposedName, `${pluginId}/${toolName}`, `${pluginId}/${exposedName}`, `${pluginId}.${toolName}`, toolName]
+}
+
+function findToolUiOverride(pluginId: string, toolName: string): 'default' | 'detailed' | 'summary' | null {
+  const overrides = props.pluginUiPresentation?.effectiveToolOverrides || {}
+  for (const key of toolOverrideKeys(pluginId, toolName)) {
+    if (!Object.prototype.hasOwnProperty.call(overrides, key)) continue
+    return readOptionalUiDisplayOverride(overrides[key]) || null
+  }
+  return null
+}
+
+function pluginDisplayMode(
+  pluginId: string,
+  pluginDefault: 'detailed' | 'summary' | null,
+): 'detailed' | 'summary' {
+  const pluginOverride = readOptionalUiDisplayOverride(props.pluginUiPresentation?.effectivePluginOverrides?.[pluginId])
+  if (pluginOverride) return resolveDisplayOverride(pluginOverride, pluginDefault || globalDisplayMode())
+  return pluginDefault || globalDisplayMode()
+}
+
+function toolDisplayMode(
+  pluginId: string,
+  toolName: string,
+  toolDefault: 'detailed' | 'summary' | null,
+  pluginDefault: 'detailed' | 'summary' | null,
+): 'detailed' | 'summary' {
+  const toolOverride = findToolUiOverride(pluginId, toolName)
+  if (toolOverride) return resolveDisplayOverride(toolOverride, toolDefault || pluginDefault || globalDisplayMode())
+  const pluginOverride = readOptionalUiDisplayOverride(props.pluginUiPresentation?.effectivePluginOverrides?.[pluginId])
+  if (pluginOverride) {
+    return resolveDisplayOverride(pluginOverride, toolDefault || pluginDefault || globalDisplayMode())
+  }
+  if (toolDefault) return toolDefault
+  return pluginDisplayMode(pluginId, pluginDefault)
+}
+
+function pluginDisplaySource(
+  pluginId: string,
+  pluginDefault: 'detailed' | 'summary' | null,
+): string {
+  const pluginOverride = readOptionalUiDisplayOverride(props.pluginUiPresentation?.effectivePluginOverrides?.[pluginId])
+  if (pluginOverride === 'summary' || pluginOverride === 'detailed') return 'plugin override'
+  if (pluginDefault) return 'plugin default'
+  return 'global default'
+}
+
+function toolDisplaySource(
+  pluginId: string,
+  toolName: string,
+  toolDefault: 'detailed' | 'summary' | null,
+  pluginDefault: 'detailed' | 'summary' | null,
+): string {
+  const toolOverride = findToolUiOverride(pluginId, toolName)
+  if (toolOverride === 'summary' || toolOverride === 'detailed') return 'tool override'
+  const pluginOverride = readOptionalUiDisplayOverride(props.pluginUiPresentation?.effectivePluginOverrides?.[pluginId])
+  if (pluginOverride === 'summary' || pluginOverride === 'detailed') return 'plugin override'
+  if (toolDefault && toolDefault !== pluginDefault) return 'tool default'
+  if (pluginDefault) return 'plugin default'
+  return 'global default'
+}
+
+function primaryManifestText(
+  mode: 'detailed' | 'summary',
+  description: string,
+  summary: string,
+  fallback: string,
+): string {
+  if (mode === 'summary') return summary || description || fallback
+  return description || summary || fallback
+}
+
+function secondaryManifestText(mode: 'detailed' | 'summary', description: string, summary: string): string {
+  if (mode === 'detailed' && summary && summary !== description) return summary
+  return ''
+}
+
+const selectedPluginDisplayMode = computed<'detailed' | 'summary'>(() => {
+  const pluginId = props.selectedPlugin?.status.plugin_id || ''
+  const pluginDefault = readOptionalUiDisplayMode(readRecord(manifest.value).ui_display_mode)
+  return pluginId ? pluginDisplayMode(pluginId, pluginDefault) : 'detailed'
+})
+
+const selectedPluginDisplaySource = computed<string>(() => {
+  const pluginId = props.selectedPlugin?.status.plugin_id || ''
+  const pluginDefault = readOptionalUiDisplayMode(readRecord(manifest.value).ui_display_mode)
+  return pluginId ? pluginDisplaySource(pluginId, pluginDefault) : 'global default'
+})
+
 const manifestFacts = computed<ManifestFact[]>(() => {
   const data = manifest.value
   if (!data || typeof data !== 'object' || Array.isArray(data)) return []
   const manifestRecord = data as Record<string, unknown>
-  const entries = readArray(manifestRecord.entries)
+  const entries = readArray(manifestRecord.tools || manifestRecord.entries)
   const ui = readRecord(manifestRecord.ui)
   const studio = readRecord(ui.studio)
   const tui = readRecord(ui.tui)
+  const description = readString(manifestRecord.description)
+  const summary = readString(manifestRecord.summary)
+  const declaredDisplayDefault = readOptionalUiDisplayMode(manifestRecord.ui_display_mode)
   return [
     { label: 'Name', value: readString(manifestRecord.name) || 'n/a' },
     { label: 'Version', value: readString(manifestRecord.version) || 'n/a' },
-    { label: 'Description', value: readString(manifestRecord.description) || 'n/a' },
+    {
+      label: selectedPluginDisplayMode.value === 'summary' ? 'Summary' : 'Description',
+      value: primaryManifestText(selectedPluginDisplayMode.value, description, summary, 'n/a'),
+    },
+    { label: 'Display Mode', value: selectedPluginDisplayMode.value },
+    { label: 'Display Default', value: declaredDisplayDefault || 'runtime default' },
+    { label: 'Display Source', value: selectedPluginDisplaySource.value },
     { label: 'Authors', value: readStringArray(manifestRecord.authors).join(', ') || 'n/a' },
     { label: 'Transports', value: readStringArray(manifestRecord.transports).join(', ') || 'n/a' },
     { label: 'Hooks', value: readStringArray(manifestRecord.hooks).join(', ') || 'n/a' },
@@ -131,21 +258,35 @@ const manifestEntries = computed<ManifestEntrySummary[]>(() => {
   const data = manifest.value
   if (!data || typeof data !== 'object' || Array.isArray(data)) return []
   const manifestRecord = data as Record<string, unknown>
-  return readArray(manifestRecord.entries)
+  const pluginId = props.selectedPlugin?.status.plugin_id || ''
+  const pluginDefault = readOptionalUiDisplayMode(manifestRecord.ui_display_mode)
+  return readArray(manifestRecord.tools || manifestRecord.entries)
     .map((entry) => readRecord(entry))
     .map((entry) => {
       const tags = readStringArray(entry.tags)
+      const toolName = readString(entry.name) || 'unnamed entry'
+      const toolDeclaredDefault = readOptionalUiDisplayMode(entry.ui_display_mode)
+      const toolDefault = toolDeclaredDefault || pluginDefault
+      const effectiveUiDisplayMode = pluginId
+        ? toolDisplayMode(pluginId, toolName, toolDefault, pluginDefault)
+        : 'detailed'
       const facts = [
         entry.strict === true ? 'strict' : null,
         entry.streaming === true ? 'streaming' : null,
         entry.concurrency_safe === true ? 'concurrency-safe' : null,
         readString(entry.description_mode) ? `mode=${readString(entry.description_mode)}` : null,
+        toolDefault ? `ui_default=${toolDefault}` : null,
+        pluginId ? `ui_source=${toolDisplaySource(pluginId, toolName, toolDeclaredDefault, pluginDefault)}` : null,
       ].filter(Boolean) as string[]
       return {
-        name: readString(entry.name) || 'unnamed entry',
+        name: toolName,
         description: readString(entry.description) || readString(entry.summary) || 'No description provided.',
-        summary: readString(entry.summary) || 'n/a',
+        summary: readString(entry.summary) || '',
         help: readString(entry.help) || '',
+        effectiveUiDisplayMode,
+        effectiveUiDisplaySource: pluginId
+          ? toolDisplaySource(pluginId, toolName, toolDeclaredDefault, pluginDefault)
+          : 'global default',
         tags,
         facts,
       }
@@ -324,6 +465,8 @@ async function runStudioUiControl(control: ManifestStudioUiItem) {
             <span class="badge">{{ selectedPluginEntryKind }}</span>
             <span v-if="selectedPluginDisabled" class="badge warn">disabled</span>
             <span v-else class="badge success">enabled</span>
+            <span class="badge">ui={{ selectedPluginDisplayMode }}</span>
+            <span class="badge">{{ selectedPluginDisplaySource }}</span>
           </div>
           <div><strong>PID:</strong> {{ props.selectedPlugin.status.pid ?? 'n/a' }}</div>
           <div><strong>Last Exit:</strong> {{ props.selectedPlugin.status.last_exit_code ?? 'n/a' }}</div>
@@ -350,10 +493,25 @@ async function runStudioUiControl(control: ManifestStudioUiItem) {
                     <strong>{{ entry.name }}</strong>
                     <span v-if="entry.facts.includes('strict')" class="badge warn">strict</span>
                     <span v-if="entry.facts.includes('streaming')" class="badge">streaming</span>
+                    <span class="badge">{{ entry.effectiveUiDisplayMode }}</span>
+                    <span class="badge">{{ entry.effectiveUiDisplaySource }}</span>
                   </div>
-                  <div class="muted">{{ entry.description }}</div>
-                  <div class="muted">{{ entry.summary }}</div>
-                  <div v-if="entry.help" class="muted mono" style="white-space: pre-wrap">{{ entry.help }}</div>
+                  <div class="muted">
+                    {{ primaryManifestText(entry.effectiveUiDisplayMode, entry.description, entry.summary, 'No description provided.') }}
+                  </div>
+                  <div
+                    v-if="secondaryManifestText(entry.effectiveUiDisplayMode, entry.description, entry.summary)"
+                    class="muted"
+                  >
+                    {{ secondaryManifestText(entry.effectiveUiDisplayMode, entry.description, entry.summary) }}
+                  </div>
+                  <div
+                    v-if="entry.help && entry.effectiveUiDisplayMode === 'detailed'"
+                    class="muted mono"
+                    style="white-space: pre-wrap"
+                  >
+                    {{ entry.help }}
+                  </div>
                   <div v-if="entry.tags.length" class="muted mono">tags={{ entry.tags.join(', ') }}</div>
                   <div v-if="entry.facts.length" class="muted mono">{{ entry.facts.join(' · ') }}</div>
                 </div>

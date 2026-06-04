@@ -157,13 +157,9 @@ const PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH: &str =
 const PLUGIN_UI_PRESENTATION_PATH: &str = "plugins.policy.ui_presentation";
 const PLUGIN_UI_PRESENTATION_DEFAULT_MODE_PATH: &str =
     "plugins.policy.ui_presentation.default_mode";
-const MEMORY_PROJECT_INSTRUCTIONS_ENABLED_PATH: &str =
-    "plugins.list.\"agena.memory\".config.project_instructions.enabled";
-const MEMORY_PROJECT_INSTRUCTIONS_INCLUDE_GLOBAL_PATH: &str =
-    "plugins.list.\"agena.memory\".config.project_instructions.include_global";
 const PROVIDER_DEFAULT_WIZARD_INHERIT: &str = "__agena_default__";
 
-const SETTINGS_FIELDS: [SettingsFieldSpec; 25] = [
+const SETTINGS_FIELDS: [SettingsFieldSpec; 23] = [
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigProviders,
         path: "providers.default",
@@ -324,20 +320,6 @@ const SETTINGS_FIELDS: [SettingsFieldSpec; 25] = [
         label_key: "settings-field-session-compaction-reserved-tokens-label",
         description_key: "settings-field-session-compaction-reserved-tokens-description",
         kind: SettingsFieldKind::Integer,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigPlugins,
-        path: MEMORY_PROJECT_INSTRUCTIONS_ENABLED_PATH,
-        label_key: "settings-field-plugin-memory-project-instructions-enabled-label",
-        description_key: "settings-field-plugin-memory-project-instructions-enabled-description",
-        kind: SettingsFieldKind::Bool,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigPlugins,
-        path: MEMORY_PROJECT_INSTRUCTIONS_INCLUDE_GLOBAL_PATH,
-        label_key: "settings-field-plugin-memory-project-instructions-include-global-label",
-        description_key: "settings-field-plugin-memory-project-instructions-include-global-description",
-        kind: SettingsFieldKind::Bool,
     },
 ];
 
@@ -1007,6 +989,14 @@ impl SettingsStudioItem {
 
     fn with_source_rows(mut self, rows: Vec<SettingsSourceRow>) -> Self {
         self.source_rows = rows;
+        self
+    }
+
+    fn without_value_details(mut self) -> Self {
+        self.current_value = None;
+        self.effective_value = None;
+        self.path = None;
+        self.source_rows.clear();
         self
     }
 }
@@ -9150,12 +9140,7 @@ impl App {
             .map_err(|error| error.to_string())?;
 
         let runtime_override_items = settings_studio_runtime_items(&self.i18n, &self.run_options);
-        let mut plugin_items = settings_studio_plugin_items(&self.i18n, &sources);
-        plugin_items.extend(settings_studio_field_items(
-            &self.i18n,
-            &sources,
-            SettingsStudioSectionId::ConfigPlugins,
-        ));
+        let plugin_items = settings_studio_plugin_items(&self.i18n, &sources);
         let mut agent_items = settings_studio_field_items(
             &self.i18n,
             &sources,
@@ -16621,16 +16606,18 @@ fn settings_studio_plugin_items(
     vec![
         SettingsStudioItem::new(
             ui_text::t(i18n, "settings-plugin-policy-label"),
-            "/plugins/policy",
+            ui_text::t(i18n, "value-open"),
             ui_text::t(i18n, "settings-plugin-policy-detail"),
             SettingsPickerAction::OpenPluginPolicyStudio,
-        ),
+        )
+        .without_value_details(),
         SettingsStudioItem::new(
             ui_text::t(i18n, "settings-plugin-workbench-label"),
-            "/plugins",
+            ui_text::t(i18n, "value-open"),
             ui_text::t(i18n, "settings-plugin-workbench-detail"),
             SettingsPickerAction::OpenPluginWorkbench,
-        ),
+        )
+        .without_value_details(),
     ]
 }
 
@@ -25645,7 +25632,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_fields_are_partitioned_by_current_config_roots() {
+    fn settings_plugins_section_uses_only_navigation_entries() {
         let i18n = I18n::english();
         let sources = ConfigJsonSources {
             config_path: PathBuf::from("/tmp/agena-config.json"),
@@ -25661,18 +25648,6 @@ mod tests {
                             "max_tracked_events": 2048
                         }
                     }
-                },
-                "plugins": {
-                    "list": {
-                        "agena.memory": {
-                            "config": {
-                                "project_instructions": {
-                                    "enabled": true,
-                                    "include_global": true
-                                }
-                            }
-                        }
-                    }
                 }
             }),
         };
@@ -25685,8 +25660,12 @@ mod tests {
             !all_paths.iter().any(|path| path.starts_with("memory.")),
             "settings fields must not expose removed top-level memory paths: {all_paths:?}"
         );
-        assert!(all_paths.contains(&MEMORY_PROJECT_INSTRUCTIONS_ENABLED_PATH));
-        assert!(all_paths.contains(&MEMORY_PROJECT_INSTRUCTIONS_INCLUDE_GLOBAL_PATH));
+        assert!(
+            !all_paths
+                .iter()
+                .any(|path| path.starts_with("plugins.list.")),
+            "per-plugin config must be edited through the plugin workbench, not global settings fields: {all_paths:?}"
+        );
 
         let runtime_items =
             settings_studio_field_items(&i18n, &sources, SettingsStudioSectionId::ConfigRuntime);
@@ -25705,11 +25684,10 @@ mod tests {
 
         let plugin_items =
             settings_studio_field_items(&i18n, &sources, SettingsStudioSectionId::ConfigPlugins);
-        assert!(plugin_items.iter().all(|item| matches!(
-            &item.action,
-            SettingsPickerAction::EditField(field)
-                if field.path.starts_with("plugins.list.\"agena.memory\".config.")
-        )));
+        assert!(
+            plugin_items.is_empty(),
+            "plugin-specific config fields should not be hard-coded into the global settings section: {plugin_items:?}"
+        );
     }
 
     #[test]
@@ -25769,7 +25747,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_plugin_policy_items_use_current_policy_path() {
+    fn settings_plugin_policy_items_render_as_navigation_entries() {
         let i18n = I18n::english();
         let sources = ConfigJsonSources {
             config_path: PathBuf::from("/tmp/agena-config.json"),
@@ -25804,23 +25782,14 @@ mod tests {
         assert!(labels.contains(&"Plugin Config Workbench"));
         assert!(!labels.contains(&"Tool Description Mode"));
         assert!(!labels.contains(&"Plugin UI Display Mode"));
-        let rendered_items = items
-            .iter()
-            .map(|item| {
-                format!(
-                    "{} {} {}",
-                    item.label,
-                    item.detail,
-                    item.path.as_deref().unwrap_or_default()
-                )
-            })
-            .collect::<Vec<_>>();
-        assert!(
-            !rendered_items
-                .iter()
-                .any(|item| item.contains("plugins.tool_presentation")),
-            "plugin policy UI must not expose legacy plugins.tool_presentation paths: {labels:?}"
-        );
+        let expected_value = ui_text::t(&i18n, "value-open");
+        for item in &items {
+            assert_eq!(item.value, expected_value);
+            assert!(item.current_value.is_none());
+            assert!(item.effective_value.is_none());
+            assert!(item.source_rows.is_empty());
+            assert!(item.path.is_none());
+        }
     }
 
     #[test]
@@ -25854,36 +25823,6 @@ mod tests {
             )
             .unwrap_or_else(|error| panic!("{path} should validate: {error}"));
         }
-
-        let memory_segments =
-            agena::config::parse_settings_path(MEMORY_PROJECT_INSTRUCTIONS_ENABLED_PATH)
-                .expect("memory settings path should parse");
-        assert_eq!(
-            &memory_segments[..4],
-            ["plugins", "list", "agena.memory", "config"]
-        );
-        agena::config::set_file_setting(
-            config_path.clone(),
-            agena::config::ConfigSettingsSetInput {
-                path: "plugins.list.\"agena.memory\"".to_owned(),
-                value: json!({
-                    "enabled": true,
-                    "package": { "kind": "static" },
-                    "config": {
-                        "project_instructions": {
-                            "enabled": true,
-                            "include_global": false
-                        }
-                    }
-                }),
-                options: agena::config::ConfigSettingsEditOptions {
-                    dry_run: false,
-                    validate: true,
-                    reload: false,
-                },
-            },
-        )
-        .expect("materialized agena.memory plugin config should validate");
     }
 
     #[test]

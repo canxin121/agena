@@ -3747,6 +3747,10 @@ fn settings_compact_item_detail_text(i18n: &I18n, dialog: &SettingsStudioOverlay
 
 fn settings_item_action_hint(i18n: &I18n, item: &SettingsStudioItem) -> String {
     match &item.action {
+        SettingsPickerAction::OpenPluginPolicyStudio
+        | SettingsPickerAction::OpenPluginWorkbench => {
+            ui_text::t(i18n, "settings-detail-action-screen")
+        }
         SettingsPickerAction::OpenSessionEffectivePermissionView(_) => {
             ui_text::t(i18n, "settings-detail-action-readonly")
         }

@@ -17,7 +17,8 @@ use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostToolRegisterRequest, HostToolRemoveRequest};
 use crate::plugin::sdk::{
     HookSubscription, HostCapability, InitContext, InitOutcome, Plugin, PluginManifest,
-    PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
+    PluginToolDecl, Result as SdkResult, ToolDescriptionMode, ToolInvokeInput, ToolInvokeOutput,
+    ToolTag, UiTextDisplayMode,
 };
 
 pub(crate) const SKILLS_PLUGIN_ID: &str = "agena.skills";
@@ -125,6 +126,7 @@ impl SkillsPlugin {
         .description(description.clone())
         .summary(description)
         .help(discovered_tool.skill.body.clone())
+        .ui_display_mode(UiTextDisplayMode::Summary)
         .tags(tags)
         .concurrency_safe(true)
     }
@@ -227,6 +229,8 @@ impl Plugin for SkillsPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder(SKILLS_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
             .description("Discovers SKILL.md files and slash commands, then registers them as dynamic plugin tools.")
+            .tool_description_mode(ToolDescriptionMode::Brief)
+            .ui_display_mode(UiTextDisplayMode::Summary)
             .hooks(HookSubscription::INIT | HookSubscription::TOOL_INVOKE)
             .plugin_capability(HostCapability::ToolRegistry)
             .config_schema(crate::tool::definition::empty_config_schema())

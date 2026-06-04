@@ -14,7 +14,8 @@ use tree_sitter::Parser;
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
     HookSubscription, InitContext, InitOutcome, PathRequest, Plugin, PluginManifest,
-    PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
+    PluginToolDecl, Result as SdkResult, ToolDescriptionMode, ToolInvokeInput, ToolInvokeOutput,
+    ToolTag, UiTextDisplayMode,
 };
 
 pub(crate) const CODE_PLUGIN_ID: &str = "agena.code";
@@ -39,6 +40,8 @@ impl Default for CodeLanguage {
     description = "Structured code inspection command. Use action `search_ast` for AST-aware pattern matching or `syntax_tree` to inspect the parsed syntax tree.",
     summary = "Search code structurally with ast-grep and inspect syntax trees.",
     help = "Use action `search_ast` with a Rust pattern like `if $COND { $BODY }` or `foo($ARGS)` to find structural matches. Use action `syntax_tree` to inspect the named syntax nodes for a Rust source file.",
+    description_mode = "brief",
+    ui_display_mode = "summary",
     tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Discovery),
     concurrency_safe = true
 )]
@@ -145,6 +148,8 @@ impl Plugin for CodePlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder(CODE_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
             .description("Structured code search and syntax inspection tools.")
+            .tool_description_mode(ToolDescriptionMode::Brief)
+            .ui_display_mode(UiTextDisplayMode::Summary)
             .hooks(HookSubscription::TOOL_INVOKE)
             .config_schema(crate::tool::definition::empty_config_schema())
             .tool(code_decl())

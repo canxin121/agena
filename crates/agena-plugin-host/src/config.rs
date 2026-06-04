@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::sdk::ToolDescriptionMode;
+pub use crate::sdk::manifest::UiTextDisplayMode;
 
 pub use crate::quota::QuotaConfig;
 
@@ -73,16 +74,21 @@ impl PluginHostConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct PluginPolicyConfig {
-    /// Controls how tool descriptions are exposed to the model. The detailed
-    /// help remains available through host/tool help APIs.
+    /// Controls how tool descriptions are exposed to the model. Compact mode
+    /// keeps detailed help available through host/tool help APIs.
     #[serde(default, skip_serializing_if = "ToolPresentationConfig::is_default")]
     pub tool_presentation: ToolPresentationConfig,
+    /// Controls how plugin and tool metadata is rendered in UI surfaces such
+    /// as the web plugin inspector and the TUI plugin workbench.
+    #[serde(default, skip_serializing_if = "UiPresentationConfig::is_default")]
+    pub ui_presentation: UiPresentationConfig,
 }
 
 impl Default for PluginPolicyConfig {
     fn default() -> Self {
         Self {
             tool_presentation: ToolPresentationConfig::default(),
+            ui_presentation: UiPresentationConfig::default(),
         }
     }
 }
@@ -98,9 +104,9 @@ impl PluginPolicyConfig {
 pub struct ToolPresentationConfig {
     pub default_mode: ToolDescriptionMode,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub plugins: BTreeMap<String, ToolDescriptionMode>,
+    pub plugins: BTreeMap<String, ToolDescriptionOverride>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub tools: BTreeMap<String, ToolDescriptionMode>,
+    pub tools: BTreeMap<String, ToolDescriptionOverride>,
 }
 
 impl Default for ToolPresentationConfig {
@@ -133,14 +139,286 @@ impl ToolPresentationConfig {
             original_name.to_string(),
         ] {
             if let Some(mode) = self.tools.get(key.as_str()).copied() {
-                return mode;
+                return resolve_tool_description_override(mode, tool_default, self.default_mode);
             }
         }
-        self.plugins
-            .get(plugin_name)
-            .copied()
-            .or(tool_default)
-            .unwrap_or(self.default_mode)
+        if let Some(mode) = self.plugins.get(plugin_name).copied() {
+            return resolve_tool_description_override(mode, tool_default, self.default_mode);
+        }
+        tool_default.unwrap_or(self.default_mode)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolDescriptionOverride {
+    #[default]
+    #[serde(alias = "default", alias = "inherit")]
+    ToolDefault,
+    Detailed,
+    #[serde(alias = "help")]
+    Brief,
+}
+
+fn resolve_tool_description_override(
+    mode: ToolDescriptionOverride,
+    tool_default: Option<ToolDescriptionMode>,
+    fallback: ToolDescriptionMode,
+) -> ToolDescriptionMode {
+    match mode {
+        ToolDescriptionOverride::ToolDefault => tool_default.unwrap_or(fallback),
+        ToolDescriptionOverride::Detailed => ToolDescriptionMode::Detailed,
+        ToolDescriptionOverride::Brief => ToolDescriptionMode::Brief,
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct UiPresentationConfig {
+    pub default_mode: UiTextDisplayMode,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugins: BTreeMap<String, UiPresentationOverride>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tools: BTreeMap<String, UiPresentationOverride>,
+}
+
+impl Default for UiPresentationConfig {
+    fn default() -> Self {
+        Self {
+            default_mode: UiTextDisplayMode::Detailed,
+            plugins: BTreeMap::new(),
+            tools: BTreeMap::new(),
+        }
+    }
+}
+
+impl UiPresentationConfig {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    pub fn mode_for(
+        &self,
+        plugin_name: &str,
+        original_name: &str,
+        exposed_name: &str,
+        tool_default: Option<UiTextDisplayMode>,
+    ) -> UiTextDisplayMode {
+        for key in [
+            exposed_name.to_string(),
+            format!("{plugin_name}/{original_name}"),
+            format!("{plugin_name}/{exposed_name}"),
+            format!("{plugin_name}.{original_name}"),
+            original_name.to_string(),
+        ] {
+            if let Some(mode) = self.tools.get(key.as_str()).copied() {
+                return resolve_ui_presentation_override(mode, tool_default, self.default_mode);
+            }
+        }
+        if let Some(mode) = self.plugins.get(plugin_name).copied() {
+            return resolve_ui_presentation_override(mode, tool_default, self.default_mode);
+        }
+        tool_default.unwrap_or(self.default_mode)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum UiPresentationOverride {
+    #[default]
+    #[serde(alias = "default", alias = "inherit")]
+    Default,
+    Detailed,
+    Summary,
+}
+
+fn resolve_ui_presentation_override(
+    mode: UiPresentationOverride,
+    tool_default: Option<UiTextDisplayMode>,
+    fallback: UiTextDisplayMode,
+) -> UiTextDisplayMode {
+    match mode {
+        UiPresentationOverride::Default => tool_default.unwrap_or(fallback),
+        UiPresentationOverride::Detailed => UiTextDisplayMode::Detailed,
+        UiPresentationOverride::Summary => UiTextDisplayMode::Summary,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_presentation_mode_for_honors_tool_default_and_override_precedence() {
+        let mut presentation = ToolPresentationConfig {
+            default_mode: ToolDescriptionMode::Detailed,
+            ..Default::default()
+        };
+        presentation
+            .plugins
+            .insert("agena.settings".to_string(), ToolDescriptionOverride::Brief);
+        presentation.tools.insert(
+            "agena.settings/settings".to_string(),
+            ToolDescriptionOverride::ToolDefault,
+        );
+
+        assert_eq!(
+            presentation.mode_for(
+                "agena.settings",
+                "settings",
+                "agena.settings/settings",
+                Some(ToolDescriptionMode::Detailed),
+            ),
+            ToolDescriptionMode::Detailed,
+        );
+
+        presentation.tools.insert(
+            "agena.settings/settings".to_string(),
+            ToolDescriptionOverride::Brief,
+        );
+        assert_eq!(
+            presentation.mode_for(
+                "agena.settings",
+                "settings",
+                "agena.settings/settings",
+                Some(ToolDescriptionMode::Detailed),
+            ),
+            ToolDescriptionMode::Brief,
+        );
+
+        presentation.tools.clear();
+        presentation.plugins.insert(
+            "agena.settings".to_string(),
+            ToolDescriptionOverride::ToolDefault,
+        );
+        assert_eq!(
+            presentation.mode_for(
+                "agena.settings",
+                "settings",
+                "agena.settings/settings",
+                Some(ToolDescriptionMode::Brief),
+            ),
+            ToolDescriptionMode::Brief,
+        );
+    }
+
+    #[test]
+    fn legacy_help_and_inherit_aliases_still_parse() {
+        let config: ToolPresentationConfig = serde_json::from_value(serde_json::json!({
+            "default_mode": "help",
+            "plugins": {
+                "agena.memory": "inherit"
+            },
+            "tools": {
+                "memory": "help"
+            }
+        }))
+        .expect("tool presentation config should parse legacy aliases");
+
+        assert_eq!(config.default_mode, ToolDescriptionMode::Brief);
+        assert_eq!(
+            config.plugins.get("agena.memory").copied(),
+            Some(ToolDescriptionOverride::ToolDefault)
+        );
+        assert_eq!(
+            config.tools.get("memory").copied(),
+            Some(ToolDescriptionOverride::Brief)
+        );
+    }
+
+    #[test]
+    fn ui_presentation_mode_for_honors_tool_and_plugin_precedence() {
+        let mut presentation = UiPresentationConfig {
+            default_mode: UiTextDisplayMode::Detailed,
+            ..Default::default()
+        };
+        presentation.plugins.insert(
+            "agena.settings".to_string(),
+            UiPresentationOverride::Summary,
+        );
+
+        assert_eq!(
+            presentation.mode_for(
+                "agena.settings",
+                "settings",
+                "agena.settings/settings",
+                Some(UiTextDisplayMode::Summary),
+            ),
+            UiTextDisplayMode::Summary,
+        );
+
+        presentation.tools.insert(
+            "agena.settings/settings".to_string(),
+            UiPresentationOverride::Detailed,
+        );
+        assert_eq!(
+            presentation.mode_for(
+                "agena.settings",
+                "settings",
+                "agena.settings/settings",
+                Some(UiTextDisplayMode::Summary),
+            ),
+            UiTextDisplayMode::Detailed,
+        );
+
+        presentation.tools.insert(
+            "agena.settings/settings".to_string(),
+            UiPresentationOverride::Default,
+        );
+        assert_eq!(
+            presentation.mode_for(
+                "agena.settings",
+                "settings",
+                "agena.settings/settings",
+                Some(UiTextDisplayMode::Summary),
+            ),
+            UiTextDisplayMode::Summary,
+        );
+    }
+
+    #[test]
+    fn ui_presentation_default_override_follows_declared_tool_default() {
+        let mut presentation = UiPresentationConfig {
+            default_mode: UiTextDisplayMode::Detailed,
+            ..Default::default()
+        };
+        presentation
+            .plugins
+            .insert("agena.memory".to_string(), UiPresentationOverride::Default);
+
+        assert_eq!(
+            presentation.mode_for(
+                "agena.memory",
+                "memory",
+                "agena.memory/memory",
+                Some(UiTextDisplayMode::Summary),
+            ),
+            UiTextDisplayMode::Summary,
+        );
+    }
+
+    #[test]
+    fn ui_presentation_inherit_alias_still_parses() {
+        let config: UiPresentationConfig = serde_json::from_value(serde_json::json!({
+            "default_mode": "summary",
+            "plugins": {
+                "agena.memory": "inherit"
+            },
+            "tools": {
+                "memory": "default"
+            }
+        }))
+        .expect("ui presentation config should parse aliases");
+
+        assert_eq!(config.default_mode, UiTextDisplayMode::Summary);
+        assert_eq!(
+            config.plugins.get("agena.memory").copied(),
+            Some(UiPresentationOverride::Default)
+        );
+        assert_eq!(
+            config.tools.get("memory").copied(),
+            Some(UiPresentationOverride::Default)
+        );
     }
 }
 

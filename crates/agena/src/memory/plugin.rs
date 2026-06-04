@@ -14,8 +14,8 @@ use crate::memory::{
 use crate::plugin::sdk::host_api::HostClient;
 use crate::plugin::sdk::{
     HookSubscription, InitContext, InitOutcome, NetworkRequest, PathRequest, Plugin,
-    PluginManifest, PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
-    ToolTag,
+    PluginManifest, PluginToolDecl, Result as SdkResult, ToolDescriptionMode, ToolInvokeInput,
+    ToolInvokeOutput, ToolTag, UiTextDisplayMode,
 };
 use crate::plugin::{
     ChatMessage, ChatMessagesTransformInput, ChatMessagesTransformPatch, ChatSystemTransformInput,
@@ -134,6 +134,8 @@ pub struct MemoryPlugin {
     description = "Persistent memory command. Use action `search`, `get`, `list`, `write`, or `delete` to manage durable user/project memory.",
     summary = "Search, inspect, and update durable memory records.",
     help = "Use action `search` to find relevant memories, `get` to read one record, `list` to inspect the catalog, `write` to create or replace a memory file, and `delete` to remove an obsolete memory.",
+    description_mode = "brief",
+    ui_display_mode = "summary",
     tags(ToolTag::ReadOnly, ToolTag::Mutating),
     concurrency_safe = false
 )]
@@ -445,6 +447,8 @@ impl Plugin for MemoryPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder(MEMORY_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
             .description("Persistent memory with searchable retrieval and write tools.")
+            .tool_description_mode(ToolDescriptionMode::Brief)
+            .ui_display_mode(UiTextDisplayMode::Summary)
             .hooks(
                 HookSubscription::INIT
                     | HookSubscription::TOOL_INVOKE

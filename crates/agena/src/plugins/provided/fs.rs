@@ -3,7 +3,7 @@
 use crate::message::{
     ApplyPatchToolInput, GlobToolInput, GrepToolInput, NotebookEditToolInput, ReadToolInput,
 };
-use crate::plugin::sdk::ToolTag;
+use crate::plugin::sdk::{ToolDescriptionMode, ToolTag, UiTextDisplayMode};
 use crate::plugins::provided::router::InProcessToolPlugin;
 use agena_macros::StaticToolSurface;
 use schemars::JsonSchema;
@@ -18,6 +18,8 @@ pub(crate) fn new_plugin() -> InProcessToolPlugin {
         vec![FsToolInput::tool_decl()],
         FsToolInput::resolve_tool,
     )
+    .tool_description_mode(ToolDescriptionMode::Detailed)
+    .ui_display_mode(UiTextDisplayMode::Detailed)
 }
 
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
@@ -26,6 +28,8 @@ pub(crate) fn new_plugin() -> InProcessToolPlugin {
     description = "Filesystem command tool. Set action to read, glob, grep, apply_patch, or notebook_edit.",
     summary = "Read, search, or edit workspace files.",
     help = "Use `read` for text previews, directory listings, or file attachments via `mode = text|attachment|auto` (default `auto`). Use `glob` for path discovery, `grep` for regex text search, `apply_patch` for text patch operations, and `notebook_edit` for notebook cell edits.",
+    description_mode = "detailed",
+    ui_display_mode = "detailed",
     tags(
         ToolTag::ReadOnly,
         ToolTag::Mutating,

@@ -723,9 +723,9 @@ fn present_registered_tool(
         registered_tool.plugin_name.as_str(),
         registered_tool.original_name.as_str(),
         registered_tool.exposed_name.as_str(),
-        registered_tool.decl.description_mode,
+        registered_tool.decl.preferred_description_mode(),
     );
-    if mode == crate::plugin::ToolDescriptionMode::Help {
+    if mode == crate::plugin::ToolDescriptionMode::Brief {
         registered_tool.decl.description = Some(compact_tool_description(&registered_tool));
     }
     registered_tool.decl.help = None;
@@ -733,28 +733,40 @@ fn present_registered_tool(
 }
 
 fn compact_tool_description(registered_tool: &RegisteredTool) -> String {
+    let summary = tool_summary_sentence(registered_tool);
     if let Some(base_tool) = registered_tool.base_exposed_name.as_deref() {
         let alias_note = registered_tool
             .fixed_input
             .as_ref()
             .and_then(fixed_input_summary)
-            .map(|summary| format!(" This model-visible alias is fixed to {summary}."))
+            .map(|summary| format!(" Alias fixed to {summary}."))
             .unwrap_or_default();
-        return format!(
-            "{} Full usage is available from the `tools` tool: call action `help` with tool `{}`.{}",
-            tool_summary(registered_tool),
-            base_tool,
-            alias_note
-        );
+        return format!("{summary} See `tools.help` for `{base_tool}`.{alias_note}");
     }
     format!(
-        "{} Full usage is available from the `tools` tool: call action `help` with tool `{}`.",
-        tool_summary(registered_tool),
+        "{summary} See `tools.help` for `{}`.",
         registered_tool.exposed_name
     )
 }
 
+fn tool_summary_sentence(registered_tool: &RegisteredTool) -> String {
+    let summary = tool_summary(registered_tool);
+    if matches!(summary.chars().last(), Some('.' | '!' | '?')) {
+        return summary;
+    }
+    format!("{summary}.")
+}
+
 fn tool_summary(registered_tool: &RegisteredTool) -> String {
+    if registered_tool.base_exposed_name.is_some() {
+        return registered_tool
+            .description_text()
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(ToString::to_string)
+            .unwrap_or_else(|| format!("Tool `{}`.", registered_tool.exposed_name));
+    }
     if let Some(summary) = registered_tool.summary_text() {
         return summary.to_string();
     }
@@ -2632,12 +2644,14 @@ mod tests {
     use crate::plugins::provided::router as in_process_router;
 
     const FS_TOOL: &str = "agena.fs/fs";
-    const SHELL_TOOL: &str = "agena.shell/shell";
+    const SHELL_BASH_TOOL: &str = "agena.shell/exec.bash";
     const TOOLS_TOOL: &str = "agena.workflow/tools";
     const TODO_TOOL: &str = "agena.workflow/todo";
     const TASK_TOOL: &str = "agena.workflow/task";
     const FIXTURE_ECHO_TOOL: &str = "fixture/plugin_echo";
     const WEB_FETCH_TOOL: &str = "agena.web/fetch";
+    const WEB_QUERY_TOOL: &str = "agena.web/store.query";
+    const WEB_SEARCH_TOOL: &str = "agena.web/search";
 
     #[test]
     fn model_safe_tool_name_escapes_provider_invalid_separators() {
@@ -2953,6 +2967,8 @@ mod tests {
                         }),
                     )
                     .description("Expose declared and dynamic permission paths.")
+                    .summary("Expose declared and dynamic permission paths.")
+                    .description_mode(crate::plugin::ToolDescriptionMode::Brief)
                     .tag(crate::plugin::sdk::ToolTag::ReadOnly)
                     .input_path(InputPathSpec {
                         jsonpath: "$.file_path".to_string(),
@@ -3612,7 +3628,11 @@ mod tests {
         let initial = executor.available_tools();
         assert!(initial.iter().any(|tool| tool.exposed_name == TOOLS_TOOL));
         assert!(initial.iter().any(|tool| tool.exposed_name == TODO_TOOL));
-        assert!(initial.iter().any(|tool| tool.exposed_name == SHELL_TOOL));
+        assert!(
+            initial
+                .iter()
+                .any(|tool| tool.exposed_name == SHELL_BASH_TOOL)
+        );
         assert!(initial.iter().any(|tool| tool.exposed_name == TASK_TOOL));
 
         let messages = vec![Message {
@@ -3633,7 +3653,11 @@ mod tests {
         }];
         let available = executor.available_tools_for_messages(messages.as_slice());
 
-        assert!(available.iter().any(|tool| tool.exposed_name == SHELL_TOOL));
+        assert!(
+            available
+                .iter()
+                .any(|tool| tool.exposed_name == SHELL_BASH_TOOL)
+        );
         assert!(available.iter().any(|tool| tool.exposed_name == TASK_TOOL));
     }
 
@@ -3878,12 +3902,12 @@ mod tests {
     }
 
     #[test]
-    fn help_mode_compacts_model_aliases_back_to_base_tool_help() {
+    fn brief_mode_compacts_model_aliases_back_to_base_tool_help() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root))
             .with_tool_presentation(crate::plugin::ToolPresentationConfig {
-                default_mode: crate::plugin::ToolDescriptionMode::Help,
+                default_mode: crate::plugin::ToolDescriptionMode::Brief,
                 ..Default::default()
             });
 
@@ -3895,22 +3919,22 @@ mod tests {
         assert!(
             alias
                 .description_text()
-                .contains("tool `agena.settings/settings`")
+                .contains("`tools.help` for `agena.settings/settings`")
         );
         assert!(
             alias
                 .description_text()
-                .contains("fixed to `action` = `get`")
+                .contains("Alias fixed to `action` = `get`")
         );
     }
 
     #[test]
-    fn help_mode_compacts_model_visible_tool_descriptions() {
+    fn brief_mode_compacts_model_visible_tool_descriptions() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_plugin_manager(&workspace.root))
             .with_tool_presentation(crate::plugin::ToolPresentationConfig {
-                default_mode: crate::plugin::ToolDescriptionMode::Help,
+                default_mode: crate::plugin::ToolDescriptionMode::Brief,
                 ..Default::default()
             });
 
@@ -3921,7 +3945,7 @@ mod tests {
             .expect("plugin_echo should be model-visible");
         assert_eq!(
             visible.description_text(),
-            "Echo a plugin message. Full usage is available from the `tools` tool: call action `help` with tool `fixture/plugin_echo`."
+            "Echo a plugin message. See `tools.help` for `fixture/plugin_echo`."
         );
         assert!(
             visible.decl.help.is_none(),
@@ -3936,6 +3960,78 @@ mod tests {
         assert_eq!(
             detailed.help_text(),
             Some("Detailed fixture help for plugin_echo.")
+        );
+    }
+
+    #[test]
+    fn tool_defined_brief_mode_compacts_visible_description_without_host_override() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_plugin_manager(&workspace.root));
+
+        let visible = executor
+            .available_tools()
+            .into_iter()
+            .find(|tool| tool.exposed_name == "fixture/plugin_paths")
+            .expect("plugin_paths should be model-visible");
+        assert_eq!(
+            visible.description_text(),
+            "Expose declared and dynamic permission paths. See `tools.help` for `fixture/plugin_paths`."
+        );
+
+        let detailed = executor
+            .detailed_tools()
+            .into_iter()
+            .find(|tool| tool.exposed_name == "fixture/plugin_paths")
+            .expect("plugin_paths should have a detailed definition");
+        assert_eq!(
+            detailed.description_text(),
+            "Expose declared and dynamic permission paths."
+        );
+    }
+
+    #[test]
+    fn builtin_tool_defaults_compact_low_frequency_web_and_workflow_tools() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+
+        let tools = executor.available_tools();
+
+        let web_query = tools
+            .iter()
+            .find(|tool| tool.exposed_name == WEB_QUERY_TOOL)
+            .expect("web query should be model-visible");
+        assert_eq!(
+            web_query.description_text(),
+            "Search locally stored crawl documents. See `tools.help` for `agena.web/store.query`."
+        );
+
+        let workflow_tools = tools
+            .iter()
+            .find(|tool| tool.exposed_name == TOOLS_TOOL)
+            .expect("tools catalog should be model-visible");
+        assert_eq!(
+            workflow_tools.description_text(),
+            "Show usage examples, search tools, or fetch detailed tool help. See `tools.help` for `agena.workflow/tools`."
+        );
+
+        let web_search = tools
+            .iter()
+            .find(|tool| tool.exposed_name == WEB_SEARCH_TOOL)
+            .expect("web search should be model-visible");
+        assert_eq!(
+            web_search.description_text(),
+            "Search the public web through the configured search engine."
+        );
+
+        let task = tools
+            .iter()
+            .find(|tool| tool.exposed_name == TASK_TOOL)
+            .expect("task tool should be model-visible");
+        assert!(
+            !task.description_text().contains("See `tools.help`"),
+            "task should stay detailed by default"
         );
     }
 
@@ -4069,7 +4165,7 @@ mod tests {
     }
 
     #[test]
-    fn shell_exec_grouped_bash_invocation_runs_command() {
+    fn shell_exec_bash_invocation_runs_command() {
         if cfg!(windows) {
             return;
         }
@@ -4085,14 +4181,14 @@ mod tests {
             network_effects: Vec::new(),
         })
         .into_invocation();
-        assert_eq!(invocation.name, SHELL_TOOL);
+        assert_eq!(invocation.name, SHELL_BASH_TOOL);
 
         let prepared = executor
             .prepare_invocation(&invocation, 7, 9)
             .expect("prepare should succeed for shell.exec");
         let payload = serde_json::Value::from(prepared.invocation.input.clone());
-        assert_eq!(payload["action"], "exec");
-        assert_eq!(payload["shell"], "bash");
+        assert!(payload.get("action").is_none());
+        assert!(payload.get("shell").is_none());
         assert_eq!(payload["command"], "echo hello_shell_exec");
 
         let execution = executor

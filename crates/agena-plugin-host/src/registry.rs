@@ -4,13 +4,16 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::sdk::{HostCapability, PluginToolDecl};
+use crate::sdk::manifest::UiTextDisplayMode;
+use crate::sdk::{HostCapability, PluginToolDecl, ToolDescriptionMode};
 
 #[derive(Debug, Clone)]
 pub struct PluginToolRegistry {
     /// `exposed_name -> tool`. `exposed_name` is the name shown
     /// to the model and is always `plugin/tool`.
     by_exposed: BTreeMap<String, RegisteredTool>,
+    plugin_tool_defaults: BTreeMap<String, ToolDescriptionMode>,
+    plugin_ui_defaults: BTreeMap<String, UiTextDisplayMode>,
     generation: u64,
 }
 
@@ -115,6 +118,8 @@ impl PluginToolRegistry {
     pub fn new() -> Self {
         Self {
             by_exposed: BTreeMap::new(),
+            plugin_tool_defaults: BTreeMap::new(),
+            plugin_ui_defaults: BTreeMap::new(),
             generation: 0,
         }
     }
@@ -124,8 +129,21 @@ impl PluginToolRegistry {
         plugin_id: &str,
         plugin_name: &str,
         decls: &[PluginToolDecl],
+        plugin_tool_default: Option<ToolDescriptionMode>,
+        plugin_ui_default: Option<UiTextDisplayMode>,
     ) {
         assert_valid_tool_namespace(plugin_name, "plugin name");
+        if let Some(mode) = plugin_tool_default {
+            self.plugin_tool_defaults
+                .insert(plugin_id.to_string(), mode);
+        } else {
+            self.plugin_tool_defaults.remove(plugin_id);
+        }
+        if let Some(mode) = plugin_ui_default {
+            self.plugin_ui_defaults.insert(plugin_id.to_string(), mode);
+        } else {
+            self.plugin_ui_defaults.remove(plugin_id);
+        }
         for decl in decls {
             self.upsert_from_plugin(plugin_id, plugin_name, decl.clone());
         }
@@ -135,9 +153,15 @@ impl PluginToolRegistry {
         &mut self,
         plugin_id: &str,
         plugin_name: &str,
-        decl: PluginToolDecl,
+        mut decl: PluginToolDecl,
     ) -> RegisteredTool {
         assert_valid_tool_namespace(plugin_name, "plugin name");
+        if decl.description_mode.is_none() {
+            decl.description_mode = self.plugin_tool_defaults.get(plugin_id).copied();
+        }
+        if decl.ui_display_mode.is_none() {
+            decl.ui_display_mode = self.plugin_ui_defaults.get(plugin_id).copied();
+        }
         let original_name = decl.name.clone();
         assert_valid_tool_namespace(&original_name, "tool name");
         let mut tools = self.registered_tools_owned();
@@ -251,6 +275,57 @@ fn assert_valid_tool_namespace(value: &str, label: &str) {
 impl Default for PluginToolRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_tool_default_applies_when_tool_has_no_explicit_mode() {
+        let mut registry = PluginToolRegistry::new();
+        registry.extend_from_plugin(
+            "plugin-id",
+            "fixture",
+            &[PluginToolDecl::new(
+                "inspect",
+                serde_json::json!({ "type": "object" }),
+            )],
+            Some(ToolDescriptionMode::Brief),
+            Some(UiTextDisplayMode::Summary),
+        );
+
+        let tool = registry
+            .lookup_tool("fixture/inspect")
+            .expect("tool should be registered");
+        assert_eq!(tool.decl.description_mode, Some(ToolDescriptionMode::Brief));
+        assert_eq!(tool.decl.ui_display_mode, Some(UiTextDisplayMode::Summary));
+    }
+
+    #[test]
+    fn explicit_tool_mode_overrides_plugin_default() {
+        let mut registry = PluginToolRegistry::new();
+        registry.extend_from_plugin(
+            "plugin-id",
+            "fixture",
+            &[
+                PluginToolDecl::new("inspect", serde_json::json!({ "type": "object" }))
+                    .description_mode(ToolDescriptionMode::Detailed)
+                    .ui_display_mode(UiTextDisplayMode::Detailed),
+            ],
+            Some(ToolDescriptionMode::Brief),
+            Some(UiTextDisplayMode::Summary),
+        );
+
+        let tool = registry
+            .lookup_tool("fixture/inspect")
+            .expect("tool should be registered");
+        assert_eq!(
+            tool.decl.description_mode,
+            Some(ToolDescriptionMode::Detailed)
+        );
+        assert_eq!(tool.decl.ui_display_mode, Some(UiTextDisplayMode::Detailed));
     }
 }
 

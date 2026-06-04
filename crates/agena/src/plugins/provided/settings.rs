@@ -22,7 +22,8 @@ use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostConfigReloadResponse};
 use crate::plugin::sdk::{
     HookSubscription, InitContext, InitOutcome, PathRequest, Plugin, PluginManifest,
-    PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
+    PluginToolDecl, Result as SdkResult, ToolDescriptionMode, ToolInvokeInput, ToolInvokeOutput,
+    ToolTag, UiTextDisplayMode,
 };
 
 pub(crate) const SETTINGS_PLUGIN_ID: &str = "agena.settings";
@@ -200,6 +201,8 @@ struct SettingsPatchToolInput {
     description = "Settings command. Set action to get, list, validate, set, delete, or patch. Edits validate agena.json and reload by default.",
     summary = "Read, validate, or edit runtime settings.",
     help = "Use action `get` to inspect one setting path, `list` to enumerate settings, `validate` to validate config text without applying it, and `set`, `delete`, or `patch` to mutate agena.json. For effective reads, prefer explicit `scope = config|meta` with a relative `path` instead of relying on prefixed paths like `config.foo`.",
+    description_mode = "brief",
+    ui_display_mode = "summary",
     tags(
         ToolTag::ReadOnly,
         ToolTag::Mutating,
@@ -516,6 +519,8 @@ impl Plugin for SettingsPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder(SETTINGS_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
             .description("Read and edit Agena runtime settings in agena.json.")
+            .tool_description_mode(ToolDescriptionMode::Brief)
+            .ui_display_mode(UiTextDisplayMode::Summary)
             .hooks(HookSubscription::TOOL_INVOKE)
             .config_schema(settings_config_schema())
             .tools(tools())

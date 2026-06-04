@@ -151,10 +151,12 @@ const AWS_REGION_CHOICES: &[&str] = &[
 ];
 
 const PLUGIN_TOOL_PRESENTATION_PATH: &str = "plugins.policy.tool_presentation";
+#[allow(dead_code)]
 const PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH: &str =
     "plugins.policy.tool_presentation.default_mode";
-const LEGACY_PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH: &str =
-    "plugins.tool_presentation.default_mode";
+const PLUGIN_UI_PRESENTATION_PATH: &str = "plugins.policy.ui_presentation";
+const PLUGIN_UI_PRESENTATION_DEFAULT_MODE_PATH: &str =
+    "plugins.policy.ui_presentation.default_mode";
 const MEMORY_PROJECT_INSTRUCTIONS_ENABLED_PATH: &str =
     "plugins.list.\"agena.memory\".config.project_instructions.enabled";
 const MEMORY_PROJECT_INSTRUCTIONS_INCLUDE_GLOBAL_PATH: &str =
@@ -723,6 +725,7 @@ enum Route {
     Picker(PickerOverlay),
     SessionModelChooser(SessionModelChooserOverlay),
     Timeline(TimelineOverlay),
+    PluginPolicyStudio(Box<PluginPolicyStudioOverlay>),
     PluginWorkbench(Box<PluginWorkbenchOverlay>),
     ProviderStudio(Box<ProviderStudioOverlay>),
     ModelCatalogStudio(ModelCatalogStudioOverlay),
@@ -743,7 +746,6 @@ struct SettingsStudioOverlay {
     title: String,
     footer: String,
     state: SectionedListState<SettingsStudioSection>,
-    plugins_default_mode: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1127,7 +1129,7 @@ enum SettingsFieldKind {
 enum SettingsPickerAction {
     EditField(SettingsFieldSpec),
     EditRuntimeSetting(RuntimeSettingSpec),
-    ToggleToolDescriptionMode,
+    OpenPluginPolicyStudio,
     OpenProviderDefaultWizard,
     OpenAgentList,
     OpenAgentPermissionWorkbench(String),
@@ -2717,6 +2719,7 @@ impl App {
                 self.handle_session_model_chooser_overlay_key(key, dialog)
             }
             Route::Timeline(dialog) => self.handle_timeline_overlay_key(key, dialog),
+            Route::PluginPolicyStudio(dialog) => self.handle_plugin_policy_studio_key(key, dialog),
             Route::PluginWorkbench(dialog) => self.handle_plugin_workbench_key(key, dialog),
             Route::ProviderStudio(dialog) => self.handle_provider_studio_overlay_key(key, dialog),
             Route::ModelCatalogStudio(dialog) => {
@@ -5453,6 +5456,9 @@ impl App {
                     dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                     Self::refresh_timeline_overlay(dialog);
+                    handled_route = true;
+                }
+                Route::PluginPolicyStudio(_) => {
                     handled_route = true;
                 }
                 Route::PluginWorkbench(dialog) => {
@@ -9119,7 +9125,6 @@ impl App {
             .map_err(|error| error.to_string())?;
         let agents = self.backend.list_agent_descriptors();
         let default_agent = self.backend.default_agent_name();
-        let plugins_default_mode = settings_studio_plugins_default_mode(&sources);
         let configured_providers = self.backend.list_configured_providers();
         let permission_rule_count = self
             .block_on_async(self.backend.list_permission_rules())
@@ -9254,15 +9259,7 @@ impl App {
             SettingsStudioSection {
                 id: SettingsStudioSectionId::ConfigPlugins,
                 label: ui_text::t(&self.i18n, "overlay-settings-section-plugins-label"),
-                summary: self.i18n.text_args(
-                    "overlay-settings-section-plugins-summary",
-                    &crate::fl_args!(
-                        "mode" => settings_studio_tool_description_mode_label(
-                            &self.i18n,
-                            plugins_default_mode.as_str(),
-                        ),
-                    ),
-                ),
+                summary: ui_text::t(&self.i18n, "overlay-settings-section-plugins-summary"),
                 description: ui_text::t(&self.i18n, "overlay-settings-section-plugins-description"),
                 items: plugin_items,
             },
@@ -9386,7 +9383,6 @@ impl App {
                 selected_item,
                 focus,
             ),
-            plugins_default_mode,
         })
     }
 
@@ -10090,8 +10086,14 @@ impl App {
                 self.open_runtime_setting_editor(field, "");
                 false
             }
-            SettingsPickerAction::ToggleToolDescriptionMode => {
-                self.toggle_tool_description_mode(dialog);
+            SettingsPickerAction::OpenPluginPolicyStudio => {
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
+                match self.build_plugin_policy_studio() {
+                    Ok(policy) => {
+                        self.current_route = Route::PluginPolicyStudio(Box::new(policy));
+                    }
+                    Err(error) => self.flash_error(error),
+                }
                 false
             }
             SettingsPickerAction::OpenProviderDefaultWizard => {
@@ -10234,6 +10236,9 @@ impl App {
             {
                 Route::Picker(self.build_provider_list_overlay(dialog.input.text(), false))
             }
+            Route::PluginPolicyStudio(dialog) => Route::PluginPolicyStudio(Box::new(
+                self.refresh_restored_plugin_policy_studio(*dialog),
+            )),
             Route::PluginWorkbench(dialog) => {
                 Route::PluginWorkbench(Box::new(self.refresh_restored_plugin_workbench(*dialog)))
             }
@@ -11623,27 +11628,6 @@ impl App {
             AgentProfileStorage::Runtime => {
                 self.flash_info(ui_text::t(&self.i18n, "flash-agent-runtime-no-source"));
             }
-        }
-    }
-
-    fn toggle_tool_description_mode(&mut self, dialog: &mut SettingsStudioOverlay) {
-        let next = if dialog.plugins_default_mode == "help" {
-            "detailed"
-        } else {
-            "help"
-        };
-        match self.block_on_async(self.backend.set_config_setting(
-            PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH,
-            JsonValue::String(next.to_string()),
-        )) {
-            Ok(_) => {
-                self.flash_success(self.i18n.text_args(
-                    "flash-tool-description-mode-set",
-                    &crate::fl_args!("mode" => next),
-                ));
-                self.refresh_settings_studio_overlay(dialog);
-            }
-            Err(error) => self.flash_error(error),
         }
     }
 
@@ -14737,6 +14721,7 @@ impl App {
                 Self::refresh_session_model_chooser_overlay(dialog, false, None);
             }
             Route::Timeline(dialog) => dialog.input.flush_pending_input_if_due(now),
+            Route::PluginPolicyStudio(_) => {}
             Route::PluginWorkbench(dialog) => Self::flush_plugin_workbench_input(dialog, now),
             Route::ProviderStudio(dialog) => {
                 if let Some(editor) = dialog.editor.as_mut() {
@@ -16625,144 +16610,27 @@ fn settings_studio_runtime_items(
     items
 }
 
-fn settings_studio_tool_description_mode_label<'a>(i18n: &'a I18n, mode: &str) -> String {
-    match mode {
-        "help" => ui_text::t(i18n, "settings-plugin-mode-help"),
-        _ => ui_text::t(i18n, "settings-plugin-mode-detailed"),
-    }
-}
-
 fn quoted_settings_segment(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-fn settings_studio_plugins_default_mode(sources: &ConfigJsonSources) -> String {
-    let current = get_json_path(
-        &sources.effective,
-        Some(PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH),
-    )
-    .unwrap_or(JsonValue::Null);
-    let current = if current.is_null() {
-        get_json_path(
-            &sources.effective,
-            Some(LEGACY_PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH),
-        )
-        .unwrap_or(JsonValue::Null)
-    } else {
-        current
-    };
-    current.as_str().unwrap_or("detailed").to_string()
-}
-
-fn settings_studio_plugins_count(sources: &ConfigJsonSources, path: &str) -> usize {
-    get_json_path(&sources.effective, Some(path))
-        .unwrap_or(JsonValue::Null)
-        .as_object()
-        .map(|object| object.len())
-        .unwrap_or(0)
-}
-
-fn settings_source_value_for_path(i18n: &I18n, root: &JsonValue, path: &str) -> String {
-    let value = get_json_path(root, Some(path)).unwrap_or(JsonValue::Null);
-    if value.is_null() {
-        ui_text::t(i18n, "settings-source-unset")
-    } else {
-        format_setting_value_inline(&value)
-    }
-}
-
 fn settings_studio_plugin_items(
     i18n: &I18n,
-    sources: &ConfigJsonSources,
+    _sources: &ConfigJsonSources,
 ) -> Vec<SettingsStudioItem> {
-    let default_mode = settings_studio_plugins_default_mode(sources);
-    let default_mode_file = get_json_path(
-        &sources.file,
-        Some(PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH),
-    )
-    .unwrap_or(JsonValue::Null);
-    let default_mode_file_summary = if default_mode_file.is_null() {
-        ui_text::t(i18n, "settings-source-unset")
-    } else {
-        format_setting_value_inline(&default_mode_file)
-    };
-    let default_mode_effective_summary =
-        settings_studio_tool_description_mode_label(i18n, default_mode.as_str());
-    let plugin_override_count =
-        settings_studio_plugins_count(sources, "plugins.policy.tool_presentation.plugins");
-    let tool_override_count =
-        settings_studio_plugins_count(sources, "plugins.policy.tool_presentation.tools");
     vec![
+        SettingsStudioItem::new(
+            ui_text::t(i18n, "settings-plugin-policy-label"),
+            "/plugins/policy",
+            ui_text::t(i18n, "settings-plugin-policy-detail"),
+            SettingsPickerAction::OpenPluginPolicyStudio,
+        ),
         SettingsStudioItem::new(
             ui_text::t(i18n, "settings-plugin-workbench-label"),
             "/plugins",
             ui_text::t(i18n, "settings-plugin-workbench-detail"),
             SettingsPickerAction::OpenPluginWorkbench,
         ),
-        SettingsStudioItem::new(
-            ui_text::t(i18n, "settings-plugin-default-mode-label"),
-            default_mode_effective_summary.clone(),
-            ui_text::t(i18n, "settings-plugin-default-mode-detail"),
-            SettingsPickerAction::ToggleToolDescriptionMode,
-        )
-        .with_path(PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH)
-        .with_current_value(default_mode_file_summary.clone())
-        .with_effective_value(default_mode_effective_summary.clone())
-        .with_source_rows(settings_source_rows_for_config_path(
-            i18n,
-            sources,
-            PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH,
-            default_mode_file_summary,
-            default_mode_effective_summary,
-        )),
-        SettingsStudioItem::new(
-            ui_text::t(i18n, "settings-plugin-per-plugin-label"),
-            i18n.text_args(
-                "settings-plugin-override-count",
-                &crate::fl_args!("count" => plugin_override_count as i64),
-            ),
-            ui_text::t(i18n, "settings-plugin-per-plugin-detail"),
-            SettingsPickerAction::OpenConfigFile,
-        )
-        .with_path(format!("{PLUGIN_TOOL_PRESENTATION_PATH}.plugins"))
-        .with_source_rows(settings_source_rows_for_config_path(
-            i18n,
-            sources,
-            format!("{PLUGIN_TOOL_PRESENTATION_PATH}.plugins").as_str(),
-            settings_source_value_for_path(
-                i18n,
-                &sources.file,
-                format!("{PLUGIN_TOOL_PRESENTATION_PATH}.plugins").as_str(),
-            ),
-            i18n.text_args(
-                "settings-plugin-override-count",
-                &crate::fl_args!("count" => plugin_override_count as i64),
-            ),
-        )),
-        SettingsStudioItem::new(
-            ui_text::t(i18n, "settings-plugin-per-tool-label"),
-            i18n.text_args(
-                "settings-plugin-override-count",
-                &crate::fl_args!("count" => tool_override_count as i64),
-            ),
-            ui_text::t(i18n, "settings-plugin-per-tool-detail"),
-            SettingsPickerAction::OpenConfigFile,
-        )
-        .with_path(format!("{PLUGIN_TOOL_PRESENTATION_PATH}.tools"))
-        .with_source_rows(settings_source_rows_for_config_path(
-            i18n,
-            sources,
-            format!("{PLUGIN_TOOL_PRESENTATION_PATH}.tools").as_str(),
-            settings_source_value_for_path(
-                i18n,
-                &sources.file,
-                format!("{PLUGIN_TOOL_PRESENTATION_PATH}.tools").as_str(),
-            ),
-            i18n.text_args(
-                "settings-plugin-override-count",
-                &crate::fl_args!("count" => tool_override_count as i64),
-            ),
-        )),
     ]
 }
 
@@ -25912,25 +25780,30 @@ mod tests {
                 "plugins": {
                     "policy": {
                         "tool_presentation": {
-                            "default_mode": "help",
+                            "default_mode": "brief",
                             "plugins": { "agena.web": "detailed" },
-                            "tools": { "agena.web/fetch": "help" }
+                            "tools": { "agena.web/fetch": "brief" }
+                        },
+                        "ui_presentation": {
+                            "default_mode": "summary",
+                            "plugins": { "agena.web": "detailed" },
+                            "tools": { "agena.web/open": "summary" }
                         }
                     }
                 }
             }),
         };
 
-        assert_eq!(settings_studio_plugins_default_mode(&sources), "help");
         let items = settings_studio_plugin_items(&i18n, &sources);
         let labels = items
             .iter()
             .map(|item| item.label.as_str())
             .collect::<Vec<_>>();
 
-        assert!(labels.contains(&"Tool Description Mode"));
-        assert!(labels.contains(&"Plugin Description Overrides"));
-        assert!(labels.contains(&"Tool Description Overrides"));
+        assert!(labels.contains(&"Plugin Policy Studio"));
+        assert!(labels.contains(&"Plugin Config Workbench"));
+        assert!(!labels.contains(&"Tool Description Mode"));
+        assert!(!labels.contains(&"Plugin UI Display Mode"));
         let rendered_items = items
             .iter()
             .map(|item| {
@@ -25942,21 +25815,6 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert!(
-            rendered_items
-                .iter()
-                .any(|item| item.contains(PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH))
-        );
-        assert!(
-            rendered_items
-                .iter()
-                .any(|item| item.contains("plugins.policy.tool_presentation.plugins"))
-        );
-        assert!(
-            rendered_items
-                .iter()
-                .any(|item| item.contains("plugins.policy.tool_presentation.tools"))
-        );
         assert!(
             !rendered_items
                 .iter()
@@ -25973,7 +25831,8 @@ mod tests {
 
         for (path, value) in [
             ("agents.default", json!("build")),
-            (PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH, json!("help")),
+            (PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH, json!("brief")),
+            (PLUGIN_UI_PRESENTATION_DEFAULT_MODE_PATH, json!("summary")),
             ("session.compaction.auto", json!(true)),
             ("tracing.database", json!("error")),
             (

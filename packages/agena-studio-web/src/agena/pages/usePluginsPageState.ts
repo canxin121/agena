@@ -19,6 +19,7 @@ export function usePluginsPageState(input: {
     openPluginManifestInWorkspace: state.openPluginManifestInWorkspace,
     pluginLoading: state.pluginLoading,
     pluginLogs: state.pluginLogs,
+    pluginUiPresentation: state.pluginUiPresentation,
     plugins: state.plugins,
     selectedPlugin: state.selectedPlugin,
     setSelectedPluginDisabled: state.setSelectedPluginDisabled,

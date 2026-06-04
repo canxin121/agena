@@ -23,8 +23,8 @@ use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostNetworkPermissionCheckRequest};
 use crate::plugin::sdk::{
     HookSubscription, HostCapability, InitContext, InitOutcome, NetworkRequest, PathRequest,
-    Plugin, PluginManifest, PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
-    ToolTag,
+    Plugin, PluginManifest, PluginToolDecl, Result as SdkResult, ToolDescriptionMode,
+    ToolInvokeInput, ToolInvokeOutput, ToolTag, UiTextDisplayMode,
 };
 
 pub const WEB_PLUGIN_ID: &str = "agena.web";
@@ -993,6 +993,8 @@ impl Plugin for WebPlugin {
             .description(
                 "Local web search/fetch/crawl plugin with embedded storage, caching, and Tantivy retrieval.",
             )
+            .tool_description_mode(ToolDescriptionMode::Brief)
+            .ui_display_mode(UiTextDisplayMode::Detailed)
             .hooks(HookSubscription::INIT | HookSubscription::TOOL_INVOKE)
             .config_schema(web_config_schema())
             .tools(web_decls())
@@ -1013,10 +1015,10 @@ impl Plugin for WebPlugin {
         match input.tool_name.as_str() {
             "search" => self.invoke_search(&parse_tool_input(input.input)?).await,
             "fetch" => self.invoke_fetch(&parse_tool_input(input.input)?).await,
-            "crawl" => self.invoke_crawl(&parse_tool_input(input.input)?).await,
-            "query" => self.invoke_query(&parse_tool_input(input.input)?).await,
-            "get" => self.invoke_get(&parse_tool_input(input.input)?).await,
-            "list" => self.invoke_list(&parse_tool_input(input.input)?).await,
+            "crawl.run" | "crawl" => self.invoke_crawl(&parse_tool_input(input.input)?).await,
+            "store.query" | "query" => self.invoke_query(&parse_tool_input(input.input)?).await,
+            "store.get" | "get" => self.invoke_get(&parse_tool_input(input.input)?).await,
+            "store.list" | "list" => self.invoke_list(&parse_tool_input(input.input)?).await,
             other => Err(PluginError::invalid_params(format!(
                 "unknown web plugin tool '{other}'"
             ))),
@@ -1030,8 +1032,8 @@ impl Plugin for WebPlugin {
     ) -> SdkResult<Vec<PathRequest>> {
         let kind = match tool {
             "search" | "fetch" => return Ok(Vec::new()),
-            "crawl" | "query" => PathKindForPermission::Write,
-            "get" | "list" => PathKindForPermission::Read,
+            "crawl.run" | "crawl" | "store.query" | "query" => PathKindForPermission::Write,
+            "store.get" | "get" | "store.list" | "list" => PathKindForPermission::Read,
             _ => return Ok(Vec::new()),
         };
         let store = self.store()?;
@@ -1064,7 +1066,7 @@ impl Plugin for WebPlugin {
                         .to_string(),
                 )]
             }
-            "crawl" => {
+            "crawl.run" | "crawl" => {
                 let args: CrawlRunInput = parse_tool_input(input.clone())?;
                 vec![NetworkRequest::connect(
                     prepare_fetch_url(args.start_url.as_str())
@@ -1072,7 +1074,7 @@ impl Plugin for WebPlugin {
                         .to_string(),
                 )]
             }
-            "query" | "get" | "list" => Vec::new(),
+            "store.query" | "query" | "store.get" | "get" | "store.list" | "list" => Vec::new(),
             _ => Vec::new(),
         };
         Ok(requests)
@@ -1091,6 +1093,9 @@ fn web_decls() -> Vec<PluginToolDecl> {
             crate::tool::definition::json_schema_for::<CrawlWebSearchInput>(),
         )
         .description("Search the public web through the configured search engine.")
+        .summary("Search the public web.")
+        .description_mode(ToolDescriptionMode::Detailed)
+        .ui_display_mode(UiTextDisplayMode::Detailed)
         .tags([
             ToolTag::ReadOnly,
             ToolTag::Network,
@@ -1103,13 +1108,18 @@ fn web_decls() -> Vec<PluginToolDecl> {
             crate::tool::definition::json_schema_for::<CrawlFetchInput>(),
         )
         .description("Fetch a web page and return readable page content.")
+        .summary("Fetch one web page as readable content.")
+        .description_mode(ToolDescriptionMode::Detailed)
+        .ui_display_mode(UiTextDisplayMode::Detailed)
         .tags([ToolTag::ReadOnly, ToolTag::Network, ToolTag::Internet])
         .host_capability(HostCapability::PermissionCheck),
         PluginToolDecl::new(
-            "crawl",
+            "crawl.run",
             crate::tool::definition::json_schema_for::<CrawlRunInput>(),
         )
         .description("Crawl a site into the local web document store.")
+        .summary("Crawl a site into the local document store.")
+        .ui_display_mode(UiTextDisplayMode::Detailed)
         .tags([
             ToolTag::Mutating,
             ToolTag::Network,
@@ -1118,25 +1128,31 @@ fn web_decls() -> Vec<PluginToolDecl> {
         ])
         .host_capability(HostCapability::PermissionCheck),
         PluginToolDecl::new(
-            "query",
+            "store.query",
             crate::tool::definition::json_schema_for::<CrawlQueryInput>(),
         )
         .description("Search locally stored crawl documents.")
+        .summary("Search locally stored crawl documents.")
+        .ui_display_mode(UiTextDisplayMode::Detailed)
         .tags([ToolTag::ReadOnly, ToolTag::Discovery])
         .host_capability(HostCapability::PermissionCheck),
         PluginToolDecl::new(
-            "get",
+            "store.get",
             crate::tool::definition::json_schema_for::<CrawlGetInput>(),
         )
         .description("Read one locally stored crawl document by id or URL.")
+        .summary("Read one stored crawl document.")
+        .ui_display_mode(UiTextDisplayMode::Detailed)
         .tags([ToolTag::ReadOnly])
         .concurrency_safe(true)
         .host_capability(HostCapability::PermissionCheck),
         PluginToolDecl::new(
-            "list",
+            "store.list",
             crate::tool::definition::json_schema_for::<CrawlListInput>(),
         )
         .description("List locally stored crawl documents.")
+        .summary("List stored crawl documents.")
+        .ui_display_mode(UiTextDisplayMode::Detailed)
         .tags([ToolTag::ReadOnly])
         .concurrency_safe(true)
         .host_capability(HostCapability::PermissionCheck),
@@ -1438,7 +1454,7 @@ fn host_matches(host: &str, pattern: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{WebConfig, fetch_cache_key, parse_web_config, search_engines, web_decls};
-    use crate::plugin::sdk::HostCapability;
+    use crate::plugin::sdk::{HostCapability, Plugin as _, ToolDescriptionMode};
     use serde_json::json;
 
     #[test]
@@ -1454,8 +1470,42 @@ mod tests {
                 .iter()
                 .map(|decl| decl.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["search", "fetch", "crawl", "query", "get", "list"]
+            vec![
+                "search",
+                "fetch",
+                "crawl.run",
+                "store.query",
+                "store.get",
+                "store.list",
+            ]
         );
+    }
+
+    #[test]
+    fn web_manifest_defaults_to_brief_but_keeps_search_and_fetch_detailed() {
+        let manifest = super::WebPlugin::new().manifest();
+        assert_eq!(
+            manifest.tool_description_mode,
+            Some(ToolDescriptionMode::Brief)
+        );
+
+        for tool_name in ["search", "fetch"] {
+            let tool = manifest
+                .tools
+                .iter()
+                .find(|decl| decl.name == tool_name)
+                .expect("tool should be declared");
+            assert_eq!(tool.description_mode, Some(ToolDescriptionMode::Detailed));
+        }
+
+        for tool_name in ["crawl.run", "store.query", "store.get", "store.list"] {
+            let tool = manifest
+                .tools
+                .iter()
+                .find(|decl| decl.name == tool_name)
+                .expect("tool should be declared");
+            assert_eq!(tool.description_mode, None);
+        }
     }
 
     #[test]

@@ -9,8 +9,8 @@ use serde_json::{Value as JsonValue, json};
 
 use crate::plugin::sdk::{
     HookSubscription, InitContext, InitOutcome, Plugin, PluginManifest, PluginStudioCommand,
-    PluginToolDecl, PluginUiAction, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
-    ToolTag,
+    PluginToolDecl, PluginUiAction, Result as SdkResult, ToolDescriptionMode, ToolInvokeInput,
+    ToolInvokeOutput, ToolTag, UiTextDisplayMode,
 };
 
 pub(crate) const SCHEMA_LAB_PLUGIN_ID: &str = "agena.schema_lab";
@@ -41,6 +41,7 @@ struct SchemaLabEchoArgs {
     description = "No-op inspection tool for the built-in schema lab fixture plugin.",
     summary = "Inspect the schema lab fixture without mutating external state.",
     help = "Use action `inspect` to summarize one config section or `echo` to round-trip a payload into the tool result. The tool is intentionally inert and exists only to populate the Tools tab for the schema lab demo plugin.",
+    ui_display_mode = "summary",
     tags(ToolTag::ReadOnly, ToolTag::Discovery),
     concurrency_safe = true
 )]
@@ -71,6 +72,8 @@ impl Plugin for SchemaLabPlugin {
             .description(
                 "Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor.",
             )
+            .tool_description_mode(ToolDescriptionMode::Brief)
+            .ui_display_mode(UiTextDisplayMode::Summary)
             .hooks(HookSubscription::TOOL_INVOKE)
             .config_schema(schema_lab_config_schema())
             .tool(schema_lab_decl())

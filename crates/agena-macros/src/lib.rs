@@ -22,6 +22,8 @@ struct SurfaceConfig {
     description: Option<LitStr>,
     summary: Option<LitStr>,
     help: Option<LitStr>,
+    description_mode: Option<LitStr>,
+    ui_display_mode: Option<LitStr>,
     tags: Vec<Expr>,
     host_capabilities: Vec<Expr>,
     concurrency_safe: Option<bool>,
@@ -67,6 +69,54 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
         .help
         .map(|value| quote! { .help(#value) })
         .unwrap_or_default();
+    let description_mode_chain = match surface
+        .description_mode
+        .as_ref()
+        .map(LitStr::value)
+        .as_deref()
+    {
+        Some("brief") | Some("help") => {
+            quote! { .description_mode(crate::plugin::sdk::ToolDescriptionMode::Brief) }
+        }
+        Some("detailed") => {
+            quote! { .description_mode(crate::plugin::sdk::ToolDescriptionMode::Detailed) }
+        }
+        Some(other) => {
+            let invalid = surface
+                .description_mode
+                .clone()
+                .expect("description_mode was matched as Some");
+            return Err(syn::Error::new_spanned(
+                invalid,
+                format!("unsupported tool description mode '{other}'"),
+            ));
+        }
+        None => quote! {},
+    };
+    let ui_display_mode_chain = match surface
+        .ui_display_mode
+        .as_ref()
+        .map(LitStr::value)
+        .as_deref()
+    {
+        Some("summary") => {
+            quote! { .ui_display_mode(crate::plugin::sdk::UiTextDisplayMode::Summary) }
+        }
+        Some("detailed") => {
+            quote! { .ui_display_mode(crate::plugin::sdk::UiTextDisplayMode::Detailed) }
+        }
+        Some(other) => {
+            let invalid = surface
+                .ui_display_mode
+                .clone()
+                .expect("ui_display_mode was matched as Some");
+            return Err(syn::Error::new_spanned(
+                invalid,
+                format!("unsupported tool ui display mode '{other}'"),
+            ));
+        }
+        None => quote! {},
+    };
     let tags_chain = if surface.tags.is_empty() {
         quote! {}
     } else {
@@ -116,6 +166,8 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
                 .description(#description)
                 #summary_chain
                 #help_chain
+                #description_mode_chain
+                #ui_display_mode_chain
                 #tags_chain
                 #capabilities_chain
                 .concurrency_safe(#concurrency_safe)
@@ -243,6 +295,12 @@ fn apply_surface_name_value(config: &mut SurfaceConfig, value: MetaNameValue) ->
         "description" => config.description = Some(expr_lit_str(&value.value, "description")?),
         "summary" => config.summary = Some(expr_lit_str(&value.value, "summary")?),
         "help" => config.help = Some(expr_lit_str(&value.value, "help")?),
+        "description_mode" => {
+            config.description_mode = Some(expr_lit_str(&value.value, "description_mode")?)
+        }
+        "ui_display_mode" => {
+            config.ui_display_mode = Some(expr_lit_str(&value.value, "ui_display_mode")?)
+        }
         "concurrency_safe" => {
             config.concurrency_safe = Some(expr_lit_bool(&value.value, "concurrency_safe")?)
         }

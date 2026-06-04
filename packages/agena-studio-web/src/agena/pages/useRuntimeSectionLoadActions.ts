@@ -21,7 +21,7 @@ import {
   loadRuntimeSectionData,
   loadSettingsSectionData,
 } from './runtimePageLoaders'
-import type { SettingsPluginsConfigSnapshot } from './runtimePageLoaders'
+import type { SettingsPluginUiPresentationSnapshot, SettingsPluginsConfigSnapshot } from './runtimePageLoaders'
 import type { PluginsTab, SettingsTab } from './runtimePageStateModel'
 
 export type RuntimeSectionLoadActionsInput = {
@@ -40,6 +40,7 @@ export type RuntimeSectionLoadActionsInput = {
   permissionRules: Ref<PermissionRuleResource[]>
   permissionSearch: Ref<string>
   pluginLogs: Ref<PluginLogEntry[]>
+  pluginUiPresentation: Ref<SettingsPluginUiPresentationSnapshot | null>
   plugins: Ref<PluginStatus[]>
   settingsPlugins: Ref<SettingsPluginsConfigSnapshot | null>
   providers: Ref<ProviderSummary[]>
@@ -125,6 +126,7 @@ export function useRuntimeSectionLoadActions(
     input.replaceProviderModels(data.providerModels)
     input.permissionRules.value = data.permissionRules
     input.settingsPlugins.value = data.settingsPlugins
+    input.pluginUiPresentation.value = data.settingsPlugins.uiPresentation
 
     if (input.activeSettingsTab.value === 'desktop' && input.desktopEnabled.value) {
       await input.loadDesktopPanel()
@@ -137,6 +139,7 @@ export function useRuntimeSectionLoadActions(
       selectedWorkspaceId: input.selectedWorkspaceId.value,
     })
     input.plugins.value = data.plugins
+    input.pluginUiPresentation.value = data.pluginUiPresentation
     input.runtime.value = data.runtime
     input.workspaces.value = data.workspaces
     input.selectedWorkspaceId.value = data.selectedWorkspaceId

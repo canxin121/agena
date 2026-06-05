@@ -2148,7 +2148,7 @@ mod tests {
         display = compact
     )]
     impl PluginLayerFixture {
-        #[tool(PluginLayerToolInput)]
+        #[tool]
         async fn echo(
             &self,
             input: PluginLayerToolInput,
@@ -2156,7 +2156,7 @@ mod tests {
             Ok(crate::ToolInvokeOutput::text(format!("layer:{}", input.text)).with_title("Layer"))
         }
 
-        #[tool_suite(PluginLayerSuiteInput)]
+        #[tool_suite]
         fn lookup(&self, input: PluginLayerSuiteInput) -> crate::Result<crate::ToolInvokeOutput> {
             match input {
                 PluginLayerSuiteInput::Lookup(input) => Ok(crate::ToolInvokeOutput::text(format!(
@@ -2167,24 +2167,23 @@ mod tests {
             }
         }
 
-        #[tool_stream(PluginLayerToolInput)]
+        #[tool_stream]
         async fn echo_stream(
             &self,
             input: PluginLayerToolInput,
             sink: crate::ToolStreamSink,
         ) -> crate::Result<crate::ToolStreamEnd> {
             sink.text(format!("layer-delta:{}", input.text)).await;
-            Ok(crate::ToolStreamEnd {
-                stream_id: sink.stream_id().to_string(),
-                title: "Layer".to_string(),
-                output_text: format!("layer-stream:{}", input.text),
-                payload: None,
-                metadata: BTreeMap::new(),
-                attachments: Vec::new(),
-            })
+            Ok(
+                crate::ToolStreamEnd::text(
+                    sink.stream_id(),
+                    format!("layer-stream:{}", input.text),
+                )
+                .with_title("Layer"),
+            )
         }
 
-        #[tool_suite_stream(PluginLayerSuiteInput)]
+        #[tool_suite_stream]
         async fn lookup_stream(
             &self,
             sink: crate::ToolStreamSink,
@@ -2192,17 +2191,14 @@ mod tests {
         ) -> crate::Result<crate::ToolStreamEnd> {
             let PluginLayerSuiteInput::Lookup(input) = input;
             sink.text(format!("lookup-delta:{}", input.query)).await;
-            Ok(crate::ToolStreamEnd {
-                stream_id: sink.stream_id().to_string(),
-                title: "Layer Suite".to_string(),
-                output_text: format!("lookup-stream:{}", input.query),
-                payload: None,
-                metadata: BTreeMap::new(),
-                attachments: Vec::new(),
-            })
+            Ok(crate::ToolStreamEnd::text(
+                sink.stream_id(),
+                format!("lookup-stream:{}", input.query),
+            )
+            .with_title("Layer Suite"))
         }
 
-        #[permission_paths(PluginLayerToolInput)]
+        #[permission_paths]
         fn echo_paths(
             &self,
             input: PluginLayerToolInput,
@@ -2213,7 +2209,7 @@ mod tests {
             ))])
         }
 
-        #[permission_networks_suite(PluginLayerSuiteInput)]
+        #[permission_networks_suite]
         fn lookup_networks(
             &self,
             input: PluginLayerSuiteInput,
@@ -2225,8 +2221,8 @@ mod tests {
             }
         }
 
-        #[hook(init)]
-        async fn setup(
+        #[hook]
+        async fn init(
             &self,
             ctx: crate::InitContext,
             _host: Arc<dyn crate::HostClient>,
@@ -2237,8 +2233,11 @@ mod tests {
             Ok(crate::InitOutcome::ack(crate::Plugin::manifest(self)))
         }
 
-        #[hook(shell_env)]
-        fn env(&self, _input: crate::ShellEnvInput) -> crate::Result<Option<crate::ShellEnvPatch>> {
+        #[hook]
+        fn shell_env(
+            &self,
+            _input: crate::ShellEnvInput,
+        ) -> crate::Result<Option<crate::ShellEnvPatch>> {
             Ok(Some(crate::ShellEnvPatch::set("PLUGIN_LAYER", "1")))
         }
     }

@@ -43,14 +43,15 @@ pub struct EchoPlugin {
     description = "Sample plugin: echo + before/after/shell hooks.",
     config_schema_type = EchoPluginConfig,
     config_schema_default = default,
-    display = compact
+    display = compact,
+    export = cdylib
 )]
 impl EchoPlugin {
     fn uppercase(&self) -> bool {
         self.config.get().is_some_and(|config| config.uppercase)
     }
 
-    #[tool(EchoToolInput)]
+    #[tool]
     async fn invoke_echo(&self, input: EchoToolInput) -> Result<ToolInvokeOutput> {
         let rendered = if self.uppercase() {
             input.text.to_uppercase()
@@ -67,7 +68,7 @@ impl EchoPlugin {
         })
     }
 
-    #[hook(init)]
+    #[hook]
     async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> Result<InitOutcome> {
         let config = agena_plugin_sdk::macro_support::parse_defaulted_config(
             ctx.config,
@@ -79,7 +80,7 @@ impl EchoPlugin {
         Ok(InitOutcome::ack(Plugin::manifest(self)))
     }
 
-    #[hook(tool_execute_before)]
+    #[hook]
     async fn tool_execute_before(&self, input: ToolBeforeInput) -> Result<Option<ToolBeforePatch>> {
         if input.tool_name != "echo" {
             return Ok(None);
@@ -97,7 +98,7 @@ impl EchoPlugin {
         }))
     }
 
-    #[hook(tool_execute_after)]
+    #[hook]
     async fn tool_execute_after(&self, input: ToolAfterInput) -> Result<Option<ToolAfterPatch>> {
         if input.tool_name != "echo" {
             return Ok(None);
@@ -109,7 +110,7 @@ impl EchoPlugin {
         }))
     }
 
-    #[hook(shell_env)]
+    #[hook]
     async fn shell_env(&self, input: ShellEnvInput) -> Result<Option<ShellEnvPatch>> {
         let mut p = ShellEnvPatch::default();
         p.set.insert("AGENA_ECHO".into(), "1".into());
@@ -120,22 +121,22 @@ impl EchoPlugin {
         Ok(Some(p))
     }
 
-    #[hook(event)]
+    #[hook]
     async fn event(&self, _ev: EventEnvelope) -> Result<()> {
         Ok(())
     }
 
-    #[hook(pre_run)]
+    #[hook]
     async fn pre_run(&self, _input: PreRunInput) -> Result<()> {
         Ok(())
     }
 
-    #[hook(post_run)]
+    #[hook]
     async fn post_run(&self, _input: PostRunInput) -> Result<()> {
         Ok(())
     }
 
-    #[hook(permission_ask)]
+    #[hook]
     async fn permission_ask(
         &self,
         _input: PermissionAskInput,
@@ -143,7 +144,7 @@ impl EchoPlugin {
         Ok(None)
     }
 
-    #[hook(session_start)]
+    #[hook]
     async fn session_start(&self, input: SessionStartInput) -> Result<Option<SessionStartPatch>> {
         Ok(Some(SessionStartPatch {
             additional_context: Some(format!(
@@ -154,12 +155,12 @@ impl EchoPlugin {
         }))
     }
 
-    #[hook(session_end)]
+    #[hook]
     async fn session_end(&self, _input: SessionEndInput) -> Result<()> {
         Ok(())
     }
 
-    #[hook(provider_list)]
+    #[hook]
     async fn provider_list(&self, input: ProviderListInput) -> Result<Option<ProviderListPatch>> {
         let already_registered = input
             .current
@@ -181,5 +182,3 @@ impl EchoPlugin {
         }))
     }
 }
-
-agena_plugin_sdk::export_cdylib!(EchoPlugin);

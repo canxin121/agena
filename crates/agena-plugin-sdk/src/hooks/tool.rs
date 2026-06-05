@@ -249,6 +249,55 @@ pub struct ToolStreamEnd {
     pub attachments: Vec<AttachmentItem>,
 }
 
+impl ToolStreamEnd {
+    pub fn text(stream_id: impl Into<String>, output_text: impl Into<String>) -> Self {
+        Self {
+            stream_id: stream_id.into(),
+            title: String::new(),
+            output_text: output_text.into(),
+            payload: None,
+            metadata: BTreeMap::new(),
+            attachments: Vec::new(),
+        }
+    }
+
+    pub fn from_output(stream_id: impl Into<String>, output: ToolInvokeOutput) -> Self {
+        Self {
+            stream_id: stream_id.into(),
+            title: output.title,
+            output_text: output.output_text,
+            payload: output.payload,
+            metadata: output.metadata,
+            attachments: output.attachments,
+        }
+    }
+
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = title.into();
+        self
+    }
+
+    pub fn with_payload(mut self, payload: serde_json::Value) -> Self {
+        self.payload = Some(payload);
+        self
+    }
+
+    pub fn with_metadata(mut self, k: impl Into<String>, v: impl Into<String>) -> Self {
+        self.metadata.insert(k.into(), v.into());
+        self
+    }
+
+    pub fn with_attachment(mut self, att: AttachmentItem) -> Self {
+        self.attachments.push(att);
+        self
+    }
+
+    pub fn with_attachments(mut self, atts: impl IntoIterator<Item = AttachmentItem>) -> Self {
+        self.attachments.extend(atts);
+        self
+    }
+}
+
 /// Terminal error marker for `hooks/tool.invoke.stream`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolStreamError {

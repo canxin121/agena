@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use agena_macros::ToolInputShape;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -106,10 +107,14 @@ pub struct WebSearchResult {
     pub snippet: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("content"), non_empty("content"))]
 pub struct TodoItem {
+    /// Todo item text.
     pub content: String,
+    /// Current state of the todo item.
     pub status: TodoStatus,
+    /// Priority used when rendering or scheduling the item.
     pub priority: TodoPriority,
 }
 
@@ -350,23 +355,37 @@ impl InteractiveRequestPart<PermissionRequest, PermissionReply> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("label", "description"), non_empty("label"))]
 pub struct UserInputOption {
+    /// Visible label for the option.
     pub label: String,
+    /// Optional explanatory text shown alongside the label.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(
+    trim("id", "header", "question", "options[].label", "options[].description"),
+    non_empty("id", "question"),
+    max_chars("header", 12)
+)]
 pub struct UserInputQuestion {
+    /// Stable identifier for the question; used in replies.
     pub id: String,
+    /// Short header displayed above the question body.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub header: String,
+    /// Prompt text presented to the user.
     pub question: String,
+    /// Optional answer options. Leave empty when the user may answer freely.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<UserInputOption>,
+    /// Allow multiple options to be selected.
     #[serde(default, skip_serializing_if = "is_false")]
     pub multiple: bool,
+    /// Allow a custom answer even when options are present.
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_custom: bool,
 }

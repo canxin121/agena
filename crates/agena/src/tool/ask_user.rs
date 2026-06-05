@@ -1,82 +1,23 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use crate::message::AskUserToolInput;
 
 use super::{ToolError, ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput};
 
-const MAX_QUESTIONS: usize = 3;
-const MAX_OPTIONS: usize = 8;
-const MAX_HEADER_CHARS: usize = 12;
-
 pub(crate) fn execute(input: &AskUserToolInput) -> Result<super::ToolPayloadExecution, ToolError> {
-    validate(input)?;
-    Err(ToolError::UserInputRequired(input.clone()))
+    let normalized = normalize(input)?;
+    Err(ToolError::UserInputRequired(normalized))
 }
 
 pub(crate) fn validate(input: &AskUserToolInput) -> Result<(), ToolError> {
-    if input.questions.is_empty() {
-        return Err(ToolError::InvalidInput(
-            "ask_user requires at least one question".to_string(),
-        ));
-    }
-    if input.questions.len() > MAX_QUESTIONS {
-        return Err(ToolError::InvalidInput(format!(
-            "ask_user accepts at most {MAX_QUESTIONS} questions"
-        )));
-    }
+    normalize(input).map(|_| ())
+}
 
-    let mut ids = HashSet::new();
-    for question in &input.questions {
-        let id = question.id.trim();
-        if id.is_empty() {
-            return Err(ToolError::InvalidInput(
-                "ask_user question id must not be empty".to_string(),
-            ));
-        }
-        if !ids.insert(id.to_string()) {
-            return Err(ToolError::InvalidInput(format!(
-                "duplicate ask_user question id: {id}"
-            )));
-        }
-
-        if question.header.chars().count() > MAX_HEADER_CHARS {
-            return Err(ToolError::InvalidInput(format!(
-                "ask_user header must be at most {MAX_HEADER_CHARS} characters for question {id}"
-            )));
-        }
-        if question.question.trim().is_empty() {
-            return Err(ToolError::InvalidInput(format!(
-                "ask_user question text must not be empty for question {id}"
-            )));
-        }
-        if question.options.len() > MAX_OPTIONS {
-            return Err(ToolError::InvalidInput(format!(
-                "ask_user question {id} accepts at most {MAX_OPTIONS} options"
-            )));
-        }
-        if question.options.is_empty() && !question.allow_custom {
-            return Err(ToolError::InvalidInput(format!(
-                "ask_user question {id} must provide options or allow_custom"
-            )));
-        }
-
-        let mut option_labels = HashSet::new();
-        for option in &question.options {
-            let label = option.label.trim();
-            if label.is_empty() {
-                return Err(ToolError::InvalidInput(format!(
-                    "ask_user option label must not be empty for question {id}"
-                )));
-            }
-            if !option_labels.insert(label.to_string()) {
-                return Err(ToolError::InvalidInput(format!(
-                    "duplicate ask_user option label '{label}' for question {id}"
-                )));
-            }
-        }
-    }
-
-    Ok(())
+fn normalize(input: &AskUserToolInput) -> Result<AskUserToolInput, ToolError> {
+    AskUserToolInput::parse_input(
+        serde_json::to_value(input).map_err(|err| ToolError::InvalidInput(err.to_string()))?,
+    )
+    .map_err(|err| ToolError::InvalidInput(err.to_string()))
 }
 
 pub(crate) fn execution_from_answers(

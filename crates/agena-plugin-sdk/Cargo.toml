@@ -6,11 +6,14 @@ license.workspace = true
 rust-version.workspace = true
 description = "Agena plugin SDK: write plugins as async traits, ship them as in-process / cdylib / stdio / http."
 [dependencies]
+agena-macros = { workspace = true }
 async-trait = { workspace = true }
 bitflags = { workspace = true }
 indexmap = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_path_to_error = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync"] }
 tracing = { workspace = true }

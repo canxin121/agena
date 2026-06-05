@@ -5,7 +5,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use async_trait::async_trait;
+use agena_macros::StaticToolSurface;
 use schemars::JsonSchema;
 
 use crate::message::{
@@ -14,9 +14,7 @@ use crate::message::{
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::HostClient;
 use crate::plugin::sdk::{
-    HookSubscription, HostCapability, InitContext, InitOutcome, Plugin, PluginManifest,
-    PluginToolDecl, Result as SdkResult, ToolDescriptionMode, ToolInvokeInput, ToolInvokeOutput,
-    ToolTag, UiTextDisplayMode,
+    HookSubscription, HostCapability, Result as SdkResult, ToolInvokeOutput, ToolTag,
 };
 use crate::plugins::provided::router;
 
@@ -26,28 +24,39 @@ pub(crate) struct CronPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
 }
 
-#[derive(Debug, Default, serde::Deserialize, JsonSchema)]
-struct ScheduleListInput {
-    #[serde(flatten)]
-    args: CronListToolInput,
-}
-
-#[derive(Debug, serde::Deserialize, JsonSchema)]
-struct ScheduleCreateInput {
-    #[serde(flatten)]
-    args: CronCreateToolInput,
-}
-
-#[derive(Debug, serde::Deserialize, JsonSchema)]
-struct ScheduleDeleteInput {
-    #[serde(flatten)]
-    args: CronDeleteToolInput,
-}
-
-#[derive(Debug, serde::Deserialize, JsonSchema)]
-struct ScheduleWakeupInput {
-    #[serde(flatten)]
-    args: ScheduleWakeupToolInput,
+#[derive(Debug, serde::Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "schedule",
+    description = "Scheduler command. Use action `list`, `create`, `delete`, or `wakeup` to manage cron schedules and one-shot wakeups.",
+    summary = "Manage cron schedules and one-shot wakeups.",
+    help = "Use action `list` to inspect registered jobs, `create` to add one cron schedule, `delete` to remove one schedule by id, and `wakeup` to create one one-shot wakeup request.",
+    display = brief,
+    tags(ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Scheduler),
+    host_capabilities(HostCapability::Scheduler),
+    concurrency_safe = false
+)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum ScheduleToolInput {
+    #[tool(exec = "list", route = "cron_list", shape = CronListToolInput)]
+    List {
+        #[serde(flatten)]
+        args: CronListToolInput,
+    },
+    #[tool(exec = "create", route = "cron_create", shape = CronCreateToolInput)]
+    Create {
+        #[serde(flatten)]
+        args: CronCreateToolInput,
+    },
+    #[tool(exec = "delete", route = "cron_delete", shape = CronDeleteToolInput)]
+    Delete {
+        #[serde(flatten)]
+        args: CronDeleteToolInput,
+    },
+    #[tool(exec = "wakeup", route = "schedule_wakeup", shape = ScheduleWakeupToolInput)]
+    Wakeup {
+        #[serde(flatten)]
+        args: ScheduleWakeupToolInput,
+    },
 }
 
 impl CronPlugin {
@@ -66,118 +75,75 @@ impl CronPlugin {
     }
 }
 
-#[async_trait]
-impl Plugin for CronPlugin {
-    fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(CRON_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
-            .description("Cron-style and one-shot wakeup scheduling tools.")
-            .tool_description_mode(ToolDescriptionMode::Brief)
-            .ui_display_mode(UiTextDisplayMode::Summary)
-            .hooks(HookSubscription::TOOL_INVOKE)
-            .config_schema(crate::tool::definition::empty_config_schema())
-            .tools(schedule_decls())
-            .build()
+#[crate::plugin::sdk::plugin]
+impl crate::plugin::sdk::Plugin for CronPlugin {
+    #[agena_plugin_sdk::plugin_manifest_method(
+        id = CRON_PLUGIN_ID,
+        version = env!("CARGO_PKG_VERSION"),
+        description = "Cron-style and one-shot wakeup scheduling tools.",
+        hooks = HookSubscription::TOOL_INVOKE,
+        display = brief,
+        tool_surface = ScheduleToolInput,
+    )]
+    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
+
+    #[agena_plugin_sdk::plugin_init_method(
+        host_cell = {
+            field = self.host,
+            value = host,
+            poisoned = "cron plugin host lock poisoned"
+        },
+    )]
+    async fn init(
+        &self,
+        _ctx: crate::plugin::sdk::InitContext,
+        host: Arc<dyn HostClient>,
+    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
     }
 
-    async fn init(&self, _ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
-        *self
-            .host
-            .write()
-            .map_err(|_| PluginError::new("cron plugin host lock poisoned"))? = Some(host);
-        Ok(InitOutcome::ack(self.manifest()))
-    }
-
-    async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
+    async fn tool_invoke(
+        &self,
+        input: crate::plugin::sdk::ToolInvokeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let _ = self.host()?;
-        let (tool_name, tool_input) =
-            resolve_schedule_tool_input(input.tool_name.as_str(), input.input)?;
-        router::invoke_tool(&tool_name, tool_input, input.session_id, input.call_id)
+        router::invoke_tool_surface::<ScheduleToolInput>(
+            input.tool_name.as_str(),
+            input.input,
+            input.session_id,
+            input.call_id,
+        )
     }
 }
 
-fn schedule_decls() -> Vec<PluginToolDecl> {
-    vec![
-        PluginToolDecl::new(
-            "schedule.list",
-            crate::tool::definition::json_schema_for::<ScheduleListInput>(),
-        )
-        .description("List registered cron jobs and one-shot wakeups.")
-        .summary("List scheduled jobs and wakeups.")
-        .help("Lists the registered cron jobs and one-shot wakeups.")
-        .ui_display_mode(UiTextDisplayMode::Summary)
-        .tags([ToolTag::ReadOnly, ToolTag::Scheduler])
-        .host_capability(HostCapability::Scheduler)
-        .concurrency_safe(true),
-        PluginToolDecl::new(
-            "schedule.create",
-            crate::tool::definition::json_schema_for::<ScheduleCreateInput>(),
-        )
-        .description("Create one cron schedule entry.")
-        .summary("Create one cron schedule.")
-        .help("Creates one cron schedule entry through the scheduler host bridge.")
-        .ui_display_mode(UiTextDisplayMode::Summary)
-        .tags([ToolTag::Mutating, ToolTag::Scheduler])
-        .host_capability(HostCapability::Scheduler)
-        .concurrency_safe(false),
-        PluginToolDecl::new(
-            "schedule.delete",
-            crate::tool::definition::json_schema_for::<ScheduleDeleteInput>(),
-        )
-        .description("Delete one cron schedule entry by id.")
-        .summary("Delete one cron schedule.")
-        .help("Deletes one cron schedule entry by id through the scheduler host bridge.")
-        .ui_display_mode(UiTextDisplayMode::Summary)
-        .tags([ToolTag::Mutating, ToolTag::Scheduler])
-        .host_capability(HostCapability::Scheduler)
-        .concurrency_safe(false),
-        PluginToolDecl::new(
-            "schedule.wakeup",
-            crate::tool::definition::json_schema_for::<ScheduleWakeupInput>(),
-        )
-        .description("Create one one-shot wakeup request.")
-        .summary("Create one one-shot wakeup.")
-        .help("Creates one one-shot wakeup request through the scheduler host bridge.")
-        .ui_display_mode(UiTextDisplayMode::Summary)
-        .tags([ToolTag::Mutating, ToolTag::Scheduler])
-        .host_capability(HostCapability::Scheduler)
-        .concurrency_safe(false),
-    ]
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
 
-fn parse_input<T>(input: serde_json::Value) -> SdkResult<T>
-where
-    T: for<'de> serde::Deserialize<'de>,
-{
-    serde_json::from_value(input).map_err(|err| PluginError::invalid_params(err.to_string()))
-}
+    #[test]
+    fn schedule_tool_routes_actions_into_internal_scheduler_payloads() {
+        let (list_tool, list_input) =
+            ScheduleToolInput::resolve_tool("schedule", json!({ "action": "list" }))
+                .expect("list action should resolve");
+        assert_eq!(list_tool, "cron_list");
+        assert_eq!(list_input, json!({}));
 
-fn resolve_schedule_tool_input(
-    tool_name: &str,
-    input: serde_json::Value,
-) -> SdkResult<(String, serde_json::Value)> {
-    match tool_name {
-        "schedule.list" => Ok((
-            "cron_list".to_string(),
-            serde_json::to_value(parse_input::<ScheduleListInput>(input)?.args)
-                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
-        )),
-        "schedule.create" => Ok((
-            "cron_create".to_string(),
-            serde_json::to_value(parse_input::<ScheduleCreateInput>(input)?.args)
-                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
-        )),
-        "schedule.delete" => Ok((
-            "cron_delete".to_string(),
-            serde_json::to_value(parse_input::<ScheduleDeleteInput>(input)?.args)
-                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
-        )),
-        "schedule.wakeup" => Ok((
-            "schedule_wakeup".to_string(),
-            serde_json::to_value(parse_input::<ScheduleWakeupInput>(input)?.args)
-                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
-        )),
-        other => Err(PluginError::invalid_params(format!(
-            "unknown schedule tool '{other}'"
-        ))),
+        let (wakeup_tool, wakeup_input) = ScheduleToolInput::resolve_tool(
+            "schedule",
+            json!({
+                "action": "wakeup",
+                "prompt": "Check status",
+                "delay_seconds": 30
+            }),
+        )
+        .expect("wakeup action should resolve");
+        assert_eq!(wakeup_tool, "schedule_wakeup");
+        assert_eq!(
+            wakeup_input,
+            json!({
+                "prompt": "Check status",
+                "delay_seconds": 30
+            })
+        );
     }
 }

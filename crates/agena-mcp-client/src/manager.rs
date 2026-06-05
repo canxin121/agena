@@ -455,7 +455,10 @@ fn convert_tools(tools: Vec<Tool>) -> Vec<ToolDescriptor> {
 fn convert_tool_descriptor(tool: Tool) -> ToolDescriptor {
     ToolDescriptor {
         name: tool.name.to_string(),
+        aliases: Vec::new(),
         description: tool.description.map(|value| value.into_owned()),
+        before_help: None,
+        after_help: None,
         input_schema: Some(Value::Object(tool.input_schema.as_ref().clone())),
     }
 }

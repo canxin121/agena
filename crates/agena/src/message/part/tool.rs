@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use agena_macros::ToolInputShape;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use strum::Display;
@@ -47,7 +48,17 @@ pub struct NetworkEffect {
     pub target: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(
+    trim(
+        "command",
+        "description",
+        "workdir",
+        "filesystem_effects[].path",
+        "network_effects[].target"
+    ),
+    non_empty("command")
+)]
 pub struct ShellCommandInput {
     pub command: String,
     #[serde(default)]
@@ -64,13 +75,19 @@ pub struct ShellCommandInput {
     pub network_effects: Vec<NetworkEffect>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("file_path"), non_empty("file_path"))]
 pub struct ReadToolInput {
+    /// File or directory path to read. Relative paths are resolved from the
+    /// workspace root.
     pub file_path: String,
+    /// 1-based offset for file lines or directory entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<u32>,
+    /// Maximum number of lines or directory entries to return.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    /// How to render the target: `text`, `attachment`, or `auto`.
     #[serde(default)]
     pub mode: ReadMode,
 }
@@ -84,18 +101,33 @@ pub enum ReadMode {
     Auto,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(
+    trim("pattern", "path"),
+    non_empty("pattern"),
+    non_empty_if_present("path")
+)]
 pub struct GlobToolInput {
+    /// Glob pattern to match.
     pub pattern: String,
+    /// Optional base path. Defaults to the workspace root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(
+    trim("pattern", "path", "include"),
+    non_empty("pattern"),
+    non_empty_if_present("path", "include")
+)]
 pub struct GrepToolInput {
+    /// Regex pattern to search for.
     pub pattern: String,
+    /// Optional base path. Defaults to the workspace root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Optional glob filter applied before matching lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include: Option<String>,
 }
@@ -138,28 +170,43 @@ impl TaskSubagentType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+/// Input for the delegated `task` subagent command.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(
+    trim("description", "prompt", "task_id", "command"),
+    non_empty("description", "prompt")
+)]
 pub struct TaskToolInput {
+    /// Short label for the subtask session.
     pub description: String,
+    /// Full instruction payload for the delegated subtask.
     pub prompt: String,
+    /// Which subagent profile should execute the subtask.
     pub subagent_type: TaskSubagentType,
+    /// Resume an existing subtask session instead of creating a new one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
+    /// Optional command to run in the subtask shell context.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("query"), non_empty("query"))]
 #[serde(deny_unknown_fields)]
 pub struct ToolSearchToolInput {
+    /// Search text used to rank matching tool names and descriptions.
     #[serde(default)]
     pub query: String,
+    /// Maximum number of search results to return.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("items[].content"), non_empty_if_present("items[].content"))]
 pub struct TodoWriteToolInput {
+    /// Todo items to replace or persist.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<TodoItem>,
 }
@@ -203,10 +250,20 @@ pub struct MonitorEvent {
 }
 
 /// Action discriminator for the `monitor` tool payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim(
+    "command",
+    "description",
+    "workdir",
+    "filesystem_effects[].path",
+    "network_effects[].target",
+    "include_pattern",
+    "monitor_id"
+))]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum MonitorToolInput {
     /// Spawn a new background monitor and return its id.
+    #[tool(non_empty("command"))]
     Start {
         #[serde(flatten)]
         command: ShellCommandInput,
@@ -224,8 +281,10 @@ pub enum MonitorToolInput {
         capture_stderr: bool,
     },
     /// List every active or recently-finished monitor in this session.
+    #[tool(default_when_empty = true)]
     List {},
     /// Read events from a monitor; optionally block waiting for new events.
+    #[tool(non_empty("monitor_id"))]
     Read {
         monitor_id: String,
         /// Return only events with `seq > since_seq`. Default 0.
@@ -239,6 +298,7 @@ pub enum MonitorToolInput {
         wait_ms: u64,
     },
     /// Terminate a running monitor.
+    #[tool(non_empty("monitor_id"))]
     Stop { monitor_id: String },
 }
 
@@ -264,7 +324,30 @@ pub struct MonitorSummary {
     pub exit_code: Option<i32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(
+    trim(
+        "title",
+        "body_markdown",
+        "kind",
+        "submit_label",
+        "cancel_label",
+        "questions[].id",
+        "questions[].header",
+        "questions[].question",
+        "questions[].options[].label",
+        "questions[].options[].description"
+    ),
+    min_items("questions", 1),
+    max_items("questions", 3),
+    max_items("questions[].options", 8),
+    max_chars("questions[].header", 12),
+    required_unless_present("questions[].allow_custom", "questions[].options"),
+    non_empty("questions[].id", "questions[].question"),
+    non_empty_if_present("questions[].options[].label"),
+    distinct_trimmed("questions[].id"),
+    distinct_trimmed_within("questions[].options[].label", "questions[]")
+)]
 pub struct AskUserToolInput {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
@@ -280,14 +363,18 @@ pub struct AskUserToolInput {
     pub questions: Vec<UserInputQuestion>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+/// Textual patch payload in the agena patch format.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
 pub struct ApplyPatchToolInput {
+    /// Unified patch text to apply to the workspace.
     pub patch: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+/// Input for the native `web_fetch` tool.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("url", "prompt"), non_empty("url"))]
 pub struct WebFetchToolInput {
-    /// Absolute URL to fetch.  HTTP is upgraded to HTTPS.
+    /// Absolute URL to fetch. HTTP is upgraded to HTTPS.
     pub url: String,
     /// Optional follow-up instruction; when present, the fetched markdown
     /// is summarized by the session's default LLM provider before being
@@ -296,8 +383,14 @@ pub struct WebFetchToolInput {
     pub prompt: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+/// Input for the native `web_search` tool.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(
+    trim("query", "allowed_domains[]", "blocked_domains[]"),
+    non_empty("query")
+)]
 pub struct WebSearchToolInput {
+    /// Search query text.
     pub query: String,
     /// Restrict results to these domains; empty means no restriction.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -309,7 +402,10 @@ pub struct WebSearchToolInput {
     pub max_results: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInputShape,
+)]
+#[tool_input(trim("agent"))]
 pub struct AgentSwitchToolInput {
     /// Target agent profile. Omit or pass an empty string to clear the
     /// explicit runtime agent selection.
@@ -320,17 +416,29 @@ pub struct AgentSwitchToolInput {
     pub push_previous: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInputShape,
+)]
 pub struct AgentRestoreToolInput {}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInputShape,
+)]
+#[tool_input(trim("args"))]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowPromptToolInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInputShape,
+)]
+#[tool_input(
+    trim("name", "path"),
+    non_empty_if_present("name", "path"),
+    conflicts_with("name", "path")
+)]
 pub struct EnterWorktreeToolInput {
     /// Optional name; when absent a slug is generated from the timestamp.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -341,7 +449,8 @@ pub struct EnterWorktreeToolInput {
     pub path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("action"), non_empty("action"))]
 pub struct ExitWorktreeToolInput {
     /// "keep" leaves the worktree on disk; "remove" deletes it.
     pub action: String,
@@ -351,7 +460,8 @@ pub struct ExitWorktreeToolInput {
     pub discard_changes: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("expression", "prompt"), non_empty("expression", "prompt"))]
 pub struct CronCreateToolInput {
     /// 6-field cron expression: `<sec> <min> <hour> <day-of-month> <month> <day-of-week>`.
     pub expression: String,
@@ -365,15 +475,19 @@ fn default_cron_max_age() -> u32 {
     7
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[derive(
+    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInputShape,
+)]
 pub struct CronListToolInput {}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("id"), non_empty("id"))]
 pub struct CronDeleteToolInput {
     pub id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("prompt", "reason"), non_empty("prompt"))]
 pub struct ScheduleWakeupToolInput {
     pub delay_seconds: u32,
     pub prompt: String,
@@ -382,21 +496,26 @@ pub struct ScheduleWakeupToolInput {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("file_path"), non_empty("file_path"))]
 pub struct LspPositionToolInput {
     pub file_path: String,
     pub line: u32,
     pub character: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("file_path"), non_empty("file_path"))]
 pub struct LspDefinitionToolInput {
+    #[tool(flatten_shape)]
     #[serde(flatten)]
     pub position: LspPositionToolInput,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("file_path"), non_empty("file_path"))]
 pub struct LspReferencesToolInput {
+    #[tool(flatten_shape)]
     #[serde(flatten)]
     pub position: LspPositionToolInput,
     #[serde(default = "default_true")]
@@ -407,13 +526,16 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("file_path"), non_empty("file_path"))]
 pub struct LspHoverToolInput {
+    #[tool(flatten_shape)]
     #[serde(flatten)]
     pub position: LspPositionToolInput,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("file_path"), non_empty("file_path"))]
 pub struct LspDiagnosticsToolInput {
     pub file_path: String,
 }
@@ -452,7 +574,8 @@ impl NotebookCellType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("notebook_path", "new_source"), non_empty("notebook_path"))]
 pub struct NotebookEditToolInput {
     pub notebook_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1085,4 +1208,175 @@ fn attachment_source_from_location(value: &str) -> Option<AttachmentSource> {
     Some(AttachmentSource::Url {
         url: trimmed.to_owned(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn tool_search_input_trims_and_rejects_empty_query_at_parse_time() {
+        let parsed = ToolSearchToolInput::parse_input(json!({
+            "query": "  shell monitor  ",
+            "limit": 5
+        }))
+        .expect("query should be trimmed");
+        assert_eq!(parsed.query, "shell monitor");
+        assert_eq!(parsed.limit, Some(5));
+
+        let err = ToolSearchToolInput::parse_input(json!({
+            "query": "   "
+        }))
+        .expect_err("blank query should fail at parse time");
+        assert!(err.to_string().contains("field `query` must not be empty"));
+    }
+
+    #[test]
+    fn shell_command_input_trims_effect_targets_and_rejects_empty_commands() {
+        let parsed = ShellCommandInput::parse_input(json!({
+            "command": "  cargo test  ",
+            "description": "  Run tests  ",
+            "workdir": "  crates/agena  ",
+            "filesystem_effects": [{ "path": "  Cargo.toml  ", "access": "read" }],
+            "network_effects": [{ "target": "  api.example.com:443  " }]
+        }))
+        .expect("shell command input should parse");
+
+        assert_eq!(parsed.command, "cargo test");
+        assert_eq!(parsed.description, "Run tests");
+        assert_eq!(parsed.workdir.as_deref(), Some("crates/agena"));
+        assert_eq!(parsed.filesystem_effects[0].path, "Cargo.toml");
+        assert_eq!(parsed.network_effects[0].target, "api.example.com:443");
+
+        let err = ShellCommandInput::parse_input(json!({
+            "command": "   ",
+            "filesystem_effects": [],
+            "network_effects": []
+        }))
+        .expect_err("blank shell command should fail at parse time");
+        assert!(
+            err.to_string()
+                .contains("field `command` must not be empty")
+        );
+    }
+
+    #[test]
+    fn ask_user_input_trims_nested_fields_and_validates_relations_at_parse_time() {
+        let parsed = AskUserToolInput::parse_input(json!({
+            "title": "  Review  ",
+            "questions": [{
+                "id": "  choice  ",
+                "header": "  Pick  ",
+                "question": "  Which path?  ",
+                "options": [
+                    { "label": "  A  ", "description": "  alpha  " },
+                    { "label": "B", "description": "" }
+                ]
+            }]
+        }))
+        .expect("ask_user input should parse");
+
+        assert_eq!(parsed.title, "Review");
+        assert_eq!(parsed.questions[0].id, "choice");
+        assert_eq!(parsed.questions[0].header, "Pick");
+        assert_eq!(parsed.questions[0].question, "Which path?");
+        assert_eq!(parsed.questions[0].options[0].label, "A");
+        assert_eq!(parsed.questions[0].options[0].description, "alpha");
+
+        let err = AskUserToolInput::parse_input(json!({
+            "questions": [{
+                "id": "reply",
+                "question": "Need a reply",
+                "options": []
+            }]
+        }))
+        .expect_err("questions require options or allow_custom");
+        assert!(err.to_string().contains(
+            "field `questions[].allow_custom` is required unless `questions[].options` is present"
+        ));
+    }
+
+    #[test]
+    fn worktree_and_cron_inputs_validate_at_parse_time() {
+        let err = EnterWorktreeToolInput::parse_input(json!({
+            "name": " feature-x ",
+            "path": " /tmp/wt "
+        }))
+        .expect_err("name and path should conflict");
+        assert!(
+            err.to_string()
+                .contains("field `name` conflicts with `path`")
+        );
+
+        let cron = CronCreateToolInput::parse_input(json!({
+            "expression": " 0 * * * * * ",
+            "prompt": "  run checks  ",
+            "max_age_days": 3
+        }))
+        .expect("cron input should parse");
+        assert_eq!(cron.expression, "0 * * * * *");
+        assert_eq!(cron.prompt, "run checks");
+
+        let wakeup = ScheduleWakeupToolInput::parse_input(json!({
+            "delay_seconds": 60,
+            "prompt": "  ping me  ",
+            "reason": "  reminder  "
+        }))
+        .expect("wakeup input should parse");
+        assert_eq!(wakeup.prompt, "ping me");
+        assert_eq!(wakeup.reason.as_deref(), Some("reminder"));
+    }
+
+    #[test]
+    fn monitor_and_lsp_inputs_use_variant_and_shape_constraints_at_parse_time() {
+        let listed = MonitorToolInput::parse_input(json!({}))
+            .expect("empty monitor input should default to list");
+        assert!(matches!(listed, MonitorToolInput::List {}));
+
+        let parsed = MonitorToolInput::parse_input(json!({
+            "action": "start",
+            "command": "  cargo test  ",
+            "description": "  run tests  ",
+            "filesystem_effects": [],
+            "network_effects": []
+        }))
+        .expect("monitor start should parse");
+        match parsed {
+            MonitorToolInput::Start { command, .. } => {
+                assert_eq!(command.command, "cargo test");
+                assert_eq!(command.description, "run tests");
+            }
+            other => panic!("expected start variant, got {other:?}"),
+        }
+
+        let err = MonitorToolInput::parse_input(json!({
+            "action": "read",
+            "monitor_id": "   "
+        }))
+        .expect_err("monitor read should reject blank ids");
+        assert!(
+            err.to_string()
+                .contains("field `monitor_id` must not be empty")
+        );
+
+        let hover = LspHoverToolInput::parse_input(json!({
+            "file_path": "  /tmp/main.rs  ",
+            "line": 1,
+            "character": 2
+        }))
+        .expect("lsp hover should trim paths");
+        assert_eq!(hover.position.file_path, "/tmp/main.rs");
+
+        let err = NotebookEditToolInput::parse_input(json!({
+            "notebook_path": "   ",
+            "edit_mode": "replace"
+        }))
+        .expect_err("notebook edit should reject blank path");
+        assert!(
+            err.to_string()
+                .contains("field `notebook_path` must not be empty")
+        );
+    }
 }

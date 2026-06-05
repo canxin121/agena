@@ -6,67 +6,48 @@
 //! by enabling the corresponding feature on `agena-plugin-sdk`.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 use agena_plugin_sdk::prelude::*;
 
-#[derive(Default)]
-pub struct EchoPlugin {
-    uppercase: AtomicBool,
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(default, deny_unknown_fields)]
+struct EchoPluginConfig {
+    uppercase: bool,
 }
 
-#[async_trait]
-impl Plugin for EchoPlugin {
-    fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder("echo", env!("CARGO_PKG_VERSION"))
-            .description("Sample plugin: echo + before/after/shell hooks.")
-            .hooks(
-                HookSubscription::INIT
-                    | HookSubscription::TOOL_INVOKE
-                    | HookSubscription::TOOL_BEFORE
-                    | HookSubscription::TOOL_AFTER
-                    | HookSubscription::SHELL_ENV
-                    | HookSubscription::EVENT
-                    | HookSubscription::PRE_RUN
-                    | HookSubscription::POST_RUN
-                    | HookSubscription::PERMISSION_ASK
-                    | HookSubscription::SESSION_START
-                    | HookSubscription::SESSION_END
-                    | HookSubscription::PROVIDER_LIST,
-            )
-            .tool(
-                PluginToolDecl::new(
-                    "echo",
-                    json!({
-                        "type": "object",
-                        "properties": {
-                            "text": { "type": "string" }
-                        },
-                        "required": ["text"]
-                    }),
-                )
-                .description("Echo the supplied text.")
-                .tag(ToolTag::ReadOnly),
-            )
-            .build()
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolCommand)]
+#[tool_command(
+    tool = "echo",
+    description = "Echo the supplied text.",
+    summary = "Echo text back to the caller.",
+    trim("text"),
+    non_empty("text"),
+    handler_receiver = EchoPlugin,
+    handle = EchoPlugin::invoke_echo,
+    handle_field = text,
+    handle_by_value = true,
+    tags(ToolTag::ReadOnly),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+struct EchoToolInput {
+    /// Text payload to echo back.
+    text: String,
+}
+
+#[derive(Default)]
+pub struct EchoPlugin {
+    config: OnceLock<EchoPluginConfig>,
+}
+
+impl EchoPlugin {
+    fn uppercase(&self) -> bool {
+        self.config.get().is_some_and(|config| config.uppercase)
     }
 
-    async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> Result<InitOutcome> {
-        if let Some(b) = ctx.config.get("uppercase").and_then(|v| v.as_bool()) {
-            self.uppercase.store(b, Ordering::Relaxed);
-        }
-        Ok(InitOutcome::ack(self.manifest()))
-    }
-
-    async fn tool_invoke(&self, input: ToolInvokeInput) -> Result<ToolInvokeOutput> {
-        let text = input
-            .input
-            .get("text")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| PluginError::invalid_params("missing `text`"))?
-            .to_string();
-
-        let rendered = if self.uppercase.load(Ordering::Relaxed) {
+    async fn invoke_echo(&self, text: String) -> Result<ToolInvokeOutput> {
+        let rendered = if self.uppercase() {
             text.to_uppercase()
         } else {
             text
@@ -80,6 +61,47 @@ impl Plugin for EchoPlugin {
             attachments: Vec::new(),
         })
     }
+}
+
+#[plugin]
+impl Plugin for EchoPlugin {
+    #[plugin_manifest_method(
+        id = "echo",
+        version = env!("CARGO_PKG_VERSION"),
+        description = "Sample plugin: echo + before/after/shell hooks.",
+        hooks = HookSubscription::INIT
+            | HookSubscription::TOOL_INVOKE
+            | HookSubscription::TOOL_BEFORE
+            | HookSubscription::TOOL_AFTER
+            | HookSubscription::SHELL_ENV
+            | HookSubscription::EVENT
+            | HookSubscription::PRE_RUN
+            | HookSubscription::POST_RUN
+            | HookSubscription::PERMISSION_ASK
+            | HookSubscription::SESSION_START
+            | HookSubscription::SESSION_END
+            | HookSubscription::PROVIDER_LIST,
+        config_schema_type = EchoPluginConfig,
+        config_schema_default = default,
+        display = compact,
+        tool_surface = EchoToolInput,
+    )]
+    fn manifest(&self) -> PluginManifest {}
+
+    #[plugin_init_method(
+        config = {
+            field = self.config,
+            value = agena_plugin_sdk::macro_support::parse_defaulted_config(
+                ctx.config,
+                "invalid echo config",
+            )?,
+            already = "echo plugin config already initialized"
+        },
+    )]
+    async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> Result<InitOutcome> {}
+
+    #[plugin_tool_invoke_method(surface(EchoToolInput))]
+    async fn tool_invoke(&self, input: ToolInvokeInput) -> Result<ToolInvokeOutput> {}
 
     async fn tool_execute_before(&self, input: ToolBeforeInput) -> Result<Option<ToolBeforePatch>> {
         if input.tool_name != "echo" {
@@ -120,7 +142,6 @@ impl Plugin for EchoPlugin {
     }
 
     async fn event(&self, _ev: EventEnvelope) -> Result<()> {
-        // We could log to host via `host.log(...)`. Skipped for brevity.
         Ok(())
     }
 

@@ -1,23 +1,22 @@
 //! `agena.schema_lab` plugin: a built-in fixture for exercising the
 //! structured plugin config editor against deep, heterogeneous JSON Schema.
 
-use agena_macros::StaticToolSurface;
-use async_trait::async_trait;
+use agena_macros::{StaticToolSurface, ToolInputShape};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 
 use crate::plugin::sdk::{
-    HookSubscription, InitContext, InitOutcome, Plugin, PluginManifest, PluginStudioCommand,
-    PluginToolDecl, PluginUiAction, Result as SdkResult, ToolDescriptionMode, ToolInvokeInput,
-    ToolInvokeOutput, ToolTag, UiTextDisplayMode,
+    HookSubscription, PluginStudioCommand, PluginUiAction, Result as SdkResult, ToolInvokeOutput,
+    ToolTag,
 };
 
 pub(crate) const SCHEMA_LAB_PLUGIN_ID: &str = "agena.schema_lab";
 
 pub(crate) struct SchemaLabPlugin;
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, ToolInputShape, Default)]
+#[tool_input(trim("section"), non_empty_if_present("section"))]
 #[serde(default, deny_unknown_fields)]
 struct SchemaLabInspectArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -26,7 +25,8 @@ struct SchemaLabInspectArgs {
     include_defaults: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, ToolInputShape, Default)]
+#[tool_input(trim("label"), non_empty_if_present("label"))]
 #[serde(default, deny_unknown_fields)]
 struct SchemaLabEchoArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -41,19 +41,26 @@ struct SchemaLabEchoArgs {
     description = "No-op inspection tool for the built-in schema lab fixture plugin.",
     summary = "Inspect the schema lab fixture without mutating external state.",
     help = "Use action `inspect` to summarize one config section or `echo` to round-trip a payload into the tool result. The tool is intentionally inert and exists only to populate the Tools tab for the schema lab demo plugin.",
-    ui_display_mode = "summary",
+    handler_receiver = SchemaLabPlugin,
+    ui_display = brief,
     tags(ToolTag::ReadOnly, ToolTag::Discovery),
     concurrency_safe = true
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum SchemaLabToolInput {
-    #[tool(exec = "inspect")]
+    #[tool(
+        exec = "inspect",
+        handle = SchemaLabPlugin::inspect,
+        handle_by_value = true
+    )]
     Inspect {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: SchemaLabInspectArgs,
     },
-    #[tool(exec = "echo")]
+    #[tool(exec = "echo", handle = SchemaLabPlugin::echo, handle_by_value = true)]
     Echo {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: SchemaLabEchoArgs,
     },
@@ -63,80 +70,67 @@ impl SchemaLabPlugin {
     pub(crate) fn new() -> Self {
         Self
     }
-}
 
-#[async_trait]
-impl Plugin for SchemaLabPlugin {
-    fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(SCHEMA_LAB_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
-            .description(
-                "Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor.",
-            )
-            .tool_description_mode(ToolDescriptionMode::Brief)
-            .ui_display_mode(UiTextDisplayMode::Summary)
-            .hooks(HookSubscription::TOOL_INVOKE)
-            .config_schema(schema_lab_config_schema())
-            .tool(schema_lab_decl())
-            .commands(schema_lab_commands())
-            .build()
+    async fn inspect(&self, args: SchemaLabInspectArgs) -> SdkResult<ToolInvokeOutput> {
+        let SchemaLabInspectArgs {
+            section,
+            include_defaults,
+        } = args;
+        let target = section.unwrap_or_else(|| "all sections".to_owned());
+        Ok(ToolInvokeOutput::text(format!(
+            "agena.schema_lab is a no-op fixture plugin.\nRequested section: {target}\nInclude defaults: {include_defaults}"
+        ))
+        .with_title("Schema Lab")
+        .with_payload(json!({
+            "section": target,
+            "include_defaults": include_defaults,
+            "mode": "inspect"
+        })))
     }
 
+    async fn echo(&self, args: SchemaLabEchoArgs) -> SdkResult<ToolInvokeOutput> {
+        let SchemaLabEchoArgs { label, payload } = args;
+        let label = label.unwrap_or_else(|| "schema-lab".to_owned());
+        Ok(ToolInvokeOutput::text(format!(
+            "Schema lab echo for `{label}` completed without side effects."
+        ))
+        .with_title("Schema Lab")
+        .with_payload(json!({
+            "label": label,
+            "payload": payload,
+            "mode": "echo"
+        })))
+    }
+}
+
+#[crate::plugin::sdk::plugin]
+impl crate::plugin::sdk::Plugin for SchemaLabPlugin {
+    #[agena_plugin_sdk::plugin_manifest_method(
+        id = SCHEMA_LAB_PLUGIN_ID,
+        version = env!("CARGO_PKG_VERSION"),
+        description = "Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor.",
+        hooks = HookSubscription::TOOL_INVOKE,
+        config_schema = schema_lab_config_schema(),
+        display = brief,
+        tool_surface = SchemaLabToolInput,
+        commands = schema_lab_commands(),
+    )]
+    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
+
+    #[agena_plugin_sdk::plugin_init_method]
     async fn init(
         &self,
-        _ctx: InitContext,
-        _host: std::sync::Arc<dyn crate::plugin::sdk::host_api::HostClient>,
-    ) -> SdkResult<InitOutcome> {
-        Ok(InitOutcome::ack(self.manifest()))
+        _ctx: crate::plugin::sdk::InitContext,
+        _host: std::sync::Arc<dyn crate::plugin::sdk::HostClient>,
+    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
     }
 
-    async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        let (action, args) =
-            SchemaLabToolInput::resolve_tool(input.tool_name.as_str(), input.input)?;
-        let output = match action.as_str() {
-            "inspect" => {
-                let args: SchemaLabInspectArgs = serde_json::from_value(args)?;
-                let SchemaLabInspectArgs {
-                    section,
-                    include_defaults,
-                } = args;
-                let target = section.unwrap_or_else(|| "all sections".to_owned());
-                ToolInvokeOutput::text(format!(
-                    "agena.schema_lab is a no-op fixture plugin.\nRequested section: {target}\nInclude defaults: {include_defaults}"
-                ))
-                .with_title("Schema Lab")
-                .with_payload(json!({
-                    "section": target,
-                    "include_defaults": include_defaults,
-                    "mode": "inspect"
-                }))
-            }
-            "echo" => {
-                let args: SchemaLabEchoArgs = serde_json::from_value(args)?;
-                let SchemaLabEchoArgs { label, payload } = args;
-                let label = label.unwrap_or_else(|| "schema-lab".to_owned());
-                ToolInvokeOutput::text(format!(
-                    "Schema lab echo for `{label}` completed without side effects."
-                ))
-                .with_title("Schema Lab")
-                .with_payload(json!({
-                    "label": label,
-                    "payload": payload,
-                    "mode": "echo"
-                }))
-            }
-            other => {
-                return Err(crate::plugin::PluginError::invalid_params(format!(
-                    "invalid schema_lab action '{other}'"
-                ))
-                .into());
-            }
-        };
-        Ok(output)
+    #[agena_plugin_sdk::plugin_tool_invoke_method(surface(SchemaLabToolInput))]
+    async fn tool_invoke(
+        &self,
+        input: crate::plugin::sdk::ToolInvokeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
     }
-}
-
-fn schema_lab_decl() -> PluginToolDecl {
-    SchemaLabToolInput::tool_decl()
 }
 
 fn schema_lab_commands() -> Vec<PluginStudioCommand> {
@@ -1300,6 +1294,45 @@ mod tests {
                 "label": "fixture",
                 "payload": { "ok": true }
             })
+        );
+    }
+
+    #[test]
+    fn schema_lab_tool_inputs_trim_optional_fields_through_flattened_shapes() {
+        let parsed = SchemaLabToolInput::parse_input(json!({
+            "action": "inspect",
+            "section": "  identity.maps  ",
+            "include_defaults": true
+        }))
+        .expect("schema_lab inspect should trim section during parse");
+        match parsed {
+            SchemaLabToolInput::Inspect { args } => {
+                assert_eq!(args.section.as_deref(), Some("identity.maps"));
+                assert!(args.include_defaults);
+            }
+            other => panic!("expected inspect variant, got {other:?}"),
+        }
+
+        let parsed = SchemaLabToolInput::parse_input(json!({
+            "action": "echo",
+            "label": "  fixture-demo  "
+        }))
+        .expect("schema_lab echo should trim label during parse");
+        match parsed {
+            SchemaLabToolInput::Echo { args } => {
+                assert_eq!(args.label.as_deref(), Some("fixture-demo"));
+            }
+            other => panic!("expected echo variant, got {other:?}"),
+        }
+
+        let err = SchemaLabToolInput::parse_input(json!({
+            "action": "inspect",
+            "section": "   "
+        }))
+        .expect_err("schema_lab inspect should reject blank section when provided");
+        assert!(
+            err.to_string()
+                .contains("field `section` must not be empty")
         );
     }
 

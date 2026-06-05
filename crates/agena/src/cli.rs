@@ -2772,10 +2772,16 @@ impl McpServerBackend for AgenaMcpBackend {
             .into_iter()
             .map(|tool| {
                 let description = tool.description_text().to_string();
+                let before_help = tool.before_help_text().map(ToString::to_string);
+                let after_help = tool.after_help_text().map(ToString::to_string);
                 let input_schema = tool.sanitized_input_schema();
+                let aliases = tool.alias_exposed_names();
                 ToolDescriptor {
                     name: tool.exposed_name,
+                    aliases,
                     description: Some(description),
+                    before_help,
+                    after_help,
                     input_schema: Some(input_schema),
                 }
             })

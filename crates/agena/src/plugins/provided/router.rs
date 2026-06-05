@@ -5,9 +5,9 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::{LazyLock, Mutex};
 
-use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 
 use crate::message::{
@@ -17,9 +17,8 @@ use crate::message::{
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
-    HookSubscription, InitContext, InitOutcome, NetworkRequest, Plugin, PluginManifest,
-    PluginToolDecl, Result as SdkResult, ToolDescriptionMode, ToolInvokeInput, ToolInvokeOutput,
-    UiTextDisplayMode,
+    HookSubscription, NetworkRequest, PluginToolDecl, Result as SdkResult, ToolDisplayPreset,
+    ToolInputShape, ToolInvokeOutput, ToolSuiteSurface, ToolSurface,
 };
 use crate::tool::result::ToolPayloadExecution;
 use crate::tool::{ToolExecutor, ToolPayloadOutput, ToolRuntimeContext, orchestrator};
@@ -67,7 +66,7 @@ pub(crate) fn install_executor_context(
         call_id,
         tool_name,
     }];
-    if let Some(alias) = routed_internal_tool_name(keys[0].tool_name.as_str()) {
+    for alias in routed_internal_tool_names(keys[0].tool_name.as_str()) {
         keys.push(InProcessContextKey {
             session_id,
             call_id,
@@ -129,16 +128,20 @@ fn routed_tool_name(tool_name: &str) -> Option<&'static str> {
     }
 }
 
-fn routed_internal_tool_name(tool_name: &str) -> Option<&'static str> {
+fn routed_internal_tool_names(tool_name: &str) -> &'static [&'static str] {
     match tool_name {
-        "exec.bash" => Some("bash"),
-        "exec.powershell" => Some("powershell"),
-        "monitor.start" | "monitor.list" | "monitor.read" | "monitor.stop" => Some("monitor"),
-        "schedule.list" => Some("cron_list"),
-        "schedule.create" => Some("cron_create"),
-        "schedule.delete" => Some("cron_delete"),
-        "schedule.wakeup" => Some("schedule_wakeup"),
-        _ => None,
+        "exec" => &["bash", "powershell"],
+        "exec.bash" => &["bash"],
+        "exec.powershell" => &["powershell"],
+        "monitor" | "monitor.start" | "monitor.list" | "monitor.read" | "monitor.stop" => {
+            &["monitor"]
+        }
+        "schedule" => &["cron_list", "cron_create", "cron_delete", "schedule_wakeup"],
+        "schedule.list" => &["cron_list"],
+        "schedule.create" => &["cron_create"],
+        "schedule.delete" => &["cron_delete"],
+        "schedule.wakeup" => &["schedule_wakeup"],
+        _ => &[],
     }
 }
 
@@ -147,11 +150,29 @@ pub(crate) struct InProcessToolPlugin {
     description: &'static str,
     tools: Vec<PluginToolDecl>,
     resolver: Option<ToolInputResolver>,
-    tool_description_mode: Option<ToolDescriptionMode>,
-    ui_display_mode: Option<UiTextDisplayMode>,
+    display: Option<ToolDisplayPreset>,
 }
 
 impl InProcessToolPlugin {
+    pub fn new_with_tool_surface<T: ToolSurface>(
+        plugin_name: &'static str,
+        description: &'static str,
+    ) -> Self {
+        Self::new_with_resolver(
+            plugin_name,
+            description,
+            vec![T::tool_decl()],
+            T::resolve_tool,
+        )
+    }
+
+    pub fn new_with_tool_suite<T: ToolSuiteSurface>(
+        plugin_name: &'static str,
+        description: &'static str,
+    ) -> Self {
+        Self::new_with_resolver(plugin_name, description, T::tool_decls(), T::resolve_tool)
+    }
+
     pub fn new_with_resolver(
         plugin_name: &'static str,
         description: &'static str,
@@ -163,18 +184,31 @@ impl InProcessToolPlugin {
             description,
             tools,
             resolver: Some(resolver),
-            tool_description_mode: None,
-            ui_display_mode: None,
+            display: None,
         }
     }
 
-    pub fn tool_description_mode(mut self, mode: ToolDescriptionMode) -> Self {
-        self.tool_description_mode = Some(mode);
-        self
+    #[allow(dead_code)]
+    pub fn compact(self) -> Self {
+        self.display(ToolDisplayPreset::Compact)
     }
 
-    pub fn ui_display_mode(mut self, mode: UiTextDisplayMode) -> Self {
-        self.ui_display_mode = Some(mode);
+    #[allow(dead_code)]
+    pub fn brief(self) -> Self {
+        self.display(ToolDisplayPreset::Compact)
+    }
+
+    #[allow(dead_code)]
+    pub fn brief_detailed(self) -> Self {
+        self.display(ToolDisplayPreset::BriefDetailed)
+    }
+
+    pub fn detailed(self) -> Self {
+        self.display(ToolDisplayPreset::Detailed)
+    }
+
+    pub fn display(mut self, preset: ToolDisplayPreset) -> Self {
+        self.display = Some(preset);
         self
     }
 
@@ -192,34 +226,30 @@ impl InProcessToolPlugin {
 
 pub(crate) type ToolInputResolver = fn(&str, JsonValue) -> SdkResult<(String, JsonValue)>;
 
-#[async_trait]
-impl Plugin for InProcessToolPlugin {
-    fn manifest(&self) -> PluginManifest {
-        let mut builder = PluginManifest::builder(self.plugin_name, env!("CARGO_PKG_VERSION"))
-            .description(self.description)
-            .hooks(HookSubscription::TOOL_INVOKE)
-            .config_schema(crate::tool::definition::empty_config_schema());
-        if let Some(mode) = self.tool_description_mode {
-            builder = builder.tool_description_mode(mode);
-        }
-        if let Some(mode) = self.ui_display_mode {
-            builder = builder.ui_display_mode(mode);
-        }
-        for tool in &self.tools {
-            builder = builder.tool(tool.clone());
-        }
-        builder.build()
-    }
+#[crate::plugin::sdk::plugin]
+impl crate::plugin::sdk::Plugin for InProcessToolPlugin {
+    #[crate::plugin::sdk::plugin_manifest_method(
+        id = self.plugin_name,
+        version = env!("CARGO_PKG_VERSION"),
+        description = self.description,
+        hooks = HookSubscription::TOOL_INVOKE,
+        display_if_some = self.display,
+        tools = self.tools.clone(),
+    )]
+    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
 
+    #[crate::plugin::sdk::plugin_init_method]
     async fn init(
         &self,
-        _ctx: InitContext,
-        _host: std::sync::Arc<dyn crate::plugin::sdk::host_api::HostClient>,
-    ) -> SdkResult<InitOutcome> {
-        Ok(InitOutcome::ack(self.manifest()))
+        _ctx: crate::plugin::sdk::InitContext,
+        _host: Arc<dyn crate::plugin::sdk::HostClient>,
+    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
     }
 
-    async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
+    async fn tool_invoke(
+        &self,
+        input: crate::plugin::sdk::ToolInvokeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let (tool_name, tool_input) = self.resolve_tool_input(&input.tool_name, input.input)?;
         invoke_tool(&tool_name, tool_input, input.session_id, input.call_id)
     }
@@ -237,7 +267,7 @@ impl Plugin for InProcessToolPlugin {
         &self,
         tool: &str,
         input: &serde_json::Value,
-    ) -> SdkResult<Vec<NetworkRequest>> {
+    ) -> SdkResult<Vec<crate::plugin::sdk::NetworkRequest>> {
         let (tool_name, tool_input) = self.resolve_tool_input(tool, input.clone())?;
         permission_networks_for(&tool_name, &tool_input)
     }
@@ -261,19 +291,29 @@ pub(crate) fn invoke_tool(
     Ok(tool_execution_to_invoke_output(execution))
 }
 
+pub(crate) fn invoke_tool_surface<T: ToolSurface>(
+    tool_name: &str,
+    input: JsonValue,
+    session_id: i64,
+    call_id: i64,
+) -> SdkResult<ToolInvokeOutput> {
+    let (resolved_tool_name, resolved_input) = T::resolve_tool(tool_name, input)?;
+    invoke_tool(&resolved_tool_name, resolved_input, session_id, call_id)
+}
+
 pub(crate) fn permission_paths_for(
     tool: &str,
     input: &serde_json::Value,
 ) -> SdkResult<Vec<crate::plugin::sdk::PathRequest>> {
     match tool {
         "read" => {
-            let payload: ReadToolInput = serde_json::from_value(input.clone())?;
+            let payload: ReadToolInput = parse_shape_input(input)?;
             Ok(vec![crate::plugin::sdk::PathRequest::read(
                 payload.file_path,
             )])
         }
         "apply_patch" => {
-            let payload: ApplyPatchToolInput = serde_json::from_value(input.clone())?;
+            let payload = ApplyPatchToolInput::parse_input(input.clone())?;
             let paths = crate::tool::apply_patch::planned_paths(&payload.patch)
                 .map_err(|err| PluginError::new(err.to_string()))?;
             Ok(paths
@@ -282,23 +322,23 @@ pub(crate) fn permission_paths_for(
                 .collect())
         }
         "bash" => {
-            let payload: ShellCommandInput = serde_json::from_value(input.clone())?;
+            let payload: ShellCommandInput = parse_shape_input(input)?;
             Ok(workdir_read_request(payload.workdir.as_deref()))
         }
         "powershell" => {
-            let payload: ShellCommandInput = serde_json::from_value(input.clone())?;
+            let payload: ShellCommandInput = parse_shape_input(input)?;
             Ok(workdir_read_request(payload.workdir.as_deref()))
         }
         "glob" => {
-            let payload: GlobToolInput = serde_json::from_value(input.clone())?;
+            let payload: GlobToolInput = parse_shape_input(input)?;
             Ok(base_path_read_request(payload.path.as_deref()))
         }
         "grep" => {
-            let payload: GrepToolInput = serde_json::from_value(input.clone())?;
+            let payload: GrepToolInput = parse_shape_input(input)?;
             Ok(base_path_read_request(payload.path.as_deref()))
         }
         "monitor" => {
-            let payload: MonitorToolInput = serde_json::from_value(input.clone())?;
+            let payload: MonitorToolInput = parse_shape_input(input)?;
             Ok(match payload {
                 MonitorToolInput::Start { command, .. } => {
                     workdir_read_request(command.workdir.as_deref())
@@ -309,31 +349,31 @@ pub(crate) fn permission_paths_for(
             })
         }
         "notebook_edit" => {
-            let payload: NotebookEditToolInput = serde_json::from_value(input.clone())?;
+            let payload: NotebookEditToolInput = parse_shape_input(input)?;
             Ok(vec![crate::plugin::sdk::PathRequest::write(
                 payload.notebook_path,
             )])
         }
         "lsp_definition" => {
-            let payload: LspDefinitionToolInput = serde_json::from_value(input.clone())?;
+            let payload: LspDefinitionToolInput = parse_shape_input(input)?;
             Ok(vec![crate::plugin::sdk::PathRequest::read(
                 payload.position.file_path,
             )])
         }
         "lsp_references" => {
-            let payload: LspReferencesToolInput = serde_json::from_value(input.clone())?;
+            let payload: LspReferencesToolInput = parse_shape_input(input)?;
             Ok(vec![crate::plugin::sdk::PathRequest::read(
                 payload.position.file_path,
             )])
         }
         "lsp_hover" => {
-            let payload: LspHoverToolInput = serde_json::from_value(input.clone())?;
+            let payload: LspHoverToolInput = parse_shape_input(input)?;
             Ok(vec![crate::plugin::sdk::PathRequest::read(
                 payload.position.file_path,
             )])
         }
         "lsp_diagnostics" => {
-            let payload: LspDiagnosticsToolInput = serde_json::from_value(input.clone())?;
+            let payload: LspDiagnosticsToolInput = parse_shape_input(input)?;
             Ok(vec![crate::plugin::sdk::PathRequest::read(
                 payload.file_path,
             )])
@@ -342,13 +382,22 @@ pub(crate) fn permission_paths_for(
     }
 }
 
+#[cfg(test)]
+pub(crate) fn permission_paths_for_surface<T: ToolSurface>(
+    tool_name: &str,
+    input: &serde_json::Value,
+) -> SdkResult<Vec<crate::plugin::sdk::PathRequest>> {
+    let (resolved_tool_name, resolved_input) = T::resolve_tool(tool_name, input.clone())?;
+    permission_paths_for(&resolved_tool_name, &resolved_input)
+}
+
 pub(crate) fn permission_networks_for(
     tool: &str,
     input: &serde_json::Value,
 ) -> SdkResult<Vec<NetworkRequest>> {
     match tool {
         "bash" => {
-            let payload: ShellCommandInput = serde_json::from_value(input.clone())?;
+            let payload: ShellCommandInput = parse_shape_input(input)?;
             declared_shell_network_requests(
                 "bash",
                 payload.command.as_str(),
@@ -356,7 +405,7 @@ pub(crate) fn permission_networks_for(
             )
         }
         "powershell" => {
-            let payload: ShellCommandInput = serde_json::from_value(input.clone())?;
+            let payload: ShellCommandInput = parse_shape_input(input)?;
             declared_shell_network_requests(
                 "powershell",
                 payload.command.as_str(),
@@ -364,7 +413,7 @@ pub(crate) fn permission_networks_for(
             )
         }
         "monitor" => {
-            let payload: MonitorToolInput = serde_json::from_value(input.clone())?;
+            let payload: MonitorToolInput = parse_shape_input(input)?;
             match payload {
                 MonitorToolInput::Start { command, .. } => declared_shell_network_requests(
                     "monitor",
@@ -378,6 +427,10 @@ pub(crate) fn permission_networks_for(
         }
         _ => Ok(Vec::new()),
     }
+}
+
+fn parse_shape_input<T: ToolInputShape>(input: &serde_json::Value) -> SdkResult<T> {
+    T::parse_input(input.clone())
 }
 
 fn workdir_read_request(workdir: Option<&str>) -> Vec<crate::plugin::sdk::PathRequest> {
@@ -444,5 +497,118 @@ pub(crate) fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -
         payload,
         metadata: metadata.into_iter().collect(),
         attachments: execution.view.attachments,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::plugin::sdk::{Plugin, ToolDescriptionMode, UiTextDisplayMode};
+
+    use super::*;
+
+    fn passthrough(tool: &str, input: JsonValue) -> SdkResult<(String, JsonValue)> {
+        Ok((tool.to_string(), input))
+    }
+
+    #[test]
+    fn permission_helpers_use_shape_normalization_for_monitor_inputs() {
+        let paths = permission_paths_for("monitor", &json!({}))
+            .expect("empty monitor input should normalize to list");
+        assert!(paths.is_empty());
+
+        let paths = permission_paths_for(
+            "monitor",
+            &json!({
+                "action": "start",
+                "command": "echo ok",
+                "workdir": "  crates/agena  ",
+                "filesystem_effects": [],
+                "network_effects": []
+            }),
+        )
+        .expect("monitor start should parse through ToolInputShape");
+        assert_eq!(
+            paths,
+            vec![crate::plugin::sdk::PathRequest::read("crates/agena")]
+        );
+    }
+
+    #[test]
+    fn tool_surface_permission_helpers_resolve_before_extracting_permissions() {
+        let paths = permission_paths_for_surface::<crate::plugins::provided::lsp::LspToolInput>(
+            "lsp",
+            &json!({
+                "action": "definition",
+                "file_path": " src/main.rs ",
+                "line": 4,
+                "character": 8
+            }),
+        )
+        .expect("lsp surface should resolve into routed definition input");
+        assert_eq!(
+            paths,
+            vec![crate::plugin::sdk::PathRequest::read("src/main.rs")]
+        );
+    }
+
+    #[test]
+    fn in_process_plugin_display_shortcuts_set_manifest_display_modes() {
+        let manifest = InProcessToolPlugin::new_with_resolver(
+            "test.plugin",
+            "Test plugin.",
+            vec![],
+            passthrough,
+        )
+        .compact()
+        .manifest();
+        assert_eq!(
+            manifest.tool_description_mode,
+            Some(ToolDescriptionMode::Brief)
+        );
+        assert_eq!(manifest.ui_display_mode, Some(UiTextDisplayMode::Summary));
+
+        let manifest = InProcessToolPlugin::new_with_resolver(
+            "test.plugin",
+            "Test plugin.",
+            vec![],
+            passthrough,
+        )
+        .brief()
+        .manifest();
+        assert_eq!(
+            manifest.tool_description_mode,
+            Some(ToolDescriptionMode::Brief)
+        );
+        assert_eq!(manifest.ui_display_mode, Some(UiTextDisplayMode::Summary));
+
+        let manifest = InProcessToolPlugin::new_with_resolver(
+            "test.plugin",
+            "Test plugin.",
+            vec![],
+            passthrough,
+        )
+        .brief_detailed()
+        .manifest();
+        assert_eq!(
+            manifest.tool_description_mode,
+            Some(ToolDescriptionMode::Brief)
+        );
+        assert_eq!(manifest.ui_display_mode, Some(UiTextDisplayMode::Detailed));
+
+        let manifest = InProcessToolPlugin::new_with_resolver(
+            "test.plugin",
+            "Test plugin.",
+            vec![],
+            passthrough,
+        )
+        .detailed()
+        .manifest();
+        assert_eq!(
+            manifest.tool_description_mode,
+            Some(ToolDescriptionMode::Detailed)
+        );
+        assert_eq!(manifest.ui_display_mode, Some(UiTextDisplayMode::Detailed));
     }
 }

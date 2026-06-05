@@ -8,24 +8,32 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+use agena_macros::ToolInputShape;
 use agena_skills::discovery::{default_command_roots, default_roots, scan, scan_commands};
 use agena_skills::skill::Skill;
-use async_trait::async_trait;
 
 use crate::message::WorkflowPromptToolInput;
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostToolRegisterRequest, HostToolRemoveRequest};
 use crate::plugin::sdk::{
-    HookSubscription, HostCapability, InitContext, InitOutcome, Plugin, PluginManifest,
-    PluginToolDecl, Result as SdkResult, ToolDescriptionMode, ToolInvokeInput, ToolInvokeOutput,
-    ToolTag, UiTextDisplayMode,
+    HookSubscription, HostCapability, InitContext, PluginToolDecl, Result as SdkResult,
+    ToolInvokeContext, ToolInvokeOutput, ToolTag,
 };
 
 pub(crate) const SKILLS_PLUGIN_ID: &str = "agena.skills";
 
-#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema, ToolInputShape,
+)]
+#[tool_input(handler_receiver = SkillsPlugin)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum SkillToolInput {
+    #[tool(
+        default_when_empty = true,
+        infer_when_present("args"),
+        handle_with_context = SkillsPlugin::dispatch_run,
+        handle_by_value = true
+    )]
     Run {
         #[serde(flatten)]
         args: WorkflowPromptToolInput,
@@ -79,11 +87,32 @@ impl SkillsPlugin {
         }
     }
 
-    fn parse_skill_input(input: serde_json::Value) -> SdkResult<WorkflowPromptToolInput> {
-        match serde_json::from_value::<SkillToolInput>(input) {
-            Ok(SkillToolInput::Run { args }) => Ok(args),
-            Err(primary) => Err(PluginError::invalid_params(primary.to_string())),
-        }
+    async fn dispatch_run(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: WorkflowPromptToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let discovered_tool = self
+            .tools
+            .read()
+            .map_err(|_| PluginError::new("skills tools lock poisoned"))?
+            .get(context.tool_name)
+            .cloned()
+            .ok_or_else(|| {
+                PluginError::invalid_params(format!("unknown skills tool '{}'", context.tool_name))
+            })?;
+        let prompt = Self::render_prompt(
+            discovered_tool.skill.body.as_str(),
+            args.args.as_deref().unwrap_or_default(),
+        );
+        let kind = match discovered_tool.kind {
+            DiscoveredToolKind::Skill => "skill",
+            DiscoveredToolKind::Command => "command",
+        };
+        Ok(ToolInvokeOutput::text(prompt)
+            .with_title(discovered_tool.skill.frontmatter.name.clone())
+            .with_metadata("workflow", discovered_tool.skill.frontmatter.name)
+            .with_metadata("skill_tool_kind", kind))
     }
 
     fn tool_decl(name: &str, discovered_tool: &DiscoveredTool) -> PluginToolDecl {
@@ -119,16 +148,13 @@ impl SkillsPlugin {
         } else {
             discovered_tool.skill.frontmatter.description.clone()
         };
-        PluginToolDecl::new(
-            name.to_string(),
-            crate::tool::definition::json_schema_for::<SkillToolInput>(),
-        )
-        .description(description.clone())
-        .summary(description)
-        .help(discovered_tool.skill.body.clone())
-        .ui_display_mode(UiTextDisplayMode::Summary)
-        .tags(tags)
-        .concurrency_safe(true)
+        PluginToolDecl::new(name.to_string(), SkillToolInput::input_schema())
+            .description(description.clone())
+            .summary(description)
+            .help(discovered_tool.skill.body.clone())
+            .compact()
+            .tags(tags)
+            .concurrency_safe(true)
     }
 
     fn discovered_tools(ctx: &InitContext) -> BTreeMap<String, DiscoveredTool> {
@@ -224,50 +250,128 @@ impl SkillsPlugin {
     }
 }
 
-#[async_trait]
-impl Plugin for SkillsPlugin {
-    fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(SKILLS_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
-            .description("Discovers SKILL.md files and slash commands, then registers them as dynamic plugin tools.")
-            .tool_description_mode(ToolDescriptionMode::Brief)
-            .ui_display_mode(UiTextDisplayMode::Summary)
-            .hooks(HookSubscription::INIT | HookSubscription::TOOL_INVOKE)
-            .plugin_capability(HostCapability::ToolRegistry)
-            .config_schema(crate::tool::definition::empty_config_schema())
-            .build()
+#[crate::plugin::sdk::plugin]
+impl crate::plugin::sdk::Plugin for SkillsPlugin {
+    #[agena_plugin_sdk::plugin_manifest_method(
+        id = SKILLS_PLUGIN_ID,
+        version = env!("CARGO_PKG_VERSION"),
+        description = "Discovers SKILL.md files and slash commands, then registers them as dynamic plugin tools.",
+        hooks = HookSubscription::INIT | HookSubscription::TOOL_INVOKE,
+        display = brief,
+        plugin_capabilities = [HostCapability::ToolRegistry],
+    )]
+    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
+
+    #[agena_plugin_sdk::plugin_init_method(
+        host_cell = {
+            field = self.host,
+            value = host,
+            poisoned = "skills host lock poisoned"
+        },
+        after = {
+            self.sync_tools(&ctx).await?;
+        }
+    )]
+    async fn init(
+        &self,
+        ctx: crate::plugin::sdk::InitContext,
+        host: Arc<dyn HostClient>,
+    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
     }
 
-    async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
-        *self
-            .host
-            .write()
-            .map_err(|_| PluginError::new("skills host lock poisoned"))? = Some(host);
-        self.sync_tools(&ctx).await?;
-        Ok(InitOutcome::ack(self.manifest()))
+    async fn tool_invoke(
+        &self,
+        input: crate::plugin::sdk::ToolInvokeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        crate::plugin::sdk::plugin_tool_dispatch_shape_with_context!(self, input, SkillToolInput)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn skill_tool_input_shape_parses_run_payload() {
+        let parsed = SkillToolInput::parse_input(json!({
+            "action": "run",
+            "args": "focus on regressions"
+        }))
+        .expect("skill input should parse");
+
+        match parsed {
+            SkillToolInput::Run { args } => {
+                assert_eq!(args.args.as_deref(), Some("focus on regressions"));
+            }
+        }
     }
 
-    async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        let workflow_input = Self::parse_skill_input(input.input.clone())?;
-        let discovered_tool = self
-            .tools
-            .read()
-            .map_err(|_| PluginError::new("skills tools lock poisoned"))?
-            .get(input.tool_name.as_str())
-            .cloned()
-            .ok_or_else(|| {
-                PluginError::invalid_params(format!("unknown skills tool '{}'", input.tool_name))
-            })?;
-        let prompt = Self::render_prompt(
-            discovered_tool.skill.body.as_str(),
-            workflow_input.args.as_deref().unwrap_or_default(),
+    #[test]
+    fn skill_tool_input_shape_infers_run_without_explicit_action() {
+        let parsed = SkillToolInput::parse_input(json!({
+            "args": "focus on regressions"
+        }))
+        .expect("skill input should infer run from args");
+
+        match parsed {
+            SkillToolInput::Run { args } => {
+                assert_eq!(args.args.as_deref(), Some("focus on regressions"));
+            }
+        }
+
+        let parsed = SkillToolInput::parse_input(json!({}))
+            .expect("empty skill input should default to run");
+        match parsed {
+            SkillToolInput::Run { args } => {
+                assert_eq!(args.args, None);
+            }
+        }
+    }
+
+    #[test]
+    fn skill_tool_decl_uses_macro_generated_schema() {
+        let schema = SkillToolInput::input_schema();
+        assert_eq!(
+            schema,
+            crate::tool::definition::json_schema_for::<SkillToolInput>()
         );
-        let kind = match discovered_tool.kind {
-            DiscoveredToolKind::Skill => "skill",
-            DiscoveredToolKind::Command => "command",
+    }
+
+    #[tokio::test]
+    async fn skill_tool_shape_dispatch_uses_context_tool_name() {
+        let plugin = SkillsPlugin::new();
+        plugin.tools.write().expect("skills tools lock").insert(
+            "dynamic.skill".to_string(),
+            DiscoveredTool {
+                skill: Skill {
+                    frontmatter: agena_skills::skill::SkillFrontmatter {
+                        name: "Dynamic Skill".to_string(),
+                        ..Default::default()
+                    },
+                    body: "Prompt: $ARGUMENTS".to_string(),
+                    source_path: None,
+                },
+                kind: DiscoveredToolKind::Skill,
+                alias: false,
+            },
+        );
+
+        let context = ToolInvokeContext {
+            tool_name: "dynamic.skill",
+            session_id: 7,
+            call_id: 8,
+            workspace_root: "/tmp/project",
         };
-        Ok(ToolInvokeOutput::text(prompt)
-            .with_title(discovered_tool.skill.frontmatter.name.clone())
-            .with_metadata("workflow", discovered_tool.skill.frontmatter.name)
-            .with_metadata("skill_tool_kind", kind))
+        let output = SkillToolInput::parse_input(json!({
+            "args": "focus on regressions"
+        }))
+        .expect("skill input should parse")
+        .dispatch_tool_invoke_with_context(&plugin, &context)
+        .await
+        .expect("skill dispatch should render prompt");
+
+        assert_eq!(output.output_text, "Prompt: focus on regressions");
+        assert_eq!(output.title, "Dynamic Skill");
     }
 }

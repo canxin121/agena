@@ -2,20 +2,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use agena_macros::StaticToolSurface;
+use agena_macros::{StaticToolSurface, ToolInputShape};
 use ast_grep_core::Pattern;
 use ast_grep_core::matcher::PatternBuilder;
 use ast_grep_core::tree_sitter::{LanguageExt, TSLanguage};
-use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tree_sitter::Parser;
 
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
-    HookSubscription, InitContext, InitOutcome, PathRequest, Plugin, PluginManifest,
-    PluginToolDecl, Result as SdkResult, ToolDescriptionMode, ToolInvokeInput, ToolInvokeOutput,
-    ToolTag, UiTextDisplayMode,
+    HookSubscription, PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
+    ToolTag,
 };
 
 pub(crate) const CODE_PLUGIN_ID: &str = "agena.code";
@@ -34,32 +32,45 @@ impl Default for CodeLanguage {
     }
 }
 
-#[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "code",
     description = "Structured code inspection command. Use action `search_ast` for AST-aware pattern matching or `syntax_tree` to inspect the parsed syntax tree.",
     summary = "Search code structurally with ast-grep and inspect syntax trees.",
     help = "Use action `search_ast` with a Rust pattern like `if $COND { $BODY }` or `foo($ARGS)` to find structural matches. Use action `syntax_tree` to inspect the named syntax nodes for a Rust source file.",
-    description_mode = "brief",
-    ui_display_mode = "summary",
+    handler_receiver = CodePlugin,
+    display = brief,
     tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Discovery),
     concurrency_safe = true
 )]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum CodeToolInput {
-    #[tool(exec = "search_ast")]
+    #[tool(
+        exec = "search_ast",
+        handle_with_context = CodePlugin::dispatch_search_ast,
+        permission_paths_handle = CodePlugin::permission_search_ast,
+        handle_by_value = true
+    )]
     SearchAst {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: CodeSearchAstInput,
     },
-    #[tool(exec = "syntax_tree")]
+    #[tool(
+        exec = "syntax_tree",
+        handle_with_context = CodePlugin::dispatch_syntax_tree,
+        permission_paths_handle = CodePlugin::permission_syntax_tree,
+        handle_by_value = true
+    )]
     SyntaxTree {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: CodeSyntaxTreeInput,
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[tool_input(trim("path", "pattern"), non_empty("path", "pattern"))]
 #[serde(deny_unknown_fields)]
 struct CodeSearchAstInput {
     path: String,
@@ -70,7 +81,8 @@ struct CodeSearchAstInput {
     limit: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[tool_input(trim("path"), non_empty("path"))]
 #[serde(deny_unknown_fields)]
 struct CodeSyntaxTreeInput {
     path: String,
@@ -143,62 +155,74 @@ impl LanguageExt for RustLanguage {
     }
 }
 
-#[async_trait]
-impl Plugin for CodePlugin {
-    fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(CODE_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
-            .description("Structured code search and syntax inspection tools.")
-            .tool_description_mode(ToolDescriptionMode::Brief)
-            .ui_display_mode(UiTextDisplayMode::Summary)
-            .hooks(HookSubscription::TOOL_INVOKE)
-            .config_schema(crate::tool::definition::empty_config_schema())
-            .tool(code_decl())
-            .build()
-    }
+#[crate::plugin::sdk::plugin]
+impl crate::plugin::sdk::Plugin for CodePlugin {
+    #[agena_plugin_sdk::plugin_manifest_method(
+        id = CODE_PLUGIN_ID,
+        version = env!("CARGO_PKG_VERSION"),
+        description = "Structured code search and syntax inspection tools.",
+        hooks = HookSubscription::TOOL_INVOKE,
+        display = brief,
+        tool_surface = CodeToolInput,
+    )]
+    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
 
+    #[agena_plugin_sdk::plugin_init_method]
     async fn init(
         &self,
-        _ctx: InitContext,
-        _host: Arc<dyn crate::plugin::sdk::host_api::HostClient>,
-    ) -> SdkResult<InitOutcome> {
-        Ok(InitOutcome::ack(self.manifest()))
+        _ctx: crate::plugin::sdk::InitContext,
+        _host: Arc<dyn crate::plugin::sdk::HostClient>,
+    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
     }
 
-    async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        if input.tool_name != "code" {
-            return Err(PluginError::invalid_params(format!(
-                "unknown code plugin tool '{}'",
-                input.tool_name
-            )));
-        }
-        match parse_code_input(input.input)? {
-            CodeToolInput::SearchAst { args } => {
-                self.invoke_search_ast(&input.workspace_root, args)
-            }
-            CodeToolInput::SyntaxTree { args } => {
-                self.invoke_syntax_tree(&input.workspace_root, args)
-            }
-        }
+    #[agena_plugin_sdk::plugin_tool_invoke_method(surface_with_context(CodeToolInput))]
+    async fn tool_invoke(
+        &self,
+        input: crate::plugin::sdk::ToolInvokeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
     }
 
+    #[agena_plugin_sdk::plugin_permission_paths_method(surface(CodeToolInput))]
     async fn permission_paths(
         &self,
         tool: &str,
         input: &serde_json::Value,
     ) -> SdkResult<Vec<PathRequest>> {
-        if tool != "code" {
-            return Ok(Vec::new());
-        }
-        let parsed = parse_code_input(input.clone())?;
-        let path = match parsed {
-            CodeToolInput::SearchAst { args } => args.path,
-            CodeToolInput::SyntaxTree { args } => args.path,
-        };
-        Ok(vec![PathRequest::read(path)])
+        let _ = (tool, input);
     }
 }
 
 impl CodePlugin {
+    async fn dispatch_search_ast(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: CodeSearchAstInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.invoke_search_ast(context.workspace_root, input)
+    }
+
+    async fn dispatch_syntax_tree(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: CodeSyntaxTreeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.invoke_syntax_tree(context.workspace_root, input)
+    }
+
+    async fn permission_search_ast(
+        &self,
+        input: CodeSearchAstInput,
+    ) -> SdkResult<Vec<PathRequest>> {
+        Ok(vec![PathRequest::read(input.path)])
+    }
+
+    async fn permission_syntax_tree(
+        &self,
+        input: CodeSyntaxTreeInput,
+    ) -> SdkResult<Vec<PathRequest>> {
+        Ok(vec![PathRequest::read(input.path)])
+    }
+
     fn invoke_search_ast(
         &self,
         workspace_root: &str,
@@ -224,7 +248,7 @@ impl CodePlugin {
         workspace_root: &str,
         input: CodeSearchAstInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let pattern = Pattern::try_new(input.pattern.trim(), RustLanguage)
+        let pattern = Pattern::try_new(input.pattern.as_str(), RustLanguage)
             .map_err(|err| PluginError::invalid_params(err.to_string()))?;
         let limit = input.limit.unwrap_or(20).clamp(1, 100) as usize;
         let root = resolve_input_path(workspace_root, input.path.as_str());
@@ -337,10 +361,7 @@ pub(crate) fn new_plugin() -> CodePlugin {
     CodePlugin
 }
 
-pub(crate) fn code_decl() -> PluginToolDecl {
-    CodeToolInput::tool_decl()
-}
-
+#[cfg(test)]
 fn parse_code_input(input: serde_json::Value) -> SdkResult<CodeToolInput> {
     CodeToolInput::parse_input(input)
 }
@@ -462,6 +483,23 @@ mod tests {
             "extra": true
         }))
         .expect_err("code tool should reject unknown fields");
-        assert!(err.to_string().contains("unknown field `extra`"));
+        assert!(err.to_string().contains("unknown field 'extra'"));
+    }
+
+    #[test]
+    fn code_tool_input_trims_search_ast_fields_at_parse_time() {
+        let parsed = parse_code_input(serde_json::json!({
+            "action": "search_ast",
+            "path": "  .  ",
+            "pattern": "  fn $NAME() { $BODY }  "
+        }))
+        .expect("search_ast should trim path and pattern during parse");
+        match parsed {
+            CodeToolInput::SearchAst { args } => {
+                assert_eq!(args.path, ".");
+                assert_eq!(args.pattern, "fn $NAME() { $BODY }");
+            }
+            other => panic!("expected search_ast variant, got {other:?}"),
+        }
     }
 }

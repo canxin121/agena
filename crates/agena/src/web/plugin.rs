@@ -5,26 +5,24 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
 use agena_web::{
     BrowserRenderOptions, CrawlPageFetcher, CrawlRunOptions, CrawlRunReport, CrawlStore,
     CrawlStoreRetention, FetchedPage, LocalBrowserOptions, SpiderFetchOptions, StoredDocument,
     WebSearchEngine, WebSearchOptions, WebSearchResult, crawl_site, ensure_index_exists,
     fetch_page_with_spider, prepare_fetch_url, preview_text, results_to_text, search_web,
 };
-use async_trait::async_trait;
 use governor::{DefaultKeyedRateLimiter, Quota};
 use moka::future::Cache;
 use schemars::JsonSchema;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostNetworkPermissionCheckRequest};
 use crate::plugin::sdk::{
-    HookSubscription, HostCapability, InitContext, InitOutcome, NetworkRequest, PathRequest,
-    Plugin, PluginManifest, PluginToolDecl, Result as SdkResult, ToolDescriptionMode,
-    ToolInvokeInput, ToolInvokeOutput, ToolTag, UiTextDisplayMode,
+    HookSubscription, HostCapability, NetworkRequest, PathRequest, Result as SdkResult,
+    ToolInvokeOutput, ToolTag,
 };
 
 pub const WEB_PLUGIN_ID: &str = "agena.web";
@@ -529,7 +527,12 @@ impl WebPluginState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[tool_input(
+    trim("url", "prompt"),
+    non_empty("url"),
+    non_empty_if_present("prompt")
+)]
 #[serde(deny_unknown_fields)]
 struct CrawlFetchInput {
     url: String,
@@ -541,7 +544,8 @@ struct CrawlFetchInput {
     render_js: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[tool_input(trim("start_url"), non_empty("start_url"))]
 #[serde(deny_unknown_fields)]
 struct CrawlRunInput {
     start_url: String,
@@ -557,7 +561,8 @@ struct CrawlRunInput {
     render_js: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[tool_input(trim("query"), non_empty("query"))]
 #[serde(deny_unknown_fields)]
 struct CrawlWebSearchInput {
     query: String,
@@ -583,7 +588,8 @@ enum WebSearchEngineSelection {
     Baidu,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[tool_input(trim("query"), non_empty("query"))]
 #[serde(deny_unknown_fields)]
 struct CrawlQueryInput {
     query: String,
@@ -597,7 +603,8 @@ struct CrawlQueryInput {
     blocked_domains: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[tool_input(trim("id", "url"), exactly_one_of("id", "url"))]
 #[serde(deny_unknown_fields)]
 struct CrawlGetInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -606,11 +613,173 @@ struct CrawlGetInput {
     url: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
 #[serde(deny_unknown_fields)]
 struct CrawlListInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "search",
+    description = "Search the public web through the configured search engine.",
+    summary = "Search the public web.",
+    handler_receiver = WebPlugin,
+    handle = WebPlugin::invoke_search,
+    handle_field = args,
+    permission_paths_handle = WebPlugin::permission_paths_search,
+    permission_networks_handle = WebPlugin::permission_networks_search,
+    examples(
+        r#"{"query":"Agena plugin architecture","limit":5}"#,
+        r#"{"query":"Rust schemars derive examples"}"#
+    ),
+    display = detailed,
+    tags(
+        ToolTag::ReadOnly,
+        ToolTag::Network,
+        ToolTag::Internet,
+        ToolTag::Discovery
+    ),
+    host_capabilities(HostCapability::PermissionCheck),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+struct SearchToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: CrawlWebSearchInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "fetch",
+    description = "Fetch a web page and return readable page content.",
+    summary = "Fetch one web page as readable content.",
+    handler_receiver = WebPlugin,
+    handle = WebPlugin::invoke_fetch,
+    handle_field = args,
+    permission_paths_handle = WebPlugin::permission_paths_fetch,
+    permission_networks_handle = WebPlugin::permission_networks_fetch,
+    examples(
+        r#"{"url":"https://openai.com"}"#,
+        r#"{"url":"https://example.com/docs","render_mode":"plain"}"#
+    ),
+    display = detailed,
+    tags(ToolTag::ReadOnly, ToolTag::Network, ToolTag::Internet),
+    host_capabilities(HostCapability::PermissionCheck),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+struct FetchToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: CrawlFetchInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "crawl.run",
+    description = "Crawl a site into the local web document store.",
+    summary = "Crawl a site into the local document store.",
+    handler_receiver = WebPlugin,
+    handle = WebPlugin::invoke_crawl,
+    handle_field = args,
+    permission_paths_handle = WebPlugin::permission_paths_crawl,
+    permission_networks_handle = WebPlugin::permission_networks_crawl,
+    ui_display = detailed,
+    tags(
+        ToolTag::Mutating,
+        ToolTag::Network,
+        ToolTag::Internet,
+        ToolTag::Discovery
+    ),
+    host_capabilities(HostCapability::PermissionCheck),
+    concurrency_safe = false
+)]
+#[serde(deny_unknown_fields)]
+struct CrawlToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: CrawlRunInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "store.query",
+    description = "Search locally stored crawl documents.",
+    summary = "Search locally stored crawl documents.",
+    handler_receiver = WebPlugin,
+    handle = WebPlugin::invoke_query,
+    handle_field = args,
+    permission_paths_handle = WebPlugin::permission_paths_store_query,
+    permission_networks_handle = WebPlugin::permission_networks_store_query,
+    ui_display = detailed,
+    tags(ToolTag::ReadOnly, ToolTag::Discovery),
+    host_capabilities(HostCapability::PermissionCheck),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+struct StoreQueryToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: CrawlQueryInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "store.get",
+    description = "Get one stored crawl document by id or url.",
+    summary = "Get one stored crawl document.",
+    handler_receiver = WebPlugin,
+    handle = WebPlugin::invoke_get,
+    handle_field = args,
+    permission_paths_handle = WebPlugin::permission_paths_store_get,
+    permission_networks_handle = WebPlugin::permission_networks_store_get,
+    ui_display = detailed,
+    tags(ToolTag::ReadOnly, ToolTag::Discovery),
+    host_capabilities(HostCapability::PermissionCheck),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+struct StoreGetToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: CrawlGetInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "store.list",
+    description = "List stored crawl documents.",
+    summary = "List stored crawl documents.",
+    handler_receiver = WebPlugin,
+    handle = WebPlugin::invoke_list,
+    handle_field = args,
+    permission_paths_handle = WebPlugin::permission_paths_store_list,
+    permission_networks_handle = WebPlugin::permission_networks_store_list,
+    ui_display = detailed,
+    tags(ToolTag::ReadOnly, ToolTag::Discovery),
+    host_capabilities(HostCapability::PermissionCheck),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+struct StoreListToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: CrawlListInput,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, ToolSuite)]
+#[tool_suite(handler_receiver = WebPlugin)]
+enum WebToolSuite {
+    Search(SearchToolInput),
+    Fetch(FetchToolInput),
+    Crawl(CrawlToolInput),
+    StoreQuery(StoreQueryToolInput),
+    StoreGet(StoreGetToolInput),
+    StoreList(StoreListToolInput),
 }
 
 #[derive(Debug, Serialize)]
@@ -787,12 +956,7 @@ impl WebPlugin {
     }
 
     async fn invoke_search(&self, input: &CrawlWebSearchInput) -> SdkResult<ToolInvokeOutput> {
-        let query = input.query.trim();
-        if query.is_empty() {
-            return Err(PluginError::invalid_params(
-                "web search requires a non-empty query",
-            ));
-        }
+        let query = input.query.as_str();
         let config = self.config()?;
         let limit = clamp_limit(
             input.limit.or(input.max_results),
@@ -878,12 +1042,7 @@ impl WebPlugin {
     }
 
     async fn invoke_query(&self, input: &CrawlQueryInput) -> SdkResult<ToolInvokeOutput> {
-        let query = input.query.trim();
-        if query.is_empty() {
-            return Err(PluginError::invalid_params(
-                "web query requires a non-empty query",
-            ));
-        }
+        let query = input.query.as_str();
         let config = self.config()?;
         let limit = clamp_limit(
             input.limit.or(input.max_results),
@@ -944,11 +1103,7 @@ impl WebPlugin {
                 .find_by_url(url)
                 .map_err(crawl_error_to_plugin)?
                 .ok_or_else(|| PluginError::new(format!("web document for '{url}' not found")))?,
-            _ => {
-                return Err(PluginError::invalid_params(
-                    "web get requires exactly one of `id` or `url`",
-                ));
-            }
+            _ => unreachable!("store.get validation should guarantee exactly one selector"),
         };
         let payload =
             serde_json::to_value(&document).map_err(|err| PluginError::new(err.to_string()))?;
@@ -984,58 +1139,11 @@ impl WebPlugin {
             .with_title("web list")
             .with_payload(payload))
     }
-}
 
-#[async_trait]
-impl Plugin for WebPlugin {
-    fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(WEB_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
-            .description(
-                "Local web search/fetch/crawl plugin with embedded storage, caching, and Tantivy retrieval.",
-            )
-            .tool_description_mode(ToolDescriptionMode::Brief)
-            .ui_display_mode(UiTextDisplayMode::Detailed)
-            .hooks(HookSubscription::INIT | HookSubscription::TOOL_INVOKE)
-            .config_schema(web_config_schema())
-            .tools(web_decls())
-            .build()
-    }
-
-    async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
-        let config = parse_web_config(ctx.config)?;
-        self.state
-            .set(WebPluginState::new(config))
-            .map_err(|_| PluginError::new("web plugin initialized more than once"))?;
-        let _ = self.workspace_root.set(ctx.workspace_root);
-        let _ = self.host.set(host);
-        Ok(InitOutcome::ack(self.manifest()))
-    }
-
-    async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        match input.tool_name.as_str() {
-            "search" => self.invoke_search(&parse_tool_input(input.input)?).await,
-            "fetch" => self.invoke_fetch(&parse_tool_input(input.input)?).await,
-            "crawl.run" | "crawl" => self.invoke_crawl(&parse_tool_input(input.input)?).await,
-            "store.query" | "query" => self.invoke_query(&parse_tool_input(input.input)?).await,
-            "store.get" | "get" => self.invoke_get(&parse_tool_input(input.input)?).await,
-            "store.list" | "list" => self.invoke_list(&parse_tool_input(input.input)?).await,
-            other => Err(PluginError::invalid_params(format!(
-                "unknown web plugin tool '{other}'"
-            ))),
-        }
-    }
-
-    async fn permission_paths(
+    fn store_permission_requests(
         &self,
-        tool: &str,
-        _input: &serde_json::Value,
+        kind: PathKindForPermission,
     ) -> SdkResult<Vec<PathRequest>> {
-        let kind = match tool {
-            "search" | "fetch" => return Ok(Vec::new()),
-            "crawl.run" | "crawl" | "store.query" | "query" => PathKindForPermission::Write,
-            "store.get" | "get" | "store.list" | "list" => PathKindForPermission::Read,
-            _ => return Ok(Vec::new()),
-        };
         let store = self.store()?;
         let path = store.dir().display().to_string();
         let request = match kind {
@@ -1045,125 +1153,165 @@ impl Plugin for WebPlugin {
         Ok(vec![request])
     }
 
+    async fn permission_paths_search(
+        &self,
+        _input: &CrawlWebSearchInput,
+    ) -> SdkResult<Vec<PathRequest>> {
+        Ok(Vec::new())
+    }
+
+    async fn permission_networks_search(
+        &self,
+        input: &CrawlWebSearchInput,
+    ) -> SdkResult<Vec<NetworkRequest>> {
+        Ok(search_engines(input.engine)
+            .into_iter()
+            .map(|engine| NetworkRequest::connect(engine.permission_url().to_string()))
+            .collect())
+    }
+
+    async fn permission_paths_fetch(
+        &self,
+        _input: &CrawlFetchInput,
+    ) -> SdkResult<Vec<PathRequest>> {
+        Ok(Vec::new())
+    }
+
+    async fn permission_networks_fetch(
+        &self,
+        input: &CrawlFetchInput,
+    ) -> SdkResult<Vec<NetworkRequest>> {
+        Ok(vec![NetworkRequest::connect(
+            prepare_fetch_url(input.url.as_str())
+                .map_err(crawl_error_to_plugin)?
+                .to_string(),
+        )])
+    }
+
+    async fn permission_paths_crawl(&self, _input: &CrawlRunInput) -> SdkResult<Vec<PathRequest>> {
+        self.store_permission_requests(PathKindForPermission::Write)
+    }
+
+    async fn permission_networks_crawl(
+        &self,
+        input: &CrawlRunInput,
+    ) -> SdkResult<Vec<NetworkRequest>> {
+        Ok(vec![NetworkRequest::connect(
+            prepare_fetch_url(input.start_url.as_str())
+                .map_err(crawl_error_to_plugin)?
+                .to_string(),
+        )])
+    }
+
+    async fn permission_paths_store_query(
+        &self,
+        _input: &CrawlQueryInput,
+    ) -> SdkResult<Vec<PathRequest>> {
+        self.store_permission_requests(PathKindForPermission::Write)
+    }
+
+    async fn permission_networks_store_query(
+        &self,
+        _input: &CrawlQueryInput,
+    ) -> SdkResult<Vec<NetworkRequest>> {
+        Ok(Vec::new())
+    }
+
+    async fn permission_paths_store_get(
+        &self,
+        _input: &CrawlGetInput,
+    ) -> SdkResult<Vec<PathRequest>> {
+        self.store_permission_requests(PathKindForPermission::Read)
+    }
+
+    async fn permission_networks_store_get(
+        &self,
+        _input: &CrawlGetInput,
+    ) -> SdkResult<Vec<NetworkRequest>> {
+        Ok(Vec::new())
+    }
+
+    async fn permission_paths_store_list(
+        &self,
+        _input: &CrawlListInput,
+    ) -> SdkResult<Vec<PathRequest>> {
+        self.store_permission_requests(PathKindForPermission::Read)
+    }
+
+    async fn permission_networks_store_list(
+        &self,
+        _input: &CrawlListInput,
+    ) -> SdkResult<Vec<NetworkRequest>> {
+        Ok(Vec::new())
+    }
+}
+
+#[crate::plugin::sdk::plugin]
+impl crate::plugin::sdk::Plugin for WebPlugin {
+    #[agena_plugin_sdk::plugin_manifest_method(
+        id = WEB_PLUGIN_ID,
+        version = env!("CARGO_PKG_VERSION"),
+        description = "Local web search/fetch/crawl plugin with embedded storage, caching, and Tantivy retrieval.",
+        hooks = HookSubscription::INIT | HookSubscription::TOOL_INVOKE,
+        config_schema = web_config_schema(),
+        display = brief_detailed,
+        tool_suite = WebToolSuite,
+    )]
+    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
+
+    #[agena_plugin_sdk::plugin_init_method(
+        store = {
+            field = self.state,
+            value = WebPluginState::new(parse_web_config(ctx.config)?),
+            already = "web plugin initialized more than once"
+        },
+        store = {
+            field = self.host,
+            value = host,
+            already = "web plugin host initialized more than once"
+        },
+        workspace_root = {
+            field = self.workspace_root,
+            value = ctx.workspace_root,
+            already = "web plugin workspace root initialized more than once"
+        }
+    )]
+    async fn init(
+        &self,
+        ctx: crate::plugin::sdk::InitContext,
+        host: Arc<dyn HostClient>,
+    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
+    }
+
+    #[agena_plugin_sdk::plugin_tool_invoke_method(suite(WebToolSuite))]
+    async fn tool_invoke(
+        &self,
+        input: crate::plugin::sdk::ToolInvokeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+    }
+
+    #[agena_plugin_sdk::plugin_permission_paths_method(suite(WebToolSuite))]
+    async fn permission_paths(
+        &self,
+        tool: &str,
+        input: &serde_json::Value,
+    ) -> SdkResult<Vec<PathRequest>> {
+        let _ = (tool, input);
+    }
+
+    #[agena_plugin_sdk::plugin_permission_networks_method(suite(WebToolSuite))]
     async fn permission_networks(
         &self,
         tool: &str,
         input: &serde_json::Value,
     ) -> SdkResult<Vec<NetworkRequest>> {
-        let requests = match tool {
-            "search" => {
-                let args: CrawlWebSearchInput = parse_tool_input(input.clone())?;
-                search_engines(args.engine)
-                    .into_iter()
-                    .map(|engine| NetworkRequest::connect(engine.permission_url().to_string()))
-                    .collect()
-            }
-            "fetch" => {
-                let args: CrawlFetchInput = parse_tool_input(input.clone())?;
-                vec![NetworkRequest::connect(
-                    prepare_fetch_url(args.url.as_str())
-                        .map_err(crawl_error_to_plugin)?
-                        .to_string(),
-                )]
-            }
-            "crawl.run" | "crawl" => {
-                let args: CrawlRunInput = parse_tool_input(input.clone())?;
-                vec![NetworkRequest::connect(
-                    prepare_fetch_url(args.start_url.as_str())
-                        .map_err(crawl_error_to_plugin)?
-                        .to_string(),
-                )]
-            }
-            "store.query" | "query" | "store.get" | "get" | "store.list" | "list" => Vec::new(),
-            _ => Vec::new(),
-        };
-        Ok(requests)
+        let _ = (tool, input);
     }
 }
 
 enum PathKindForPermission {
     Read,
     Write,
-}
-
-fn web_decls() -> Vec<PluginToolDecl> {
-    vec![
-        PluginToolDecl::new(
-            "search",
-            crate::tool::definition::json_schema_for::<CrawlWebSearchInput>(),
-        )
-        .description("Search the public web through the configured search engine.")
-        .summary("Search the public web.")
-        .description_mode(ToolDescriptionMode::Detailed)
-        .ui_display_mode(UiTextDisplayMode::Detailed)
-        .tags([
-            ToolTag::ReadOnly,
-            ToolTag::Network,
-            ToolTag::Internet,
-            ToolTag::Discovery,
-        ])
-        .host_capability(HostCapability::PermissionCheck),
-        PluginToolDecl::new(
-            "fetch",
-            crate::tool::definition::json_schema_for::<CrawlFetchInput>(),
-        )
-        .description("Fetch a web page and return readable page content.")
-        .summary("Fetch one web page as readable content.")
-        .description_mode(ToolDescriptionMode::Detailed)
-        .ui_display_mode(UiTextDisplayMode::Detailed)
-        .tags([ToolTag::ReadOnly, ToolTag::Network, ToolTag::Internet])
-        .host_capability(HostCapability::PermissionCheck),
-        PluginToolDecl::new(
-            "crawl.run",
-            crate::tool::definition::json_schema_for::<CrawlRunInput>(),
-        )
-        .description("Crawl a site into the local web document store.")
-        .summary("Crawl a site into the local document store.")
-        .ui_display_mode(UiTextDisplayMode::Detailed)
-        .tags([
-            ToolTag::Mutating,
-            ToolTag::Network,
-            ToolTag::Internet,
-            ToolTag::Discovery,
-        ])
-        .host_capability(HostCapability::PermissionCheck),
-        PluginToolDecl::new(
-            "store.query",
-            crate::tool::definition::json_schema_for::<CrawlQueryInput>(),
-        )
-        .description("Search locally stored crawl documents.")
-        .summary("Search locally stored crawl documents.")
-        .ui_display_mode(UiTextDisplayMode::Detailed)
-        .tags([ToolTag::ReadOnly, ToolTag::Discovery])
-        .host_capability(HostCapability::PermissionCheck),
-        PluginToolDecl::new(
-            "store.get",
-            crate::tool::definition::json_schema_for::<CrawlGetInput>(),
-        )
-        .description("Read one locally stored crawl document by id or URL.")
-        .summary("Read one stored crawl document.")
-        .ui_display_mode(UiTextDisplayMode::Detailed)
-        .tags([ToolTag::ReadOnly])
-        .concurrency_safe(true)
-        .host_capability(HostCapability::PermissionCheck),
-        PluginToolDecl::new(
-            "store.list",
-            crate::tool::definition::json_schema_for::<CrawlListInput>(),
-        )
-        .description("List locally stored crawl documents.")
-        .summary("List stored crawl documents.")
-        .ui_display_mode(UiTextDisplayMode::Detailed)
-        .tags([ToolTag::ReadOnly])
-        .concurrency_safe(true)
-        .host_capability(HostCapability::PermissionCheck),
-    ]
-}
-
-fn parse_tool_input<T>(input: serde_json::Value) -> SdkResult<T>
-where
-    T: DeserializeOwned,
-{
-    serde_json::from_value(input).map_err(|err| PluginError::invalid_params(err.to_string()))
 }
 
 fn crawl_error_to_plugin(err: agena_web::CrawlError) -> PluginError {
@@ -1453,13 +1601,16 @@ fn host_matches(host: &str, pattern: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{WebConfig, fetch_cache_key, parse_web_config, search_engines, web_decls};
+    use super::{
+        FetchToolInput, SearchToolInput, StoreGetToolInput, StoreQueryToolInput, WebConfig,
+        WebToolSuite, fetch_cache_key, parse_web_config, search_engines,
+    };
     use crate::plugin::sdk::{HostCapability, Plugin as _, ToolDescriptionMode};
     use serde_json::json;
 
     #[test]
     fn web_decls_declare_permission_check_host_capability() {
-        let decls = web_decls();
+        let decls = WebToolSuite::tool_decls();
         assert_eq!(decls.len(), 6);
         assert!(decls.iter().all(|decl| {
             decl.host_capabilities
@@ -1476,7 +1627,7 @@ mod tests {
                 "crawl.run",
                 "store.query",
                 "store.get",
-                "store.list",
+                "store.list"
             ]
         );
     }
@@ -1662,5 +1813,56 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("invalid web plugin config"));
         assert!(message.contains("unknown field"));
+    }
+
+    #[test]
+    fn web_tool_inputs_validate_empty_queries_and_store_get_selector_pairs() {
+        let err = SearchToolInput::parse_input(json!({
+            "query": "   "
+        }))
+        .expect_err("web search should reject empty query during parse");
+        assert!(err.to_string().contains("field `query` must not be empty"));
+
+        let err = StoreQueryToolInput::parse_input(json!({
+            "query": ""
+        }))
+        .expect_err("web query should reject empty query during parse");
+        assert!(err.to_string().contains("field `query` must not be empty"));
+
+        let err = StoreGetToolInput::parse_input(json!({
+            "id": "doc_1",
+            "url": "https://example.com"
+        }))
+        .expect_err("store.get should reject duplicate selectors during parse");
+        assert!(
+            err.to_string()
+                .contains("exactly one of `id` or `url` is required")
+        );
+
+        let parsed = SearchToolInput::parse_input(json!({
+            "query": "  Rust schemars derive examples  "
+        }))
+        .expect("web search should trim query during parse");
+        assert_eq!(parsed.args.query, "Rust schemars derive examples");
+
+        let parsed = StoreQueryToolInput::parse_input(json!({
+            "query": "  local docs  "
+        }))
+        .expect("store.query should trim query during parse");
+        assert_eq!(parsed.args.query, "local docs");
+
+        let fetch = FetchToolInput::parse_input(json!({
+            "url": "  https://example.com/docs  ",
+            "prompt": "  summarize key points  "
+        }))
+        .expect("fetch should trim nested fields during parse");
+        assert_eq!(fetch.args.url, "https://example.com/docs");
+        assert_eq!(fetch.args.prompt.as_deref(), Some("summarize key points"));
+
+        let get = StoreGetToolInput::parse_input(json!({
+            "url": "  https://example.com/post  "
+        }))
+        .expect("store.get should trim selector fields during parse");
+        assert_eq!(get.args.url.as_deref(), Some("https://example.com/post"));
     }
 }

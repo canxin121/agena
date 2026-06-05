@@ -130,6 +130,25 @@ pub struct ToolInvokeInput {
     pub input: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ToolInvokeContext<'a> {
+    pub tool_name: &'a str,
+    pub session_id: i64,
+    pub call_id: i64,
+    pub workspace_root: &'a str,
+}
+
+impl ToolInvokeInput {
+    pub fn context(&self) -> ToolInvokeContext<'_> {
+        ToolInvokeContext {
+            tool_name: self.tool_name.as_str(),
+            session_id: self.session_id,
+            call_id: self.call_id,
+            workspace_root: self.workspace_root.as_str(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolPermissionPathsInput {
     pub tool_name: String,

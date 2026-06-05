@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
 use agena_macros::StaticToolSurface;
-use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -15,9 +14,8 @@ use crate::message::{
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostLspListServersResponse};
 use crate::plugin::sdk::{
-    HookSubscription, HostCapability, InitContext, InitOutcome, PathRequest, Plugin,
-    PluginManifest, PluginToolDecl, Result as SdkResult, ToolDescriptionMode, ToolInvokeInput,
-    ToolInvokeOutput, ToolTag, UiTextDisplayMode,
+    HookSubscription, HostCapability, PathRequest, Result as SdkResult, ToolInvokeContext,
+    ToolInvokeOutput, ToolTag,
 };
 use crate::plugins::provided::router;
 
@@ -237,6 +235,23 @@ impl LspPlugin {
             .clone()
             .ok_or_else(|| PluginError::new("lsp plugin invoked before init"))
     }
+
+    fn invoke_routed_tool<T: serde::Serialize>(
+        &self,
+        tool_name: &str,
+        args: T,
+        session_id: i64,
+        call_id: i64,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let _ = self.host()?;
+        router::invoke_tool(
+            tool_name,
+            serde_json::to_value(args)
+                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+            session_id,
+            call_id,
+        )
+    }
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, StaticToolSurface)]
@@ -245,33 +260,61 @@ impl LspPlugin {
     description = "LSP command dispatcher. Set action to servers, definition, references, hover, or diagnostics.",
     summary = "Query configured language servers.",
     help = "Use action `servers` to list configured LSP servers, `definition` and `references` for symbol navigation, `hover` for hover text, and `diagnostics` for diagnostics.",
-    description_mode = "brief",
-    ui_display_mode = "summary",
+    handler_receiver = LspPlugin,
+    display = brief,
     tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp),
     host_capabilities(HostCapability::LspRegistry),
     concurrency_safe = true
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
-enum LspToolInput {
-    #[tool(exec = "lsp_servers")]
+pub(crate) enum LspToolInput {
+    #[tool(
+        exec = "lsp_servers",
+        handle_with_context = LspPlugin::dispatch_servers,
+        permission_paths_handle = LspPlugin::permission_servers
+    )]
     Servers,
-    #[tool(exec = "lsp_definition")]
+    #[tool(
+        exec = "lsp_definition",
+        handle_with_context = LspPlugin::dispatch_definition,
+        permission_paths_handle = LspPlugin::permission_definition,
+        handle_by_value = true
+    )]
     Definition {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: LspDefinitionToolInput,
     },
-    #[tool(exec = "lsp_references")]
+    #[tool(
+        exec = "lsp_references",
+        handle_with_context = LspPlugin::dispatch_references,
+        permission_paths_handle = LspPlugin::permission_references,
+        handle_by_value = true
+    )]
     References {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: LspReferencesToolInput,
     },
-    #[tool(exec = "lsp_hover")]
+    #[tool(
+        exec = "lsp_hover",
+        handle_with_context = LspPlugin::dispatch_hover,
+        permission_paths_handle = LspPlugin::permission_hover,
+        handle_by_value = true
+    )]
     Hover {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: LspHoverToolInput,
     },
-    #[tool(exec = "lsp_diagnostics")]
+    #[tool(
+        exec = "lsp_diagnostics",
+        handle_with_context = LspPlugin::dispatch_diagnostics,
+        permission_paths_handle = LspPlugin::permission_diagnostics,
+        handle_by_value = true
+    )]
     Diagnostics {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: LspDiagnosticsToolInput,
     },
@@ -290,126 +333,139 @@ struct LspServerSummary {
     file_extensions: Vec<String>,
 }
 
-#[async_trait]
-impl Plugin for LspPlugin {
-    fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(LSP_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
-            .description("LSP read-only observability and navigation tools.")
-            .tool_description_mode(ToolDescriptionMode::Brief)
-            .ui_display_mode(UiTextDisplayMode::Summary)
-            .hooks(HookSubscription::TOOL_INVOKE)
-            .config_schema(lsp_config_schema())
-            .tool(lsp_decl())
-            .build()
+#[crate::plugin::sdk::plugin]
+impl crate::plugin::sdk::Plugin for LspPlugin {
+    #[agena_plugin_sdk::plugin_manifest_method(
+        id = LSP_PLUGIN_ID,
+        version = env!("CARGO_PKG_VERSION"),
+        description = "LSP read-only observability and navigation tools.",
+        hooks = HookSubscription::TOOL_INVOKE,
+        config_schema = lsp_config_schema(),
+        display = brief,
+        tool_surface = LspToolInput,
+    )]
+    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
+
+    #[agena_plugin_sdk::plugin_init_method(
+        host_cell = {
+            field = self.host,
+            value = host,
+            poisoned = "lsp plugin host lock poisoned"
+        },
+    )]
+    async fn init(
+        &self,
+        _ctx: crate::plugin::sdk::InitContext,
+        host: Arc<dyn HostClient>,
+    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
     }
 
-    async fn init(&self, _ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
-        *self
-            .host
-            .write()
-            .map_err(|_| PluginError::new("lsp plugin host lock poisoned"))? = Some(host);
-        Ok(InitOutcome::ack(self.manifest()))
+    #[agena_plugin_sdk::plugin_tool_invoke_method(surface_with_context(LspToolInput))]
+    async fn tool_invoke(
+        &self,
+        input: crate::plugin::sdk::ToolInvokeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
     }
 
-    async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        if input.tool_name != "lsp" {
-            return Err(PluginError::invalid_params(format!(
-                "unknown lsp plugin tool '{}'",
-                input.tool_name
-            )));
-        }
-        match parse_lsp_input(input.input)? {
-            LspToolInput::Servers => {
-                let HostLspListServersResponse { servers } =
-                    self.host()?.lsp_list_servers().await?;
-                let summary = LspServersOutput {
-                    servers: servers
-                        .into_iter()
-                        .map(|server| LspServerSummary {
-                            name: server.name,
-                            command: server.command,
-                            args: server.args,
-                            file_extensions: server.file_extensions,
-                        })
-                        .collect(),
-                };
-                let body = serde_json::to_string_pretty(&summary)
-                    .map_err(|err| PluginError::new(err.to_string()))?;
-                let title = format!("lsp_servers: {} configured", summary.servers.len());
-                Ok(ToolInvokeOutput {
-                    title,
-                    output_text: body,
-                    payload: serde_json::to_value(&summary).ok(),
-                    metadata: Default::default(),
-                    attachments: Vec::new(),
-                })
-            }
-            LspToolInput::Definition { args } => {
-                let _ = self.host()?;
-                router::invoke_tool(
-                    "lsp_definition",
-                    serde_json::to_value(args)
-                        .map_err(|err| PluginError::invalid_params(err.to_string()))?,
-                    input.session_id,
-                    input.call_id,
-                )
-            }
-            LspToolInput::References { args } => {
-                let _ = self.host()?;
-                router::invoke_tool(
-                    "lsp_references",
-                    serde_json::to_value(args)
-                        .map_err(|err| PluginError::invalid_params(err.to_string()))?,
-                    input.session_id,
-                    input.call_id,
-                )
-            }
-            LspToolInput::Hover { args } => {
-                let _ = self.host()?;
-                router::invoke_tool(
-                    "lsp_hover",
-                    serde_json::to_value(args)
-                        .map_err(|err| PluginError::invalid_params(err.to_string()))?,
-                    input.session_id,
-                    input.call_id,
-                )
-            }
-            LspToolInput::Diagnostics { args } => {
-                let _ = self.host()?;
-                router::invoke_tool(
-                    "lsp_diagnostics",
-                    serde_json::to_value(args)
-                        .map_err(|err| PluginError::invalid_params(err.to_string()))?,
-                    input.session_id,
-                    input.call_id,
-                )
-            }
-        }
-    }
-
+    #[agena_plugin_sdk::plugin_permission_paths_method(surface(LspToolInput))]
     async fn permission_paths(
         &self,
         tool: &str,
         input: &serde_json::Value,
     ) -> SdkResult<Vec<PathRequest>> {
-        if tool != "lsp" {
-            return Ok(Vec::new());
-        }
-        let (tool_name, tool_input) = lsp_route(input.clone())?;
-        router::permission_paths_for(tool_name.as_str(), &tool_input)
+        let _ = (tool, input);
     }
 }
 
-pub(crate) fn lsp_decl() -> PluginToolDecl {
-    LspToolInput::tool_decl()
-}
+impl LspPlugin {
+    async fn permission_servers(&self) -> SdkResult<Vec<PathRequest>> {
+        Ok(Vec::new())
+    }
 
-fn lsp_route(input: serde_json::Value) -> SdkResult<(String, serde_json::Value)> {
-    LspToolInput::resolve_tool("lsp", input)
-}
+    async fn permission_definition(
+        &self,
+        input: LspDefinitionToolInput,
+    ) -> SdkResult<Vec<PathRequest>> {
+        Ok(vec![PathRequest::read(input.position.file_path)])
+    }
 
-fn parse_lsp_input(input: serde_json::Value) -> SdkResult<LspToolInput> {
-    LspToolInput::parse_input(input)
+    async fn permission_references(
+        &self,
+        input: LspReferencesToolInput,
+    ) -> SdkResult<Vec<PathRequest>> {
+        Ok(vec![PathRequest::read(input.position.file_path)])
+    }
+
+    async fn permission_hover(&self, input: LspHoverToolInput) -> SdkResult<Vec<PathRequest>> {
+        Ok(vec![PathRequest::read(input.position.file_path)])
+    }
+
+    async fn permission_diagnostics(
+        &self,
+        input: LspDiagnosticsToolInput,
+    ) -> SdkResult<Vec<PathRequest>> {
+        Ok(vec![PathRequest::read(input.file_path)])
+    }
+
+    async fn dispatch_servers(
+        &self,
+        _context: &ToolInvokeContext<'_>,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let HostLspListServersResponse { servers } = self.host()?.lsp_list_servers().await?;
+        let summary = LspServersOutput {
+            servers: servers
+                .into_iter()
+                .map(|server| LspServerSummary {
+                    name: server.name,
+                    command: server.command,
+                    args: server.args,
+                    file_extensions: server.file_extensions,
+                })
+                .collect(),
+        };
+        let body = serde_json::to_string_pretty(&summary)
+            .map_err(|err| PluginError::new(err.to_string()))?;
+        let title = format!("lsp_servers: {} configured", summary.servers.len());
+        Ok(ToolInvokeOutput {
+            title,
+            output_text: body,
+            payload: serde_json::to_value(&summary).ok(),
+            metadata: Default::default(),
+            attachments: Vec::new(),
+        })
+    }
+
+    async fn dispatch_definition(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: LspDefinitionToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.invoke_routed_tool("lsp_definition", args, context.session_id, context.call_id)
+    }
+
+    async fn dispatch_references(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: LspReferencesToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.invoke_routed_tool("lsp_references", args, context.session_id, context.call_id)
+    }
+
+    async fn dispatch_hover(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: LspHoverToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.invoke_routed_tool("lsp_hover", args, context.session_id, context.call_id)
+    }
+
+    async fn dispatch_diagnostics(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: LspDiagnosticsToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.invoke_routed_tool("lsp_diagnostics", args, context.session_id, context.call_id)
+    }
 }
 
 #[cfg(test)]
@@ -477,5 +533,44 @@ mod tests {
         .expect_err("legacy lsp config should fail");
 
         assert!(err.to_string().contains("unknown field `command`"));
+    }
+
+    #[test]
+    fn lsp_permission_paths_route_through_surface_resolution() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let plugin = LspPlugin::new();
+
+            let paths = crate::plugin::sdk::Plugin::permission_paths(
+                &plugin,
+                "lsp",
+                &json!({
+                    "action": "hover",
+                    "file_path": " src/main.rs ",
+                    "line": 8,
+                    "character": 2
+                }),
+            )
+            .await
+            .expect("hover should resolve into lsp_hover permissions");
+            assert_eq!(
+                paths,
+                vec![crate::plugin::sdk::PathRequest::read("src/main.rs")]
+            );
+
+            let other_paths = crate::plugin::sdk::Plugin::permission_paths(
+                &plugin,
+                "other.tool",
+                &json!({
+                    "action": "hover",
+                    "file_path": " src/main.rs ",
+                    "line": 8,
+                    "character": 2
+                }),
+            )
+            .await
+            .expect("other tools should be ignored");
+            assert!(other_paths.is_empty());
+        });
     }
 }

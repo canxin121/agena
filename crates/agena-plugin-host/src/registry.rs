@@ -12,6 +12,8 @@ pub struct PluginToolRegistry {
     /// `exposed_name -> tool`. `exposed_name` is the name shown
     /// to the model and is always `plugin/tool`.
     by_exposed: BTreeMap<String, RegisteredTool>,
+    /// `alias_exposed_name -> canonical_exposed_name`.
+    aliases_by_exposed: BTreeMap<String, String>,
     plugin_tool_defaults: BTreeMap<String, ToolDescriptionMode>,
     plugin_ui_defaults: BTreeMap<String, UiTextDisplayMode>,
     generation: u64,
@@ -74,10 +76,11 @@ impl RegisteredTool {
     pub fn with_model_alias(
         &self,
         alias_name: impl Into<String>,
-        decl: PluginToolDecl,
+        mut decl: PluginToolDecl,
         fixed_input: serde_json::Value,
     ) -> Self {
         let alias_name = alias_name.into();
+        decl.aliases.clear();
         Self {
             plugin_id: self.plugin_id.clone(),
             plugin_name: self.plugin_name.clone(),
@@ -87,6 +90,30 @@ impl RegisteredTool {
             base_exposed_name: Some(self.behavior_exposed_name().to_string()),
             fixed_input: Some(fixed_input),
         }
+    }
+
+    pub fn with_tool_alias(&self, alias_name: impl Into<String>, mut decl: PluginToolDecl) -> Self {
+        let alias_name = alias_name.into();
+        decl.aliases.clear();
+        Self {
+            plugin_id: self.plugin_id.clone(),
+            plugin_name: self.plugin_name.clone(),
+            original_name: self.original_name.clone(),
+            exposed_name: exposed_tool_name(&self.plugin_name, &alias_name),
+            decl,
+            base_exposed_name: Some(self.behavior_exposed_name().to_string()),
+            fixed_input: None,
+        }
+    }
+
+    pub fn alias_names(&self) -> impl Iterator<Item = &str> {
+        self.decl.alias_texts().iter().map(String::as_str)
+    }
+
+    pub fn alias_exposed_names(&self) -> Vec<String> {
+        self.alias_names()
+            .map(|alias| exposed_tool_name(&self.plugin_name, alias))
+            .collect()
     }
 
     pub fn description_text(&self) -> &str {
@@ -99,6 +126,14 @@ impl RegisteredTool {
 
     pub fn help_text(&self) -> Option<&str> {
         self.decl.help_text()
+    }
+
+    pub fn before_help_text(&self) -> Option<&str> {
+        self.decl.before_help_text()
+    }
+
+    pub fn after_help_text(&self) -> Option<&str> {
+        self.decl.after_help_text()
     }
 
     pub fn sanitized_input_schema(&self) -> serde_json::Value {
@@ -118,6 +153,7 @@ impl PluginToolRegistry {
     pub fn new() -> Self {
         Self {
             by_exposed: BTreeMap::new(),
+            aliases_by_exposed: BTreeMap::new(),
             plugin_tool_defaults: BTreeMap::new(),
             plugin_ui_defaults: BTreeMap::new(),
             generation: 0,
@@ -201,16 +237,24 @@ impl PluginToolRegistry {
         plugin_id: &str,
         exposed_name: &str,
     ) -> Option<RegisteredTool> {
+        let canonical_exposed_name = self
+            .aliases_by_exposed
+            .get(exposed_name)
+            .map(String::as_str)
+            .unwrap_or(exposed_name);
         let original_name = self
             .by_exposed
-            .get(exposed_name)
+            .get(canonical_exposed_name)
             .filter(|tool| tool.plugin_id == plugin_id)
             .map(|tool| tool.original_name.clone())?;
         self.remove_from_plugin(plugin_id, &original_name)
     }
 
     pub fn lookup_tool(&self, exposed_name: &str) -> Option<&RegisteredTool> {
-        self.by_exposed.get(exposed_name)
+        self.by_exposed.get(exposed_name).or_else(|| {
+            let canonical = self.aliases_by_exposed.get(exposed_name)?;
+            self.by_exposed.get(canonical)
+        })
     }
 
     pub fn generation(&self) -> u64 {
@@ -240,12 +284,33 @@ impl PluginToolRegistry {
         for tool in &mut tools {
             assert_valid_tool_namespace(&tool.plugin_name, "plugin name");
             assert_valid_tool_namespace(&tool.original_name, "tool name");
+            tool.decl.aliases = normalize_tool_aliases(&tool.original_name, &tool.decl.aliases);
             tool.exposed_name = exposed_tool_name(&tool.plugin_name, &tool.original_name);
         }
-        self.by_exposed = tools
+        let by_exposed: BTreeMap<String, RegisteredTool> = tools
             .into_iter()
             .map(|tool| (tool.exposed_name.clone(), tool))
             .collect();
+        let mut aliases_by_exposed = BTreeMap::new();
+        for tool in by_exposed.values() {
+            for alias_exposed_name in tool.alias_exposed_names() {
+                assert!(
+                    !by_exposed.contains_key(&alias_exposed_name),
+                    "tool alias `{alias_exposed_name}` for `{}` collides with a registered tool",
+                    tool.exposed_name
+                );
+                if let Some(existing) =
+                    aliases_by_exposed.insert(alias_exposed_name.clone(), tool.exposed_name.clone())
+                {
+                    panic!(
+                        "tool alias `{alias_exposed_name}` for `{}` collides with alias for `{existing}`",
+                        tool.exposed_name
+                    );
+                }
+            }
+        }
+        self.by_exposed = by_exposed;
+        self.aliases_by_exposed = aliases_by_exposed;
     }
 
     fn lookup_for_plugin(&self, plugin_id: &str, original_name: &str) -> Option<&RegisteredTool> {
@@ -270,6 +335,21 @@ fn assert_valid_tool_namespace(value: &str, label: &str) {
         !value.contains('/'),
         "{label} `{value}` must not contain `/`; model-visible tool names use `plugin/tool`"
     );
+}
+
+fn normalize_tool_aliases(tool_name: &str, aliases: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for alias in aliases {
+        let alias = alias.trim();
+        if alias.is_empty() || alias == tool_name {
+            continue;
+        }
+        assert_valid_tool_namespace(alias, "tool alias");
+        if !normalized.iter().any(|existing| existing == alias) {
+            normalized.push(alias.to_string());
+        }
+    }
+    normalized
 }
 
 impl Default for PluginToolRegistry {
@@ -326,6 +406,44 @@ mod tests {
             Some(ToolDescriptionMode::Detailed)
         );
         assert_eq!(tool.decl.ui_display_mode, Some(UiTextDisplayMode::Detailed));
+    }
+
+    #[test]
+    fn tool_aliases_lookup_and_remove_canonical_tools() {
+        let mut registry = PluginToolRegistry::new();
+        registry.extend_from_plugin(
+            "plugin-id",
+            "fixture",
+            &[
+                PluginToolDecl::new("inspect", serde_json::json!({ "type": "object" }))
+                    .alias("i")
+                    .aliases(["show", "i", " inspect "]),
+            ],
+            None,
+            None,
+        );
+
+        let canonical = registry
+            .lookup_tool("fixture/inspect")
+            .expect("canonical tool should be registered");
+        assert_eq!(canonical.exposed_name, "fixture/inspect");
+        assert_eq!(
+            canonical.alias_exposed_names(),
+            vec!["fixture/i".to_string(), "fixture/show".to_string()]
+        );
+
+        let alias = registry
+            .lookup_tool("fixture/i")
+            .expect("alias should resolve to canonical tool");
+        assert_eq!(alias.exposed_name, "fixture/inspect");
+        assert_eq!(alias.original_name, "inspect");
+
+        let removed = registry
+            .remove_exposed_from_plugin("plugin-id", "fixture/show")
+            .expect("alias removal should remove canonical tool");
+        assert_eq!(removed.exposed_name, "fixture/inspect");
+        assert!(registry.lookup_tool("fixture/inspect").is_none());
+        assert!(registry.lookup_tool("fixture/i").is_none());
     }
 }
 

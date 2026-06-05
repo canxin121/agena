@@ -58,6 +58,10 @@ impl PluginError {
         }
     }
 
+    pub fn invalid_params_with_data(message: impl Into<String>, data: serde_json::Value) -> Self {
+        Self::invalid_params(message).with_data(data)
+    }
+
     pub fn with_hook(mut self, hook: impl Into<String>) -> Self {
         self.hook = Some(hook.into());
         self
@@ -65,6 +69,11 @@ impl PluginError {
 
     pub fn with_plugin(mut self, plugin: impl Into<String>) -> Self {
         self.plugin = Some(plugin.into());
+        self
+    }
+
+    pub fn with_data(mut self, data: serde_json::Value) -> Self {
+        self.data = Some(data);
         self
     }
 }

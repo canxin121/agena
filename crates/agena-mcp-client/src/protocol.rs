@@ -6,8 +6,14 @@ use serde_json::Value;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDescriptor {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_help: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_help: Option<String>,
     #[serde(
         default,
         rename = "inputSchema",

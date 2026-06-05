@@ -14,6 +14,7 @@ agena-macros = { workspace = true }
 agena-scheduler = { workspace = true }
 agena-skills = { workspace = true }
 agena-plugin-host = { workspace = true }
+agena-plugin-sdk = { workspace = true }
 agena-plugin-marketplace = { workspace = true }
 arc-swap = { workspace = true }
 chrono = { workspace = true }

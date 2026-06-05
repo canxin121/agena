@@ -5,6 +5,7 @@
 //! ```
 
 pub use async_trait::async_trait;
+pub use schemars::JsonSchema;
 pub use serde::{Deserialize, Serialize};
 pub use serde_json::{Value, json};
 pub use std::sync::Arc;
@@ -36,15 +37,23 @@ pub use crate::host_api::{
     HostToolRemoveRequest, HostToolUpdateRequest, HostWorktreeListResponse, HostWorktreeSummary,
     LogLevel, NoopHostClient,
 };
+pub use crate::macro_support::{schema_example_texts, schema_usage_text};
 pub use crate::manifest::{
     HookSubscription, HostCapability, InputNetworkSpec, InputPathSpec, NetworkAccessSpec,
     PathAccessSpec, PathKind, PluginManifest, PluginManifestBuilder, PluginStudioCommand,
     PluginStudioControl, PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView,
     PluginToolDecl, PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions,
     PluginUiAction, PluginUiContributions, PluginUiThemePalette, ToolDescriptionMode,
-    ToolStreamingMode, ToolTag, TransportKind, normalize_tool_tag_name,
+    ToolDisplayPreset, ToolInputShape, ToolStreamingMode, ToolSuiteSurface, ToolSurface, ToolTag,
+    TransportKind, normalize_tool_tag_name,
 };
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, ToolStreamSink};
+pub use crate::{plugin_impl, plugin_init, plugin_manifest, plugin_method, plugin_methods};
+pub use agena_macros::{
+    StaticToolSurface, ToolArgs, ToolCommand, ToolInputShape, ToolSubcommands, ToolSuite, plugin,
+    plugin_init_method, plugin_manifest_method, plugin_permission_networks_method,
+    plugin_permission_paths_method, plugin_tool_invoke_method, plugin_tool_invoke_stream_method,
+};
 
 #[cfg(feature = "cdylib")]
 pub use crate::cdylib_abi::{AgenaPluginCdylib, AgenaPluginCdylib_Ref};

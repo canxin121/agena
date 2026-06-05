@@ -1,8 +1,7 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
-use agena_macros::StaticToolSurface;
-use async_trait::async_trait;
+use agena_macros::{StaticToolSurface, ToolInputShape};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -11,11 +10,8 @@ use crate::memory::{
     MemoryError, MemoryIndex, MemoryRecord, MemorySearchDocument, MemoryStore, MemoryType,
     NewMemory,
 };
-use crate::plugin::sdk::host_api::HostClient;
 use crate::plugin::sdk::{
-    HookSubscription, InitContext, InitOutcome, NetworkRequest, PathRequest, Plugin,
-    PluginManifest, PluginToolDecl, Result as SdkResult, ToolDescriptionMode, ToolInvokeInput,
-    ToolInvokeOutput, ToolTag, UiTextDisplayMode,
+    HookSubscription, PathRequest, Result as SdkResult, ToolInvokeOutput, ToolTag,
 };
 use crate::plugin::{
     ChatMessage, ChatMessagesTransformInput, ChatMessagesTransformPatch, ChatSystemTransformInput,
@@ -128,47 +124,73 @@ pub struct MemoryPlugin {
     sync_lock: Mutex<()>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "memory",
     description = "Persistent memory command. Use action `search`, `get`, `list`, `write`, or `delete` to manage durable user/project memory.",
     summary = "Search, inspect, and update durable memory records.",
     help = "Use action `search` to find relevant memories, `get` to read one record, `list` to inspect the catalog, `write` to create or replace a memory file, and `delete` to remove an obsolete memory.",
-    description_mode = "brief",
-    ui_display_mode = "summary",
+    handler_receiver = MemoryPlugin,
+    display = brief,
     tags(ToolTag::ReadOnly, ToolTag::Mutating),
     concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum MemoryToolInput {
-    #[tool(exec = "search")]
+    #[tool(
+        exec = "search",
+        handle = MemoryPlugin::invoke_search,
+        permission_paths_handle = MemoryPlugin::permission_search
+    )]
     Search {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: MemorySearchInput,
     },
-    #[tool(exec = "get")]
+    #[tool(
+        exec = "get",
+        handle = MemoryPlugin::invoke_get,
+        permission_paths_handle = MemoryPlugin::permission_get
+    )]
     Get {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: MemoryGetInput,
     },
-    #[tool(exec = "list")]
+    #[tool(
+        exec = "list",
+        handle = MemoryPlugin::invoke_list,
+        permission_paths_handle = MemoryPlugin::permission_list
+    )]
     List {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: MemoryListInput,
     },
-    #[tool(exec = "write")]
+    #[tool(
+        exec = "write",
+        handle = MemoryPlugin::invoke_write,
+        permission_paths_handle = MemoryPlugin::permission_write
+    )]
     Write {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: MemoryWriteInput,
     },
-    #[tool(exec = "delete")]
+    #[tool(
+        exec = "delete",
+        handle = MemoryPlugin::invoke_delete,
+        permission_paths_handle = MemoryPlugin::permission_delete
+    )]
     Delete {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: MemoryDeleteInput,
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[tool_input(trim("query"), non_empty("query"))]
 #[serde(deny_unknown_fields)]
 struct MemorySearchInput {
     query: String,
@@ -176,20 +198,32 @@ struct MemorySearchInput {
     limit: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[tool_input(
+    trim("name"),
+    trim_suffix("name", ".md"),
+    non_empty("name"),
+    forbid_substrings("name", "/", "\\")
+)]
 #[serde(deny_unknown_fields)]
 struct MemoryGetInput {
     name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
 #[serde(deny_unknown_fields)]
 struct MemoryListInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     limit: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[tool_input(
+    trim("name", "description", "content"),
+    trim_suffix("name", ".md"),
+    non_empty("name", "content"),
+    forbid_substrings("name", "/", "\\")
+)]
 #[serde(deny_unknown_fields)]
 struct MemoryWriteInput {
     name: String,
@@ -200,7 +234,13 @@ struct MemoryWriteInput {
     content: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[tool_input(
+    trim("name"),
+    trim_suffix("name", ".md"),
+    non_empty("name"),
+    forbid_substrings("name", "/", "\\")
+)]
 #[serde(deny_unknown_fields)]
 struct MemoryDeleteInput {
     name: String,
@@ -295,12 +335,7 @@ impl MemoryPlugin {
     }
 
     async fn invoke_search(&self, input: &MemorySearchInput) -> SdkResult<ToolInvokeOutput> {
-        let query = input.query.trim();
-        if query.is_empty() {
-            return Err(PluginError::invalid_params(
-                "memory search requires a non-empty query",
-            ));
-        }
+        let query = input.query.as_str();
         let limit = input
             .limit
             .unwrap_or(DEFAULT_MEMORY_SEARCH_LIMIT as u32)
@@ -329,7 +364,7 @@ impl MemoryPlugin {
     async fn invoke_get(&self, input: &MemoryGetInput) -> SdkResult<ToolInvokeOutput> {
         let store = self.store()?;
         let entry = store
-            .get(input.name.trim())
+            .get(input.name.as_str())
             .map_err(memory_error_to_plugin)?;
         let payload = serde_json::to_value(memory_record_output(&entry))
             .map_err(|err| PluginError::new(err.to_string()))?;
@@ -376,19 +411,14 @@ impl MemoryPlugin {
     }
 
     async fn invoke_write(&self, input: &MemoryWriteInput) -> SdkResult<ToolInvokeOutput> {
-        let name = validate_memory_name(input.name.as_str())?;
-        let content = input.content.trim();
-        if content.is_empty() {
-            return Err(PluginError::invalid_params(
-                "memory write requires non-empty content",
-            ));
-        }
+        let name = input.name.clone();
+        let content = input.content.as_str();
         let store = self.store()?;
         match store.forget(name.as_str()) {
             Ok(()) | Err(MemoryError::NotFound(_)) => {}
             Err(err) => return Err(memory_error_to_plugin(err)),
         }
-        let description = input.description.trim();
+        let description = input.description.as_str();
         let entry = store
             .save(NewMemory {
                 name: name.clone(),
@@ -408,7 +438,7 @@ impl MemoryPlugin {
     }
 
     async fn invoke_delete(&self, input: &MemoryDeleteInput) -> SdkResult<ToolInvokeOutput> {
-        let name = validate_memory_name(input.name.as_str())?;
+        let name = input.name.clone();
         let store = self.store()?;
         store
             .forget(name.as_str())
@@ -417,6 +447,32 @@ impl MemoryPlugin {
             ToolInvokeOutput::text(format!("Deleted memory '{}'.", name))
                 .with_title("memory delete"),
         )
+    }
+
+    fn store_dir_request(&self, request: fn(String) -> PathRequest) -> SdkResult<Vec<PathRequest>> {
+        let store = self.store()?;
+        let store_dir = store.dir().display().to_string();
+        Ok(vec![request(store_dir)])
+    }
+
+    async fn permission_search(&self, _input: &MemorySearchInput) -> SdkResult<Vec<PathRequest>> {
+        self.store_dir_request(PathRequest::write)
+    }
+
+    async fn permission_get(&self, _input: &MemoryGetInput) -> SdkResult<Vec<PathRequest>> {
+        self.store_dir_request(PathRequest::read)
+    }
+
+    async fn permission_list(&self, _input: &MemoryListInput) -> SdkResult<Vec<PathRequest>> {
+        self.store_dir_request(PathRequest::read)
+    }
+
+    async fn permission_write(&self, _input: &MemoryWriteInput) -> SdkResult<Vec<PathRequest>> {
+        self.store_dir_request(PathRequest::write)
+    }
+
+    async fn permission_delete(&self, _input: &MemoryDeleteInput) -> SdkResult<Vec<PathRequest>> {
+        self.store_dir_request(PathRequest::write)
     }
 
     fn memory_retrieval_query(
@@ -442,84 +498,61 @@ impl MemoryPlugin {
     }
 }
 
-#[async_trait]
-impl Plugin for MemoryPlugin {
-    fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(MEMORY_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
-            .description("Persistent memory with searchable retrieval and write tools.")
-            .tool_description_mode(ToolDescriptionMode::Brief)
-            .ui_display_mode(UiTextDisplayMode::Summary)
-            .hooks(
-                HookSubscription::INIT
-                    | HookSubscription::TOOL_INVOKE
-                    | HookSubscription::CHAT_SYSTEM_TRANSFORM
-                    | HookSubscription::CHAT_MESSAGES_TRANSFORM,
-            )
-            .config_schema(memory_config_schema())
-            .tool(memory_decl())
-            .build()
+#[crate::plugin::sdk::plugin]
+impl crate::plugin::sdk::Plugin for MemoryPlugin {
+    #[agena_plugin_sdk::plugin_manifest_method(
+        id = MEMORY_PLUGIN_ID,
+        version = env!("CARGO_PKG_VERSION"),
+        description = "Persistent memory with searchable retrieval and write tools.",
+        hooks = HookSubscription::INIT
+            | HookSubscription::TOOL_INVOKE
+            | HookSubscription::CHAT_SYSTEM_TRANSFORM
+            | HookSubscription::CHAT_MESSAGES_TRANSFORM,
+        config_schema = memory_config_schema(),
+        display = brief,
+        tool_surface = MemoryToolInput,
+    )]
+    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
+
+    #[agena_plugin_sdk::plugin_init_method(
+        config = {
+            field = self.config,
+            value = parse_memory_config(ctx.config)?,
+            already = "memory plugin initialized more than once"
+        },
+        workspace_root = {
+            field = self.workspace_root,
+            value = ctx.workspace_root,
+            already = "memory plugin workspace root already initialized"
+        },
+    )]
+    async fn init(
+        &self,
+        ctx: crate::plugin::sdk::InitContext,
+        _host: std::sync::Arc<dyn crate::plugin::sdk::HostClient>,
+    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
     }
 
-    async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
-        let config = parse_memory_config(ctx.config)?;
-        self.config
-            .set(config)
-            .map_err(|_| PluginError::new("memory plugin initialized more than once"))?;
-        let _ = self.workspace_root.set(ctx.workspace_root);
-        Ok(InitOutcome::ack(self.manifest()))
+    #[agena_plugin_sdk::plugin_tool_invoke_method(surface(MemoryToolInput))]
+    async fn tool_invoke(
+        &self,
+        input: crate::plugin::sdk::ToolInvokeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
     }
 
-    async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        if input.tool_name != "memory" {
-            return Err(PluginError::invalid_params(format!(
-                "unknown memory plugin tool '{}'",
-                input.tool_name
-            )));
-        }
-        match parse_memory_input(input.input)? {
-            MemoryToolInput::Search { args } => self.invoke_search(&args).await,
-            MemoryToolInput::Get { args } => self.invoke_get(&args).await,
-            MemoryToolInput::List { args } => self.invoke_list(&args).await,
-            MemoryToolInput::Write { args } => self.invoke_write(&args).await,
-            MemoryToolInput::Delete { args } => self.invoke_delete(&args).await,
-        }
-    }
-
+    #[agena_plugin_sdk::plugin_permission_paths_method(surface(MemoryToolInput))]
     async fn permission_paths(
         &self,
         tool: &str,
         input: &serde_json::Value,
     ) -> SdkResult<Vec<PathRequest>> {
-        if tool != "memory" {
-            return Ok(Vec::new());
-        }
-        let store = self.store()?;
-        let parsed = parse_memory_input(input.clone())?;
-        let request = match parsed {
-            MemoryToolInput::Get { .. } | MemoryToolInput::List { .. } => {
-                PathRequest::read(store.dir().display().to_string())
-            }
-            MemoryToolInput::Search { .. }
-            | MemoryToolInput::Write { .. }
-            | MemoryToolInput::Delete { .. } => {
-                PathRequest::write(store.dir().display().to_string())
-            }
-        };
-        Ok(vec![request])
-    }
-
-    async fn permission_networks(
-        &self,
-        _tool: &str,
-        _input: &serde_json::Value,
-    ) -> SdkResult<Vec<NetworkRequest>> {
-        Ok(Vec::new())
+        let _ = (tool, input);
     }
 
     async fn chat_system_transform(
         &self,
         _input: ChatSystemTransformInput,
-    ) -> SdkResult<Option<ChatSystemTransformPatch>> {
+    ) -> Result<Option<ChatSystemTransformPatch>, PluginError> {
         let workspace_root = self.workspace_root()?;
         let config = self.config()?;
         if !config.project_instructions.enabled {
@@ -544,7 +577,7 @@ impl Plugin for MemoryPlugin {
     async fn chat_messages_transform(
         &self,
         input: ChatMessagesTransformInput,
-    ) -> SdkResult<Option<ChatMessagesTransformPatch>> {
+    ) -> Result<Option<ChatMessagesTransformPatch>, PluginError> {
         let config = self.config()?;
         if !config.retrieval.enabled {
             return Ok(None);
@@ -579,14 +612,6 @@ impl Plugin for MemoryPlugin {
             messages: Some(messages),
         }))
     }
-}
-
-fn memory_decl() -> PluginToolDecl {
-    MemoryToolInput::tool_decl()
-}
-
-fn parse_memory_input(input: serde_json::Value) -> SdkResult<MemoryToolInput> {
-    MemoryToolInput::parse_input(input)
 }
 
 fn parse_memory_config(value: serde_json::Value) -> SdkResult<MemoryConfig> {
@@ -713,19 +738,6 @@ fn should_skip_memory_retrieval(message: &str) -> bool {
     .any(|needle| lowered.contains(needle))
 }
 
-fn validate_memory_name(raw: &str) -> SdkResult<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(PluginError::invalid_params("memory name must not be empty"));
-    }
-    if trimmed.contains('/') || trimmed.contains('\\') {
-        return Err(PluginError::invalid_params(
-            "memory name must not contain path separators",
-        ));
-    }
-    Ok(trimmed.trim_end_matches(".md").to_string())
-}
-
 fn memory_index_line(name: &str, description: &str, content: &str) -> String {
     let hook = if description.trim().is_empty() {
         truncate_body(first_line(content).as_str(), 120)
@@ -738,12 +750,6 @@ fn memory_index_line(name: &str, description: &str, content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn validate_memory_name_rejects_path_separators() {
-        assert!(validate_memory_name("team/preference").is_err());
-        assert!(validate_memory_name("team\\preference").is_err());
-    }
 
     #[test]
     fn memory_index_line_prefers_description() {
@@ -760,7 +766,38 @@ mod tests {
             "backend": "legacy"
         }))
         .expect_err("memory tool should reject unknown fields");
-        assert!(err.to_string().contains("unknown field `backend`"));
+        assert!(err.to_string().contains("unknown field 'backend'"));
+    }
+
+    #[test]
+    fn memory_tool_input_rejects_empty_queries_and_invalid_names_at_parse_time() {
+        let err = MemoryToolInput::parse_input(serde_json::json!({
+            "action": "search",
+            "query": "   "
+        }))
+        .expect_err("memory search should reject empty query during parse");
+        assert!(err.to_string().contains("field `query` must not be empty"));
+
+        let err = MemoryToolInput::parse_input(serde_json::json!({
+            "action": "write",
+            "name": "team/preference",
+            "content": "Keep replies terse"
+        }))
+        .expect_err("memory write should reject invalid names during parse");
+        assert!(
+            err.to_string()
+                .contains("field `name` must not contain `/`")
+        );
+
+        let parsed = MemoryToolInput::parse_input(serde_json::json!({
+            "action": "get",
+            "name": "  user_style.md  "
+        }))
+        .expect("memory get should normalize names during parse");
+        match parsed {
+            MemoryToolInput::Get { args } => assert_eq!(args.name, "user_style"),
+            other => panic!("expected get variant, got {other:?}"),
+        }
     }
 
     #[test]

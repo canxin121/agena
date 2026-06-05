@@ -98,16 +98,23 @@ pub(super) fn render_tool_descriptor(
     tool: crate::plugin::registry::RegisteredTool,
 ) -> ToolDescriptor {
     let description = tool.description_text().trim().to_string();
+    let before_help = tool.before_help_text().map(ToString::to_string);
+    let after_help = tool.after_help_text().map(ToString::to_string);
     let summary = tool.summary_text().map(ToString::to_string);
     let help = tool.help_text().map(ToString::to_string);
     let input_schema = Some(tool.sanitized_input_schema());
     let description_mode = tool.decl.description_mode;
     let tags = tool.effective_tags();
+    let aliases = tool.alias_exposed_names();
     ToolDescriptor {
         name: tool.exposed_name,
+        aliases,
         description: (!description.is_empty()).then_some(description),
+        before_help,
+        after_help,
         summary,
         help,
+        examples: tool.decl.examples.clone(),
         input_schema,
         description_mode,
         tags,
@@ -217,26 +224,20 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
                 allow_custom: question.allow_custom,
             })
             .collect();
-        return Ok(AskUserToolInput {
+        let input = AskUserToolInput {
             title: req.title,
             body_markdown: req.body_markdown,
             kind: req.kind,
             submit_label: req.submit_label,
             cancel_label: req.cancel_label,
             questions,
-        });
+        };
+        return AskUserToolInput::parse_input(
+            serde_json::to_value(input)
+                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+        );
     }
 
-    if req.prompt.trim().is_empty() {
-        return Err(PluginError::invalid_params(
-            "ask_user prompt must not be empty",
-        ));
-    }
-    if req.options.is_empty() && !req.allow_free_text {
-        return Err(PluginError::invalid_params(
-            "ask_user requires options or allow_free_text",
-        ));
-    }
     let options = req
         .options
         .into_iter()
@@ -245,7 +246,7 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
             description: String::new(),
         })
         .collect();
-    Ok(AskUserToolInput {
+    let input = AskUserToolInput {
         title: req.title,
         body_markdown: req.body_markdown,
         kind: req.kind,
@@ -259,7 +260,10 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
             multiple: false,
             allow_custom: req.allow_free_text,
         }],
-    })
+    };
+    AskUserToolInput::parse_input(
+        serde_json::to_value(input).map_err(|err| PluginError::invalid_params(err.to_string()))?,
+    )
 }
 
 pub(super) fn todo_item_from_host(item: HostTodoItem) -> TodoItem {

@@ -104,10 +104,101 @@ pub(crate) fn model_safe_tool_name(name: &str) -> String {
     }
 }
 
+pub(crate) fn suggest_tool_names<I, T>(requested: &str, candidates: I, limit: usize) -> Vec<String>
+where
+    I: IntoIterator<Item = T>,
+    T: AsRef<str>,
+{
+    let requested = requested.trim();
+    let requested_lower = requested.to_ascii_lowercase();
+    let mut ranked: Vec<(usize, String)> = Vec::new();
+
+    for candidate in candidates {
+        let name = candidate.as_ref().trim();
+        if name.is_empty() {
+            continue;
+        }
+        let score = normalized_tool_name_distance(requested, name);
+        if score == 0 {
+            continue;
+        }
+        let name_lower = name.to_ascii_lowercase();
+        if score <= 4
+            || name_lower.contains(requested_lower.as_str())
+            || requested_lower.contains(name_lower.as_str())
+        {
+            ranked.push((score, name.to_string()));
+        }
+    }
+
+    ranked.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+
+    let mut suggestions = Vec::new();
+    for (_, name) in ranked {
+        if !suggestions.contains(&name) {
+            suggestions.push(name);
+        }
+        if suggestions.len() >= limit {
+            break;
+        }
+    }
+    suggestions
+}
+
+pub(crate) fn unknown_tool_message(requested: &str, suggestions: &[String]) -> String {
+    if suggestions.is_empty() {
+        return format!("unknown tool '{requested}'");
+    }
+    format!(
+        "unknown tool '{requested}'. Did you mean {}?",
+        suggestions
+            .iter()
+            .map(|tool| format!("`{tool}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+pub(crate) fn unknown_tool_hint(requested: &str, suggestions: Vec<String>) -> ToolError {
+    let suggestion_text = unknown_tool_message(requested, &suggestions);
+    ToolError::UnknownToolHint {
+        tool: requested.to_string(),
+        suggestions,
+        suggestion_text,
+    }
+}
+
+fn normalized_tool_name_distance(left: &str, right: &str) -> usize {
+    let left = left.trim().to_ascii_lowercase();
+    let right = right.trim().to_ascii_lowercase();
+    if left == right {
+        return 0;
+    }
+    let left_chars = left.chars().collect::<Vec<_>>();
+    let right_chars = right.chars().collect::<Vec<_>>();
+    let mut prev = (0..=right_chars.len()).collect::<Vec<_>>();
+    let mut curr = vec![0; right_chars.len() + 1];
+    for (i, left_ch) in left_chars.iter().enumerate() {
+        curr[0] = i + 1;
+        for (j, right_ch) in right_chars.iter().enumerate() {
+            let replace = prev[j] + usize::from(left_ch != right_ch);
+            let insert = curr[j] + 1;
+            let delete = prev[j + 1] + 1;
+            curr[j + 1] = replace.min(insert.min(delete));
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[right_chars.len()]
+}
+
 pub(crate) fn tool_matches_model_name(registered_tool: &RegisteredTool, name: &str) -> bool {
     let trimmed = name.trim();
     registered_tool.exposed_name == trimmed
         || model_safe_tool_name(registered_tool.exposed_name.as_str()) == trimmed
+        || registered_tool
+            .alias_exposed_names()
+            .iter()
+            .any(|alias| alias == trimmed || model_safe_tool_name(alias) == trimmed)
 }
 
 pub(crate) fn model_safe_tool_schema(schema: &serde_json::Value) -> serde_json::Value {
@@ -374,6 +465,10 @@ fn strip_discriminant_from_variant(
     stripped
         .entry("properties".to_string())
         .or_insert_with(|| serde_json::Value::Object(Default::default()));
+    stripped.insert(
+        "x-agena-discriminant-field".to_string(),
+        serde_json::Value::String(field.to_string()),
+    );
     serde_json::Value::Object(stripped)
 }
 
@@ -454,6 +549,27 @@ fn model_alias_help(base: &RegisteredTool, fixed_input: &serde_json::Value) -> O
     })
 }
 
+fn tool_name_alias_description(base: &RegisteredTool) -> String {
+    let prefix = format!("Alias for `{}`.", base.behavior_exposed_name());
+    let base_description = base.description_text().trim();
+    if base_description.is_empty() {
+        prefix
+    } else {
+        format!("{prefix} {base_description}")
+    }
+}
+
+fn tool_name_alias_help(base: &RegisteredTool) -> Option<String> {
+    let prefix = format!(
+        "This tool alias dispatches to `{}`.",
+        base.behavior_exposed_name()
+    );
+    Some(match base.help_text() {
+        Some(help) => format!("{prefix}\n\n{help}"),
+        None => prefix,
+    })
+}
+
 fn allocate_model_alias_name(
     base: &RegisteredTool,
     alias_segments: &[String],
@@ -480,6 +596,19 @@ fn expand_registered_tool_for_model(
     used_exposed_names: &mut BTreeSet<String>,
     out: &mut Vec<RegisteredTool>,
 ) {
+    for alias_name in base.alias_names() {
+        let alias_exposed_name =
+            crate::plugin::registry::exposed_tool_name(base.plugin_name.as_str(), alias_name);
+        if !used_exposed_names.insert(alias_exposed_name) {
+            continue;
+        }
+        let mut decl = base.decl.clone();
+        decl.name = alias_name.to_string();
+        decl.aliases.clear();
+        decl.description = Some(tool_name_alias_description(base));
+        decl.help = tool_name_alias_help(base);
+        out.push(base.with_tool_alias(alias_name, decl));
+    }
     expand_registered_tool_for_model_inner(
         base,
         base.sanitized_input_schema(),
@@ -709,8 +838,14 @@ pub enum ToolError {
     Io(#[from] std::io::Error),
     #[error("plugin error: {0}")]
     Plugin(String),
-    #[error("unknown tool: {0}")]
-    UnknownTool(String),
+    #[error("unknown tool: {tool}")]
+    UnknownTool { tool: String },
+    #[error("{suggestion_text}")]
+    UnknownToolHint {
+        tool: String,
+        suggestions: Vec<String>,
+        suggestion_text: String,
+    },
     #[error("unsupported tool invocation in executor: {0}")]
     UnsupportedInvocation(String),
 }
@@ -1040,6 +1175,41 @@ impl ToolExecutor {
         self.catalogued_model_tools()
     }
 
+    fn suggested_tool_names(&self, requested: &str) -> Vec<String> {
+        let mut candidates = self
+            .catalogued_tools_raw()
+            .into_iter()
+            .flat_map(|tool| {
+                let mut names = tool.alias_exposed_names();
+                names.insert(0, tool.exposed_name);
+                names
+            })
+            .collect::<Vec<_>>();
+        candidates.extend(
+            self.catalogued_model_tools_raw()
+                .into_iter()
+                .flat_map(|tool| {
+                    let mut names = tool.alias_exposed_names();
+                    names.insert(0, tool.exposed_name);
+                    names
+                }),
+        );
+        candidates.sort();
+        candidates.dedup();
+        suggest_tool_names(requested, candidates, 1)
+    }
+
+    fn unknown_tool_error(&self, requested: &str) -> ToolError {
+        let suggestions = self.suggested_tool_names(requested);
+        if suggestions.is_empty() {
+            ToolError::UnknownTool {
+                tool: requested.to_string(),
+            }
+        } else {
+            unknown_tool_hint(requested, suggestions)
+        }
+    }
+
     pub fn is_concurrency_safe_invocation(&self, invocation: &ToolInvocation) -> bool {
         let invocation = PluginInvocation::from_tool_invocation(invocation);
         let Some(entry) = self.plugin_invocation_definition(&invocation) else {
@@ -1122,7 +1292,7 @@ impl ToolExecutor {
         let tool_name = invocation_name(invocation);
         let definition = self
             .invocation_definition(invocation)
-            .ok_or_else(|| ToolError::UnknownTool(tool_name.clone()))?;
+            .ok_or_else(|| self.unknown_tool_error(tool_name.as_str()))?;
         let tags = invocation_effective_tags(&definition, invocation);
         if !self.tool_catalog().are_tags_enabled(&tags) {
             return Err(ToolError::PermissionDenied(format!(
@@ -1434,7 +1604,7 @@ impl ToolExecutor {
         let tool_name = input.tool_name();
         let definition = scoped_executor
             .invocation_definition(&invocation)
-            .ok_or_else(|| ToolError::UnknownTool(tool_name.to_string()))?;
+            .ok_or_else(|| scoped_executor.unknown_tool_error(tool_name))?;
         if !scoped_executor.tool_catalog().is_tool_enabled(&definition) {
             return Err(ToolError::UnsupportedInvocation(tool_name.to_string()));
         }
@@ -1666,7 +1836,7 @@ impl ToolExecutor {
 
         let resolution = self
             .plugin_resolution_for_plugin_invocation(&plugin_invocation)
-            .ok_or_else(|| ToolError::UnknownTool(plugin_invocation.tool_name.clone()))?;
+            .ok_or_else(|| self.unknown_tool_error(plugin_invocation.tool_name.as_str()))?;
         let executor_guard = in_process_router::install_executor_context(
             self,
             session_id,
@@ -1764,7 +1934,7 @@ impl ToolExecutor {
                 .entered();
         let resolution = self
             .plugin_resolution_for_plugin_invocation(&plugin_invocation)
-            .ok_or_else(|| ToolError::UnknownTool(plugin_invocation.tool_name.clone()))?;
+            .ok_or_else(|| self.unknown_tool_error(plugin_invocation.tool_name.as_str()))?;
         let _executor_guard = in_process_router::install_executor_context(
             self,
             session_id,
@@ -2293,6 +2463,12 @@ fn invocation_effective_tags(
         ("agena.cron/schedule", "create" | "delete" | "wakeup") => {
             set_invocation_access_tags(&mut tags, false, true, false, false)
         }
+        ("agena.shell/monitor", "list" | "read") => {
+            set_invocation_access_tags(&mut tags, true, false, false, false)
+        }
+        ("agena.shell/monitor", "start" | "stop") => {
+            set_invocation_access_tags(&mut tags, false, true, false, false)
+        }
         ("agena.workflow/session", "get") => {
             set_invocation_access_tags(&mut tags, true, false, false, false)
         }
@@ -2353,6 +2529,8 @@ fn is_concurrency_safe_tool_invocation(
     match (registered_tool.behavior_exposed_name(), command) {
         ("agena.fs/fs", "read" | "glob" | "grep") => true,
         ("agena.fs/fs", "apply_patch" | "notebook_edit") => false,
+        ("agena.shell/monitor", "list" | "read") => true,
+        ("agena.shell/monitor", "start" | "stop") => false,
         ("agena.settings/settings", "get" | "list" | "validate") => true,
         ("agena.settings/settings", "set" | "delete" | "patch") => false,
         ("agena.cron/schedule", "list") => true,
@@ -2611,8 +2789,11 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
 
+    use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use chrono::Utc;
+    use schemars::JsonSchema;
+    use serde::{Deserialize, Serialize};
     use serde_json::json;
     use uuid::Uuid;
 
@@ -2622,6 +2803,7 @@ mod tests {
         LspPositionToolInput, Message, MonitorToolInput, NetworkEffect, PartContent, ReadToolInput,
         ShellCommandInput, StructuredObject, TaskSubagentType, TaskToolInput, TodoItem,
         TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation, WebFetchToolInput,
+        WebSearchToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
@@ -2634,16 +2816,22 @@ mod tests {
     use crate::plugin::sdk::{
         EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, Result as SdkResult,
     };
+    use crate::plugin::sdk::{
+        ToolArgs as SdkToolArgs, ToolCommand as SdkToolCommand,
+        ToolSubcommands as SdkToolSubcommands,
+    };
     use crate::plugin::{ConfiguredPlugin, PluginHost, PluginHostBuilder, PluginsConfig};
     use crate::role::Role;
 
     use super::{
         ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadInput,
-        ToolPayloadOutput,
+        ToolPayloadOutput, ToolRuntimeContext, orchestrator,
     };
     use crate::plugins::provided::router as in_process_router;
 
     const FS_TOOL: &str = "agena.fs/fs";
+    const GENERATED_HELP_TOOL: &str = "fixture/generated_help";
+    const MERGED_HELP_TOOL: &str = "fixture/merged_help";
     const SHELL_BASH_TOOL: &str = "agena.shell/exec.bash";
     const TOOLS_TOOL: &str = "agena.workflow/tools";
     const TODO_TOOL: &str = "agena.workflow/todo";
@@ -2652,6 +2840,899 @@ mod tests {
     const WEB_FETCH_TOOL: &str = "agena.web/fetch";
     const WEB_QUERY_TOOL: &str = "agena.web/store.query";
     const WEB_SEARCH_TOOL: &str = "agena.web/search";
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    struct DocBackedArgs {
+        value: String,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[serde(deny_unknown_fields)]
+    struct DocBackedShapeInput {
+        /// Search text.
+        query: String,
+        /// Optional result limit.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<u32>,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[serde(deny_unknown_fields)]
+    struct OrderedShapeInput {
+        /// Second declared field.
+        beta: String,
+        /// First declared field.
+        alpha: String,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, SdkToolArgs)]
+    #[tool_args(trim("value"), non_empty("value"))]
+    #[serde(deny_unknown_fields)]
+    struct SdkAliasArgs {
+        /// Value normalized by the SDK alias derive.
+        value: String,
+    }
+
+    /// SDK alias-backed command.
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, SdkToolCommand)]
+    #[tool_command(
+        tool = "fixture.sdk_alias_command",
+        alias = "fixture.sdk_alias_short",
+        visible_alias = "fixture.sdk_alias_visible",
+        aliases("fixture.sdk_alias_lookup")
+    )]
+    #[serde(deny_unknown_fields)]
+    struct SdkAliasCommandInput {
+        /// Value routed through the SDK alias surface.
+        value: String,
+    }
+
+    #[allow(dead_code)]
+    #[derive(Debug, SdkToolSubcommands)]
+    enum SdkAliasToolSuite {
+        Command(SdkAliasCommandInput),
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    struct DispatchInnerArgs {
+        value: String,
+    }
+
+    struct DispatchReceiver;
+
+    impl DispatchReceiver {
+        async fn handle_struct(&self, args: &DispatchInnerArgs) -> SdkResult<ToolInvokeOutput> {
+            Ok(ToolInvokeOutput::text(format!("struct: {}", args.value)))
+        }
+
+        async fn handle_struct_stream(
+            &self,
+            sink: crate::plugin::sdk::ToolStreamSink,
+            args: &DispatchInnerArgs,
+        ) -> SdkResult<crate::plugin::sdk::ToolStreamEnd> {
+            sink.text(format!("struct-stream:{}", args.value)).await;
+            Ok(crate::plugin::sdk::ToolStreamEnd {
+                stream_id: sink.stream_id().to_string(),
+                title: "Struct Stream".to_string(),
+                output_text: format!("struct-stream: {}", args.value),
+                payload: None,
+                metadata: Default::default(),
+                attachments: Vec::new(),
+            })
+        }
+
+        async fn handle_struct_with_context(
+            &self,
+            context: &crate::plugin::sdk::ToolInvokeContext<'_>,
+            args: DispatchInnerArgs,
+        ) -> SdkResult<ToolInvokeOutput> {
+            Ok(ToolInvokeOutput::text(format!(
+                "struct-ctx:{}:{}:{}:{}",
+                context.tool_name, context.session_id, context.call_id, args.value
+            )))
+        }
+
+        async fn handle_struct_stream_with_context(
+            &self,
+            context: &crate::plugin::sdk::ToolInvokeContext<'_>,
+            sink: crate::plugin::sdk::ToolStreamSink,
+            args: DispatchInnerArgs,
+        ) -> SdkResult<crate::plugin::sdk::ToolStreamEnd> {
+            sink.text(format!(
+                "struct-stream-ctx:{}:{}:{}:{}",
+                context.tool_name, context.session_id, context.call_id, args.value
+            ))
+            .await;
+            Ok(crate::plugin::sdk::ToolStreamEnd {
+                stream_id: sink.stream_id().to_string(),
+                title: "Struct Stream Context".to_string(),
+                output_text: format!(
+                    "struct-stream-ctx:{}:{}:{}:{}",
+                    context.tool_name, context.session_id, context.call_id, args.value
+                ),
+                payload: None,
+                metadata: Default::default(),
+                attachments: Vec::new(),
+            })
+        }
+
+        async fn handle_struct_owned(
+            &self,
+            args: DispatchInnerArgs,
+        ) -> SdkResult<ToolInvokeOutput> {
+            Ok(ToolInvokeOutput::text(format!(
+                "struct-owned: {}",
+                args.value
+            )))
+        }
+
+        async fn handle_usage(&self) -> SdkResult<ToolInvokeOutput> {
+            Ok(ToolInvokeOutput::text("usage"))
+        }
+
+        async fn handle_run(
+            &self,
+            value: &String,
+            limit: &Option<u32>,
+        ) -> SdkResult<ToolInvokeOutput> {
+            Ok(ToolInvokeOutput::text(format!(
+                "run: {}:{}",
+                value,
+                limit.unwrap_or(0)
+            )))
+        }
+
+        async fn handle_run_with_context(
+            &self,
+            context: &crate::plugin::sdk::ToolInvokeContext<'_>,
+            value: String,
+            limit: Option<u32>,
+        ) -> SdkResult<ToolInvokeOutput> {
+            Ok(ToolInvokeOutput::text(format!(
+                "run-ctx:{}:{}:{}:{}:{}",
+                context.tool_name,
+                context.session_id,
+                context.call_id,
+                value,
+                limit.unwrap_or(0)
+            )))
+        }
+
+        async fn handle_run_owned(
+            &self,
+            value: String,
+            limit: Option<u32>,
+        ) -> SdkResult<ToolInvokeOutput> {
+            Ok(ToolInvokeOutput::text(format!(
+                "run-owned: {}:{}",
+                value,
+                limit.unwrap_or(0)
+            )))
+        }
+
+        async fn handle_shape(&self, args: &DispatchInnerArgs) -> SdkResult<ToolInvokeOutput> {
+            Ok(ToolInvokeOutput::text(format!("shape: {}", args.value)))
+        }
+
+        async fn handle_shape_stream(
+            &self,
+            sink: crate::plugin::sdk::ToolStreamSink,
+            args: &DispatchInnerArgs,
+        ) -> SdkResult<crate::plugin::sdk::ToolStreamEnd> {
+            sink.text(format!("shape-stream:{}", args.value)).await;
+            Ok(crate::plugin::sdk::ToolStreamEnd {
+                stream_id: sink.stream_id().to_string(),
+                title: "Shape Stream".to_string(),
+                output_text: format!("shape-stream: {}", args.value),
+                payload: None,
+                metadata: Default::default(),
+                attachments: Vec::new(),
+            })
+        }
+
+        async fn handle_shape_with_context(
+            &self,
+            context: &crate::plugin::sdk::ToolInvokeContext<'_>,
+            value: String,
+            limit: Option<u32>,
+        ) -> SdkResult<ToolInvokeOutput> {
+            Ok(ToolInvokeOutput::text(format!(
+                "shape-ctx:{}:{}:{}:{}:{}",
+                context.tool_name,
+                context.session_id,
+                context.call_id,
+                value,
+                limit.unwrap_or(0)
+            )))
+        }
+
+        async fn handle_shape_stream_with_context(
+            &self,
+            context: &crate::plugin::sdk::ToolInvokeContext<'_>,
+            sink: crate::plugin::sdk::ToolStreamSink,
+            value: String,
+            limit: Option<u32>,
+        ) -> SdkResult<crate::plugin::sdk::ToolStreamEnd> {
+            sink.text(format!(
+                "shape-stream-ctx:{}:{}:{}:{}:{}",
+                context.tool_name,
+                context.session_id,
+                context.call_id,
+                value,
+                limit.unwrap_or(0)
+            ))
+            .await;
+            Ok(crate::plugin::sdk::ToolStreamEnd {
+                stream_id: sink.stream_id().to_string(),
+                title: "Shape Stream Context".to_string(),
+                output_text: format!(
+                    "shape-stream-ctx:{}:{}:{}:{}:{}",
+                    context.tool_name,
+                    context.session_id,
+                    context.call_id,
+                    value,
+                    limit.unwrap_or(0)
+                ),
+                payload: None,
+                metadata: Default::default(),
+                attachments: Vec::new(),
+            })
+        }
+
+        async fn permission_shape_paths(
+            &self,
+            args: &DispatchInnerArgs,
+        ) -> SdkResult<Vec<crate::plugin::sdk::PathRequest>> {
+            Ok(vec![crate::plugin::sdk::PathRequest::read(format!(
+                "/shape/{}",
+                args.value
+            ))])
+        }
+
+        async fn permission_shape_networks(
+            &self,
+            args: &DispatchInnerArgs,
+        ) -> SdkResult<Vec<crate::plugin::sdk::NetworkRequest>> {
+            Ok(vec![crate::plugin::sdk::NetworkRequest::connect(format!(
+                "https://shape-{}.example.com",
+                args.value
+            ))])
+        }
+
+        async fn permission_shape_usage_paths(
+            &self,
+        ) -> SdkResult<Vec<crate::plugin::sdk::PathRequest>> {
+            Ok(Vec::new())
+        }
+
+        async fn permission_shape_usage_networks(
+            &self,
+        ) -> SdkResult<Vec<crate::plugin::sdk::NetworkRequest>> {
+            Ok(Vec::new())
+        }
+
+        async fn permission_shape_variant_paths(
+            &self,
+            value: String,
+            limit: Option<u32>,
+        ) -> SdkResult<Vec<crate::plugin::sdk::PathRequest>> {
+            Ok(vec![crate::plugin::sdk::PathRequest::read(format!(
+                "/shape-variant/{value}/{}",
+                limit.unwrap_or(0)
+            ))])
+        }
+
+        async fn permission_shape_variant_networks(
+            &self,
+            value: String,
+            limit: Option<u32>,
+        ) -> SdkResult<Vec<crate::plugin::sdk::NetworkRequest>> {
+            Ok(vec![crate::plugin::sdk::NetworkRequest::connect(format!(
+                "https://shape-variant-{value}-{}.example.com",
+                limit.unwrap_or(0)
+            ))])
+        }
+    }
+
+    /// Dispatch fixture using a direct field handler binding.
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, SdkToolCommand)]
+    #[tool_command(
+        tool = "fixture.dispatch_struct",
+        handler_receiver = DispatchReceiver,
+        handle = DispatchReceiver::handle_struct,
+        stream_handle = DispatchReceiver::handle_struct_stream,
+        handle_field = args
+    )]
+    #[serde(deny_unknown_fields)]
+    struct DispatchStructToolInput {
+        args: DispatchInnerArgs,
+    }
+
+    /// Dispatch fixture using owned argument handler binding.
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, SdkToolCommand)]
+    #[tool_command(
+        tool = "fixture.dispatch_struct_owned",
+        handler_receiver = DispatchReceiver,
+        handle = DispatchReceiver::handle_struct_owned,
+        handle_field = args,
+        handle_by_value = true
+    )]
+    #[serde(deny_unknown_fields)]
+    struct DispatchOwnedStructToolInput {
+        args: DispatchInnerArgs,
+    }
+
+    /// Dispatch fixture using invoke-context-aware owned handler binding.
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, SdkToolCommand)]
+    #[tool_command(
+        tool = "fixture.dispatch_struct_context",
+        handler_receiver = DispatchReceiver,
+        handle_with_context = DispatchReceiver::handle_struct_with_context,
+        stream_handle_with_context = DispatchReceiver::handle_struct_stream_with_context,
+        handle_field = args,
+        handle_by_value = true
+    )]
+    #[serde(deny_unknown_fields)]
+    struct DispatchContextStructToolInput {
+        args: DispatchInnerArgs,
+    }
+
+    /// Dispatch fixture using per-variant handler bindings.
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, SdkToolCommand)]
+    #[tool_command(tool = "fixture.dispatch_enum", handler_receiver = DispatchReceiver)]
+    #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+    enum DispatchEnumToolInput {
+        #[tool(exec = "usage", handle = DispatchReceiver::handle_usage)]
+        Usage,
+        #[tool(exec = "run", handle = DispatchReceiver::handle_run)]
+        Run { value: String, limit: Option<u32> },
+    }
+
+    /// Dispatch fixture using per-variant owned handler bindings.
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, SdkToolCommand)]
+    #[tool_command(tool = "fixture.dispatch_enum_owned", handler_receiver = DispatchReceiver)]
+    #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+    enum DispatchOwnedEnumToolInput {
+        #[tool(
+            exec = "run",
+            handle = DispatchReceiver::handle_run_owned,
+            handle_by_value = true
+        )]
+        Run { value: String, limit: Option<u32> },
+    }
+
+    /// Dispatch fixture using per-variant invoke-context-aware handler bindings.
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, SdkToolCommand)]
+    #[tool_command(
+        tool = "fixture.dispatch_enum_context",
+        handler_receiver = DispatchReceiver
+    )]
+    #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+    enum DispatchContextEnumToolInput {
+        #[tool(
+            exec = "run",
+            handle_with_context = DispatchReceiver::handle_run_with_context,
+            handle_by_value = true
+        )]
+        Run { value: String, limit: Option<u32> },
+    }
+
+    #[allow(dead_code)]
+    #[derive(Debug, SdkToolSubcommands)]
+    #[tool_subcommands(handler_receiver = DispatchReceiver)]
+    enum DispatchToolSuite {
+        Struct(DispatchStructToolInput),
+        StructOwned(DispatchOwnedStructToolInput),
+        StructContext(DispatchContextStructToolInput),
+        Enum(DispatchEnumToolInput),
+        EnumOwned(DispatchOwnedEnumToolInput),
+        EnumContext(DispatchContextEnumToolInput),
+    }
+
+    /// Dispatch fixture using shape-level direct field handler binding.
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, SdkToolArgs)]
+    #[tool_args(
+        handler_receiver = DispatchReceiver,
+        handle = DispatchReceiver::handle_shape,
+        stream_handle = DispatchReceiver::handle_shape_stream,
+        permission_paths_handle = DispatchReceiver::permission_shape_paths,
+        permission_networks_handle = DispatchReceiver::permission_shape_networks,
+        handle_field = args
+    )]
+    #[serde(deny_unknown_fields)]
+    struct DispatchStructShapeInput {
+        args: DispatchInnerArgs,
+    }
+
+    /// Dispatch fixture using shape-level per-variant context-aware handler bindings.
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, SdkToolArgs)]
+    #[tool_args(handler_receiver = DispatchReceiver)]
+    #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+    enum DispatchEnumShapeInput {
+        #[tool(
+            default_when_empty = true,
+            handle = DispatchReceiver::handle_usage,
+            permission_paths_handle = DispatchReceiver::permission_shape_usage_paths,
+            permission_networks_handle = DispatchReceiver::permission_shape_usage_networks
+        )]
+        Usage,
+        #[tool(
+            exec = "run",
+            handle_with_context = DispatchReceiver::handle_shape_with_context,
+            stream_handle_with_context = DispatchReceiver::handle_shape_stream_with_context,
+            permission_paths_handle = DispatchReceiver::permission_shape_variant_paths,
+            permission_networks_handle = DispatchReceiver::permission_shape_variant_networks,
+            handle_by_value = true
+        )]
+        Run { value: String, limit: Option<u32> },
+    }
+
+    fn validate_inline_variant_limit(value: &serde_json::Value) -> SdkResult<()> {
+        let limit = value
+            .get("limit")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        if limit > 10 {
+            return Err(crate::plugin::PluginError::invalid_params(
+                "limit must be 10 or less",
+            ));
+        }
+        Ok(())
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+    enum MultiFieldValidatedShapeInput {
+        #[tool(non_empty("value"), validate = validate_inline_variant_limit)]
+        Run { value: String, limit: Option<u32> },
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, StaticToolSurface)]
+    #[tool_surface(tool = "fixture.multi_field_validate")]
+    #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+    /// Multi-field variant validation fixture.
+    enum MultiFieldValidatedToolInput {
+        #[tool(
+            exec = "run",
+            non_empty("value"),
+            validate = validate_inline_variant_limit
+        )]
+        Run { value: String, limit: Option<u32> },
+    }
+
+    /// Doc-backed struct tool.
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, StaticToolSurface)]
+    #[tool_surface(tool = "fixture.doc_struct_tool")]
+    #[serde(deny_unknown_fields)]
+    struct DocBackedStructToolInput {
+        /// Path to inspect.
+        path: String,
+    }
+
+    /// Doc-backed tool.
+    ///
+    /// Second paragraph becomes help text automatically.
+    #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
+    #[tool_surface(
+        tool = "fixture.doc_tool",
+        examples(r#"{"action":"run","value":"ok"}"#),
+        tags(ToolTag::ReadOnly),
+        concurrency_safe = true
+    )]
+    #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+    enum DocBackedToolInput {
+        /// Run the documented action.
+        #[tool(exec = "run")]
+        Run {
+            #[serde(flatten)]
+            args: DocBackedArgs,
+        },
+        /// Explain the documented action.
+        #[tool(exec = "explain")]
+        Explain {
+            #[serde(flatten)]
+            args: DocBackedArgs,
+        },
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, StaticToolSurface)]
+    #[tool_surface(
+        tool = "fixture.ui_display_tool",
+        description = "UI display preset fixture.",
+        ui_display = brief
+    )]
+    #[serde(deny_unknown_fields)]
+    struct UiDisplaySurfaceInput;
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, StaticToolSurface)]
+    #[tool_surface(
+        tool = "fixture.brief_display_tool",
+        description = "Brief display preset fixture.",
+        display = brief
+    )]
+    #[serde(deny_unknown_fields)]
+    struct BriefDisplaySurfaceInput;
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, StaticToolSurface)]
+    #[tool_surface(
+        tool = "fixture.about_surface_tool",
+        about = "About summary.",
+        long_about = "About description.",
+        long_help = "About help."
+    )]
+    #[serde(deny_unknown_fields)]
+    struct AboutAliasSurfaceInput;
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, StaticToolSurface)]
+    #[tool_surface(
+        tool = "fixture.after_help_surface_tool",
+        description = "After-help surface fixture.",
+        after_help = "After-help text.",
+        after_long_help = "After-long-help text."
+    )]
+    #[serde(deny_unknown_fields)]
+    struct AfterHelpAliasSurfaceInput;
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, StaticToolSurface)]
+    #[tool_surface(
+        tool = "fixture.before_help_surface_tool",
+        description = "Before-help surface fixture.",
+        before_help = "Before-help surface fixture.",
+        before_long_help = "Before-long-help surface fixture."
+    )]
+    #[serde(deny_unknown_fields)]
+    struct BeforeHelpAliasSurfaceInput;
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolCommand)]
+    #[tool_command(
+        tool = "fixture.about_command_tool",
+        about = "Command summary.",
+        long_about = "Command description.",
+        long_help = "Command help."
+    )]
+    #[serde(deny_unknown_fields)]
+    struct AboutAliasCommandInput;
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolCommand)]
+    #[tool_command(
+        tool = "fixture.after_help_command_tool",
+        description = "After-help command fixture.",
+        after_help = "Command after-help text.",
+        after_long_help = "Command after-long-help text."
+    )]
+    #[serde(deny_unknown_fields)]
+    struct AfterHelpAliasCommandInput;
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolCommand)]
+    #[tool_command(
+        tool = "fixture.before_help_command_tool",
+        description = "Command before-help fixture.",
+        before_help = "Command before-help text.",
+        before_long_help = "Command before-long-help text."
+    )]
+    #[serde(deny_unknown_fields)]
+    struct BeforeHelpAliasCommandInput;
+
+    #[derive(Debug, Deserialize, JsonSchema, ToolInputShape)]
+    #[serde(deny_unknown_fields)]
+    struct ShapeFromStringInput {
+        value: String,
+    }
+
+    fn validate_non_empty_shape(input: &ValidatedShapeFromStringInput) -> SdkResult<()> {
+        if input.value.trim().is_empty() {
+            return Err(crate::plugin::PluginError::invalid_params(
+                "value must not be empty",
+            ));
+        }
+        Ok(())
+    }
+
+    #[derive(Debug, Deserialize, JsonSchema, ToolInputShape)]
+    #[tool_input(validate = validate_non_empty_shape)]
+    #[serde(deny_unknown_fields)]
+    struct ValidatedShapeFromStringInput {
+        value: String,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[tool_input(non_empty("value"))]
+    #[serde(deny_unknown_fields)]
+    struct BuiltInValidatedShapeFromStringInput {
+        value: String,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    struct SelectorArgs {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+    }
+
+    /// Selector tool.
+    #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
+    #[tool_surface(tool = "fixture.selector_tool")]
+    #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+    enum SelectorToolInput {
+        #[tool(exec = "pick", exactly_one_of("id", "url"))]
+        Pick {
+            #[serde(flatten)]
+            args: SelectorArgs,
+        },
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[tool_input(trim("query"))]
+    #[serde(deny_unknown_fields)]
+    struct SearchArgs {
+        query: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<u32>,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[tool_input(trim("tool"))]
+    #[serde(deny_unknown_fields)]
+    struct HelpArgs {
+        #[serde(alias = "name", alias = "tool_name")]
+        tool: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        include_schema: Option<bool>,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    struct RoutedArgs {
+        value: String,
+    }
+
+    /// Route fixture using direct field serialization.
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, StaticToolSurface)]
+    #[tool_surface(tool = "fixture.route_field")]
+    #[serde(deny_unknown_fields)]
+    struct RoutedFieldToolInput {
+        #[serde(flatten)]
+        args: RoutedArgs,
+    }
+
+    /// Route fixture using converted payload serialization.
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, StaticToolSurface)]
+    #[tool_surface(tool = "fixture.route_convert")]
+    #[serde(deny_unknown_fields)]
+    struct RoutedConvertToolInput {
+        #[serde(flatten)]
+        args: RoutedArgs,
+    }
+
+    /// Route fixture using direct field serialization plus ToolInputShape normalization.
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, StaticToolSurface)]
+    #[tool_surface(tool = "fixture.route_field_shape")]
+    #[serde(deny_unknown_fields)]
+    struct RoutedFieldShapeToolInput {
+        #[serde(flatten)]
+        args: RoutedArgs,
+    }
+
+    /// Route fixture using direct field serialization plus routed action injection.
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, StaticToolSurface)]
+    #[tool_surface(tool = "fixture.route_action_shape")]
+    #[serde(deny_unknown_fields)]
+    struct RoutedActionShapeToolInput {
+        #[serde(flatten)]
+        args: RoutedArgs,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+    enum RoutedTargetInput {
+        Echo { value: String },
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[tool_input(trim("value"), non_empty("value"))]
+    #[serde(deny_unknown_fields)]
+    struct RoutedNormalizedValueInput {
+        value: String,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[tool_input(trim("value"), non_empty("value"))]
+    #[serde(deny_unknown_fields)]
+    struct FlattenedNestedShapeInput {
+        value: String,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[serde(deny_unknown_fields)]
+    struct FlattenedShapeWrapperInput {
+        #[tool(flatten_shape)]
+        #[serde(flatten)]
+        inner: FlattenedNestedShapeInput,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, StaticToolSurface)]
+    #[tool_surface(
+        tool = "fixture.flatten_shape_surface",
+        description = "Flattened nested ToolInputShape normalization fixture."
+    )]
+    #[serde(deny_unknown_fields)]
+    struct FlattenedShapeSurfaceInput {
+        #[tool(flatten_shape)]
+        #[serde(flatten)]
+        inner: FlattenedNestedShapeInput,
+    }
+
+    #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
+    #[tool_surface(tool = "fixture.surface_route", description = "Surface route fixture.")]
+    #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+    enum SurfaceRoutedToolInput {
+        #[tool(exec = "field", route = "fixture.inner_surface_field")]
+        Field {
+            #[serde(flatten)]
+            args: RoutedArgs,
+        },
+        #[tool(
+            exec = "field_shape",
+            route = "fixture.inner_surface_field_shape",
+            shape = RoutedNormalizedValueInput
+        )]
+        FieldShape {
+            #[serde(flatten)]
+            args: RoutedArgs,
+        },
+        #[tool(
+            exec = "action_shape",
+            route = "fixture.inner_surface_action_shape",
+            route_action = "echo",
+            shape = RoutedTargetInput
+        )]
+        ActionShape {
+            #[serde(flatten)]
+            args: RoutedArgs,
+        },
+    }
+
+    fn convert_routed_target(input: RoutedConvertToolInput) -> SdkResult<RoutedTargetInput> {
+        Ok(RoutedTargetInput::Echo {
+            value: input.args.value,
+        })
+    }
+
+    #[allow(dead_code)]
+    #[derive(Debug, ToolSuite)]
+    enum RoutedToolSuite {
+        #[tool(route = "fixture.inner_field", field = args)]
+        Field(RoutedFieldToolInput),
+        #[tool(route = "fixture.inner_field_shape", field = args, shape = RoutedNormalizedValueInput)]
+        FieldShape(RoutedFieldShapeToolInput),
+        #[tool(
+            route = "fixture.inner_action_shape",
+            route_action = "echo",
+            field = args,
+            shape = RoutedTargetInput
+        )]
+        ActionShape(RoutedActionShapeToolInput),
+        #[tool(route = "fixture.inner_convert", convert = convert_routed_target)]
+        Convert(RoutedConvertToolInput),
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[tool_input(requires("confirm", "token"), conflicts_with("id", "url"))]
+    #[serde(deny_unknown_fields)]
+    struct RelationValidatedShapeInput {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        confirm: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[tool_input(required_unless_present("questions[].allow_custom", "questions[].options"))]
+    #[serde(deny_unknown_fields)]
+    struct QuestionChoiceShapeInput {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        questions: Vec<crate::message::UserInputQuestion>,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[tool_input(forbid_substrings("name", "/", "\\"))]
+    #[serde(deny_unknown_fields)]
+    struct PathValidatedShapeInput {
+        name: String,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[tool_input(trim("name"), trim_suffix("name", ".md"))]
+    #[serde(deny_unknown_fields)]
+    struct NormalizedNameShapeInput {
+        name: String,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[tool_input(trim("name"))]
+    #[serde(deny_unknown_fields)]
+    struct AliasNormalizedNameShapeInput {
+        #[serde(alias = "file_name")]
+        name: String,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[tool_input(
+        non_empty_if_present("questions[].options[].label"),
+        distinct_trimmed("questions[].id"),
+        distinct_trimmed_within("questions[].options[].label", "questions[]")
+    )]
+    #[serde(deny_unknown_fields)]
+    struct DistinctQuestionShapeInput {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        questions: Vec<crate::message::UserInputQuestion>,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[tool_input(trim("query", "tool"))]
+    #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+    enum VariantValidatedShapeInput {
+        #[tool(non_empty("query"))]
+        Search { query: String },
+        #[tool(non_empty("tool"))]
+        Help { tool: String },
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
+    #[tool_input(trim("query", "tool"))]
+    #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+    enum NormalizedVariantShapeInput {
+        #[tool(default_when_empty = true)]
+        Usage,
+        #[tool(infer_when_present("query"), drop_keys("tool"))]
+        Search { query: String },
+        #[tool(
+            infer_when_present("tool"),
+            action_alias("describe"),
+            action_alias_default("quick_help", include_schema = false)
+        )]
+        Help {
+            tool: String,
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            include_schema: Option<bool>,
+        },
+    }
+
+    #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
+    #[tool_surface(tool = "fixture.catalog_tool", description = "Catalog tool fixture.")]
+    #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+    enum CatalogToolInput {
+        #[tool(exec = "usage", default_when_empty = true)]
+        Usage,
+        #[tool(
+            exec = "search",
+            infer_when_present("query"),
+            drop_keys("tool", "name", "tool_name", "include_schema")
+        )]
+        Search {
+            #[tool(flatten_shape)]
+            #[serde(flatten)]
+            args: SearchArgs,
+        },
+        #[tool(
+            exec = "help",
+            infer_when_present("tool", "name", "tool_name"),
+            drop_keys("query", "limit")
+        )]
+        Help {
+            #[tool(flatten_shape)]
+            #[serde(flatten)]
+            args: HelpArgs,
+        },
+    }
 
     #[test]
     fn model_safe_tool_name_escapes_provider_invalid_separators() {
@@ -2663,6 +3744,1317 @@ mod tests {
             super::model_safe_tool_name("mcp:docs:search"),
             "mcp__x3a__docs__x3a__search"
         );
+    }
+
+    #[test]
+    fn static_tool_surface_can_derive_docs_from_rust_doc_comments() {
+        let decl = DocBackedToolInput::tool_decl();
+        assert_eq!(
+            decl.description_text(),
+            "Doc-backed tool.\n\nSecond paragraph becomes help text automatically."
+        );
+        assert_eq!(decl.summary_text(), Some("Doc-backed tool."));
+        assert_eq!(
+            decl.help_text(),
+            Some("Doc-backed tool.\n\nSecond paragraph becomes help text automatically.")
+        );
+        assert_eq!(
+            decl.example_texts(),
+            &[r#"{"action":"run","value":"ok"}"#.to_string()]
+        );
+    }
+
+    #[test]
+    fn static_tool_surface_accepts_about_aliases() {
+        let decl = AboutAliasSurfaceInput::tool_decl();
+        assert_eq!(decl.summary_text(), Some("About summary."));
+        assert_eq!(decl.description_text(), "About description.");
+        assert_eq!(decl.help_text(), Some("About help."));
+    }
+
+    #[test]
+    fn tool_command_accepts_about_aliases() {
+        let decl = AboutAliasCommandInput::tool_decl();
+        assert_eq!(decl.summary_text(), Some("Command summary."));
+        assert_eq!(decl.description_text(), "Command description.");
+        assert_eq!(decl.help_text(), Some("Command help."));
+    }
+
+    #[test]
+    fn static_tool_surface_accepts_after_help_aliases() {
+        let decl = AfterHelpAliasSurfaceInput::tool_decl();
+        assert_eq!(decl.after_help_text(), Some("After-long-help text."));
+        assert_eq!(decl.help_text(), None);
+    }
+
+    #[test]
+    fn tool_command_accepts_after_help_aliases() {
+        let decl = AfterHelpAliasCommandInput::tool_decl();
+        assert_eq!(
+            decl.after_help_text(),
+            Some("Command after-long-help text.")
+        );
+        assert_eq!(decl.help_text(), None);
+    }
+
+    #[test]
+    fn static_tool_surface_accepts_before_help_aliases() {
+        let decl = BeforeHelpAliasSurfaceInput::tool_decl();
+        assert_eq!(
+            decl.before_help_text(),
+            Some("Before-long-help surface fixture.")
+        );
+        assert_eq!(decl.description_text(), "Before-help surface fixture.");
+    }
+
+    #[test]
+    fn tool_command_accepts_before_help_aliases() {
+        let decl = BeforeHelpAliasCommandInput::tool_decl();
+        assert_eq!(
+            decl.before_help_text(),
+            Some("Command before-long-help text.")
+        );
+        assert_eq!(decl.description_text(), "Command before-help fixture.");
+    }
+
+    #[test]
+    fn tool_input_shape_schema_carries_field_doc_descriptions() {
+        let schema = DocBackedShapeInput::input_schema();
+        assert_eq!(
+            schema
+                .pointer("/properties/query/description")
+                .and_then(serde_json::Value::as_str),
+            Some("Search text.")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/limit/description")
+                .and_then(serde_json::Value::as_str),
+            Some("Optional result limit.")
+        );
+        let usage = crate::tool::definition::schema_usage_text(&schema).expect("usage text");
+        assert!(usage.contains("Search text."));
+        assert!(usage.contains("Optional result limit."));
+    }
+
+    #[test]
+    fn tool_input_shape_schema_carries_field_order_metadata() {
+        let schema = OrderedShapeInput::input_schema();
+        assert_eq!(
+            schema
+                .pointer("/properties/beta/x-agena-order")
+                .and_then(serde_json::Value::as_str),
+            Some("000000")
+        );
+        assert_eq!(
+            schema
+                .pointer("/properties/alpha/x-agena-order")
+                .and_then(serde_json::Value::as_str),
+            Some("000001")
+        );
+
+        let usage = crate::tool::definition::schema_usage_text(&schema).expect("usage text");
+        let beta_index = usage.find("`beta` <string, required>").expect("beta arg");
+        let alpha_index = usage.find("`alpha` <string, required>").expect("alpha arg");
+        assert!(beta_index < alpha_index);
+
+        let examples = crate::tool::definition::schema_example_texts(&schema);
+        assert_eq!(
+            examples.as_slice(),
+            &[r#"{"beta":"<beta>","alpha":"<alpha>"}"#.to_string()]
+        );
+    }
+
+    #[test]
+    fn sdk_reexported_clap_style_derives_parse_and_describe_tools() {
+        let parsed = SdkAliasArgs::parse_json_str(r#"{"value":"  ok  "}"#)
+            .expect("sdk alias args should parse through ToolArgs re-export");
+        assert_eq!(parsed.value, "ok");
+
+        let command_decl = SdkAliasCommandInput::tool_decl();
+        assert_eq!(command_decl.name, "fixture.sdk_alias_command");
+        assert_eq!(
+            command_decl.alias_texts(),
+            &[
+                "fixture.sdk_alias_short".to_string(),
+                "fixture.sdk_alias_visible".to_string(),
+                "fixture.sdk_alias_lookup".to_string()
+            ]
+        );
+        let usage = crate::tool::definition::schema_usage_text(&command_decl.input_schema)
+            .expect("sdk alias command usage");
+        assert!(usage.contains("Value routed through the SDK alias surface."));
+
+        let decl_names = SdkAliasToolSuite::tool_decls()
+            .into_iter()
+            .map(|decl| decl.name)
+            .collect::<Vec<_>>();
+        assert_eq!(decl_names, vec!["fixture.sdk_alias_command".to_string()]);
+
+        let (resolved_tool, resolved_input) =
+            SdkAliasCommandInput::resolve_json_str("fixture.sdk_alias_short", r#"{"value":"ok"}"#)
+                .expect("single tool resolve should accept aliases");
+        assert_eq!(resolved_tool, "fixture.sdk_alias_command");
+        assert_eq!(resolved_input, serde_json::json!({"value":"ok"}));
+
+        let (suite_tool, suite_input) = SdkAliasToolSuite::resolve_tool_json_str(
+            "fixture.sdk_alias_lookup",
+            r#"{"value":"ok"}"#,
+        )
+        .expect("suite resolve should accept aliases");
+        assert_eq!(suite_tool, "fixture.sdk_alias_command");
+        assert_eq!(suite_input, serde_json::json!({"value":"ok"}));
+    }
+
+    #[test]
+    fn clap_style_dispatch_helpers_bind_struct_enum_and_suite_handlers() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        runtime
+            .block_on(async {
+                let receiver = DispatchReceiver;
+
+                let struct_output = DispatchStructToolInput::parse_input(json!({
+                    "args": { "value": "alpha" }
+                }))
+                .expect("struct dispatch input")
+                .dispatch_tool_invoke(&receiver)
+                .await
+                .expect("struct handler dispatch");
+                assert_eq!(struct_output.output_text, "struct: alpha");
+
+                let enum_usage_output = DispatchEnumToolInput::parse_input(json!({
+                    "action": "usage"
+                }))
+                .expect("enum usage input")
+                .dispatch_tool_invoke(&receiver)
+                .await
+                .expect("enum usage dispatch");
+                assert_eq!(enum_usage_output.output_text, "usage");
+
+                let enum_run_output = DispatchEnumToolInput::parse_input(json!({
+                    "action": "run",
+                    "value": "beta",
+                    "limit": 3
+                }))
+                .expect("enum run input")
+                .dispatch_tool_invoke(&receiver)
+                .await
+                .expect("enum run dispatch");
+                assert_eq!(enum_run_output.output_text, "run: beta:3");
+
+                let struct_owned_output = DispatchOwnedStructToolInput::parse_input(json!({
+                    "args": { "value": "delta" }
+                }))
+                .expect("owned struct dispatch input")
+                .dispatch_tool_invoke(&receiver)
+                .await
+                .expect("owned struct handler dispatch");
+                assert_eq!(struct_owned_output.output_text, "struct-owned: delta");
+
+                let enum_owned_output = DispatchOwnedEnumToolInput::parse_input(json!({
+                    "action": "run",
+                    "value": "epsilon",
+                    "limit": 5
+                }))
+                .expect("owned enum run input")
+                .dispatch_tool_invoke(&receiver)
+                .await
+                .expect("owned enum run dispatch");
+                assert_eq!(enum_owned_output.output_text, "run-owned: epsilon:5");
+
+                let context = crate::plugin::sdk::ToolInvokeContext {
+                    tool_name: "fixture.dispatch_struct_context",
+                    session_id: 41,
+                    call_id: 42,
+                    workspace_root: "/tmp/project",
+                };
+
+                let struct_context_output = DispatchContextStructToolInput::parse_input(json!({
+                    "args": { "value": "theta" }
+                }))
+                .expect("context struct dispatch input")
+                .dispatch_tool_invoke_with_context(&receiver, &context)
+                .await
+                .expect("context struct handler dispatch");
+                assert_eq!(
+                    struct_context_output.output_text,
+                    "struct-ctx:fixture.dispatch_struct_context:41:42:theta"
+                );
+
+                let enum_context_output = DispatchContextEnumToolInput::parse_input(json!({
+                    "action": "run",
+                    "value": "iota",
+                    "limit": 7
+                }))
+                .expect("context enum run input")
+                .dispatch_tool_invoke_with_context(&receiver, &context)
+                .await
+                .expect("context enum run dispatch");
+                assert_eq!(
+                    enum_context_output.output_text,
+                    "run-ctx:fixture.dispatch_struct_context:41:42:iota:7"
+                );
+
+                let shape_struct_output = DispatchStructShapeInput::parse_input(json!({
+                    "args": { "value": "lambda" }
+                }))
+                .expect("shape struct dispatch input")
+                .dispatch_tool_invoke(&receiver)
+                .await
+                .expect("shape struct handler dispatch");
+                assert_eq!(shape_struct_output.output_text, "shape: lambda");
+
+                let shape_struct_paths = DispatchStructShapeInput::parse_input(json!({
+                    "args": { "value": "lambda" }
+                }))
+                .expect("shape struct permission paths input")
+                .dispatch_permission_paths(&receiver)
+                .await
+                .expect("shape struct permission paths dispatch");
+                assert_eq!(
+                    shape_struct_paths,
+                    vec![crate::plugin::sdk::PathRequest::read("/shape/lambda")]
+                );
+
+                let shape_struct_networks = DispatchStructShapeInput::parse_input(json!({
+                    "args": { "value": "lambda" }
+                }))
+                .expect("shape struct permission networks input")
+                .dispatch_permission_networks(&receiver)
+                .await
+                .expect("shape struct permission networks dispatch");
+                assert_eq!(
+                    shape_struct_networks,
+                    vec![crate::plugin::sdk::NetworkRequest::connect(
+                        "https://shape-lambda.example.com"
+                    )]
+                );
+
+                let shape_enum_usage_output = DispatchEnumShapeInput::parse_input(json!({}))
+                    .expect("shape enum usage input")
+                    .dispatch_tool_invoke(&receiver)
+                    .await
+                    .expect("shape enum usage dispatch");
+                assert_eq!(shape_enum_usage_output.output_text, "usage");
+
+                let shape_enum_context_output = DispatchEnumShapeInput::parse_input(json!({
+                    "action": "run",
+                    "value": "mu",
+                    "limit": 11
+                }))
+                .expect("shape enum context input")
+                .dispatch_tool_invoke_with_context(&receiver, &context)
+                .await
+                .expect("shape enum context dispatch");
+                assert_eq!(
+                    shape_enum_context_output.output_text,
+                    "shape-ctx:fixture.dispatch_struct_context:41:42:mu:11"
+                );
+
+                let shape_enum_usage_paths = DispatchEnumShapeInput::parse_input(json!({}))
+                    .expect("shape enum usage permission paths input")
+                    .dispatch_permission_paths(&receiver)
+                    .await
+                    .expect("shape enum usage permission paths dispatch");
+                assert!(shape_enum_usage_paths.is_empty());
+
+                let shape_enum_usage_networks = DispatchEnumShapeInput::parse_input(json!({}))
+                    .expect("shape enum usage permission networks input")
+                    .dispatch_permission_networks(&receiver)
+                    .await
+                    .expect("shape enum usage permission networks dispatch");
+                assert!(shape_enum_usage_networks.is_empty());
+
+                let shape_enum_run_paths = DispatchEnumShapeInput::parse_input(json!({
+                    "action": "run",
+                    "value": "mu",
+                    "limit": 11
+                }))
+                .expect("shape enum run permission paths input")
+                .dispatch_permission_paths(&receiver)
+                .await
+                .expect("shape enum run permission paths dispatch");
+                assert_eq!(
+                    shape_enum_run_paths,
+                    vec![crate::plugin::sdk::PathRequest::read(
+                        "/shape-variant/mu/11"
+                    )]
+                );
+
+                let shape_enum_run_networks = DispatchEnumShapeInput::parse_input(json!({
+                    "action": "run",
+                    "value": "mu",
+                    "limit": 11
+                }))
+                .expect("shape enum run permission networks input")
+                .dispatch_permission_networks(&receiver)
+                .await
+                .expect("shape enum run permission networks dispatch");
+                assert_eq!(
+                    shape_enum_run_networks,
+                    vec![crate::plugin::sdk::NetworkRequest::connect(
+                        "https://shape-variant-mu-11.example.com"
+                    )]
+                );
+
+                let suite_output = DispatchToolSuite::parse_tool(
+                    "fixture.dispatch_struct",
+                    json!({ "args": { "value": "gamma" } }),
+                )
+                .expect("suite input")
+                .dispatch_tool_invoke(&receiver)
+                .await
+                .expect("suite dispatch");
+                assert_eq!(suite_output.output_text, "struct: gamma");
+
+                let suite_owned_output = DispatchToolSuite::parse_tool(
+                    "fixture.dispatch_enum_owned",
+                    json!({ "action": "run", "value": "zeta", "limit": 13 }),
+                )
+                .expect("owned suite input")
+                .dispatch_tool_invoke(&receiver)
+                .await
+                .expect("owned suite dispatch");
+                assert_eq!(suite_owned_output.output_text, "run-owned: zeta:13");
+
+                let suite_context_struct_output = DispatchToolSuite::parse_tool(
+                    "fixture.dispatch_struct_context",
+                    json!({ "args": { "value": "eta" } }),
+                )
+                .expect("context suite struct input")
+                .dispatch_tool_invoke_with_context(&receiver, &context)
+                .await
+                .expect("context suite struct dispatch");
+                assert_eq!(
+                    suite_context_struct_output.output_text,
+                    "struct-ctx:fixture.dispatch_struct_context:41:42:eta"
+                );
+
+                let suite_context_enum_output = DispatchToolSuite::parse_tool(
+                    "fixture.dispatch_enum_context",
+                    json!({ "action": "run", "value": "kappa", "limit": 17 }),
+                )
+                .expect("context suite enum input")
+                .dispatch_tool_invoke_with_context(&receiver, &context)
+                .await
+                .expect("context suite enum dispatch");
+                assert_eq!(
+                    suite_context_enum_output.output_text,
+                    "run-ctx:fixture.dispatch_struct_context:41:42:kappa:17"
+                );
+
+                let shape_dispatch_output = crate::plugin::sdk::plugin_tool_dispatch_shape!(
+                    &receiver,
+                    crate::plugin::sdk::ToolInvokeInput {
+                        tool_name: "dynamic.skill".to_string(),
+                        session_id: 51,
+                        call_id: 52,
+                        workspace_root: "/tmp/project".to_string(),
+                        input: json!({ "args": { "value": "nu" } }),
+                    },
+                    DispatchStructShapeInput
+                )
+                .expect("shape dispatch macro");
+                assert_eq!(shape_dispatch_output.output_text, "shape: nu");
+
+                let shape_dispatch_context_output =
+                    crate::plugin::sdk::plugin_tool_dispatch_shape_with_context!(
+                        &receiver,
+                        crate::plugin::sdk::ToolInvokeInput {
+                            tool_name: "dynamic.skill".to_string(),
+                            session_id: 61,
+                            call_id: 62,
+                            workspace_root: "/tmp/project".to_string(),
+                            input: json!({ "action": "run", "value": "xi", "limit": 19 }),
+                        },
+                        DispatchEnumShapeInput
+                    )
+                    .expect("shape dispatch context macro");
+                assert_eq!(
+                    shape_dispatch_context_output.output_text,
+                    "shape-ctx:dynamic.skill:61:62:xi:19"
+                );
+
+                let shape_dispatch_paths =
+                    crate::plugin::sdk::plugin_permission_dispatch_paths_shape!(
+                        &receiver,
+                        "dynamic.skill",
+                        &json!({ "args": { "value": "omicron" } }),
+                        DispatchStructShapeInput
+                    )
+                    .expect("shape permission paths macro");
+                assert_eq!(
+                    shape_dispatch_paths,
+                    vec![crate::plugin::sdk::PathRequest::read("/shape/omicron")]
+                );
+
+                let shape_dispatch_networks =
+                    crate::plugin::sdk::plugin_permission_dispatch_networks_shape!(
+                        &receiver,
+                        "dynamic.skill",
+                        &json!({ "action": "run", "value": "pi", "limit": 29 }),
+                        DispatchEnumShapeInput
+                    )
+                    .expect("shape permission networks macro");
+                assert_eq!(
+                    shape_dispatch_networks,
+                    vec![crate::plugin::sdk::NetworkRequest::connect(
+                        "https://shape-variant-pi-29.example.com"
+                    )]
+                );
+                Ok::<_, crate::plugin::PluginError>(())
+            })
+            .expect("dispatch helpers should succeed");
+    }
+
+    #[test]
+    fn clap_style_stream_dispatch_helpers_bind_struct_enum_suite_and_shape_handlers() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        runtime
+            .block_on(async {
+                let receiver = DispatchReceiver;
+                let context = crate::plugin::sdk::ToolInvokeContext {
+                    tool_name: "fixture.dispatch_struct_context",
+                    session_id: 71,
+                    call_id: 72,
+                    workspace_root: "/tmp/project",
+                };
+
+                let (struct_tx, mut struct_rx) = tokio::sync::mpsc::channel(8);
+                let struct_sink = crate::plugin::sdk::ToolStreamSink::new(
+                    "fixture-struct-stream".to_string(),
+                    struct_tx,
+                );
+                let struct_stream_end = DispatchStructToolInput::parse_input(json!({
+                    "args": { "value": "alpha" }
+                }))
+                .expect("struct stream input")
+                .dispatch_tool_invoke_stream(&receiver, struct_sink)
+                .await
+                .expect("struct stream dispatch");
+                assert_eq!(struct_stream_end.output_text, "struct-stream: alpha");
+                assert_eq!(
+                    struct_rx.recv().await.and_then(|chunk| chunk.text_delta),
+                    Some("struct-stream:alpha".to_string())
+                );
+
+                let (enum_tx, mut enum_rx) = tokio::sync::mpsc::channel(8);
+                let enum_sink = crate::plugin::sdk::ToolStreamSink::new(
+                    "fixture-enum-stream".to_string(),
+                    enum_tx,
+                );
+                let enum_stream_end = DispatchEnumToolInput::parse_input(json!({
+                    "action": "run",
+                    "value": "beta",
+                    "limit": 23
+                }))
+                .expect("enum stream input")
+                .dispatch_tool_invoke_stream(&receiver, enum_sink)
+                .await
+                .expect("enum stream dispatch");
+                assert_eq!(enum_stream_end.output_text, "run: beta:23");
+                assert_eq!(
+                    enum_rx.recv().await.and_then(|chunk| chunk.text_delta),
+                    Some("run: beta:23".to_string())
+                );
+
+                let (struct_ctx_tx, mut struct_ctx_rx) = tokio::sync::mpsc::channel(8);
+                let struct_ctx_sink = crate::plugin::sdk::ToolStreamSink::new(
+                    "fixture-struct-stream-context".to_string(),
+                    struct_ctx_tx,
+                );
+                let struct_context_stream_end =
+                    DispatchContextStructToolInput::parse_input(json!({
+                        "args": { "value": "gamma" }
+                    }))
+                    .expect("context struct stream input")
+                    .dispatch_tool_invoke_stream_with_context(&receiver, &context, struct_ctx_sink)
+                    .await
+                    .expect("context struct stream dispatch");
+                assert_eq!(
+                    struct_context_stream_end.output_text,
+                    "struct-stream-ctx:fixture.dispatch_struct_context:71:72:gamma"
+                );
+                assert_eq!(
+                    struct_ctx_rx
+                        .recv()
+                        .await
+                        .and_then(|chunk| chunk.text_delta),
+                    Some(
+                        "struct-stream-ctx:fixture.dispatch_struct_context:71:72:gamma".to_string()
+                    )
+                );
+
+                let (shape_tx, mut shape_rx) = tokio::sync::mpsc::channel(8);
+                let shape_sink = crate::plugin::sdk::ToolStreamSink::new(
+                    "fixture-shape-stream".to_string(),
+                    shape_tx,
+                );
+                let shape_stream_end = DispatchStructShapeInput::parse_input(json!({
+                    "args": { "value": "delta" }
+                }))
+                .expect("shape stream input")
+                .dispatch_tool_invoke_stream(&receiver, shape_sink)
+                .await
+                .expect("shape stream dispatch");
+                assert_eq!(shape_stream_end.output_text, "shape-stream: delta");
+                assert_eq!(
+                    shape_rx.recv().await.and_then(|chunk| chunk.text_delta),
+                    Some("shape-stream:delta".to_string())
+                );
+
+                let (shape_ctx_tx, mut shape_ctx_rx) = tokio::sync::mpsc::channel(8);
+                let shape_ctx_sink = crate::plugin::sdk::ToolStreamSink::new(
+                    "fixture-shape-stream-context".to_string(),
+                    shape_ctx_tx,
+                );
+                let shape_context_stream_end = DispatchEnumShapeInput::parse_input(json!({
+                    "action": "run",
+                    "value": "epsilon",
+                    "limit": 29
+                }))
+                .expect("shape context stream input")
+                .dispatch_tool_invoke_stream_with_context(&receiver, &context, shape_ctx_sink)
+                .await
+                .expect("shape context stream dispatch");
+                assert_eq!(
+                    shape_context_stream_end.output_text,
+                    "shape-stream-ctx:fixture.dispatch_struct_context:71:72:epsilon:29"
+                );
+                assert_eq!(
+                    shape_ctx_rx.recv().await.and_then(|chunk| chunk.text_delta),
+                    Some(
+                        "shape-stream-ctx:fixture.dispatch_struct_context:71:72:epsilon:29"
+                            .to_string()
+                    )
+                );
+
+                let (suite_tx, mut suite_rx) = tokio::sync::mpsc::channel(8);
+                let suite_sink = crate::plugin::sdk::ToolStreamSink::new(
+                    "fixture-suite-stream".to_string(),
+                    suite_tx,
+                );
+                let suite_stream_end = DispatchToolSuite::parse_tool(
+                    "fixture.dispatch_enum",
+                    json!({ "action": "run", "value": "zeta", "limit": 31 }),
+                )
+                .expect("suite stream input")
+                .dispatch_tool_invoke_stream(&receiver, suite_sink)
+                .await
+                .expect("suite stream dispatch");
+                assert_eq!(suite_stream_end.output_text, "run: zeta:31");
+                assert_eq!(
+                    suite_rx.recv().await.and_then(|chunk| chunk.text_delta),
+                    Some("run: zeta:31".to_string())
+                );
+
+                let (suite_ctx_tx, mut suite_ctx_rx) = tokio::sync::mpsc::channel(8);
+                let suite_ctx_sink = crate::plugin::sdk::ToolStreamSink::new(
+                    "fixture-suite-stream-context".to_string(),
+                    suite_ctx_tx,
+                );
+                let suite_context_stream_end = DispatchToolSuite::parse_tool(
+                    "fixture.dispatch_struct_context",
+                    json!({ "args": { "value": "eta" } }),
+                )
+                .expect("suite context stream input")
+                .dispatch_tool_invoke_stream_with_context(&receiver, &context, suite_ctx_sink)
+                .await
+                .expect("suite context stream dispatch");
+                assert_eq!(
+                    suite_context_stream_end.output_text,
+                    "struct-stream-ctx:fixture.dispatch_struct_context:71:72:eta"
+                );
+                assert_eq!(
+                    suite_ctx_rx.recv().await.and_then(|chunk| chunk.text_delta),
+                    Some("struct-stream-ctx:fixture.dispatch_struct_context:71:72:eta".to_string())
+                );
+
+                let (macro_surface_tx, mut macro_surface_rx) = tokio::sync::mpsc::channel(8);
+                let macro_surface_sink = crate::plugin::sdk::ToolStreamSink::new(
+                    "fixture-macro-surface-stream".to_string(),
+                    macro_surface_tx,
+                );
+                let macro_surface_stream_end =
+                    crate::plugin::sdk::plugin_tool_dispatch_stream_surface!(
+                        &receiver,
+                        crate::plugin::sdk::ToolInvokeInput {
+                            tool_name: "fixture.dispatch_struct".to_string(),
+                            session_id: 81,
+                            call_id: 82,
+                            workspace_root: "/tmp/project".to_string(),
+                            input: json!({ "args": { "value": "theta" } }),
+                        },
+                        macro_surface_sink,
+                        DispatchStructToolInput
+                    )
+                    .expect("surface stream macro");
+                assert_eq!(macro_surface_stream_end.output_text, "struct-stream: theta");
+                assert_eq!(
+                    macro_surface_rx
+                        .recv()
+                        .await
+                        .and_then(|chunk| chunk.text_delta),
+                    Some("struct-stream:theta".to_string())
+                );
+
+                let (macro_suite_tx, mut macro_suite_rx) = tokio::sync::mpsc::channel(8);
+                let macro_suite_sink = crate::plugin::sdk::ToolStreamSink::new(
+                    "fixture-macro-suite-stream".to_string(),
+                    macro_suite_tx,
+                );
+                let macro_suite_stream_end =
+                    crate::plugin::sdk::plugin_tool_dispatch_stream_suite!(
+                        &receiver,
+                        crate::plugin::sdk::ToolInvokeInput {
+                            tool_name: "fixture.dispatch_enum".to_string(),
+                            session_id: 83,
+                            call_id: 84,
+                            workspace_root: "/tmp/project".to_string(),
+                            input: json!({ "action": "run", "value": "iota", "limit": 37 }),
+                        },
+                        macro_suite_sink,
+                        DispatchToolSuite
+                    )
+                    .expect("suite stream macro");
+                assert_eq!(macro_suite_stream_end.output_text, "run: iota:37");
+                assert_eq!(
+                    macro_suite_rx
+                        .recv()
+                        .await
+                        .and_then(|chunk| chunk.text_delta),
+                    Some("run: iota:37".to_string())
+                );
+
+                let (macro_shape_tx, mut macro_shape_rx) = tokio::sync::mpsc::channel(8);
+                let macro_shape_sink = crate::plugin::sdk::ToolStreamSink::new(
+                    "fixture-macro-shape-stream".to_string(),
+                    macro_shape_tx,
+                );
+                let macro_shape_stream_end =
+                    crate::plugin::sdk::plugin_tool_dispatch_stream_shape!(
+                        &receiver,
+                        crate::plugin::sdk::ToolInvokeInput {
+                            tool_name: "dynamic.skill".to_string(),
+                            session_id: 85,
+                            call_id: 86,
+                            workspace_root: "/tmp/project".to_string(),
+                            input: json!({ "args": { "value": "kappa" } }),
+                        },
+                        macro_shape_sink,
+                        DispatchStructShapeInput
+                    )
+                    .expect("shape stream macro");
+                assert_eq!(macro_shape_stream_end.output_text, "shape-stream: kappa");
+                assert_eq!(
+                    macro_shape_rx
+                        .recv()
+                        .await
+                        .and_then(|chunk| chunk.text_delta),
+                    Some("shape-stream:kappa".to_string())
+                );
+
+                let (macro_shape_ctx_tx, mut macro_shape_ctx_rx) = tokio::sync::mpsc::channel(8);
+                let macro_shape_ctx_sink = crate::plugin::sdk::ToolStreamSink::new(
+                    "fixture-macro-shape-stream-context".to_string(),
+                    macro_shape_ctx_tx,
+                );
+                let macro_shape_context_stream_end =
+                    crate::plugin::sdk::plugin_tool_dispatch_stream_shape_with_context!(
+                        &receiver,
+                        crate::plugin::sdk::ToolInvokeInput {
+                            tool_name: "dynamic.skill".to_string(),
+                            session_id: 87,
+                            call_id: 88,
+                            workspace_root: "/tmp/project".to_string(),
+                            input: json!({ "action": "run", "value": "lambda", "limit": 41 }),
+                        },
+                        macro_shape_ctx_sink,
+                        DispatchEnumShapeInput
+                    )
+                    .expect("shape stream context macro");
+                assert_eq!(
+                    macro_shape_context_stream_end.output_text,
+                    "shape-stream-ctx:dynamic.skill:87:88:lambda:41"
+                );
+                assert_eq!(
+                    macro_shape_ctx_rx
+                        .recv()
+                        .await
+                        .and_then(|chunk| chunk.text_delta),
+                    Some("shape-stream-ctx:dynamic.skill:87:88:lambda:41".to_string())
+                );
+
+                Ok::<_, crate::plugin::PluginError>(())
+            })
+            .expect("stream dispatch helpers should succeed");
+    }
+
+    #[test]
+    fn static_tool_surface_schema_carries_variant_and_field_doc_descriptions() {
+        let tool_decl = DocBackedToolInput::tool_decl();
+        let usage = crate::tool::definition::schema_usage_text(&tool_decl.input_schema)
+            .expect("usage text");
+        assert!(usage.contains("run: Run the documented action."));
+
+        let struct_decl = DocBackedStructToolInput::tool_decl();
+        assert_eq!(
+            struct_decl
+                .input_schema
+                .pointer("/properties/path/description")
+                .and_then(serde_json::Value::as_str),
+            Some("Path to inspect.")
+        );
+        let struct_usage = crate::tool::definition::schema_usage_text(&struct_decl.input_schema)
+            .expect("struct usage text");
+        assert!(struct_usage.contains("Path to inspect."));
+
+        let ui_decl = UiDisplaySurfaceInput::tool_decl();
+        assert_eq!(
+            ui_decl.preferred_ui_display_mode(),
+            Some(crate::plugin::sdk::UiTextDisplayMode::Summary)
+        );
+
+        let brief_decl = BriefDisplaySurfaceInput::tool_decl();
+        assert_eq!(
+            brief_decl.preferred_description_mode(),
+            Some(crate::plugin::sdk::ToolDescriptionMode::Brief)
+        );
+        assert_eq!(
+            brief_decl.preferred_ui_display_mode(),
+            Some(crate::plugin::sdk::UiTextDisplayMode::Summary)
+        );
+    }
+
+    #[test]
+    fn macro_generated_json_string_parsers_return_structured_results_and_errors() {
+        let parsed = ShapeFromStringInput::parse_json_str(r#"{"value":"ok"}"#)
+            .expect("shape should parse from raw JSON string");
+        assert_eq!(parsed.value, "ok");
+
+        let (_, resolved_args) = DocBackedToolInput::resolve_json_str(
+            "fixture.doc_tool",
+            r#"{"action":"run","value":"ok"}"#,
+        )
+        .expect("tool should resolve from raw JSON string");
+        assert_eq!(resolved_args, json!({ "value": "ok" }));
+
+        let err = ShapeFromStringInput::parse_json_str(r#"{"value":1}"#)
+            .expect_err("invalid type should produce structured parse error");
+        let data = err
+            .data
+            .expect("structured parse error should include data");
+        assert_eq!(
+            data.get("category").and_then(serde_json::Value::as_str),
+            Some("data")
+        );
+        assert_eq!(
+            data.get("path").and_then(serde_json::Value::as_str),
+            Some("value")
+        );
+
+        let syntax_err = ShapeFromStringInput::parse_json_str(r#"{"value":"ok""#)
+            .expect_err("invalid JSON should produce syntax error");
+        let syntax_data = syntax_err
+            .data
+            .expect("syntax parse error should include data");
+        assert_eq!(
+            syntax_data
+                .get("category")
+                .and_then(serde_json::Value::as_str),
+            Some("eof")
+        );
+        assert_eq!(
+            syntax_data
+                .get("source")
+                .and_then(serde_json::Value::as_str),
+            Some("string")
+        );
+    }
+
+    #[test]
+    fn tool_input_shape_validate_hook_runs_after_parse() {
+        let parsed = ValidatedShapeFromStringInput::parse_json_str(r#"{"value":"ok"}"#)
+            .expect("validated shape should parse");
+        assert_eq!(parsed.value, "ok");
+
+        let err = ValidatedShapeFromStringInput::parse_json_str("{\"value\":\"   \"}")
+            .expect_err("validated shape should reject empty trimmed text");
+        assert!(err.to_string().contains("value must not be empty"));
+    }
+
+    #[test]
+    fn built_in_validation_attributes_run_after_parse() {
+        let err = BuiltInValidatedShapeFromStringInput::parse_json_str("{\"value\":\"   \"}")
+            .expect_err("built-in non_empty should reject blank trimmed text");
+        assert!(err.to_string().contains("field `value` must not be empty"));
+
+        let err = SelectorToolInput::parse_input(json!({
+            "action": "pick",
+            "id": "doc_1",
+            "url": "https://example.com"
+        }))
+        .expect_err("variant-level exactly_one_of should reject duplicate selectors");
+        assert!(
+            err.to_string()
+                .contains("exactly one of `id` or `url` is required")
+        );
+    }
+
+    #[test]
+    fn built_in_action_inference_and_drop_keys_normalize_enum_inputs() {
+        let usage = CatalogToolInput::parse_input(json!({}))
+            .expect("empty object should map to default usage action");
+        assert!(matches!(usage, CatalogToolInput::Usage));
+
+        let search = CatalogToolInput::parse_input(json!({
+            "query": "permissions",
+            "limit": 5,
+            "tool": "noise"
+        }))
+        .expect("query-only payload should infer search and ignore help-only noise");
+        match search {
+            CatalogToolInput::Search { args } => {
+                assert_eq!(args.query, "permissions");
+                assert_eq!(args.limit, Some(5));
+            }
+            other => panic!("expected search variant, got {other:?}"),
+        }
+
+        let help = CatalogToolInput::parse_input(json!({
+            "tool_name": "agena.web/search",
+            "include_schema": true
+        }))
+        .expect("tool_name payload should infer help");
+        match help {
+            CatalogToolInput::Help { args } => {
+                assert_eq!(args.tool, "agena.web/search");
+                assert_eq!(args.include_schema, Some(true));
+            }
+            other => panic!("expected help variant, got {other:?}"),
+        }
+
+        let help_with_noise = CatalogToolInput::parse_input(json!({
+            "action": "help",
+            "tool_name": "agena.web/search",
+            "include_schema": true,
+            "query": "noise"
+        }))
+        .expect("explicit help action should ignore search-only noise");
+        match help_with_noise {
+            CatalogToolInput::Help { args } => {
+                assert_eq!(args.tool, "agena.web/search");
+                assert_eq!(args.include_schema, Some(true));
+            }
+            other => panic!("expected help variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enum_inputs_suggest_closest_action_names_for_typos() {
+        let err = NormalizedVariantShapeInput::parse_input(json!({
+            "action": "describ",
+            "tool": "docs"
+        }))
+        .expect_err("unknown action should suggest a nearby alias");
+        let message = err.to_string();
+        assert!(message.contains("unknown action 'describ'"));
+        assert!(message.contains("Did you mean `describe`?"));
+
+        let err = NormalizedVariantShapeInput::parse_input(json!({
+            "action": "quik_help",
+            "tool": "docs"
+        }))
+        .expect_err("unknown action should suggest alias defaults");
+        let message = err.to_string();
+        assert!(message.contains("unknown action 'quik_help'"));
+        assert!(message.contains("Did you mean `quick_help`?"));
+    }
+
+    #[test]
+    fn static_tool_surface_suggests_closest_action_names_for_typos() {
+        let err = CatalogToolInput::parse_input(json!({
+            "action": "searc",
+            "query": "permissions"
+        }))
+        .expect_err("unknown action should suggest a close match");
+        let message = err.to_string();
+        assert!(message.contains("unknown action 'searc'"));
+        assert!(message.contains("Did you mean `search`?"));
+    }
+
+    #[test]
+    fn enum_inputs_suggest_closest_field_names_for_typos() {
+        let err = CatalogToolInput::parse_input(json!({
+            "action": "search",
+            "querry": "permissions"
+        }))
+        .expect_err("unknown field should suggest the closest matching name");
+        let message = err.to_string();
+        assert!(message.contains("unknown field 'querry'"));
+        assert!(message.contains("Did you mean `query`?"));
+    }
+
+    #[test]
+    fn static_tool_surface_suggests_closest_field_names_for_typos() {
+        let err = DocBackedStructToolInput::parse_input(json!({
+            "pat": "notes.txt"
+        }))
+        .expect_err("unknown field should suggest the closest matching name");
+        let message = err.to_string();
+        assert!(message.contains("unknown field 'pat'"));
+        assert!(message.contains("Did you mean `path`?"));
+    }
+
+    #[test]
+    fn flattened_shape_unknown_fields_suggest_inner_names() {
+        let err = FlattenedShapeSurfaceInput::parse_input(json!({
+            "valu": "  ok  "
+        }))
+        .expect_err("flattened shape should suggest the nested field name");
+        let message = err.to_string();
+        assert!(message.contains("unknown field 'valu'"));
+        assert!(message.contains("Did you mean `value`?"));
+    }
+
+    #[test]
+    fn tool_input_shape_schema_usage_renders_action_aliases() {
+        let schema = NormalizedVariantShapeInput::input_schema();
+        let usage = crate::tool::definition::schema_usage_text(&schema).expect("usage text");
+        assert!(usage.contains("- help (aliases: describe, quick_help)"));
+    }
+
+    #[test]
+    fn tool_suite_route_attributes_serialize_fields_and_converted_payloads() {
+        let (field_tool, field_input) =
+            RoutedToolSuite::resolve_tool("fixture.route_field", json!({ "value": "ok" }))
+                .expect("field-routed suite variant should resolve");
+        assert_eq!(field_tool, "fixture.inner_field");
+        assert_eq!(field_input, json!({ "value": "ok" }));
+
+        let (field_shape_tool, field_shape_input) = RoutedToolSuite::resolve_tool(
+            "fixture.route_field_shape",
+            json!({ "value": "  ok  " }),
+        )
+        .expect("shape-routed suite variant should normalize nested ToolInputShape payload");
+        assert_eq!(field_shape_tool, "fixture.inner_field_shape");
+        assert_eq!(field_shape_input, json!({ "value": "ok" }));
+
+        let (convert_tool, convert_input) =
+            RoutedToolSuite::resolve_tool("fixture.route_convert", json!({ "value": "ok" }))
+                .expect("converted suite variant should resolve");
+        assert_eq!(convert_tool, "fixture.inner_convert");
+        assert_eq!(
+            convert_input,
+            json!({
+                "action": "echo",
+                "value": "ok"
+            })
+        );
+
+        let (action_shape_tool, action_shape_input) =
+            RoutedToolSuite::resolve_tool("fixture.route_action_shape", json!({ "value": "ok" }))
+                .expect("route_action should inject action into routed payload");
+        assert_eq!(action_shape_tool, "fixture.inner_action_shape");
+        assert_eq!(
+            action_shape_input,
+            json!({
+                "action": "echo",
+                "value": "ok"
+            })
+        );
+    }
+
+    #[test]
+    fn static_tool_surface_route_attributes_reuse_nested_shape_normalization() {
+        let (field_tool, field_input) = SurfaceRoutedToolInput::resolve_tool(
+            "fixture.surface_route",
+            json!({
+                "action": "field",
+                "value": "  ok  "
+            }),
+        )
+        .expect("field-routed surface variant should resolve");
+        assert_eq!(field_tool, "fixture.inner_surface_field");
+        assert_eq!(field_input, json!({ "value": "  ok  " }));
+
+        let (field_shape_tool, field_shape_input) = SurfaceRoutedToolInput::resolve_tool(
+            "fixture.surface_route",
+            json!({
+                "action": "field_shape",
+                "value": "  ok  "
+            }),
+        )
+        .expect("shape-routed surface variant should normalize nested ToolInputShape payload");
+        assert_eq!(field_shape_tool, "fixture.inner_surface_field_shape");
+        assert_eq!(field_shape_input, json!({ "value": "ok" }));
+
+        let (action_shape_tool, action_shape_input) = SurfaceRoutedToolInput::resolve_tool(
+            "fixture.surface_route",
+            json!({
+                "action": "action_shape",
+                "value": "ok"
+            }),
+        )
+        .expect("route_action should inject an action before nested ToolInputShape parsing");
+        assert_eq!(action_shape_tool, "fixture.inner_surface_action_shape");
+        assert_eq!(
+            action_shape_input,
+            json!({
+                "action": "echo",
+                "value": "ok"
+            })
+        );
+    }
+
+    #[test]
+    fn built_in_relation_constraints_run_after_parse() {
+        let err = RelationValidatedShapeInput::parse_input(json!({
+            "confirm": "yes"
+        }))
+        .expect_err("requires should reject missing dependent field");
+        assert!(err.to_string().contains("field `confirm` requires `token`"));
+
+        let err = RelationValidatedShapeInput::parse_input(json!({
+            "id": "doc_1",
+            "url": "https://example.com"
+        }))
+        .expect_err("conflicts_with should reject conflicting fields");
+        assert!(err.to_string().contains("field `id` conflicts with `url`"));
+    }
+
+    #[test]
+    fn wildcard_required_unless_present_runs_per_array_item() {
+        let err = QuestionChoiceShapeInput::parse_input(json!({
+            "questions": [{
+                "id": "q1",
+                "question": "Pick one"
+            }]
+        }))
+        .expect_err("required_unless_present should reject missing allow_custom per item");
+        assert!(err.to_string().contains(
+            "field `questions[].allow_custom` is required unless `questions[].options` is present"
+        ));
+    }
+
+    #[test]
+    fn built_in_string_constraints_reject_forbidden_and_duplicate_values() {
+        let err = PathValidatedShapeInput::parse_input(json!({
+            "name": "team/preference"
+        }))
+        .expect_err("forbid_substrings should reject path separators");
+        assert!(
+            err.to_string()
+                .contains("field `name` must not contain `/`")
+        );
+
+        let err = DistinctQuestionShapeInput::parse_input(json!({
+            "questions": [
+                { "id": "q1", "question": "One?" },
+                { "id": " q1 ", "question": "Two?" }
+            ]
+        }))
+        .expect_err("distinct_trimmed should reject duplicate trimmed ids");
+        assert!(
+            err.to_string()
+                .contains("field `questions[].id` must not contain duplicate values")
+        );
+
+        let err = DistinctQuestionShapeInput::parse_input(json!({
+            "questions": [{
+                "id": "q1",
+                "question": "Pick one",
+                "allow_custom": true,
+                "options": [
+                    { "label": " ", "description": "" }
+                ]
+            }]
+        }))
+        .expect_err("non_empty_if_present should reject blank option labels");
+        assert!(
+            err.to_string()
+                .contains("field `questions[].options[].label` must not be empty when present")
+        );
+
+        let err = DistinctQuestionShapeInput::parse_input(json!({
+            "questions": [{
+                "id": "q1",
+                "question": "Pick one",
+                "options": [
+                    { "label": "A", "description": "" },
+                    { "label": " A ", "description": "" }
+                ]
+            }]
+        }))
+        .expect_err("distinct_trimmed_within should reject duplicate option labels per question");
+        assert!(err.to_string().contains(
+            "field `questions[].options[].label` must not contain duplicate values within `questions[]`"
+        ));
+    }
+
+    #[test]
+    fn built_in_string_normalizers_run_before_parse() {
+        let parsed = NormalizedNameShapeInput::parse_input(json!({
+            "name": "  notes.md  "
+        }))
+        .expect("trim and trim_suffix should normalize string values before parse");
+        assert_eq!(parsed.name, "notes");
+    }
+
+    #[test]
+    fn built_in_string_normalizers_also_run_after_parse_for_alias_fields() {
+        let parsed = AliasNormalizedNameShapeInput::parse_input(json!({
+            "file_name": "  notes  "
+        }))
+        .expect("trim should normalize aliased string values after parse");
+        assert_eq!(parsed.name, "notes");
+    }
+
+    #[test]
+    fn flatten_shape_post_parse_normalizers_reuse_nested_shape_rules() {
+        let parsed = FlattenedShapeWrapperInput::parse_input(json!({
+            "value": "  nested  "
+        }))
+        .expect("flattened shape should reuse nested ToolInputShape normalization");
+        assert_eq!(parsed.inner.value, "nested");
+
+        let surface = FlattenedShapeSurfaceInput::parse_input(json!({
+            "value": "  surfaced  "
+        }))
+        .expect("flattened surface should reuse nested ToolInputShape normalization");
+        assert_eq!(surface.inner.value, "surfaced");
+
+        let err = FlattenedShapeSurfaceInput::parse_input(json!({
+            "value": "   "
+        }))
+        .expect_err("flattened surface should reuse nested ToolInputShape validation");
+        assert!(err.to_string().contains("field `value` must not be empty"));
+    }
+
+    #[test]
+    fn tool_input_shape_variant_constraints_run_per_enum_variant() {
+        let parsed = VariantValidatedShapeInput::parse_input(json!({
+            "action": "search",
+            "query": "  monitor read  "
+        }))
+        .expect("search variant should trim and parse");
+        match parsed {
+            VariantValidatedShapeInput::Search { query } => {
+                assert_eq!(query, "monitor read");
+            }
+            other => panic!("expected search variant, got {other:?}"),
+        }
+
+        let err = VariantValidatedShapeInput::parse_input(json!({
+            "action": "help",
+            "tool": "   "
+        }))
+        .expect_err("help variant should reject blank tool");
+        assert!(err.to_string().contains("field `tool` must not be empty"));
+    }
+
+    #[test]
+    fn multi_field_inline_variants_support_parse_time_validation() {
+        let parsed = MultiFieldValidatedShapeInput::parse_input(json!({
+            "action": "run",
+            "value": "ok",
+            "limit": 4
+        }))
+        .expect("multi-field shape variant should validate successfully");
+        match parsed {
+            MultiFieldValidatedShapeInput::Run { value, limit } => {
+                assert_eq!(value, "ok");
+                assert_eq!(limit, Some(4));
+            }
+        }
+
+        let err = MultiFieldValidatedShapeInput::parse_input(json!({
+            "action": "run",
+            "value": "   ",
+            "limit": 4
+        }))
+        .expect_err("multi-field shape variant should still enforce built-in validation");
+        assert!(err.to_string().contains("field `value` must not be empty"));
+
+        let err = MultiFieldValidatedShapeInput::parse_input(json!({
+            "action": "run",
+            "value": "ok",
+            "limit": 99
+        }))
+        .expect_err("multi-field shape variant should run custom validate hook");
+        assert!(err.to_string().contains("limit must be 10 or less"));
+
+        let parsed = MultiFieldValidatedToolInput::parse_input(json!({
+            "action": "run",
+            "value": "ok",
+            "limit": 6
+        }))
+        .expect("multi-field surface variant should validate successfully");
+        match parsed {
+            MultiFieldValidatedToolInput::Run { value, limit } => {
+                assert_eq!(value, "ok");
+                assert_eq!(limit, Some(6));
+            }
+        }
+
+        let err = MultiFieldValidatedToolInput::parse_input(json!({
+            "action": "run",
+            "value": "ok",
+            "limit": 42
+        }))
+        .expect_err("multi-field surface variant should run custom validate hook");
+        assert!(err.to_string().contains("limit must be 10 or less"));
+    }
+
+    #[test]
+    fn tool_input_shape_enum_normalization_matches_surface_behaviors() {
+        let usage = NormalizedVariantShapeInput::parse_input(json!({}))
+            .expect("empty object should map to default usage action");
+        assert!(matches!(usage, NormalizedVariantShapeInput::Usage));
+
+        let search = NormalizedVariantShapeInput::parse_input(json!({
+            "query": "  permissions  ",
+            "tool": "noise"
+        }))
+        .expect("query-only payload should infer search and drop help-only noise");
+        match search {
+            NormalizedVariantShapeInput::Search { query } => {
+                assert_eq!(query, "permissions");
+            }
+            other => panic!("expected search variant, got {other:?}"),
+        }
+
+        let help = NormalizedVariantShapeInput::parse_input(json!({
+            "action": "describe",
+            "tool": "  agena.web/search  "
+        }))
+        .expect("action alias should normalize to help");
+        match help {
+            NormalizedVariantShapeInput::Help {
+                tool,
+                include_schema,
+            } => {
+                assert_eq!(tool, "agena.web/search");
+                assert_eq!(include_schema, None);
+            }
+            other => panic!("expected help variant, got {other:?}"),
+        }
+
+        let quick_help = NormalizedVariantShapeInput::parse_input(json!({
+            "action": "quick_help",
+            "tool": "agena.web/search"
+        }))
+        .expect("action alias default should inject include_schema");
+        match quick_help {
+            NormalizedVariantShapeInput::Help {
+                tool,
+                include_schema,
+            } => {
+                assert_eq!(tool, "agena.web/search");
+                assert_eq!(include_schema, Some(false));
+            }
+            other => panic!("expected help variant, got {other:?}"),
+        }
     }
 
     #[test]
@@ -2873,19 +5265,136 @@ mod tests {
         }
 
         async fn list_tools(&self) -> SdkResult<Vec<ToolDescriptor>> {
-            Ok(vec![ToolDescriptor {
-                name: FS_TOOL.to_string(),
-                description: Some("Patch files in the workspace".to_string()),
-                summary: Some("Patch files".to_string()),
-                help: Some("Patch files in the workspace.".to_string()),
-                input_schema: Some(serde_json::json!({"type": "object"})),
-                description_mode: None,
-                tags: vec![
-                    crate::plugin::sdk::ToolTag::Mutating,
-                    crate::plugin::sdk::ToolTag::FilesystemWrite,
-                ],
-                plugin_id: None,
-            }])
+            Ok(vec![
+                crate::plugins::provided::workflow::tools_tool_descriptor_for_tests(),
+                ToolDescriptor {
+                    name: FS_TOOL.to_string(),
+                    aliases: Vec::new(),
+                    description: Some("Patch files in the workspace".to_string()),
+                    before_help: None,
+                    after_help: None,
+                    summary: Some("Patch files".to_string()),
+                    help: Some("Patch files in the workspace.".to_string()),
+                    examples: vec![
+                        r#"{"action":"read","path":"Cargo.toml"}"#.to_string(),
+                        r#"{"action":"grep","pattern":"StaticToolSurface","path":"crates"}"#
+                            .to_string(),
+                    ],
+                    input_schema: Some(serde_json::json!({
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "action": { "const": "read" },
+                                    "path": {
+                                        "type": "string",
+                                        "description": "File or directory path to preview."
+                                    },
+                                    "mode": {
+                                        "type": "string",
+                                        "enum": ["text", "attachment", "auto"],
+                                        "default": "auto",
+                                        "description": "Read mode."
+                                    }
+                                },
+                                "required": ["action", "path"]
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "action": { "const": "grep" },
+                                    "pattern": {
+                                        "type": "string",
+                                        "description": "Regex pattern to search."
+                                    },
+                                    "path": {
+                                        "type": "string",
+                                        "description": "Base path to search."
+                                    }
+                                },
+                                "required": ["action", "pattern"]
+                            }
+                        ]
+                    })),
+                    description_mode: None,
+                    tags: vec![
+                        crate::plugin::sdk::ToolTag::Mutating,
+                        crate::plugin::sdk::ToolTag::FilesystemWrite,
+                    ],
+                    plugin_id: None,
+                },
+                ToolDescriptor {
+                    name: GENERATED_HELP_TOOL.to_string(),
+                    aliases: Vec::new(),
+                    description: Some("Structured tool without declared examples".to_string()),
+                    before_help: None,
+                    after_help: None,
+                    summary: Some("Structured tool".to_string()),
+                    help: None,
+                    examples: Vec::new(),
+                    input_schema: Some(serde_json::json!({
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "action": { "const": "search_ast" },
+                                    "path": { "type": "string" },
+                                    "pattern": { "type": "string" }
+                                },
+                                "required": ["action", "path", "pattern"]
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "action": { "const": "syntax_tree" },
+                                    "path": { "type": "string" }
+                                },
+                                "required": ["action", "path"]
+                            }
+                        ]
+                    })),
+                    description_mode: None,
+                    tags: vec![crate::plugin::sdk::ToolTag::ReadOnly],
+                    plugin_id: None,
+                },
+                ToolDescriptor {
+                    name: MERGED_HELP_TOOL.to_string(),
+                    aliases: Vec::new(),
+                    description: Some("Structured tool with partial declared examples".to_string()),
+                    before_help: None,
+                    after_help: None,
+                    summary: Some("Structured merged tool".to_string()),
+                    help: Some("Structured tool help should appear after examples.".to_string()),
+                    examples: vec![
+                        r#"{"action":"search_ast","path":"src/lib.rs","pattern":"Tool"}"#
+                            .to_string(),
+                    ],
+                    input_schema: Some(serde_json::json!({
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "action": { "const": "search_ast" },
+                                    "path": { "type": "string" },
+                                    "pattern": { "type": "string" }
+                                },
+                                "required": ["action", "path", "pattern"]
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "action": { "const": "syntax_tree" },
+                                    "path": { "type": "string" }
+                                },
+                                "required": ["action", "path"]
+                            }
+                        ]
+                    })),
+                    description_mode: None,
+                    tags: vec![crate::plugin::sdk::ToolTag::ReadOnly],
+                    plugin_id: None,
+                },
+            ])
         }
 
         async fn todo_write(
@@ -3616,8 +6125,365 @@ mod tests {
             .execute_invocation_detailed(&invocation, 7, 9)
             .expect("tools help should succeed");
 
+        let usage_index = result
+            .view
+            .output_text
+            .find("Usage:")
+            .expect("usage section should be present");
+        let description_index = result
+            .view
+            .output_text
+            .find("Description:")
+            .expect("description section should be present");
+
         assert!(result.view.output_text.contains("Tool: agena.fs/fs"));
         assert!(result.view.output_text.contains("Description:"));
+        assert!(result.view.output_text.contains("Actions:"));
+        assert!(result.view.output_text.contains("Arguments for `read`:"));
+        assert!(usage_index < description_index);
+    }
+
+    #[test]
+    fn tools_help_renders_before_and_after_help_sections() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root);
+
+        let invocation = ToolInvocation::new(
+            TOOLS_TOOL,
+            StructuredObject::try_from(serde_json::json!({
+                "action": "help",
+                "tool": TOOLS_TOOL,
+                "include_schema": false
+            }))
+            .expect("tools help input should serialize"),
+        );
+        let result = executor
+            .execute_invocation_detailed(&invocation, 7, 9)
+            .expect("tools help should succeed");
+
+        let before_help_index = result
+            .view
+            .output_text
+            .find("Before help:")
+            .expect("before help section should be present");
+        let usage_index = result
+            .view
+            .output_text
+            .find("Usage:")
+            .expect("usage section should be present");
+        let after_help_index = result
+            .view
+            .output_text
+            .find("After help:")
+            .expect("after help section should be present");
+
+        assert!(before_help_index < usage_index);
+        assert!(usage_index < after_help_index);
+        assert!(
+            result
+                .view
+                .output_text
+                .contains("Quick reference for browsing the registered tool catalog.")
+        );
+        assert!(
+            result.view.output_text.contains(
+                "To actually run a tool, call that tool directly after reading its help."
+            )
+        );
+    }
+
+    #[test]
+    fn tools_help_renders_declared_tool_aliases() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root);
+
+        let invocation = ToolInvocation::new(
+            TOOLS_TOOL,
+            StructuredObject::try_from(serde_json::json!({
+                "action": "help",
+                "tool": TOOLS_TOOL,
+                "include_schema": false
+            }))
+            .expect("tools help input should serialize"),
+        );
+        let result = executor
+            .execute_invocation_detailed(&invocation, 7, 9)
+            .expect("tools help should succeed");
+
+        assert!(
+            result
+                .view
+                .output_text
+                .contains("Aliases: agena.workflow/tool_catalog, agena.workflow/tool.help")
+        );
+    }
+
+    #[test]
+    fn tools_help_accepts_declared_tool_aliases() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root);
+
+        let invocation = ToolInvocation::new(
+            TOOLS_TOOL,
+            StructuredObject::try_from(serde_json::json!({
+                "action": "help",
+                "tool": "agena.workflow/tool_catalog",
+                "include_schema": false
+            }))
+            .expect("tools help input should serialize"),
+        );
+        let result = executor
+            .execute_invocation_detailed(&invocation, 7, 9)
+            .expect("tools help should resolve alias");
+
+        assert!(
+            result
+                .view
+                .output_text
+                .contains("Tool: agena.workflow/tools")
+        );
+        assert!(
+            result
+                .view
+                .output_text
+                .contains("Aliases: agena.workflow/tool_catalog, agena.workflow/tool.help")
+        );
+    }
+
+    #[test]
+    fn declared_tool_aliases_dispatch_to_canonical_plugin_tools() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root);
+
+        let invocation = ToolInvocation::new(
+            "agena.workflow/tool_catalog",
+            StructuredObject::try_from(serde_json::json!({
+                "action": "usage"
+            }))
+            .expect("tools usage input should serialize"),
+        );
+        let result = executor
+            .execute_invocation_detailed(&invocation, 7, 9)
+            .expect("tool alias should dispatch to canonical tool");
+
+        assert_eq!(result.view.title, "Tool catalog usage");
+        assert!(result.view.output_text.contains("Tool catalog usage:"));
+    }
+
+    #[test]
+    fn available_model_tools_include_declared_tool_aliases() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root);
+
+        let tools = executor.available_model_tools();
+        let alias = tools
+            .iter()
+            .find(|tool| tool.exposed_name == "agena.workflow/tool_catalog")
+            .expect("declared tool alias should be model-visible");
+
+        assert_eq!(alias.base_exposed_name.as_deref(), Some(TOOLS_TOOL));
+        assert_eq!(alias.original_name, "tools");
+        assert!(alias.fixed_input.is_none());
+        assert!(
+            alias
+                .description_text()
+                .contains("Alias for `agena.workflow/tools`.")
+        );
+    }
+
+    #[test]
+    fn tools_help_provided_includes_declared_examples() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root);
+
+        let invocation = ToolInvocation::new(
+            TOOLS_TOOL,
+            StructuredObject::try_from(serde_json::json!({
+                "action": "help",
+                "tool": FS_TOOL,
+                "include_schema": false
+            }))
+            .expect("tools help input should serialize"),
+        );
+        let result = executor
+            .execute_invocation_detailed(&invocation, 7, 9)
+            .expect("tools help should succeed");
+
+        assert!(result.view.output_text.contains("Examples:"));
+        assert!(result.view.output_text.contains("Declared examples:"));
+        assert!(
+            result
+                .view
+                .output_text
+                .contains(r#"{"action":"read","path":"Cargo.toml"}"#)
+        );
+    }
+
+    #[test]
+    fn tools_help_generates_examples_from_schema_when_none_are_declared() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root);
+
+        let invocation = ToolInvocation::new(
+            TOOLS_TOOL,
+            StructuredObject::try_from(serde_json::json!({
+                "action": "help",
+                "tool": GENERATED_HELP_TOOL,
+                "include_schema": false
+            }))
+            .expect("tools help input should serialize"),
+        );
+        let result = executor
+            .execute_invocation_detailed(&invocation, 7, 9)
+            .expect("tools help should succeed");
+
+        assert!(result.view.output_text.contains("Examples:"));
+        assert!(result.view.output_text.contains("Generated examples:"));
+        assert!(result.view.output_text.contains(
+            r#"search_ast: {"action":"search_ast","path":"<path>","pattern":"<pattern>"}"#
+        ));
+    }
+
+    #[test]
+    fn tools_help_suggests_similar_tool_names_for_typos() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root);
+
+        let invocation = ToolInvocation::new(
+            TOOLS_TOOL,
+            StructuredObject::try_from(serde_json::json!({
+                "action": "help",
+                "tool": "agena.fs/fss",
+                "include_schema": false
+            }))
+            .expect("tools help input should serialize"),
+        );
+        let err = executor
+            .execute_invocation_detailed(&invocation, 7, 9)
+            .expect_err("unknown tool should suggest a close match");
+        let ToolError::Plugin(message) = err else {
+            panic!("expected plugin error, got {err:?}");
+        };
+        assert!(message.contains("unknown tool 'agena.fs/fss'"));
+        assert!(message.contains("Did you mean"));
+        assert!(message.contains("agena.fs/fs"));
+    }
+
+    #[test]
+    fn tools_usage_output_is_structured() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root);
+
+        let invocation = ToolInvocation::new(
+            TOOLS_TOOL,
+            StructuredObject::try_from(serde_json::json!({
+                "action": "usage"
+            }))
+            .expect("tools usage input should serialize"),
+        );
+        let result = executor
+            .execute_invocation_detailed(&invocation, 7, 9)
+            .expect("tools usage should succeed");
+
+        let usage_index = result
+            .view
+            .output_text
+            .find("Usage:")
+            .expect("usage section should be present");
+        let examples_index = result
+            .view
+            .output_text
+            .find("Examples:")
+            .expect("examples section should be present");
+        let notes_index = result
+            .view
+            .output_text
+            .find("Notes:")
+            .expect("notes section should be present");
+        assert!(usage_index < examples_index);
+        assert!(examples_index < notes_index);
+        assert!(
+            result
+                .view
+                .output_text
+                .contains(r#"- {"action":"usage"} or {}"#)
+        );
+        assert!(
+            result
+                .view
+                .output_text
+                .contains(r#"- Search: {"action":"search","query":"web","limit":8}"#)
+        );
+        assert!(
+            result
+                .view
+                .output_text
+                .contains(r#"- Help: {"action":"help","tool":"agena.web/search"}"#)
+        );
+    }
+
+    #[test]
+    fn tools_help_merges_declared_and_generated_examples() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root);
+
+        let invocation = ToolInvocation::new(
+            TOOLS_TOOL,
+            StructuredObject::try_from(serde_json::json!({
+                "action": "help",
+                "tool": MERGED_HELP_TOOL,
+                "include_schema": false
+            }))
+            .expect("tools help input should serialize"),
+        );
+        let result = executor
+            .execute_invocation_detailed(&invocation, 7, 9)
+            .expect("tools help should succeed");
+
+        let usage_index = result
+            .view
+            .output_text
+            .find("Usage:")
+            .expect("usage section should be present");
+        let examples_index = result
+            .view
+            .output_text
+            .find("Examples:")
+            .expect("examples section should be present");
+        let help_index = result
+            .view
+            .output_text
+            .find("Help:")
+            .expect("help section should be present");
+        assert!(usage_index < examples_index);
+        assert!(examples_index < help_index);
+        assert_eq!(
+            result
+                .view
+                .output_text
+                .matches(
+                    r#"search_ast: {"action":"search_ast","path":"src/lib.rs","pattern":"Tool"}"#
+                )
+                .count(),
+            0
+        );
+        assert!(result.view.output_text.contains("Examples:"));
+        assert!(result.view.output_text.contains("Declared examples:"));
+        assert!(result.view.output_text.contains("Generated examples:"));
+        assert_eq!(
+            result
+                .view
+                .output_text
+                .matches(r#"- {"action":"search_ast","path":"src/lib.rs","pattern":"Tool"}"#)
+                .count(),
+            1
+        );
+        assert!(
+            result
+                .view
+                .output_text
+                .contains(r#"syntax_tree: {"action":"syntax_tree","path":"<path>"}"#)
+        );
     }
 
     #[test]
@@ -3997,8 +6863,9 @@ mod tests {
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
 
         let tools = executor.available_tools();
+        let model_tools = executor.available_model_tools();
 
-        let web_query = tools
+        let web_query = model_tools
             .iter()
             .find(|tool| tool.exposed_name == WEB_QUERY_TOOL)
             .expect("web query should be model-visible");
@@ -4477,7 +7344,7 @@ mod tests {
         let executor = ToolExecutor::new(&workspace.root, agent)
             .with_plugin_manager(build_default_plugin_manager_without_host(&workspace.root));
         let invocation = ToolInvocation {
-            name: "agena.web/unsupported".to_string(),
+            name: "agena.fs/fss".to_string(),
             plugin_name: None,
             input: StructuredObject::default(),
         };
@@ -4486,7 +7353,7 @@ mod tests {
             .prepare_invocation(&invocation, 7, 9)
             .expect("unknown tools should not trigger plugin before hooks");
 
-        assert_eq!(prepared.invocation.name, "agena.web/unsupported");
+        assert_eq!(prepared.invocation.name, "agena.fs/fss");
         assert_eq!(prepared.invocation.plugin_name.as_deref(), Some("custom"));
         assert!(prepared.title_override.is_none());
         assert!(prepared.metadata.is_empty());
@@ -4496,7 +7363,33 @@ mod tests {
             .expect_err("unknown tools should still fail as unknown at execution time");
         assert!(matches!(
             err,
-            ToolError::UnknownTool(name) if name == "agena.web/unsupported"
+            ToolError::UnknownToolHint { tool, suggestions, suggestion_text }
+                if tool == "agena.fs/fss"
+                    && suggestions == vec!["agena.fs/fs".to_string()]
+                    && suggestion_text == "unknown tool 'agena.fs/fss'. Did you mean `agena.fs/fs`?"
+        ));
+    }
+
+    #[test]
+    fn builtin_unknown_tool_suggests_close_match() {
+        let workspace = TempWorkspace::new();
+        let agent = crate::agent::Agent::new("build", PermissionPolicy::allow_all());
+        let executor = ToolExecutor::new(&workspace.root, agent);
+
+        let err = orchestrator::execute_tool(
+            &executor,
+            "grepp",
+            serde_json::Value::Object(Default::default()),
+            ToolRuntimeContext::default(),
+        )
+        .expect_err("unknown built-in tools should suggest a close match");
+
+        assert!(matches!(
+            err,
+            ToolError::UnknownToolHint { tool, suggestions, suggestion_text }
+                if tool == "grepp"
+                    && suggestions == vec!["grep".to_string()]
+                    && suggestion_text == "unknown tool 'grepp'. Did you mean `grep`?"
         ));
     }
 
@@ -4862,6 +7755,180 @@ mod tests {
             ToolError::PermissionDenied(reason) => assert!(reason.contains("loopback")),
             other => panic!("expected network permission denial, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn web_fetch_and_search_inputs_trim_and_validate_at_parse_time() {
+        let fetch = WebFetchToolInput::parse_input(json!({
+            "url": "  https://example.com/docs  ",
+            "prompt": "  summarize it  "
+        }))
+        .expect("web fetch input should parse");
+        assert_eq!(fetch.url, "https://example.com/docs");
+        assert_eq!(fetch.prompt.as_deref(), Some("summarize it"));
+
+        let fetch_schema = WebFetchToolInput::input_schema();
+        let fetch_usage =
+            crate::tool::definition::schema_usage_text(&fetch_schema).expect("fetch usage");
+        assert!(fetch_usage.contains("Absolute URL to fetch."));
+
+        let search = WebSearchToolInput::parse_input(json!({
+            "query": "  rust async runtime  ",
+            "allowed_domains": ["  docs.rs  ", "  rust-lang.org  "],
+            "blocked_domains": ["  example.com  "],
+            "max_results": 4
+        }))
+        .expect("web search input should parse");
+        assert_eq!(search.query, "rust async runtime");
+        assert_eq!(
+            search.allowed_domains,
+            vec!["docs.rs".to_string(), "rust-lang.org".to_string()]
+        );
+        assert_eq!(search.blocked_domains, vec!["example.com".to_string()]);
+        assert_eq!(search.max_results, Some(4));
+
+        let search_schema = WebSearchToolInput::input_schema();
+        let search_usage =
+            crate::tool::definition::schema_usage_text(&search_schema).expect("search usage");
+        assert!(search_usage.contains("Search query text."));
+        assert!(
+            search_usage.contains("Restrict results to these domains; empty means no restriction.")
+        );
+
+        let err = WebSearchToolInput::parse_input(json!({
+            "query": "   "
+        }))
+        .expect_err("blank web search query should be rejected");
+        assert!(err.to_string().contains("field `query` must not be empty"));
+    }
+
+    #[test]
+    fn read_glob_grep_and_todo_inputs_trim_and_validate_at_parse_time() {
+        let read = ReadToolInput::parse_input(json!({
+            "file_path": "  docs/README.md  ",
+            "offset": 3,
+            "limit": 10,
+            "mode": "auto"
+        }))
+        .expect("read input should parse");
+        assert_eq!(read.file_path, "docs/README.md");
+        assert_eq!(read.offset, Some(3));
+        assert_eq!(read.limit, Some(10));
+
+        let read_schema = ReadToolInput::input_schema();
+        let read_usage =
+            crate::tool::definition::schema_usage_text(&read_schema).expect("read usage");
+        assert!(read_usage.contains("File or directory path to read."));
+        assert!(read_usage.contains("1-based offset for file lines or directory entries."));
+        assert!(read_usage.contains("`file_path` <string, required, min_length=1>"));
+
+        let glob = GlobToolInput::parse_input(json!({
+            "pattern": "  **/*.rs  ",
+            "path": "  crates  "
+        }))
+        .expect("glob input should parse");
+        assert_eq!(glob.pattern, "**/*.rs");
+        assert_eq!(glob.path.as_deref(), Some("crates"));
+
+        let glob_schema = GlobToolInput::input_schema();
+        let glob_usage =
+            crate::tool::definition::schema_usage_text(&glob_schema).expect("glob usage");
+        assert!(glob_usage.contains("Glob pattern to match."));
+        assert!(glob_usage.contains("Optional base path. Defaults to the workspace root."));
+        assert!(glob_usage.contains("`path` <string, optional, min_length=1>"));
+
+        let grep = GrepToolInput::parse_input(json!({
+            "pattern": "  TODO|FIXME  ",
+            "path": "  crates  ",
+            "include": "  src/**/*.rs  "
+        }))
+        .expect("grep input should parse");
+        assert_eq!(grep.pattern, "TODO|FIXME");
+        assert_eq!(grep.path.as_deref(), Some("crates"));
+        assert_eq!(grep.include.as_deref(), Some("src/**/*.rs"));
+
+        let grep_schema = GrepToolInput::input_schema();
+        let grep_usage =
+            crate::tool::definition::schema_usage_text(&grep_schema).expect("grep usage");
+        assert!(grep_usage.contains("Regex pattern to search for."));
+        assert!(grep_usage.contains("Optional glob filter applied before matching lines."));
+        assert!(grep_usage.contains("`include` <string, optional, min_length=1>"));
+
+        let todo = TodoWriteToolInput::parse_input(json!({
+            "items": [
+                {
+                    "content": "  write docs  ",
+                    "status": "pending",
+                    "priority": "high"
+                }
+            ]
+        }))
+        .expect("todo write input should parse");
+        assert_eq!(todo.items[0].content, "write docs");
+
+        let todo_schema = TodoWriteToolInput::input_schema();
+        let todo_usage =
+            crate::tool::definition::schema_usage_text(&todo_schema).expect("todo usage");
+        assert!(todo_usage.contains("Todo items to replace or persist."));
+        assert!(todo_usage.contains("Todo item text."));
+        assert!(todo_usage.contains("`items[].content` <string, required, min_length=1>"));
+
+        let ask_usage = crate::tool::definition::schema_usage_text(
+            &crate::message::AskUserToolInput::input_schema(),
+        )
+        .expect("ask usage");
+        assert!(ask_usage.contains("`questions` <array<object>, optional"));
+        assert!(ask_usage.contains("min_items=1"));
+        assert!(ask_usage.contains("max_items=3"));
+        assert!(ask_usage.contains("`questions[].header` <string, optional, max_length=12>"));
+        assert!(ask_usage.contains("`questions[].options` <array<object>, optional, max_items=8>"));
+        assert!(ask_usage.contains("`questions[].id` <string, required, min_length=1>"));
+        assert!(ask_usage.contains("`questions[].question` <string, required, min_length=1>"));
+        assert!(ask_usage.contains("Relations:"));
+        assert!(ask_usage.contains("required_unless_present"));
+
+        let err = ReadToolInput::parse_input(json!({
+            "file_path": "   "
+        }))
+        .expect_err("blank read path should be rejected");
+        assert!(
+            err.to_string()
+                .contains("field `file_path` must not be empty")
+        );
+
+        let err = GlobToolInput::parse_input(json!({
+            "pattern": "   "
+        }))
+        .expect_err("blank glob pattern should be rejected");
+        assert!(
+            err.to_string()
+                .contains("field `pattern` must not be empty")
+        );
+
+        let err = GrepToolInput::parse_input(json!({
+            "pattern": "  TODO  ",
+            "include": "   "
+        }))
+        .expect_err("blank grep include should be rejected");
+        assert!(
+            err.to_string()
+                .contains("field `include` must not be empty")
+        );
+
+        let err = TodoWriteToolInput::parse_input(json!({
+            "items": [
+                {
+                    "content": "   ",
+                    "status": "pending",
+                    "priority": "low"
+                }
+            ]
+        }))
+        .expect_err("blank todo content should be rejected");
+        assert!(
+            err.to_string()
+                .contains("field `items[].content` must not be empty")
+        );
     }
 
     #[test]

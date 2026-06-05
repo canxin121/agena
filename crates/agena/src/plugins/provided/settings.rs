@@ -5,8 +5,7 @@ use std::{
     sync::{Arc, OnceLock, RwLock},
 };
 
-use agena_macros::StaticToolSurface;
-use async_trait::async_trait;
+use agena_macros::{StaticToolSurface, ToolInputShape};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -21,9 +20,7 @@ use crate::config::{
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostConfigReloadResponse};
 use crate::plugin::sdk::{
-    HookSubscription, InitContext, InitOutcome, PathRequest, Plugin, PluginManifest,
-    PluginToolDecl, Result as SdkResult, ToolDescriptionMode, ToolInvokeInput, ToolInvokeOutput,
-    ToolTag, UiTextDisplayMode,
+    HookSubscription, PathRequest, Result as SdkResult, ToolInvokeOutput, ToolTag,
 };
 
 pub(crate) const SETTINGS_PLUGIN_ID: &str = "agena.settings";
@@ -136,7 +133,8 @@ fn settings_config_schema() -> JsonValue {
     schema
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape, Default)]
+#[tool_input(trim("path"))]
 #[serde(default, deny_unknown_fields)]
 struct SettingsGetToolInput {
     path: Option<String>,
@@ -144,7 +142,8 @@ struct SettingsGetToolInput {
     source: Option<ConfigSettingsSource>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape, Default)]
+#[tool_input(trim("path"))]
 #[serde(default, deny_unknown_fields)]
 struct SettingsListToolInput {
     path: Option<String>,
@@ -153,11 +152,12 @@ struct SettingsListToolInput {
     recursive: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape, Default)]
 #[serde(default, deny_unknown_fields)]
 struct SettingsValidateToolInput {}
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[tool_input(trim("path"), non_empty("path"))]
 #[serde(deny_unknown_fields)]
 struct SettingsSetToolInput {
     path: String,
@@ -170,7 +170,8 @@ struct SettingsSetToolInput {
     reload: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[tool_input(trim("path"), non_empty("path"))]
 #[serde(deny_unknown_fields)]
 struct SettingsDeleteToolInput {
     path: String,
@@ -182,7 +183,8 @@ struct SettingsDeleteToolInput {
     reload: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape, Default)]
+#[tool_input(trim("path"))]
 #[serde(default, deny_unknown_fields)]
 struct SettingsPatchToolInput {
     path: Option<String>,
@@ -201,8 +203,8 @@ struct SettingsPatchToolInput {
     description = "Settings command. Set action to get, list, validate, set, delete, or patch. Edits validate agena.json and reload by default.",
     summary = "Read, validate, or edit runtime settings.",
     help = "Use action `get` to inspect one setting path, `list` to enumerate settings, `validate` to validate config text without applying it, and `set`, `delete`, or `patch` to mutate agena.json. For effective reads, prefer explicit `scope = config|meta` with a relative `path` instead of relying on prefixed paths like `config.foo`.",
-    description_mode = "brief",
-    ui_display_mode = "summary",
+    handler_receiver = SettingsPlugin,
+    display = brief,
     tags(
         ToolTag::ReadOnly,
         ToolTag::Mutating,
@@ -218,33 +220,69 @@ struct SettingsPatchToolInput {
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum SettingsToolInput {
-    #[tool(exec = "get")]
+    #[tool(
+        exec = "get",
+        handle = SettingsPlugin::get,
+        permission_paths_handle = SettingsPlugin::permission_get,
+        handle_by_value = true
+    )]
     Get {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: SettingsGetToolInput,
     },
-    #[tool(exec = "list")]
+    #[tool(
+        exec = "list",
+        handle = SettingsPlugin::list,
+        permission_paths_handle = SettingsPlugin::permission_list,
+        handle_by_value = true
+    )]
     List {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: SettingsListToolInput,
     },
-    #[tool(exec = "validate")]
+    #[tool(
+        exec = "validate",
+        handle = SettingsPlugin::validate,
+        permission_paths_handle = SettingsPlugin::permission_validate,
+        handle_by_value = true
+    )]
     Validate {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: SettingsValidateToolInput,
     },
-    #[tool(exec = "set")]
+    #[tool(
+        exec = "set",
+        handle = SettingsPlugin::set,
+        permission_paths_handle = SettingsPlugin::permission_set,
+        handle_by_value = true
+    )]
     Set {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: SettingsSetToolInput,
     },
-    #[tool(exec = "delete")]
+    #[tool(
+        exec = "delete",
+        handle = SettingsPlugin::delete,
+        permission_paths_handle = SettingsPlugin::permission_delete,
+        handle_by_value = true
+    )]
     Delete {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: SettingsDeleteToolInput,
     },
-    #[tool(exec = "patch")]
+    #[tool(
+        exec = "patch",
+        handle = SettingsPlugin::patch,
+        permission_paths_handle = SettingsPlugin::permission_patch,
+        handle_by_value = true
+    )]
     Patch {
+        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: SettingsPatchToolInput,
     },
@@ -483,6 +521,49 @@ impl SettingsPlugin {
         output("Settings valid", "Settings file is valid.", &response)
     }
 
+    async fn config_read_permission(&self) -> SdkResult<Vec<PathRequest>> {
+        let (config_path, _) = self.config_meta().await?;
+        Ok(vec![PathRequest::read(config_path.display().to_string())])
+    }
+
+    async fn config_write_permission(&self) -> SdkResult<Vec<PathRequest>> {
+        let (config_path, _) = self.config_meta().await?;
+        Ok(vec![PathRequest::write(config_path.display().to_string())])
+    }
+
+    async fn permission_get(&self, _input: SettingsGetToolInput) -> SdkResult<Vec<PathRequest>> {
+        self.config_read_permission().await
+    }
+
+    async fn permission_list(&self, _input: SettingsListToolInput) -> SdkResult<Vec<PathRequest>> {
+        self.config_read_permission().await
+    }
+
+    async fn permission_validate(
+        &self,
+        _input: SettingsValidateToolInput,
+    ) -> SdkResult<Vec<PathRequest>> {
+        self.config_read_permission().await
+    }
+
+    async fn permission_set(&self, _input: SettingsSetToolInput) -> SdkResult<Vec<PathRequest>> {
+        self.config_write_permission().await
+    }
+
+    async fn permission_delete(
+        &self,
+        _input: SettingsDeleteToolInput,
+    ) -> SdkResult<Vec<PathRequest>> {
+        self.config_write_permission().await
+    }
+
+    async fn permission_patch(
+        &self,
+        _input: SettingsPatchToolInput,
+    ) -> SdkResult<Vec<PathRequest>> {
+        self.config_write_permission().await
+    }
+
     async fn edit_output<T>(
         &self,
         title: &str,
@@ -514,83 +595,56 @@ impl SettingsPlugin {
     }
 }
 
-#[async_trait]
-impl Plugin for SettingsPlugin {
-    fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(SETTINGS_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
-            .description("Read and edit Agena runtime settings in agena.json.")
-            .tool_description_mode(ToolDescriptionMode::Brief)
-            .ui_display_mode(UiTextDisplayMode::Summary)
-            .hooks(HookSubscription::TOOL_INVOKE)
-            .config_schema(settings_config_schema())
-            .tools(tools())
-            .build()
+#[crate::plugin::sdk::plugin]
+impl crate::plugin::sdk::Plugin for SettingsPlugin {
+    #[agena_plugin_sdk::plugin_manifest_method(
+        id = SETTINGS_PLUGIN_ID,
+        version = env!("CARGO_PKG_VERSION"),
+        description = "Read and edit Agena runtime settings in agena.json.",
+        hooks = HookSubscription::TOOL_INVOKE,
+        config_schema = settings_config_schema(),
+        display = brief,
+        tool_surface = SettingsToolInput,
+    )]
+    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
+    #[agena_plugin_sdk::plugin_init_method(
+        default_config = {
+            field = self.config,
+            ty = SettingsPluginConfig,
+            input = ctx.config,
+            invalid = "invalid settings plugin config",
+            already = "settings plugin config already initialized"
+        },
+        host_cell = {
+            field = self.host,
+            value = host,
+            poisoned = "settings plugin host lock poisoned"
+        },
+    )]
+    async fn init(
+        &self,
+        ctx: crate::plugin::sdk::InitContext,
+        host: Arc<dyn HostClient>,
+    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
     }
-
-    async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
-        let config = if ctx.config.is_null() {
-            SettingsPluginConfig::default()
-        } else {
-            serde_json::from_value(ctx.config)
-                .map_err(|err| PluginError::new(format!("invalid settings plugin config: {err}")))?
-        };
-        self.config
-            .set(config)
-            .map_err(|_| PluginError::new("settings plugin config already initialized"))?;
-        *self
-            .host
-            .write()
-            .map_err(|_| PluginError::new("settings plugin host lock poisoned"))? = Some(host);
-        Ok(InitOutcome::ack(self.manifest()))
+    #[agena_plugin_sdk::plugin_tool_invoke_method(surface(SettingsToolInput))]
+    async fn tool_invoke(
+        &self,
+        input: crate::plugin::sdk::ToolInvokeInput,
+    ) -> SdkResult<ToolInvokeOutput> {
     }
-
-    async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        match input.tool_name.as_str() {
-            "settings" => match parse_settings_input(input.input)? {
-                SettingsToolInput::Get { args } => self.get(args).await,
-                SettingsToolInput::List { args } => self.list(args).await,
-                SettingsToolInput::Validate { args } => self.validate(args).await,
-                SettingsToolInput::Set { args } => self.set(args).await,
-                SettingsToolInput::Delete { args } => self.delete(args).await,
-                SettingsToolInput::Patch { args } => self.patch(args).await,
-            },
-            other => Err(PluginError::invalid_params(format!(
-                "unknown settings tool '{other}'"
-            ))),
-        }
-    }
-
+    #[agena_plugin_sdk::plugin_permission_paths_method(surface(SettingsToolInput))]
     async fn permission_paths(
         &self,
         tool: &str,
-        _input: &serde_json::Value,
+        input: &serde_json::Value,
     ) -> SdkResult<Vec<PathRequest>> {
-        let (config_path, _) = self.config_meta().await?;
-        let path = config_path.display().to_string();
-        match tool {
-            "settings" => match parse_settings_input(_input.clone())? {
-                SettingsToolInput::Get { .. }
-                | SettingsToolInput::List { .. }
-                | SettingsToolInput::Validate { .. } => Ok(vec![PathRequest::read(path)]),
-                SettingsToolInput::Set { .. }
-                | SettingsToolInput::Delete { .. }
-                | SettingsToolInput::Patch { .. } => Ok(vec![PathRequest::write(path)]),
-            },
-            _ => Ok(Vec::new()),
-        }
+        let _ = (tool, input);
     }
-}
-
-fn tools() -> Vec<PluginToolDecl> {
-    vec![SettingsToolInput::tool_decl()]
 }
 
 fn settings_tag() -> ToolTag {
     ToolTag::custom("settings").expect("settings tag is valid")
-}
-
-fn parse_settings_input(input: JsonValue) -> SdkResult<SettingsToolInput> {
-    SettingsToolInput::parse_input(input)
 }
 
 fn effective_host_path(path: Option<&str>) -> Option<String> {
@@ -671,7 +725,61 @@ fn map_err(error: ConfigError) -> PluginError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
     use serde_json::json;
+
+    use crate::plugin::sdk::host_api::{EventSubscription, HostClient, LogLevel, ToolDescriptor};
+    use crate::plugin::sdk::{EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision};
+
+    struct SettingsTestHostClient {
+        config_path: String,
+        found: bool,
+    }
+
+    #[async_trait]
+    impl HostClient for SettingsTestHostClient {
+        async fn log(&self, _level: LogLevel, _message: String, _fields: JsonValue) {}
+
+        async fn publish_event(&self, _env: EventEnvelope) -> SdkResult<()> {
+            Ok(())
+        }
+
+        async fn subscribe_events(&self, _filter: EventFilter) -> SdkResult<EventSubscription> {
+            Ok(EventSubscription {
+                id: "settings-test-subscription".to_string(),
+            })
+        }
+
+        async fn ask_permission(&self, _req: PermissionAskInput) -> SdkResult<PermissionDecision> {
+            Ok(PermissionDecision::Allow)
+        }
+
+        async fn read_config(&self, path: Option<String>) -> SdkResult<JsonValue> {
+            match path.as_deref() {
+                Some("meta") => Ok(json!({
+                    "config_path": self.config_path,
+                    "config_found": self.found,
+                })),
+                _ => Ok(json!({})),
+            }
+        }
+
+        async fn invoke_tool(
+            &self,
+            tool: String,
+            _input: JsonValue,
+        ) -> SdkResult<ToolInvokeOutput> {
+            Err(PluginError::new(format!(
+                "settings test host cannot invoke tool '{tool}'"
+            )))
+        }
+
+        async fn list_tools(&self) -> SdkResult<Vec<ToolDescriptor>> {
+            Ok(Vec::new())
+        }
+    }
 
     #[test]
     fn settings_plugin_config_accepts_nested_defaults() {
@@ -712,6 +820,86 @@ mod tests {
             }
             other => panic!("unexpected input: {other:?}"),
         }
+    }
+
+    #[test]
+    fn settings_tool_inputs_trim_paths_and_reject_blank_required_paths_at_parse_time() {
+        let parsed = SettingsToolInput::parse_input(json!({
+            "action": "get",
+            "path": "  plugins.policy.tool_presentation  "
+        }))
+        .expect("settings get should trim optional paths during parse");
+        match parsed {
+            SettingsToolInput::Get { args } => {
+                assert_eq!(
+                    args.path.as_deref(),
+                    Some("plugins.policy.tool_presentation")
+                );
+            }
+            other => panic!("unexpected input: {other:?}"),
+        }
+
+        let parsed = SettingsToolInput::parse_input(json!({
+            "action": "set",
+            "path": "  plugins.list.\"agena.web\".enabled  ",
+            "value": true
+        }))
+        .expect("settings set should trim required paths during parse");
+        match parsed {
+            SettingsToolInput::Set { args } => {
+                assert_eq!(args.path, "plugins.list.\"agena.web\".enabled");
+            }
+            other => panic!("unexpected input: {other:?}"),
+        }
+
+        let err = SettingsToolInput::parse_input(json!({
+            "action": "delete",
+            "path": "   "
+        }))
+        .expect_err("settings delete should reject blank required paths during parse");
+        assert!(err.to_string().contains("field `path` must not be empty"));
+    }
+
+    #[test]
+    fn settings_permission_paths_follow_surface_action_dispatch() {
+        let plugin = SettingsPlugin::new();
+        *plugin.host.write().expect("settings host lock") =
+            Some(Arc::new(SettingsTestHostClient {
+                config_path: "/tmp/agena.json".to_string(),
+                found: true,
+            }));
+        plugin
+            .config
+            .set(SettingsPluginConfig::default())
+            .expect("settings config should initialize once");
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let read_input = json!({
+            "action": "get",
+            "path": "plugins.policy.tool_presentation"
+        });
+        let read_paths = runtime
+            .block_on(crate::plugin::sdk::Plugin::permission_paths(
+                &plugin,
+                "settings",
+                &read_input,
+            ))
+            .expect("settings get permissions");
+        assert_eq!(read_paths, vec![PathRequest::read("/tmp/agena.json")]);
+
+        let write_input = json!({
+            "action": "set",
+            "path": "plugins.list.\"agena.web\".enabled",
+            "value": true
+        });
+        let write_paths = runtime
+            .block_on(crate::plugin::sdk::Plugin::permission_paths(
+                &plugin,
+                "settings",
+                &write_input,
+            ))
+            .expect("settings set permissions");
+        assert_eq!(write_paths, vec![PathRequest::write("/tmp/agena.json")]);
     }
 
     #[test]

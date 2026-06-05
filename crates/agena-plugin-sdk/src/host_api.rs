@@ -571,12 +571,22 @@ pub struct SpawnSubtaskResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDescriptor {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Optional text shown before the main help block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_help: Option<String>,
+    /// Optional text shown after the main help block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_help: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

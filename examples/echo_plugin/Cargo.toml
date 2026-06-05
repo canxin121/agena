@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 abi_stable = { workspace = true }
 agena-plugin-sdk = { workspace = true, features = ["cdylib"] }
 async-trait = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

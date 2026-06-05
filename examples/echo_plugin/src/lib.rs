@@ -23,10 +23,6 @@ struct EchoPluginConfig {
     summary = "Echo text back to the caller.",
     trim("text"),
     non_empty("text"),
-    handler_receiver = EchoPlugin,
-    handle = EchoPlugin::invoke_echo,
-    handle_field = text,
-    handle_by_value = true,
     tags(ToolTag::ReadOnly),
     concurrency_safe = true
 )]
@@ -41,16 +37,25 @@ pub struct EchoPlugin {
     config: OnceLock<EchoPluginConfig>,
 }
 
+#[plugin(
+    id = "echo",
+    version = env!("CARGO_PKG_VERSION"),
+    description = "Sample plugin: echo + before/after/shell hooks.",
+    config_schema_type = EchoPluginConfig,
+    config_schema_default = default,
+    display = compact
+)]
 impl EchoPlugin {
     fn uppercase(&self) -> bool {
         self.config.get().is_some_and(|config| config.uppercase)
     }
 
-    async fn invoke_echo(&self, text: String) -> Result<ToolInvokeOutput> {
+    #[tool(EchoToolInput)]
+    async fn invoke_echo(&self, input: EchoToolInput) -> Result<ToolInvokeOutput> {
         let rendered = if self.uppercase() {
-            text.to_uppercase()
+            input.text.to_uppercase()
         } else {
-            text
+            input.text
         };
 
         Ok(ToolInvokeOutput {
@@ -61,48 +66,20 @@ impl EchoPlugin {
             attachments: Vec::new(),
         })
     }
-}
 
-#[plugin]
-impl Plugin for EchoPlugin {
-    #[plugin_manifest_method(
-        id = "echo",
-        version = env!("CARGO_PKG_VERSION"),
-        description = "Sample plugin: echo + before/after/shell hooks.",
-        hooks = HookSubscription::INIT
-            | HookSubscription::TOOL_INVOKE
-            | HookSubscription::TOOL_BEFORE
-            | HookSubscription::TOOL_AFTER
-            | HookSubscription::SHELL_ENV
-            | HookSubscription::EVENT
-            | HookSubscription::PRE_RUN
-            | HookSubscription::POST_RUN
-            | HookSubscription::PERMISSION_ASK
-            | HookSubscription::SESSION_START
-            | HookSubscription::SESSION_END
-            | HookSubscription::PROVIDER_LIST,
-        config_schema_type = EchoPluginConfig,
-        config_schema_default = default,
-        display = compact,
-        tool_surface = EchoToolInput,
-    )]
-    fn manifest(&self) -> PluginManifest {}
+    #[hook(init)]
+    async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> Result<InitOutcome> {
+        let config = agena_plugin_sdk::macro_support::parse_defaulted_config(
+            ctx.config,
+            "invalid echo config",
+        )?;
+        self.config
+            .set(config)
+            .map_err(|_| PluginError::invalid_params("echo plugin config already initialized"))?;
+        Ok(InitOutcome::ack(Plugin::manifest(self)))
+    }
 
-    #[plugin_init_method(
-        config = {
-            field = self.config,
-            value = agena_plugin_sdk::macro_support::parse_defaulted_config(
-                ctx.config,
-                "invalid echo config",
-            )?,
-            already = "echo plugin config already initialized"
-        },
-    )]
-    async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> Result<InitOutcome> {}
-
-    #[plugin_tool_invoke_method(surface(EchoToolInput))]
-    async fn tool_invoke(&self, input: ToolInvokeInput) -> Result<ToolInvokeOutput> {}
-
+    #[hook(tool_execute_before)]
     async fn tool_execute_before(&self, input: ToolBeforeInput) -> Result<Option<ToolBeforePatch>> {
         if input.tool_name != "echo" {
             return Ok(None);
@@ -120,6 +97,7 @@ impl Plugin for EchoPlugin {
         }))
     }
 
+    #[hook(tool_execute_after)]
     async fn tool_execute_after(&self, input: ToolAfterInput) -> Result<Option<ToolAfterPatch>> {
         if input.tool_name != "echo" {
             return Ok(None);
@@ -131,6 +109,7 @@ impl Plugin for EchoPlugin {
         }))
     }
 
+    #[hook(shell_env)]
     async fn shell_env(&self, input: ShellEnvInput) -> Result<Option<ShellEnvPatch>> {
         let mut p = ShellEnvPatch::default();
         p.set.insert("AGENA_ECHO".into(), "1".into());
@@ -141,18 +120,22 @@ impl Plugin for EchoPlugin {
         Ok(Some(p))
     }
 
+    #[hook(event)]
     async fn event(&self, _ev: EventEnvelope) -> Result<()> {
         Ok(())
     }
 
+    #[hook(pre_run)]
     async fn pre_run(&self, _input: PreRunInput) -> Result<()> {
         Ok(())
     }
 
+    #[hook(post_run)]
     async fn post_run(&self, _input: PostRunInput) -> Result<()> {
         Ok(())
     }
 
+    #[hook(permission_ask)]
     async fn permission_ask(
         &self,
         _input: PermissionAskInput,
@@ -160,6 +143,7 @@ impl Plugin for EchoPlugin {
         Ok(None)
     }
 
+    #[hook(session_start)]
     async fn session_start(&self, input: SessionStartInput) -> Result<Option<SessionStartPatch>> {
         Ok(Some(SessionStartPatch {
             additional_context: Some(format!(
@@ -170,10 +154,12 @@ impl Plugin for EchoPlugin {
         }))
     }
 
+    #[hook(session_end)]
     async fn session_end(&self, _input: SessionEndInput) -> Result<()> {
         Ok(())
     }
 
+    #[hook(provider_list)]
     async fn provider_list(&self, input: ProviderListInput) -> Result<Option<ProviderListPatch>> {
         let already_registered = input
             .current

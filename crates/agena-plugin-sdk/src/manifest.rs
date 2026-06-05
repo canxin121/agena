@@ -2102,6 +2102,308 @@ mod tests {
 
     #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, crate::ToolCommand)]
     #[tool_command(
+        tool = "layer.echo",
+        aliases("layer.echo.alias"),
+        description = "Exercise plugin-layer tool aggregation.",
+        trim("text"),
+        non_empty("text"),
+        streaming = "streaming",
+        concurrency_safe = true
+    )]
+    #[serde(deny_unknown_fields)]
+    struct PluginLayerToolInput {
+        text: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, crate::ToolCommand)]
+    #[tool_command(
+        tool = "layer.lookup",
+        aliases("layer.lookup.alias"),
+        description = "Exercise plugin-layer suite aggregation.",
+        trim("query"),
+        non_empty("query"),
+        concurrency_safe = true
+    )]
+    #[serde(deny_unknown_fields)]
+    struct PluginLayerLookupInput {
+        query: String,
+    }
+
+    #[derive(Debug, crate::ToolSubcommands)]
+    enum PluginLayerSuiteInput {
+        Lookup(PluginLayerLookupInput),
+    }
+
+    #[derive(Default)]
+    struct PluginLayerFixture {
+        workspace_root: OnceLock<String>,
+    }
+
+    #[crate::plugin(
+        id = "dummy.plugin_layer",
+        version = "1.0.0",
+        description = "Fixture plugin used to exercise plugin-layer aggregation.",
+        config_schema_type = DummyInitConfig,
+        config_schema_default = default,
+        display = compact
+    )]
+    impl PluginLayerFixture {
+        #[tool(PluginLayerToolInput)]
+        async fn echo(
+            &self,
+            input: PluginLayerToolInput,
+        ) -> crate::Result<crate::ToolInvokeOutput> {
+            Ok(crate::ToolInvokeOutput::text(format!("layer:{}", input.text)).with_title("Layer"))
+        }
+
+        #[tool_suite(PluginLayerSuiteInput)]
+        fn lookup(&self, input: PluginLayerSuiteInput) -> crate::Result<crate::ToolInvokeOutput> {
+            match input {
+                PluginLayerSuiteInput::Lookup(input) => Ok(crate::ToolInvokeOutput::text(format!(
+                    "lookup:{}",
+                    input.query
+                ))
+                .with_title("Layer Suite")),
+            }
+        }
+
+        #[tool_stream(PluginLayerToolInput)]
+        async fn echo_stream(
+            &self,
+            input: PluginLayerToolInput,
+            sink: crate::ToolStreamSink,
+        ) -> crate::Result<crate::ToolStreamEnd> {
+            sink.text(format!("layer-delta:{}", input.text)).await;
+            Ok(crate::ToolStreamEnd {
+                stream_id: sink.stream_id().to_string(),
+                title: "Layer".to_string(),
+                output_text: format!("layer-stream:{}", input.text),
+                payload: None,
+                metadata: BTreeMap::new(),
+                attachments: Vec::new(),
+            })
+        }
+
+        #[tool_suite_stream(PluginLayerSuiteInput)]
+        async fn lookup_stream(
+            &self,
+            sink: crate::ToolStreamSink,
+            input: PluginLayerSuiteInput,
+        ) -> crate::Result<crate::ToolStreamEnd> {
+            let PluginLayerSuiteInput::Lookup(input) = input;
+            sink.text(format!("lookup-delta:{}", input.query)).await;
+            Ok(crate::ToolStreamEnd {
+                stream_id: sink.stream_id().to_string(),
+                title: "Layer Suite".to_string(),
+                output_text: format!("lookup-stream:{}", input.query),
+                payload: None,
+                metadata: BTreeMap::new(),
+                attachments: Vec::new(),
+            })
+        }
+
+        #[permission_paths(PluginLayerToolInput)]
+        fn echo_paths(
+            &self,
+            input: PluginLayerToolInput,
+        ) -> crate::Result<Vec<crate::PathRequest>> {
+            Ok(vec![crate::PathRequest::read(format!(
+                "/tmp/layer/{}",
+                input.text
+            ))])
+        }
+
+        #[permission_networks_suite(PluginLayerSuiteInput)]
+        fn lookup_networks(
+            &self,
+            input: PluginLayerSuiteInput,
+        ) -> crate::Result<Vec<crate::NetworkRequest>> {
+            match input {
+                PluginLayerSuiteInput::Lookup(input) => Ok(vec![crate::NetworkRequest::connect(
+                    format!("https://{}.example.com", input.query),
+                )]),
+            }
+        }
+
+        #[hook(init)]
+        async fn setup(
+            &self,
+            ctx: crate::InitContext,
+            _host: Arc<dyn crate::HostClient>,
+        ) -> crate::Result<crate::InitOutcome> {
+            self.workspace_root
+                .set(ctx.workspace_root.to_string_lossy().into_owned())
+                .map_err(|_| crate::PluginError::invalid_params("workspace root already set"))?;
+            Ok(crate::InitOutcome::ack(crate::Plugin::manifest(self)))
+        }
+
+        #[hook(shell_env)]
+        fn env(&self, _input: crate::ShellEnvInput) -> crate::Result<Option<crate::ShellEnvPatch>> {
+            Ok(Some(crate::ShellEnvPatch::set("PLUGIN_LAYER", "1")))
+        }
+    }
+
+    #[test]
+    fn plugin_layer_macro_generates_manifest_dispatch_permissions_and_hooks() -> crate::Result<()> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let plugin = PluginLayerFixture::default();
+            let manifest = crate::Plugin::manifest(&plugin);
+            assert_eq!(manifest.name, "dummy.plugin_layer");
+            assert!(manifest.hooks.contains(HookSubscription::INIT));
+            assert!(manifest.hooks.contains(HookSubscription::TOOL_INVOKE));
+            assert!(
+                manifest
+                    .hooks
+                    .contains(HookSubscription::TOOL_INVOKE_STREAM)
+            );
+            assert!(manifest.hooks.contains(HookSubscription::SHELL_ENV));
+            assert_eq!(manifest.tools.len(), 2);
+            let echo_decl = manifest
+                .tools
+                .iter()
+                .find(|tool| tool.name == "layer.echo")
+                .expect("echo tool");
+            assert_eq!(echo_decl.aliases, vec!["layer.echo.alias"]);
+            let lookup_decl = manifest
+                .tools
+                .iter()
+                .find(|tool| tool.name == "layer.lookup")
+                .expect("lookup tool");
+            assert_eq!(lookup_decl.aliases, vec!["layer.lookup.alias"]);
+
+            let init = crate::Plugin::init(
+                &plugin,
+                crate::InitContext {
+                    agena_version: "test".to_string(),
+                    workspace_root: std::path::PathBuf::from("/tmp/plugin-layer"),
+                    plugin_id: "dummy.plugin_layer".to_string(),
+                    host_callback_url: None,
+                    host_callback_token: None,
+                    config: serde_json::Value::Null,
+                    protocol_version: 1,
+                },
+                Arc::new(crate::NoopHostClient),
+            )
+            .await?;
+            assert_eq!(init.manifest.name, "dummy.plugin_layer");
+            assert_eq!(
+                plugin.workspace_root.get().map(String::as_str),
+                Some("/tmp/plugin-layer")
+            );
+
+            let output = crate::Plugin::tool_invoke(
+                &plugin,
+                crate::ToolInvokeInput {
+                    tool_name: "layer.echo.alias".to_string(),
+                    session_id: 1,
+                    call_id: 2,
+                    workspace_root: "/tmp/plugin-layer".to_string(),
+                    input: serde_json::json!({"text":"  hello  "}),
+                },
+            )
+            .await?;
+            assert_eq!(output.title, "Layer");
+            assert_eq!(output.output_text, "layer:hello");
+
+            let suite_output = crate::Plugin::tool_invoke(
+                &plugin,
+                crate::ToolInvokeInput {
+                    tool_name: "layer.lookup.alias".to_string(),
+                    session_id: 1,
+                    call_id: 3,
+                    workspace_root: "/tmp/plugin-layer".to_string(),
+                    input: serde_json::json!({"query":"  docs  "}),
+                },
+            )
+            .await?;
+            assert_eq!(suite_output.title, "Layer Suite");
+            assert_eq!(suite_output.output_text, "lookup:docs");
+
+            let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+            let end = crate::Plugin::tool_invoke_stream(
+                &plugin,
+                crate::ToolInvokeInput {
+                    tool_name: "layer.echo.alias".to_string(),
+                    session_id: 1,
+                    call_id: 4,
+                    workspace_root: "/tmp/plugin-layer".to_string(),
+                    input: serde_json::json!({"text":"  hello  "}),
+                },
+                crate::ToolStreamSink::new("layer-stream".to_string(), tx),
+            )
+            .await?;
+            let chunk = rx.recv().await.expect("stream chunk");
+            assert_eq!(chunk.text_delta.as_deref(), Some("layer-delta:hello"));
+            assert_eq!(end.stream_id, "layer-stream");
+            assert_eq!(end.output_text, "layer-stream:hello");
+
+            let (suite_tx, mut suite_rx) = tokio::sync::mpsc::channel(4);
+            let suite_end = crate::Plugin::tool_invoke_stream(
+                &plugin,
+                crate::ToolInvokeInput {
+                    tool_name: "layer.lookup.alias".to_string(),
+                    session_id: 1,
+                    call_id: 5,
+                    workspace_root: "/tmp/plugin-layer".to_string(),
+                    input: serde_json::json!({"query":"  docs  "}),
+                },
+                crate::ToolStreamSink::new("layer-suite-stream".to_string(), suite_tx),
+            )
+            .await?;
+            let suite_chunk = suite_rx.recv().await.expect("suite stream chunk");
+            assert_eq!(suite_chunk.text_delta.as_deref(), Some("lookup-delta:docs"));
+            assert_eq!(suite_end.stream_id, "layer-suite-stream");
+            assert_eq!(suite_end.output_text, "lookup-stream:docs");
+
+            let path_requests = crate::Plugin::permission_paths(
+                &plugin,
+                "layer.echo.alias",
+                &serde_json::json!({"text":"  hello  "}),
+            )
+            .await?;
+            assert_eq!(
+                path_requests,
+                vec![crate::PathRequest::read("/tmp/layer/hello")]
+            );
+
+            let network_requests = crate::Plugin::permission_networks(
+                &plugin,
+                "layer.lookup.alias",
+                &serde_json::json!({"query":"  docs  "}),
+            )
+            .await?;
+            assert_eq!(
+                network_requests,
+                vec![crate::NetworkRequest::connect("https://docs.example.com")]
+            );
+
+            let shell_env = crate::Plugin::shell_env(
+                &plugin,
+                crate::ShellEnvInput {
+                    cwd: std::path::PathBuf::from("/tmp/plugin-layer"),
+                    session_id: None,
+                    call_id: None,
+                },
+            )
+            .await?;
+            assert_eq!(
+                shell_env
+                    .as_ref()
+                    .and_then(|patch| patch.set.get("PLUGIN_LAYER"))
+                    .map(String::as_str),
+                Some("1")
+            );
+
+            crate::Result::Ok(())
+        })
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, crate::ToolCommand)]
+    #[tool_command(
         tool = "methods.echo",
         description = "Exercise plugin_methods! against a real ToolCommand.",
         handler_receiver = PluginMethodsFixture,

@@ -5,9 +5,9 @@ use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{
-    Attribute, Data, DeriveInput, Expr, ExprLit, ExprPath, Field, Fields, FnArg, Ident, ImplItemFn,
-    Index, ItemImpl, Lit, LitBool, LitStr, Member, Meta, MetaList, MetaNameValue, Pat, Path,
-    Result, Token, Variant, parenthesized, parse_macro_input, parse_quote,
+    Attribute, Data, DeriveInput, Expr, ExprLit, ExprPath, Field, Fields, FnArg, Ident, ImplItem,
+    ImplItemFn, Index, ItemImpl, Lit, LitBool, LitStr, Member, Meta, MetaList, MetaNameValue, Pat,
+    Path, Result, Token, Type, Variant, parenthesized, parse_macro_input, parse_quote,
 };
 
 #[proc_macro_attribute]
@@ -124,15 +124,29 @@ pub fn derive_tool_args(input: TokenStream) -> TokenStream {
 
 fn expand_plugin_impl_attr(
     attr: proc_macro2::TokenStream,
-    mut item: ItemImpl,
+    item: ItemImpl,
 ) -> Result<proc_macro2::TokenStream> {
-    if !attr.is_empty() {
-        return Err(syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "#[plugin] does not accept arguments",
+    if item.trait_.is_some() {
+        if !attr.is_empty() {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "#[plugin(...)] is for inherent plugin impl blocks; use bare #[plugin] on `impl Plugin for Type` compatibility impls",
+            ));
+        }
+        return expand_legacy_plugin_trait_impl(item);
+    }
+
+    if attr.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &item.self_ty,
+            "#[plugin(...)] inherent impls require id/version/description metadata",
         ));
     }
 
+    expand_plugin_inherent_impl_attr(attr, item)
+}
+
+fn expand_legacy_plugin_trait_impl(mut item: ItemImpl) -> Result<proc_macro2::TokenStream> {
     let Some((_, trait_path, _)) = &item.trait_ else {
         return Err(syn::Error::new_spanned(
             &item.self_ty,
@@ -155,6 +169,1330 @@ fn expand_plugin_impl_attr(
         #[::agena_plugin_sdk::async_trait]
         #item
     })
+}
+
+#[derive(Default)]
+struct PluginImplConfig {
+    id: Option<Expr>,
+    version: Option<Expr>,
+    description: Option<Expr>,
+    summary: Option<Expr>,
+    help: Option<Expr>,
+    config_schema: Option<Expr>,
+    config_schema_type: Option<Type>,
+    config_schema_default: Option<Expr>,
+    display: Option<Ident>,
+    ui_display: Option<Ident>,
+    tool_description_mode: Option<Expr>,
+    ui_display_mode: Option<Expr>,
+    commands: Option<Expr>,
+    plugin_capabilities_expr: Option<Expr>,
+    plugin_capabilities: Vec<Expr>,
+    explicit_hooks: Option<Expr>,
+}
+
+#[derive(Clone)]
+enum PluginToolBindingKind {
+    Surface,
+    Suite,
+}
+
+#[derive(Clone)]
+struct PluginToolBinding {
+    method: Ident,
+    ty: Type,
+    kind: PluginToolBindingKind,
+    is_async: bool,
+}
+
+#[derive(Clone)]
+struct PluginStreamToolBinding {
+    method: Ident,
+    ty: Type,
+    is_async: bool,
+    sink_first: bool,
+    kind: PluginToolBindingKind,
+}
+
+#[derive(Clone)]
+struct PluginPermissionBinding {
+    method: Ident,
+    ty: Type,
+    is_async: bool,
+    kind: PluginToolBindingKind,
+}
+
+#[derive(Clone)]
+struct PluginHookBinding {
+    method: Ident,
+    hook: PluginHookKind,
+    is_async: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PluginHookKind {
+    Init,
+    Shutdown,
+    ToolExecuteBefore,
+    ToolExecuteAfter,
+    ToolExecuteFailure,
+    ToolDefinition,
+    ChatMessage,
+    ChatParams,
+    ChatHeaders,
+    ChatSystemTransform,
+    ChatMessagesTransform,
+    Event,
+    Auth,
+    ProviderList,
+    PermissionAsk,
+    Notification,
+    CommandExecuteBefore,
+    CommandExecuteAfter,
+    ShellEnv,
+    PreRun,
+    PostRun,
+    SessionStart,
+    SessionEnd,
+    UserPromptSubmit,
+    AgentStop,
+    ConfigResolved,
+}
+
+fn expand_plugin_inherent_impl_attr(
+    attr: proc_macro2::TokenStream,
+    mut item: ItemImpl,
+) -> Result<proc_macro2::TokenStream> {
+    let config = parse_plugin_impl_config(attr)?;
+    let self_ty = item.self_ty.as_ref().clone();
+    let mut tool_bindings = Vec::new();
+    let mut stream_bindings = Vec::new();
+    let mut permission_path_bindings = Vec::new();
+    let mut permission_network_bindings = Vec::new();
+    let mut hook_bindings = Vec::new();
+
+    for impl_item in &mut item.items {
+        let ImplItem::Fn(method) = impl_item else {
+            continue;
+        };
+        let attrs = parse_plugin_inherent_method_attrs(method)?;
+        tool_bindings.extend(attrs.tools);
+        stream_bindings.extend(attrs.stream_tools);
+        permission_path_bindings.extend(attrs.permission_paths);
+        permission_network_bindings.extend(attrs.permission_networks);
+        hook_bindings.extend(attrs.hooks);
+    }
+
+    reject_duplicate_hook_bindings(&hook_bindings)?;
+
+    let manifest_method = expand_plugin_layer_manifest(
+        &config,
+        &tool_bindings,
+        &stream_bindings,
+        &permission_path_bindings,
+        &permission_network_bindings,
+        &hook_bindings,
+    )?;
+    let tool_invoke_method = (!tool_bindings.is_empty())
+        .then(|| expand_plugin_layer_tool_invoke(&self_ty, &tool_bindings))
+        .transpose()?;
+    let stream_method = (!stream_bindings.is_empty())
+        .then(|| expand_plugin_layer_tool_stream(&self_ty, &stream_bindings))
+        .transpose()?;
+    let permission_paths_method = (!permission_path_bindings.is_empty())
+        .then(|| expand_plugin_layer_permission_paths(&self_ty, &permission_path_bindings))
+        .transpose()?;
+    let permission_networks_method = (!permission_network_bindings.is_empty())
+        .then(|| expand_plugin_layer_permission_networks(&self_ty, &permission_network_bindings))
+        .transpose()?;
+    let hook_methods = hook_bindings
+        .iter()
+        .map(|binding| expand_plugin_layer_hook_method(&self_ty, binding))
+        .collect::<Result<Vec<_>>>()?;
+
+    let generics = &item.generics;
+    let (impl_generics, _ty_generics, where_clause) = generics.split_for_impl();
+    Ok(quote! {
+        #item
+
+        #[::agena_plugin_sdk::async_trait]
+        impl #impl_generics ::agena_plugin_sdk::Plugin for #self_ty #where_clause {
+            #manifest_method
+            #tool_invoke_method
+            #stream_method
+            #permission_paths_method
+            #permission_networks_method
+            #(#hook_methods)*
+        }
+    })
+}
+
+fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<PluginImplConfig> {
+    let metas = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(attr)?;
+    let mut config = PluginImplConfig::default();
+    for meta in metas {
+        match meta {
+            Meta::NameValue(value) => apply_plugin_impl_name_value(&mut config, value)?,
+            Meta::List(list) => apply_plugin_impl_list(&mut config, list)?,
+            Meta::Path(path) => {
+                return Err(syn::Error::new_spanned(
+                    path,
+                    "unsupported bare plugin argument",
+                ));
+            }
+        }
+    }
+    for (label, present) in [
+        ("id", config.id.is_some()),
+        ("version", config.version.is_some()),
+        ("description", config.description.is_some()),
+    ] {
+        if !present {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!("#[plugin(...)] requires `{label} = ...`"),
+            ));
+        }
+    }
+    Ok(config)
+}
+
+fn apply_plugin_impl_name_value(config: &mut PluginImplConfig, value: MetaNameValue) -> Result<()> {
+    let Some(ident) = value.path.get_ident() else {
+        return Err(syn::Error::new_spanned(value.path, "expected identifier"));
+    };
+    match ident.to_string().as_str() {
+        "id" => config.id = Some(value.value),
+        "version" => config.version = Some(value.value),
+        "description" | "long_about" => config.description = Some(value.value),
+        "summary" | "about" => config.summary = Some(value.value),
+        "help" | "long_help" => config.help = Some(value.value),
+        "config_schema" => config.config_schema = Some(value.value),
+        "config_schema_type" => config.config_schema_type = Some(expr_as_type(value.value)?),
+        "config_schema_default" => config.config_schema_default = Some(value.value),
+        "display" => config.display = Some(expr_path_ident(value.value, "display")?),
+        "ui_display" => config.ui_display = Some(expr_path_ident(value.value, "ui_display")?),
+        "tool_description_mode" => config.tool_description_mode = Some(value.value),
+        "ui_display_mode" => config.ui_display_mode = Some(value.value),
+        "commands" => config.commands = Some(value.value),
+        "plugin_capabilities" => config.plugin_capabilities_expr = Some(value.value),
+        "hooks" => config.explicit_hooks = Some(value.value),
+        other => {
+            return Err(syn::Error::new_spanned(
+                ident,
+                format!("unsupported plugin argument '{other}'"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn apply_plugin_impl_list(config: &mut PluginImplConfig, list: MetaList) -> Result<()> {
+    let Some(ident) = list.path.get_ident() else {
+        return Err(syn::Error::new_spanned(list.path, "expected identifier"));
+    };
+    match ident.to_string().as_str() {
+        "plugin_capabilities" => config
+            .plugin_capabilities
+            .extend(parse_expr_list(list.tokens)?),
+        other => {
+            return Err(syn::Error::new_spanned(
+                ident,
+                format!("unsupported plugin list '{other}'"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn expr_as_type(expr: Expr) -> Result<Type> {
+    match expr {
+        Expr::Path(path) => {
+            let path = path.path;
+            Ok(parse_quote!(#path))
+        }
+        other => Err(syn::Error::new_spanned(
+            other,
+            "expected a type path, such as `MyConfig`",
+        )),
+    }
+}
+
+fn expr_path_ident(expr: Expr, label: &str) -> Result<Ident> {
+    match expr {
+        Expr::Path(path) => path.path.get_ident().cloned().ok_or_else(|| {
+            syn::Error::new_spanned(path, format!("{label} must be a single identifier"))
+        }),
+        other => Err(syn::Error::new_spanned(
+            other,
+            format!("{label} must be a single identifier"),
+        )),
+    }
+}
+
+#[derive(Default)]
+struct PluginInherentMethodAttrs {
+    tools: Vec<PluginToolBinding>,
+    stream_tools: Vec<PluginStreamToolBinding>,
+    permission_paths: Vec<PluginPermissionBinding>,
+    permission_networks: Vec<PluginPermissionBinding>,
+    hooks: Vec<PluginHookBinding>,
+}
+
+fn parse_plugin_inherent_method_attrs(
+    method: &mut ImplItemFn,
+) -> Result<PluginInherentMethodAttrs> {
+    let mut out = PluginInherentMethodAttrs::default();
+    let mut kept_attrs = Vec::new();
+    let method_ident = method.sig.ident.clone();
+    let is_async = method.sig.asyncness.is_some();
+    let attrs = std::mem::take(&mut method.attrs);
+    for attr in attrs {
+        if attr.path().is_ident("tool") {
+            ensure_plugin_method_shared_receiver(method, "#[tool] methods")?;
+            ensure_plugin_method_typed_arg_count(method, 1, "#[tool] methods")?;
+            out.tools.push(PluginToolBinding {
+                method: method_ident.clone(),
+                ty: attr.parse_args::<Type>()?,
+                kind: PluginToolBindingKind::Surface,
+                is_async,
+            });
+        } else if attr.path().is_ident("tool_suite") {
+            ensure_plugin_method_shared_receiver(method, "#[tool_suite] methods")?;
+            ensure_plugin_method_typed_arg_count(method, 1, "#[tool_suite] methods")?;
+            out.tools.push(PluginToolBinding {
+                method: method_ident.clone(),
+                ty: attr.parse_args::<Type>()?,
+                kind: PluginToolBindingKind::Suite,
+                is_async,
+            });
+        } else if attr.path().is_ident("tool_stream") {
+            ensure_plugin_method_shared_receiver(method, "#[tool_stream] methods")?;
+            let sink_first = stream_sink_is_first_arg(method)?;
+            out.stream_tools.push(PluginStreamToolBinding {
+                method: method_ident.clone(),
+                ty: attr.parse_args::<Type>()?,
+                is_async,
+                sink_first,
+                kind: PluginToolBindingKind::Surface,
+            });
+        } else if attr.path().is_ident("tool_suite_stream") {
+            ensure_plugin_method_shared_receiver(method, "#[tool_suite_stream] methods")?;
+            let sink_first = stream_sink_is_first_arg(method)?;
+            out.stream_tools.push(PluginStreamToolBinding {
+                method: method_ident.clone(),
+                ty: attr.parse_args::<Type>()?,
+                is_async,
+                sink_first,
+                kind: PluginToolBindingKind::Suite,
+            });
+        } else if attr.path().is_ident("permission_paths") {
+            ensure_plugin_method_shared_receiver(method, "#[permission_paths] methods")?;
+            ensure_plugin_method_typed_arg_count(method, 1, "#[permission_paths] methods")?;
+            out.permission_paths.push(PluginPermissionBinding {
+                method: method_ident.clone(),
+                ty: attr.parse_args::<Type>()?,
+                kind: PluginToolBindingKind::Surface,
+                is_async,
+            });
+        } else if attr.path().is_ident("permission_paths_suite") {
+            ensure_plugin_method_shared_receiver(method, "#[permission_paths_suite] methods")?;
+            ensure_plugin_method_typed_arg_count(method, 1, "#[permission_paths_suite] methods")?;
+            out.permission_paths.push(PluginPermissionBinding {
+                method: method_ident.clone(),
+                ty: attr.parse_args::<Type>()?,
+                kind: PluginToolBindingKind::Suite,
+                is_async,
+            });
+        } else if attr.path().is_ident("permission_networks") {
+            ensure_plugin_method_shared_receiver(method, "#[permission_networks] methods")?;
+            ensure_plugin_method_typed_arg_count(method, 1, "#[permission_networks] methods")?;
+            out.permission_networks.push(PluginPermissionBinding {
+                method: method_ident.clone(),
+                ty: attr.parse_args::<Type>()?,
+                kind: PluginToolBindingKind::Surface,
+                is_async,
+            });
+        } else if attr.path().is_ident("permission_networks_suite") {
+            ensure_plugin_method_shared_receiver(method, "#[permission_networks_suite] methods")?;
+            ensure_plugin_method_typed_arg_count(
+                method,
+                1,
+                "#[permission_networks_suite] methods",
+            )?;
+            out.permission_networks.push(PluginPermissionBinding {
+                method: method_ident.clone(),
+                ty: attr.parse_args::<Type>()?,
+                kind: PluginToolBindingKind::Suite,
+                is_async,
+            });
+        } else if attr.path().is_ident("hook") {
+            ensure_plugin_method_shared_receiver(method, "#[hook] methods")?;
+            let hook = parse_plugin_hook_attr(&attr)?;
+            ensure_plugin_method_typed_arg_count(
+                method,
+                plugin_hook_arg_count(hook),
+                &format!("#[hook({})] methods", plugin_hook_name(hook)),
+            )?;
+            out.hooks.push(PluginHookBinding {
+                method: method_ident.clone(),
+                hook,
+                is_async,
+            });
+        } else {
+            kept_attrs.push(attr);
+        }
+    }
+    method.attrs = kept_attrs;
+    Ok(out)
+}
+
+fn ensure_plugin_method_shared_receiver(method: &ImplItemFn, label: &str) -> Result<()> {
+    match method.sig.inputs.first() {
+        Some(FnArg::Receiver(receiver))
+            if receiver.reference.is_some() && receiver.mutability.is_none() =>
+        {
+            Ok(())
+        }
+        _ => Err(syn::Error::new_spanned(
+            &method.sig,
+            format!("{label} must be inherent methods with `&self` receiver"),
+        )),
+    }
+}
+
+fn ensure_plugin_method_typed_arg_count(
+    method: &ImplItemFn,
+    expected: usize,
+    label: &str,
+) -> Result<()> {
+    let count = typed_arg_types(method).len();
+    if count != expected {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            format!("{label} must take exactly {expected} typed argument(s) after `&self`"),
+        ));
+    }
+    Ok(())
+}
+
+fn stream_sink_is_first_arg(method: &ImplItemFn) -> Result<bool> {
+    let args = typed_arg_types(method);
+    if args.len() != 2 {
+        return Err(syn::Error::new_spanned(
+            &method.sig,
+            "#[tool_stream] methods must take exactly two typed arguments after `&self`: input and ToolStreamSink",
+        ));
+    }
+    let first_is_sink = type_last_segment_is(&args[0], "ToolStreamSink");
+    let second_is_sink = type_last_segment_is(&args[1], "ToolStreamSink");
+    match (first_is_sink, second_is_sink) {
+        (true, false) => Ok(true),
+        (false, true) => Ok(false),
+        _ => Err(syn::Error::new_spanned(
+            &method.sig,
+            "#[tool_stream] methods must include exactly one ToolStreamSink argument",
+        )),
+    }
+}
+
+fn typed_arg_types(method: &ImplItemFn) -> Vec<Type> {
+    method
+        .sig
+        .inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            FnArg::Receiver(_) => None,
+            FnArg::Typed(pat_type) => Some((*pat_type.ty).clone()),
+        })
+        .collect()
+}
+
+fn type_last_segment_is(ty: &Type, expected: &str) -> bool {
+    let Type::Path(path) = ty else {
+        return false;
+    };
+    path.path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == expected)
+}
+
+fn parse_plugin_hook_attr(attr: &Attribute) -> Result<PluginHookKind> {
+    let ident = attr.parse_args::<Ident>()?;
+    plugin_hook_kind_from_ident(&ident)
+}
+
+fn plugin_hook_kind_from_ident(ident: &Ident) -> Result<PluginHookKind> {
+    match ident.to_string().as_str() {
+        "init" => Ok(PluginHookKind::Init),
+        "shutdown" => Ok(PluginHookKind::Shutdown),
+        "tool_execute_before" => Ok(PluginHookKind::ToolExecuteBefore),
+        "tool_execute_after" => Ok(PluginHookKind::ToolExecuteAfter),
+        "tool_execute_failure" => Ok(PluginHookKind::ToolExecuteFailure),
+        "tool_definition" => Ok(PluginHookKind::ToolDefinition),
+        "chat_message" => Ok(PluginHookKind::ChatMessage),
+        "chat_params" => Ok(PluginHookKind::ChatParams),
+        "chat_headers" => Ok(PluginHookKind::ChatHeaders),
+        "chat_system_transform" => Ok(PluginHookKind::ChatSystemTransform),
+        "chat_messages_transform" => Ok(PluginHookKind::ChatMessagesTransform),
+        "event" => Ok(PluginHookKind::Event),
+        "auth" => Ok(PluginHookKind::Auth),
+        "provider_list" => Ok(PluginHookKind::ProviderList),
+        "permission_ask" => Ok(PluginHookKind::PermissionAsk),
+        "notification" => Ok(PluginHookKind::Notification),
+        "command_execute_before" => Ok(PluginHookKind::CommandExecuteBefore),
+        "command_execute_after" => Ok(PluginHookKind::CommandExecuteAfter),
+        "shell_env" => Ok(PluginHookKind::ShellEnv),
+        "pre_run" => Ok(PluginHookKind::PreRun),
+        "post_run" => Ok(PluginHookKind::PostRun),
+        "session_start" => Ok(PluginHookKind::SessionStart),
+        "session_end" => Ok(PluginHookKind::SessionEnd),
+        "user_prompt_submit" => Ok(PluginHookKind::UserPromptSubmit),
+        "agent_stop" => Ok(PluginHookKind::AgentStop),
+        "config_resolved" => Ok(PluginHookKind::ConfigResolved),
+        other => Err(syn::Error::new_spanned(
+            ident,
+            format!("unsupported plugin hook '{other}'"),
+        )),
+    }
+}
+
+fn plugin_hook_arg_count(hook: PluginHookKind) -> usize {
+    match hook {
+        PluginHookKind::Shutdown => 0,
+        PluginHookKind::Init => 2,
+        PluginHookKind::ToolExecuteBefore
+        | PluginHookKind::ToolExecuteAfter
+        | PluginHookKind::ToolExecuteFailure
+        | PluginHookKind::ToolDefinition
+        | PluginHookKind::ChatMessage
+        | PluginHookKind::ChatParams
+        | PluginHookKind::ChatHeaders
+        | PluginHookKind::ChatSystemTransform
+        | PluginHookKind::ChatMessagesTransform
+        | PluginHookKind::Event
+        | PluginHookKind::Auth
+        | PluginHookKind::ProviderList
+        | PluginHookKind::PermissionAsk
+        | PluginHookKind::Notification
+        | PluginHookKind::CommandExecuteBefore
+        | PluginHookKind::CommandExecuteAfter
+        | PluginHookKind::ShellEnv
+        | PluginHookKind::PreRun
+        | PluginHookKind::PostRun
+        | PluginHookKind::SessionStart
+        | PluginHookKind::SessionEnd
+        | PluginHookKind::UserPromptSubmit
+        | PluginHookKind::AgentStop
+        | PluginHookKind::ConfigResolved => 1,
+    }
+}
+
+fn plugin_hook_name(hook: PluginHookKind) -> &'static str {
+    match hook {
+        PluginHookKind::Init => "init",
+        PluginHookKind::Shutdown => "shutdown",
+        PluginHookKind::ToolExecuteBefore => "tool_execute_before",
+        PluginHookKind::ToolExecuteAfter => "tool_execute_after",
+        PluginHookKind::ToolExecuteFailure => "tool_execute_failure",
+        PluginHookKind::ToolDefinition => "tool_definition",
+        PluginHookKind::ChatMessage => "chat_message",
+        PluginHookKind::ChatParams => "chat_params",
+        PluginHookKind::ChatHeaders => "chat_headers",
+        PluginHookKind::ChatSystemTransform => "chat_system_transform",
+        PluginHookKind::ChatMessagesTransform => "chat_messages_transform",
+        PluginHookKind::Event => "event",
+        PluginHookKind::Auth => "auth",
+        PluginHookKind::ProviderList => "provider_list",
+        PluginHookKind::PermissionAsk => "permission_ask",
+        PluginHookKind::Notification => "notification",
+        PluginHookKind::CommandExecuteBefore => "command_execute_before",
+        PluginHookKind::CommandExecuteAfter => "command_execute_after",
+        PluginHookKind::ShellEnv => "shell_env",
+        PluginHookKind::PreRun => "pre_run",
+        PluginHookKind::PostRun => "post_run",
+        PluginHookKind::SessionStart => "session_start",
+        PluginHookKind::SessionEnd => "session_end",
+        PluginHookKind::UserPromptSubmit => "user_prompt_submit",
+        PluginHookKind::AgentStop => "agent_stop",
+        PluginHookKind::ConfigResolved => "config_resolved",
+    }
+}
+
+fn reject_duplicate_hook_bindings(hooks: &[PluginHookBinding]) -> Result<()> {
+    for (index, hook) in hooks.iter().enumerate() {
+        if hooks
+            .iter()
+            .skip(index + 1)
+            .any(|other| other.hook == hook.hook)
+        {
+            return Err(syn::Error::new_spanned(
+                &hook.method,
+                "duplicate #[hook] binding for the same plugin hook",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn expand_plugin_layer_manifest(
+    config: &PluginImplConfig,
+    tools: &[PluginToolBinding],
+    streams: &[PluginStreamToolBinding],
+    permission_paths: &[PluginPermissionBinding],
+    permission_networks: &[PluginPermissionBinding],
+    hooks: &[PluginHookBinding],
+) -> Result<proc_macro2::TokenStream> {
+    let id = config.id.as_ref().expect("plugin id validated");
+    let version = config.version.as_ref().expect("plugin version validated");
+    let description = config
+        .description
+        .as_ref()
+        .expect("plugin description validated");
+    let hooks_expr = plugin_layer_hooks_expr(
+        config.explicit_hooks.as_ref(),
+        tools,
+        streams,
+        permission_paths,
+        permission_networks,
+        hooks,
+    );
+
+    let config_schema_chain =
+        expand_plugin_layer_config_schema_chain(config.config_schema_type.as_ref(), config)?;
+    let config_schema_value_chain = config
+        .config_schema
+        .as_ref()
+        .map(|schema| quote! { builder = builder.config_schema(#schema); })
+        .unwrap_or_default();
+    let display_chain = config
+        .display
+        .as_ref()
+        .map(|display| {
+            quote! { builder = ::agena_plugin_sdk::plugin_manifest_display!(builder, #display); }
+        })
+        .unwrap_or_default();
+    let ui_display_chain = config
+        .ui_display
+        .as_ref()
+        .map(|display| {
+            quote! { builder = ::agena_plugin_sdk::plugin_manifest_ui_display!(builder, #display); }
+        })
+        .unwrap_or_default();
+    let summary_chain = config
+        .summary
+        .as_ref()
+        .map(|summary| quote! { builder = builder.summary(#summary); })
+        .unwrap_or_default();
+    let help_chain = config
+        .help
+        .as_ref()
+        .map(|help| quote! { builder = builder.help(#help); })
+        .unwrap_or_default();
+    let tool_description_mode_chain = config
+        .tool_description_mode
+        .as_ref()
+        .map(|mode| quote! { builder = builder.tool_description_mode(#mode); })
+        .unwrap_or_default();
+    let ui_display_mode_chain = config
+        .ui_display_mode
+        .as_ref()
+        .map(|mode| quote! { builder = builder.ui_display_mode(#mode); })
+        .unwrap_or_default();
+    let commands_chain = config
+        .commands
+        .as_ref()
+        .map(|commands| quote! { builder = builder.commands(#commands); })
+        .unwrap_or_default();
+    let plugin_capabilities_expr_chain = config
+        .plugin_capabilities_expr
+        .as_ref()
+        .map(|capabilities| quote! { builder = builder.plugin_capabilities(#capabilities); })
+        .unwrap_or_default();
+    let plugin_capability_chains = config
+        .plugin_capabilities
+        .iter()
+        .map(|capability| quote! { builder = builder.plugin_capability(#capability); })
+        .collect::<Vec<_>>();
+    let (surface_types, suite_types) = unique_manifest_tool_types(tools, streams);
+    let surface_chains = surface_types
+        .iter()
+        .map(|ty| quote! { builder = builder.tool_surface::<#ty>(); })
+        .collect::<Vec<_>>();
+    let suite_chains = suite_types
+        .iter()
+        .map(|ty| quote! { builder = builder.tool_suite::<#ty>(); })
+        .collect::<Vec<_>>();
+
+    Ok(quote! {
+        fn manifest(&self) -> ::agena_plugin_sdk::PluginManifest {
+            let mut builder = ::agena_plugin_sdk::PluginManifest::builder(#id, #version)
+                .description(#description)
+                .hooks(#hooks_expr)
+                .config_schema(::agena_plugin_sdk::macro_support::empty_config_schema());
+            #config_schema_chain
+            #config_schema_value_chain
+            #display_chain
+            #ui_display_chain
+            #summary_chain
+            #help_chain
+            #tool_description_mode_chain
+            #ui_display_mode_chain
+            #commands_chain
+            #plugin_capabilities_expr_chain
+            #(#plugin_capability_chains)*
+            #(#surface_chains)*
+            #(#suite_chains)*
+            builder.build()
+        }
+    })
+}
+
+fn expand_plugin_layer_config_schema_chain(
+    config_schema_type: Option<&Type>,
+    config: &PluginImplConfig,
+) -> Result<proc_macro2::TokenStream> {
+    let Some(ty) = config_schema_type else {
+        return Ok(quote! {});
+    };
+    let Some(default) = config.config_schema_default.as_ref() else {
+        return Ok(quote! {
+            builder = builder.config_schema(::agena_plugin_sdk::macro_support::json_schema_for::<#ty>());
+        });
+    };
+    if expr_is_ident(default, "default") {
+        Ok(quote! {
+            builder = builder.config_schema(
+                ::agena_plugin_sdk::macro_support::json_schema_for_with_default(
+                    <#ty as ::core::default::Default>::default(),
+                ),
+            );
+        })
+    } else {
+        Ok(quote! {
+            builder = builder.config_schema(
+                ::agena_plugin_sdk::macro_support::json_schema_for_with_default(#default),
+            );
+        })
+    }
+}
+
+fn expr_is_ident(expr: &Expr, expected: &str) -> bool {
+    let Expr::Path(path) = expr else {
+        return false;
+    };
+    path.path.get_ident().is_some_and(|ident| ident == expected)
+}
+
+fn unique_manifest_tool_types(
+    tools: &[PluginToolBinding],
+    streams: &[PluginStreamToolBinding],
+) -> (Vec<Type>, Vec<Type>) {
+    let mut surface_types = Vec::new();
+    let mut surface_keys = Vec::new();
+    let mut suite_types = Vec::new();
+    let mut suite_keys = Vec::new();
+    for binding in tools {
+        match binding.kind {
+            PluginToolBindingKind::Surface => {
+                push_unique_type(&mut surface_types, &mut surface_keys, &binding.ty)
+            }
+            PluginToolBindingKind::Suite => {
+                push_unique_type(&mut suite_types, &mut suite_keys, &binding.ty)
+            }
+        }
+    }
+    for binding in streams {
+        match binding.kind {
+            PluginToolBindingKind::Surface => {
+                push_unique_type(&mut surface_types, &mut surface_keys, &binding.ty)
+            }
+            PluginToolBindingKind::Suite => {
+                push_unique_type(&mut suite_types, &mut suite_keys, &binding.ty)
+            }
+        }
+    }
+    (surface_types, suite_types)
+}
+
+fn push_unique_type(types: &mut Vec<Type>, keys: &mut Vec<String>, ty: &Type) {
+    let key = quote!(#ty).to_string();
+    if !keys.contains(&key) {
+        keys.push(key);
+        types.push(ty.clone());
+    }
+}
+
+fn plugin_layer_hooks_expr(
+    explicit_hooks: Option<&Expr>,
+    tools: &[PluginToolBinding],
+    streams: &[PluginStreamToolBinding],
+    _permission_paths: &[PluginPermissionBinding],
+    _permission_networks: &[PluginPermissionBinding],
+    hooks: &[PluginHookBinding],
+) -> proc_macro2::TokenStream {
+    let mut terms = Vec::new();
+    if let Some(explicit) = explicit_hooks {
+        terms.push(quote! { #explicit });
+    }
+    if !tools.is_empty() {
+        terms.push(quote! { ::agena_plugin_sdk::HookSubscription::TOOL_INVOKE });
+    }
+    if !streams.is_empty() {
+        terms.push(quote! { ::agena_plugin_sdk::HookSubscription::TOOL_INVOKE_STREAM });
+    }
+    for hook in hooks {
+        terms.push(plugin_hook_subscription_expr(hook.hook));
+    }
+    if terms.is_empty() {
+        quote! { ::agena_plugin_sdk::HookSubscription::empty() }
+    } else {
+        quote! { #(#terms)|* }
+    }
+}
+
+fn plugin_hook_subscription_expr(hook: PluginHookKind) -> proc_macro2::TokenStream {
+    match hook {
+        PluginHookKind::Init => quote! { ::agena_plugin_sdk::HookSubscription::INIT },
+        PluginHookKind::Shutdown => quote! { ::agena_plugin_sdk::HookSubscription::SHUTDOWN },
+        PluginHookKind::ToolExecuteBefore => {
+            quote! { ::agena_plugin_sdk::HookSubscription::TOOL_BEFORE }
+        }
+        PluginHookKind::ToolExecuteAfter => {
+            quote! { ::agena_plugin_sdk::HookSubscription::TOOL_AFTER }
+        }
+        PluginHookKind::ToolExecuteFailure => {
+            quote! { ::agena_plugin_sdk::HookSubscription::TOOL_FAILURE }
+        }
+        PluginHookKind::ToolDefinition => {
+            quote! { ::agena_plugin_sdk::HookSubscription::TOOL_DEFINITION }
+        }
+        PluginHookKind::ChatMessage => {
+            quote! { ::agena_plugin_sdk::HookSubscription::CHAT_MESSAGE }
+        }
+        PluginHookKind::ChatParams => quote! { ::agena_plugin_sdk::HookSubscription::CHAT_PARAMS },
+        PluginHookKind::ChatHeaders => {
+            quote! { ::agena_plugin_sdk::HookSubscription::CHAT_HEADERS }
+        }
+        PluginHookKind::ChatSystemTransform => {
+            quote! { ::agena_plugin_sdk::HookSubscription::CHAT_SYSTEM_TRANSFORM }
+        }
+        PluginHookKind::ChatMessagesTransform => {
+            quote! { ::agena_plugin_sdk::HookSubscription::CHAT_MESSAGES_TRANSFORM }
+        }
+        PluginHookKind::Event => quote! { ::agena_plugin_sdk::HookSubscription::EVENT },
+        PluginHookKind::Auth => quote! { ::agena_plugin_sdk::HookSubscription::AUTH },
+        PluginHookKind::ProviderList => {
+            quote! { ::agena_plugin_sdk::HookSubscription::PROVIDER_LIST }
+        }
+        PluginHookKind::PermissionAsk => {
+            quote! { ::agena_plugin_sdk::HookSubscription::PERMISSION_ASK }
+        }
+        PluginHookKind::Notification => {
+            quote! { ::agena_plugin_sdk::HookSubscription::NOTIFICATION }
+        }
+        PluginHookKind::CommandExecuteBefore => {
+            quote! { ::agena_plugin_sdk::HookSubscription::COMMAND_BEFORE }
+        }
+        PluginHookKind::CommandExecuteAfter => {
+            quote! { ::agena_plugin_sdk::HookSubscription::COMMAND_AFTER }
+        }
+        PluginHookKind::ShellEnv => quote! { ::agena_plugin_sdk::HookSubscription::SHELL_ENV },
+        PluginHookKind::PreRun => quote! { ::agena_plugin_sdk::HookSubscription::PRE_RUN },
+        PluginHookKind::PostRun => quote! { ::agena_plugin_sdk::HookSubscription::POST_RUN },
+        PluginHookKind::SessionStart => {
+            quote! { ::agena_plugin_sdk::HookSubscription::SESSION_START }
+        }
+        PluginHookKind::SessionEnd => quote! { ::agena_plugin_sdk::HookSubscription::SESSION_END },
+        PluginHookKind::UserPromptSubmit => {
+            quote! { ::agena_plugin_sdk::HookSubscription::USER_PROMPT_SUBMIT }
+        }
+        PluginHookKind::AgentStop => quote! { ::agena_plugin_sdk::HookSubscription::AGENT_STOP },
+        PluginHookKind::ConfigResolved => quote! { ::agena_plugin_sdk::HookSubscription::CONFIG },
+    }
+}
+
+fn expand_plugin_layer_tool_invoke(
+    _self_ty: &Type,
+    bindings: &[PluginToolBinding],
+) -> Result<proc_macro2::TokenStream> {
+    let branches = bindings
+        .iter()
+        .map(expand_plugin_layer_tool_invoke_branch)
+        .collect::<Vec<_>>();
+
+    Ok(quote! {
+        async fn tool_invoke(
+            &self,
+            input: ::agena_plugin_sdk::ToolInvokeInput,
+        ) -> ::agena_plugin_sdk::Result<::agena_plugin_sdk::ToolInvokeOutput> {
+            let __tool_name = input.tool_name.clone();
+            #(#branches)*
+            Err(::agena_plugin_sdk::PluginError::not_implemented(format!(
+                "tool_invoke({})",
+                __tool_name
+            )))
+        }
+    })
+}
+
+fn expand_plugin_layer_tool_invoke_branch(binding: &PluginToolBinding) -> proc_macro2::TokenStream {
+    let ty = &binding.ty;
+    let call = plugin_layer_method_call(&binding.method, binding.is_async, &[quote! { __parsed }]);
+    match binding.kind {
+        PluginToolBindingKind::Surface => quote! {
+            {
+                let __decl = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_decl();
+                if __decl.name.as_str() == __tool_name.as_str()
+                    || __decl.aliases.iter().any(|__alias| __alias.as_str() == __tool_name.as_str())
+                {
+                    let (_, __resolved_input) =
+                        <#ty as ::agena_plugin_sdk::ToolSurface>::resolve_tool(
+                            __tool_name.as_str(),
+                            input.input,
+                        )?;
+                    let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_input(
+                        __resolved_input,
+                    )?;
+                    return #call;
+                }
+            }
+        },
+        PluginToolBindingKind::Suite => quote! {
+            {
+                let __decls = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::tool_decls();
+                if __decls.iter().any(|__decl| {
+                    __decl.name.as_str() == __tool_name.as_str()
+                        || __decl.aliases.iter().any(|__alias| __alias.as_str() == __tool_name.as_str())
+                }) {
+                    let (__resolved_tool, __resolved_input) =
+                        <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::resolve_tool(
+                            __tool_name.as_str(),
+                            input.input,
+                        )?;
+                    let __parsed = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::parse_tool(
+                        __resolved_tool.as_str(),
+                        __resolved_input,
+                    )?;
+                    return #call;
+                }
+            }
+        },
+    }
+}
+
+fn expand_plugin_layer_tool_stream(
+    _self_ty: &Type,
+    bindings: &[PluginStreamToolBinding],
+) -> Result<proc_macro2::TokenStream> {
+    let branches = bindings
+        .iter()
+        .map(expand_plugin_layer_tool_stream_branch)
+        .collect::<Vec<_>>();
+
+    Ok(quote! {
+        async fn tool_invoke_stream(
+            &self,
+            input: ::agena_plugin_sdk::ToolInvokeInput,
+            sink: ::agena_plugin_sdk::ToolStreamSink,
+        ) -> ::agena_plugin_sdk::Result<::agena_plugin_sdk::ToolStreamEnd> {
+            let __tool_name = input.tool_name.clone();
+            #(#branches)*
+
+            let __stream_id = sink.stream_id().to_string();
+            let __result = self.tool_invoke(input).await?;
+            sink.chunk(::agena_plugin_sdk::ToolStreamChunk {
+                stream_id: __stream_id.clone(),
+                text_delta: Some(__result.output_text.clone()),
+                payload_delta: __result.payload.clone(),
+                metadata: __result.metadata.clone(),
+            })
+            .await;
+            Ok(::agena_plugin_sdk::ToolStreamEnd {
+                stream_id: __stream_id,
+                title: __result.title,
+                output_text: __result.output_text,
+                payload: __result.payload,
+                metadata: __result.metadata,
+                attachments: __result.attachments,
+            })
+        }
+    })
+}
+
+fn expand_plugin_layer_tool_stream_branch(
+    binding: &PluginStreamToolBinding,
+) -> proc_macro2::TokenStream {
+    let ty = &binding.ty;
+    let args = if binding.sink_first {
+        vec![quote! { sink }, quote! { __parsed }]
+    } else {
+        vec![quote! { __parsed }, quote! { sink }]
+    };
+    let call = plugin_layer_method_call(&binding.method, binding.is_async, &args);
+    match binding.kind {
+        PluginToolBindingKind::Surface => quote! {
+            {
+                let __decl = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_decl();
+                if __decl.name.as_str() == __tool_name.as_str()
+                    || __decl.aliases.iter().any(|__alias| __alias.as_str() == __tool_name.as_str())
+                {
+                    let (_, __resolved_input) =
+                        <#ty as ::agena_plugin_sdk::ToolSurface>::resolve_tool(
+                            __tool_name.as_str(),
+                            input.input,
+                        )?;
+                    let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_input(
+                        __resolved_input,
+                    )?;
+                    return #call;
+                }
+            }
+        },
+        PluginToolBindingKind::Suite => quote! {
+            {
+                let __decls = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::tool_decls();
+                if __decls.iter().any(|__decl| {
+                    __decl.name.as_str() == __tool_name.as_str()
+                        || __decl.aliases.iter().any(|__alias| __alias.as_str() == __tool_name.as_str())
+                }) {
+                    let (__resolved_tool, __resolved_input) =
+                        <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::resolve_tool(
+                            __tool_name.as_str(),
+                            input.input,
+                        )?;
+                    let __parsed = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::parse_tool(
+                        __resolved_tool.as_str(),
+                        __resolved_input,
+                    )?;
+                    return #call;
+                }
+            }
+        },
+    }
+}
+
+fn expand_plugin_layer_permission_paths(
+    _self_ty: &Type,
+    bindings: &[PluginPermissionBinding],
+) -> Result<proc_macro2::TokenStream> {
+    let branches = bindings
+        .iter()
+        .map(|binding| expand_plugin_layer_permission_branch(binding, true))
+        .collect::<Vec<_>>();
+
+    Ok(quote! {
+        async fn permission_paths(
+            &self,
+            tool: &str,
+            input: &::agena_plugin_sdk::serde_json::Value,
+        ) -> ::agena_plugin_sdk::Result<Vec<::agena_plugin_sdk::PathRequest>> {
+            #(#branches)*
+            Ok(Vec::new())
+        }
+    })
+}
+
+fn expand_plugin_layer_permission_networks(
+    _self_ty: &Type,
+    bindings: &[PluginPermissionBinding],
+) -> Result<proc_macro2::TokenStream> {
+    let branches = bindings
+        .iter()
+        .map(|binding| expand_plugin_layer_permission_branch(binding, false))
+        .collect::<Vec<_>>();
+
+    Ok(quote! {
+        async fn permission_networks(
+            &self,
+            tool: &str,
+            input: &::agena_plugin_sdk::serde_json::Value,
+        ) -> ::agena_plugin_sdk::Result<Vec<::agena_plugin_sdk::NetworkRequest>> {
+            #(#branches)*
+            Ok(Vec::new())
+        }
+    })
+}
+
+fn expand_plugin_layer_permission_branch(
+    binding: &PluginPermissionBinding,
+    _paths: bool,
+) -> proc_macro2::TokenStream {
+    let ty = &binding.ty;
+    let call = plugin_layer_method_call(&binding.method, binding.is_async, &[quote! { __parsed }]);
+    match binding.kind {
+        PluginToolBindingKind::Surface => quote! {
+            {
+                let __decl = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_decl();
+                if __decl.name.as_str() == tool
+                    || __decl.aliases.iter().any(|__alias| __alias.as_str() == tool)
+                {
+                    let (_, __resolved_input) =
+                        <#ty as ::agena_plugin_sdk::ToolSurface>::resolve_tool(
+                            tool,
+                            input.clone(),
+                        )?;
+                    let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_input(
+                        __resolved_input,
+                    )?;
+                    return #call;
+                }
+            }
+        },
+        PluginToolBindingKind::Suite => quote! {
+            {
+                let __decls = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::tool_decls();
+                if __decls.iter().any(|__decl| {
+                    __decl.name.as_str() == tool
+                        || __decl.aliases.iter().any(|__alias| __alias.as_str() == tool)
+                }) {
+                    let (__resolved_tool, __resolved_input) =
+                        <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::resolve_tool(
+                            tool,
+                            input.clone(),
+                        )?;
+                    let __parsed = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::parse_tool(
+                        __resolved_tool.as_str(),
+                        __resolved_input,
+                    )?;
+                    return #call;
+                }
+            }
+        },
+    }
+}
+
+fn expand_plugin_layer_hook_method(
+    _self_ty: &Type,
+    binding: &PluginHookBinding,
+) -> Result<proc_macro2::TokenStream> {
+    let method = &binding.method;
+    let is_async = binding.is_async;
+    let tokens = match binding.hook {
+        PluginHookKind::Init => {
+            let call =
+                plugin_layer_method_call(method, is_async, &[quote! { ctx }, quote! { host }]);
+            quote! {
+                async fn init(
+                    &self,
+                    ctx: ::agena_plugin_sdk::InitContext,
+                    host: ::std::sync::Arc<dyn ::agena_plugin_sdk::HostClient>,
+                ) -> ::agena_plugin_sdk::Result<::agena_plugin_sdk::InitOutcome> {
+                    #call
+                }
+            }
+        }
+        PluginHookKind::Shutdown => {
+            let call = plugin_layer_method_call(method, is_async, &[]);
+            quote! {
+                async fn shutdown(&self) -> ::agena_plugin_sdk::Result<()> {
+                    #call
+                }
+            }
+        }
+        PluginHookKind::ToolExecuteBefore => expand_plugin_layer_single_arg_hook(
+            "tool_execute_before",
+            quote! { ::agena_plugin_sdk::ToolBeforeInput },
+            quote! { Option<::agena_plugin_sdk::ToolBeforePatch> },
+            method,
+            is_async,
+        ),
+        PluginHookKind::ToolExecuteAfter => expand_plugin_layer_single_arg_hook(
+            "tool_execute_after",
+            quote! { ::agena_plugin_sdk::ToolAfterInput },
+            quote! { Option<::agena_plugin_sdk::ToolAfterPatch> },
+            method,
+            is_async,
+        ),
+        PluginHookKind::ToolExecuteFailure => expand_plugin_layer_single_arg_hook(
+            "tool_execute_failure",
+            quote! { ::agena_plugin_sdk::ToolFailureInput },
+            quote! { () },
+            method,
+            is_async,
+        ),
+        PluginHookKind::ToolDefinition => expand_plugin_layer_single_arg_hook(
+            "tool_definition",
+            quote! { ::agena_plugin_sdk::ToolDefinitionInput },
+            quote! { Option<::agena_plugin_sdk::ToolDefinitionPatch> },
+            method,
+            is_async,
+        ),
+        PluginHookKind::ChatMessage => expand_plugin_layer_single_arg_hook(
+            "chat_message",
+            quote! { ::agena_plugin_sdk::ChatMessageInput },
+            quote! { Option<::agena_plugin_sdk::ChatMessagePatch> },
+            method,
+            is_async,
+        ),
+        PluginHookKind::ChatParams => expand_plugin_layer_single_arg_hook(
+            "chat_params",
+            quote! { ::agena_plugin_sdk::ChatParamsInput },
+            quote! { Option<::agena_plugin_sdk::ChatParamsPatch> },
+            method,
+            is_async,
+        ),
+        PluginHookKind::ChatHeaders => expand_plugin_layer_single_arg_hook(
+            "chat_headers",
+            quote! { ::agena_plugin_sdk::ChatHeadersInput },
+            quote! { Option<::agena_plugin_sdk::ChatHeadersPatch> },
+            method,
+            is_async,
+        ),
+        PluginHookKind::ChatSystemTransform => expand_plugin_layer_single_arg_hook(
+            "chat_system_transform",
+            quote! { ::agena_plugin_sdk::ChatSystemTransformInput },
+            quote! { Option<::agena_plugin_sdk::ChatSystemTransformPatch> },
+            method,
+            is_async,
+        ),
+        PluginHookKind::ChatMessagesTransform => expand_plugin_layer_single_arg_hook(
+            "chat_messages_transform",
+            quote! { ::agena_plugin_sdk::ChatMessagesTransformInput },
+            quote! { Option<::agena_plugin_sdk::ChatMessagesTransformPatch> },
+            method,
+            is_async,
+        ),
+        PluginHookKind::Event => expand_plugin_layer_single_arg_hook(
+            "event",
+            quote! { ::agena_plugin_sdk::EventEnvelope },
+            quote! { () },
+            method,
+            is_async,
+        ),
+        PluginHookKind::Auth => expand_plugin_layer_single_arg_hook(
+            "auth",
+            quote! { ::agena_plugin_sdk::AuthInput },
+            quote! { Option<::agena_plugin_sdk::AuthOutput> },
+            method,
+            is_async,
+        ),
+        PluginHookKind::ProviderList => expand_plugin_layer_single_arg_hook(
+            "provider_list",
+            quote! { ::agena_plugin_sdk::ProviderListInput },
+            quote! { Option<::agena_plugin_sdk::ProviderListPatch> },
+            method,
+            is_async,
+        ),
+        PluginHookKind::PermissionAsk => expand_plugin_layer_single_arg_hook(
+            "permission_ask",
+            quote! { ::agena_plugin_sdk::PermissionAskInput },
+            quote! { Option<::agena_plugin_sdk::PermissionAskDecision> },
+            method,
+            is_async,
+        ),
+        PluginHookKind::Notification => expand_plugin_layer_single_arg_hook(
+            "notification",
+            quote! { ::agena_plugin_sdk::NotificationInput },
+            quote! { () },
+            method,
+            is_async,
+        ),
+        PluginHookKind::CommandExecuteBefore => expand_plugin_layer_single_arg_hook(
+            "command_execute_before",
+            quote! { ::agena_plugin_sdk::CommandBeforeInput },
+            quote! { Option<::agena_plugin_sdk::CommandBeforeResponse> },
+            method,
+            is_async,
+        ),
+        PluginHookKind::CommandExecuteAfter => expand_plugin_layer_single_arg_hook(
+            "command_execute_after",
+            quote! { ::agena_plugin_sdk::CommandAfterInput },
+            quote! { Option<::agena_plugin_sdk::CommandAfterPatch> },
+            method,
+            is_async,
+        ),
+        PluginHookKind::ShellEnv => expand_plugin_layer_single_arg_hook(
+            "shell_env",
+            quote! { ::agena_plugin_sdk::ShellEnvInput },
+            quote! { Option<::agena_plugin_sdk::ShellEnvPatch> },
+            method,
+            is_async,
+        ),
+        PluginHookKind::PreRun => expand_plugin_layer_single_arg_hook(
+            "pre_run",
+            quote! { ::agena_plugin_sdk::PreRunInput },
+            quote! { () },
+            method,
+            is_async,
+        ),
+        PluginHookKind::PostRun => expand_plugin_layer_single_arg_hook(
+            "post_run",
+            quote! { ::agena_plugin_sdk::PostRunInput },
+            quote! { () },
+            method,
+            is_async,
+        ),
+        PluginHookKind::SessionStart => expand_plugin_layer_single_arg_hook(
+            "session_start",
+            quote! { ::agena_plugin_sdk::SessionStartInput },
+            quote! { Option<::agena_plugin_sdk::SessionStartPatch> },
+            method,
+            is_async,
+        ),
+        PluginHookKind::SessionEnd => expand_plugin_layer_single_arg_hook(
+            "session_end",
+            quote! { ::agena_plugin_sdk::SessionEndInput },
+            quote! { () },
+            method,
+            is_async,
+        ),
+        PluginHookKind::UserPromptSubmit => expand_plugin_layer_single_arg_hook(
+            "user_prompt_submit",
+            quote! { ::agena_plugin_sdk::UserPromptSubmitInput },
+            quote! { Option<::agena_plugin_sdk::UserPromptSubmitPatch> },
+            method,
+            is_async,
+        ),
+        PluginHookKind::AgentStop => expand_plugin_layer_single_arg_hook(
+            "agent_stop",
+            quote! { ::agena_plugin_sdk::AgentStopInput },
+            quote! { Option<::agena_plugin_sdk::AgentStopPatch> },
+            method,
+            is_async,
+        ),
+        PluginHookKind::ConfigResolved => expand_plugin_layer_single_arg_hook(
+            "config_resolved",
+            quote! { ::agena_plugin_sdk::ConfigInput },
+            quote! { Option<::agena_plugin_sdk::ConfigPatch> },
+            method,
+            is_async,
+        ),
+    };
+    Ok(tokens)
+}
+
+fn expand_plugin_layer_single_arg_hook(
+    trait_method: &str,
+    input_ty: proc_macro2::TokenStream,
+    output_ty: proc_macro2::TokenStream,
+    method: &Ident,
+    is_async: bool,
+) -> proc_macro2::TokenStream {
+    let trait_method = format_ident!("{trait_method}");
+    let call = plugin_layer_method_call(method, is_async, &[quote! { input }]);
+    quote! {
+        async fn #trait_method(
+            &self,
+            input: #input_ty,
+        ) -> ::agena_plugin_sdk::Result<#output_ty> {
+            #call
+        }
+    }
+}
+
+fn plugin_layer_method_call(
+    method: &Ident,
+    is_async: bool,
+    args: &[proc_macro2::TokenStream],
+) -> proc_macro2::TokenStream {
+    let call = quote! { Self::#method(self #(, #args)*) };
+    if is_async {
+        quote! { #call.await }
+    } else {
+        call
+    }
 }
 
 struct PluginDispatchAttr {

@@ -8,6 +8,13 @@
 - `shell_env` hook：为 `bash` 注入环境变量
 - `provider.list` hook：注入一个示例 provider descriptor
 
+示例使用新的插件层聚合宏写法：
+
+- `#[tool_command(...)]` 只描述工具名、输入 schema、help、约束和展示策略，不再绑定 handler。
+- `#[plugin(...)] impl EchoPlugin { ... }` 汇集插件元数据、tool handler 和 hook handler。
+- `#[tool(EchoToolInput)]` 把 JSON 输入解析成 `EchoToolInput` 后再调用方法。
+- `#[hook(...)]` 把对应插件生命周期或运行时 hook 接到普通 Rust 方法上。
+
 ## 构建
 
 在当前目录执行：

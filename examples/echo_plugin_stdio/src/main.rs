@@ -9,11 +9,6 @@ use agena_plugin_sdk::prelude::*;
     description = "Echo via stdio.",
     summary = "Echo text over stdio transport.",
     trim("text"),
-    handler_receiver = EchoPlugin,
-    handle = EchoPlugin::invoke_echo,
-    stream_handle = EchoPlugin::invoke_echo_stream,
-    handle_field = text,
-    handle_by_value = true,
     streaming = "streaming",
     concurrency_safe = true
 )]
@@ -26,64 +21,50 @@ struct EchoToolInput {
 #[derive(Default)]
 struct EchoPlugin;
 
+#[plugin(
+    id = "echo-stdio",
+    version = env!("CARGO_PKG_VERSION"),
+    description = "Echo via stdio.",
+    display = compact
+)]
 impl EchoPlugin {
-    async fn invoke_echo(&self, text: String) -> Result<ToolInvokeOutput> {
-        Ok(ToolInvokeOutput::text(format!("stdio-echo: {text}")))
+    #[tool(EchoToolInput)]
+    async fn invoke_echo(&self, input: EchoToolInput) -> Result<ToolInvokeOutput> {
+        Ok(ToolInvokeOutput::text(format!(
+            "stdio-echo: {}",
+            input.text
+        )))
     }
 
+    #[tool_stream(EchoToolInput)]
     async fn invoke_echo_stream(
         &self,
+        input: EchoToolInput,
         sink: ToolStreamSink,
-        text: String,
     ) -> Result<ToolStreamEnd> {
         sink.text("stdio-").await;
-        sink.text(format!("echo: {text}")).await;
+        sink.text(format!("echo: {}", input.text)).await;
         Ok(ToolStreamEnd {
             stream_id: sink.stream_id().to_string(),
             title: String::new(),
-            output_text: format!("stdio-echo: {text}"),
+            output_text: format!("stdio-echo: {}", input.text),
             payload: None,
             metadata: Default::default(),
             attachments: Vec::new(),
         })
     }
-}
 
-#[plugin]
-impl Plugin for EchoPlugin {
-    #[plugin_manifest_method(
-        id = "echo-stdio",
-        version = env!("CARGO_PKG_VERSION"),
-        description = "Echo via stdio.",
-        hooks = HookSubscription::INIT
-            | HookSubscription::TOOL_INVOKE
-            | HookSubscription::TOOL_INVOKE_STREAM
-            | HookSubscription::SHELL_ENV
-            | HookSubscription::CHAT_PARAMS,
-        display = compact,
-        tool_surface = EchoToolInput,
-    )]
-    fn manifest(&self) -> PluginManifest {}
-
-    #[plugin_init_method]
-    async fn init(&self, _ctx: InitContext, _host: Arc<dyn HostClient>) -> Result<InitOutcome> {}
-
-    #[plugin_tool_invoke_method(surface(EchoToolInput))]
-    async fn tool_invoke(&self, input: ToolInvokeInput) -> Result<ToolInvokeOutput> {}
-
-    #[plugin_tool_invoke_stream_method(surface(EchoToolInput))]
-    async fn tool_invoke_stream(
-        &self,
-        input: ToolInvokeInput,
-        sink: ToolStreamSink,
-    ) -> Result<ToolStreamEnd> {
-        let _ = (input, sink);
+    #[hook(init)]
+    async fn init(&self, _ctx: InitContext, _host: Arc<dyn HostClient>) -> Result<InitOutcome> {
+        Ok(InitOutcome::ack(Plugin::manifest(self)))
     }
 
+    #[hook(shell_env)]
     async fn shell_env(&self, _input: ShellEnvInput) -> Result<Option<ShellEnvPatch>> {
         Ok(Some(ShellEnvPatch::set("AGENA_STDIO_PLUGIN", "1")))
     }
 
+    #[hook(chat_params)]
     async fn chat_params(&self, _input: ChatParamsInput) -> Result<Option<ChatParamsPatch>> {
         Ok(Some(ChatParamsPatch {
             params: Some(json!({ "stop": ["\nHuman:"] })),

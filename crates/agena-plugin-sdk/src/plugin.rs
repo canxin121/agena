@@ -123,14 +123,7 @@ pub trait Plugin: Send + Sync + 'static {
             metadata: result.metadata.clone(),
         })
         .await;
-        Ok(ToolStreamEnd {
-            stream_id,
-            title: result.title,
-            output_text: result.output_text,
-            payload: result.payload,
-            metadata: result.metadata,
-            attachments: result.attachments,
-        })
+        Ok(ToolStreamEnd::from_output(stream_id, result))
     }
 
     // -------- chat --------

@@ -189,6 +189,7 @@ struct PluginImplConfig {
     plugin_capabilities_expr: Option<Expr>,
     plugin_capabilities: Vec<Expr>,
     explicit_hooks: Option<Expr>,
+    export: Option<Ident>,
 }
 
 #[derive(Clone)]
@@ -309,8 +310,8 @@ fn expand_plugin_inherent_impl_attr(
         .iter()
         .map(|binding| expand_plugin_layer_hook_method(&self_ty, binding))
         .collect::<Result<Vec<_>>>()?;
-
     let generics = &item.generics;
+    let export = expand_plugin_layer_export(&config, &self_ty, generics)?;
     let (impl_generics, _ty_generics, where_clause) = generics.split_for_impl();
     Ok(quote! {
         #item
@@ -324,6 +325,8 @@ fn expand_plugin_inherent_impl_attr(
             #permission_networks_method
             #(#hook_methods)*
         }
+
+        #export
     })
 }
 
@@ -377,6 +380,7 @@ fn apply_plugin_impl_name_value(config: &mut PluginImplConfig, value: MetaNameVa
         "commands" => config.commands = Some(value.value),
         "plugin_capabilities" => config.plugin_capabilities_expr = Some(value.value),
         "hooks" => config.explicit_hooks = Some(value.value),
+        "export" => config.export = Some(expr_path_ident(value.value, "export")?),
         other => {
             return Err(syn::Error::new_spanned(
                 ident,
@@ -453,7 +457,7 @@ fn parse_plugin_inherent_method_attrs(
             ensure_plugin_method_typed_arg_count(method, 1, "#[tool] methods")?;
             out.tools.push(PluginToolBinding {
                 method: method_ident.clone(),
-                ty: attr.parse_args::<Type>()?,
+                ty: plugin_method_single_input_type(&attr, method)?,
                 kind: PluginToolBindingKind::Surface,
                 is_async,
             });
@@ -462,7 +466,7 @@ fn parse_plugin_inherent_method_attrs(
             ensure_plugin_method_typed_arg_count(method, 1, "#[tool_suite] methods")?;
             out.tools.push(PluginToolBinding {
                 method: method_ident.clone(),
-                ty: attr.parse_args::<Type>()?,
+                ty: plugin_method_single_input_type(&attr, method)?,
                 kind: PluginToolBindingKind::Suite,
                 is_async,
             });
@@ -471,7 +475,7 @@ fn parse_plugin_inherent_method_attrs(
             let sink_first = stream_sink_is_first_arg(method)?;
             out.stream_tools.push(PluginStreamToolBinding {
                 method: method_ident.clone(),
-                ty: attr.parse_args::<Type>()?,
+                ty: plugin_method_stream_input_type(&attr, method, sink_first)?,
                 is_async,
                 sink_first,
                 kind: PluginToolBindingKind::Surface,
@@ -481,7 +485,7 @@ fn parse_plugin_inherent_method_attrs(
             let sink_first = stream_sink_is_first_arg(method)?;
             out.stream_tools.push(PluginStreamToolBinding {
                 method: method_ident.clone(),
-                ty: attr.parse_args::<Type>()?,
+                ty: plugin_method_stream_input_type(&attr, method, sink_first)?,
                 is_async,
                 sink_first,
                 kind: PluginToolBindingKind::Suite,
@@ -491,7 +495,7 @@ fn parse_plugin_inherent_method_attrs(
             ensure_plugin_method_typed_arg_count(method, 1, "#[permission_paths] methods")?;
             out.permission_paths.push(PluginPermissionBinding {
                 method: method_ident.clone(),
-                ty: attr.parse_args::<Type>()?,
+                ty: plugin_method_single_input_type(&attr, method)?,
                 kind: PluginToolBindingKind::Surface,
                 is_async,
             });
@@ -500,7 +504,7 @@ fn parse_plugin_inherent_method_attrs(
             ensure_plugin_method_typed_arg_count(method, 1, "#[permission_paths_suite] methods")?;
             out.permission_paths.push(PluginPermissionBinding {
                 method: method_ident.clone(),
-                ty: attr.parse_args::<Type>()?,
+                ty: plugin_method_single_input_type(&attr, method)?,
                 kind: PluginToolBindingKind::Suite,
                 is_async,
             });
@@ -509,7 +513,7 @@ fn parse_plugin_inherent_method_attrs(
             ensure_plugin_method_typed_arg_count(method, 1, "#[permission_networks] methods")?;
             out.permission_networks.push(PluginPermissionBinding {
                 method: method_ident.clone(),
-                ty: attr.parse_args::<Type>()?,
+                ty: plugin_method_single_input_type(&attr, method)?,
                 kind: PluginToolBindingKind::Surface,
                 is_async,
             });
@@ -522,13 +526,13 @@ fn parse_plugin_inherent_method_attrs(
             )?;
             out.permission_networks.push(PluginPermissionBinding {
                 method: method_ident.clone(),
-                ty: attr.parse_args::<Type>()?,
+                ty: plugin_method_single_input_type(&attr, method)?,
                 kind: PluginToolBindingKind::Suite,
                 is_async,
             });
         } else if attr.path().is_ident("hook") {
             ensure_plugin_method_shared_receiver(method, "#[hook] methods")?;
-            let hook = parse_plugin_hook_attr(&attr)?;
+            let hook = parse_plugin_hook_attr(&attr, &method_ident)?;
             ensure_plugin_method_typed_arg_count(
                 method,
                 plugin_hook_arg_count(hook),
@@ -545,6 +549,44 @@ fn parse_plugin_inherent_method_attrs(
     }
     method.attrs = kept_attrs;
     Ok(out)
+}
+
+fn plugin_attr_has_explicit_args(attr: &Attribute) -> bool {
+    match &attr.meta {
+        Meta::Path(_) => false,
+        Meta::List(list) => !list.tokens.is_empty(),
+        Meta::NameValue(_) => true,
+    }
+}
+
+fn plugin_method_single_input_type(attr: &Attribute, method: &ImplItemFn) -> Result<Type> {
+    if plugin_attr_has_explicit_args(attr) {
+        return attr.parse_args::<Type>();
+    }
+    typed_arg_types(method).into_iter().next().ok_or_else(|| {
+        syn::Error::new_spanned(
+            &method.sig,
+            "cannot infer plugin method input type without a typed argument",
+        )
+    })
+}
+
+fn plugin_method_stream_input_type(
+    attr: &Attribute,
+    method: &ImplItemFn,
+    sink_first: bool,
+) -> Result<Type> {
+    if plugin_attr_has_explicit_args(attr) {
+        return attr.parse_args::<Type>();
+    }
+    let args = typed_arg_types(method);
+    let index = usize::from(sink_first);
+    args.get(index).cloned().ok_or_else(|| {
+        syn::Error::new_spanned(
+            &method.sig,
+            "cannot infer plugin stream input type without an input argument",
+        )
+    })
 }
 
 fn ensure_plugin_method_shared_receiver(method: &ImplItemFn, label: &str) -> Result<()> {
@@ -618,9 +660,13 @@ fn type_last_segment_is(ty: &Type, expected: &str) -> bool {
         .is_some_and(|segment| segment.ident == expected)
 }
 
-fn parse_plugin_hook_attr(attr: &Attribute) -> Result<PluginHookKind> {
-    let ident = attr.parse_args::<Ident>()?;
-    plugin_hook_kind_from_ident(&ident)
+fn parse_plugin_hook_attr(attr: &Attribute, method_ident: &Ident) -> Result<PluginHookKind> {
+    if plugin_attr_has_explicit_args(attr) {
+        let ident = attr.parse_args::<Ident>()?;
+        plugin_hook_kind_from_ident(&ident)
+    } else {
+        plugin_hook_kind_from_ident(method_ident)
+    }
 }
 
 fn plugin_hook_kind_from_ident(ident: &Ident) -> Result<PluginHookKind> {
@@ -734,6 +780,33 @@ fn reject_duplicate_hook_bindings(hooks: &[PluginHookBinding]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn expand_plugin_layer_export(
+    config: &PluginImplConfig,
+    self_ty: &Type,
+    generics: &syn::Generics,
+) -> Result<proc_macro2::TokenStream> {
+    let Some(export) = config.export.as_ref() else {
+        return Ok(quote! {});
+    };
+    match export.to_string().as_str() {
+        "cdylib" => {
+            if !generics.params.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    self_ty,
+                    "export = cdylib does not support generic plugin types",
+                ));
+            }
+            Ok(quote! {
+                ::agena_plugin_sdk::export_cdylib!(#self_ty);
+            })
+        }
+        other => Err(syn::Error::new_spanned(
+            export,
+            format!("unsupported plugin export '{other}'; expected cdylib"),
+        )),
+    }
 }
 
 fn expand_plugin_layer_manifest(
@@ -1109,14 +1182,7 @@ fn expand_plugin_layer_tool_stream(
                 metadata: __result.metadata.clone(),
             })
             .await;
-            Ok(::agena_plugin_sdk::ToolStreamEnd {
-                stream_id: __stream_id,
-                title: __result.title,
-                output_text: __result.output_text,
-                payload: __result.payload,
-                metadata: __result.metadata,
-                attachments: __result.attachments,
-            })
+            Ok(::agena_plugin_sdk::ToolStreamEnd::from_output(__stream_id, __result))
         }
     })
 }

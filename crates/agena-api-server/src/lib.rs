@@ -295,10 +295,6 @@ pub fn router(state: AppState) -> Router {
                 get(rest::list_session_tree),
             )
             .route(
-                "/api/v1/sessions/{session_id}/rewind-checkpoints",
-                get(rest::list_rewind_checkpoints),
-            )
-            .route(
                 "/api/v1/permission-rules",
                 get(rest::list_permission_rules).post(rest::create_permission_rule),
             )

@@ -589,7 +589,7 @@ fn schema_lab_config_schema() -> JsonValue {
   "properties": {
     "identity": {
       "title": "Identity",
-      "description": "Top-level string, enum, const, formatted string, deprecated, and array fields.",
+      "description": "Top-level string, enum, const, formatted string, and array fields.",
       "type": "object",
       "additionalProperties": false,
       "required": ["fixture_kind", "display_name", "profile_slug", "owner_email", "documentation_url", "hostname", "instance_uuid", "notes", "tags"],
@@ -613,12 +613,6 @@ fn schema_lab_config_schema() -> JsonValue {
           "minItems": 1,
           "uniqueItems": true,
           "contains": { "const": "primary" }
-        },
-        "legacy_profile_id": {
-          "title": "Legacy Profile ID",
-          "type": "integer",
-          "minimum": 1,
-          "deprecated": true
         }
       }
     },

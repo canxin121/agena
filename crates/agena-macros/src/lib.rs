@@ -2617,7 +2617,7 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
         .map(LitStr::value)
         .as_deref()
     {
-        Some("brief") | Some("help") => {
+        Some("brief") => {
             quote! { .description_mode(::agena_plugin_sdk::ToolDescriptionMode::Brief) }
         }
         Some("detailed") => {

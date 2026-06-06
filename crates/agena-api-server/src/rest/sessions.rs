@@ -357,20 +357,6 @@ pub async fn list_session_tree(
     Ok(Json(resources))
 }
 
-pub async fn list_rewind_checkpoints(
-    State(state): State<AppState>,
-    Path(session_id): Path<i64>,
-) -> Result<impl IntoResponse, ServerError> {
-    let manager = state.session_manager()?;
-    let checkpoints = manager
-        .list_rewind_checkpoints(session_id)
-        .await
-        .map_err(ServerError::Core)?;
-    let resources: Vec<agena_api::resource::RewindCheckpointResource> =
-        checkpoints.into_iter().map(Into::into).collect();
-    Ok(Json(resources))
-}
-
 pub async fn export_session(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,

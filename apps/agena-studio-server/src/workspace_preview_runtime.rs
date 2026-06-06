@@ -47,12 +47,11 @@ fn resolve_logs_paths(raw: &str, run_dir: &Path) -> ApiResult<ResolvedLogsPaths>
         run_dir.join(path)
     };
 
-    // Backwards-compatible: legacy plugin wrote logsPath as a directory.
-    // If a directory is provided (and exists), write to stdout.log/stderr.log.
     if resolved.is_dir() {
-        let stdout = resolved.join("stdout.log");
-        let stderr = resolved.join("stderr.log");
-        return Ok(ResolvedLogsPaths { stdout, stderr });
+        return Err(AppError::bad_request(format!(
+            "logsPath must point to a file, got directory: {}",
+            resolved.to_string_lossy()
+        )));
     }
 
     if let Some(parent) = resolved.parent() {

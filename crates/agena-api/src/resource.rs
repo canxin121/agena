@@ -797,44 +797,6 @@ pub use agena::permission::{PermissionMode, PermissionReply, PermissionRequest};
 pub use agena::provider::ProviderModel;
 pub use agena::role::Role;
 
-/// Wire form of a rewind audit checkpoint exposed via the Command protocol.
-/// Mirrors `agena::session::RewindCheckpoint` with a stable serde shape.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RewindCheckpointResource {
-    pub schema: u32,
-    pub at_ms: i64,
-    pub target_message_id: i64,
-    pub dropped: Vec<RewindCheckpointRecordResource>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RewindCheckpointRecordResource {
-    pub message_id: i64,
-    pub role: String,
-    pub preview: String,
-}
-
-impl From<agena::session::RewindCheckpoint> for RewindCheckpointResource {
-    fn from(value: agena::session::RewindCheckpoint) -> Self {
-        Self {
-            schema: value.schema,
-            at_ms: value.at_ms,
-            target_message_id: value.target_message_id,
-            dropped: value.dropped.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<agena::session::RewindCheckpointRecord> for RewindCheckpointRecordResource {
-    fn from(value: agena::session::RewindCheckpointRecord) -> Self {
-        Self {
-            message_id: value.message_id,
-            role: value.role,
-            preview: value.preview,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -40,10 +40,6 @@ pub use processor::SessionProcessor;
 pub(crate) use processor::parse_tool_invocation;
 
 pub use history::ProjectedMessageHeader;
-/// Audit-only payload carried by `RewindCheckpoint` system notices.
-/// Exposed publicly so callers of `SessionManager::list_rewind_checkpoints`
-/// can name the return type.
-pub use history::{RewindCheckpoint, RewindCheckpointRecord};
 
 pub const EFFECTIVE_CONTEXT_WINDOW_PERCENT: u32 = 95;
 pub const AUTO_COMPACTION_CONTEXT_WINDOW_PERCENT: u32 = 90;

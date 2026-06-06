@@ -1,11 +1,8 @@
 use std::path::{Path, PathBuf};
 
 pub(crate) const SETTINGS_FILE: &str = "studio-settings.json";
-pub(crate) const LEGACY_SETTINGS_FILE: &str = "settings.json";
 pub(crate) const TERMINAL_UI_STATE_FILE: &str = "terminal-ui-state.json";
-pub(crate) const LEGACY_TERMINAL_UI_STATE_FILE: &str = "terminal.state.json";
 pub(crate) const TERMINAL_SESSION_REGISTRY_FILE: &str = "session-registry.json";
-pub(crate) const LEGACY_TERMINAL_SESSION_REGISTRY_FILE: &str = "sessions.json";
 
 // Agena Studio state is stored in a single SQLite database.
 pub(crate) const STUDIO_DB_FILE: &str = "agena-studio.db";
@@ -103,7 +100,6 @@ pub(crate) fn studio_settings_path_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::<PathBuf>::new();
     for root in studio_data_dir_candidates() {
         candidates.push(root.join(SETTINGS_FILE));
-        candidates.push(root.join(LEGACY_SETTINGS_FILE));
     }
     dedupe_paths(candidates)
 }
@@ -130,7 +126,6 @@ pub(crate) fn terminal_ui_state_path_candidates() -> Vec<PathBuf> {
     for root in studio_data_dir_candidates() {
         let ui_dir = root.join("ui");
         candidates.push(ui_dir.join(TERMINAL_UI_STATE_FILE));
-        candidates.push(ui_dir.join(LEGACY_TERMINAL_UI_STATE_FILE));
     }
     dedupe_paths(candidates)
 }
@@ -144,7 +139,6 @@ pub(crate) fn terminal_session_registry_path_candidates() -> Vec<PathBuf> {
     for root in studio_data_dir_candidates() {
         let terminal_dir = root.join("terminal");
         candidates.push(terminal_dir.join(TERMINAL_SESSION_REGISTRY_FILE));
-        candidates.push(terminal_dir.join(LEGACY_TERMINAL_SESSION_REGISTRY_FILE));
     }
     dedupe_paths(candidates)
 }

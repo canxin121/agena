@@ -77,7 +77,7 @@ impl BackendErrorInfo {
         self
     }
 
-    fn legacy_message(&self) -> String {
+    fn message(&self) -> String {
         let mut out = self.summary.trim().to_string();
         if let Some(detail) = self.detail.as_deref().map(str::trim)
             && !detail.is_empty()
@@ -119,7 +119,7 @@ impl BackendInner {
     }
 
     fn set_last_error_info(&mut self, info: BackendErrorInfo) {
-        let message = info.legacy_message();
+        let message = info.message();
         self.last_error = Some(message);
         self.last_error_info = Some(info);
     }
@@ -160,7 +160,7 @@ impl BackendManager {
             Ok(started) => started,
             Err(err) => {
                 let info = backend_start_error_info(err);
-                let message = info.legacy_message();
+                let message = info.message();
                 let mut guard = self.inner.lock().await;
                 guard.child = None;
                 guard.pid = None;
@@ -185,7 +185,7 @@ impl BackendManager {
 
         if let Err(err) = wait_for_health(&url).await {
             let info = backend_start_error_info(err);
-            let message = info.legacy_message();
+            let message = info.message();
             let _ = self.stop(app).await;
             let mut guard = self.inner.lock().await;
             guard.set_last_error_info(info);

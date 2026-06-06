@@ -668,8 +668,8 @@ pub(crate) async fn require_ui_auth(
                 return next.run(req).await;
             }
 
-            // Cookie token fallback (legacy / same-origin): enforce Origin allowlist for
-            // unsafe methods when cookies may be sent cross-site.
+            // Cookie token sessions require Origin allowlist enforcement for unsafe
+            // methods when cookies may be sent cross-site.
             if let Some(token) = get_token_from_jar(&jar)
                 && is_session_valid(inner, &token)
             {

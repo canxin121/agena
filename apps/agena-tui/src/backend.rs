@@ -3423,9 +3423,8 @@ impl Backend {
     }
 
     /// Subscribe to live events for a session via the unified
-    /// [`agena_event::EventBus`]. Replaces the legacy 250ms REST polling
-    /// loop: callers receive a [`LiveEvent`] for every domain event the
-    /// session emits, in real time.
+    /// [`agena_event::EventBus`]. Callers receive a [`LiveEvent`] for every
+    /// domain event the session emits, in real time.
     ///
     /// Returns `None` when the runtime has no session manager configured
     /// (e.g. a database-less smoke test).

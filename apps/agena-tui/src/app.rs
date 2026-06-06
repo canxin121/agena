@@ -635,8 +635,8 @@ enum AppMessage {
         result: UiResult<SessionExecutionResource>,
     },
     /// Pushed by the unified event bus (`Backend::subscribe_session_events`).
-    /// Replaces the legacy 250ms polling tick: callers receive each domain
-    /// event in real time, with a hint about whether a refresh is needed.
+    /// Callers receive each domain event in real time, with a hint about
+    /// whether a refresh is needed.
     SessionEventArrived {
         session_id: i64,
         live: LiveEvent,
@@ -5831,8 +5831,8 @@ impl App {
             self.recall_prompt_history(PromptHistoryDirection::Newer);
             return;
         }
-        // Configurable bindings take precedence over the legacy hardcoded
-        // map. The defaults preserve the user's stated preference:
+        // Configurable bindings define the composer map. The defaults preserve
+        // the user's stated preference:
         // Enter = queue, Ctrl+Enter = submit, Shift+Enter / Ctrl+J = newline.
         if let Some(action) = self.keybindings.match_action(&key) {
             match action {
@@ -8097,9 +8097,8 @@ impl App {
     }
 
     /// Spawn a forwarder task that pumps live `LiveEvent`s from the unified
-    /// bus into [`AppMessage::SessionEventArrived`]. Replaces the legacy
-    /// 250ms refresh polling with push-based notifications. Aborts any
-    /// previous subscription so we never accumulate stale receivers.
+    /// bus into [`AppMessage::SessionEventArrived`]. Aborts any previous
+    /// subscription so we never accumulate stale receivers.
     fn subscribe_session_events(&mut self, session_id: i64) {
         if let Some(handle) = self.active_subscription.take() {
             handle.abort();
@@ -8312,9 +8311,8 @@ impl App {
     /// sends immediately. When the AI is mid-run, the message is appended to
     /// the local pending queue and drained on run completion.
     fn queue_or_submit(&mut self) {
-        // Preserve the legacy paste-burst behavior: if a multi-character
-        // paste burst is active, an Enter inside it should be treated as
-        // a literal newline rather than a submit/queue.
+        // During a multi-character paste burst, an Enter inside it should be
+        // treated as a literal newline rather than a submit/queue.
         if self.composer.should_insert_newline_on_enter() {
             self.composer.insert_newline_from_enter();
             return;

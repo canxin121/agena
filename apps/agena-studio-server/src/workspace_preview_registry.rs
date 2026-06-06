@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use url::{Host, Url};
 
 use crate::{ApiResult, AppError};
@@ -12,9 +12,6 @@ use crate::studio_db;
 
 const STATE_VERSION: u32 = 1;
 const CACHE_TTL: Duration = Duration::from_millis(750);
-const PREVIEW_STATE_ENV: &str = "AGENA_WEB_PREVIEW_STATE_PATH";
-const STUDIO_PREVIEW_STATE_ENV: &str = "AGENA_STUDIO_PREVIEW_STATE_PATH";
-const XDG_DATA_HOME_ENV: &str = "XDG_DATA_HOME";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -97,7 +94,6 @@ pub(crate) struct WorkspacePreviewRegistry {
     db: Arc<studio_db::StudioDb>,
     ttl: Duration,
     cache: RwLock<Option<RegistryCache>>,
-    legacy_import_done: Mutex<bool>,
 }
 
 impl WorkspacePreviewRegistry {
@@ -110,7 +106,6 @@ impl WorkspacePreviewRegistry {
             db,
             ttl,
             cache: RwLock::new(None),
-            legacy_import_done: Mutex::new(false),
         }
     }
 
@@ -131,81 +126,6 @@ impl WorkspacePreviewRegistry {
         *cache = None;
     }
 
-    async fn ensure_legacy_plugin_state_imported(&self) {
-        let mut guard = self.legacy_import_done.lock().await;
-        if *guard {
-            return;
-        }
-        *guard = true;
-        drop(guard);
-
-        let legacy_path = legacy_plugin_preview_state_path();
-        let legacy_file = match load_state_file_from_path(&legacy_path) {
-            Ok(file) => file,
-            Err(error) => {
-                tracing::warn!(
-                    target: "agena_studio.preview_registry",
-                    path = %legacy_path.to_string_lossy(),
-                    error = %error,
-                    "Failed to load legacy plugin preview sessions"
-                );
-                return;
-            }
-        };
-
-        let legacy_snapshot = parse_preview_sessions(legacy_file);
-        if legacy_snapshot.sessions.is_empty() {
-            return;
-        }
-
-        let mut studio_file = match self.load_studio_state_file().await {
-            Ok(file) => file,
-            Err(error) => {
-                tracing::warn!(
-                    target: "agena_studio.preview_registry",
-                    error = %error,
-                    "Failed to load studio preview sessions for legacy import"
-                );
-                return;
-            }
-        };
-
-        let mut changed = false;
-        for session in legacy_snapshot.sessions {
-            if let Some(idx) = studio_file
-                .sessions
-                .iter()
-                .position(|existing| existing.id == session.id)
-            {
-                if session.updated_at > studio_file.sessions[idx].updated_at {
-                    studio_file.sessions[idx] = session;
-                    changed = true;
-                }
-                continue;
-            }
-
-            studio_file.sessions.push(session);
-            changed = true;
-        }
-
-        if !changed {
-            return;
-        }
-
-        studio_file.version = STATE_VERSION;
-        studio_file.updated_at = now_millis();
-        if let Err(error) = self.write_studio_state_file(&studio_file).await {
-            tracing::warn!(
-                target: "agena_studio.preview_registry",
-                error = %error,
-                "Failed to persist legacy plugin preview sessions"
-            );
-            return;
-        }
-
-        self.invalidate().await;
-    }
-
     async fn load_studio_state_file(&self) -> ApiResult<PreviewSessionsFile> {
         match self
             .db
@@ -213,19 +133,11 @@ impl WorkspacePreviewRegistry {
             .await
         {
             Ok(Some(file)) => Ok(file),
-            Ok(None) => {
-                let legacy_path = legacy_studio_preview_state_path();
-                let file = load_state_file_from_path(&legacy_path)?;
-                self.db
-                    .set_json(studio_db::KV_KEY_WORKSPACE_PREVIEW_STUDIO_STATE, &file)
-                    .await
-                    .map_err(|err| {
-                        AppError::internal(format!(
-                            "failed to persist studio preview registry: {err}"
-                        ))
-                    })?;
-                Ok(file)
-            }
+            Ok(None) => Ok(PreviewSessionsFile {
+                version: STATE_VERSION,
+                updated_at: 0,
+                sessions: Vec::new(),
+            }),
             Err(err) => Err(AppError::internal(format!(
                 "failed to read studio preview registry from db: {err}"
             ))),
@@ -332,8 +244,6 @@ impl WorkspacePreviewRegistry {
             ));
         }
 
-        self.ensure_legacy_plugin_state_imported().await;
-
         let mut file = self.load_studio_state_file().await?;
         if file.sessions.iter().any(|session| session.id == trimmed_id) {
             return Err(AppError::bad_request(format!(
@@ -409,7 +319,6 @@ impl WorkspacePreviewRegistry {
             return Err(AppError::bad_request("id is required"));
         }
 
-        self.ensure_legacy_plugin_state_imported().await;
         let updated_at = now_millis();
 
         if !self
@@ -435,7 +344,6 @@ impl WorkspacePreviewRegistry {
             return Err(AppError::bad_request("id is required"));
         }
 
-        self.ensure_legacy_plugin_state_imported().await;
         let updated_at = now_millis();
 
         if let Some(updated) = self
@@ -477,8 +385,6 @@ impl WorkspacePreviewRegistry {
             });
         }
 
-        self.ensure_legacy_plugin_state_imported().await;
-
         let studio_file = self.load_studio_state_file().await?;
         if studio_file
             .sessions
@@ -511,7 +417,6 @@ impl WorkspacePreviewRegistry {
             return Err(AppError::bad_request("id is required"));
         }
 
-        self.ensure_legacy_plugin_state_imported().await;
         let updated_at = now_millis();
 
         if let Some(updated) = self
@@ -537,7 +442,6 @@ impl WorkspacePreviewRegistry {
             return Err(AppError::bad_request("id is required"));
         }
 
-        self.ensure_legacy_plugin_state_imported().await;
         let updated_at = now_millis();
 
         if let Some(updated) = self
@@ -554,7 +458,6 @@ impl WorkspacePreviewRegistry {
     }
 
     async fn snapshot(&self) -> PreviewSessionsResponse {
-        self.ensure_legacy_plugin_state_imported().await;
         let studio_db_path = self.db.path().to_path_buf();
         {
             let cache = self.cache.read().await;
@@ -767,56 +670,6 @@ fn rename_session_in_file(
 
 fn default_state_version() -> u32 {
     STATE_VERSION
-}
-
-fn legacy_plugin_preview_state_path() -> PathBuf {
-    state_path_from_env_or_default(PREVIEW_STATE_ENV, "preview-sessions.json")
-}
-
-fn legacy_studio_preview_state_path() -> PathBuf {
-    state_path_from_env_or_default(STUDIO_PREVIEW_STATE_ENV, "studio-preview-sessions.json")
-}
-
-fn state_path_from_env_or_default(env_key: &str, file_name: &str) -> PathBuf {
-    if let Ok(path) = std::env::var(env_key) {
-        let trimmed = path.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
-    }
-
-    preview_state_root()
-        .join("agena")
-        .join("web-preview")
-        .join(file_name)
-}
-
-fn preview_state_root() -> PathBuf {
-    if let Ok(path) = std::env::var(XDG_DATA_HOME_ENV) {
-        let trimmed = path.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
-    }
-
-    crate::path_utils::data_home_dir()
-}
-
-fn load_state_file_from_path(path: &Path) -> ApiResult<PreviewSessionsFile> {
-    let Ok(contents) = std::fs::read_to_string(path) else {
-        return Ok(PreviewSessionsFile {
-            version: STATE_VERSION,
-            updated_at: 0,
-            sessions: Vec::new(),
-        });
-    };
-
-    serde_json::from_str(&contents).map_err(|err| {
-        AppError::internal(format!(
-            "invalid preview registry JSON at {}: {err}",
-            path.to_string_lossy()
-        ))
-    })
 }
 
 fn empty_snapshot() -> PreviewSessionsResponse {

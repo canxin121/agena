@@ -431,7 +431,6 @@ pub enum ToolStreamingMode {
 pub enum ToolDescriptionMode {
     #[default]
     Detailed,
-    #[serde(alias = "help")]
     Brief,
 }
 

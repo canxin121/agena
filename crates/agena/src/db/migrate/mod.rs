@@ -7,9 +7,7 @@ use crate::db::{entities, event_entity};
 
 /// Bootstraps the current database schema directly.
 ///
-/// Agena only supports creating the latest schema from scratch. Historical
-/// migrations, data rewrites, and legacy compatibility paths are intentionally
-/// not retained here.
+/// Agena creates the current schema from scratch.
 pub async fn up(db: &DatabaseConnection) -> Result<(), DbErr> {
     let backend = db.get_database_backend();
     let schema = Schema::new(backend);
@@ -264,7 +262,7 @@ mod tests {
         }
         assert!(
             !tables.contains("seaql_migrations"),
-            "legacy migration tracking table should not exist"
+            "migration tracking table should not exist"
         );
 
         let activity_message_columns = sqlite_table_columns(&db, "agena_activity_messages")

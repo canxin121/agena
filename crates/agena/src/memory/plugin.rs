@@ -747,7 +747,7 @@ mod tests {
         let err = MemoryToolInput::parse_input(serde_json::json!({
             "action": "search",
             "query": "launch plan",
-            "backend": "legacy"
+            "backend": "remote"
         }))
         .expect_err("memory tool should reject unknown fields");
         assert!(err.to_string().contains("unknown field 'backend'"));

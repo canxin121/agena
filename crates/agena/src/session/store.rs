@@ -658,36 +658,6 @@ impl SessionStore {
         ))
     }
 
-    /// Serialise a session as JSONL: the first line is a [`SessionExportMeta`]
-    /// header; each subsequent line is one persistent `EventKind` payload in
-    /// the original `seq_global` order. The output is portable across
-    /// workspaces and across machines.
-    /// Return every persisted [`RewindCheckpoint`] for this session, in the
-    /// order they were emitted. Audit-only — used to surface "you rewound
-    /// past these N messages — undo?" affordances without re-folding.
-    pub(crate) async fn list_rewind_checkpoints(
-        &self,
-        session_id: i64,
-    ) -> Result<Vec<super::history::RewindCheckpoint>, AppError> {
-        let events = self.history.list_session_events(session_id).await?;
-        let mut out = Vec::new();
-        for event in events {
-            if let EventKind::SystemNoticeAppended(payload) = &event.kind
-                && matches!(
-                    payload.kind,
-                    super::history::SystemNoticeKind::RewindCheckpoint
-                )
-            {
-                let parsed: super::history::RewindCheckpoint = serde_json::from_str(&payload.text)
-                    .map_err(|err| {
-                        AppError::Internal(format!("decode rewind checkpoint: {err}"))
-                    })?;
-                out.push(parsed);
-            }
-        }
-        Ok(out)
-    }
-
     pub(crate) async fn export_session_jsonl(&self, session_id: i64) -> Result<String, AppError> {
         let model = session::get_session_by_id(&self.db, session_id)
             .await?
@@ -1443,7 +1413,6 @@ fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
         }
         EventKind::SystemNoticeAppended(p) => {
             visit(p.message_id.raw());
-            visit_rewind_checkpoint_ids(p, &mut visit);
         }
         EventKind::MessagePartUpdated(p) => {
             visit(p.message_id);
@@ -1475,21 +1444,6 @@ fn visit_message_metadata_ids(
 ) {
     if let Some(parent_message_id) = metadata.parent_message_id {
         visit(parent_message_id);
-    }
-}
-
-fn visit_rewind_checkpoint_ids(
-    notice: &super::history::SystemNoticeAppended,
-    mut visit: impl FnMut(i64),
-) {
-    if notice.kind != super::history::SystemNoticeKind::RewindCheckpoint {
-        return;
-    }
-    if let Ok(checkpoint) = serde_json::from_str::<super::history::RewindCheckpoint>(&notice.text) {
-        visit(checkpoint.target_message_id);
-        for entry in checkpoint.dropped {
-            visit(entry.message_id);
-        }
     }
 }
 
@@ -1564,7 +1518,6 @@ fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64
         }
         EventKind::SystemNoticeAppended(p) => {
             p.message_id = MessageId(f(p.message_id.raw()));
-            rewrite_rewind_checkpoint_ids(p, &mut f);
         }
         EventKind::MessagePartUpdated(p) => {
             p.message_id = f(p.message_id);
@@ -1595,26 +1548,6 @@ fn rewrite_message_metadata_ids(
 ) {
     if let Some(parent_message_id) = metadata.parent_message_id.as_mut() {
         *parent_message_id = f(*parent_message_id);
-    }
-}
-
-fn rewrite_rewind_checkpoint_ids(
-    notice: &mut super::history::SystemNoticeAppended,
-    mut f: impl FnMut(i64) -> i64,
-) {
-    if notice.kind != super::history::SystemNoticeKind::RewindCheckpoint {
-        return;
-    }
-    if let Ok(mut checkpoint) =
-        serde_json::from_str::<super::history::RewindCheckpoint>(&notice.text)
-    {
-        checkpoint.target_message_id = f(checkpoint.target_message_id);
-        for entry in &mut checkpoint.dropped {
-            entry.message_id = f(entry.message_id);
-        }
-        if let Ok(text) = serde_json::to_string(&checkpoint) {
-            notice.text = text;
-        }
     }
 }
 

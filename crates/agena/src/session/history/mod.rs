@@ -6,10 +6,8 @@ mod transcript;
 pub(crate) use crate::session::ids::{MessageId, RunId, ToolCallId};
 pub(crate) use event::{
     AssistantMessageCompleted, FinishReason, RunAbortReason, RunAborted, RunCompleted, RunSource,
-    RunStarted, SystemNoticeAppended, SystemNoticeKind, ToolCallCompleted, ToolCallIssued,
-    UserMessageAppended,
+    RunStarted, SystemNoticeAppended, ToolCallCompleted, ToolCallIssued, UserMessageAppended,
 };
-pub use event::{RewindCheckpoint, RewindCheckpointRecord};
 pub(crate) use run_buffer::{MessageIdAllocator, RunBuffer, SequentialIdAllocator};
 pub use store::ProjectedMessageHeader;
 pub(crate) use store::SessionHistoryStore;

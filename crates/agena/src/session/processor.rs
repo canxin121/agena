@@ -45,8 +45,7 @@ pub(crate) struct SessionRunRequest {
     pub event_publisher: Option<Arc<EventPublisher>>,
     /// Optional cancel handle. When the token fires the stream loop
     /// terminates between provider events and surfaces a `RunAbortReason::
-    /// Cancelled`-shaped terminal error. `None` keeps the legacy "run to
-    /// completion" semantics for callers that don't have a control object.
+    /// Cancelled`-shaped terminal error. `None` runs the turn to completion.
     pub cancel: Option<tokio_util::sync::CancellationToken>,
 }
 
@@ -154,8 +153,7 @@ impl SessionProcessor {
         let mut client_events = Vec::new();
         // Provider-visible prompt content is append-only for prompt-cache
         // affinity. Mutating chat hooks can rewrite/drop/reorder system and
-        // message content, so they remain registered for compatibility but are
-        // not applied on the provider request path.
+        // message content, so they are not applied on the provider request path.
         self.apply_chat_params_hook(
             run.model.provider_id.as_str(),
             run.model.model_id.as_str(),

@@ -90,11 +90,7 @@ pub(crate) fn normalize_chat_activity_tool_filters(v: Option<&Value>) -> Vec<Str
         let Some(s) = item.as_str() else {
             continue;
         };
-        let mut t = s.trim().to_ascii_lowercase();
-        // Backward compatibility: older builds used `invalid` for unknown tools.
-        if t == "invalid" {
-            t = "unknown".to_string();
-        }
+        let t = s.trim().to_ascii_lowercase();
         if t.is_empty() {
             continue;
         }

@@ -171,19 +171,6 @@ fn reject_unsupported_fields_value(value: &Value) -> Result<(), ConfigError> {
             "`hooks` has been removed; implement hook behavior as a regular plugin under `plugins.list.<id>`".to_string(),
         ));
     }
-    for (field, plugin_id) in [
-        ("memory", "agena.memory"),
-        ("web", "agena.web"),
-        ("crawl", "agena.web"),
-        ("mcp", "agena.mcp"),
-        ("lsp", "agena.lsp"),
-    ] {
-        if table.contains_key(field) {
-            return Err(ConfigError::Validation(format!(
-                "`{field}` has moved under `plugins.list.\"{plugin_id}\".config`"
-            )));
-        }
-    }
     if let Some(providers) = table.get("providers").and_then(Value::as_object) {
         for (provider_id, provider) in providers {
             let Some(provider) = provider.as_object() else {
@@ -353,7 +340,6 @@ impl RawConfig {
     }
 
     pub(crate) fn from_env(env: &dyn ConfigEnvironment) -> Result<Self, ConfigError> {
-        reject_legacy_provider_env_overrides(env)?;
         let mut config = Self::default();
 
         if let Some(filter) = env.var("AGENA_LOG") {
@@ -377,9 +363,6 @@ impl RawConfig {
         if let Some(locale) = env.var("AGENA_LOCALE") {
             config.ui.get_or_insert_with(RawUiConfig::default).locale = Some(locale);
         }
-        // Note: `AGENA_PLUGIN_PATHS` is no longer supported — the new plugin
-        // config requires explicit `plugins.list.<id>` entries.
-
         apply_env_number(env, "AGENA_PROVIDER_HTTP_TIMEOUT_SECS", |value| {
             config
                 .runtime
@@ -521,7 +504,6 @@ impl RawConfig {
         }
         let plugins: PluginConfig =
             crate::plugins::sources::resolve_plugin_config(self.plugins.unwrap_or_default());
-        PluginRuntimeOptions::validate_plugin_ids(&plugins)?;
         let mcp = crate::plugins::provided::mcp::config_from_plugins(&plugins)
             .map_err(ConfigError::Validation)?;
         let harnesses: HarnessesConfig = self.harnesses.unwrap_or_default();
@@ -635,27 +617,6 @@ fn resolve_default_agent(
     Ok(agents
         .iter()
         .find_map(|(agent_name, agent)| (!agent.disabled).then(|| agent_name.clone())))
-}
-
-#[derive(Debug, Default)]
-struct PluginRuntimeOptions;
-
-impl PluginRuntimeOptions {
-    fn validate_plugin_ids(plugins: &PluginConfig) -> Result<(), ConfigError> {
-        for plugin_id in plugins.list.keys() {
-            if plugin_id == "agena.hooks" {
-                return Err(ConfigError::Validation(
-                    "`plugins.list.\"agena.hooks\"` has been removed; implement hook behavior as a regular plugin under `plugins.list.<id>`".to_string(),
-                ));
-            }
-            if plugin_id == "agena.crawl" {
-                return Err(ConfigError::Validation(
-                    "`plugins.list.\"agena.crawl\"` has been renamed to `plugins.list.\"agena.web\"`; move configuration fields under `plugins.list.\"agena.web\".config`".to_string(),
-                ));
-            }
-        }
-        Ok(())
-    }
 }
 
 impl Merge for PluginConfig {
@@ -2738,19 +2699,6 @@ pub(crate) fn parse_adapter_model_ref(
     Ok((adapter_id.to_owned(), model_id.to_owned()))
 }
 
-fn reject_legacy_provider_env_overrides(env: &dyn ConfigEnvironment) -> Result<(), ConfigError> {
-    if let Some((key, _)) = env
-        .vars()
-        .into_iter()
-        .find(|(key, _)| key.starts_with("AGENA_PROVIDER__"))
-    {
-        return Err(ConfigError::Validation(format!(
-            "{key} is no longer supported; use canonical config files or `--set providers.<id>.auth.*` overrides"
-        )));
-    }
-    Ok(())
-}
-
 fn parse_bool(key: &str, value: &str) -> Result<bool, ConfigError> {
     match value.trim() {
         "true" | "1" | "yes" => Ok(true),
@@ -2962,7 +2910,7 @@ mod tests {
             "plugins": {
                 "policy": {
                     "tool_presentation": {
-                        "default_mode": "help"
+                        "default_mode": "brief"
                     }
                 }
             }
@@ -3094,13 +3042,13 @@ mod tests {
             "plugins": {
                 "policy": {
                     "tool_presentation": {
-                        "default_mode": "help",
+                        "default_mode": "brief",
                         "plugins": {
-                            "agena.web": "help",
-                            "agena.memory": "help"
+                            "agena.web": "brief",
+                            "agena.memory": "brief"
                         },
                         "tools": {
-                            "bash": "help"
+                            "bash": "brief"
                         }
                     }
                 }
@@ -3597,83 +3545,6 @@ mod tests {
                 .contains("agents.default `planner` references disabled agent"),
             "unexpected error: {error}"
         );
-    }
-
-    #[test]
-    fn old_flat_plugin_config_shape_is_rejected() {
-        let err = serde_json::from_value::<RawConfig>(json!({
-            "plugins": {
-                "list": {
-                    "agena.web": {
-                        "kind": "static",
-                        "config": {
-                            "default_max_pages": 20
-                        }
-                    }
-                }
-            }
-        }))
-        .expect_err("old flat plugin package fields should be rejected");
-
-        assert!(err.to_string().contains("unknown field `kind`"));
-    }
-
-    #[test]
-    fn old_crawl_plugin_id_is_rejected() {
-        let raw = serde_json::from_value::<RawConfig>(json!({
-            "plugins": {
-                "list": {
-                    "agena.crawl": {
-                        "package": {
-                            "kind": "static"
-                        }
-                    }
-                }
-            }
-        }))
-        .expect("config should parse");
-
-        let err = raw
-            .resolve_with_env(&TestEnvironment)
-            .expect_err("old crawl plugin id should be rejected");
-        assert!(err.to_string().contains("has been renamed"));
-    }
-
-    #[test]
-    fn crawl_table_is_rejected() {
-        let err = serde_json::from_value::<RawConfig>(json!({
-            "crawl": {
-                "default_max_pages": 7
-            }
-        }))
-        .expect_err("crawl compatibility alias should be rejected");
-
-        assert!(err.to_string().contains("unknown field `crawl`"));
-    }
-
-    #[test]
-    fn web_table_is_rejected() {
-        let err = serde_json::from_value::<RawConfig>(json!({
-            "web": {
-                "default_max_pages": 20,
-                "max_pages_limit": 10
-            }
-        }))
-        .expect_err("top-level web config should be rejected");
-
-        assert!(err.to_string().contains("unknown field `web`"));
-    }
-
-    #[test]
-    fn web_config_rejects_removed_search_engine_setting() {
-        let err = serde_json::from_value::<RawConfig>(json!({
-            "web": {
-                "search_engine": "brave"
-            }
-        }))
-        .expect_err("top-level web config should be rejected");
-
-        assert!(err.to_string().contains("unknown field `web`"));
     }
 
     #[test]

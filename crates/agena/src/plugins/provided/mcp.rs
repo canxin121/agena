@@ -468,35 +468,6 @@ impl McpPlugin {
     ) -> SdkResult<Vec<NetworkRequest>> {
         self.permission_networks_for_server(&input.server).await
     }
-
-    fn resolve_permission_target(
-        &self,
-        tool: &str,
-        input: &serde_json::Value,
-    ) -> SdkResult<(String, serde_json::Value)> {
-        if tool == "mcp" {
-            McpToolInput::resolve_tool(tool, input.clone())
-        } else {
-            Ok((tool.to_string(), input.clone()))
-        }
-    }
-
-    fn resolve_invoke_target(
-        &self,
-        input: crate::plugin::sdk::ToolInvokeInput,
-    ) -> SdkResult<crate::plugin::sdk::ToolInvokeInput> {
-        if input.tool_name == "mcp" {
-            let (tool_name, input_value) =
-                McpToolInput::resolve_tool(input.tool_name.as_str(), input.input)?;
-            Ok(crate::plugin::sdk::ToolInvokeInput {
-                tool_name,
-                input: input_value,
-                ..input
-            })
-        } else {
-            Ok(input)
-        }
-    }
 }
 
 #[crate::plugin::sdk::async_trait]
@@ -531,7 +502,6 @@ impl crate::plugin::sdk::Plugin for McpPlugin {
         &self,
         input: crate::plugin::sdk::ToolInvokeInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let input = self.resolve_invoke_target(input)?;
         let suite = McpToolSuite::parse_tool(input.tool_name.as_str(), input.input)?;
         suite.dispatch_tool_invoke(self).await
     }
@@ -541,8 +511,7 @@ impl crate::plugin::sdk::Plugin for McpPlugin {
         tool: &str,
         input: &serde_json::Value,
     ) -> SdkResult<Vec<NetworkRequest>> {
-        let (tool_name, input) = self.resolve_permission_target(tool, input)?;
-        let suite = McpToolSuite::parse_tool(tool_name.as_str(), input)?;
+        let suite = McpToolSuite::parse_tool(tool, input.clone())?;
         suite.dispatch_permission_networks(self).await
     }
 }
@@ -566,50 +535,6 @@ pub(super) enum McpToolTarget {
     },
     GetPrompt {
         server: GetPromptInput,
-    },
-}
-
-#[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "mcp",
-    description = "MCP bridge command. Use action `list_resources`, `read_resource`, `list_prompts`, `get_prompt`, or `call` to access capabilities exposed by configured MCP servers.",
-    summary = "Read MCP resources or prompt templates, or call discovered MCP tools.",
-    help = "Use action `list_resources`, `read_resource`, `list_prompts`, `get_prompt`, or `call`. MCP prompts here are server-provided prompt templates/messages, not Agena chat prompts or permission prompts.",
-    ui_display = brief,
-    tags(ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Mcp),
-    concurrency_safe = false
-)]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-enum McpToolInput {
-    #[tool(exec = "list_resources", route = "resources.list")]
-    ListResources {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: McpServerInput,
-    },
-    #[tool(exec = "read_resource", route = "resources.read")]
-    ReadResource {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: ReadResourceInput,
-    },
-    #[tool(exec = "list_prompts", route = "prompts.list")]
-    ListPrompts {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: McpServerInput,
-    },
-    #[tool(exec = "get_prompt", route = "prompts.get")]
-    GetPrompt {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: GetPromptInput,
-    },
-    #[tool(exec = "call", route = "tools.call")]
-    Call {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: CallToolInput,
     },
 }
 
@@ -743,11 +668,6 @@ enum McpToolSuite {
 
 #[cfg(test)]
 pub(super) fn target_from_invocation(tool: &str, input: Value) -> SdkResult<McpToolTarget> {
-    if tool == "mcp" {
-        let (resolved_tool, resolved_input) = McpToolInput::resolve_tool(tool, input)?;
-        return target_from_invocation(resolved_tool.as_str(), resolved_input);
-    }
-
     match McpToolSuite::parse_tool(tool, input)? {
         McpToolSuite::ResourcesList(McpResourcesListToolInput { args }) => {
             Ok(McpToolTarget::ListResources {
@@ -1216,23 +1136,6 @@ mod tests {
     fn mcp_invocation_routes_hierarchical_commands() {
         assert_eq!(
             target_from_invocation(
-                "mcp",
-                serde_json::json!({
-                    "action": "call",
-                    "server": "docs",
-                    "name": "search",
-                    "arguments": { "q": "rust" }
-                })
-            )
-            .expect("legacy mcp action should route through declarative surface metadata"),
-            McpToolTarget::Tool {
-                server: "docs".to_string(),
-                tool: "search".to_string(),
-                arguments: Some(serde_json::json!({ "q": "rust" })),
-            }
-        );
-        assert_eq!(
-            target_from_invocation(
                 "tools.call",
                 serde_json::json!({
                     "server": "docs",
@@ -1306,20 +1209,14 @@ mod tests {
 
     #[test]
     fn mcp_tool_inputs_trim_server_name_and_uri_fields_at_parse_time() {
-        let parsed = McpToolInput::parse_input(serde_json::json!({
-            "action": "call",
+        let parsed = McpToolsCallToolInput::parse_input(serde_json::json!({
             "server": "  docs  ",
             "name": "  search  ",
             "arguments": { "q": "rust" }
         }))
-        .expect("legacy mcp call should trim nested tool input fields during parse");
-        match parsed {
-            McpToolInput::Call { args } => {
-                assert_eq!(args.server, "docs");
-                assert_eq!(args.name, "search");
-            }
-            other => panic!("expected call variant, got {other:?}"),
-        }
+        .expect("mcp tools.call should trim input fields during parse");
+        assert_eq!(parsed.args.server, "docs");
+        assert_eq!(parsed.args.name, "search");
 
         let parsed = McpResourcesReadToolInput::parse_input(serde_json::json!({
             "server": "  docs  ",
@@ -1402,7 +1299,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_mcp_http_shape_is_rejected() {
+    fn mcp_http_config_rejects_flat_url_shape() {
         let err = serde_json::from_value::<McpConfig>(json!({
             "servers": {
                 "docs": {
@@ -1411,7 +1308,7 @@ mod tests {
                 }
             }
         }))
-        .expect_err("legacy mcp config should fail");
+        .expect_err("flat mcp config should fail");
 
         assert!(err.to_string().contains("unknown field `url`"));
     }

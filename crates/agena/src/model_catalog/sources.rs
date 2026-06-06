@@ -1594,7 +1594,7 @@ fn parse_models_dev_lifecycle(status: Option<&str>) -> Option<ModelLifecycle> {
         Some("beta") => Some(ModelLifecycle::Beta),
         Some("alpha") => Some(ModelLifecycle::Alpha),
         Some("experimental") => Some(ModelLifecycle::Experimental),
-        Some("deprecated") | Some("legacy") | Some("sunset") => Some(ModelLifecycle::Deprecated),
+        Some("deprecated") | Some("sunset") => Some(ModelLifecycle::Deprecated),
         _ => None,
     }
 }

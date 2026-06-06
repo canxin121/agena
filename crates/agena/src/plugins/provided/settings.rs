@@ -19,9 +19,7 @@ use crate::config::{
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostConfigReloadResponse};
-use crate::plugin::sdk::{
-    HookSubscription, PathRequest, Result as SdkResult, ToolInvokeOutput, ToolTag,
-};
+use crate::plugin::sdk::{PathRequest, Result as SdkResult, ToolInvokeOutput, ToolTag};
 
 pub(crate) const SETTINGS_PLUGIN_ID: &str = "agena.settings";
 
@@ -595,51 +593,44 @@ impl SettingsPlugin {
     }
 }
 
-#[crate::plugin::sdk::plugin]
-impl crate::plugin::sdk::Plugin for SettingsPlugin {
-    #[agena_plugin_sdk::plugin_manifest_method(
-        id = SETTINGS_PLUGIN_ID,
-        version = env!("CARGO_PKG_VERSION"),
-        description = "Read and edit Agena runtime settings in agena.json.",
-        hooks = HookSubscription::TOOL_INVOKE,
-        config_schema = settings_config_schema(),
-        display = brief,
-        tool_surface = SettingsToolInput,
-    )]
-    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
-    #[agena_plugin_sdk::plugin_init_method(
-        default_config = {
-            field = self.config,
-            ty = SettingsPluginConfig,
-            input = ctx.config,
-            invalid = "invalid settings plugin config",
-            already = "settings plugin config already initialized"
-        },
-        host_cell = {
-            field = self.host,
-            value = host,
-            poisoned = "settings plugin host lock poisoned"
-        },
-    )]
+#[crate::plugin::sdk::plugin(
+    id = SETTINGS_PLUGIN_ID,
+    version = env!("CARGO_PKG_VERSION"),
+    description = "Read and edit Agena runtime settings in agena.json.",
+    config_schema = settings_config_schema(),
+    display = brief
+)]
+impl SettingsPlugin {
+    #[hook]
     async fn init(
         &self,
         ctx: crate::plugin::sdk::InitContext,
         host: Arc<dyn HostClient>,
     ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
+        let config = crate::plugin::sdk::macro_support::parse_defaulted_config(
+            ctx.config,
+            "invalid settings plugin config",
+        )?;
+        self.config
+            .set(config)
+            .map_err(|_| PluginError::new("settings plugin config already initialized"))?;
+        *self
+            .host
+            .write()
+            .map_err(|_| PluginError::new("settings plugin host lock poisoned"))? = Some(host);
+        Ok(crate::plugin::sdk::InitOutcome::ack(
+            crate::plugin::sdk::Plugin::manifest(self),
+        ))
     }
-    #[agena_plugin_sdk::plugin_tool_invoke_method(surface(SettingsToolInput))]
-    async fn tool_invoke(
-        &self,
-        input: crate::plugin::sdk::ToolInvokeInput,
-    ) -> SdkResult<ToolInvokeOutput> {
+
+    #[tool]
+    async fn tool_invoke(&self, input: SettingsToolInput) -> SdkResult<ToolInvokeOutput> {
+        input.dispatch_tool_invoke(self).await
     }
-    #[agena_plugin_sdk::plugin_permission_paths_method(surface(SettingsToolInput))]
-    async fn permission_paths(
-        &self,
-        tool: &str,
-        input: &serde_json::Value,
-    ) -> SdkResult<Vec<PathRequest>> {
-        let _ = (tool, input);
+
+    #[permission(paths)]
+    async fn permission_paths(&self, input: SettingsToolInput) -> SdkResult<Vec<PathRequest>> {
+        input.dispatch_permission_paths(self).await
     }
 }
 

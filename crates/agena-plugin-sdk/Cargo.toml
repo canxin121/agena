@@ -30,5 +30,8 @@ cdylib = ["dep:abi_stable", "tokio/rt-multi-thread", "tokio/macros"]
 stdio = ["tokio/rt-multi-thread", "tokio/macros", "tokio/io-util", "tokio/io-std", "dep:tokio-util"]
 http = ["tokio/rt-multi-thread", "tokio/macros", "dep:axum", "dep:hyper", "dep:reqwest"]
 
+[dev-dependencies]
+trybuild = { workspace = true }
+
 [lints]
 workspace = true

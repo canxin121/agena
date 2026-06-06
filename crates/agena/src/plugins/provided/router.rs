@@ -17,8 +17,9 @@ use crate::message::{
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
-    HookSubscription, NetworkRequest, PluginToolDecl, Result as SdkResult, ToolDisplayPreset,
-    ToolInputShape, ToolInvokeOutput, ToolSuiteSurface, ToolSurface,
+    HookSubscription, InitOutcome, NetworkRequest, PluginManifest, PluginToolDecl,
+    Result as SdkResult, ToolDisplayPreset, ToolInputShape, ToolInvokeOutput, ToolSuiteSurface,
+    ToolSurface,
 };
 use crate::tool::result::ToolPayloadExecution;
 use crate::tool::{ToolExecutor, ToolPayloadOutput, ToolRuntimeContext, orchestrator};
@@ -226,24 +227,25 @@ impl InProcessToolPlugin {
 
 pub(crate) type ToolInputResolver = fn(&str, JsonValue) -> SdkResult<(String, JsonValue)>;
 
-#[crate::plugin::sdk::plugin]
+#[crate::plugin::sdk::async_trait]
 impl crate::plugin::sdk::Plugin for InProcessToolPlugin {
-    #[crate::plugin::sdk::plugin_manifest_method(
-        id = self.plugin_name,
-        version = env!("CARGO_PKG_VERSION"),
-        description = self.description,
-        hooks = HookSubscription::TOOL_INVOKE,
-        display_if_some = self.display,
-        tools = self.tools.clone(),
-    )]
-    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
+    fn manifest(&self) -> PluginManifest {
+        let mut builder = PluginManifest::builder(self.plugin_name, env!("CARGO_PKG_VERSION"))
+            .description(self.description)
+            .hooks(HookSubscription::TOOL_INVOKE)
+            .tools(self.tools.clone());
+        if let Some(display) = self.display {
+            builder = builder.display(display);
+        }
+        builder.build()
+    }
 
-    #[crate::plugin::sdk::plugin_init_method]
     async fn init(
         &self,
         _ctx: crate::plugin::sdk::InitContext,
         _host: Arc<dyn crate::plugin::sdk::HostClient>,
-    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
+    ) -> SdkResult<InitOutcome> {
+        Ok(InitOutcome::ack(self.manifest()))
     }
 
     async fn tool_invoke(
@@ -289,16 +291,6 @@ pub(crate) fn invoke_tool(
     let execution = orchestrator::execute_tool(&executor, tool_name, input, context)
         .map_err(|err| PluginError::new(format!("{tool_name}: {err}")))?;
     Ok(tool_execution_to_invoke_output(execution))
-}
-
-pub(crate) fn invoke_tool_surface<T: ToolSurface>(
-    tool_name: &str,
-    input: JsonValue,
-    session_id: i64,
-    call_id: i64,
-) -> SdkResult<ToolInvokeOutput> {
-    let (resolved_tool_name, resolved_input) = T::resolve_tool(tool_name, input)?;
-    invoke_tool(&resolved_tool_name, resolved_input, session_id, call_id)
 }
 
 pub(crate) fn permission_paths_for(

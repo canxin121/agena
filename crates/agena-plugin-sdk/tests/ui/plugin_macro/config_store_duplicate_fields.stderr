@@ -1,0 +1,6 @@
+error: PluginConfigStore supports exactly one #[config] field
+  --> tests/ui/plugin_macro/config_store_duplicate_fields.rs:12:5
+   |
+12 | /     #[plugin_config]
+13 | |     fallback_config: PluginConfig<BadConfig>,
+   | |____________________________________________^

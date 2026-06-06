@@ -1,0 +1,5 @@
+error: stream target must reference a #[tool] or #[tool_suite] method in the same #[plugin] impl
+  --> tests/ui/plugin_macro/stream_missing_target.rs:18:20
+   |
+18 |     #[stream(for = echo)]
+   |                    ^^^^

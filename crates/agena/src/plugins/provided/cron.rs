@@ -13,9 +13,7 @@ use crate::message::{
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::HostClient;
-use crate::plugin::sdk::{
-    HookSubscription, HostCapability, Result as SdkResult, ToolInvokeOutput, ToolTag,
-};
+use crate::plugin::sdk::{HostCapability, Result as SdkResult, ToolInvokeOutput, ToolTag};
 use crate::plugins::provided::router;
 
 pub(crate) const CRON_PLUGIN_ID: &str = "agena.cron";
@@ -75,42 +73,46 @@ impl CronPlugin {
     }
 }
 
-#[crate::plugin::sdk::plugin]
-impl crate::plugin::sdk::Plugin for CronPlugin {
-    #[agena_plugin_sdk::plugin_manifest_method(
-        id = CRON_PLUGIN_ID,
-        version = env!("CARGO_PKG_VERSION"),
-        description = "Cron-style and one-shot wakeup scheduling tools.",
-        hooks = HookSubscription::TOOL_INVOKE,
-        display = brief,
-        tool_surface = ScheduleToolInput,
-    )]
-    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
-
-    #[agena_plugin_sdk::plugin_init_method(
-        host_cell = {
-            field = self.host,
-            value = host,
-            poisoned = "cron plugin host lock poisoned"
-        },
-    )]
+#[crate::plugin::sdk::plugin(
+    id = CRON_PLUGIN_ID,
+    version = env!("CARGO_PKG_VERSION"),
+    description = "Cron-style and one-shot wakeup scheduling tools.",
+    display = brief
+)]
+impl CronPlugin {
+    #[hook]
     async fn init(
         &self,
         _ctx: crate::plugin::sdk::InitContext,
         host: Arc<dyn HostClient>,
     ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
+        *self
+            .host
+            .write()
+            .map_err(|_| PluginError::new("cron plugin host lock poisoned"))? = Some(host);
+        Ok(crate::plugin::sdk::InitOutcome::ack(
+            crate::plugin::sdk::Plugin::manifest(self),
+        ))
     }
 
+    #[tool]
     async fn tool_invoke(
         &self,
-        input: crate::plugin::sdk::ToolInvokeInput,
+        input: ScheduleToolInput,
+        context: &crate::plugin::sdk::ToolInvokeContext<'_>,
     ) -> SdkResult<ToolInvokeOutput> {
         let _ = self.host()?;
-        router::invoke_tool_surface::<ScheduleToolInput>(
-            input.tool_name.as_str(),
-            input.input,
-            input.session_id,
-            input.call_id,
+        let (tool_name, payload) = match input {
+            ScheduleToolInput::List { args } => ("cron_list", serde_json::to_value(args)),
+            ScheduleToolInput::Create { args } => ("cron_create", serde_json::to_value(args)),
+            ScheduleToolInput::Delete { args } => ("cron_delete", serde_json::to_value(args)),
+            ScheduleToolInput::Wakeup { args } => ("schedule_wakeup", serde_json::to_value(args)),
+        };
+        router::invoke_tool(
+            tool_name,
+            payload.map_err(|err| PluginError::invalid_params(err.to_string()))?,
+            context.session_id,
+            context.call_id,
         )
     }
 }

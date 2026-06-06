@@ -7,8 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 
 use crate::plugin::sdk::{
-    HookSubscription, PluginStudioCommand, PluginUiAction, Result as SdkResult, ToolInvokeOutput,
-    ToolTag,
+    PluginStudioCommand, PluginUiAction, Result as SdkResult, ToolInvokeOutput, ToolTag,
 };
 
 pub(crate) const SCHEMA_LAB_PLUGIN_ID: &str = "agena.schema_lab";
@@ -103,33 +102,18 @@ impl SchemaLabPlugin {
     }
 }
 
-#[crate::plugin::sdk::plugin]
-impl crate::plugin::sdk::Plugin for SchemaLabPlugin {
-    #[agena_plugin_sdk::plugin_manifest_method(
-        id = SCHEMA_LAB_PLUGIN_ID,
-        version = env!("CARGO_PKG_VERSION"),
-        description = "Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor.",
-        hooks = HookSubscription::TOOL_INVOKE,
-        config_schema = schema_lab_config_schema(),
-        display = brief,
-        tool_surface = SchemaLabToolInput,
-        commands = schema_lab_commands(),
-    )]
-    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
-
-    #[agena_plugin_sdk::plugin_init_method]
-    async fn init(
-        &self,
-        _ctx: crate::plugin::sdk::InitContext,
-        _host: std::sync::Arc<dyn crate::plugin::sdk::HostClient>,
-    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
-    }
-
-    #[agena_plugin_sdk::plugin_tool_invoke_method(surface(SchemaLabToolInput))]
-    async fn tool_invoke(
-        &self,
-        input: crate::plugin::sdk::ToolInvokeInput,
-    ) -> SdkResult<ToolInvokeOutput> {
+#[crate::plugin::sdk::plugin(
+    id = SCHEMA_LAB_PLUGIN_ID,
+    version = env!("CARGO_PKG_VERSION"),
+    description = "Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor.",
+    config_schema = schema_lab_config_schema(),
+    display = brief,
+    commands = schema_lab_commands()
+)]
+impl SchemaLabPlugin {
+    #[tool]
+    async fn tool_invoke(&self, input: SchemaLabToolInput) -> SdkResult<ToolInvokeOutput> {
+        input.dispatch_tool_invoke(self).await
     }
 }
 

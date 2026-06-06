@@ -47,12 +47,10 @@ pub use crate::manifest::{
     ToolDisplayPreset, ToolInputShape, ToolStreamingMode, ToolSuiteSurface, ToolSurface, ToolTag,
     TransportKind, normalize_tool_tag_name,
 };
-pub use crate::plugin::{InitContext, InitOutcome, Plugin, ToolStreamSink};
-pub use crate::{plugin_impl, plugin_init, plugin_manifest, plugin_method, plugin_methods};
+pub use crate::plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
 pub use agena_macros::{
-    StaticToolSurface, ToolArgs, ToolCommand, ToolInputShape, ToolSubcommands, ToolSuite, plugin,
-    plugin_init_method, plugin_manifest_method, plugin_permission_networks_method,
-    plugin_permission_paths_method, plugin_tool_invoke_method, plugin_tool_invoke_stream_method,
+    PluginConfigStore, StaticToolSurface, ToolArgs, ToolCommand, ToolInputShape, ToolSubcommands,
+    ToolSuite, plugin,
 };
 
 #[cfg(feature = "cdylib")]

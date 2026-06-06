@@ -213,6 +213,58 @@ impl ToolInvokeOutput {
     }
 }
 
+pub trait IntoToolInvokeOutput {
+    fn into_tool_invoke_output(self) -> crate::Result<ToolInvokeOutput>;
+}
+
+impl IntoToolInvokeOutput for ToolInvokeOutput {
+    fn into_tool_invoke_output(self) -> crate::Result<ToolInvokeOutput> {
+        Ok(self)
+    }
+}
+
+impl IntoToolInvokeOutput for String {
+    fn into_tool_invoke_output(self) -> crate::Result<ToolInvokeOutput> {
+        Ok(ToolInvokeOutput::text(self))
+    }
+}
+
+impl IntoToolInvokeOutput for &str {
+    fn into_tool_invoke_output(self) -> crate::Result<ToolInvokeOutput> {
+        Ok(ToolInvokeOutput::text(self))
+    }
+}
+
+impl IntoToolInvokeOutput for serde_json::Value {
+    fn into_tool_invoke_output(self) -> crate::Result<ToolInvokeOutput> {
+        let output_text = match &self {
+            serde_json::Value::Null => String::new(),
+            serde_json::Value::String(value) => value.clone(),
+            _ => self.to_string(),
+        };
+        Ok(ToolInvokeOutput::text(output_text).with_payload(self))
+    }
+}
+
+impl IntoToolInvokeOutput for () {
+    fn into_tool_invoke_output(self) -> crate::Result<ToolInvokeOutput> {
+        Ok(ToolInvokeOutput::text(String::new()))
+    }
+}
+
+impl<T, E> IntoToolInvokeOutput for std::result::Result<T, E>
+where
+    T: IntoToolInvokeOutput,
+    E: Into<crate::PluginError>,
+{
+    fn into_tool_invoke_output(self) -> crate::Result<ToolInvokeOutput> {
+        match self {
+            Ok(value) => value.into_tool_invoke_output(),
+            Err(err) => Err(err.into()),
+        }
+    }
+}
+
 // ── streaming tool invocation ──────────────────────────────────────────────
 
 /// Initial response to `hooks/tool.invoke.stream`.
@@ -295,6 +347,60 @@ impl ToolStreamEnd {
     pub fn with_attachments(mut self, atts: impl IntoIterator<Item = AttachmentItem>) -> Self {
         self.attachments.extend(atts);
         self
+    }
+}
+
+pub trait IntoToolStreamEnd {
+    fn into_tool_stream_end(self, stream_id: String) -> crate::Result<ToolStreamEnd>;
+}
+
+impl IntoToolStreamEnd for ToolStreamEnd {
+    fn into_tool_stream_end(self, _stream_id: String) -> crate::Result<ToolStreamEnd> {
+        Ok(self)
+    }
+}
+
+impl IntoToolStreamEnd for ToolInvokeOutput {
+    fn into_tool_stream_end(self, stream_id: String) -> crate::Result<ToolStreamEnd> {
+        Ok(ToolStreamEnd::from_output(stream_id, self))
+    }
+}
+
+impl IntoToolStreamEnd for String {
+    fn into_tool_stream_end(self, stream_id: String) -> crate::Result<ToolStreamEnd> {
+        Ok(ToolStreamEnd::text(stream_id, self))
+    }
+}
+
+impl IntoToolStreamEnd for &str {
+    fn into_tool_stream_end(self, stream_id: String) -> crate::Result<ToolStreamEnd> {
+        Ok(ToolStreamEnd::text(stream_id, self))
+    }
+}
+
+impl IntoToolStreamEnd for serde_json::Value {
+    fn into_tool_stream_end(self, stream_id: String) -> crate::Result<ToolStreamEnd> {
+        self.into_tool_invoke_output()?
+            .into_tool_stream_end(stream_id)
+    }
+}
+
+impl IntoToolStreamEnd for () {
+    fn into_tool_stream_end(self, stream_id: String) -> crate::Result<ToolStreamEnd> {
+        Ok(ToolStreamEnd::text(stream_id, String::new()))
+    }
+}
+
+impl<T, E> IntoToolStreamEnd for std::result::Result<T, E>
+where
+    T: IntoToolStreamEnd,
+    E: Into<crate::PluginError>,
+{
+    fn into_tool_stream_end(self, stream_id: String) -> crate::Result<ToolStreamEnd> {
+        match self {
+            Ok(value) => value.into_tool_stream_end(stream_id),
+            Err(err) => Err(err.into()),
+        }
     }
 }
 

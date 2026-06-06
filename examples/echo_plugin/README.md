@@ -13,7 +13,9 @@
 - `#[tool_command(...)]` 只描述工具名、输入 schema、help、约束和展示策略，不再绑定 handler。
 - `#[plugin(...)] impl EchoPlugin { ... }` 汇集插件元数据、tool handler 和 hook handler。
 - `#[tool]` 从方法参数推断输入类型，把 JSON 输入解析成结构化参数后再调用方法。
-- `#[hook]` 从标准方法名推断 hook；需要自定义方法名时仍可写 `#[hook(shell_env)]`。
+- `#[stream(...)]` 和 `#[permission(...)]` 同样支持直接返回简单类型，宏会自动包成协议输出。
+- `#[hook]` 从标准方法名推断 hook；返回 patch、`Option<Patch>`、`()`, `Result<_>` 都会自动适配。
+- `#[derive(PluginConfigStore)]` + 字段级 `#[config(default)]` 汇集配置字段；`#[plugin(..., config)]` 自动生成配置 schema，并在 init 时解析到 `PluginConfig<EchoPluginConfig>`。
 - `export = cdylib` 在 cdylib crate 中自动导出 host 加载所需的动态库入口。
 
 ## 构建

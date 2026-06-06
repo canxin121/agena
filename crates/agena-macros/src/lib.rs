@@ -1,13 +1,14 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
+use syn::ext::IdentExt;
 use syn::parse::Parser;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{
     Attribute, Data, DeriveInput, Expr, ExprLit, ExprPath, Field, Fields, FnArg, Ident, ImplItem,
-    ImplItemFn, Index, ItemImpl, Lit, LitBool, LitStr, Member, Meta, MetaList, MetaNameValue, Pat,
-    Path, Result, Token, Type, Variant, parenthesized, parse_macro_input, parse_quote,
+    ImplItemFn, Index, ItemImpl, Lit, LitBool, LitStr, Member, Meta, MetaList, MetaNameValue, Path,
+    PathArguments, Result, Token, Type, Variant, parse_macro_input, parse_quote,
 };
 
 #[proc_macro_attribute]
@@ -15,66 +16,6 @@ pub fn plugin(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = parse_macro_input!(attr as proc_macro2::TokenStream);
     let item = parse_macro_input!(item as ItemImpl);
     match expand_plugin_impl_attr(attr, item) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
-
-#[proc_macro_attribute]
-pub fn plugin_manifest_method(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attr = parse_macro_input!(attr as proc_macro2::TokenStream);
-    let item = parse_macro_input!(item as ImplItemFn);
-    match expand_plugin_manifest_method(attr, item) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
-
-#[proc_macro_attribute]
-pub fn plugin_init_method(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attr = parse_macro_input!(attr as proc_macro2::TokenStream);
-    let item = parse_macro_input!(item as ImplItemFn);
-    match expand_plugin_init_method(attr, item) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
-
-#[proc_macro_attribute]
-pub fn plugin_tool_invoke_method(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attr = parse_macro_input!(attr as PluginDispatchAttr);
-    let item = parse_macro_input!(item as ImplItemFn);
-    match expand_plugin_dispatch_method("tool_invoke", attr, item, false) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
-
-#[proc_macro_attribute]
-pub fn plugin_tool_invoke_stream_method(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attr = parse_macro_input!(attr as PluginDispatchAttr);
-    let item = parse_macro_input!(item as ImplItemFn);
-    match expand_plugin_dispatch_method("tool_invoke_stream", attr, item, true) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
-
-#[proc_macro_attribute]
-pub fn plugin_permission_paths_method(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attr = parse_macro_input!(attr as PluginPermissionDispatchAttr);
-    let item = parse_macro_input!(item as ImplItemFn);
-    match expand_plugin_permission_method("permission_paths", attr, item, true) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
-
-#[proc_macro_attribute]
-pub fn plugin_permission_networks_method(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attr = parse_macro_input!(attr as PluginPermissionDispatchAttr);
-    let item = parse_macro_input!(item as ImplItemFn);
-    match expand_plugin_permission_method("permission_networks", attr, item, false) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
@@ -122,18 +63,24 @@ pub fn derive_tool_args(input: TokenStream) -> TokenStream {
     derive_tool_input_shape(input)
 }
 
+#[proc_macro_derive(PluginConfigStore, attributes(config, plugin_config))]
+pub fn derive_plugin_config_store(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match expand_plugin_config_store(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
 fn expand_plugin_impl_attr(
     attr: proc_macro2::TokenStream,
     item: ItemImpl,
 ) -> Result<proc_macro2::TokenStream> {
     if item.trait_.is_some() {
-        if !attr.is_empty() {
-            return Err(syn::Error::new(
-                proc_macro2::Span::call_site(),
-                "#[plugin(...)] is for inherent plugin impl blocks; use bare #[plugin] on `impl Plugin for Type` compatibility impls",
-            ));
-        }
-        return expand_legacy_plugin_trait_impl(item);
+        return Err(syn::Error::new_spanned(
+            &item.self_ty,
+            "#[plugin(...)] only supports inherent impl blocks; write `#[async_trait] impl Plugin for Type` manually for dynamic plugins",
+        ));
     }
 
     if attr.is_empty() {
@@ -146,29 +93,208 @@ fn expand_plugin_impl_attr(
     expand_plugin_inherent_impl_attr(attr, item)
 }
 
-fn expand_legacy_plugin_trait_impl(mut item: ItemImpl) -> Result<proc_macro2::TokenStream> {
-    let Some((_, trait_path, _)) = &item.trait_ else {
-        return Err(syn::Error::new_spanned(
-            &item.self_ty,
-            "#[plugin] can only be used on `impl Plugin for Type` blocks",
+fn expand_plugin_config_store(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
+    let name = input.ident;
+    let config_field = find_plugin_config_store_field(&input.data)?;
+    let field_member = config_field.member;
+    let config_ty = config_field.config_ty;
+    let schema_expr = match config_field.default {
+        PluginConfigDefault::None => {
+            quote! { ::agena_plugin_sdk::macro_support::json_schema_for::<#config_ty>() }
+        }
+        PluginConfigDefault::Default => {
+            quote! {
+                ::agena_plugin_sdk::macro_support::json_schema_for_with_default(
+                    <#config_ty as ::core::default::Default>::default(),
+                )
+            }
+        }
+        PluginConfigDefault::Expr(default) => {
+            quote! { ::agena_plugin_sdk::macro_support::json_schema_for_with_default(#default) }
+        }
+    };
+    let generics = input.generics;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+    Ok(quote! {
+        impl #impl_generics ::agena_plugin_sdk::plugin::PluginConfigStoreAccess for #name #ty_generics #where_clause {
+            fn plugin_config_schema() -> ::agena_plugin_sdk::serde_json::Value {
+                #schema_expr
+            }
+
+            fn set_plugin_config_from_json(
+                &self,
+                input: ::agena_plugin_sdk::serde_json::Value,
+                invalid: &str,
+                already: ::std::string::String,
+            ) -> ::agena_plugin_sdk::Result<()> {
+                self.#field_member.set_from_json(input, invalid, already)
+            }
+        }
+    })
+}
+
+struct PluginConfigStoreField {
+    member: Member,
+    config_ty: Type,
+    default: PluginConfigDefault,
+}
+
+enum PluginConfigDefault {
+    None,
+    Default,
+    Expr(Expr),
+}
+
+fn find_plugin_config_store_field(data: &Data) -> Result<PluginConfigStoreField> {
+    let Data::Struct(data_struct) = data else {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "PluginConfigStore can only be derived for structs",
         ));
     };
-    let is_plugin_impl = trait_path
-        .segments
-        .last()
-        .is_some_and(|segment| segment.ident == "Plugin");
-    if !is_plugin_impl {
-        return Err(syn::Error::new_spanned(
-            trait_path,
-            "#[plugin] can only be used on `impl Plugin for Type` blocks",
-        ));
+
+    let mut found = None;
+    for (index, field) in data_struct.fields.iter().enumerate() {
+        let config_attr = parse_plugin_config_store_field_attrs(field)?;
+        if config_attr.is_none() {
+            continue;
+        }
+        if found.is_some() {
+            return Err(syn::Error::new_spanned(
+                field,
+                "PluginConfigStore supports exactly one #[config] field",
+            ));
+        }
+        let member = match &field.ident {
+            Some(ident) => Member::Named(ident.clone()),
+            None => Member::Unnamed(Index::from(index)),
+        };
+        let config_ty = plugin_config_inner_type(field)?;
+        found = Some(PluginConfigStoreField {
+            member,
+            config_ty,
+            default: config_attr.expect("config attr checked as present").default,
+        });
     }
 
-    item.attrs.retain(|attr| !is_async_trait_attr(attr));
-    Ok(quote! {
-        #[::agena_plugin_sdk::async_trait]
-        #item
+    found.ok_or_else(|| {
+        syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "PluginConfigStore requires one field marked #[config] or #[plugin_config]",
+        )
     })
+}
+
+fn is_plugin_config_store_attr(attr: &Attribute) -> bool {
+    attr.path().is_ident("config") || attr.path().is_ident("plugin_config")
+}
+
+struct PluginConfigFieldAttr {
+    default: PluginConfigDefault,
+}
+
+fn parse_plugin_config_store_field_attrs(field: &Field) -> Result<Option<PluginConfigFieldAttr>> {
+    let mut found = false;
+    let mut default = PluginConfigDefault::None;
+    for attr in &field.attrs {
+        if !is_plugin_config_store_attr(attr) {
+            continue;
+        }
+        found = true;
+        let attr_default = parse_plugin_config_store_field_attr(attr)?;
+        match (&default, attr_default) {
+            (PluginConfigDefault::None, next) => default = next,
+            (_, PluginConfigDefault::None) => {}
+            (_, _) => {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "duplicate #[config] default option",
+                ));
+            }
+        }
+    }
+
+    Ok(found.then_some(PluginConfigFieldAttr { default }))
+}
+
+fn parse_plugin_config_store_field_attr(attr: &Attribute) -> Result<PluginConfigDefault> {
+    match &attr.meta {
+        Meta::Path(_) => Ok(PluginConfigDefault::None),
+        Meta::NameValue(_) => Err(syn::Error::new_spanned(
+            attr,
+            "#[config] only supports `#[config]`, `#[config(default)]`, or `#[config(default = expr)]`",
+        )),
+        Meta::List(_) => attr.parse_args::<PluginConfigDefault>(),
+    }
+}
+
+impl Parse for PluginConfigDefault {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        if input.is_empty() {
+            return Ok(Self::None);
+        }
+        let key = input.call(Ident::parse_any)?;
+        if key != "default" {
+            return Err(syn::Error::new_spanned(
+                key,
+                "unsupported #[config] option; expected `default`",
+            ));
+        }
+        if input.peek(Token![=]) {
+            let _: Token![=] = input.parse()?;
+            let default = input.parse::<Expr>()?;
+            if !input.is_empty() {
+                return Err(input.error("unexpected trailing tokens in #[config]"));
+            }
+            return Ok(Self::Expr(default));
+        }
+        if !input.is_empty() {
+            return Err(input.error("unexpected trailing tokens in #[config]"));
+        }
+        Ok(Self::Default)
+    }
+}
+
+fn plugin_config_inner_type(field: &Field) -> Result<Type> {
+    let Type::Path(path) = &field.ty else {
+        return Err(syn::Error::new_spanned(
+            &field.ty,
+            "#[config] fields must have type PluginConfig<T>",
+        ));
+    };
+    let Some(segment) = path.path.segments.last() else {
+        return Err(syn::Error::new_spanned(
+            &field.ty,
+            "#[config] fields must have type PluginConfig<T>",
+        ));
+    };
+    if segment.ident != "PluginConfig" {
+        return Err(syn::Error::new_spanned(
+            &field.ty,
+            "#[config] fields must have type PluginConfig<T>",
+        ));
+    }
+    let PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return Err(syn::Error::new_spanned(
+            &field.ty,
+            "#[config] fields must specify PluginConfig<T>",
+        ));
+    };
+    let mut types = args.args.iter().filter_map(|arg| match arg {
+        syn::GenericArgument::Type(ty) => Some(ty.clone()),
+        _ => None,
+    });
+    let config_ty = types.next().ok_or_else(|| {
+        syn::Error::new_spanned(&field.ty, "#[config] fields must specify PluginConfig<T>")
+    })?;
+    if types.next().is_some() {
+        return Err(syn::Error::new_spanned(
+            &field.ty,
+            "#[config] fields must specify exactly one PluginConfig<T> type",
+        ));
+    }
+    Ok(config_ty)
 }
 
 #[derive(Default)]
@@ -181,6 +307,9 @@ struct PluginImplConfig {
     config_schema: Option<Expr>,
     config_schema_type: Option<Type>,
     config_schema_default: Option<Expr>,
+    config_schema_store: bool,
+    config_field: Option<Ident>,
+    config_store: bool,
     display: Option<Ident>,
     ui_display: Option<Ident>,
     tool_description_mode: Option<Expr>,
@@ -190,9 +319,10 @@ struct PluginImplConfig {
     plugin_capabilities: Vec<Expr>,
     explicit_hooks: Option<Expr>,
     export: Option<Ident>,
+    export_bind: Option<Expr>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum PluginToolBindingKind {
     Surface,
     Suite,
@@ -204,6 +334,7 @@ struct PluginToolBinding {
     ty: Type,
     kind: PluginToolBindingKind,
     is_async: bool,
+    context: Option<PluginContextArg>,
 }
 
 #[derive(Clone)]
@@ -213,6 +344,7 @@ struct PluginStreamToolBinding {
     is_async: bool,
     sink_first: bool,
     kind: PluginToolBindingKind,
+    for_method: Option<Ident>,
 }
 
 #[derive(Clone)]
@@ -220,6 +352,22 @@ struct PluginPermissionBinding {
     method: Ident,
     ty: Type,
     is_async: bool,
+    kind: PluginToolBindingKind,
+}
+
+#[derive(Clone, Copy)]
+struct PluginContextArg {
+    first: bool,
+    by_ref: bool,
+}
+
+enum PluginPermissionTarget {
+    Paths,
+    Networks,
+}
+
+struct PluginPermissionAttr {
+    target: PluginPermissionTarget,
     kind: PluginToolBindingKind,
 }
 
@@ -265,6 +413,7 @@ fn expand_plugin_inherent_impl_attr(
     mut item: ItemImpl,
 ) -> Result<proc_macro2::TokenStream> {
     let config = parse_plugin_impl_config(attr)?;
+    let docs = doc_text(&item.attrs);
     let self_ty = item.self_ty.as_ref().clone();
     let mut tool_bindings = Vec::new();
     let mut stream_bindings = Vec::new();
@@ -284,10 +433,13 @@ fn expand_plugin_inherent_impl_attr(
         hook_bindings.extend(attrs.hooks);
     }
 
+    resolve_plugin_stream_bindings(&tool_bindings, &mut stream_bindings)?;
     reject_duplicate_hook_bindings(&hook_bindings)?;
 
     let manifest_method = expand_plugin_layer_manifest(
         &config,
+        &self_ty,
+        docs.as_deref(),
         &tool_bindings,
         &stream_bindings,
         &permission_path_bindings,
@@ -306,8 +458,16 @@ fn expand_plugin_inherent_impl_attr(
     let permission_networks_method = (!permission_network_bindings.is_empty())
         .then(|| expand_plugin_layer_permission_networks(&self_ty, &permission_network_bindings))
         .transpose()?;
+    let init_binding = hook_bindings
+        .iter()
+        .find(|binding| binding.hook == PluginHookKind::Init);
+    let init_method =
+        (config.config_field.is_some() || config.config_store || init_binding.is_some())
+            .then(|| expand_plugin_layer_init_method(&config, &self_ty, init_binding))
+            .transpose()?;
     let hook_methods = hook_bindings
         .iter()
+        .filter(|binding| binding.hook != PluginHookKind::Init)
         .map(|binding| expand_plugin_layer_hook_method(&self_ty, binding))
         .collect::<Result<Vec<_>>>()?;
     let generics = &item.generics;
@@ -323,6 +483,7 @@ fn expand_plugin_inherent_impl_attr(
             #stream_method
             #permission_paths_method
             #permission_networks_method
+            #init_method
             #(#hook_methods)*
         }
 
@@ -338,6 +499,16 @@ fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<PluginImpl
             Meta::NameValue(value) => apply_plugin_impl_name_value(&mut config, value)?,
             Meta::List(list) => apply_plugin_impl_list(&mut config, list)?,
             Meta::Path(path) => {
+                if path.is_ident("config") {
+                    config.config_store = true;
+                    config.config_schema_store = true;
+                    continue;
+                }
+                if path.is_ident("config_store") {
+                    config.config_store = true;
+                    config.config_schema_store = true;
+                    continue;
+                }
                 return Err(syn::Error::new_spanned(
                     path,
                     "unsupported bare plugin argument",
@@ -348,7 +519,6 @@ fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<PluginImpl
     for (label, present) in [
         ("id", config.id.is_some()),
         ("version", config.version.is_some()),
-        ("description", config.description.is_some()),
     ] {
         if !present {
             return Err(syn::Error::new(
@@ -356,6 +526,24 @@ fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<PluginImpl
                 format!("#[plugin(...)] requires `{label} = ...`"),
             ));
         }
+    }
+    if config.config_field.is_some() && config.config_schema_type.is_none() {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "#[plugin(..., config_field = field)] requires `config = Type` or `config_schema_type = Type`",
+        ));
+    }
+    if config.config_store && config.config_schema_type.is_none() {
+        config.config_schema_store = true;
+    }
+    if config.config_schema_default.is_some()
+        && config.config_schema_type.is_none()
+        && config.config_schema_store
+    {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "put derived config defaults on the field, e.g. `#[config(default)]`; `config_default = ...` requires `config = Type` or `config_schema_type = Type`",
+        ));
     }
     Ok(config)
 }
@@ -370,9 +558,16 @@ fn apply_plugin_impl_name_value(config: &mut PluginImplConfig, value: MetaNameVa
         "description" | "long_about" => config.description = Some(value.value),
         "summary" | "about" => config.summary = Some(value.value),
         "help" | "long_help" => config.help = Some(value.value),
+        "config" => {
+            config.config_schema_type = Some(expr_as_type(value.value)?);
+            config.config_store = true;
+        }
         "config_schema" => config.config_schema = Some(value.value),
         "config_schema_type" => config.config_schema_type = Some(expr_as_type(value.value)?),
+        "config_default" => config.config_schema_default = Some(value.value),
         "config_schema_default" => config.config_schema_default = Some(value.value),
+        "config_field" => config.config_field = Some(expr_path_ident(value.value, "config_field")?),
+        "config_store" => config.config_store = expr_bool(value.value, "config_store")?,
         "display" => config.display = Some(expr_path_ident(value.value, "display")?),
         "ui_display" => config.ui_display = Some(expr_path_ident(value.value, "ui_display")?),
         "tool_description_mode" => config.tool_description_mode = Some(value.value),
@@ -381,6 +576,7 @@ fn apply_plugin_impl_name_value(config: &mut PluginImplConfig, value: MetaNameVa
         "plugin_capabilities" => config.plugin_capabilities_expr = Some(value.value),
         "hooks" => config.explicit_hooks = Some(value.value),
         "export" => config.export = Some(expr_path_ident(value.value, "export")?),
+        "bind" | "export_bind" | "http_bind" => config.export_bind = Some(value.value),
         other => {
             return Err(syn::Error::new_spanned(
                 ident,
@@ -434,6 +630,19 @@ fn expr_path_ident(expr: Expr, label: &str) -> Result<Ident> {
     }
 }
 
+fn expr_bool(expr: Expr, label: &str) -> Result<bool> {
+    match expr {
+        Expr::Lit(ExprLit {
+            lit: Lit::Bool(value),
+            ..
+        }) => Ok(value.value),
+        other => Err(syn::Error::new_spanned(
+            other,
+            format!("{label} must be a boolean literal"),
+        )),
+    }
+}
+
 #[derive(Default)]
 struct PluginInherentMethodAttrs {
     tools: Vec<PluginToolBinding>,
@@ -454,21 +663,23 @@ fn parse_plugin_inherent_method_attrs(
     for attr in attrs {
         if attr.path().is_ident("tool") {
             ensure_plugin_method_shared_receiver(method, "#[tool] methods")?;
-            ensure_plugin_method_typed_arg_count(method, 1, "#[tool] methods")?;
+            let (ty, context) = plugin_method_tool_input_type_and_context(&attr, method)?;
             out.tools.push(PluginToolBinding {
                 method: method_ident.clone(),
-                ty: plugin_method_single_input_type(&attr, method)?,
+                ty,
                 kind: PluginToolBindingKind::Surface,
                 is_async,
+                context,
             });
         } else if attr.path().is_ident("tool_suite") {
             ensure_plugin_method_shared_receiver(method, "#[tool_suite] methods")?;
-            ensure_plugin_method_typed_arg_count(method, 1, "#[tool_suite] methods")?;
+            let (ty, context) = plugin_method_tool_input_type_and_context(&attr, method)?;
             out.tools.push(PluginToolBinding {
                 method: method_ident.clone(),
-                ty: plugin_method_single_input_type(&attr, method)?,
+                ty,
                 kind: PluginToolBindingKind::Suite,
                 is_async,
+                context,
             });
         } else if attr.path().is_ident("tool_stream") {
             ensure_plugin_method_shared_receiver(method, "#[tool_stream] methods")?;
@@ -479,6 +690,7 @@ fn parse_plugin_inherent_method_attrs(
                 is_async,
                 sink_first,
                 kind: PluginToolBindingKind::Surface,
+                for_method: None,
             });
         } else if attr.path().is_ident("tool_suite_stream") {
             ensure_plugin_method_shared_receiver(method, "#[tool_suite_stream] methods")?;
@@ -489,6 +701,18 @@ fn parse_plugin_inherent_method_attrs(
                 is_async,
                 sink_first,
                 kind: PluginToolBindingKind::Suite,
+                for_method: None,
+            });
+        } else if attr.path().is_ident("stream") {
+            ensure_plugin_method_shared_receiver(method, "#[stream] methods")?;
+            let sink_first = stream_sink_is_first_arg(method)?;
+            out.stream_tools.push(PluginStreamToolBinding {
+                method: method_ident.clone(),
+                ty: plugin_method_inferred_stream_input_type(method, sink_first)?,
+                is_async,
+                sink_first,
+                kind: PluginToolBindingKind::Surface,
+                for_method: parse_plugin_stream_attr(&attr)?,
             });
         } else if attr.path().is_ident("permission_paths") {
             ensure_plugin_method_shared_receiver(method, "#[permission_paths] methods")?;
@@ -530,6 +754,20 @@ fn parse_plugin_inherent_method_attrs(
                 kind: PluginToolBindingKind::Suite,
                 is_async,
             });
+        } else if attr.path().is_ident("permission") {
+            ensure_plugin_method_shared_receiver(method, "#[permission] methods")?;
+            ensure_plugin_method_typed_arg_count(method, 1, "#[permission] methods")?;
+            let permission = parse_plugin_permission_attr(&attr)?;
+            let binding = PluginPermissionBinding {
+                method: method_ident.clone(),
+                ty: plugin_method_inferred_single_input_type(method)?,
+                kind: permission.kind,
+                is_async,
+            };
+            match permission.target {
+                PluginPermissionTarget::Paths => out.permission_paths.push(binding),
+                PluginPermissionTarget::Networks => out.permission_networks.push(binding),
+            }
         } else if attr.path().is_ident("hook") {
             ensure_plugin_method_shared_receiver(method, "#[hook] methods")?;
             let hook = parse_plugin_hook_attr(&attr, &method_ident)?;
@@ -563,6 +801,62 @@ fn plugin_method_single_input_type(attr: &Attribute, method: &ImplItemFn) -> Res
     if plugin_attr_has_explicit_args(attr) {
         return attr.parse_args::<Type>();
     }
+    plugin_method_inferred_single_input_type(method)
+}
+
+fn plugin_method_tool_input_type_and_context(
+    attr: &Attribute,
+    method: &ImplItemFn,
+) -> Result<(Type, Option<PluginContextArg>)> {
+    let args = typed_arg_types(method);
+    match args.len() {
+        1 => Ok((plugin_method_single_input_type(attr, method)?, None)),
+        2 => {
+            let first_context = type_is_tool_invoke_context(&args[0]);
+            let second_context = type_is_tool_invoke_context(&args[1]);
+            match (first_context, second_context) {
+                (true, false) => {
+                    let ty = if plugin_attr_has_explicit_args(attr) {
+                        attr.parse_args::<Type>()?
+                    } else {
+                        args[1].clone()
+                    };
+                    Ok((
+                        ty,
+                        Some(PluginContextArg {
+                            first: true,
+                            by_ref: type_is_reference(&args[0]),
+                        }),
+                    ))
+                }
+                (false, true) => {
+                    let ty = if plugin_attr_has_explicit_args(attr) {
+                        attr.parse_args::<Type>()?
+                    } else {
+                        args[0].clone()
+                    };
+                    Ok((
+                        ty,
+                        Some(PluginContextArg {
+                            first: false,
+                            by_ref: type_is_reference(&args[1]),
+                        }),
+                    ))
+                }
+                _ => Err(syn::Error::new_spanned(
+                    &method.sig,
+                    "#[tool] methods must take input, or input plus ToolInvokeContext",
+                )),
+            }
+        }
+        _ => Err(syn::Error::new_spanned(
+            &method.sig,
+            "#[tool] methods must take input, or input plus ToolInvokeContext",
+        )),
+    }
+}
+
+fn plugin_method_inferred_single_input_type(method: &ImplItemFn) -> Result<Type> {
     typed_arg_types(method).into_iter().next().ok_or_else(|| {
         syn::Error::new_spanned(
             &method.sig,
@@ -579,6 +873,10 @@ fn plugin_method_stream_input_type(
     if plugin_attr_has_explicit_args(attr) {
         return attr.parse_args::<Type>();
     }
+    plugin_method_inferred_stream_input_type(method, sink_first)
+}
+
+fn plugin_method_inferred_stream_input_type(method: &ImplItemFn, sink_first: bool) -> Result<Type> {
     let args = typed_arg_types(method);
     let index = usize::from(sink_first);
     args.get(index).cloned().ok_or_else(|| {
@@ -587,6 +885,101 @@ fn plugin_method_stream_input_type(
             "cannot infer plugin stream input type without an input argument",
         )
     })
+}
+
+fn parse_plugin_stream_attr(attr: &Attribute) -> Result<Option<Ident>> {
+    if !plugin_attr_has_explicit_args(attr) {
+        return Ok(None);
+    }
+    let parsed = attr.parse_args::<PluginStreamAttr>()?;
+    Ok(parsed.for_method)
+}
+
+struct PluginStreamAttr {
+    for_method: Option<Ident>,
+}
+
+impl Parse for PluginStreamAttr {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let mut for_method = None;
+        while !input.is_empty() {
+            let key = input.call(Ident::parse_any)?;
+            match key.to_string().as_str() {
+                "for" | "tool" => {
+                    let _: Token![=] = input.parse()?;
+                    let value = input.call(Ident::parse_any)?;
+                    if for_method.replace(value).is_some() {
+                        return Err(syn::Error::new_spanned(
+                            key,
+                            "duplicate stream target option",
+                        ));
+                    }
+                }
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        key,
+                        format!("unsupported stream option '{other}'; expected `for = method`"),
+                    ));
+                }
+            }
+            if input.peek(Token![,]) {
+                let _: Token![,] = input.parse()?;
+            }
+        }
+        Ok(Self { for_method })
+    }
+}
+
+fn parse_plugin_permission_attr(attr: &Attribute) -> Result<PluginPermissionAttr> {
+    attr.parse_args::<PluginPermissionAttr>()
+}
+
+impl Parse for PluginPermissionAttr {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let mut target = None;
+        let mut kind = PluginToolBindingKind::Surface;
+        while !input.is_empty() {
+            let ident = input.call(Ident::parse_any)?;
+            match ident.to_string().as_str() {
+                "paths" => {
+                    if target.replace(PluginPermissionTarget::Paths).is_some() {
+                        return Err(syn::Error::new_spanned(
+                            ident,
+                            "duplicate permission target",
+                        ));
+                    }
+                }
+                "networks" => {
+                    if target.replace(PluginPermissionTarget::Networks).is_some() {
+                        return Err(syn::Error::new_spanned(
+                            ident,
+                            "duplicate permission target",
+                        ));
+                    }
+                }
+                "surface" => kind = PluginToolBindingKind::Surface,
+                "suite" => kind = PluginToolBindingKind::Suite,
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        ident,
+                        format!(
+                            "unsupported permission option '{other}'; expected paths, networks, surface, or suite"
+                        ),
+                    ));
+                }
+            }
+            if input.peek(Token![,]) {
+                let _: Token![,] = input.parse()?;
+            }
+        }
+        let target = target.ok_or_else(|| {
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "#[permission(...)] requires `paths` or `networks`",
+            )
+        })?;
+        Ok(Self { target, kind })
+    }
 }
 
 fn ensure_plugin_method_shared_receiver(method: &ImplItemFn, label: &str) -> Result<()> {
@@ -651,13 +1044,23 @@ fn typed_arg_types(method: &ImplItemFn) -> Vec<Type> {
 }
 
 fn type_last_segment_is(ty: &Type, expected: &str) -> bool {
-    let Type::Path(path) = ty else {
-        return false;
+    let ty = match ty {
+        Type::Reference(reference) => reference.elem.as_ref(),
+        other => other,
     };
+    let Type::Path(path) = ty else { return false };
     path.path
         .segments
         .last()
         .is_some_and(|segment| segment.ident == expected)
+}
+
+fn type_is_tool_invoke_context(ty: &Type) -> bool {
+    type_last_segment_is(ty, "ToolInvokeContext")
+}
+
+fn type_is_reference(ty: &Type) -> bool {
+    matches!(ty, Type::Reference(_))
 }
 
 fn parse_plugin_hook_attr(attr: &Attribute, method_ident: &Ident) -> Result<PluginHookKind> {
@@ -782,6 +1185,33 @@ fn reject_duplicate_hook_bindings(hooks: &[PluginHookBinding]) -> Result<()> {
     Ok(())
 }
 
+fn resolve_plugin_stream_bindings(
+    tools: &[PluginToolBinding],
+    streams: &mut [PluginStreamToolBinding],
+) -> Result<()> {
+    for stream in streams {
+        let Some(for_method) = stream.for_method.as_ref() else {
+            continue;
+        };
+        let Some(tool) = tools.iter().find(|tool| &tool.method == for_method) else {
+            return Err(syn::Error::new_spanned(
+                for_method,
+                "stream target must reference a #[tool] or #[tool_suite] method in the same #[plugin] impl",
+            ));
+        };
+        let tool_ty = &tool.ty;
+        let stream_ty = &stream.ty;
+        if quote!(#tool_ty).to_string() != quote!(#stream_ty).to_string() {
+            return Err(syn::Error::new_spanned(
+                &stream.method,
+                "stream input type must match the referenced tool method input type",
+            ));
+        }
+        stream.kind = tool.kind;
+    }
+    Ok(())
+}
+
 fn expand_plugin_layer_export(
     config: &PluginImplConfig,
     self_ty: &Type,
@@ -802,15 +1232,42 @@ fn expand_plugin_layer_export(
                 ::agena_plugin_sdk::export_cdylib!(#self_ty);
             })
         }
+        "stdio" => {
+            if !generics.params.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    self_ty,
+                    "export = stdio does not support generic plugin types",
+                ));
+            }
+            Ok(quote! {
+                ::agena_plugin_sdk::export_stdio!(<#self_ty as ::core::default::Default>::default());
+            })
+        }
+        "http" => {
+            if !generics.params.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    self_ty,
+                    "export = http does not support generic plugin types",
+                ));
+            }
+            let bind = config.export_bind.as_ref().ok_or_else(|| {
+                syn::Error::new_spanned(export, "export = http requires `bind = ...`")
+            })?;
+            Ok(quote! {
+                ::agena_plugin_sdk::export_http!(<#self_ty as ::core::default::Default>::default(), #bind);
+            })
+        }
         other => Err(syn::Error::new_spanned(
             export,
-            format!("unsupported plugin export '{other}'; expected cdylib"),
+            format!("unsupported plugin export '{other}'; expected cdylib, stdio, or http"),
         )),
     }
 }
 
 fn expand_plugin_layer_manifest(
     config: &PluginImplConfig,
+    self_ty: &Type,
+    docs: Option<&str>,
     tools: &[PluginToolBinding],
     streams: &[PluginStreamToolBinding],
     permission_paths: &[PluginPermissionBinding],
@@ -819,10 +1276,16 @@ fn expand_plugin_layer_manifest(
 ) -> Result<proc_macro2::TokenStream> {
     let id = config.id.as_ref().expect("plugin id validated");
     let version = config.version.as_ref().expect("plugin version validated");
-    let description = config
-        .description
-        .as_ref()
-        .expect("plugin description validated");
+    let description = if let Some(description) = config.description.as_ref() {
+        quote! { #description }
+    } else if let Some(description) = lit_str_from_text(docs) {
+        quote! { #description }
+    } else {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "#[plugin(...)] requires `description = ...` or doc comments on the impl block",
+        ));
+    };
     let hooks_expr = plugin_layer_hooks_expr(
         config.explicit_hooks.as_ref(),
         tools,
@@ -832,8 +1295,11 @@ fn expand_plugin_layer_manifest(
         hooks,
     );
 
-    let config_schema_chain =
-        expand_plugin_layer_config_schema_chain(config.config_schema_type.as_ref(), config)?;
+    let config_schema_chain = expand_plugin_layer_config_schema_chain(
+        config.config_schema_type.as_ref(),
+        config,
+        self_ty,
+    )?;
     let config_schema_value_chain = config
         .config_schema
         .as_ref()
@@ -843,26 +1309,49 @@ fn expand_plugin_layer_manifest(
         .display
         .as_ref()
         .map(|display| {
-            quote! { builder = ::agena_plugin_sdk::plugin_manifest_display!(builder, #display); }
+            match display.to_string().as_str() {
+                "brief" | "compact" => {
+                    quote! { builder = builder.display(::agena_plugin_sdk::ToolDisplayPreset::Compact); }
+                }
+                "brief_detailed" => {
+                    quote! { builder = builder.display(::agena_plugin_sdk::ToolDisplayPreset::BriefDetailed); }
+                }
+                "detailed" => {
+                    quote! { builder = builder.display(::agena_plugin_sdk::ToolDisplayPreset::Detailed); }
+                }
+                _ => quote! { compile_error!("unsupported plugin display mode"); },
+            }
         })
         .unwrap_or_default();
     let ui_display_chain = config
         .ui_display
         .as_ref()
         .map(|display| {
-            quote! { builder = ::agena_plugin_sdk::plugin_manifest_ui_display!(builder, #display); }
+            match display.to_string().as_str() {
+                "brief" | "summary" => {
+                    quote! { builder = builder.ui_display_mode(::agena_plugin_sdk::UiTextDisplayMode::Summary); }
+                }
+                "detailed" => {
+                    quote! { builder = builder.ui_display_mode(::agena_plugin_sdk::UiTextDisplayMode::Detailed); }
+                }
+                _ => quote! { compile_error!("unsupported plugin UI display mode"); },
+            }
         })
         .unwrap_or_default();
-    let summary_chain = config
-        .summary
-        .as_ref()
-        .map(|summary| quote! { builder = builder.summary(#summary); })
-        .unwrap_or_default();
-    let help_chain = config
-        .help
-        .as_ref()
-        .map(|help| quote! { builder = builder.help(#help); })
-        .unwrap_or_default();
+    let summary_chain = if let Some(summary) = config.summary.as_ref() {
+        quote! { builder = builder.summary(#summary); }
+    } else if let Some(summary) = lit_str_from_text(doc_summary(docs).as_deref()) {
+        quote! { builder = builder.summary(#summary); }
+    } else {
+        quote! {}
+    };
+    let help_chain = if let Some(help) = config.help.as_ref() {
+        quote! { builder = builder.help(#help); }
+    } else if let Some(help) = lit_str_from_text(docs) {
+        quote! { builder = builder.help(#help); }
+    } else {
+        quote! {}
+    };
     let tool_description_mode_chain = config
         .tool_description_mode
         .as_ref()
@@ -925,8 +1414,16 @@ fn expand_plugin_layer_manifest(
 fn expand_plugin_layer_config_schema_chain(
     config_schema_type: Option<&Type>,
     config: &PluginImplConfig,
+    self_ty: &Type,
 ) -> Result<proc_macro2::TokenStream> {
     let Some(ty) = config_schema_type else {
+        if config.config_schema_store {
+            return Ok(quote! {
+                builder = builder.config_schema(
+                    <#self_ty as ::agena_plugin_sdk::plugin::PluginConfigStoreAccess>::plugin_config_schema(),
+                );
+            });
+        }
         return Ok(quote! {});
     };
     let Some(default) = config.config_schema_default.as_ref() else {
@@ -1101,6 +1598,7 @@ fn expand_plugin_layer_tool_invoke(
             input: ::agena_plugin_sdk::ToolInvokeInput,
         ) -> ::agena_plugin_sdk::Result<::agena_plugin_sdk::ToolInvokeOutput> {
             let __tool_name = input.tool_name.clone();
+            let __context = input.context();
             #(#branches)*
             Err(::agena_plugin_sdk::PluginError::not_implemented(format!(
                 "tool_invoke({})",
@@ -1112,7 +1610,8 @@ fn expand_plugin_layer_tool_invoke(
 
 fn expand_plugin_layer_tool_invoke_branch(binding: &PluginToolBinding) -> proc_macro2::TokenStream {
     let ty = &binding.ty;
-    let call = plugin_layer_method_call(&binding.method, binding.is_async, &[quote! { __parsed }]);
+    let call_args = plugin_layer_tool_call_args(binding.context);
+    let call = plugin_layer_tool_method_call(&binding.method, binding.is_async, &call_args);
     match binding.kind {
         PluginToolBindingKind::Surface => quote! {
             {
@@ -1120,13 +1619,9 @@ fn expand_plugin_layer_tool_invoke_branch(binding: &PluginToolBinding) -> proc_m
                 if __decl.name.as_str() == __tool_name.as_str()
                     || __decl.aliases.iter().any(|__alias| __alias.as_str() == __tool_name.as_str())
                 {
-                    let (_, __resolved_input) =
-                        <#ty as ::agena_plugin_sdk::ToolSurface>::resolve_tool(
-                            __tool_name.as_str(),
-                            input.input,
-                        )?;
-                    let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_input(
-                        __resolved_input,
+                    let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(
+                        __tool_name.as_str(),
+                        input.input.clone(),
                     )?;
                     return #call;
                 }
@@ -1139,14 +1634,9 @@ fn expand_plugin_layer_tool_invoke_branch(binding: &PluginToolBinding) -> proc_m
                     __decl.name.as_str() == __tool_name.as_str()
                         || __decl.aliases.iter().any(|__alias| __alias.as_str() == __tool_name.as_str())
                 }) {
-                    let (__resolved_tool, __resolved_input) =
-                        <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::resolve_tool(
-                            __tool_name.as_str(),
-                            input.input,
-                        )?;
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::parse_tool(
-                        __resolved_tool.as_str(),
-                        __resolved_input,
+                        __tool_name.as_str(),
+                        input.input.clone(),
                     )?;
                     return #call;
                 }
@@ -1196,7 +1686,7 @@ fn expand_plugin_layer_tool_stream_branch(
     } else {
         vec![quote! { __parsed }, quote! { sink }]
     };
-    let call = plugin_layer_method_call(&binding.method, binding.is_async, &args);
+    let call = plugin_layer_stream_method_call(&binding.method, binding.is_async, &args);
     match binding.kind {
         PluginToolBindingKind::Surface => quote! {
             {
@@ -1204,13 +1694,9 @@ fn expand_plugin_layer_tool_stream_branch(
                 if __decl.name.as_str() == __tool_name.as_str()
                     || __decl.aliases.iter().any(|__alias| __alias.as_str() == __tool_name.as_str())
                 {
-                    let (_, __resolved_input) =
-                        <#ty as ::agena_plugin_sdk::ToolSurface>::resolve_tool(
-                            __tool_name.as_str(),
-                            input.input,
-                        )?;
-                    let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_input(
-                        __resolved_input,
+                    let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(
+                        __tool_name.as_str(),
+                        input.input,
                     )?;
                     return #call;
                 }
@@ -1223,14 +1709,9 @@ fn expand_plugin_layer_tool_stream_branch(
                     __decl.name.as_str() == __tool_name.as_str()
                         || __decl.aliases.iter().any(|__alias| __alias.as_str() == __tool_name.as_str())
                 }) {
-                    let (__resolved_tool, __resolved_input) =
-                        <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::resolve_tool(
-                            __tool_name.as_str(),
-                            input.input,
-                        )?;
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::parse_tool(
-                        __resolved_tool.as_str(),
-                        __resolved_input,
+                        __tool_name.as_str(),
+                        input.input,
                     )?;
                     return #call;
                 }
@@ -1283,10 +1764,15 @@ fn expand_plugin_layer_permission_networks(
 
 fn expand_plugin_layer_permission_branch(
     binding: &PluginPermissionBinding,
-    _paths: bool,
+    paths: bool,
 ) -> proc_macro2::TokenStream {
     let ty = &binding.ty;
-    let call = plugin_layer_method_call(&binding.method, binding.is_async, &[quote! { __parsed }]);
+    let call = plugin_layer_permission_method_call(
+        &binding.method,
+        binding.is_async,
+        &[quote! { __parsed }],
+        paths,
+    );
     match binding.kind {
         PluginToolBindingKind::Surface => quote! {
             {
@@ -1294,13 +1780,9 @@ fn expand_plugin_layer_permission_branch(
                 if __decl.name.as_str() == tool
                     || __decl.aliases.iter().any(|__alias| __alias.as_str() == tool)
                 {
-                    let (_, __resolved_input) =
-                        <#ty as ::agena_plugin_sdk::ToolSurface>::resolve_tool(
-                            tool,
-                            input.clone(),
-                        )?;
-                    let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_input(
-                        __resolved_input,
+                    let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(
+                        tool,
+                        input.clone(),
                     )?;
                     return #call;
                 }
@@ -1313,20 +1795,75 @@ fn expand_plugin_layer_permission_branch(
                     __decl.name.as_str() == tool
                         || __decl.aliases.iter().any(|__alias| __alias.as_str() == tool)
                 }) {
-                    let (__resolved_tool, __resolved_input) =
-                        <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::resolve_tool(
-                            tool,
-                            input.clone(),
-                        )?;
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::parse_tool(
-                        __resolved_tool.as_str(),
-                        __resolved_input,
+                        tool,
+                        input.clone(),
                     )?;
                     return #call;
                 }
             }
         },
     }
+}
+
+fn expand_plugin_layer_init_method(
+    config: &PluginImplConfig,
+    self_ty: &Type,
+    binding: Option<&PluginHookBinding>,
+) -> Result<proc_macro2::TokenStream> {
+    let config_store = {
+        let invalid = format!("invalid {} config", plugin_id_label(config));
+        let already = format!(
+            "{} plugin config already initialized",
+            plugin_id_label(config)
+        );
+        if let Some(field) = config.config_field.as_ref() {
+            quote! {
+                self.#field.set_from_json(ctx.config.clone(), #invalid, #already)?;
+            }
+        } else if config.config_store {
+            quote! {
+                <#self_ty as ::agena_plugin_sdk::plugin::PluginConfigStoreAccess>::set_plugin_config_from_json(
+                    self,
+                    ctx.config.clone(),
+                    #invalid,
+                    #already.to_string(),
+                )?;
+            }
+        } else {
+            quote! {}
+        }
+    };
+    let body = if let Some(binding) = binding {
+        let method = &binding.method;
+        plugin_layer_method_call(method, binding.is_async, &[quote! { ctx }, quote! { host }])
+    } else {
+        quote! { Ok(::agena_plugin_sdk::InitOutcome::ack(self.manifest())) }
+    };
+    Ok(quote! {
+        async fn init(
+            &self,
+            ctx: ::agena_plugin_sdk::InitContext,
+            host: ::std::sync::Arc<dyn ::agena_plugin_sdk::HostClient>,
+        ) -> ::agena_plugin_sdk::Result<::agena_plugin_sdk::InitOutcome> {
+            #config_store
+            #body
+        }
+    })
+}
+
+fn plugin_id_label(config: &PluginImplConfig) -> String {
+    config
+        .id
+        .as_ref()
+        .and_then(|expr| match expr {
+            Expr::Lit(ExprLit {
+                lit: Lit::Str(value),
+                ..
+            }) => Some(value.value()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "plugin".to_string())
 }
 
 fn expand_plugin_layer_hook_method(
@@ -1353,7 +1890,7 @@ fn expand_plugin_layer_hook_method(
             let call = plugin_layer_method_call(method, is_async, &[]);
             quote! {
                 async fn shutdown(&self) -> ::agena_plugin_sdk::Result<()> {
-                    #call
+                    ::agena_plugin_sdk::IntoHookOutput::<()>::into_hook_output(#call)
                 }
             }
         }
@@ -1543,7 +2080,7 @@ fn expand_plugin_layer_single_arg_hook(
             &self,
             input: #input_ty,
         ) -> ::agena_plugin_sdk::Result<#output_ty> {
-            #call
+            ::agena_plugin_sdk::IntoHookOutput::<#output_ty>::into_hook_output(#call)
         }
     }
 }
@@ -1561,275 +2098,57 @@ fn plugin_layer_method_call(
     }
 }
 
-struct PluginDispatchAttr {
-    mode: Ident,
-    ty: Path,
-    resolve: Option<Path>,
-}
-
-impl Parse for PluginDispatchAttr {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let mode: Ident = input.parse()?;
-        let content;
-        parenthesized!(content in input);
-        let ty: Path = content.parse()?;
-        let mut resolve = None;
-        if input.peek(Token![,]) {
-            let _: Token![,] = input.parse()?;
-            let key: Ident = input.parse()?;
-            if key != "resolve" {
-                return Err(syn::Error::new_spanned(
-                    key,
-                    "unsupported dispatch attribute option; expected `resolve = path`",
-                ));
-            }
-            let _: Token![=] = input.parse()?;
-            resolve = Some(input.parse()?);
-        }
-        if !input.is_empty() {
-            return Err(input.error("unexpected trailing tokens in plugin dispatch attribute"));
-        }
-        Ok(Self { mode, ty, resolve })
+fn plugin_layer_tool_method_call(
+    method: &Ident,
+    is_async: bool,
+    args: &[proc_macro2::TokenStream],
+) -> proc_macro2::TokenStream {
+    let call = plugin_layer_method_call(method, is_async, args);
+    quote! {
+        ::agena_plugin_sdk::IntoToolInvokeOutput::into_tool_invoke_output(#call)
     }
 }
 
-struct PluginPermissionDispatchAttr {
-    mode: Ident,
-    ty: Path,
-    resolve: Option<Path>,
-}
-
-impl Parse for PluginPermissionDispatchAttr {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let mode: Ident = input.parse()?;
-        let content;
-        parenthesized!(content in input);
-        let ty: Path = content.parse()?;
-        let mut resolve = None;
-        if input.peek(Token![,]) {
-            let _: Token![,] = input.parse()?;
-            let key: Ident = input.parse()?;
-            if key != "resolve" {
-                return Err(syn::Error::new_spanned(
-                    key,
-                    "unsupported permission dispatch attribute option; expected `resolve = path`",
-                ));
-            }
-            let _: Token![=] = input.parse()?;
-            resolve = Some(input.parse()?);
-        }
-        if !input.is_empty() {
-            return Err(
-                input.error("unexpected trailing tokens in plugin permission dispatch attribute")
-            );
-        }
-        Ok(Self { mode, ty, resolve })
-    }
-}
-
-fn expand_plugin_manifest_method(
-    attr: proc_macro2::TokenStream,
-    method: ImplItemFn,
-) -> Result<proc_macro2::TokenStream> {
-    expand_generated_plugin_method(
-        "manifest",
-        method,
-        quote!(::agena_plugin_sdk::plugin_manifest!(#attr)),
-        false,
-    )
-}
-
-fn expand_plugin_init_method(
-    attr: proc_macro2::TokenStream,
-    method: ImplItemFn,
-) -> Result<proc_macro2::TokenStream> {
-    expand_generated_plugin_method(
-        "init",
-        method,
-        quote!(::agena_plugin_sdk::plugin_init!(manifest = self.manifest(), #attr)),
-        true,
-    )
-}
-
-fn expand_generated_plugin_method(
-    expected_name: &str,
-    mut method: ImplItemFn,
-    body: proc_macro2::TokenStream,
-    may_need_async_box: bool,
-) -> Result<proc_macro2::TokenStream> {
-    ensure_plugin_method_name(&method, expected_name)?;
-    method.block = generated_plugin_method_block(&method, body, may_need_async_box);
-    Ok(quote!(#method))
-}
-
-fn expand_plugin_dispatch_method(
-    expected_name: &str,
-    attr: PluginDispatchAttr,
-    mut method: ImplItemFn,
-    stream: bool,
-) -> Result<proc_macro2::TokenStream> {
-    ensure_plugin_method_name(&method, expected_name)?;
-    let macro_ident = dispatch_macro_ident(&attr.mode, stream)?;
-    let dispatch_ty = &attr.ty;
-    let arg_idents = typed_arg_idents(&method)?;
-    let body = if stream {
-        let [input_ident, sink_ident]: [&Ident; 2] = arg_idents
-            .iter()
-            .collect::<Vec<_>>()
-            .try_into()
-            .map_err(|_| {
-                syn::Error::new_spanned(
-                    &method.sig,
-                    "plugin stream dispatch methods must take exactly `input` and `sink` arguments after `&self`",
-                )
-            })?;
-        if let Some(resolve) = attr.resolve.as_ref() {
-            quote!({
-                let __input = #resolve(self, #input_ident)?;
-                ::agena_plugin_sdk::#macro_ident!(self, __input, #sink_ident, #dispatch_ty)
-            })
-        } else {
-            quote!(::agena_plugin_sdk::#macro_ident!(self, #input_ident, #sink_ident, #dispatch_ty))
-        }
-    } else {
-        let [input_ident]: [&Ident; 1] = arg_idents
-            .iter()
-            .collect::<Vec<_>>()
-            .try_into()
-            .map_err(|_| {
-                syn::Error::new_spanned(
-                    &method.sig,
-                    "plugin invoke dispatch methods must take exactly one `input` argument after `&self`",
-                )
-            })?;
-        if let Some(resolve) = attr.resolve.as_ref() {
-            quote!({
-                let __input = #resolve(self, #input_ident)?;
-                ::agena_plugin_sdk::#macro_ident!(self, __input, #dispatch_ty)
-            })
-        } else {
-            quote!(::agena_plugin_sdk::#macro_ident!(self, #input_ident, #dispatch_ty))
-        }
+fn plugin_layer_tool_call_args(context: Option<PluginContextArg>) -> Vec<proc_macro2::TokenStream> {
+    let Some(context) = context else {
+        return vec![quote! { __parsed }];
     };
-    method.block = generated_plugin_method_block(&method, body, true);
-    Ok(quote!(#method))
+    let context_arg = if context.by_ref {
+        quote! { &__context }
+    } else {
+        quote! { __context }
+    };
+    if context.first {
+        vec![context_arg, quote! { __parsed }]
+    } else {
+        vec![quote! { __parsed }, context_arg]
+    }
 }
 
-fn expand_plugin_permission_method(
-    expected_name: &str,
-    attr: PluginPermissionDispatchAttr,
-    mut method: ImplItemFn,
+fn plugin_layer_stream_method_call(
+    method: &Ident,
+    is_async: bool,
+    args: &[proc_macro2::TokenStream],
+) -> proc_macro2::TokenStream {
+    let call = plugin_layer_method_call(method, is_async, args);
+    quote! {{
+        let __stream_id = sink.stream_id().to_string();
+        ::agena_plugin_sdk::IntoToolStreamEnd::into_tool_stream_end(#call, __stream_id)
+    }}
+}
+
+fn plugin_layer_permission_method_call(
+    method: &Ident,
+    is_async: bool,
+    args: &[proc_macro2::TokenStream],
     paths: bool,
-) -> Result<proc_macro2::TokenStream> {
-    ensure_plugin_method_name(&method, expected_name)?;
-    let macro_ident = permission_dispatch_macro_ident(&attr.mode, paths)?;
-    let dispatch_ty = &attr.ty;
-    let arg_idents = typed_arg_idents(&method)?;
-    let [tool_ident, input_ident]: [&Ident; 2] = arg_idents
-        .iter()
-        .collect::<Vec<_>>()
-        .try_into()
-        .map_err(|_| {
-            syn::Error::new_spanned(
-                &method.sig,
-                "plugin permission dispatch methods must take exactly `tool` and `input` arguments after `&self`",
-            )
-        })?;
-    let body = if let Some(resolve) = attr.resolve.as_ref() {
-        quote!({
-            let (__tool, __input) = #resolve(self, #tool_ident, #input_ident)?;
-            ::agena_plugin_sdk::#macro_ident!(self, __tool.as_str(), &__input, #dispatch_ty)
-        })
+) -> proc_macro2::TokenStream {
+    let call = plugin_layer_method_call(method, is_async, args);
+    if paths {
+        quote! { ::agena_plugin_sdk::IntoPathRequests::into_path_requests(#call) }
     } else {
-        quote!(::agena_plugin_sdk::#macro_ident!(self, #tool_ident, #input_ident, #dispatch_ty))
-    };
-    method.block = generated_plugin_method_block(&method, body, true);
-    Ok(quote!(#method))
-}
-
-fn generated_plugin_method_block(
-    method: &ImplItemFn,
-    body: proc_macro2::TokenStream,
-    may_need_async_box: bool,
-) -> syn::Block {
-    if may_need_async_box && method.sig.asyncness.is_none() {
-        parse_quote!({
-            ::std::boxed::Box::pin(async move { #body })
-        })
-    } else {
-        parse_quote!({ #body })
+        quote! { ::agena_plugin_sdk::IntoNetworkRequests::into_network_requests(#call) }
     }
-}
-
-fn ensure_plugin_method_name(method: &ImplItemFn, expected_name: &str) -> Result<()> {
-    if method.sig.ident != expected_name {
-        return Err(syn::Error::new_spanned(
-            &method.sig.ident,
-            format!("expected method named `{expected_name}`"),
-        ));
-    }
-    Ok(())
-}
-
-fn typed_arg_idents(method: &ImplItemFn) -> Result<Vec<Ident>> {
-    method
-        .sig
-        .inputs
-        .iter()
-        .filter_map(|arg| match arg {
-            FnArg::Receiver(_) => None,
-            FnArg::Typed(pat_type) => Some(&*pat_type.pat),
-        })
-        .map(|pat| match pat {
-            Pat::Ident(pat_ident) => Ok(pat_ident.ident.clone()),
-            _ => Err(syn::Error::new_spanned(
-                pat,
-                "plugin dispatch method arguments must use simple identifier patterns",
-            )),
-        })
-        .collect()
-}
-
-fn dispatch_macro_ident(mode: &Ident, stream: bool) -> Result<Ident> {
-    let name = match (mode.to_string().as_str(), stream) {
-        ("surface", false) => "plugin_tool_dispatch_surface",
-        ("surface_with_context", false) => "plugin_tool_dispatch_surface_with_context",
-        ("suite", false) => "plugin_tool_dispatch_suite",
-        ("suite_with_context", false) => "plugin_tool_dispatch_suite_with_context",
-        ("shape", false) => "plugin_tool_dispatch_shape",
-        ("shape_with_context", false) => "plugin_tool_dispatch_shape_with_context",
-        ("surface", true) => "plugin_tool_dispatch_stream_surface",
-        ("surface_with_context", true) => "plugin_tool_dispatch_stream_surface_with_context",
-        ("suite", true) => "plugin_tool_dispatch_stream_suite",
-        ("suite_with_context", true) => "plugin_tool_dispatch_stream_suite_with_context",
-        ("shape", true) => "plugin_tool_dispatch_stream_shape",
-        ("shape_with_context", true) => "plugin_tool_dispatch_stream_shape_with_context",
-        _ => {
-            return Err(syn::Error::new_spanned(
-                mode,
-                "unsupported dispatch mode; expected one of surface, surface_with_context, suite, suite_with_context, shape, or shape_with_context",
-            ));
-        }
-    };
-    Ok(format_ident!("{name}"))
-}
-
-fn permission_dispatch_macro_ident(mode: &Ident, paths: bool) -> Result<Ident> {
-    let name = match (mode.to_string().as_str(), paths) {
-        ("surface", true) => "plugin_permission_dispatch_paths_surface",
-        ("surface", false) => "plugin_permission_dispatch_networks_surface",
-        ("suite", true) => "plugin_permission_dispatch_paths_suite",
-        ("suite", false) => "plugin_permission_dispatch_networks_suite",
-        ("shape", true) => "plugin_permission_dispatch_paths_shape",
-        ("shape", false) => "plugin_permission_dispatch_networks_shape",
-        _ => {
-            return Err(syn::Error::new_spanned(
-                mode,
-                "unsupported permission dispatch mode; expected surface(...), suite(...), or shape(...)",
-            ));
-        }
-    };
-    Ok(format_ident!("{name}"))
 }
 
 #[derive(Clone, Default)]
@@ -2430,7 +2749,7 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
         .collect::<Vec<_>>();
 
     let mut enum_helper_fn = quote! {};
-    let (parse_input_body, resolve_tool_body) = match input.data {
+    let (parse_input_body, parse_tool_body, resolve_tool_body) = match input.data {
         Data::Enum(data_enum) => {
             enum_helper_fn = expand_enum_input_normalize_fn(&data_enum.variants)?;
             let match_arms = data_enum
@@ -2438,6 +2757,41 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
                 .iter()
                 .map(expand_variant_arm)
                 .collect::<Result<Vec<_>>>()?;
+            let parse_tool_exec_arms = data_enum
+                .variants
+                .iter()
+                .filter_map(|variant| {
+                    let config = parse_tool_variant_config(variant).ok()?;
+                    let VariantMapping::Exec(tool_name) = config.mapping else {
+                        return None;
+                    };
+                    let prefixed_tool_name = LitStr::new(
+                        format!("{}.{}", tool.value(), tool_name.value()).as_str(),
+                        tool_name.span(),
+                    );
+                    let action = LitStr::new(
+                        ident_to_snake_case(&variant.ident).as_str(),
+                        variant.ident.span(),
+                    );
+                    Some(quote! {
+                        #tool_name | #prefixed_tool_name => {
+                            let mut input = input;
+                            match &mut input {
+                                serde_json::Value::Object(object) => {
+                                    object.insert(
+                                        "action".to_string(),
+                                        serde_json::Value::String(#action.to_string()),
+                                    );
+                                    Self::parse_input(input)
+                                }
+                                _ => Err(::agena_plugin_sdk::PluginError::invalid_params(
+                                    "tool route payload must be an object",
+                                )),
+                            }
+                        }
+                    })
+                })
+                .collect::<Vec<_>>();
             let validate_arms = data_enum
                 .variants
                 .iter()
@@ -2466,6 +2820,16 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
                     Ok(parsed)
                 },
                 quote! {
+                    match tool {
+                        #tool #(#tool_alias_match_arms)* => Self::parse_input(input),
+                        #(#parse_tool_exec_arms,)*
+                        other => Err(::agena_plugin_sdk::PluginError::invalid_params(format!(
+                            "unknown {} tool '{other}'",
+                            #tool
+                        ))),
+                    }
+                },
+                quote! {
                     let parsed = Self::parse_input(input)?;
 
                     match parsed {
@@ -2492,6 +2856,15 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
                     Ok(parsed)
             },
             quote! {
+                match tool {
+                    #tool #(#tool_alias_match_arms)* => Self::parse_input(input),
+                    other => Err(::agena_plugin_sdk::PluginError::invalid_params(format!(
+                        "unknown {} tool '{other}'",
+                        #tool
+                    ))),
+                }
+            },
+            quote! {
                 let parsed = Self::parse_input(input)?;
                 Ok((
                     #tool.to_string(),
@@ -2515,6 +2888,14 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
             #parse_input_body
         }
     };
+    let parse_tool_fn = quote! {
+        pub(crate) fn parse_tool(
+            tool: &str,
+            input: serde_json::Value,
+        ) -> ::agena_plugin_sdk::Result<Self> {
+            #parse_tool_body
+        }
+    };
 
     Ok(quote! {
         impl #name {
@@ -2526,6 +2907,8 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
             #input_schema_fn
 
             #parse_input_fn
+
+            #parse_tool_fn
 
             #parse_json_str_fn
 
@@ -2570,6 +2953,13 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
 
             fn parse_input(input: serde_json::Value) -> ::agena_plugin_sdk::Result<Self> {
                 Self::parse_input(input)
+            }
+
+            fn parse_tool(
+                tool: &str,
+                input: serde_json::Value,
+            ) -> ::agena_plugin_sdk::Result<Self> {
+                Self::parse_tool(tool, input)
             }
 
             fn parse_json_str(input: &str) -> ::agena_plugin_sdk::Result<Self> {
@@ -2639,7 +3029,7 @@ fn expand_tool_suite(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
             .as_ref()
             .map(|path| quote! { #path(input) })
             .unwrap_or_else(
-                || quote! { <#ty as ::agena_plugin_sdk::ToolSurface>::parse_input(input) },
+                || quote! { <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(tool, input) },
             );
         quote! {
             let __decl = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_decl();
@@ -7041,13 +7431,6 @@ fn built_in_validation_tokens(
         #(#conflicts_exprs)*
         #(#required_unless_exprs)*
     }
-}
-
-fn is_async_trait_attr(attr: &Attribute) -> bool {
-    attr.path()
-        .segments
-        .last()
-        .is_some_and(|segment| segment.ident == "async_trait")
 }
 
 fn parse_expr_list(tokens: proc_macro2::TokenStream) -> Result<Vec<Expr>> {

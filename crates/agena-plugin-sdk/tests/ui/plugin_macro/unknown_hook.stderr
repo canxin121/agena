@@ -1,0 +1,5 @@
+error: unsupported plugin hook 'not_a_hook'
+  --> tests/ui/plugin_macro/unknown_hook.rs:13:14
+   |
+13 |     async fn not_a_hook(&self) -> Result<()> {
+   |              ^^^^^^^^^^

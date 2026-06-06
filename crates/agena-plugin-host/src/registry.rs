@@ -1,4 +1,5 @@
-//! Plugin tool name registry. Model-visible tool names are always `plugin/tool`.
+//! Plugin tool name registry. Model-visible tool names are always
+//! `plugin__tool`, with each segment normalized to ASCII words joined by `_`.
 
 use std::collections::BTreeMap;
 
@@ -10,7 +11,7 @@ use crate::sdk::{HostCapability, PluginToolDecl, ToolDescriptionMode};
 #[derive(Debug, Clone)]
 pub struct PluginToolRegistry {
     /// `exposed_name -> tool`. `exposed_name` is the name shown
-    /// to the model and is always `plugin/tool`.
+    /// to the model and is always `plugin__tool`.
     by_exposed: BTreeMap<String, RegisteredTool>,
     /// `alias_exposed_name -> canonical_exposed_name`.
     aliases_by_exposed: BTreeMap<String, String>,
@@ -287,10 +288,15 @@ impl PluginToolRegistry {
             tool.decl.aliases = normalize_tool_aliases(&tool.original_name, &tool.decl.aliases);
             tool.exposed_name = exposed_tool_name(&tool.plugin_name, &tool.original_name);
         }
-        let by_exposed: BTreeMap<String, RegisteredTool> = tools
-            .into_iter()
-            .map(|tool| (tool.exposed_name.clone(), tool))
-            .collect();
+        let mut by_exposed = BTreeMap::new();
+        for tool in tools {
+            if let Some(existing) = by_exposed.insert(tool.exposed_name.clone(), tool) {
+                panic!(
+                    "tool `{}` collides with another registered tool after model-visible name normalization",
+                    existing.exposed_name
+                );
+            }
+        }
         let mut aliases_by_exposed = BTreeMap::new();
         for tool in by_exposed.values() {
             for alias_exposed_name in tool.alias_exposed_names() {
@@ -323,7 +329,41 @@ impl PluginToolRegistry {
 pub fn exposed_tool_name(plugin_name: &str, tool_name: &str) -> String {
     assert_valid_tool_namespace(plugin_name, "plugin name");
     assert_valid_tool_namespace(tool_name, "tool name");
-    format!("{plugin_name}/{tool_name}")
+    format!(
+        "{}__{}",
+        exposed_tool_name_segment(plugin_name),
+        exposed_tool_name_segment(tool_name)
+    )
+}
+
+pub fn exposed_tool_name_segment(value: &str) -> String {
+    let trimmed = value.trim();
+    let mut out = String::with_capacity(trimmed.len());
+    let mut previous_was_separator = false;
+
+    for ch in trimmed.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            previous_was_separator = false;
+        } else if !previous_was_separator {
+            out.push('_');
+            previous_was_separator = true;
+        }
+    }
+
+    while out.ends_with('_') {
+        out.pop();
+    }
+    while out.starts_with('_') {
+        out.remove(0);
+    }
+    if out.is_empty() {
+        out.push_str("tool");
+    }
+    if out.bytes().next().is_some_and(|byte| byte.is_ascii_digit()) {
+        out.insert(0, '_');
+    }
+    out
 }
 
 fn assert_valid_tool_namespace(value: &str, label: &str) {
@@ -333,7 +373,7 @@ fn assert_valid_tool_namespace(value: &str, label: &str) {
     );
     assert!(
         !value.contains('/'),
-        "{label} `{value}` must not contain `/`; model-visible tool names use `plugin/tool`"
+        "{label} `{value}` must not contain `/`; model-visible tool names use `plugin__tool`"
     );
 }
 
@@ -377,7 +417,7 @@ mod tests {
         );
 
         let tool = registry
-            .lookup_tool("fixture/inspect")
+            .lookup_tool("fixture__inspect")
             .expect("tool should be registered");
         assert_eq!(tool.decl.description_mode, Some(ToolDescriptionMode::Brief));
         assert_eq!(tool.decl.ui_display_mode, Some(UiTextDisplayMode::Summary));
@@ -399,7 +439,7 @@ mod tests {
         );
 
         let tool = registry
-            .lookup_tool("fixture/inspect")
+            .lookup_tool("fixture__inspect")
             .expect("tool should be registered");
         assert_eq!(
             tool.decl.description_mode,
@@ -424,26 +464,38 @@ mod tests {
         );
 
         let canonical = registry
-            .lookup_tool("fixture/inspect")
+            .lookup_tool("fixture__inspect")
             .expect("canonical tool should be registered");
-        assert_eq!(canonical.exposed_name, "fixture/inspect");
+        assert_eq!(canonical.exposed_name, "fixture__inspect");
         assert_eq!(
             canonical.alias_exposed_names(),
-            vec!["fixture/i".to_string(), "fixture/show".to_string()]
+            vec!["fixture__i".to_string(), "fixture__show".to_string()]
         );
 
         let alias = registry
-            .lookup_tool("fixture/i")
+            .lookup_tool("fixture__i")
             .expect("alias should resolve to canonical tool");
-        assert_eq!(alias.exposed_name, "fixture/inspect");
+        assert_eq!(alias.exposed_name, "fixture__inspect");
         assert_eq!(alias.original_name, "inspect");
 
         let removed = registry
-            .remove_exposed_from_plugin("plugin-id", "fixture/show")
+            .remove_exposed_from_plugin("plugin-id", "fixture__show")
             .expect("alias removal should remove canonical tool");
-        assert_eq!(removed.exposed_name, "fixture/inspect");
-        assert!(registry.lookup_tool("fixture/inspect").is_none());
-        assert!(registry.lookup_tool("fixture/i").is_none());
+        assert_eq!(removed.exposed_name, "fixture__inspect");
+        assert!(registry.lookup_tool("fixture__inspect").is_none());
+        assert!(registry.lookup_tool("fixture__i").is_none());
+    }
+
+    #[test]
+    fn exposed_tool_names_use_double_underscore_between_normalized_segments() {
+        assert_eq!(
+            exposed_tool_name("agena.workflow", "plan.create"),
+            "agena_workflow__plan_create"
+        );
+        assert_eq!(
+            exposed_tool_name("streaming-fixture", "stream_fixture.count"),
+            "streaming_fixture__stream_fixture_count"
+        );
     }
 }
 

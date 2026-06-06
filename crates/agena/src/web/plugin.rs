@@ -297,7 +297,7 @@ fn web_config_schema() -> serde_json::Value {
         (
             "/properties/fetch/properties/enabled",
             "Enabled",
-            "Allows agena.web/fetch and agena.web/crawl to run. Disable this to turn off network page retrieval.",
+            "Allows agena_web__fetch and agena_web__crawl to run. Disable this to turn off network page retrieval.",
         ),
         (
             "/properties/fetch/properties/request",

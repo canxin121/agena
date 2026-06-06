@@ -3172,7 +3172,7 @@ mod tests {
                             "agena.memory": "summary"
                         },
                         "tools": {
-                            "agena.web/fetch": "summary"
+                            "agena_web__fetch": "summary"
                         }
                     }
                 }
@@ -3186,7 +3186,7 @@ mod tests {
                             "agena.web": "detailed"
                         },
                         "tools": {
-                            "agena.web/open": "detailed"
+                            "agena_web__open": "detailed"
                         }
                     }
                 }
@@ -3223,11 +3223,11 @@ mod tests {
             Some(crate::plugin::UiPresentationOverride::Summary)
         );
         assert_eq!(
-            presentation.tools.get("agena.web/fetch").copied(),
+            presentation.tools.get("agena_web__fetch").copied(),
             Some(crate::plugin::UiPresentationOverride::Summary)
         );
         assert_eq!(
-            presentation.tools.get("agena.web/open").copied(),
+            presentation.tools.get("agena_web__open").copied(),
             Some(crate::plugin::UiPresentationOverride::Detailed)
         );
     }

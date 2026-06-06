@@ -131,14 +131,8 @@ impl ToolPresentationConfig {
         exposed_name: &str,
         tool_default: Option<ToolDescriptionMode>,
     ) -> ToolDescriptionMode {
-        for key in [
-            exposed_name.to_string(),
-            format!("{plugin_name}/{original_name}"),
-            format!("{plugin_name}/{exposed_name}"),
-            format!("{plugin_name}.{original_name}"),
-            original_name.to_string(),
-        ] {
-            if let Some(mode) = self.tools.get(key.as_str()).copied() {
+        for key in [exposed_name, original_name] {
+            if let Some(mode) = self.tools.get(key).copied() {
                 return resolve_tool_description_override(mode, tool_default, self.default_mode);
             }
         }
@@ -204,14 +198,8 @@ impl UiPresentationConfig {
         exposed_name: &str,
         tool_default: Option<UiTextDisplayMode>,
     ) -> UiTextDisplayMode {
-        for key in [
-            exposed_name.to_string(),
-            format!("{plugin_name}/{original_name}"),
-            format!("{plugin_name}/{exposed_name}"),
-            format!("{plugin_name}.{original_name}"),
-            original_name.to_string(),
-        ] {
-            if let Some(mode) = self.tools.get(key.as_str()).copied() {
+        for key in [exposed_name, original_name] {
+            if let Some(mode) = self.tools.get(key).copied() {
                 return resolve_ui_presentation_override(mode, tool_default, self.default_mode);
             }
         }
@@ -258,7 +246,7 @@ mod tests {
             .plugins
             .insert("agena.settings".to_string(), ToolDescriptionOverride::Brief);
         presentation.tools.insert(
-            "agena.settings/settings".to_string(),
+            "agena_settings__settings".to_string(),
             ToolDescriptionOverride::ToolDefault,
         );
 
@@ -266,21 +254,21 @@ mod tests {
             presentation.mode_for(
                 "agena.settings",
                 "settings",
-                "agena.settings/settings",
+                "agena_settings__settings",
                 Some(ToolDescriptionMode::Detailed),
             ),
             ToolDescriptionMode::Detailed,
         );
 
         presentation.tools.insert(
-            "agena.settings/settings".to_string(),
+            "agena_settings__settings".to_string(),
             ToolDescriptionOverride::Brief,
         );
         assert_eq!(
             presentation.mode_for(
                 "agena.settings",
                 "settings",
-                "agena.settings/settings",
+                "agena_settings__settings",
                 Some(ToolDescriptionMode::Detailed),
             ),
             ToolDescriptionMode::Brief,
@@ -295,7 +283,7 @@ mod tests {
             presentation.mode_for(
                 "agena.settings",
                 "settings",
-                "agena.settings/settings",
+                "agena_settings__settings",
                 Some(ToolDescriptionMode::Brief),
             ),
             ToolDescriptionMode::Brief,
@@ -341,35 +329,35 @@ mod tests {
             presentation.mode_for(
                 "agena.settings",
                 "settings",
-                "agena.settings/settings",
+                "agena_settings__settings",
                 Some(UiTextDisplayMode::Summary),
             ),
             UiTextDisplayMode::Summary,
         );
 
         presentation.tools.insert(
-            "agena.settings/settings".to_string(),
+            "agena_settings__settings".to_string(),
             UiPresentationOverride::Detailed,
         );
         assert_eq!(
             presentation.mode_for(
                 "agena.settings",
                 "settings",
-                "agena.settings/settings",
+                "agena_settings__settings",
                 Some(UiTextDisplayMode::Summary),
             ),
             UiTextDisplayMode::Detailed,
         );
 
         presentation.tools.insert(
-            "agena.settings/settings".to_string(),
+            "agena_settings__settings".to_string(),
             UiPresentationOverride::Default,
         );
         assert_eq!(
             presentation.mode_for(
                 "agena.settings",
                 "settings",
-                "agena.settings/settings",
+                "agena_settings__settings",
                 Some(UiTextDisplayMode::Summary),
             ),
             UiTextDisplayMode::Summary,
@@ -390,7 +378,7 @@ mod tests {
             presentation.mode_for(
                 "agena.memory",
                 "memory",
-                "agena.memory/memory",
+                "agena_memory__memory",
                 Some(UiTextDisplayMode::Summary),
             ),
             UiTextDisplayMode::Summary,

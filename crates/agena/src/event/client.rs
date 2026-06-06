@@ -262,13 +262,13 @@ mod tests {
             "related_actions": [
                 {
                     "kind": "tool",
-                    "tool_name": "agena.workflow/plan"
+                    "tool_name": "agena_workflow__plan"
                 }
             ],
             "requested_actions": [
                 {
                     "kind": "tool",
-                    "tool_name": "agena.workflow/plan"
+                    "tool_name": "agena_workflow__plan"
                 }
             ],
             "reason": "tool requires confirmation",
@@ -285,7 +285,7 @@ mod tests {
         assert_eq!(
             event.action,
             PermissionAction::Tool {
-                tool_name: "agena.workflow/plan".to_string(),
+                tool_name: "agena_workflow__plan".to_string(),
                 qualifier: None,
             }
         );

@@ -85,23 +85,14 @@ pub(crate) fn model_safe_tool_name(name: &str) -> String {
         return "tool".to_owned();
     }
 
-    let mut safe = String::with_capacity(trimmed.len());
-    for byte in trimmed.bytes() {
-        match byte {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-' => {
-                safe.push(byte as char);
-            }
-            _ => {
-                use std::fmt::Write as _;
-                let _ = write!(&mut safe, "__x{byte:02x}__");
-            }
-        }
+    if trimmed
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return trimmed.to_owned();
     }
-    if safe.is_empty() {
-        "tool".to_owned()
-    } else {
-        safe
-    }
+
+    crate::plugin::registry::exposed_tool_name_segment(trimmed)
 }
 
 pub(crate) fn suggest_tool_names<I, T>(requested: &str, candidates: I, limit: usize) -> Vec<String>
@@ -1687,7 +1678,7 @@ impl ToolExecutor {
         }
         let mut rewritten = bash_input;
         rewritten.command = prepared_shell.command.clone();
-        let input_value = if invocation.name.rsplit('/').next() == Some("bash") {
+        let input_value = if invocation.name == "bash" {
             serde_json::to_value(rewritten)
                 .map_err(|err| ToolError::InvalidInput(format!("bash input: {err}")))?
         } else {
@@ -2445,40 +2436,40 @@ fn invocation_effective_tags(
     };
 
     match (definition.behavior_exposed_name(), command) {
-        ("agena.fs/fs", "read" | "glob" | "grep") => {
+        ("agena_fs__fs", "read" | "glob" | "grep") => {
             set_invocation_access_tags(&mut tags, true, false, true, false)
         }
-        ("agena.fs/fs", "apply_patch" | "notebook_edit") => {
+        ("agena_fs__fs", "apply_patch" | "notebook_edit") => {
             set_invocation_access_tags(&mut tags, false, true, false, true)
         }
-        ("agena.settings/settings", "get" | "list" | "validate") => {
+        ("agena_settings__settings", "get" | "list" | "validate") => {
             set_invocation_access_tags(&mut tags, true, false, false, false)
         }
-        ("agena.settings/settings", "set" | "delete" | "patch") => {
+        ("agena_settings__settings", "set" | "delete" | "patch") => {
             set_invocation_access_tags(&mut tags, false, true, false, true)
         }
-        ("agena.cron/schedule", "list") => {
+        ("agena_cron__schedule", "list") => {
             set_invocation_access_tags(&mut tags, true, false, false, false)
         }
-        ("agena.cron/schedule", "create" | "delete" | "wakeup") => {
+        ("agena_cron__schedule", "create" | "delete" | "wakeup") => {
             set_invocation_access_tags(&mut tags, false, true, false, false)
         }
-        ("agena.shell/monitor", "list" | "read") => {
+        ("agena_shell__monitor", "list" | "read") => {
             set_invocation_access_tags(&mut tags, true, false, false, false)
         }
-        ("agena.shell/monitor", "start" | "stop") => {
+        ("agena_shell__monitor", "start" | "stop") => {
             set_invocation_access_tags(&mut tags, false, true, false, false)
         }
-        ("agena.workflow/session", "get") => {
+        ("agena_workflow__session", "get") => {
             set_invocation_access_tags(&mut tags, true, false, false, false)
         }
-        ("agena.workflow/session", "rename") => {
+        ("agena_workflow__session", "rename") => {
             set_invocation_access_tags(&mut tags, false, true, false, false)
         }
-        ("agena.mcp/mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => {
+        ("agena_mcp__mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => {
             set_invocation_access_tags(&mut tags, true, false, false, false)
         }
-        ("agena.mcp/mcp", "call") => {
+        ("agena_mcp__mcp", "call") => {
             set_invocation_access_tags(&mut tags, false, true, false, false)
         }
         _ => {}
@@ -2527,20 +2518,20 @@ fn is_concurrency_safe_tool_invocation(
     };
 
     match (registered_tool.behavior_exposed_name(), command) {
-        ("agena.fs/fs", "read" | "glob" | "grep") => true,
-        ("agena.fs/fs", "apply_patch" | "notebook_edit") => false,
-        ("agena.shell/monitor", "list" | "read") => true,
-        ("agena.shell/monitor", "start" | "stop") => false,
-        ("agena.settings/settings", "get" | "list" | "validate") => true,
-        ("agena.settings/settings", "set" | "delete" | "patch") => false,
-        ("agena.cron/schedule", "list") => true,
-        ("agena.cron/schedule", "create" | "delete" | "wakeup") => false,
-        ("agena.workflow/session", "get") => true,
-        ("agena.workflow/session", "rename") => false,
-        ("agena.mcp/mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => {
+        ("agena_fs__fs", "read" | "glob" | "grep") => true,
+        ("agena_fs__fs", "apply_patch" | "notebook_edit") => false,
+        ("agena_shell__monitor", "list" | "read") => true,
+        ("agena_shell__monitor", "start" | "stop") => false,
+        ("agena_settings__settings", "get" | "list" | "validate") => true,
+        ("agena_settings__settings", "set" | "delete" | "patch") => false,
+        ("agena_cron__schedule", "list") => true,
+        ("agena_cron__schedule", "create" | "delete" | "wakeup") => false,
+        ("agena_workflow__session", "get") => true,
+        ("agena_workflow__session", "rename") => false,
+        ("agena_mcp__mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => {
             true
         }
-        ("agena.mcp/mcp", "call") => false,
+        ("agena_mcp__mcp", "call") => false,
         _ => registered_tool.decl.concurrency_safe,
     }
 }
@@ -2829,17 +2820,17 @@ mod tests {
     };
     use crate::plugins::provided::router as in_process_router;
 
-    const FS_TOOL: &str = "agena.fs/fs";
-    const GENERATED_HELP_TOOL: &str = "fixture/generated_help";
-    const MERGED_HELP_TOOL: &str = "fixture/merged_help";
-    const SHELL_BASH_TOOL: &str = "agena.shell/exec.bash";
-    const TOOLS_TOOL: &str = "agena.workflow/tools";
-    const TODO_TOOL: &str = "agena.workflow/todo";
-    const TASK_TOOL: &str = "agena.workflow/task";
-    const FIXTURE_ECHO_TOOL: &str = "fixture/plugin_echo";
-    const WEB_FETCH_TOOL: &str = "agena.web/fetch";
-    const WEB_QUERY_TOOL: &str = "agena.web/store.query";
-    const WEB_SEARCH_TOOL: &str = "agena.web/search";
+    const FS_TOOL: &str = "agena_fs__fs";
+    const GENERATED_HELP_TOOL: &str = "fixture__generated_help";
+    const MERGED_HELP_TOOL: &str = "fixture__merged_help";
+    const SHELL_BASH_TOOL: &str = "agena_shell__exec_bash";
+    const TOOLS_TOOL: &str = "agena_workflow__tools";
+    const TODO_TOOL: &str = "agena_workflow__todo";
+    const TASK_TOOL: &str = "agena_workflow__task";
+    const FIXTURE_ECHO_TOOL: &str = "fixture__plugin_echo";
+    const WEB_FETCH_TOOL: &str = "agena_web__fetch";
+    const WEB_QUERY_TOOL: &str = "agena_web__store_query";
+    const WEB_SEARCH_TOOL: &str = "agena_web__search";
 
     #[derive(Debug, Deserialize, Serialize, JsonSchema)]
     #[serde(deny_unknown_fields)]
@@ -3735,14 +3726,11 @@ mod tests {
     }
 
     #[test]
-    fn model_safe_tool_name_escapes_provider_invalid_separators() {
-        assert_eq!(
-            super::model_safe_tool_name("agena.fs/fs"),
-            "agena__x2e__fs__x2f__fs"
-        );
+    fn model_safe_tool_name_uses_readable_underscore_separators() {
+        assert_eq!(super::model_safe_tool_name("agena_fs__fs"), "agena_fs__fs");
         assert_eq!(
             super::model_safe_tool_name("mcp:docs:search"),
-            "mcp__x3a__docs__x3a__search"
+            "mcp_docs_search"
         );
     }
 
@@ -4604,13 +4592,13 @@ mod tests {
         }
 
         let help = CatalogToolInput::parse_input(json!({
-            "tool_name": "agena.web/search",
+            "tool_name": "agena_web__search",
             "include_schema": true
         }))
         .expect("tool_name payload should infer help");
         match help {
             CatalogToolInput::Help { args } => {
-                assert_eq!(args.tool, "agena.web/search");
+                assert_eq!(args.tool, "agena_web__search");
                 assert_eq!(args.include_schema, Some(true));
             }
             other => panic!("expected help variant, got {other:?}"),
@@ -4618,14 +4606,14 @@ mod tests {
 
         let help_with_noise = CatalogToolInput::parse_input(json!({
             "action": "help",
-            "tool_name": "agena.web/search",
+            "tool_name": "agena_web__search",
             "include_schema": true,
             "query": "noise"
         }))
         .expect("explicit help action should ignore search-only noise");
         match help_with_noise {
             CatalogToolInput::Help { args } => {
-                assert_eq!(args.tool, "agena.web/search");
+                assert_eq!(args.tool, "agena_web__search");
                 assert_eq!(args.include_schema, Some(true));
             }
             other => panic!("expected help variant, got {other:?}"),
@@ -5008,7 +4996,7 @@ mod tests {
 
         let help = NormalizedVariantShapeInput::parse_input(json!({
             "action": "describe",
-            "tool": "  agena.web/search  "
+            "tool": "  agena_web__search  "
         }))
         .expect("action alias should normalize to help");
         match help {
@@ -5016,7 +5004,7 @@ mod tests {
                 tool,
                 include_schema,
             } => {
-                assert_eq!(tool, "agena.web/search");
+                assert_eq!(tool, "agena_web__search");
                 assert_eq!(include_schema, None);
             }
             other => panic!("expected help variant, got {other:?}"),
@@ -5024,7 +5012,7 @@ mod tests {
 
         let quick_help = NormalizedVariantShapeInput::parse_input(json!({
             "action": "quick_help",
-            "tool": "agena.web/search"
+            "tool": "agena_web__search"
         }))
         .expect("action alias default should inject include_schema");
         match quick_help {
@@ -5032,7 +5020,7 @@ mod tests {
                 tool,
                 include_schema,
             } => {
-                assert_eq!(tool, "agena.web/search");
+                assert_eq!(tool, "agena_web__search");
                 assert_eq!(include_schema, Some(false));
             }
             other => panic!("expected help variant, got {other:?}"),
@@ -6118,7 +6106,7 @@ mod tests {
             .find("Description:")
             .expect("description section should be present");
 
-        assert!(result.view.output_text.contains("Tool: agena.fs/fs"));
+        assert!(result.view.output_text.contains("Tool: agena_fs__fs"));
         assert!(result.view.output_text.contains("Description:"));
         assert!(result.view.output_text.contains("Actions:"));
         assert!(result.view.output_text.contains("Arguments for `read`:"));
@@ -6196,7 +6184,7 @@ mod tests {
             result
                 .view
                 .output_text
-                .contains("Aliases: agena.workflow/tool_catalog, agena.workflow/tool.help")
+                .contains("Aliases: agena_workflow__tool_catalog, agena_workflow__tool_help")
         );
     }
 
@@ -6209,7 +6197,7 @@ mod tests {
             TOOLS_TOOL,
             StructuredObject::try_from(serde_json::json!({
                 "action": "help",
-                "tool": "agena.workflow/tool_catalog",
+                "tool": "agena_workflow__tool_catalog",
                 "include_schema": false
             }))
             .expect("tools help input should serialize"),
@@ -6222,13 +6210,13 @@ mod tests {
             result
                 .view
                 .output_text
-                .contains("Tool: agena.workflow/tools")
+                .contains("Tool: agena_workflow__tools")
         );
         assert!(
             result
                 .view
                 .output_text
-                .contains("Aliases: agena.workflow/tool_catalog, agena.workflow/tool.help")
+                .contains("Aliases: agena_workflow__tool_catalog, agena_workflow__tool_help")
         );
     }
 
@@ -6238,7 +6226,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let invocation = ToolInvocation::new(
-            "agena.workflow/tool_catalog",
+            "agena_workflow__tool_catalog",
             StructuredObject::try_from(serde_json::json!({
                 "action": "usage"
             }))
@@ -6260,7 +6248,7 @@ mod tests {
         let tools = executor.available_model_tools();
         let alias = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena.workflow/tool_catalog")
+            .find(|tool| tool.exposed_name == "agena_workflow__tool_catalog")
             .expect("declared tool alias should be model-visible");
 
         assert_eq!(alias.base_exposed_name.as_deref(), Some(TOOLS_TOOL));
@@ -6269,7 +6257,7 @@ mod tests {
         assert!(
             alias
                 .description_text()
-                .contains("Alias for `agena.workflow/tools`.")
+                .contains("Alias for `agena_workflow__tools`.")
         );
     }
 
@@ -6335,7 +6323,7 @@ mod tests {
             TOOLS_TOOL,
             StructuredObject::try_from(serde_json::json!({
                 "action": "help",
-                "tool": "agena.fs/fss",
+                "tool": "agena_fs__fss",
                 "include_schema": false
             }))
             .expect("tools help input should serialize"),
@@ -6346,9 +6334,9 @@ mod tests {
         let ToolError::Plugin(message) = err else {
             panic!("expected plugin error, got {err:?}");
         };
-        assert!(message.contains("unknown tool 'agena.fs/fss'"));
+        assert!(message.contains("unknown tool 'agena_fs__fss'"));
         assert!(message.contains("Did you mean"));
-        assert!(message.contains("agena.fs/fs"));
+        assert!(message.contains("agena_fs__fs"));
     }
 
     #[test]
@@ -6400,7 +6388,7 @@ mod tests {
             result
                 .view
                 .output_text
-                .contains(r#"- Help: {"action":"help","tool":"agena.web/search"}"#)
+                .contains(r#"- Help: {"action":"help","tool":"agena_web__search"}"#)
         );
     }
 
@@ -6546,49 +6534,49 @@ mod tests {
         assert!(
             !tools
                 .iter()
-                .any(|tool| tool.exposed_name == "agena.workflow/plan")
+                .any(|tool| tool.exposed_name == "agena_workflow__plan")
         );
         assert!(
             !tools
                 .iter()
-                .any(|tool| tool.exposed_name == "agena.workflow/plan.get")
+                .any(|tool| tool.exposed_name == "agena_workflow__plan_get")
         );
         assert!(
             !tools
                 .iter()
-                .any(|tool| tool.exposed_name == "agena.workflow/plan.submit")
+                .any(|tool| tool.exposed_name == "agena_workflow__plan_submit")
         );
         assert!(
             !tools
                 .iter()
-                .any(|tool| tool.exposed_name == "agena.workflow/plan.next")
+                .any(|tool| tool.exposed_name == "agena_workflow__plan_next")
         );
         assert!(
             !tools
                 .iter()
-                .any(|tool| tool.exposed_name == "agena.workflow/plan.replace")
+                .any(|tool| tool.exposed_name == "agena_workflow__plan_replace")
         );
         assert!(
             !tools
                 .iter()
-                .any(|tool| tool.exposed_name == "agena.workflow/worktree")
+                .any(|tool| tool.exposed_name == "agena_workflow__worktree")
         );
 
         let plan_set_status = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena.workflow/plan.set_status")
+            .find(|tool| tool.exposed_name == "agena_workflow__plan_set_status")
             .expect("plan.set_status alias should be model-visible");
         let plan_current = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena.workflow/plan.current")
+            .find(|tool| tool.exposed_name == "agena_workflow__plan_current")
             .expect("plan.current alias should be model-visible");
         let check_update = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena.workflow/plan.update_check")
+            .find(|tool| tool.exposed_name == "agena_workflow__plan_update_check")
             .expect("plan.update_check alias should be model-visible");
         let worktree_existing = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena.workflow/worktree.enter.existing")
+            .find(|tool| tool.exposed_name == "agena_workflow__worktree_enter_existing")
             .expect("nested worktree.enter.existing alias should be model-visible");
 
         let plan_set_schema =
@@ -6646,11 +6634,11 @@ mod tests {
         let tools = executor.available_model_tools();
         let plan_create = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena.workflow/plan.create")
+            .find(|tool| tool.exposed_name == "agena_workflow__plan_create")
             .expect("plan.create alias should be model-visible");
         let plan_set_status = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena.workflow/plan.set_status")
+            .find(|tool| tool.exposed_name == "agena_workflow__plan_set_status")
             .expect("plan.set_status alias should be model-visible");
 
         assert!(
@@ -6688,18 +6676,18 @@ mod tests {
             .map(|tool| tool.exposed_name)
             .collect::<std::collections::BTreeSet<_>>();
 
-        assert!(names.contains("agena.settings/settings.get"));
-        assert!(names.contains("agena.settings/settings.list"));
-        assert!(names.contains("agena.settings/settings.validate"));
-        assert!(!names.contains("agena.settings/settings.set"));
-        assert!(!names.contains("agena.settings/settings.delete"));
-        assert!(!names.contains("agena.settings/settings.patch"));
+        assert!(names.contains("agena_settings__settings_get"));
+        assert!(names.contains("agena_settings__settings_list"));
+        assert!(names.contains("agena_settings__settings_validate"));
+        assert!(!names.contains("agena_settings__settings_set"));
+        assert!(!names.contains("agena_settings__settings_delete"));
+        assert!(!names.contains("agena_settings__settings_patch"));
 
-        assert!(names.contains("agena.fs/fs.read"));
-        assert!(names.contains("agena.fs/fs.glob"));
-        assert!(names.contains("agena.fs/fs.grep"));
-        assert!(!names.contains("agena.fs/fs.apply_patch"));
-        assert!(!names.contains("agena.fs/fs.notebook_edit"));
+        assert!(names.contains("agena_fs__fs_read"));
+        assert!(names.contains("agena_fs__fs_glob"));
+        assert!(names.contains("agena_fs__fs_grep"));
+        assert!(!names.contains("agena_fs__fs_apply_patch"));
+        assert!(!names.contains("agena_fs__fs_notebook_edit"));
     }
 
     #[test]
@@ -6711,7 +6699,7 @@ mod tests {
             .expect("test source should be written");
 
         let invocation = ToolInvocation::new(
-            "agena.code/code.syntax_tree",
+            "agena_code__code_syntax_tree",
             StructuredObject::try_from(json!({
                 "path": "main.rs"
             }))
@@ -6735,7 +6723,7 @@ mod tests {
 
         let tools = executor.available_model_tools();
         let invocation = crate::session::parse_tool_invocation(
-            "agena.code/code.syntax_tree",
+            "agena_code__code_syntax_tree",
             r#"{"path":"main.rs"}"#,
             tools.as_slice(),
         )
@@ -6745,7 +6733,7 @@ mod tests {
             .execute_invocation_detailed(&invocation, 7, 9)
             .expect("parsed alias invocation should execute successfully");
 
-        assert_eq!(invocation.name, "agena.code/code.syntax_tree");
+        assert_eq!(invocation.name, "agena_code__code_syntax_tree");
         assert!(!result.view.output_text.trim().is_empty());
     }
 
@@ -6762,12 +6750,12 @@ mod tests {
         let alias = executor
             .available_model_tools()
             .into_iter()
-            .find(|tool| tool.exposed_name == "agena.settings/settings.get")
+            .find(|tool| tool.exposed_name == "agena_settings__settings_get")
             .expect("settings.get alias should be model-visible");
         assert!(
             alias
                 .description_text()
-                .contains("`tools.help` for `agena.settings/settings`")
+                .contains("`tools.help` for `agena_settings__settings`")
         );
         assert!(
             alias
@@ -6793,7 +6781,7 @@ mod tests {
             .expect("plugin_echo should be model-visible");
         assert_eq!(
             visible.description_text(),
-            "Echo a plugin message. See `tools.help` for `fixture/plugin_echo`."
+            "Echo a plugin message. See `tools.help` for `fixture__plugin_echo`."
         );
         assert!(
             visible.decl.help.is_none(),
@@ -6820,17 +6808,17 @@ mod tests {
         let visible = executor
             .available_tools()
             .into_iter()
-            .find(|tool| tool.exposed_name == "fixture/plugin_paths")
+            .find(|tool| tool.exposed_name == "fixture__plugin_paths")
             .expect("plugin_paths should be model-visible");
         assert_eq!(
             visible.description_text(),
-            "Expose declared and dynamic permission paths. See `tools.help` for `fixture/plugin_paths`."
+            "Expose declared and dynamic permission paths. See `tools.help` for `fixture__plugin_paths`."
         );
 
         let detailed = executor
             .detailed_tools()
             .into_iter()
-            .find(|tool| tool.exposed_name == "fixture/plugin_paths")
+            .find(|tool| tool.exposed_name == "fixture__plugin_paths")
             .expect("plugin_paths should have a detailed definition");
         assert_eq!(
             detailed.description_text(),
@@ -6853,7 +6841,7 @@ mod tests {
             .expect("web query should be model-visible");
         assert_eq!(
             web_query.description_text(),
-            "Search locally stored crawl documents. See `tools.help` for `agena.web/store.query`."
+            "Search locally stored crawl documents. See `tools.help` for `agena_web__store_query`."
         );
 
         let workflow_tools = tools
@@ -6862,7 +6850,7 @@ mod tests {
             .expect("tools catalog should be model-visible");
         assert_eq!(
             workflow_tools.description_text(),
-            "Show usage examples, search tools, or fetch detailed tool help. See `tools.help` for `agena.workflow/tools`."
+            "Show usage examples, search tools, or fetch detailed tool help. See `tools.help` for `agena_workflow__tools`."
         );
 
         let web_search = tools
@@ -7326,7 +7314,7 @@ mod tests {
         let executor = ToolExecutor::new(&workspace.root, agent)
             .with_plugin_manager(build_default_plugin_manager_without_host(&workspace.root));
         let invocation = ToolInvocation {
-            name: "agena.fs/fss".to_string(),
+            name: "agena_fs__fss".to_string(),
             plugin_name: None,
             input: StructuredObject::default(),
         };
@@ -7335,7 +7323,7 @@ mod tests {
             .prepare_invocation(&invocation, 7, 9)
             .expect("unknown tools should not trigger plugin before hooks");
 
-        assert_eq!(prepared.invocation.name, "agena.fs/fss");
+        assert_eq!(prepared.invocation.name, "agena_fs__fss");
         assert_eq!(prepared.invocation.plugin_name.as_deref(), Some("custom"));
         assert!(prepared.title_override.is_none());
         assert!(prepared.metadata.is_empty());
@@ -7346,9 +7334,9 @@ mod tests {
         assert!(matches!(
             err,
             ToolError::UnknownToolHint { tool, suggestions, suggestion_text }
-                if tool == "agena.fs/fss"
-                    && suggestions == vec!["agena.fs/fs".to_string()]
-                    && suggestion_text == "unknown tool 'agena.fs/fss'. Did you mean `agena.fs/fs`?"
+                if tool == "agena_fs__fss"
+                    && suggestions == vec!["agena_fs__fs".to_string()]
+                    && suggestion_text == "unknown tool 'agena_fs__fss'. Did you mean `agena_fs__fs`?"
         ));
     }
 
@@ -7381,7 +7369,7 @@ mod tests {
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_plugin_manager(&workspace.root));
         let invocation = ToolInvocation {
-            name: "fixture/plugin_paths".to_string(),
+            name: "fixture__plugin_paths".to_string(),
             plugin_name: None,
             input: StructuredObject::try_from(json!({
                 "file_path": "docs/spec.md",
@@ -7932,7 +7920,7 @@ mod tests {
         let executor = ToolExecutor::new(workspace.root.clone(), agent)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
         let invocation = ToolInvocation::new(
-            "agena.workflow/plan",
+            "agena_workflow__plan",
             StructuredObject::try_from(json!({ "action": "current" }))
                 .expect("plan invocation input should be valid"),
         );

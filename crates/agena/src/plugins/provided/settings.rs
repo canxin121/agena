@@ -88,7 +88,7 @@ fn settings_config_schema() -> JsonValue {
         (
             "/properties/reads",
             "Reads",
-            "Defaults applied when reading or listing settings through agena.settings/settings.",
+            "Defaults applied when reading or listing settings through agena_settings__settings",
         ),
         (
             "/properties/reads/properties/source",

@@ -1,20 +1,22 @@
 //! `agena.shell` plugin: hierarchical exec and monitor commands.
 
 use crate::message::{MonitorToolInput, ShellCommandInput};
-use crate::plugin::sdk::{HostCapability, ToolTag};
-use crate::plugins::provided::router::InProcessToolPlugin;
+use crate::plugin::PluginError;
+use crate::plugin::sdk::{
+    HostCapability, NetworkRequest, PathRequest, Result as SdkResult, ToolInvokeContext,
+    ToolInvokeOutput, ToolTag,
+};
+use crate::plugins::provided::router;
 use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub(crate) const SHELL_PLUGIN_ID: &str = "agena.shell";
 
-pub(crate) fn new_plugin() -> InProcessToolPlugin {
-    InProcessToolPlugin::new_with_tool_suite::<ShellToolSuite>(
-        SHELL_PLUGIN_ID,
-        "Shell command tools backed by the in-process executor bridge.",
-    )
-    .detailed()
+pub(crate) struct ShellPlugin;
+
+pub(crate) fn new_plugin() -> ShellPlugin {
+    ShellPlugin
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
@@ -186,6 +188,94 @@ enum ShellToolSuite {
 
 fn default_capture_stderr() -> bool {
     true
+}
+
+#[crate::plugin::sdk::plugin(
+    id = SHELL_PLUGIN_ID,
+    version = env!("CARGO_PKG_VERSION"),
+    description = "Shell command tools backed by the in-process executor bridge.",
+    display = detailed
+)]
+impl ShellPlugin {
+    #[tool_suite]
+    async fn tool_invoke(
+        &self,
+        input: ShellToolSuite,
+        context: &ToolInvokeContext<'_>,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let (tool, input) = into_internal_tool(input)?;
+        router::invoke_tool(&tool, input, context.session_id, context.call_id)
+    }
+
+    #[permission(paths, suite)]
+    async fn permission_paths(&self, input: ShellToolSuite) -> SdkResult<Vec<PathRequest>> {
+        let (tool, input) = into_internal_tool(input)?;
+        router::permission_paths_for(&tool, &input)
+    }
+
+    #[permission(networks, suite)]
+    async fn permission_networks(&self, input: ShellToolSuite) -> SdkResult<Vec<NetworkRequest>> {
+        let (tool, input) = into_internal_tool(input)?;
+        router::permission_networks_for(&tool, &input)
+    }
+}
+
+fn into_internal_tool(input: ShellToolSuite) -> SdkResult<(String, serde_json::Value)> {
+    let (tool, input) = match input {
+        ShellToolSuite::ExecBash(ShellExecBashToolInput { args }) => ("bash", json_input(args)?),
+        ShellToolSuite::ExecPowershell(ShellExecPowershellToolInput { args }) => {
+            ("powershell", json_input(args)?)
+        }
+        ShellToolSuite::MonitorStart(ShellMonitorStartToolInput { args }) => {
+            ("monitor", json_input(monitor_start_input(args)?)?)
+        }
+        ShellToolSuite::MonitorList(ShellMonitorListToolInput { args: _ }) => {
+            ("monitor", json_input(MonitorToolInput::List {})?)
+        }
+        ShellToolSuite::MonitorRead(ShellMonitorReadToolInput { args }) => {
+            ("monitor", json_input(monitor_read_input(args))?)
+        }
+        ShellToolSuite::MonitorStop(ShellMonitorStopToolInput { args }) => {
+            ("monitor", json_input(monitor_stop_input(args))?)
+        }
+    };
+    Ok((tool.to_string(), input))
+}
+
+fn monitor_start_input(input: ShellMonitorStartInput) -> SdkResult<MonitorToolInput> {
+    let ShellMonitorStartInput {
+        command,
+        persistent,
+        include_pattern,
+        max_buffered_lines,
+        capture_stderr,
+    } = input;
+    Ok(MonitorToolInput::Start {
+        command,
+        persistent,
+        include_pattern,
+        max_buffered_lines,
+        capture_stderr,
+    })
+}
+
+fn monitor_read_input(input: ShellMonitorReadInput) -> MonitorToolInput {
+    MonitorToolInput::Read {
+        monitor_id: input.monitor_id,
+        since_seq: input.since_seq,
+        limit: input.limit,
+        wait_ms: input.wait_ms,
+    }
+}
+
+fn monitor_stop_input(input: ShellMonitorStopInput) -> MonitorToolInput {
+    MonitorToolInput::Stop {
+        monitor_id: input.monitor_id,
+    }
+}
+
+fn json_input<T: Serialize>(input: T) -> SdkResult<serde_json::Value> {
+    serde_json::to_value(input).map_err(|err| PluginError::invalid_params(err.to_string()))
 }
 
 #[cfg(test)]

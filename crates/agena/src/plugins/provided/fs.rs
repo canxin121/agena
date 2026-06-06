@@ -3,20 +3,21 @@
 use crate::message::{
     ApplyPatchToolInput, GlobToolInput, GrepToolInput, NotebookEditToolInput, ReadToolInput,
 };
-use crate::plugin::sdk::ToolTag;
-use crate::plugins::provided::router::InProcessToolPlugin;
+use crate::plugin::PluginError;
+use crate::plugin::sdk::{
+    PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, ToolTag,
+};
+use crate::plugins::provided::router;
 use agena_macros::StaticToolSurface;
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub(crate) const FS_PLUGIN_ID: &str = "agena.fs";
 
-pub(crate) fn new_plugin() -> InProcessToolPlugin {
-    InProcessToolPlugin::new_with_tool_surface::<FsToolInput>(
-        FS_PLUGIN_ID,
-        "Filesystem command tools for read/search and explicit edits.",
-    )
-    .detailed()
+pub(crate) struct FsPlugin;
+
+pub(crate) fn new_plugin() -> FsPlugin {
+    FsPlugin
 }
 
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
@@ -69,6 +70,62 @@ enum FsToolInput {
         #[serde(flatten)]
         args: NotebookEditToolInput,
     },
+}
+
+#[crate::plugin::sdk::plugin(
+    id = FS_PLUGIN_ID,
+    version = env!("CARGO_PKG_VERSION"),
+    description = "Filesystem command tools for read/search and explicit edits.",
+    display = detailed
+)]
+impl FsPlugin {
+    #[tool]
+    async fn tool_invoke(
+        &self,
+        input: FsToolInput,
+        context: &ToolInvokeContext<'_>,
+    ) -> SdkResult<ToolInvokeOutput> {
+        match input {
+            FsToolInput::Read { args } => invoke_internal(context, "read", args),
+            FsToolInput::Glob { args } => invoke_internal(context, "glob", args),
+            FsToolInput::Grep { args } => invoke_internal(context, "grep", args),
+            FsToolInput::ApplyPatch { args } => invoke_internal(context, "apply_patch", args),
+            FsToolInput::NotebookEdit { args } => invoke_internal(context, "notebook_edit", args),
+        }
+    }
+
+    #[permission(paths)]
+    async fn permission_paths(&self, input: FsToolInput) -> SdkResult<Vec<PathRequest>> {
+        match input {
+            FsToolInput::Read { args } => permission_paths_internal("read", args),
+            FsToolInput::Glob { args } => permission_paths_internal("glob", args),
+            FsToolInput::Grep { args } => permission_paths_internal("grep", args),
+            FsToolInput::ApplyPatch { args } => permission_paths_internal("apply_patch", args),
+            FsToolInput::NotebookEdit { args } => permission_paths_internal("notebook_edit", args),
+        }
+    }
+}
+
+fn invoke_internal<T: Serialize>(
+    context: &ToolInvokeContext<'_>,
+    tool: &str,
+    input: T,
+) -> SdkResult<ToolInvokeOutput> {
+    router::invoke_tool(
+        tool,
+        json_input(input)?,
+        context.session_id,
+        context.call_id,
+    )
+}
+
+fn permission_paths_internal<T: Serialize>(tool: &str, input: T) -> SdkResult<Vec<PathRequest>> {
+    let input = json_input(input)?;
+    router::permission_paths_for(tool, &input)
+}
+
+fn json_input<T: Serialize>(input: T) -> SdkResult<serde_json::Value> {
+    serde_json::to_value(input).map_err(|err| PluginError::invalid_params(err.to_string()))
 }
 
 #[cfg(test)]

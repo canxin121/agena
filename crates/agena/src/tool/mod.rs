@@ -4143,59 +4143,56 @@ mod tests {
                     "run-ctx:fixture.dispatch_struct_context:41:42:kappa:17"
                 );
 
-                let shape_dispatch_output = crate::plugin::sdk::plugin_tool_dispatch_shape!(
-                    &receiver,
-                    crate::plugin::sdk::ToolInvokeInput {
-                        tool_name: "dynamic.skill".to_string(),
-                        session_id: 51,
-                        call_id: 52,
-                        workspace_root: "/tmp/project".to_string(),
-                        input: json!({ "args": { "value": "nu" } }),
-                    },
-                    DispatchStructShapeInput
-                )
-                .expect("shape dispatch macro");
+                let shape_dispatch_output = DispatchStructShapeInput::parse_input(json!({
+                    "args": { "value": "nu" }
+                }))
+                .expect("shape dispatch input")
+                .dispatch_tool_invoke(&receiver)
+                .await
+                .expect("shape dispatch");
                 assert_eq!(shape_dispatch_output.output_text, "shape: nu");
 
-                let shape_dispatch_context_output =
-                    crate::plugin::sdk::plugin_tool_dispatch_shape_with_context!(
-                        &receiver,
-                        crate::plugin::sdk::ToolInvokeInput {
-                            tool_name: "dynamic.skill".to_string(),
-                            session_id: 61,
-                            call_id: 62,
-                            workspace_root: "/tmp/project".to_string(),
-                            input: json!({ "action": "run", "value": "xi", "limit": 19 }),
-                        },
-                        DispatchEnumShapeInput
-                    )
-                    .expect("shape dispatch context macro");
+                let shape_dispatch_context = crate::plugin::sdk::ToolInvokeContext {
+                    tool_name: "dynamic.skill",
+                    session_id: 61,
+                    call_id: 62,
+                    workspace_root: "/tmp/project",
+                };
+                let shape_dispatch_context_output = DispatchEnumShapeInput::parse_input(json!({
+                    "action": "run",
+                    "value": "xi",
+                    "limit": 19
+                }))
+                .expect("shape dispatch context input")
+                .dispatch_tool_invoke_with_context(&receiver, &shape_dispatch_context)
+                .await
+                .expect("shape dispatch context");
                 assert_eq!(
                     shape_dispatch_context_output.output_text,
                     "shape-ctx:dynamic.skill:61:62:xi:19"
                 );
 
-                let shape_dispatch_paths =
-                    crate::plugin::sdk::plugin_permission_dispatch_paths_shape!(
-                        &receiver,
-                        "dynamic.skill",
-                        &json!({ "args": { "value": "omicron" } }),
-                        DispatchStructShapeInput
-                    )
-                    .expect("shape permission paths macro");
+                let shape_dispatch_paths = DispatchStructShapeInput::parse_input(json!({
+                    "args": { "value": "omicron" }
+                }))
+                .expect("shape permission paths input")
+                .dispatch_permission_paths(&receiver)
+                .await
+                .expect("shape permission paths");
                 assert_eq!(
                     shape_dispatch_paths,
                     vec![crate::plugin::sdk::PathRequest::read("/shape/omicron")]
                 );
 
-                let shape_dispatch_networks =
-                    crate::plugin::sdk::plugin_permission_dispatch_networks_shape!(
-                        &receiver,
-                        "dynamic.skill",
-                        &json!({ "action": "run", "value": "pi", "limit": 29 }),
-                        DispatchEnumShapeInput
-                    )
-                    .expect("shape permission networks macro");
+                let shape_dispatch_networks = DispatchEnumShapeInput::parse_input(json!({
+                    "action": "run",
+                    "value": "pi",
+                    "limit": 29
+                }))
+                .expect("shape permission networks input")
+                .dispatch_permission_networks(&receiver)
+                .await
+                .expect("shape permission networks");
                 assert_eq!(
                     shape_dispatch_networks,
                     vec![crate::plugin::sdk::NetworkRequest::connect(
@@ -4375,20 +4372,13 @@ mod tests {
                     "fixture-macro-surface-stream".to_string(),
                     macro_surface_tx,
                 );
-                let macro_surface_stream_end =
-                    crate::plugin::sdk::plugin_tool_dispatch_stream_surface!(
-                        &receiver,
-                        crate::plugin::sdk::ToolInvokeInput {
-                            tool_name: "fixture.dispatch_struct".to_string(),
-                            session_id: 81,
-                            call_id: 82,
-                            workspace_root: "/tmp/project".to_string(),
-                            input: json!({ "args": { "value": "theta" } }),
-                        },
-                        macro_surface_sink,
-                        DispatchStructToolInput
-                    )
-                    .expect("surface stream macro");
+                let macro_surface_stream_end = DispatchStructToolInput::parse_input(json!({
+                    "args": { "value": "theta" }
+                }))
+                .expect("surface stream input")
+                .dispatch_tool_invoke_stream(&receiver, macro_surface_sink)
+                .await
+                .expect("surface stream dispatch");
                 assert_eq!(macro_surface_stream_end.output_text, "struct-stream: theta");
                 assert_eq!(
                     macro_surface_rx
@@ -4403,20 +4393,14 @@ mod tests {
                     "fixture-macro-suite-stream".to_string(),
                     macro_suite_tx,
                 );
-                let macro_suite_stream_end =
-                    crate::plugin::sdk::plugin_tool_dispatch_stream_suite!(
-                        &receiver,
-                        crate::plugin::sdk::ToolInvokeInput {
-                            tool_name: "fixture.dispatch_enum".to_string(),
-                            session_id: 83,
-                            call_id: 84,
-                            workspace_root: "/tmp/project".to_string(),
-                            input: json!({ "action": "run", "value": "iota", "limit": 37 }),
-                        },
-                        macro_suite_sink,
-                        DispatchToolSuite
-                    )
-                    .expect("suite stream macro");
+                let macro_suite_stream_end = DispatchToolSuite::parse_tool(
+                    "fixture.dispatch_enum",
+                    json!({ "action": "run", "value": "iota", "limit": 37 }),
+                )
+                .expect("suite stream input")
+                .dispatch_tool_invoke_stream(&receiver, macro_suite_sink)
+                .await
+                .expect("suite stream dispatch");
                 assert_eq!(macro_suite_stream_end.output_text, "run: iota:37");
                 assert_eq!(
                     macro_suite_rx
@@ -4431,20 +4415,13 @@ mod tests {
                     "fixture-macro-shape-stream".to_string(),
                     macro_shape_tx,
                 );
-                let macro_shape_stream_end =
-                    crate::plugin::sdk::plugin_tool_dispatch_stream_shape!(
-                        &receiver,
-                        crate::plugin::sdk::ToolInvokeInput {
-                            tool_name: "dynamic.skill".to_string(),
-                            session_id: 85,
-                            call_id: 86,
-                            workspace_root: "/tmp/project".to_string(),
-                            input: json!({ "args": { "value": "kappa" } }),
-                        },
-                        macro_shape_sink,
-                        DispatchStructShapeInput
-                    )
-                    .expect("shape stream macro");
+                let macro_shape_stream_end = DispatchStructShapeInput::parse_input(json!({
+                    "args": { "value": "kappa" }
+                }))
+                .expect("shape stream input")
+                .dispatch_tool_invoke_stream(&receiver, macro_shape_sink)
+                .await
+                .expect("shape stream dispatch");
                 assert_eq!(macro_shape_stream_end.output_text, "shape-stream: kappa");
                 assert_eq!(
                     macro_shape_rx
@@ -4459,20 +4436,25 @@ mod tests {
                     "fixture-macro-shape-stream-context".to_string(),
                     macro_shape_ctx_tx,
                 );
-                let macro_shape_context_stream_end =
-                    crate::plugin::sdk::plugin_tool_dispatch_stream_shape_with_context!(
-                        &receiver,
-                        crate::plugin::sdk::ToolInvokeInput {
-                            tool_name: "dynamic.skill".to_string(),
-                            session_id: 87,
-                            call_id: 88,
-                            workspace_root: "/tmp/project".to_string(),
-                            input: json!({ "action": "run", "value": "lambda", "limit": 41 }),
-                        },
-                        macro_shape_ctx_sink,
-                        DispatchEnumShapeInput
-                    )
-                    .expect("shape stream context macro");
+                let macro_shape_stream_context = crate::plugin::sdk::ToolInvokeContext {
+                    tool_name: "dynamic.skill",
+                    session_id: 87,
+                    call_id: 88,
+                    workspace_root: "/tmp/project",
+                };
+                let macro_shape_context_stream_end = DispatchEnumShapeInput::parse_input(json!({
+                    "action": "run",
+                    "value": "lambda",
+                    "limit": 41
+                }))
+                .expect("shape stream context input")
+                .dispatch_tool_invoke_stream_with_context(
+                    &receiver,
+                    &macro_shape_stream_context,
+                    macro_shape_ctx_sink,
+                )
+                .await
+                .expect("shape stream context dispatch");
                 assert_eq!(
                     macro_shape_context_stream_end.output_text,
                     "shape-stream-ctx:dynamic.skill:87:88:lambda:41"

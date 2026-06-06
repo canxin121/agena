@@ -499,7 +499,7 @@ impl McpPlugin {
     }
 }
 
-#[crate::plugin::sdk::plugin]
+#[crate::plugin::sdk::async_trait]
 impl crate::plugin::sdk::Plugin for McpPlugin {
     fn manifest(&self) -> PluginManifest {
         let manager = Arc::clone(&self.manager);
@@ -527,26 +527,23 @@ impl crate::plugin::sdk::Plugin for McpPlugin {
         )))
     }
 
-    #[agena_plugin_sdk::plugin_tool_invoke_method(
-        suite(McpToolSuite),
-        resolve = McpPlugin::resolve_invoke_target
-    )]
     async fn tool_invoke(
         &self,
         input: crate::plugin::sdk::ToolInvokeInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        let input = self.resolve_invoke_target(input)?;
+        let suite = McpToolSuite::parse_tool(input.tool_name.as_str(), input.input)?;
+        suite.dispatch_tool_invoke(self).await
     }
 
-    #[agena_plugin_sdk::plugin_permission_networks_method(
-        suite(McpToolSuite),
-        resolve = McpPlugin::resolve_permission_target
-    )]
     async fn permission_networks(
         &self,
         tool: &str,
         input: &serde_json::Value,
     ) -> SdkResult<Vec<NetworkRequest>> {
-        let _ = (tool, input);
+        let (tool_name, input) = self.resolve_permission_target(tool, input)?;
+        let suite = McpToolSuite::parse_tool(tool_name.as_str(), input)?;
+        suite.dispatch_permission_networks(self).await
     }
 }
 
@@ -786,15 +783,13 @@ fn manifest_from_snapshot(
     } else {
         mcp_decls(&servers, &tools, !network_access.is_empty())
     };
-    crate::plugin::sdk::plugin_manifest!(
-        id = MCP_PLUGIN_ID,
-        version = env!("CARGO_PKG_VERSION"),
-        description = "Agena MCP bridge exposed as hierarchical plugin commands.",
-        hooks = HookSubscription::TOOL_INVOKE,
-        config_schema = mcp_config_schema(),
-        display = brief,
-        tools = tool_decls,
-    )
+    PluginManifest::builder(MCP_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
+        .description("Agena MCP bridge exposed as hierarchical plugin commands.")
+        .hooks(HookSubscription::TOOL_INVOKE)
+        .config_schema(mcp_config_schema())
+        .brief()
+        .tools(tool_decls)
+        .build()
 }
 
 async fn network_access_by_server(

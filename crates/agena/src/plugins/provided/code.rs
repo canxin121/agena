@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use agena_macros::{StaticToolSurface, ToolInputShape};
 use ast_grep_core::Pattern;
@@ -12,8 +11,7 @@ use tree_sitter::Parser;
 
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
-    HookSubscription, PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
-    ToolTag,
+    PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, ToolTag,
 };
 
 pub(crate) const CODE_PLUGIN_ID: &str = "agena.code";
@@ -155,40 +153,25 @@ impl LanguageExt for RustLanguage {
     }
 }
 
-#[crate::plugin::sdk::plugin]
-impl crate::plugin::sdk::Plugin for CodePlugin {
-    #[agena_plugin_sdk::plugin_manifest_method(
-        id = CODE_PLUGIN_ID,
-        version = env!("CARGO_PKG_VERSION"),
-        description = "Structured code search and syntax inspection tools.",
-        hooks = HookSubscription::TOOL_INVOKE,
-        display = brief,
-        tool_surface = CodeToolInput,
-    )]
-    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
-
-    #[agena_plugin_sdk::plugin_init_method]
-    async fn init(
-        &self,
-        _ctx: crate::plugin::sdk::InitContext,
-        _host: Arc<dyn crate::plugin::sdk::HostClient>,
-    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
-    }
-
-    #[agena_plugin_sdk::plugin_tool_invoke_method(surface_with_context(CodeToolInput))]
+#[crate::plugin::sdk::plugin(
+    id = CODE_PLUGIN_ID,
+    version = env!("CARGO_PKG_VERSION"),
+    description = "Structured code search and syntax inspection tools.",
+    display = brief
+)]
+impl CodePlugin {
+    #[tool]
     async fn tool_invoke(
         &self,
-        input: crate::plugin::sdk::ToolInvokeInput,
+        input: CodeToolInput,
+        context: &ToolInvokeContext<'_>,
     ) -> SdkResult<ToolInvokeOutput> {
+        input.dispatch_tool_invoke_with_context(self, context).await
     }
 
-    #[agena_plugin_sdk::plugin_permission_paths_method(surface(CodeToolInput))]
-    async fn permission_paths(
-        &self,
-        tool: &str,
-        input: &serde_json::Value,
-    ) -> SdkResult<Vec<PathRequest>> {
-        let _ = (tool, input);
+    #[permission(paths)]
+    async fn permission_paths(&self, input: CodeToolInput) -> SdkResult<Vec<PathRequest>> {
+        input.dispatch_permission_paths(self).await
     }
 }
 

@@ -16,8 +16,8 @@ use crate::message::WorkflowPromptToolInput;
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostToolRegisterRequest, HostToolRemoveRequest};
 use crate::plugin::sdk::{
-    HookSubscription, HostCapability, InitContext, PluginToolDecl, Result as SdkResult,
-    ToolInvokeContext, ToolInvokeOutput, ToolTag,
+    HookSubscription, HostCapability, InitContext, InitOutcome, PluginManifest, PluginToolDecl,
+    Result as SdkResult, ToolInvokeContext, ToolInvokeInput, ToolInvokeOutput, ToolTag,
 };
 
 pub(crate) const SKILLS_PLUGIN_ID: &str = "agena.skills";
@@ -250,40 +250,34 @@ impl SkillsPlugin {
     }
 }
 
-#[crate::plugin::sdk::plugin]
+#[crate::plugin::sdk::async_trait]
 impl crate::plugin::sdk::Plugin for SkillsPlugin {
-    #[agena_plugin_sdk::plugin_manifest_method(
-        id = SKILLS_PLUGIN_ID,
-        version = env!("CARGO_PKG_VERSION"),
-        description = "Discovers SKILL.md files and slash commands, then registers them as dynamic plugin tools.",
-        hooks = HookSubscription::INIT | HookSubscription::TOOL_INVOKE,
-        display = brief,
-        plugin_capabilities = [HostCapability::ToolRegistry],
-    )]
-    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
-
-    #[agena_plugin_sdk::plugin_init_method(
-        host_cell = {
-            field = self.host,
-            value = host,
-            poisoned = "skills host lock poisoned"
-        },
-        after = {
-            self.sync_tools(&ctx).await?;
-        }
-    )]
-    async fn init(
-        &self,
-        ctx: crate::plugin::sdk::InitContext,
-        host: Arc<dyn HostClient>,
-    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
+    fn manifest(&self) -> PluginManifest {
+        PluginManifest::builder(SKILLS_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
+            .description(
+                "Discovers SKILL.md files and slash commands, then registers them as dynamic plugin tools.",
+            )
+            .hooks(HookSubscription::TOOL_INVOKE)
+            .brief()
+            .plugin_capabilities([HostCapability::ToolRegistry])
+            .build()
     }
 
-    async fn tool_invoke(
-        &self,
-        input: crate::plugin::sdk::ToolInvokeInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        crate::plugin::sdk::plugin_tool_dispatch_shape_with_context!(self, input, SkillToolInput)
+    async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
+        *self
+            .host
+            .write()
+            .map_err(|_| PluginError::new("skills host lock poisoned"))? = Some(host);
+        self.sync_tools(&ctx).await?;
+        Ok(InitOutcome::ack(self.manifest()))
+    }
+
+    async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
+        let context = input.context();
+        let parsed = SkillToolInput::parse_input(input.input.clone())?;
+        parsed
+            .dispatch_tool_invoke_with_context(self, &context)
+            .await
     }
 }
 

@@ -28,3 +28,52 @@ pub use provider::*;
 pub use session::*;
 pub use shell::*;
 pub use tool::*;
+
+pub trait IntoHookOutput<T> {
+    fn into_hook_output(self) -> crate::Result<T>;
+}
+
+impl<T> IntoHookOutput<Option<T>> for Option<T> {
+    fn into_hook_output(self) -> crate::Result<Option<T>> {
+        Ok(self)
+    }
+}
+
+impl<T> IntoHookOutput<Option<T>> for T {
+    fn into_hook_output(self) -> crate::Result<Option<T>> {
+        Ok(Some(self))
+    }
+}
+
+impl<T, E> IntoHookOutput<Option<T>> for std::result::Result<Option<T>, E>
+where
+    E: Into<crate::PluginError>,
+{
+    fn into_hook_output(self) -> crate::Result<Option<T>> {
+        self.map_err(Into::into)
+    }
+}
+
+impl<T, E> IntoHookOutput<Option<T>> for std::result::Result<T, E>
+where
+    E: Into<crate::PluginError>,
+{
+    fn into_hook_output(self) -> crate::Result<Option<T>> {
+        self.map(Some).map_err(Into::into)
+    }
+}
+
+impl IntoHookOutput<()> for () {
+    fn into_hook_output(self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+impl<E> IntoHookOutput<()> for std::result::Result<(), E>
+where
+    E: Into<crate::PluginError>,
+{
+    fn into_hook_output(self) -> crate::Result<()> {
+        self.map_err(Into::into)
+    }
+}

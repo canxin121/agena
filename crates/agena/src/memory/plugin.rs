@@ -10,9 +10,7 @@ use crate::memory::{
     MemoryError, MemoryIndex, MemoryRecord, MemorySearchDocument, MemoryStore, MemoryType,
     NewMemory,
 };
-use crate::plugin::sdk::{
-    HookSubscription, PathRequest, Result as SdkResult, ToolInvokeOutput, ToolTag,
-};
+use crate::plugin::sdk::{PathRequest, Result as SdkResult, ToolInvokeOutput, ToolTag};
 use crate::plugin::{
     ChatMessage, ChatMessagesTransformInput, ChatMessagesTransformPatch, ChatSystemTransformInput,
     ChatSystemTransformPatch, PluginError,
@@ -498,57 +496,42 @@ impl MemoryPlugin {
     }
 }
 
-#[crate::plugin::sdk::plugin]
-impl crate::plugin::sdk::Plugin for MemoryPlugin {
-    #[agena_plugin_sdk::plugin_manifest_method(
-        id = MEMORY_PLUGIN_ID,
-        version = env!("CARGO_PKG_VERSION"),
-        description = "Persistent memory with searchable retrieval and write tools.",
-        hooks = HookSubscription::INIT
-            | HookSubscription::TOOL_INVOKE
-            | HookSubscription::CHAT_SYSTEM_TRANSFORM
-            | HookSubscription::CHAT_MESSAGES_TRANSFORM,
-        config_schema = memory_config_schema(),
-        display = brief,
-        tool_surface = MemoryToolInput,
-    )]
-    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
-
-    #[agena_plugin_sdk::plugin_init_method(
-        config = {
-            field = self.config,
-            value = parse_memory_config(ctx.config)?,
-            already = "memory plugin initialized more than once"
-        },
-        workspace_root = {
-            field = self.workspace_root,
-            value = ctx.workspace_root,
-            already = "memory plugin workspace root already initialized"
-        },
-    )]
+#[crate::plugin::sdk::plugin(
+    id = MEMORY_PLUGIN_ID,
+    version = env!("CARGO_PKG_VERSION"),
+    description = "Persistent memory with searchable retrieval and write tools.",
+    config_schema = memory_config_schema(),
+    display = brief
+)]
+impl MemoryPlugin {
+    #[hook]
     async fn init(
         &self,
         ctx: crate::plugin::sdk::InitContext,
         _host: std::sync::Arc<dyn crate::plugin::sdk::HostClient>,
     ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
+        self.config
+            .set(parse_memory_config(ctx.config)?)
+            .map_err(|_| PluginError::new("memory plugin initialized more than once"))?;
+        self.workspace_root
+            .set(ctx.workspace_root)
+            .map_err(|_| PluginError::new("memory plugin workspace root already initialized"))?;
+        Ok(crate::plugin::sdk::InitOutcome::ack(
+            crate::plugin::sdk::Plugin::manifest(self),
+        ))
     }
 
-    #[agena_plugin_sdk::plugin_tool_invoke_method(surface(MemoryToolInput))]
-    async fn tool_invoke(
-        &self,
-        input: crate::plugin::sdk::ToolInvokeInput,
-    ) -> SdkResult<ToolInvokeOutput> {
+    #[tool]
+    async fn tool_invoke(&self, input: MemoryToolInput) -> SdkResult<ToolInvokeOutput> {
+        input.dispatch_tool_invoke(self).await
     }
 
-    #[agena_plugin_sdk::plugin_permission_paths_method(surface(MemoryToolInput))]
-    async fn permission_paths(
-        &self,
-        tool: &str,
-        input: &serde_json::Value,
-    ) -> SdkResult<Vec<PathRequest>> {
-        let _ = (tool, input);
+    #[permission(paths)]
+    async fn permission_paths(&self, input: MemoryToolInput) -> SdkResult<Vec<PathRequest>> {
+        input.dispatch_permission_paths(self).await
     }
 
+    #[hook]
     async fn chat_system_transform(
         &self,
         _input: ChatSystemTransformInput,
@@ -574,6 +557,7 @@ impl crate::plugin::sdk::Plugin for MemoryPlugin {
         }))
     }
 
+    #[hook]
     async fn chat_messages_transform(
         &self,
         input: ChatMessagesTransformInput,

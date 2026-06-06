@@ -20,8 +20,8 @@ use crate::plugin::sdk::host_api::{
     HostTodoWriteRequest, SpawnSubtaskRequest, ToolDescriptor,
 };
 use crate::plugin::sdk::{
-    CommandBeforeInput, CommandBeforeResponse, HookSubscription, HostCapability, PathRequest,
-    Result as SdkResult, ToolBeforeInput, ToolBeforePatch, ToolInvokeOutput, ToolTag,
+    CommandBeforeInput, CommandBeforeResponse, HostCapability, PathRequest, Result as SdkResult,
+    ToolBeforeInput, ToolBeforePatch, ToolInvokeOutput, ToolTag,
 };
 use crate::search::tool_catalog::{ToolCatalogDocument, search_tool_catalog};
 use crate::tool::{ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ask_user};
@@ -2783,69 +2783,55 @@ pub(crate) fn new_plugin() -> WorkflowPlugin {
     WorkflowPlugin::new()
 }
 
-#[crate::plugin::sdk::plugin]
-impl crate::plugin::sdk::Plugin for WorkflowPlugin {
-    #[agena_plugin_sdk::plugin_manifest_method(
-        id = WORKFLOW_PLUGIN_ID,
-        version = env!("CARGO_PKG_VERSION"),
+#[crate::plugin::sdk::plugin(
+    id = WORKFLOW_PLUGIN_ID,
+    version = env!("CARGO_PKG_VERSION"),
     description = "Workflow orchestration tools.",
-    hooks = HookSubscription::TOOL_INVOKE
-        | HookSubscription::TOOL_BEFORE
-        | HookSubscription::COMMAND_BEFORE
-        | HookSubscription::AGENT_STOP,
     config_schema = workflow_config_schema(),
     display = brief_detailed,
-        tool_suite = WorkflowToolSuite,
-        plugin_capabilities = [
-            HostCapability::AgentRegistry,
-            HostCapability::PluginStorage,
-            HostCapability::Statusline,
-        ],
-    )]
-    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
-
-    #[agena_plugin_sdk::plugin_init_method(
-        default_config = {
-            field = self.config,
-            ty = WorkflowPluginConfig,
-            input = ctx.config,
-            invalid = "invalid workflow config",
-            already = "workflow plugin config already initialized"
-        },
-        workspace_root = {
-            field = self.workspace_root,
-            value = ctx.workspace_root,
-            already = "workflow plugin workspace root already initialized"
-        },
-        host_cell = {
-            field = self.host,
-            value = host,
-            poisoned = "workflow plugin host lock poisoned"
-        },
-    )]
+    plugin_capabilities = [
+        HostCapability::AgentRegistry,
+        HostCapability::PluginStorage,
+        HostCapability::Statusline,
+    ]
+)]
+impl WorkflowPlugin {
+    #[hook]
     async fn init(
         &self,
         ctx: crate::plugin::sdk::InitContext,
         host: Arc<dyn HostClient>,
     ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
+        let config = crate::plugin::sdk::macro_support::parse_defaulted_config(
+            ctx.config,
+            "invalid workflow config",
+        )?;
+        self.config
+            .set(config)
+            .map_err(|_| PluginError::new("workflow plugin config already initialized"))?;
+        self.workspace_root
+            .set(ctx.workspace_root)
+            .map_err(|_| PluginError::new("workflow plugin workspace root already initialized"))?;
+        *self
+            .host
+            .write()
+            .map_err(|_| PluginError::new("workflow plugin host lock poisoned"))? = Some(host);
+        Ok(crate::plugin::sdk::InitOutcome::ack(
+            crate::plugin::sdk::Plugin::manifest(self),
+        ))
     }
 
-    #[agena_plugin_sdk::plugin_tool_invoke_method(suite(WorkflowToolSuite))]
-    async fn tool_invoke(
-        &self,
-        input: crate::plugin::sdk::ToolInvokeInput,
-    ) -> SdkResult<ToolInvokeOutput> {
+    #[tool_suite]
+    async fn tool_invoke(&self, input: WorkflowToolSuite) -> SdkResult<ToolInvokeOutput> {
+        input.dispatch_tool_invoke(self).await
     }
 
-    #[agena_plugin_sdk::plugin_permission_paths_method(surface(WorktreeToolInput))]
-    async fn permission_paths(
-        &self,
-        tool: &str,
-        input: &serde_json::Value,
-    ) -> SdkResult<Vec<PathRequest>> {
-        let _ = (tool, input);
+    #[permission(paths)]
+    async fn permission_paths(&self, input: WorktreeToolInput) -> SdkResult<Vec<PathRequest>> {
+        input.dispatch_permission_paths(self).await
     }
 
+    #[hook]
     async fn tool_execute_before(
         &self,
         input: ToolBeforeInput,
@@ -2868,6 +2854,7 @@ impl crate::plugin::sdk::Plugin for WorkflowPlugin {
         }))
     }
 
+    #[hook]
     async fn command_execute_before(
         &self,
         input: CommandBeforeInput,
@@ -2887,6 +2874,7 @@ impl crate::plugin::sdk::Plugin for WorkflowPlugin {
         }))
     }
 
+    #[hook]
     async fn agent_stop(
         &self,
         input: crate::plugin::AgentStopInput,

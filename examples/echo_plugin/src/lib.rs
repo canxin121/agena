@@ -1,14 +1,12 @@
 //! Demonstration plugin for the new agena plugin SDK.
 //!
 //! Implements every relevant hook surface in a tiny amount of code, then
-//! exports itself as a cdylib via `export_cdylib!`. The same `Plugin` impl
+//! exports itself as a cdylib via `#[plugin(..., export = cdylib)]`. The same `Plugin` impl
 //! could be exported as stdio (`export_stdio!`) or HTTP (`export_http!`)
 //! by enabling the corresponding feature on `agena-plugin-sdk`.
 
-use std::collections::BTreeMap;
-use std::sync::OnceLock;
-
 use agena_plugin_sdk::prelude::*;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(default, deny_unknown_fields)]
@@ -32,17 +30,17 @@ struct EchoToolInput {
     text: String,
 }
 
-#[derive(Default)]
+#[derive(Default, PluginConfigStore)]
 pub struct EchoPlugin {
-    config: OnceLock<EchoPluginConfig>,
+    #[config(default)]
+    config: PluginConfig<EchoPluginConfig>,
 }
 
 #[plugin(
     id = "echo",
     version = env!("CARGO_PKG_VERSION"),
     description = "Sample plugin: echo + before/after/shell hooks.",
-    config_schema_type = EchoPluginConfig,
-    config_schema_default = default,
+    config,
     display = compact,
     export = cdylib
 )]
@@ -69,21 +67,9 @@ impl EchoPlugin {
     }
 
     #[hook]
-    async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> Result<InitOutcome> {
-        let config = agena_plugin_sdk::macro_support::parse_defaulted_config(
-            ctx.config,
-            "invalid echo config",
-        )?;
-        self.config
-            .set(config)
-            .map_err(|_| PluginError::invalid_params("echo plugin config already initialized"))?;
-        Ok(InitOutcome::ack(Plugin::manifest(self)))
-    }
-
-    #[hook]
-    async fn tool_execute_before(&self, input: ToolBeforeInput) -> Result<Option<ToolBeforePatch>> {
+    async fn tool_execute_before(&self, input: ToolBeforeInput) -> Option<ToolBeforePatch> {
         if input.tool_name != "echo" {
-            return Ok(None);
+            return None;
         }
         let mut new_input = input.input.clone();
         if let Some(text) = new_input.get_mut("text")
@@ -91,86 +77,75 @@ impl EchoPlugin {
         {
             *text = serde_json::Value::String(format!("[prepared] {s}"));
         }
-        Ok(Some(ToolBeforePatch {
+        Some(ToolBeforePatch {
             input: Some(new_input),
             title_override: Some("Echo (prepared)".into()),
             ..Default::default()
-        }))
+        })
     }
 
     #[hook]
-    async fn tool_execute_after(&self, input: ToolAfterInput) -> Result<Option<ToolAfterPatch>> {
+    async fn tool_execute_after(&self, input: ToolAfterInput) -> Option<ToolAfterPatch> {
         if input.tool_name != "echo" {
-            return Ok(None);
+            return None;
         }
-        Ok(Some(ToolAfterPatch {
+        Some(ToolAfterPatch {
             output_text: Some(format!("{}\n[echo after-hook]", input.output_text)),
             metadata: BTreeMap::from([("after_hook".to_string(), "applied".to_string())]),
             ..Default::default()
-        }))
+        })
     }
 
     #[hook]
-    async fn shell_env(&self, input: ShellEnvInput) -> Result<Option<ShellEnvPatch>> {
+    async fn shell_env(&self, input: ShellEnvInput) -> ShellEnvPatch {
         let mut p = ShellEnvPatch::default();
         p.set.insert("AGENA_ECHO".into(), "1".into());
         p.set.insert(
             "AGENA_ECHO_CWD".into(),
             input.cwd.to_string_lossy().to_string(),
         );
-        Ok(Some(p))
+        p
     }
 
     #[hook]
-    async fn event(&self, _ev: EventEnvelope) -> Result<()> {
-        Ok(())
+    async fn event(&self, _ev: EventEnvelope) {}
+
+    #[hook]
+    async fn pre_run(&self, _input: PreRunInput) {}
+
+    #[hook]
+    async fn post_run(&self, _input: PostRunInput) {}
+
+    #[hook]
+    async fn permission_ask(&self, _input: PermissionAskInput) -> Option<PermissionAskDecision> {
+        None
     }
 
     #[hook]
-    async fn pre_run(&self, _input: PreRunInput) -> Result<()> {
-        Ok(())
-    }
-
-    #[hook]
-    async fn post_run(&self, _input: PostRunInput) -> Result<()> {
-        Ok(())
-    }
-
-    #[hook]
-    async fn permission_ask(
-        &self,
-        _input: PermissionAskInput,
-    ) -> Result<Option<PermissionAskDecision>> {
-        Ok(None)
-    }
-
-    #[hook]
-    async fn session_start(&self, input: SessionStartInput) -> Result<Option<SessionStartPatch>> {
-        Ok(Some(SessionStartPatch {
+    async fn session_start(&self, input: SessionStartInput) -> SessionStartPatch {
+        SessionStartPatch {
             additional_context: Some(format!(
                 "Echo plugin attached to session {}",
                 input.session_id
             )),
             initial_user_message: None,
-        }))
+        }
     }
 
     #[hook]
-    async fn session_end(&self, _input: SessionEndInput) -> Result<()> {
-        Ok(())
-    }
+    async fn session_end(&self, _input: SessionEndInput) {}
 
     #[hook]
-    async fn provider_list(&self, input: ProviderListInput) -> Result<Option<ProviderListPatch>> {
+    async fn provider_list(&self, input: ProviderListInput) -> Option<ProviderListPatch> {
         let already_registered = input
             .current
             .iter()
             .any(|provider| provider.id == "echo-mock");
         if already_registered {
-            return Ok(None);
+            return None;
         }
 
-        Ok(Some(ProviderListPatch {
+        Some(ProviderListPatch {
             add: vec![ProviderDescriptor {
                 id: "echo-mock".to_string(),
                 display_name: "Echo Mock".to_string(),
@@ -179,6 +154,6 @@ impl EchoPlugin {
                 kind: ProviderKind::Custom,
             }],
             remove: Vec::new(),
-        }))
+        })
     }
 }

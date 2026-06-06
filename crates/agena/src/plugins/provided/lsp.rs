@@ -14,8 +14,7 @@ use crate::message::{
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostLspListServersResponse};
 use crate::plugin::sdk::{
-    HookSubscription, HostCapability, PathRequest, Result as SdkResult, ToolInvokeContext,
-    ToolInvokeOutput, ToolTag,
+    HostCapability, PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, ToolTag,
 };
 use crate::plugins::provided::router;
 
@@ -333,47 +332,41 @@ struct LspServerSummary {
     file_extensions: Vec<String>,
 }
 
-#[crate::plugin::sdk::plugin]
-impl crate::plugin::sdk::Plugin for LspPlugin {
-    #[agena_plugin_sdk::plugin_manifest_method(
-        id = LSP_PLUGIN_ID,
-        version = env!("CARGO_PKG_VERSION"),
-        description = "LSP read-only observability and navigation tools.",
-        hooks = HookSubscription::TOOL_INVOKE,
-        config_schema = lsp_config_schema(),
-        display = brief,
-        tool_surface = LspToolInput,
-    )]
-    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
-
-    #[agena_plugin_sdk::plugin_init_method(
-        host_cell = {
-            field = self.host,
-            value = host,
-            poisoned = "lsp plugin host lock poisoned"
-        },
-    )]
+#[crate::plugin::sdk::plugin(
+    id = LSP_PLUGIN_ID,
+    version = env!("CARGO_PKG_VERSION"),
+    description = "LSP read-only observability and navigation tools.",
+    config_schema = lsp_config_schema(),
+    display = brief
+)]
+impl LspPlugin {
+    #[hook]
     async fn init(
         &self,
         _ctx: crate::plugin::sdk::InitContext,
         host: Arc<dyn HostClient>,
     ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
+        *self
+            .host
+            .write()
+            .map_err(|_| PluginError::new("lsp plugin host lock poisoned"))? = Some(host);
+        Ok(crate::plugin::sdk::InitOutcome::ack(
+            crate::plugin::sdk::Plugin::manifest(self),
+        ))
     }
 
-    #[agena_plugin_sdk::plugin_tool_invoke_method(surface_with_context(LspToolInput))]
+    #[tool]
     async fn tool_invoke(
         &self,
-        input: crate::plugin::sdk::ToolInvokeInput,
+        input: LspToolInput,
+        context: &ToolInvokeContext<'_>,
     ) -> SdkResult<ToolInvokeOutput> {
+        input.dispatch_tool_invoke_with_context(self, context).await
     }
 
-    #[agena_plugin_sdk::plugin_permission_paths_method(surface(LspToolInput))]
-    async fn permission_paths(
-        &self,
-        tool: &str,
-        input: &serde_json::Value,
-    ) -> SdkResult<Vec<PathRequest>> {
-        let _ = (tool, input);
+    #[permission(paths)]
+    async fn permission_paths(&self, input: LspToolInput) -> SdkResult<Vec<PathRequest>> {
+        input.dispatch_permission_paths(self).await
     }
 }
 

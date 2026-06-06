@@ -1,0 +1,12 @@
+error: #[plugin(..., config_field = field)] requires `config = Type` or `config_schema_type = Type`
+  --> tests/ui/plugin_macro/config_field_without_config.rs:13:1
+   |
+13 | / #[plugin(
+14 | |     id = "bad.config_field_without_config",
+15 | |     version = "1.0.0",
+16 | |     description = "Bad plugin.",
+17 | |     config_field = config
+18 | | )]
+   | |__^
+   |
+   = note: this error originates in the attribute macro `plugin` (in Nightly builds, run with -Z macro-backtrace for more info)

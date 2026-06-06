@@ -25,29 +25,20 @@ struct EchoPlugin;
     id = "echo-stdio",
     version = env!("CARGO_PKG_VERSION"),
     description = "Echo via stdio.",
-    display = compact
+    display = compact,
+    export = stdio
 )]
 impl EchoPlugin {
     #[tool]
-    async fn invoke_echo(&self, input: EchoToolInput) -> Result<ToolInvokeOutput> {
-        Ok(ToolInvokeOutput::text(format!(
-            "stdio-echo: {}",
-            input.text
-        )))
+    async fn invoke_echo(&self, input: EchoToolInput) -> String {
+        format!("stdio-echo: {}", input.text)
     }
 
     #[tool_stream]
-    async fn invoke_echo_stream(
-        &self,
-        input: EchoToolInput,
-        sink: ToolStreamSink,
-    ) -> Result<ToolStreamEnd> {
+    async fn invoke_echo_stream(&self, input: EchoToolInput, sink: ToolStreamSink) -> String {
         sink.text("stdio-").await;
         sink.text(format!("echo: {}", input.text)).await;
-        Ok(ToolStreamEnd::text(
-            sink.stream_id(),
-            format!("stdio-echo: {}", input.text),
-        ))
+        format!("stdio-echo: {}", input.text)
     }
 
     #[hook]
@@ -56,19 +47,14 @@ impl EchoPlugin {
     }
 
     #[hook]
-    async fn shell_env(&self, _input: ShellEnvInput) -> Result<Option<ShellEnvPatch>> {
-        Ok(Some(ShellEnvPatch::set("AGENA_STDIO_PLUGIN", "1")))
+    async fn shell_env(&self, _input: ShellEnvInput) -> ShellEnvPatch {
+        ShellEnvPatch::set("AGENA_STDIO_PLUGIN", "1")
     }
 
     #[hook]
-    async fn chat_params(&self, _input: ChatParamsInput) -> Result<Option<ChatParamsPatch>> {
-        Ok(Some(ChatParamsPatch {
+    async fn chat_params(&self, _input: ChatParamsInput) -> ChatParamsPatch {
+        ChatParamsPatch {
             params: Some(json!({ "stop": ["\nHuman:"] })),
-        }))
+        }
     }
-}
-
-#[tokio::main(flavor = "multi_thread")]
-async fn main() -> std::io::Result<()> {
-    agena_plugin_sdk::drivers::stdio::serve_stdio(EchoPlugin).await
 }

@@ -1,10 +1,10 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::error::Result;
+use crate::error::{PluginError, Result};
 use crate::hooks::*;
 use crate::host_api::HostClient;
 use crate::manifest::PluginManifest;
@@ -40,6 +40,66 @@ impl InitOutcome {
             protocol_version: crate::rpc::PROTOCOL_VERSION,
         }
     }
+}
+
+#[derive(Debug)]
+pub struct PluginConfig<T> {
+    value: OnceLock<T>,
+}
+
+impl<T> Default for PluginConfig<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> PluginConfig<T> {
+    pub const fn new() -> Self {
+        Self {
+            value: OnceLock::new(),
+        }
+    }
+
+    pub fn get(&self) -> Option<&T> {
+        self.value.get()
+    }
+
+    pub fn expect(&self, message: &str) -> &T {
+        self.value.get().expect(message)
+    }
+
+    pub fn set(&self, value: T, already: impl Into<String>) -> Result<()> {
+        self.value
+            .set(value)
+            .map_err(|_| PluginError::new(already.into()))
+    }
+}
+
+impl<T> PluginConfig<T>
+where
+    T: Default + DeserializeOwned,
+{
+    pub fn set_from_json(
+        &self,
+        input: serde_json::Value,
+        invalid: impl AsRef<str>,
+        already: impl Into<String>,
+    ) -> Result<()> {
+        let value = crate::macro_support::parse_defaulted_config(input, invalid.as_ref())?;
+        self.set(value, already)
+    }
+}
+
+#[doc(hidden)]
+pub trait PluginConfigStoreAccess {
+    fn plugin_config_schema() -> serde_json::Value;
+
+    fn set_plugin_config_from_json(
+        &self,
+        input: serde_json::Value,
+        invalid: &str,
+        already: String,
+    ) -> Result<()>;
 }
 
 /// The trait every plugin implements. Every method has a default no-op body so

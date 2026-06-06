@@ -1,0 +1,5 @@
+error: #[tool] methods must take input, or input plus ToolInvokeContext
+  --> tests/ui/plugin_macro/tool_without_input.rs:13:5
+   |
+13 |     async fn echo(&self) -> Result<ToolInvokeOutput> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

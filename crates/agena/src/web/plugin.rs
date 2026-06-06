@@ -21,8 +21,7 @@ use tokio::sync::Mutex;
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostNetworkPermissionCheckRequest};
 use crate::plugin::sdk::{
-    HookSubscription, HostCapability, NetworkRequest, PathRequest, Result as SdkResult,
-    ToolInvokeOutput, ToolTag,
+    HostCapability, NetworkRequest, PathRequest, Result as SdkResult, ToolInvokeOutput, ToolTag,
 };
 
 pub const WEB_PLUGIN_ID: &str = "agena.web";
@@ -1246,66 +1245,47 @@ impl WebPlugin {
     }
 }
 
-#[crate::plugin::sdk::plugin]
-impl crate::plugin::sdk::Plugin for WebPlugin {
-    #[agena_plugin_sdk::plugin_manifest_method(
-        id = WEB_PLUGIN_ID,
-        version = env!("CARGO_PKG_VERSION"),
-        description = "Local web search/fetch/crawl plugin with embedded storage, caching, and Tantivy retrieval.",
-        hooks = HookSubscription::INIT | HookSubscription::TOOL_INVOKE,
-        config_schema = web_config_schema(),
-        display = brief_detailed,
-        tool_suite = WebToolSuite,
-    )]
-    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {}
-
-    #[agena_plugin_sdk::plugin_init_method(
-        store = {
-            field = self.state,
-            value = WebPluginState::new(parse_web_config(ctx.config)?),
-            already = "web plugin initialized more than once"
-        },
-        store = {
-            field = self.host,
-            value = host,
-            already = "web plugin host initialized more than once"
-        },
-        workspace_root = {
-            field = self.workspace_root,
-            value = ctx.workspace_root,
-            already = "web plugin workspace root initialized more than once"
-        }
-    )]
+#[crate::plugin::sdk::plugin(
+    id = WEB_PLUGIN_ID,
+    version = env!("CARGO_PKG_VERSION"),
+    description = "Local web search/fetch/crawl plugin with embedded storage, caching, and Tantivy retrieval.",
+    config_schema = web_config_schema(),
+    display = brief_detailed
+)]
+impl WebPlugin {
+    #[hook]
     async fn init(
         &self,
         ctx: crate::plugin::sdk::InitContext,
         host: Arc<dyn HostClient>,
     ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
+        self.state
+            .set(WebPluginState::new(parse_web_config(ctx.config)?))
+            .map_err(|_| PluginError::new("web plugin initialized more than once"))?;
+        self.host
+            .set(host)
+            .map_err(|_| PluginError::new("web plugin host initialized more than once"))?;
+        self.workspace_root.set(ctx.workspace_root).map_err(|_| {
+            PluginError::new("web plugin workspace root initialized more than once")
+        })?;
+        Ok(crate::plugin::sdk::InitOutcome::ack(
+            crate::plugin::sdk::Plugin::manifest(self),
+        ))
     }
 
-    #[agena_plugin_sdk::plugin_tool_invoke_method(suite(WebToolSuite))]
-    async fn tool_invoke(
-        &self,
-        input: crate::plugin::sdk::ToolInvokeInput,
-    ) -> SdkResult<ToolInvokeOutput> {
+    #[tool_suite]
+    async fn tool_invoke(&self, input: WebToolSuite) -> SdkResult<ToolInvokeOutput> {
+        input.dispatch_tool_invoke(self).await
     }
 
-    #[agena_plugin_sdk::plugin_permission_paths_method(suite(WebToolSuite))]
-    async fn permission_paths(
-        &self,
-        tool: &str,
-        input: &serde_json::Value,
-    ) -> SdkResult<Vec<PathRequest>> {
-        let _ = (tool, input);
+    #[permission(paths, suite)]
+    async fn permission_paths(&self, input: WebToolSuite) -> SdkResult<Vec<PathRequest>> {
+        input.dispatch_permission_paths(self).await
     }
 
-    #[agena_plugin_sdk::plugin_permission_networks_method(suite(WebToolSuite))]
-    async fn permission_networks(
-        &self,
-        tool: &str,
-        input: &serde_json::Value,
-    ) -> SdkResult<Vec<NetworkRequest>> {
-        let _ = (tool, input);
+    #[permission(networks, suite)]
+    async fn permission_networks(&self, input: WebToolSuite) -> SdkResult<Vec<NetworkRequest>> {
+        input.dispatch_permission_networks(self).await
     }
 }
 

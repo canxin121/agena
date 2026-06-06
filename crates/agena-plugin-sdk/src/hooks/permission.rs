@@ -36,6 +36,35 @@ impl PathRequest {
     }
 }
 
+pub trait IntoPathRequests {
+    fn into_path_requests(self) -> crate::Result<Vec<PathRequest>>;
+}
+
+impl IntoPathRequests for Vec<PathRequest> {
+    fn into_path_requests(self) -> crate::Result<Vec<PathRequest>> {
+        Ok(self)
+    }
+}
+
+impl IntoPathRequests for PathRequest {
+    fn into_path_requests(self) -> crate::Result<Vec<PathRequest>> {
+        Ok(vec![self])
+    }
+}
+
+impl<T, E> IntoPathRequests for std::result::Result<T, E>
+where
+    T: IntoPathRequests,
+    E: Into<crate::PluginError>,
+{
+    fn into_path_requests(self) -> crate::Result<Vec<PathRequest>> {
+        match self {
+            Ok(value) => value.into_path_requests(),
+            Err(err) => Err(err.into()),
+        }
+    }
+}
+
 /// One outbound network target that a tool intends to connect to. Returned by
 /// [`crate::Plugin::permission_networks`] for targets that cannot be expressed
 /// as declarative `InputNetworkSpec` JSONPath rules.
@@ -48,6 +77,35 @@ impl NetworkRequest {
     pub fn connect(target: impl Into<String>) -> Self {
         Self {
             target: target.into(),
+        }
+    }
+}
+
+pub trait IntoNetworkRequests {
+    fn into_network_requests(self) -> crate::Result<Vec<NetworkRequest>>;
+}
+
+impl IntoNetworkRequests for Vec<NetworkRequest> {
+    fn into_network_requests(self) -> crate::Result<Vec<NetworkRequest>> {
+        Ok(self)
+    }
+}
+
+impl IntoNetworkRequests for NetworkRequest {
+    fn into_network_requests(self) -> crate::Result<Vec<NetworkRequest>> {
+        Ok(vec![self])
+    }
+}
+
+impl<T, E> IntoNetworkRequests for std::result::Result<T, E>
+where
+    T: IntoNetworkRequests,
+    E: Into<crate::PluginError>,
+{
+    fn into_network_requests(self) -> crate::Result<Vec<NetworkRequest>> {
+        match self {
+            Ok(value) => value.into_network_requests(),
+            Err(err) => Err(err.into()),
         }
     }
 }

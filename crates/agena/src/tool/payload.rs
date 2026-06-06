@@ -94,7 +94,7 @@ impl ToolPayloadInput {
 
     /// Reconstruct a `ToolPayloadInput` from a [`ToolInvocation`], or `None`
     /// if the invocation does not use one of the typed payload tool names.
-    /// Namespaced forms like `plugin/tool` are matched by their terminal
+    /// Namespaced forms like `plugin__tool` are matched by their terminal
     /// segment so user-installed replacements inherit the same semantics.
     pub fn from_invocation(invocation: &ToolInvocation) -> Option<Self> {
         let value: serde_json::Value = invocation.input.clone().into();
@@ -363,7 +363,9 @@ impl ToolPayloadOutput {
 }
 
 fn canonical_tool_payload_name(name: &str) -> &str {
-    name.rsplit('/').next().unwrap_or(name)
+    name.rsplit_once("__")
+        .map(|(_, tool_name)| tool_name)
+        .unwrap_or(name)
 }
 
 const DIRECT_GROUPED_TOOL_MAPPINGS: &[(&str, &str, &str, &str)] = &[
@@ -384,7 +386,7 @@ const DIRECT_GROUPED_TOOL_MAPPINGS: &[(&str, &str, &str, &str)] = &[
 ];
 
 fn exposed_tool_name(plugin: &str, tool: &str) -> String {
-    format!("{plugin}/{tool}")
+    crate::plugin::registry::exposed_tool_name(plugin, tool)
 }
 
 fn grouped_mapping_for_tool(tool: &str) -> Option<(&'static str, &'static str, &'static str)> {
@@ -476,42 +478,42 @@ fn payload_name_for_invocation(
     input: &mut serde_json::Map<String, serde_json::Value>,
 ) -> Option<String> {
     match invocation_name {
-        "agena.web/fetch" | "web_fetch" => return Some("web_fetch".to_string()),
-        "agena.web/search" | "web_search" => return Some("web_search".to_string()),
-        "agena.shell/exec.bash" => return Some("bash".to_string()),
-        "agena.shell/exec.powershell" => return Some("powershell".to_string()),
-        "agena.shell/monitor.start" => {
+        "agena_web__fetch" | "web_fetch" => return Some("web_fetch".to_string()),
+        "agena_web__search" | "web_search" => return Some("web_search".to_string()),
+        "agena_shell__exec_bash" => return Some("bash".to_string()),
+        "agena_shell__exec_powershell" => return Some("powershell".to_string()),
+        "agena_shell__monitor_start" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("start".to_string()),
             );
             return Some("monitor".to_string());
         }
-        "agena.shell/monitor.list" => {
+        "agena_shell__monitor_list" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("list".to_string()),
             );
             return Some("monitor".to_string());
         }
-        "agena.shell/monitor.read" => {
+        "agena_shell__monitor_read" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("read".to_string()),
             );
             return Some("monitor".to_string());
         }
-        "agena.shell/monitor.stop" => {
+        "agena_shell__monitor_stop" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("stop".to_string()),
             );
             return Some("monitor".to_string());
         }
-        "agena.cron/schedule.create" => return Some("cron_create".to_string()),
-        "agena.cron/schedule.list" => return Some("cron_list".to_string()),
-        "agena.cron/schedule.delete" => return Some("cron_delete".to_string()),
-        "agena.cron/schedule.wakeup" => return Some("schedule_wakeup".to_string()),
+        "agena_cron__schedule_create" => return Some("cron_create".to_string()),
+        "agena_cron__schedule_list" => return Some("cron_list".to_string()),
+        "agena_cron__schedule_delete" => return Some("cron_delete".to_string()),
+        "agena_cron__schedule_wakeup" => return Some("schedule_wakeup".to_string()),
         _ => {}
     }
     let entry = canonical_tool_payload_name(invocation_name);
@@ -592,32 +594,32 @@ fn grouped_tool_payload_name(
 
 fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
     match tool_name {
-        "agena.web/fetch" | "web_fetch" | "fetch" => Some("web_fetch".to_string()),
-        "agena.web/search" | "web_search" | "search" => Some("web_search".to_string()),
-        "agena.shell/exec.bash" | "exec.bash" => Some("bash".to_string()),
-        "agena.shell/exec.powershell" | "exec.powershell" => Some("powershell".to_string()),
-        "agena.shell/monitor.start"
-        | "agena.shell/monitor.list"
-        | "agena.shell/monitor.read"
-        | "agena.shell/monitor.stop"
+        "agena_web__fetch" | "web_fetch" | "fetch" => Some("web_fetch".to_string()),
+        "agena_web__search" | "web_search" | "search" => Some("web_search".to_string()),
+        "agena_shell__exec_bash" | "exec.bash" => Some("bash".to_string()),
+        "agena_shell__exec_powershell" | "exec.powershell" => Some("powershell".to_string()),
+        "agena_shell__monitor_start"
+        | "agena_shell__monitor_list"
+        | "agena_shell__monitor_read"
+        | "agena_shell__monitor_stop"
         | "monitor.start"
         | "monitor.list"
         | "monitor.read"
         | "monitor.stop" => Some("monitor".to_string()),
-        "agena.cron/schedule.create" | "schedule.create" => Some("cron_create".to_string()),
-        "agena.cron/schedule.list" | "schedule.list" => Some("cron_list".to_string()),
-        "agena.cron/schedule.delete" | "schedule.delete" => Some("cron_delete".to_string()),
-        "agena.cron/schedule.wakeup" | "schedule.wakeup" => Some("schedule_wakeup".to_string()),
-        "agena.shell/shell" | "shell" => None,
-        "agena.fs/fs" | "fs" => None,
-        "agena.workflow/task" | "task" => Some("task".to_string()),
-        "agena.workflow/tools" | "tools" => Some("tool_search".to_string()),
-        "agena.workflow/todo" | "todo" => Some("todo_write".to_string()),
-        "agena.workflow/user" | "user" => Some("ask_user".to_string()),
-        "agena.workflow/plan" | "plan" => None,
-        "agena.workflow/worktree" | "worktree" => None,
-        "agena.cron/schedule" | "schedule" => None,
-        "agena.lsp/lsp" | "lsp" => None,
+        "agena_cron__schedule_create" | "schedule.create" => Some("cron_create".to_string()),
+        "agena_cron__schedule_list" | "schedule.list" => Some("cron_list".to_string()),
+        "agena_cron__schedule_delete" | "schedule.delete" => Some("cron_delete".to_string()),
+        "agena_cron__schedule_wakeup" | "schedule.wakeup" => Some("schedule_wakeup".to_string()),
+        "agena_shell__shell" | "shell" => None,
+        "agena_fs__fs" | "fs" => None,
+        "agena_workflow__task" | "task" => Some("task".to_string()),
+        "agena_workflow__tools" | "tools" => Some("tool_search".to_string()),
+        "agena_workflow__todo" | "todo" => Some("todo_write".to_string()),
+        "agena_workflow__user" | "user" => Some("ask_user".to_string()),
+        "agena_workflow__plan" | "plan" => None,
+        "agena_workflow__worktree" | "worktree" => None,
+        "agena_cron__schedule" | "schedule" => None,
+        "agena_lsp__lsp" | "lsp" => None,
         _ => None,
     }
 }

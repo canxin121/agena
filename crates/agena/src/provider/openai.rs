@@ -3467,7 +3467,7 @@ mod tests {
     fn responses_input_serializes_tool_call_and_output_as_items() {
         let created_at = chrono::Utc::now();
         let invocation = ToolInvocation::new(
-            "agena.web/search",
+            "agena_web__search",
             StructuredObject::try_from(serde_json::json!({ "query": "weather" }))
                 .expect("tool input"),
         );
@@ -3518,7 +3518,7 @@ mod tests {
                 {
                     "type": "function_call",
                     "call_id": "call_1",
-                    "name": "agena__x2e__web__x2f__search",
+                    "name": "agena_web__search",
                     "arguments": "{\"query\":\"weather\"}"
                 },
                 {
@@ -3534,7 +3534,7 @@ mod tests {
     fn responses_input_hashes_oversized_tool_call_ids() {
         let created_at = chrono::Utc::now();
         let invocation = ToolInvocation::new(
-            "agena.web/search",
+            "agena_web__search",
             StructuredObject::try_from(serde_json::json!({ "query": "science" }))
                 .expect("tool input"),
         );

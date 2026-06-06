@@ -121,7 +121,7 @@ fn workflow_config_schema() -> serde_json::Value {
         (
             "/properties/tool_catalog/properties/search",
             "Search",
-            "Default search behavior for agena.workflow/tools with action=search.",
+            "Default search behavior for agena_workflow__tools with action=search.",
         ),
         (
             "/properties/tool_catalog/properties/search/properties/default_limit",
@@ -136,7 +136,7 @@ fn workflow_config_schema() -> serde_json::Value {
         (
             "/properties/tool_catalog/properties/help",
             "Help",
-            "Defaults for agena.workflow/tools with action=help.",
+            "Defaults for agena_workflow__tools with action=help.",
         ),
         (
             "/properties/tool_catalog/properties/help/properties/include_schema_by_default",
@@ -276,11 +276,11 @@ fn resolve_tools_tool_input(input: serde_json::Value) -> SdkResult<(String, serd
 pub(crate) fn tools_tool_descriptor_for_tests() -> ToolDescriptor {
     let decl = ToolsToolInput::tool_decl();
     ToolDescriptor {
-        name: "agena.workflow/tools".to_string(),
+        name: "agena_workflow__tools".to_string(),
         aliases: decl
             .alias_texts()
             .iter()
-            .map(|alias| format!("agena.workflow/{alias}"))
+            .map(|alias| crate::plugin::registry::exposed_tool_name(WORKFLOW_PLUGIN_ID, alias))
             .collect(),
         description: Some(decl.description_text().to_string()),
         before_help: decl.before_help_text().map(ToString::to_string),
@@ -2769,7 +2769,7 @@ impl WorkflowPlugin {
                 r#"- {"action":"usage"} or {}"#,
                 "Examples:",
                 r#"- Search: {"action":"search","query":"web","limit":8}"#,
-                r#"- Help: {"action":"help","tool":"agena.web/search"}"#,
+                r#"- Help: {"action":"help","tool":"agena_web__search"}"#,
                 "Notes:",
                 "This command only inspects tool help; call the target tool directly to execute it.",
             ]
@@ -3276,14 +3276,14 @@ mod tests {
     #[test]
     fn tools_help_accepts_tool_name_without_action() {
         let (action, action_input) = resolve_tools_tool_input(json!({
-            "tool_name": "  agena.web/search  ",
+            "tool_name": "  agena_web__search  ",
             "include_schema": false
         }))
         .expect("tool_name-only tools input should infer help");
 
         assert_eq!(action, "help");
         let parsed: ToolsHelpInput = serde_json::from_value(action_input).expect("help input");
-        assert_eq!(parsed.tool, "agena.web/search");
+        assert_eq!(parsed.tool, "agena_web__search");
         assert_eq!(parsed.include_schema, Some(false));
     }
 
@@ -3400,7 +3400,7 @@ mod tests {
     fn tools_help_ignores_search_only_noise_fields() {
         let (action, action_input) = resolve_tools_tool_input(json!({
             "action": "help",
-            "tool": "agena.web/search",
+            "tool": "agena_web__search",
             "query": "web",
             "limit": 10,
             "include_schema": true
@@ -3409,7 +3409,7 @@ mod tests {
 
         assert_eq!(action, "help");
         let parsed: ToolsHelpInput = serde_json::from_value(action_input).expect("help input");
-        assert_eq!(parsed.tool, "agena.web/search");
+        assert_eq!(parsed.tool, "agena_web__search");
         assert_eq!(parsed.include_schema, Some(true));
     }
 

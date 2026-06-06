@@ -34,35 +34,35 @@ use crate::session::{ContextGovernor, ContextPolicy};
 use super::*;
 use crate::session::cache::SessionCachePolicy;
 
-const FS_TOOL: &str = "agena.fs/fs";
-const SHELL_BASH_TOOL: &str = "agena.shell/exec.bash";
-const SHELL_POWERSHELL_TOOL: &str = "agena.shell/exec.powershell";
-const SHELL_MONITOR_START_TOOL: &str = "agena.shell/monitor.start";
-const SHELL_MONITOR_LIST_TOOL: &str = "agena.shell/monitor.list";
-const SHELL_MONITOR_READ_TOOL: &str = "agena.shell/monitor.read";
-const SHELL_MONITOR_STOP_TOOL: &str = "agena.shell/monitor.stop";
-const WEB_FETCH_TOOL: &str = "agena.web/fetch";
-const WEB_QUERY_TOOL: &str = "agena.web/store.query";
-const TOOLS_TOOL: &str = "agena.workflow/tools";
-const TODO_TOOL: &str = "agena.workflow/todo";
-const USER_TOOL: &str = "agena.workflow/user";
-const PLAN_TOOL: &str = "agena.workflow/plan";
-const PLAN_CREATE_TOOL: &str = "agena.workflow/plan.create";
-const PLAN_UPDATE_STEP_TOOL: &str = "agena.workflow/plan.update_step";
-const PLAN_SET_STATUS_TOOL: &str = "agena.workflow/plan.set_status";
-const WORKTREE_ENTER_NEW_TOOL: &str = "agena.workflow/worktree.enter.new";
-const WORKTREE_EXIT_TOOL: &str = "agena.workflow/worktree.exit";
-const TASK_TOOL: &str = "agena.workflow/task";
-const LSP_TOOL: &str = "agena.lsp/lsp";
-const WORKFLOW_TOOL: &str = "agena.workflow/workflow";
-const AGENT_TOOL: &str = "agena.workflow/agent";
-const SESSION_TOOL: &str = "agena.workflow/session";
-const SETTINGS_TOOL: &str = "agena.settings/settings";
-const SETTINGS_GET_TOOL: &str = "agena.settings/settings.get";
-const SETTINGS_VALIDATE_TOOL: &str = "agena.settings/settings.validate";
-const SCHEDULE_LIST_TOOL: &str = "agena.cron/schedule.list";
+const FS_TOOL: &str = "agena_fs__fs";
+const SHELL_BASH_TOOL: &str = "agena_shell__exec_bash";
+const SHELL_POWERSHELL_TOOL: &str = "agena_shell__exec_powershell";
+const SHELL_MONITOR_START_TOOL: &str = "agena_shell__monitor_start";
+const SHELL_MONITOR_LIST_TOOL: &str = "agena_shell__monitor_list";
+const SHELL_MONITOR_READ_TOOL: &str = "agena_shell__monitor_read";
+const SHELL_MONITOR_STOP_TOOL: &str = "agena_shell__monitor_stop";
+const WEB_FETCH_TOOL: &str = "agena_web__fetch";
+const WEB_QUERY_TOOL: &str = "agena_web__store_query";
+const TOOLS_TOOL: &str = "agena_workflow__tools";
+const TODO_TOOL: &str = "agena_workflow__todo";
+const USER_TOOL: &str = "agena_workflow__user";
+const PLAN_TOOL: &str = "agena_workflow__plan";
+const PLAN_CREATE_TOOL: &str = "agena_workflow__plan_create";
+const PLAN_UPDATE_STEP_TOOL: &str = "agena_workflow__plan_update_step";
+const PLAN_SET_STATUS_TOOL: &str = "agena_workflow__plan_set_status";
+const WORKTREE_ENTER_NEW_TOOL: &str = "agena_workflow__worktree_enter_new";
+const WORKTREE_EXIT_TOOL: &str = "agena_workflow__worktree_exit";
+const TASK_TOOL: &str = "agena_workflow__task";
+const LSP_TOOL: &str = "agena_lsp__lsp";
+const WORKFLOW_TOOL: &str = "agena_workflow__workflow";
+const AGENT_TOOL: &str = "agena_workflow__agent";
+const SESSION_TOOL: &str = "agena_workflow__session";
+const SETTINGS_TOOL: &str = "agena_settings__settings";
+const SETTINGS_GET_TOOL: &str = "agena_settings__settings_get";
+const SETTINGS_VALIDATE_TOOL: &str = "agena_settings__settings_validate";
+const SCHEDULE_LIST_TOOL: &str = "agena_cron__schedule_list";
 const STREAM_FIXTURE_PLUGIN: &str = "streaming-fixture";
-const STREAM_FIXTURE_TOOL: &str = "streaming-fixture/stream_fixture_count";
+const STREAM_FIXTURE_TOOL: &str = "streaming_fixture__stream_fixture_count";
 
 struct TempWorkspace {
     root: std::path::PathBuf,
@@ -481,7 +481,7 @@ impl ModelRuntime for ScriptedProvider {
                     model: scripted_model_id(),
                     stream_key: "call_web_1".to_string(),
                     id: Some("call_web_1".to_string()),
-                    name: Some("agena.web/unsupported".to_string()),
+                    name: Some("agena_web__unsupported".to_string()),
                     arguments_delta: serde_json::json!({}).to_string(),
                 }),
                 Ok(CompletionStreamEvent::Completed {
@@ -1499,10 +1499,10 @@ fn unsupported_tool_call_is_returned_to_model() {
         assert!(
             error
                 .as_deref()
-                .is_some_and(|value| value.contains("agena.web/unsupported")),
+                .is_some_and(|value| value.contains("agena_web__unsupported")),
             "unexpected unsupported-tool error: error={error:?} output={output:?}"
         );
-        assert!(output.contains("agena.web/unsupported"));
+        assert!(output.contains("agena_web__unsupported"));
         assert!(
             completed.messages.iter().any(|message| {
                 message.role == Role::Assistant
@@ -3333,9 +3333,10 @@ fn pending_permission_request_aggregates_invocation_actions() {
                     if tool_name == "shell"
                         || tool_name == "bash"
                         || tool_name == "exec.bash"
-                        || tool_name.ends_with("/shell")
-                        || tool_name.ends_with("/bash")
-                        || tool_name.ends_with("/exec.bash")
+                        || tool_name == SHELL_BASH_TOOL
+                        || tool_name.ends_with("__shell")
+                        || tool_name.ends_with("__bash")
+                        || tool_name.ends_with("__exec_bash")
             )),
             "aggregated request should include the shell tool action: {:?}",
             request.related_actions
@@ -6751,7 +6752,7 @@ while True:
                 })
                 .expect("tools help output should exist");
             assert!(
-                tools_help_text.contains("Tool: agena.settings/settings"),
+                tools_help_text.contains("Tool: agena_settings__settings"),
                 "tools help should describe the settings tool"
             );
             assert!(

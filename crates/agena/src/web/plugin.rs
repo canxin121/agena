@@ -1788,7 +1788,7 @@ mod tests {
             "default_max_pages": 12,
             "browser_enabled": true
         }))
-        .expect_err("legacy flat config should fail");
+        .expect_err("web config should reject unknown fields");
 
         let message = err.to_string();
         assert!(message.contains("invalid web plugin config"));

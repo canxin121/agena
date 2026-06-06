@@ -3469,7 +3469,6 @@ mod tests {
     #[tool_input(trim("tool"))]
     #[serde(deny_unknown_fields)]
     struct HelpArgs {
-        #[serde(alias = "name", alias = "tool_name")]
         tool: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         include_schema: Option<bool>,
@@ -3648,14 +3647,6 @@ mod tests {
     }
 
     #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
-    #[tool_input(trim("name"))]
-    #[serde(deny_unknown_fields)]
-    struct AliasNormalizedNameShapeInput {
-        #[serde(alias = "file_name")]
-        name: String,
-    }
-
-    #[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape)]
     #[tool_input(
         non_empty_if_present("questions[].options[].label"),
         distinct_trimmed("questions[].id"),
@@ -3706,18 +3697,14 @@ mod tests {
         #[tool(
             exec = "search",
             infer_when_present("query"),
-            drop_keys("tool", "name", "tool_name", "include_schema")
+            drop_keys("tool", "include_schema")
         )]
         Search {
             #[tool(flatten_shape)]
             #[serde(flatten)]
             args: SearchArgs,
         },
-        #[tool(
-            exec = "help",
-            infer_when_present("tool", "name", "tool_name"),
-            drop_keys("query", "limit")
-        )]
+        #[tool(exec = "help", infer_when_present("tool"), drop_keys("query", "limit"))]
         Help {
             #[tool(flatten_shape)]
             #[serde(flatten)]
@@ -4592,10 +4579,10 @@ mod tests {
         }
 
         let help = CatalogToolInput::parse_input(json!({
-            "tool_name": "agena_web__search",
+            "tool": "agena_web__search",
             "include_schema": true
         }))
-        .expect("tool_name payload should infer help");
+        .expect("tool payload should infer help");
         match help {
             CatalogToolInput::Help { args } => {
                 assert_eq!(args.tool, "agena_web__search");
@@ -4606,7 +4593,7 @@ mod tests {
 
         let help_with_noise = CatalogToolInput::parse_input(json!({
             "action": "help",
-            "tool_name": "agena_web__search",
+            "tool": "agena_web__search",
             "include_schema": true,
             "query": "noise"
         }))
@@ -4868,15 +4855,6 @@ mod tests {
             "name": "  notes.md  "
         }))
         .expect("trim and trim_suffix should normalize string values before parse");
-        assert_eq!(parsed.name, "notes");
-    }
-
-    #[test]
-    fn built_in_string_normalizers_also_run_after_parse_for_alias_fields() {
-        let parsed = AliasNormalizedNameShapeInput::parse_input(json!({
-            "file_name": "  notes  "
-        }))
-        .expect("trim should normalize aliased string values after parse");
         assert_eq!(parsed.name, "notes");
     }
 
@@ -6656,10 +6634,6 @@ mod tests {
                 .description_text()
                 .contains("`draft`, `active`, `blocked`, `completed`, and `cancelled`"),
             "plan.set_status description should emphasize canonical phases"
-        );
-        assert!(
-            !plan_set_status.description_text().contains("executing"),
-            "plan.set_status description should not lead with legacy phase names"
         );
     }
 

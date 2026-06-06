@@ -53,12 +53,6 @@ pub(crate) fn config_home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-pub(crate) fn data_home_dir() -> PathBuf {
-    home_dir_path()
-        .map(|v| v.join(".local").join("share"))
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
 pub(crate) fn normalize_directory_path(input: &str) -> String {
     let trimmed = input.trim();
     if trimmed.is_empty() {

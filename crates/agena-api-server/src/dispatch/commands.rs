@@ -149,12 +149,6 @@ pub async fn dispatch_command(
                 summaries.into_iter().map(SessionResource::from).collect();
             Ok(CommandResult::SessionTree(resources))
         }
-        Command::ListRewindCheckpoints(ListRewindCheckpointsParams { session_id }) => {
-            let checkpoints = manager.list_rewind_checkpoints(session_id).await?;
-            Ok(CommandResult::RewindCheckpoints(
-                checkpoints.into_iter().map(Into::into).collect(),
-            ))
-        }
         Command::ExportSession(ExportSessionParams { session_id }) => {
             let jsonl = manager.export_session_jsonl(session_id).await?;
             Ok(CommandResult::SessionExport { jsonl })

@@ -174,8 +174,8 @@ pub trait Plugin: Send + Sync + 'static {
     ) -> Result<ToolStreamEnd> {
         let stream_id = sink.stream_id().to_string();
         let result = self.tool_invoke(input).await?;
-        // Single chunk + end: makes the streaming path trivially correct
-        // for plugins that haven't migrated yet.
+        // Single chunk + end: keeps the default streaming path equivalent to
+        // a normal tool invocation.
         sink.chunk(ToolStreamChunk {
             stream_id: stream_id.clone(),
             text_delta: Some(result.output_text.clone()),

@@ -147,10 +147,8 @@ impl ToolPresentationConfig {
 #[serde(rename_all = "snake_case")]
 pub enum ToolDescriptionOverride {
     #[default]
-    #[serde(alias = "default", alias = "inherit")]
     ToolDefault,
     Detailed,
-    #[serde(alias = "help")]
     Brief,
 }
 
@@ -214,7 +212,6 @@ impl UiPresentationConfig {
 #[serde(rename_all = "snake_case")]
 pub enum UiPresentationOverride {
     #[default]
-    #[serde(alias = "default", alias = "inherit")]
     Default,
     Detailed,
     Summary,
@@ -291,30 +288,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_help_and_inherit_aliases_still_parse() {
-        let config: ToolPresentationConfig = serde_json::from_value(serde_json::json!({
-            "default_mode": "help",
-            "plugins": {
-                "agena.memory": "inherit"
-            },
-            "tools": {
-                "memory": "help"
-            }
-        }))
-        .expect("tool presentation config should parse legacy aliases");
-
-        assert_eq!(config.default_mode, ToolDescriptionMode::Brief);
-        assert_eq!(
-            config.plugins.get("agena.memory").copied(),
-            Some(ToolDescriptionOverride::ToolDefault)
-        );
-        assert_eq!(
-            config.tools.get("memory").copied(),
-            Some(ToolDescriptionOverride::Brief)
-        );
-    }
-
-    #[test]
     fn ui_presentation_mode_for_honors_tool_and_plugin_precedence() {
         let mut presentation = UiPresentationConfig {
             default_mode: UiTextDisplayMode::Detailed,
@@ -382,30 +355,6 @@ mod tests {
                 Some(UiTextDisplayMode::Summary),
             ),
             UiTextDisplayMode::Summary,
-        );
-    }
-
-    #[test]
-    fn ui_presentation_inherit_alias_still_parses() {
-        let config: UiPresentationConfig = serde_json::from_value(serde_json::json!({
-            "default_mode": "summary",
-            "plugins": {
-                "agena.memory": "inherit"
-            },
-            "tools": {
-                "memory": "default"
-            }
-        }))
-        .expect("ui presentation config should parse aliases");
-
-        assert_eq!(config.default_mode, UiTextDisplayMode::Summary);
-        assert_eq!(
-            config.plugins.get("agena.memory").copied(),
-            Some(UiPresentationOverride::Default)
-        );
-        assert_eq!(
-            config.tools.get("memory").copied(),
-            Some(UiPresentationOverride::Default)
         );
     }
 }

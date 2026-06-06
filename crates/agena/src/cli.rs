@@ -561,15 +561,6 @@ pub enum SessionsSubcommand {
     Import(SessionImportArgs),
     /// Print every session sharing the given tree root, in (depth, id) order.
     Tree(SessionTreeArgs),
-    /// List rewind audit checkpoints for a session — what was dropped and when.
-    Checkpoints(SessionCheckpointsArgs),
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct SessionCheckpointsArgs {
-    pub session_id: i64,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
-    pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -868,12 +859,6 @@ struct SessionForkOutput {
 #[derive(Debug, Serialize)]
 struct SessionImportOutput {
     session: SessionDetail,
-}
-
-#[derive(Debug, Serialize)]
-struct SessionCheckpointsOutput {
-    session_id: i64,
-    checkpoints: Vec<crate::session::RewindCheckpoint>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1953,16 +1938,6 @@ impl AgenaCli {
                     sessions.truncate(limit);
                 }
                 render_serialized(args.format, &SessionListOutput { sessions })
-            }
-            SessionsSubcommand::Checkpoints(args) => {
-                let checkpoints = manager.list_rewind_checkpoints(args.session_id).await?;
-                render_serialized(
-                    args.format,
-                    &SessionCheckpointsOutput {
-                        session_id: args.session_id,
-                        checkpoints,
-                    },
-                )
             }
         }
     }

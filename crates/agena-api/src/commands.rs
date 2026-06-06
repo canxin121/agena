@@ -36,7 +36,6 @@ pub enum Command {
     // ── tree / fork / portability ──
     ForkSession(ForkSessionParams),
     ListSessionTree(ListSessionTreeParams),
-    ListRewindCheckpoints(ListRewindCheckpointsParams),
     ExportSession(ExportSessionParams),
     ImportSession(ImportSessionParams),
 
@@ -61,7 +60,6 @@ pub enum CommandResult {
     SessionDeleted { id: i64 },
     SessionTree(Vec<SessionResource>),
     SessionExport { jsonl: String },
-    RewindCheckpoints(Vec<crate::resource::RewindCheckpointResource>),
     Execution(SessionExecutionResource),
     PermissionRule(crate::resource::PermissionRuleResource),
     PermissionRuleDeleted { id: i64 },
@@ -177,12 +175,6 @@ pub struct ForkSessionParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListSessionTreeParams {
     pub root_id: i64,
-}
-
-/// List every persisted rewind audit checkpoint for a session.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ListRewindCheckpointsParams {
-    pub session_id: i64,
 }
 
 /// Export a session as a portable JSONL bundle.

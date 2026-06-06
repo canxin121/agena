@@ -15,7 +15,7 @@ use crate::event::{
 use crate::message::{Message, MessagePart, MessageSource};
 use crate::session::SessionRuntimeState;
 
-use super::{RunAbortReason, RunAborted, RunId, RunStarted, SystemNoticeKind};
+use super::{RunAbortReason, RunAborted, RunId, RunStarted};
 use crate::role::Role;
 
 #[derive(Debug, Clone, FromQueryResult)]
@@ -1290,7 +1290,7 @@ where
                         provider_state: None,
                         usage: None,
                         part_count: 1,
-                        is_hidden: matches!(payload.kind, SystemNoticeKind::RewindCheckpoint),
+                        is_hidden: false,
                     },
                 )
                 .await
@@ -1300,16 +1300,14 @@ where
                         payload.message_id.raw()
                     ))
                 })?;
-                if !matches!(payload.kind, SystemNoticeKind::RewindCheckpoint) {
-                    upsert_part_projection(db, session_id, &synthetic_part)
-                        .await
-                        .map_err(|err| {
-                            DbErr::Custom(format!(
-                                "project system notice part {} for message {}: {err}",
-                                synthetic_part.id, synthetic_part.message_id
-                            ))
-                        })?;
-                }
+                upsert_part_projection(db, session_id, &synthetic_part)
+                    .await
+                    .map_err(|err| {
+                        DbErr::Custom(format!(
+                            "project system notice part {} for message {}: {err}",
+                            synthetic_part.id, synthetic_part.message_id
+                        ))
+                    })?;
             }
             EventKind::MessagePartUpdated(update) => {
                 apply_message_part_update_on_connection(db, update)

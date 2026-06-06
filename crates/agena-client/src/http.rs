@@ -6,10 +6,10 @@ use agena_api::{
         CancelRunParams, Command, CommandResult, ContinueRunParams, CreateSessionParams,
         CreateWorkspaceParams, DeletePermissionRuleParams, DeleteSessionParams,
         DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams, ImportSessionParams,
-        ListRewindCheckpointsParams, ListSessionTreeParams, ReplacePermissionRuleParams,
-        ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-        RevokePermissionRuleParams, RewindSessionParams, SubmitMessageParams, UpdateSessionParams,
-        UpdateWorkspaceParams, UpsertPermissionRuleParams,
+        ListSessionTreeParams, ReplacePermissionRuleParams, ReplyPermissionParams,
+        ReplyUserInputParams, ResolveWorkspaceParams, RevokePermissionRuleParams,
+        RewindSessionParams, SubmitMessageParams, UpdateSessionParams, UpdateWorkspaceParams,
+        UpsertPermissionRuleParams,
     },
     queries::{
         GetMessageParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
@@ -378,12 +378,6 @@ impl AgenaClient {
             Command::ListSessionTree(ListSessionTreeParams { root_id }) => {
                 Ok(CommandResult::SessionTree(
                     self.get_json(&format!("/api/v1/sessions/tree/{root_id}"))
-                        .await?,
-                ))
-            }
-            Command::ListRewindCheckpoints(ListRewindCheckpointsParams { session_id }) => {
-                Ok(CommandResult::RewindCheckpoints(
-                    self.get_json(&format!("/api/v1/sessions/{session_id}/rewind-checkpoints"))
                         .await?,
                 ))
             }

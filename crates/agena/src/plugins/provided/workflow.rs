@@ -90,7 +90,6 @@ impl Default for WorkflowToolCatalogHelpConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 struct WorkflowPlanConfig {
-    #[serde(alias = "default_auto_continue")]
     default_autorun: bool,
     allow_direct_approval: bool,
 }
@@ -156,7 +155,7 @@ fn workflow_config_schema() -> serde_json::Value {
         (
             "/properties/plan/properties/allow_direct_approval",
             "Allow Direct Approval",
-            "When enabled, plan.set_status and legacy status actions may move a draft or cancelled plan directly into active, blocked, or completed. Disable this to make plan.set_status automatically request review before those transitions.",
+            "When enabled, plan.set_status may move a draft or cancelled plan directly into active, blocked, or completed. Disable this to make plan.set_status automatically request review before those transitions.",
         ),
     ] {
         crate::tool::definition::set_schema_metadata(
@@ -234,7 +233,7 @@ enum ToolsToolInput {
         handle = WorkflowPlugin::invoke_tool_search,
         non_empty("query"),
         infer_when_present("query"),
-        drop_keys("include_schema", "tool", "name", "tool_name")
+        drop_keys("include_schema", "tool")
     )]
     Search {
         #[tool(flatten_shape)]
@@ -245,7 +244,7 @@ enum ToolsToolInput {
         exec = "help",
         handle = WorkflowPlugin::invoke_tool_help,
         non_empty("tool"),
-        infer_when_present("tool", "name", "tool_name"),
+        infer_when_present("tool"),
         drop_keys("query", "limit")
     )]
     Help {
@@ -260,7 +259,6 @@ enum ToolsToolInput {
 #[serde(deny_unknown_fields)]
 struct ToolsHelpInput {
     /// Registered model-visible tool name to inspect.
-    #[serde(alias = "name", alias = "tool_name")]
     pub tool: String,
     /// Include the sanitized JSON input schema in the response.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -427,14 +425,8 @@ enum UserToolInput {
 #[serde(rename_all = "snake_case")]
 enum WorkflowPlanPhase {
     #[default]
-    #[serde(alias = "awaiting_review")]
     Draft,
-    #[serde(
-        rename = "active",
-        alias = "executing",
-        alias = "paused",
-        alias = "execution"
-    )]
+    #[serde(rename = "active")]
     Active,
     Blocked,
     Completed,
@@ -480,12 +472,7 @@ struct WorkflowPlanStep {
     wait_until_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     note: String,
-    #[serde(
-        default,
-        rename = "checks",
-        alias = "checkpoints",
-        skip_serializing_if = "Vec::is_empty"
-    )]
+    #[serde(default, rename = "checks", skip_serializing_if = "Vec::is_empty")]
     checkpoints: Vec<WorkflowPlanCheckpoint>,
 }
 
@@ -495,7 +482,6 @@ struct WorkflowPlan {
     title: String,
     objective: String,
     phase: WorkflowPlanPhase,
-    #[serde(alias = "auto_continue")]
     autorun: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     document_markdown: String,
@@ -505,16 +491,11 @@ struct WorkflowPlan {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(default, deny_unknown_fields)]
-#[schemars(
-    description = "Plan check input. Each check item should use `text`; `title` and `description` are accepted only as compatibility aliases."
-)]
+#[schemars(description = "Plan check input. Each check item should use `text`.")]
 struct WorkflowPlanCheckpointInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     id: Option<String>,
-    #[schemars(
-        description = "Check text. Models should send `text`; `title` and `description` are accepted only for compatibility."
-    )]
-    #[serde(alias = "title", alias = "description")]
+    #[schemars(description = "Check text.")]
     text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     status: Option<WorkflowPlanStepStatus>,
@@ -528,10 +509,7 @@ struct WorkflowPlanCheckpointInput {
 struct WorkflowPlanStepInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     id: Option<String>,
-    #[schemars(
-        description = "Human-readable step title. Models should send `title`; legacy `text` is accepted only for compatibility."
-    )]
-    #[serde(alias = "text")]
+    #[schemars(description = "Human-readable step title.")]
     title: String,
     #[schemars(
         description = "Optional longer explanation for the step. If omitted, the step title can serve as the short description."
@@ -552,12 +530,7 @@ struct WorkflowPlanStepInput {
     #[schemars(
         description = "Optional checklist checks for this step. Each check item uses `text`, not `title`."
     )]
-    #[serde(
-        default,
-        rename = "checks",
-        alias = "checkpoints",
-        skip_serializing_if = "Vec::is_empty"
-    )]
+    #[serde(default, rename = "checks", skip_serializing_if = "Vec::is_empty")]
     checkpoints: Vec<WorkflowPlanCheckpointInput>,
 }
 
@@ -577,11 +550,7 @@ struct PlanCreateInput {
     )]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     steps: Vec<WorkflowPlanStepInput>,
-    #[serde(
-        default,
-        alias = "auto_continue",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     autorun: Option<bool>,
 }
 
@@ -597,14 +566,10 @@ struct PlanSetStatusInput {
     #[schemars(
         description = "Canonical plan phase. Use `draft`, `active`, `blocked`, `completed`, or `cancelled`."
     )]
-    #[serde(default, alias = "status", skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     phase: Option<WorkflowPlanPhase>,
     #[schemars(description = "Whether an approved active plan should keep running automatically.")]
-    #[serde(
-        default,
-        alias = "auto_continue",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     autorun: Option<bool>,
     #[schemars(
         description = "Optional completion summary. This is only applied when `phase` is `completed`."
@@ -630,7 +595,7 @@ struct PlanUpdateStepInput {
 #[serde(deny_unknown_fields)]
 struct PlanUpdateCheckpointInput {
     step_id: String,
-    #[serde(rename = "check_id", alias = "checkpoint_id")]
+    #[serde(rename = "check_id")]
     checkpoint_id: String,
     status: WorkflowPlanStepStatus,
 }
@@ -641,7 +606,7 @@ struct PlanUpdateCheckpointInput {
     description = "Plan command backed by shared plugin storage. Use it to create or overwrite the current draft plan, inspect the current step, and manage the active session plan.",
     summary = "Create or overwrite plans, inspect the current step, update steps/checks, and use `set_status` for phase changes.",
     handler_receiver = WorkflowPlugin,
-    help = "Use action `create` to write the current draft plan; if a plan already exists, `create` overwrites it and returns it to draft. Use action `current` to inspect the current actionable step and its goal. Use action `set_status` to move the plan between draft, active, blocked, completed, or cancelled. Use action `update_check` to update an individual check inside a step. Autorun on/off distinguishes active plans that should keep running automatically. If workflow plan config disables direct approval, plan.set_status automatically requests review before moving a draft or cancelled plan into active, blocked, or completed. Legacy action `replace`, legacy status actions, legacy field names such as `auto_continue`, and legacy phase names such as `complete`, `cancel`, `restore`, `update_runtime`, `awaiting_review`, `executing`, and `paused` remain accepted for compatibility and are normalized to the canonical actions.",
+    help = "Use action `create` to write the current draft plan; if a plan already exists, `create` overwrites it and returns it to draft. Use action `current` to inspect the current actionable step and its goal. Use action `set_status` to move the plan between draft, active, blocked, completed, or cancelled. Use action `update_check` to update an individual check inside a step. Autorun on/off distinguishes active plans that should keep running automatically. If workflow plan config disables direct approval, plan.set_status automatically requests review before moving a draft or cancelled plan into active, blocked, or completed.",
     display = brief,
     tags(ToolTag::Planning, ToolTag::Mutating),
     host_capabilities(
@@ -655,11 +620,7 @@ struct PlanUpdateCheckpointInput {
 enum PlanToolInput {
     #[tool(exec = "current", handle = WorkflowPlugin::invoke_plan_current)]
     Current,
-    #[tool(
-        exec = "create",
-        handle = WorkflowPlugin::invoke_plan_create,
-        action_alias("replace")
-    )]
+    #[tool(exec = "create", handle = WorkflowPlugin::invoke_plan_create)]
     Create {
         #[tool(flatten_shape)]
         #[serde(flatten)]
@@ -668,11 +629,7 @@ enum PlanToolInput {
     #[tool(
         exec = "set_status",
         handle = WorkflowPlugin::invoke_plan_set_status,
-        at_least_one_of("phase", "autorun"),
-        action_alias("update_runtime"),
-        action_alias_default("complete", phase = "completed"),
-        action_alias_default("cancel", phase = "cancelled"),
-        action_alias_default("restore", phase = "draft")
+        at_least_one_of("phase", "autorun")
     )]
     SetStatus {
         #[tool(flatten_shape)]
@@ -687,8 +644,7 @@ enum PlanToolInput {
     },
     #[tool(
         exec = "update_check",
-        handle = WorkflowPlugin::invoke_plan_update_checkpoint,
-        action_alias("update_checkpoint")
+        handle = WorkflowPlugin::invoke_plan_update_checkpoint
     )]
     UpdateCheck {
         #[tool(flatten_shape)]
@@ -3225,7 +3181,7 @@ mod tests {
             serde_json::json!({
                 "action": "search",
                 "query": "memory",
-                "backend": "legacy"
+                "backend": "remote"
             }),
         )
         .expect_err("tools search should reject unknown fields");
@@ -3234,7 +3190,7 @@ mod tests {
         let err = resolve_tools_tool_input(json!({
             "action": "search",
             "query": "memory",
-            "backend": "legacy"
+            "backend": "remote"
         }))
         .expect_err("tools resolver should preserve unknown-field rejection");
         assert!(err.to_string().contains("unknown field 'backend'"));
@@ -3274,12 +3230,12 @@ mod tests {
     }
 
     #[test]
-    fn tools_help_accepts_tool_name_without_action() {
+    fn tools_help_accepts_tool_without_action() {
         let (action, action_input) = resolve_tools_tool_input(json!({
-            "tool_name": "  agena_web__search  ",
+            "tool": "  agena_web__search  ",
             "include_schema": false
         }))
-        .expect("tool_name-only tools input should infer help");
+        .expect("tool-only tools input should infer help");
 
         assert_eq!(action, "help");
         let parsed: ToolsHelpInput = serde_json::from_value(action_input).expect("help input");
@@ -3308,7 +3264,6 @@ mod tests {
         let usage = crate::tool::definition::schema_usage_text(&schema).expect("tools usage text");
         assert!(usage.contains("Search text used to rank matching tool names and descriptions."));
         assert!(usage.contains("Maximum number of search results to return."));
-        assert!(usage.contains("aliases=name | tool_name"));
     }
 
     #[test]
@@ -3443,7 +3398,7 @@ mod tests {
         let plan = WorkflowToolSuite::parse_tool(
             "plan",
             json!({
-                "action": "replace",
+                "action": "create",
                 "objective": "Rewrite plan",
                 "steps": []
             }),
@@ -3531,26 +3486,6 @@ mod tests {
 
         assert!(!config.plan.default_autorun);
         assert!(!config.plan.allow_direct_approval);
-
-        let legacy_config: WorkflowPluginConfig = serde_json::from_value(json!({
-            "plan": {
-                "default_auto_continue": false
-            }
-        }))
-        .expect("legacy autorun config should parse");
-        assert!(!legacy_config.plan.default_autorun);
-    }
-
-    #[test]
-    fn workflow_plugin_config_rejects_legacy_tool_search_shape() {
-        let err = serde_json::from_value::<WorkflowPluginConfig>(json!({
-            "tool_search": {
-                "url": "https://example.com/catalog"
-            }
-        }))
-        .expect_err("legacy workflow config should fail");
-
-        assert!(err.to_string().contains("unknown field `tool_search`"));
     }
 
     #[test]
@@ -3750,133 +3685,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_create_accepts_step_text_and_checkpoint_title_aliases() {
-        let plugin = WorkflowPlugin::new();
-        let (action, action_input) = resolve_plan_tool_input(json!({
-            "action": "create",
-            "objective": "Exercise mixed legacy field names.",
-            "autorun": false,
-            "steps": [
-                {
-                    "id": "step_1",
-                    "text": "创建计划",
-                    "executor": "ai",
-                    "checkpoints": [
-                        {
-                            "id": "cp_1",
-                            "title": "检查计划内容"
-                        }
-                    ]
-                }
-            ]
-        }))
-        .expect("plan payload should parse");
-        assert_eq!(action, "create");
-        let args: PlanCreateInput =
-            serde_json::from_value(action_input).expect("plan create input should deserialize");
-
-        let plan = plugin
-            .build_plan(
-                args.objective.as_str(),
-                args.title.as_deref(),
-                args.document_markdown.as_deref(),
-                args.steps.as_slice(),
-                args.autorun,
-                None,
-            )
-            .expect("plan should build");
-
-        assert_eq!(plan.steps.len(), 1);
-        assert_eq!(plan.steps[0].title, "创建计划");
-        assert_eq!(plan.steps[0].checkpoints.len(), 1);
-        assert_eq!(plan.steps[0].checkpoints[0].text, "检查计划内容");
-    }
-
-    #[test]
-    fn resolve_plan_tool_input_normalizes_legacy_actions() {
-        let (legacy_create_action, legacy_create_input) = resolve_plan_tool_input(json!({
-            "action": "create",
-            "objective": "Use the legacy autorun field.",
-            "auto_continue": true,
-            "steps": []
-        }))
-        .expect("legacy create autorun field should normalize");
-        assert_eq!(legacy_create_action, "create");
-        let legacy_create_args: PlanCreateInput = serde_json::from_value(legacy_create_input)
-            .expect("legacy create input should deserialize");
-        assert_eq!(legacy_create_args.autorun, Some(true));
-
-        let (replace_action, replace_input) = resolve_plan_tool_input(json!({
-            "action": "replace",
-            "objective": "Rewrite the draft plan.",
-            "steps": []
-        }))
-        .expect("legacy replace should normalize");
-        assert_eq!(replace_action, "create");
-        let replace_args: PlanCreateInput =
-            serde_json::from_value(replace_input).expect("replace input should deserialize");
-        assert_eq!(replace_args.objective, "Rewrite the draft plan.");
-
-        let (status_action, status_input) = resolve_plan_tool_input(json!({
-            "action": "set_status",
-            "status": "active",
-            "auto_continue": true
-        }))
-        .expect("set_status should continue accepting legacy status field");
-        assert_eq!(status_action, "set_status");
-        let status_args: PlanSetStatusInput =
-            serde_json::from_value(status_input).expect("status input should deserialize");
-        assert_eq!(status_args.phase, Some(WorkflowPlanPhase::Active));
-        assert_eq!(status_args.autorun, Some(true));
-
-        let (complete_action, complete_input) = resolve_plan_tool_input(json!({
-            "action": "complete",
-            "summary": "done"
-        }))
-        .expect("legacy complete should normalize");
-        assert_eq!(complete_action, "set_status");
-        let complete_args: PlanSetStatusInput =
-            serde_json::from_value(complete_input).expect("complete input should deserialize");
-        assert_eq!(complete_args.phase, Some(WorkflowPlanPhase::Completed));
-        assert_eq!(complete_args.summary.as_deref(), Some("done"));
-
-        let (restore_action, restore_input) = resolve_plan_tool_input(json!({
-            "action": "restore",
-            "phase": "paused",
-            "autorun": true
-        }))
-        .expect("legacy restore should normalize");
-        assert_eq!(restore_action, "set_status");
-        let restore_args: PlanSetStatusInput =
-            serde_json::from_value(restore_input).expect("restore input should deserialize");
-        assert_eq!(restore_args.phase, Some(WorkflowPlanPhase::Active));
-        assert_eq!(restore_args.autorun, Some(true));
-
-        let (runtime_action, runtime_input) = resolve_plan_tool_input(json!({
-            "action": "update_runtime",
-            "autorun": false
-        }))
-        .expect("legacy update_runtime should normalize");
-        assert_eq!(runtime_action, "set_status");
-        let runtime_args: PlanSetStatusInput =
-            serde_json::from_value(runtime_input).expect("runtime input should deserialize");
-        assert_eq!(runtime_args.phase, None);
-        assert_eq!(runtime_args.autorun, Some(false));
-
-        let (check_action, check_input) = resolve_plan_tool_input(json!({
-            "action": "update_checkpoint",
-            "step_id": "step_1",
-            "checkpoint_id": "cp_1",
-            "status": "completed"
-        }))
-        .expect("legacy update_checkpoint should normalize");
-        assert_eq!(check_action, "update_check");
-        let check_args: PlanUpdateCheckpointInput =
-            serde_json::from_value(check_input).expect("check input should deserialize");
-        assert_eq!(check_args.step_id, "step_1");
-        assert_eq!(check_args.checkpoint_id, "cp_1");
-        assert_eq!(check_args.status, WorkflowPlanStepStatus::Completed);
-
+    fn resolve_plan_tool_input_normalizes_canonical_actions() {
         let (trimmed_step_action, trimmed_step_input) = resolve_plan_tool_input(json!({
             "action": "update_step",
             "step_id": "  step_2  ",
@@ -3890,10 +3699,17 @@ mod tests {
         assert_eq!(trimmed_step_args.step_id, "step_2");
         assert_eq!(trimmed_step_args.note.as_deref(), Some("waiting on review"));
 
-        let execution_args: PlanSetStatusInput =
-            serde_json::from_value(json!({ "phase": "execution" }))
-                .expect("execution alias should deserialize");
-        assert_eq!(execution_args.phase, Some(WorkflowPlanPhase::Active));
+        let (status_action, status_input) = resolve_plan_tool_input(json!({
+            "action": "set_status",
+            "phase": "active",
+            "autorun": true
+        }))
+        .expect("set_status should parse canonical fields");
+        assert_eq!(status_action, "set_status");
+        let status_args: PlanSetStatusInput =
+            serde_json::from_value(status_input).expect("status input should deserialize");
+        assert_eq!(status_args.phase, Some(WorkflowPlanPhase::Active));
+        assert_eq!(status_args.autorun, Some(true));
     }
 
     #[test]
@@ -3927,7 +3743,7 @@ mod tests {
         let parsed = PlanToolInput::parse_input(json!({
             "action": "update_check",
             "step_id": "  step_1  ",
-            "checkpoint_id": "  cp_1  ",
+            "check_id": "  cp_1  ",
             "status": "completed"
         }))
         .expect("plan update_check should trim ids through flattened shape");
@@ -4164,10 +3980,6 @@ mod tests {
 
         assert!(phase_literals.contains("active"));
         assert!(phase_literals.contains("completed"));
-        assert!(!phase_literals.contains("awaiting_review"));
-        assert!(!phase_literals.contains("executing"));
-        assert!(!phase_literals.contains("paused"));
-        assert!(!phase_literals.contains("execution"));
         assert!(status_literals.contains("pending"));
         assert!(status_literals.contains("in_progress"));
         assert!(!status_literals.contains("active"));
@@ -4323,7 +4135,8 @@ mod tests {
             &runtime,
             &plugin,
             json!({
-                "action": "complete",
+                "action": "set_status",
+                "phase": "completed",
                 "summary": "Minimal trial plan"
             }),
         )
@@ -4336,11 +4149,11 @@ mod tests {
             &runtime,
             &plugin,
             json!({
-                "action": "update_runtime",
+                "action": "set_status",
                 "phase": "completed"
             }),
         )
-        .expect_err("runtime completion should fail while work remains");
+        .expect_err("plan completion should fail while work remains");
         assert!(runtime_completion_err.to_string().contains(
             "cannot complete plan: step 1 ('Create a minimal draft plan.') is still pending"
         ));
@@ -4378,7 +4191,8 @@ mod tests {
             &runtime,
             &plugin,
             json!({
-                "action": "complete",
+                "action": "set_status",
+                "phase": "completed",
                 "summary": "Minimal trial plan"
             }),
         );
@@ -4669,7 +4483,11 @@ mod tests {
             }),
         );
 
-        let cancelled = invoke_plan(&runtime, &plugin, json!({ "action": "cancel" }));
+        let cancelled = invoke_plan(
+            &runtime,
+            &plugin,
+            json!({ "action": "set_status", "phase": "cancelled" }),
+        );
         let cancelled_plan = output_plan(&cancelled);
         assert_eq!(cancelled_plan.phase, WorkflowPlanPhase::Cancelled);
         assert!(
@@ -4687,8 +4505,8 @@ mod tests {
             &runtime,
             &plugin,
             json!({
-                "action": "restore",
-                "phase": "paused",
+                "action": "set_status",
+                "phase": "active",
                 "autorun": true
             }),
         );
@@ -4706,7 +4524,11 @@ mod tests {
             Some("plan:active steps:0/1 autorun:on")
         );
 
-        let reset_to_draft = invoke_plan(&runtime, &plugin, json!({ "action": "restore" }));
+        let reset_to_draft = invoke_plan(
+            &runtime,
+            &plugin,
+            json!({ "action": "set_status", "phase": "draft" }),
+        );
         let reset_plan = output_plan(&reset_to_draft);
         assert_eq!(reset_plan.phase, WorkflowPlanPhase::Draft);
 
@@ -4714,7 +4536,8 @@ mod tests {
             &runtime,
             &plugin,
             json!({
-                "action": "cancel"
+                "action": "set_status",
+                "phase": "cancelled"
             }),
         );
         let completed_cancelled_plan = output_plan(&completed_cancel);
@@ -4757,7 +4580,8 @@ mod tests {
             &runtime,
             &plugin,
             json!({
-                "action": "complete",
+                "action": "set_status",
+                "phase": "completed",
                 "summary": "Everything finished."
             }),
         );
@@ -4768,7 +4592,7 @@ mod tests {
             &runtime,
             &plugin,
             json!({
-                "action": "restore",
+                "action": "set_status",
                 "phase": "draft"
             }),
         );
@@ -4785,7 +4609,7 @@ mod tests {
             &plugin,
             json!({
                 "action": "set_status",
-                "status": "blocked"
+                "phase": "blocked"
             }),
         )
         .expect_err("active phases should require remaining incomplete work");
@@ -4808,7 +4632,7 @@ mod tests {
             &plugin,
             json!({
                 "action": "set_status",
-                "status": "blocked"
+                "phase": "blocked"
             }),
         );
         let blocked_plan = output_plan(&blocked);

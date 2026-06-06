@@ -95,18 +95,6 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Return every persisted rewind audit entry for this session.
-    ///
-    /// These entries are legacy audit data from older same-session rewind
-    /// behavior. New rewind requests create forked sessions and do not append
-    /// checkpoints to the source session.
-    pub async fn list_rewind_checkpoints(
-        &self,
-        session_id: i64,
-    ) -> Result<Vec<crate::session::RewindCheckpoint>, AppError> {
-        self.store.list_rewind_checkpoints(session_id).await
-    }
-
     /// Serialise `session_id` as a JSONL bundle. The first line is the
     /// session header (id, parent, depth, runtime); subsequent lines are
     /// persistent event payloads in `seq_global` order.

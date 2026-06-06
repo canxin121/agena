@@ -514,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_lsp_server_shape_is_rejected() {
+    fn lsp_server_config_rejects_unknown_fields() {
         let err = serde_json::from_value::<LspConfig>(json!({
             "servers": {
                 "rust-analyzer": {
@@ -523,7 +523,7 @@ mod tests {
                 }
             }
         }))
-        .expect_err("legacy lsp config should fail");
+        .expect_err("lsp config should reject unknown fields");
 
         assert!(err.to_string().contains("unknown field `command`"));
     }

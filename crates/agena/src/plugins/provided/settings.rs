@@ -900,7 +900,7 @@ mod tests {
                 "source": "effective"
             }
         }))
-        .expect_err("legacy settings plugin config should fail");
+        .expect_err("settings plugin config should reject unknown fields");
 
         assert!(err.to_string().contains("unknown field `defaults`"));
     }

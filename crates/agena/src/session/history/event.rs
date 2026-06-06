@@ -168,36 +168,5 @@ pub struct SystemNoticeAppended {
 pub enum SystemNoticeKind {
     ContextInjection,
     ToolPolicyHint,
-    /// Legacy audit marker emitted by older same-session rewind operations.
-    /// The notice text is a JSON [`RewindCheckpoint`] payload describing the
-    /// messages that were removed by the rewind so a UI can show "you rewound
-    /// past these N messages — undo?" without re-folding.
-    /// Projection drops these from the visible transcript.
-    RewindCheckpoint,
     Other,
-}
-
-/// Payload carried as JSON inside a `SystemNoticeAppended` whose kind is
-/// `RewindCheckpoint`. Stable wire format keyed on schema for forward
-/// compatibility.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RewindCheckpoint {
-    /// Format version. Increment on breaking changes.
-    pub schema: u32,
-    /// Millisecond UTC timestamp of when the rewind happened.
-    pub at_ms: i64,
-    /// The message id the user rewound *to*.
-    pub target_message_id: i64,
-    /// Per-message audit entries for every message skipped by the rewind.
-    /// Order matches the original transcript order.
-    pub dropped: Vec<RewindCheckpointRecord>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RewindCheckpointRecord {
-    pub message_id: i64,
-    pub role: String,
-    /// Truncated preview of the message body (≤256 chars). Full content is
-    /// still recoverable from the underlying event log if needed.
-    pub preview: String,
 }

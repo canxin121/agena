@@ -1688,8 +1688,7 @@ async fn append_only_full_turn_writes_one_row_per_event_no_overwrites() {
         .await
         .expect("history should load");
 
-    // The legacy mutable-snapshot variant has been removed; nothing to
-    // assert here beyond the seq invariant below.
+    // The append-only log only needs the seq invariant below.
 
     // Every seq is unique and monotonically increasing — the cardinal
     // invariant of an append-only log.

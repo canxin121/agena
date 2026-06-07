@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
 import LoginPage from './agena/pages/LoginPage.vue'
@@ -10,8 +10,10 @@ import {
   fetchRuntimeStatus,
   runPluginUiAction,
   type PluginStudioCommand,
+  type RuntimeStatus,
   type RuntimeSkill,
 } from './agena/lib/agenaApi'
+import { usePluginToolRegistryRuntimeSync } from './agena/lib/usePluginToolRegistryRuntimeSync'
 import { sectionBasePaths, sectionNavItems } from './agena/pages/runtimePageStateModel'
 import { syncDesktopBackendTarget } from './lib/backend'
 import { isDesktopRuntime } from './lib/desktopConfig'
@@ -24,6 +26,7 @@ const route = useRoute()
 const router = useRouter()
 
 const booting = ref(true)
+const runtimeSnapshot = ref<RuntimeStatus | null>(null)
 const runtimeSkills = ref<RuntimeSkill[]>([])
 const runtimeCommands = ref<RuntimeSkill[]>([])
 const pluginCommands = ref<PluginStudioCommand[]>([])
@@ -63,6 +66,29 @@ const commandPalette = createCommandPalette({
     }
   },
 })
+
+function applyRuntimeSnapshot(status: RuntimeStatus | null) {
+  runtimeSnapshot.value = status
+  runtimeSkills.value = status?.operator.skills.skills ?? []
+  runtimeCommands.value = status?.operator.skills.commands ?? []
+  pluginCommands.value = status?.operator.ui?.catalog.studio.commands ?? []
+}
+
+const pluginRegistryRuntimeSync = usePluginToolRegistryRuntimeSync(
+  {
+    runtime: runtimeSnapshot,
+  },
+  undefined,
+  {
+    registerComponentLifecycle: false,
+    onRuntimeRefreshed: (status) => {
+      applyRuntimeSnapshot(status)
+    },
+    onError: (error) => {
+      console.warn('plugin tool registry stream failed', error)
+    },
+  },
+)
 
 function handleGlobalKeydown(event: KeyboardEvent) {
   const key = String(event.key || '').toLowerCase()
@@ -128,14 +154,10 @@ async function bootstrap() {
       auth.refresh().catch(() => {}),
       fetchRuntimeStatus()
         .then((status) => {
-          runtimeSkills.value = status.operator.skills.skills
-          runtimeCommands.value = status.operator.skills.commands
-          pluginCommands.value = status.operator.ui?.studio.commands ?? []
+          applyRuntimeSnapshot(status)
         })
         .catch(() => {
-          runtimeSkills.value = []
-          runtimeCommands.value = []
-          pluginCommands.value = []
+          applyRuntimeSnapshot(null)
         }),
     ])
   } finally {
@@ -154,6 +176,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   setGlobalCommandPaletteOpenHandler(null)
+  pluginRegistryRuntimeSync.stop()
   if (typeof window !== 'undefined') {
     window.removeEventListener('keydown', handleGlobalKeydown)
     window.removeEventListener('message', handleWindowMessage)
@@ -166,6 +189,21 @@ const activeModeLabel = computed(() => {
   const value = String(health.data?.activeMode || '').trim()
   return value || 'default'
 })
+const pluginRegistrySyncEnabled = computed(() => backendReady.value && !showLogin.value)
+
+watch(
+  pluginRegistrySyncEnabled,
+  (enabled) => {
+    if (enabled) {
+      pluginRegistryRuntimeSync.start()
+      void pluginRegistryRuntimeSync.refreshRuntime()
+    } else {
+      pluginRegistryRuntimeSync.stop()
+      applyRuntimeSnapshot(null)
+    }
+  },
+  { immediate: true },
+)
 </script>
 
 <template>

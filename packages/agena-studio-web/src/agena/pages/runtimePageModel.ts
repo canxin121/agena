@@ -36,6 +36,7 @@ export function buildOperatorCards(runtime: RuntimeStatus | null): OperatorCard[
   if (!runtime) return []
   return [
     { label: 'Generation', value: String(runtime.generation) },
+    { label: 'Tool Registry', value: String(runtime.operator.ui?.tool_registry_generation ?? 0) },
     { label: 'Providers', value: String(runtime.provider_ids.length) },
     { label: 'Plugins', value: String(runtime.plugin_count) },
     { label: 'Agents', value: String(runtime.operator.agents.total_count) },
@@ -54,6 +55,12 @@ export function buildRuntimeSnapshotFacts(runtime: RuntimeStatus | null): Sessio
     { label: 'Config Path', value: runtime.config_path, mono: true },
     { label: 'Config Found', value: runtime.config_found ? 'yes' : 'no' },
     { label: 'Auth Store', value: runtime.auth_store_path, mono: true },
+    { label: 'Tool Registry Generation', value: String(runtime.operator.ui?.tool_registry_generation ?? 0) },
+    {
+      label: 'Tool Registry Last Event',
+      value: runtime.operator.ui?.tool_registry_last_event?.exposed_name || 'n/a',
+      mono: Boolean(runtime.operator.ui?.tool_registry_last_event?.exposed_name),
+    },
     { label: 'Providers', value: runtime.provider_ids.join(', ') || 'none' },
     { label: 'Session Runtime', value: runtime.session_runtime_available ? 'enabled' : 'disabled' },
     { label: 'Automation', value: runtime.automation.enabled ? 'enabled' : 'disabled' },

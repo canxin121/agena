@@ -319,7 +319,11 @@ impl PluginToolRegistry {
         self.aliases_by_exposed = aliases_by_exposed;
     }
 
-    fn lookup_for_plugin(&self, plugin_id: &str, original_name: &str) -> Option<&RegisteredTool> {
+    pub fn lookup_for_plugin(
+        &self,
+        plugin_id: &str,
+        original_name: &str,
+    ) -> Option<&RegisteredTool> {
         self.by_exposed
             .values()
             .find(|tool| tool.plugin_id == plugin_id && tool.original_name == original_name)

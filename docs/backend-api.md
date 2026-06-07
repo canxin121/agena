@@ -1160,6 +1160,69 @@ Lagged notification:
 
 The SSE response sends keepalive every 25 seconds.
 
+当客户端只关心 plugin tool registry 变化时，推荐：
+
+- 首次加载用 `GET /api/v1/runtime` 或 `GET /api/v1/plugins/ui` 读取当前 `tool_registry_generation` 和 `tool_registry_last_event`。
+- 增量轮询用 `GET /api/v1/plugins/tools/changes?after_generation=<n>`。
+- 实时订阅用 `GET /api/v1/events/stream?kinds=plugin_tool_registry_changed`。
+
+`plugin_tool_registry_changed` 是统一事件总线上的一等事件，`payload` 结构与 `/api/v1/plugins/tools/changes` 返回的单条 change event 相同：
+
+```json
+{
+  "kind": "registered",
+  "generation": 42,
+  "timestamp_ms": 1780800000000,
+  "plugin_id": "agena.skills",
+  "original_name": "workflow_search",
+  "exposed_name": "agena_skills__workflow_search",
+  "tool": {
+    "name": "workflow_search",
+    "input_schema": {
+      "type": "object"
+    }
+  }
+}
+```
+
+`curl` 示例：
+
+```bash
+curl -N \
+  -H 'Accept: text/event-stream' \
+  'http://127.0.0.1:3210/api/v1/events/stream?scope_kind=global&kinds=plugin_tool_registry_changed'
+```
+
+对应的 SSE frame：
+
+```text
+event: notification
+data: {"kind":"event","data":{"subscription":"sse","event":{"meta":{"seq_global":901},"kind":"plugin_tool_registry_changed","payload":{"kind":"updated","generation":42,"timestamp_ms":1780800000000,"plugin_id":"agena.skills","original_name":"workflow_search","exposed_name":"agena_skills__workflow_search","tool":{"name":"workflow_search","input_schema":{"type":"object"}}}}}}
+```
+
+浏览器 `EventSource` 示例：
+
+```ts
+const stream = new EventSource(
+  '/api/v1/events/stream?scope_kind=global&kinds=plugin_tool_registry_changed',
+  { withCredentials: true },
+)
+
+stream.addEventListener('notification', (raw) => {
+  const notification = JSON.parse((raw as MessageEvent).data)
+  if (notification.kind !== 'event') return
+  const event = notification.data.event
+  if (event.kind !== 'plugin_tool_registry_changed') return
+  console.log(event.payload.exposed_name, event.payload.generation)
+})
+```
+
+选择建议：
+
+- 只想知道“当前 catalog 长什么样”时，读 `/api/v1/runtime` 或 `/api/v1/plugins/ui`。
+- 想按 generation 做轻量追增量时，读 `/api/v1/plugins/tools/changes`。
+- 想和其他 runtime 事件统一消费、做实时 UI 刷新或日志观察时，订 `/api/v1/events/stream`。
+
 ## WebSocket
 
 ```text

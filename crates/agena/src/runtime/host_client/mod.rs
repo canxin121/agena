@@ -59,6 +59,57 @@ pub fn noop_host_client() -> Arc<dyn HostClient> {
     Arc::new(NoopHostClient)
 }
 
+pub fn install_plugin_host_event_publisher(
+    host_handle: Arc<crate::plugin::host::HostHandle>,
+    runtime: AgenaRuntime,
+) {
+    let listener = Arc::new(
+        move |event: crate::plugin::sdk::host_api::ToolRegistryChangedEvent| {
+            let runtime = runtime.clone();
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    publish_tool_registry_changed_event(runtime, event).await;
+                });
+            } else {
+                tracing::debug!(
+                    target: "agena_plugin_host::events",
+                    "skipping tool-registry event publish: no tokio runtime available"
+                );
+            }
+        },
+    );
+    host_handle.set_tool_registry_event_listener(Some(listener));
+}
+
+async fn publish_tool_registry_changed_event(
+    runtime: AgenaRuntime,
+    event: crate::plugin::sdk::host_api::ToolRegistryChangedEvent,
+) {
+    let snapshot = runtime.current_snapshot();
+    let Some(manager) = snapshot.session_manager() else {
+        tracing::debug!(
+            target: "agena_plugin_host::events",
+            generation = event.generation,
+            exposed_name = %event.exposed_name,
+            "skipping tool-registry event publish: no session manager"
+        );
+        return;
+    };
+    if let Err(err) = manager
+        .event_publisher()
+        .publish(
+            crate::event::PublishContext::default(),
+            crate::event::EventKind::PluginToolRegistryChanged(event),
+        )
+        .await
+    {
+        tracing::warn!(
+            target: "agena_plugin_host::events",
+            "failed to publish tool-registry change event: {err}"
+        );
+    }
+}
+
 fn plugin_error(error: impl ToString) -> PluginError {
     PluginError::new(error.to_string())
 }

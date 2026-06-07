@@ -25,6 +25,8 @@ pub(crate) mod truncation;
 pub(crate) mod worktree;
 
 use std::collections::BTreeSet;
+use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
@@ -50,7 +52,7 @@ use crate::plugin::{
         InputNetworkSpec as SdkInputNetworkSpec, InputPathSpec as SdkInputPathSpec,
         NetworkAccessSpec as SdkNetworkAccessSpec, PathAccessSpec as SdkPathAccessSpec,
         PathKind as SdkPathKind, ShellEnvInput as PluginShellEnvInput,
-        ToolStreamingMode as SdkToolStreamingMode,
+        ToolResultPolicy as SdkToolResultPolicy, ToolStreamingMode as SdkToolStreamingMode,
     },
 };
 use crate::plugins::provided::{
@@ -1851,6 +1853,8 @@ impl ToolExecutor {
         let stream_id = stream.stream_id;
         let chunks = stream.chunks;
         let end = stream.end;
+        let result_policy = resolution.decl.result_policy.clone();
+        let exposed_tool_name = resolution.exposed_name.clone();
         let executor = self.clone();
         let invocation = invocation.clone();
         let (end_tx, end_rx) = tokio::sync::oneshot::channel();
@@ -1868,6 +1872,12 @@ impl ToolExecutor {
                     let mut execution = ToolInvocationExecution::new(output.clone(), view)
                         .with_apply_patch_option(apply_patch_execution_from_tool_output(&output));
                     executor.apply_after_hooks(&invocation, session_id, call_id, &mut execution)?;
+                    executor.apply_result_policy(
+                        exposed_tool_name.as_str(),
+                        &result_policy,
+                        call_id,
+                        &mut execution,
+                    )?;
                     Ok(execution)
                 })(),
                 Ok(Err(err)) => Err(ToolError::Plugin(err.message)),
@@ -1958,6 +1968,12 @@ impl ToolExecutor {
         let mut execution = ToolInvocationExecution::new(output.clone(), view)
             .with_apply_patch_option(apply_patch_execution_from_tool_output(&output));
         self.apply_after_hooks(invocation, session_id, call_id, &mut execution)?;
+        self.apply_result_policy(
+            resolution.exposed_name.as_str(),
+            &resolution.decl.result_policy,
+            call_id,
+            &mut execution,
+        )?;
         Ok(execution)
     }
 
@@ -2055,6 +2071,95 @@ impl ToolExecutor {
                 .map_err(ToolError::InvalidInput)?;
         }
 
+        Ok(())
+    }
+
+    fn apply_result_policy(
+        &self,
+        exposed_tool_name: &str,
+        policy: &SdkToolResultPolicy,
+        call_id: i64,
+        execution: &mut ToolInvocationExecution,
+    ) -> Result<(), ToolError> {
+        if policy.is_default() {
+            return Ok(());
+        }
+
+        execution.view.metadata.insert(
+            "result_policy_ui_render_kind".to_string(),
+            format!("{:?}", policy.ui_render_kind).to_ascii_lowercase(),
+        );
+        if let Some(preview_lines) = policy.preview_lines {
+            execution.view.metadata.insert(
+                "result_policy_preview_lines".to_string(),
+                preview_lines.to_string(),
+            );
+        }
+
+        let original = execution.view.output_text.clone();
+        if original.is_empty() {
+            return Ok(());
+        }
+
+        let mut preview = original.clone();
+        let mut truncated = false;
+
+        if let Some(max_lines) = policy.preview_lines
+            && max_lines > 0
+        {
+            let mut lines = preview.lines();
+            let selected = lines.by_ref().take(max_lines).collect::<Vec<_>>();
+            if lines.next().is_some() {
+                preview = selected.join("\n");
+                truncated = true;
+            }
+        }
+
+        if let Some(max_chars) = policy.max_model_chars
+            && max_chars > 0
+            && preview.chars().count() > max_chars
+        {
+            preview = truncate_to_char_count(preview.as_str(), max_chars);
+            truncated = true;
+        }
+
+        if !truncated {
+            return Ok(());
+        }
+
+        execution
+            .view
+            .metadata
+            .insert("result_policy_truncated".to_string(), "true".to_string());
+        execution.view.metadata.insert(
+            "result_policy_original_chars".to_string(),
+            original.chars().count().to_string(),
+        );
+        execution.view.metadata.insert(
+            "result_policy_model_chars".to_string(),
+            preview.chars().count().to_string(),
+        );
+
+        if policy.persist_large_output {
+            if let Some(path) = persist_tool_result_output(
+                self.workspace_root(),
+                exposed_tool_name,
+                call_id,
+                &original,
+            )? {
+                execution.view.metadata.insert(
+                    "result_policy_persisted_path".to_string(),
+                    path.display().to_string(),
+                );
+                preview.push_str("\n\n[output truncated; full output persisted at ");
+                preview.push_str(path.display().to_string().as_str());
+                preview.push(']');
+            }
+        } else {
+            preview.push_str("\n\n[output truncated by tool result policy]");
+        }
+
+        execution.view.output_text = preview;
         Ok(())
     }
 
@@ -2323,6 +2428,45 @@ impl ToolExecutor {
 
 pub(crate) fn normalize_path_for_display(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn truncate_to_char_count(value: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    let Some((idx, _)) = value.char_indices().nth(max_chars) else {
+        return value.to_string();
+    };
+    value[..idx].to_string()
+}
+
+fn persist_tool_result_output(
+    workspace_root: &Path,
+    exposed_tool_name: &str,
+    call_id: i64,
+    output_text: &str,
+) -> Result<Option<PathBuf>, ToolError> {
+    if output_text.is_empty() {
+        return Ok(None);
+    }
+
+    let dir = workspace_root.join(".agena").join("tool-results");
+    fs::create_dir_all(&dir)?;
+    let digest = blake3::hash(output_text.as_bytes()).to_hex().to_string();
+    let short_digest = digest.get(..12).unwrap_or(digest.as_str());
+    let safe_tool = model_safe_tool_name(exposed_tool_name).replace("__", "_");
+    let call_part = if call_id >= 0 {
+        call_id.to_string()
+    } else {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis().to_string())
+            .unwrap_or_else(|_| "synthetic".to_string())
+    };
+    let path = dir.join(format!("{call_part}-{safe_tool}-{short_digest}.txt"));
+    let mut file = fs::File::create(&path)?;
+    file.write_all(output_text.as_bytes())?;
+    Ok(Some(path))
 }
 
 fn access_kind_name(access: AccessKind) -> &'static str {
@@ -5403,6 +5547,10 @@ mod tests {
                     .description("Echo a message from the plugin.")
                     .summary("Echo a plugin message.")
                     .help("Detailed fixture help for plugin_echo.")
+                    .max_model_chars(24)
+                    .preview_lines(2)
+                    .persist_large_output(true)
+                    .ui_render_kind(crate::plugin::sdk::ToolResultRenderKind::Markdown)
                     .tag(crate::plugin::sdk::ToolTag::ReadOnly),
                 )
                 .tool(
@@ -7223,6 +7371,54 @@ mod tests {
                 .map(String::as_str),
             Some("applied")
         );
+    }
+
+    #[test]
+    fn plugin_result_policy_truncates_and_persists_large_output() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_plugin_manager(&workspace.root));
+        let invocation = ToolInvocation {
+            name: FIXTURE_ECHO_TOOL.to_string(),
+            plugin_name: None,
+            input: StructuredObject::try_from(json!({
+                "message": "alpha line\nbeta line\ngamma line with tail"
+            }))
+            .expect("structured object should build"),
+        };
+
+        let prepared = executor
+            .prepare_invocation(&invocation, 7, 11)
+            .expect("prepare should succeed");
+        let execution = executor
+            .execute_invocation_detailed(&prepared.invocation, 7, 11)
+            .expect("plugin execution should succeed");
+
+        assert_eq!(
+            execution
+                .view
+                .metadata
+                .get("result_policy_truncated")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            execution
+                .view
+                .metadata
+                .get("result_policy_ui_render_kind")
+                .map(String::as_str),
+            Some("markdown")
+        );
+        let persisted_path = execution
+            .view
+            .metadata
+            .get("result_policy_persisted_path")
+            .expect("persisted path should be recorded");
+        let persisted = fs::read_to_string(persisted_path).expect("persisted output should exist");
+        assert!(persisted.contains("alpha line"));
+        assert!(persisted.contains("after"));
+        assert!(execution.view.output_text.contains("output truncated"));
     }
 
     #[test]

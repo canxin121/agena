@@ -106,7 +106,7 @@ export function useChatCommandState(input: ChatCommandStateInput) {
     router: input.routeRouter,
     runtimeSkills: computed(() => input.runtime.value?.operator.skills.skills ?? []),
     runtimeCommands: computed(() => input.runtime.value?.operator.skills.commands ?? []),
-    pluginCommands: computed(() => input.runtime.value?.operator.ui?.studio.commands ?? []),
+    pluginCommands: computed(() => input.runtime.value?.operator.ui?.catalog.studio.commands ?? []),
     localCommands,
     onSelectRuntimeEntry: async ({ context, item }) => {
       const response = await invokePluginUiTool({

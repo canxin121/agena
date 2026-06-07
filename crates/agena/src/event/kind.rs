@@ -12,6 +12,7 @@ use crate::event::client::{
     ExecutionStartedEvent, MessagePartDeltaEvent, MessagePartUpdatedEvent, PermissionRepliedEvent,
     PermissionRequestedEvent, PermissionRuleEvent, StreamErrorEvent,
 };
+pub type PluginToolRegistryChangedEvent = crate::plugin::sdk::host_api::ToolRegistryChangedEvent;
 use crate::session::history::{
     AssistantMessageCompleted, RunAborted, RunCompleted, RunStarted, SystemNoticeAppended,
     ToolCallCompleted, ToolCallIssued, UserMessageAppended,
@@ -51,6 +52,8 @@ pub enum EventKind {
     /// `kind_label` carries the plugin's intended kind name so subscribers
     /// can filter by it; `payload` is opaque JSON.
     PluginEvent(PluginEventPayload),
+    /// Structured runtime event emitted when the plugin tool registry changes.
+    PluginToolRegistryChanged(PluginToolRegistryChangedEvent),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -85,6 +88,7 @@ impl EventKind {
             Self::ToolCallCompleted(_) => "tool_call_completed",
             Self::SystemNoticeAppended(_) => "system_notice_appended",
             Self::PluginEvent(_) => "plugin_event",
+            Self::PluginToolRegistryChanged(_) => "plugin_tool_registry_changed",
         }
     }
 
@@ -145,6 +149,7 @@ pub const HISTORY_KINDS: &[&str] = &[
     "tool_call_completed",
     "system_notice_appended",
     "plugin_event",
+    "plugin_tool_registry_changed",
 ];
 
 /// Stable list of every known kind tag (UI + history). Order matches the
@@ -172,6 +177,7 @@ pub const ALL_KINDS: &[&str] = &[
     "tool_call_completed",
     "system_notice_appended",
     "plugin_event",
+    "plugin_tool_registry_changed",
 ];
 
 /// Concrete `DomainEvent` envelope specialised for agena's `EventKind`.

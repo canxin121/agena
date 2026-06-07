@@ -272,6 +272,10 @@ pub enum ToolPayloadOutput {
         edit_mode: String,
         cell_index: u32,
         cell_count: u32,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        changes: Vec<FileChangeRecord>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        diff: String,
     },
     PowerShell {
         #[serde(default, skip_serializing_if = "Option::is_none")]

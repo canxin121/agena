@@ -2196,19 +2196,38 @@ impl SessionManager {
             execution.view.attachments.as_slice(),
             output_text.as_str(),
         );
+        let completion_title = {
+            let execution_title = execution.view.title.trim();
+            if !execution_title.is_empty() {
+                execution_title.to_string()
+            } else {
+                session
+                    .part(&resolved.pending.part)
+                    .and_then(|part| part.content.as_ref())
+                    .and_then(|content| match content {
+                        PartContent::Operation(operation) => Some(operation.title.clone()),
+                        _ => None,
+                    })
+                    .filter(|title| !title.trim().is_empty())
+                    .unwrap_or_else(|| format!("Tool {}", tool_name(&resolved.invocation)))
+            }
+        };
         self.apply_tool_success_execution_context(&mut session, &resolved.invocation, &execution);
 
         let assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                tool_part.set_content(PartContent::Operation(OperationPart::completed(
-                    resolved.call_id,
-                    resolved.invocation.clone(),
-                    output_text.clone(),
-                    blocks.clone(),
-                    execution.view.attachments.clone(),
-                    tool_output.clone(),
-                    lifecycle.clone(),
-                )));
+                tool_part.set_content(PartContent::Operation(
+                    OperationPart::completed(
+                        resolved.call_id,
+                        resolved.invocation.clone(),
+                        output_text.clone(),
+                        blocks.clone(),
+                        execution.view.attachments.clone(),
+                        tool_output.clone(),
+                        lifecycle.clone(),
+                    )
+                    .with_title(completion_title.clone()),
+                ));
                 tool_part.status = ExecutionStatus::Completed;
             })?;
 
@@ -2254,6 +2273,15 @@ impl SessionManager {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
         let blocks = text_result_blocks(reason.as_str());
+        let failure_title = session
+            .part(&resolved.pending.part)
+            .and_then(|part| part.content.as_ref())
+            .and_then(|content| match content {
+                PartContent::Operation(operation) => Some(operation.title.clone()),
+                _ => None,
+            })
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| format!("Tool {}", tool_name(&resolved.invocation)));
 
         // Notify plugins about the tool failure (fire-and-forget).
         state.tool_executor.broadcast_tool_failure(
@@ -2265,16 +2293,19 @@ impl SessionManager {
 
         let assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                tool_part.set_content(PartContent::Operation(OperationPart::failed(
-                    resolved.call_id,
-                    resolved.invocation.clone(),
-                    reason.clone(),
-                    reason.clone(),
-                    blocks.clone(),
-                    Vec::new(),
-                    ToolOutput::default(),
-                    lifecycle.clone(),
-                )));
+                tool_part.set_content(PartContent::Operation(
+                    OperationPart::failed(
+                        resolved.call_id,
+                        resolved.invocation.clone(),
+                        reason.clone(),
+                        reason.clone(),
+                        blocks.clone(),
+                        Vec::new(),
+                        ToolOutput::default(),
+                        lifecycle.clone(),
+                    )
+                    .with_title(failure_title.clone()),
+                ));
                 tool_part.status = ExecutionStatus::Failed;
             })?;
 

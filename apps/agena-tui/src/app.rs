@@ -101,8 +101,10 @@ mod view;
 use self::plugin_workbench::*;
 use self::provider_studio::*;
 
+#[cfg(test)]
+use self::transcript_view::render_message;
 use self::transcript_view::{
-    render_message, render_message_detailed, render_transcript_export_markdown,
+    render_message_detailed, render_message_export, render_transcript_export_markdown,
     rewind_message_preview, sanitize_terminal_text,
 };
 
@@ -15487,11 +15489,22 @@ impl App {
             .messages
             .iter()
             .map(|message| {
-                render_message(message, u16::MAX, &self.i18n)
-                    .into_iter()
-                    .map(|line| line.text)
-                    .collect::<Vec<_>>()
-                    .join("\n")
+                render_message_export(
+                    message,
+                    u16::MAX,
+                    &self.i18n,
+                    TranscriptDetailDefaults {
+                        tool_output_expanded: true,
+                        thinking_expanded: self
+                            .transcript
+                            .detail_expanded_by_default
+                            .thinking_expanded,
+                    },
+                )
+                .into_iter()
+                .map(|line| line.text)
+                .collect::<Vec<_>>()
+                .join("\n")
             })
             .collect::<Vec<_>>()
             .join("\n\n")

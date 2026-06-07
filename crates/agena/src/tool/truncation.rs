@@ -55,6 +55,9 @@ impl ToolOutputTruncator {
                 *inverse_patch = truncate_text(inverse_patch, self.policy.max_chars);
                 *diff = truncate_text(diff, self.policy.max_chars);
             }
+            ToolPayloadOutput::NotebookEdit { diff, .. } => {
+                *diff = truncate_text(diff, self.policy.max_chars);
+            }
             ToolPayloadOutput::Glob { .. }
             | ToolPayloadOutput::Grep { .. }
             | ToolPayloadOutput::Task { .. }
@@ -73,8 +76,7 @@ impl ToolOutputTruncator {
             | ToolPayloadOutput::LspDefinition { .. }
             | ToolPayloadOutput::LspReferences { .. }
             | ToolPayloadOutput::LspHover { .. }
-            | ToolPayloadOutput::LspDiagnostics { .. }
-            | ToolPayloadOutput::NotebookEdit { .. } => {}
+            | ToolPayloadOutput::LspDiagnostics { .. } => {}
         }
 
         execution

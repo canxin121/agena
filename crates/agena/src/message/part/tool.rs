@@ -1102,6 +1102,11 @@ impl OperationPart {
         }
     }
 
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = title.into();
+        self
+    }
+
     pub fn call_id(&self) -> i64 {
         self.call_id
     }

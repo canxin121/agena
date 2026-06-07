@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use diff::Result as DiffResult;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -95,7 +96,7 @@ pub fn execute(
                 fs::write(&absolute, &content)?;
 
                 inverse_sections.push(format!("*** Delete File: {path}"));
-                diff_sections.push(render_file_diff(None, Some((&path, &content))));
+                diff_sections.push(render_add_diff(&path, &content));
                 progress.push(format!("applied add {path}"));
                 changed_files.push(AppliedFileChange {
                     path,
@@ -119,7 +120,7 @@ pub fn execute(
                 fs::remove_file(&absolute)?;
 
                 inverse_sections.push(render_add_file_section(&path, &original));
-                diff_sections.push(render_file_diff(Some((&path, &original)), None));
+                diff_sections.push(render_delete_diff(&path, &original));
                 progress.push(format!("applied delete {path}"));
                 changed_files.push(AppliedFileChange {
                     path,
@@ -169,10 +170,7 @@ pub fn execute(
                         &updated,
                         &original,
                     ));
-                    diff_sections.push(render_file_diff(
-                        Some((&path, &original)),
-                        Some((&target_path, &updated)),
-                    ));
+                    diff_sections.push(render_update_diff(&path, Some(&target_path), &hunks));
                     progress.push(format!("applied move {path} -> {target_path}"));
                     changed_files.push(AppliedFileChange {
                         path: target_path,
@@ -189,10 +187,7 @@ pub fn execute(
                     inverse_sections.push(render_update_inverse_section(
                         &path, None, &updated, &original,
                     ));
-                    diff_sections.push(render_file_diff(
-                        Some((&path, &original)),
-                        Some((&path, &updated)),
-                    ));
+                    diff_sections.push(render_update_diff(&path, None, &hunks));
                     progress.push(format!("applied update {path}"));
                     changed_files.push(AppliedFileChange {
                         path,
@@ -435,49 +430,62 @@ fn render_update_inverse_section(
     lines.join("\n")
 }
 
-fn render_file_diff(before: Option<(&str, &str)>, after: Option<(&str, &str)>) -> String {
-    let before_path = before.map(|(path, _)| path);
-    let after_path = after.map(|(path, _)| path);
-    let display_before = before_path.unwrap_or("/dev/null");
-    let display_after = after_path.unwrap_or("/dev/null");
-    let mut lines = vec![format!(
-        "diff --git a/{} b/{}",
-        before_path.unwrap_or(display_after),
-        after_path.unwrap_or(display_before)
-    )];
-
-    match (before_path, after_path) {
-        (None, Some(_)) => lines.push("new file mode 100644".to_string()),
-        (Some(_), None) => lines.push("deleted file mode 100644".to_string()),
-        (Some(from), Some(to)) if from != to => {
-            lines.push(format!("rename from {from}"));
-            lines.push(format!("rename to {to}"));
-        }
-        _ => {}
-    }
-
-    lines.push(format!(
-        "--- {}",
-        before_path.map_or("/dev/null".to_string(), |p| format!("a/{p}"))
-    ));
-    lines.push(format!(
-        "+++ {}",
-        after_path.map_or("/dev/null".to_string(), |p| format!("b/{p}"))
-    ));
+fn render_add_diff(path: &str, content: &str) -> String {
+    let mut lines = vec![format!("diff --git a/{} b/{}", path, path)];
+    lines.push("new file mode 100644".to_string());
+    lines.push("--- /dev/null".to_string());
+    lines.push(format!("+++ b/{path}"));
     lines.push("@@".to_string());
+    push_prefixed_lines(&mut lines, '+', content);
+    lines.join("\n")
+}
 
-    if let Some((_, content)) = before {
-        for line in normalize_lf(content).lines() {
-            lines.push(format!("-{line}"));
-        }
+fn render_delete_diff(path: &str, content: &str) -> String {
+    let mut lines = vec![format!("diff --git a/{path} b/{path}")];
+    lines.push("deleted file mode 100644".to_string());
+    lines.push(format!("--- a/{path}"));
+    lines.push("+++ /dev/null".to_string());
+    lines.push("@@".to_string());
+    push_prefixed_lines(&mut lines, '-', content);
+    lines.join("\n")
+}
+
+fn render_update_diff(path: &str, move_to: Option<&str>, hunks: &[Hunk]) -> String {
+    let target_path = move_to.unwrap_or(path);
+    let mut lines = vec![format!("diff --git a/{path} b/{target_path}")];
+    if let Some(target_path) = move_to {
+        lines.push(format!("rename from {path}"));
+        lines.push(format!("rename to {target_path}"));
     }
-    if let Some((_, content)) = after {
-        for line in normalize_lf(content).lines() {
-            lines.push(format!("+{line}"));
+    lines.push(format!("--- a/{path}"));
+    lines.push(format!("+++ b/{target_path}"));
+
+    if hunks.is_empty() {
+        return lines.join("\n");
+    }
+
+    for hunk in hunks {
+        lines.push("@@".to_string());
+        for line in diff::lines(&hunk.old, &hunk.new) {
+            match line {
+                DiffResult::Left(value) => lines.push(format!("-{value}")),
+                DiffResult::Both(value, _) => lines.push(format!(" {value}")),
+                DiffResult::Right(value) => lines.push(format!("+{value}")),
+            }
         }
     }
 
     lines.join("\n")
+}
+
+fn push_prefixed_lines(lines: &mut Vec<String>, prefix: char, content: &str) {
+    let normalized = normalize_lf(content);
+    for line in normalized.lines() {
+        lines.push(format!("{prefix}{line}"));
+    }
+    if normalized.ends_with('\n') {
+        lines.push(prefix.to_string());
+    }
 }
 
 fn describe_planned_op(op: &PatchOp) -> String {

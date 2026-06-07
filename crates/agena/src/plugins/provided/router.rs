@@ -331,7 +331,7 @@ fn declared_shell_network_requests(
 pub(crate) fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -> ToolInvokeOutput {
     let mut metadata = execution.view.metadata;
     match &execution.output {
-        ToolPayloadOutput::ApplyPatch { .. } => {
+        ToolPayloadOutput::ApplyPatch { .. } | ToolPayloadOutput::NotebookEdit { .. } => {
             metadata.insert("agena.effect".to_string(), "file_changes".to_string());
         }
         ToolPayloadOutput::ToolSearch { .. } => {

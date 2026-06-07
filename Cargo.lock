@@ -143,6 +143,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "derive_more",
+ "diff",
  "futures-core",
  "futures-util",
  "gcp_auth",

@@ -12900,6 +12900,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(raw_config)),
         };
         build_plugin_workbench_plugin(&test_sources(), "en-US", status, Some(inspect), Vec::new())
@@ -12978,6 +12979,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: None,
         };
 
@@ -13025,6 +13027,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: None,
         };
 
@@ -13073,6 +13076,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: None,
         };
 
@@ -13139,6 +13143,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: None,
         };
 
@@ -13188,6 +13193,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: None,
         };
 
@@ -13512,6 +13518,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
                 JsonValue::Null,
             )),
@@ -13557,6 +13564,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
                 JsonValue::Null,
             )),
@@ -13611,6 +13619,7 @@ mod tests {
                 status: status.clone(),
                 manifest: Some(manifest.clone()),
                 authority: None,
+                hooks: Vec::new(),
                 configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
                     JsonValue::Null,
                 )),
@@ -13625,6 +13634,7 @@ mod tests {
                 status,
                 manifest: Some(manifest),
                 authority: None,
+                hooks: Vec::new(),
                 configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
                     saved_full_config,
                 )),
@@ -13700,6 +13710,7 @@ mod tests {
                 status: status.clone(),
                 manifest: Some(manifest.clone()),
                 authority: None,
+                hooks: Vec::new(),
                 configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
                     JsonValue::Null,
                 )),
@@ -13714,6 +13725,7 @@ mod tests {
                 status,
                 manifest: Some(manifest),
                 authority: None,
+                hooks: Vec::new(),
                 configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
                     saved_full_config,
                 )),
@@ -13772,6 +13784,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
                 JsonValue::Null,
             )),
@@ -13821,6 +13834,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
                 JsonValue::Null,
             )),
@@ -13876,6 +13890,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
                 JsonValue::Null,
             )),
@@ -14023,6 +14038,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
                 JsonValue::Null,
             )),
@@ -14164,6 +14180,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
                 JsonValue::Null,
             )),
@@ -14223,6 +14240,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
                 JsonValue::Null,
             )),
@@ -14290,6 +14308,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
                 JsonValue::Null,
             )),
@@ -14434,6 +14453,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
                 JsonValue::Null,
             )),
@@ -14511,6 +14531,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
                 JsonValue::Null,
             )),
@@ -15960,6 +15981,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
                 JsonValue::Null,
             )),
@@ -16199,6 +16221,7 @@ mod tests {
             status: status.clone(),
             manifest: Some(manifest),
             authority: None,
+            hooks: Vec::new(),
             configured_plugin: Some(agena::plugin::ConfiguredPlugin::static_config(
                 JsonValue::Null,
             )),

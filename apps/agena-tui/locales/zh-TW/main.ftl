@@ -121,6 +121,9 @@ message-empty = （空訊息）
 message-thinking = 思考：{$summary}
 message-command-status = 狀態：{$status}，結束碼={$exit}
 message-file-changes = 檔案變更
+message-file-changes-preview-one = 1 個檔案：{$paths}
+message-file-changes-preview-many = {$count} 個檔案：{$paths}
+message-file-changes-more = 另 {$count} 個
 message-search = 搜尋：{$query}
 message-todo-list = 待辦清單
 message-error = 錯誤 [{$code}]：{$message}

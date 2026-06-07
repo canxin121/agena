@@ -2935,10 +2935,10 @@ mod tests {
     use crate::message::{
         ApplyPatchToolInput, EnterWorktreeToolInput, FileChangeKind, FilesystemAccess,
         FilesystemEffect, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
-        LspPositionToolInput, Message, MonitorToolInput, NetworkEffect, PartContent, ReadToolInput,
-        ShellCommandInput, StructuredObject, TaskSubagentType, TaskToolInput, TodoItem,
-        TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation, WebFetchToolInput,
-        WebSearchToolInput,
+        LspPositionToolInput, Message, MonitorToolInput, NetworkEffect, NotebookEditMode,
+        NotebookEditToolInput, PartContent, ReadToolInput, ShellCommandInput, StructuredObject,
+        TaskSubagentType, TaskToolInput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput,
+        ToolInvocation, WebFetchToolInput, WebSearchToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
@@ -6011,6 +6011,100 @@ mod tests {
                 );
             }
             other => panic!("expected apply_patch output, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_patch_diff_focuses_on_hunks_instead_of_full_file_snapshots() {
+        let workspace = TempWorkspace::new();
+        fs::write(
+            workspace.root.join("notes.txt"),
+            "alpha\nkeep-one\nbeta\nkeep-two\ngamma\n",
+        )
+        .expect("failed to seed notes.txt");
+        let executor = build_executor(&workspace.root);
+
+        let result = executor
+            .execute_tool_payload_detailed(&ToolPayloadInput::ApplyPatch(ApplyPatchToolInput {
+                patch: "\
+*** Begin Patch
+*** Update File: notes.txt
+@@
+ alpha
+-keep-one
++keep-one-updated
+ beta
+@@
+ beta
+-keep-two
++keep-two-updated
+ gamma
+*** End Patch"
+                    .to_string(),
+            }))
+            .expect("apply_patch should succeed");
+
+        match result.output {
+            ToolPayloadOutput::ApplyPatch { diff, .. } => {
+                assert!(diff.contains("diff --git a/notes.txt b/notes.txt"));
+                assert!(diff.contains("-keep-one"));
+                assert!(diff.contains("+keep-one-updated"));
+                assert!(!diff.lines().any(|line| line == " keep-one"));
+                assert!(!diff.lines().any(|line| line == " keep-two"));
+                assert!(diff.matches("@@").count() >= 2);
+            }
+            other => panic!("expected apply_patch output, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn notebook_edit_reports_structured_file_change_and_diff() {
+        let workspace = TempWorkspace::new();
+        fs::write(
+            workspace.root.join("demo.ipynb"),
+            r#"{
+  "cells": [
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {},
+      "outputs": [],
+      "source": [
+        "print('before')\n"
+      ]
+    }
+  ],
+  "metadata": {},
+  "nbformat": 4,
+  "nbformat_minor": 5
+}
+"#,
+        )
+        .expect("failed to seed notebook");
+        let executor = build_executor(&workspace.root);
+
+        let result = executor
+            .execute_tool_payload_detailed(&ToolPayloadInput::NotebookEdit(NotebookEditToolInput {
+                notebook_path: "demo.ipynb".to_string(),
+                cell_number: Some(0),
+                new_source: "print('after')\n".to_string(),
+                edit_mode: NotebookEditMode::Replace,
+                cell_type: None,
+            }))
+            .expect("notebook_edit should succeed");
+
+        match result.output {
+            ToolPayloadOutput::NotebookEdit { changes, diff, .. } => {
+                assert_eq!(changes.len(), 1);
+                assert_eq!(changes[0].path, "demo.ipynb");
+                assert_eq!(changes[0].kind, FileChangeKind::Updated);
+                assert!(diff.contains("diff --git a/demo.ipynb b/demo.ipynb"));
+                assert!(diff.contains("print('before')"));
+                assert!(diff.contains("print('after')"));
+                assert!(diff.lines().any(|line| line.starts_with('-')));
+                assert!(diff.lines().any(|line| line.starts_with('+')));
+            }
+            other => panic!("expected notebook_edit output, got {other:?}"),
         }
     }
 

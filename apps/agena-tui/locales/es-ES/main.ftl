@@ -121,6 +121,9 @@ message-empty = (mensaje vacio)
 message-thinking = pensando: {$summary}
 message-command-status = estado: {$status}, exit={$exit}
 message-file-changes = cambios de archivos
+message-file-changes-preview-one = 1 archivo: {$paths}
+message-file-changes-preview-many = {$count} archivos: {$paths}
+message-file-changes-more = +{$count} mas
 message-search = busqueda: {$query}
 message-todo-list = lista de tareas
 message-error = error [{$code}]: {$message}

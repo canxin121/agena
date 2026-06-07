@@ -121,6 +121,9 @@ message-empty = （空メッセージ）
 message-thinking = 思考: {$summary}
 message-command-status = 状態: {$status}, exit={$exit}
 message-file-changes = ファイル変更
+message-file-changes-preview-one = 1 件のファイル: {$paths}
+message-file-changes-preview-many = {$count} 件のファイル: {$paths}
+message-file-changes-more = 残り {$count} 件
 message-search = 検索: {$query}
 message-todo-list = TODO リスト
 message-error = エラー [{$code}]: {$message}

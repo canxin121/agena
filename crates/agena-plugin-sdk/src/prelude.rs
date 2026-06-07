@@ -17,16 +17,16 @@ pub use crate::host_api::{
     HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
     HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
     HostAgentSwitchRequest, HostAgentSwitchResponse, HostClient, HostGetSessionRequest,
-    HostGetSessionResponse, HostHookListResponse, HostHookRegistration, HostLspDiagnostic,
-    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
-    HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
-    HostMcpRemoveServerResponse, HostMcpServerSpec, HostNetworkPermissionCheckRequest,
-    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPluginStatus,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostRenameSessionRequest,
-    HostRenameSessionResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
-    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerJob,
-    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostGetSessionResponse, HostHookDescriptor, HostHookListResponse, HostHookRegistration,
+    HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
+    HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec,
+    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
+    HostPluginStatus, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
+    HostPluginStatusListResponse, HostRegisteredToolDescriptor, HostRegisteredToolListResponse,
+    HostRenameSessionRequest, HostRenameSessionResponse, HostSchedulerCreateRequest,
+    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
+    HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
     HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveRequest,
     HostStatuslineRemoveResponse, HostStatuslineSegment, HostStorageDeleteRequest,
@@ -35,7 +35,7 @@ pub use crate::host_api::{
     HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest,
     HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
     HostToolRemoveRequest, HostToolUpdateRequest, HostWorktreeListResponse, HostWorktreeSummary,
-    LogLevel, NoopHostClient,
+    LogLevel, NoopHostClient, ToolRegistryChangeKind, ToolRegistryChangedEvent,
 };
 pub use crate::macro_support::{schema_example_texts, schema_usage_text};
 pub use crate::manifest::{
@@ -44,8 +44,8 @@ pub use crate::manifest::{
     PluginStudioControl, PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView,
     PluginToolDecl, PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions,
     PluginUiAction, PluginUiContributions, PluginUiThemePalette, ToolDescriptionMode,
-    ToolDisplayPreset, ToolInputShape, ToolStreamingMode, ToolSuiteSurface, ToolSurface, ToolTag,
-    TransportKind, normalize_tool_tag_name,
+    ToolDisplayPreset, ToolInputShape, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode,
+    ToolSuiteSurface, ToolSurface, ToolTag, TransportKind, normalize_tool_tag_name,
 };
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
 pub use agena_macros::{

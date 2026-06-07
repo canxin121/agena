@@ -135,7 +135,7 @@ export type RuntimeStatus = {
       skills: RuntimeSkill[]
       commands: RuntimeSkill[]
     }
-    ui?: PluginUiCatalog
+    ui?: PluginUiCatalogSnapshot
   }
 }
 
@@ -289,6 +289,29 @@ export type PluginUiCatalog = {
     controls?: PluginStudioControl[]
     views?: PluginStudioView[]
   }
+}
+
+export type ToolRegistryChangeKind = 'registered' | 'updated' | 'removed'
+
+export type ToolRegistryChangedEvent = {
+  kind: ToolRegistryChangeKind
+  generation: number
+  timestamp_ms: number
+  plugin_id: string
+  original_name: string
+  exposed_name: string
+  tool?: Record<string, unknown> | null
+}
+
+export type PluginUiCatalogSnapshot = {
+  catalog: PluginUiCatalog
+  tool_registry_generation: number
+  tool_registry_last_event?: ToolRegistryChangedEvent | null
+}
+
+export type PluginToolRegistryChangesResponse = {
+  generation: number
+  events: ToolRegistryChangedEvent[]
 }
 
 export type PluginUiToolInvokeResponse = {
@@ -925,7 +948,41 @@ export type DomainEventRecord = {
   payload: Record<string, unknown>
 }
 
+export type EventNotification =
+  | {
+      kind: 'event'
+      data: {
+        subscription: string
+        event: DomainEventRecord
+      }
+    }
+  | {
+      kind: 'lagged'
+      data: {
+        subscription: string
+        skipped: number
+      }
+    }
+  | {
+      kind: 'resumed'
+      data: {
+        subscription: string
+        up_to_seq_global: number
+      }
+    }
+  | {
+      kind: 'subscription_closed'
+      data: {
+        subscription: string
+        reason: string
+      }
+    }
+
 export type SessionEventStreamHandle = {
+  close: () => void
+}
+
+export type NotificationStreamHandle = {
   close: () => void
 }
 
@@ -1106,9 +1163,30 @@ export async function listPlugins(): Promise<PluginStatus[]> {
   return response.entries ?? []
 }
 
+export async function fetchPluginUiCatalogSnapshot(): Promise<PluginUiCatalogSnapshot> {
+  return await apiJson<PluginUiCatalogSnapshot>('/api/v1/plugins/ui')
+}
+
 export async function fetchPluginUiCatalog(): Promise<PluginUiCatalog> {
-  const response = await apiJson<{ catalog: PluginUiCatalog }>('/api/v1/plugins/ui')
+  const response = await fetchPluginUiCatalogSnapshot()
   return response.catalog
+}
+
+export async function listPluginToolRegistryChanges(input?: {
+  afterGeneration?: number | null
+  limit?: number
+}): Promise<PluginToolRegistryChangesResponse> {
+  const params = new URLSearchParams()
+  if (input?.afterGeneration && input.afterGeneration > 0) {
+    params.set('after_generation', String(Math.trunc(input.afterGeneration)))
+  }
+  if (input?.limit && input.limit > 0) {
+    params.set('limit', String(Math.trunc(input.limit)))
+  }
+  const suffix = params.toString()
+  return await apiJson<PluginToolRegistryChangesResponse>(
+    `/api/v1/plugins/tools/changes${suffix ? `?${suffix}` : ''}`,
+  )
 }
 
 export async function invokePluginUiTool(input: {
@@ -1947,6 +2025,193 @@ export function streamSessionEvents(
   void connect()
 
   return { close }
+}
+
+export function streamNotifications(options: {
+  sinceSeqGlobal?: number | null
+  scopeKind?: 'global' | 'workspace' | 'session'
+  workspaceId?: number | null
+  sessionId?: number | null
+  kinds?: string[]
+  reconnectDelayMs?: number
+  onNotification: (notification: EventNotification) => void
+  onError?: (error: Error) => void
+  onOpen?: () => void
+}): NotificationStreamHandle {
+  const controller = new AbortController()
+  const decoder = new TextDecoder()
+  let closed = false
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let sinceSeqGlobal = Math.max(0, Math.trunc(options.sinceSeqGlobal ?? 0))
+  const reconnectDelayMs = Math.max(100, Math.trunc(options.reconnectDelayMs ?? 1000))
+
+  const scheduleReconnect = (delayMs: number) => {
+    if (closed || reconnectTimer) return
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      void connect()
+    }, delayMs)
+  }
+
+  const close = () => {
+    closed = true
+    controller.abort()
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+  }
+
+  const handleEventBlock = (block: string) => {
+    const parsed = parseSseEventBlock(block)
+    if (!parsed.data) return
+
+    if (parsed.event !== 'notification') return
+
+    const notification = JSON.parse(parsed.data) as EventNotification
+    if (notification.kind === 'event') {
+      const seq = Number(notification.data.event.seq_global)
+      if (Number.isFinite(seq)) {
+        sinceSeqGlobal = Math.max(sinceSeqGlobal, seq)
+      }
+    }
+    if (notification.kind === 'subscription_closed') {
+      options.onNotification(notification)
+      close()
+      return
+    }
+    options.onNotification(notification)
+  }
+
+  const readResponseStream = async (response: Response) => {
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('Notification stream response body is unavailable')
+    }
+
+    let buffer = ''
+    while (!closed) {
+      const { done, value } = await reader.read()
+      buffer = normalizeSseBuffer(buffer + decoder.decode(value ?? new Uint8Array(), { stream: !done }))
+
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary >= 0) {
+        const block = buffer.slice(0, boundary).trim()
+        buffer = buffer.slice(boundary + 2)
+        if (block) {
+          handleEventBlock(block)
+        }
+        boundary = buffer.indexOf('\n\n')
+      }
+
+      if (done) {
+        const trailing = buffer.trim()
+        if (trailing) {
+          handleEventBlock(trailing)
+        }
+        return
+      }
+    }
+  }
+
+  const connect = async () => {
+    if (closed) return
+
+    try {
+      const authHeaders = buildActiveUiAuthHeaders()
+      const url = new URL(apiUrl('/api/v1/events/stream'))
+      url.searchParams.set('scope_kind', options.scopeKind ?? 'global')
+      if (sinceSeqGlobal > 0) {
+        url.searchParams.set('since_seq_global', String(sinceSeqGlobal))
+      }
+      if (options.workspaceId !== null && options.workspaceId !== undefined) {
+        url.searchParams.set('workspace_id', String(Math.trunc(options.workspaceId)))
+      }
+      if (options.sessionId !== null && options.sessionId !== undefined) {
+        url.searchParams.set('session_id', String(Math.trunc(options.sessionId)))
+      }
+      if (options.kinds?.length) {
+        url.searchParams.set(
+          'kinds',
+          options.kinds
+            .map((value) => String(value || '').trim())
+            .filter(Boolean)
+            .join(','),
+        )
+      }
+
+      const response = await fetch(url.toString(), {
+        method: 'GET',
+        signal: controller.signal,
+        credentials: authHeaders.authorization ? 'omit' : 'include',
+        headers: {
+          accept: 'text/event-stream',
+          ...(authHeaders.authorization ? authHeaders : {}),
+        },
+      })
+
+      if (!response.ok) {
+        const bodyText = await response.text().catch(() => '')
+        const extractedMessage = extractAuthRequiredMessageFromBodyText(bodyText)
+        const message = extractedMessage || bodyText.trim() || `Request failed (${response.status})`
+        const code = extractErrorCode(bodyText)
+        const isUiAuthRequired =
+          response.status === 401 &&
+          (code === 'auth_required' || message.trim().toLowerCase() === 'ui authentication required')
+        if (isUiAuthRequired) {
+          emitAuthRequired({
+            message,
+            status: response.status,
+            code: code || 'auth_required',
+            url: url.toString(),
+          })
+        }
+        throw new Error(message)
+      }
+
+      options.onOpen?.()
+      await readResponseStream(response)
+
+      if (!closed) {
+        scheduleReconnect(250)
+      }
+    } catch (error) {
+      if (closed || controller.signal.aborted) return
+      options.onError?.(error instanceof Error ? error : new Error(String(error)))
+      scheduleReconnect(reconnectDelayMs)
+    }
+  }
+
+  void connect()
+
+  return { close }
+}
+
+export function streamPluginToolRegistryChanges(options: {
+  sinceSeqGlobal?: number | null
+  reconnectDelayMs?: number
+  onEvent: (event: ToolRegistryChangedEvent) => void
+  onLagged?: (skipped: number) => void
+  onError?: (error: Error) => void
+  onOpen?: () => void
+}): NotificationStreamHandle {
+  return streamNotifications({
+    sinceSeqGlobal: options.sinceSeqGlobal,
+    scopeKind: 'global',
+    kinds: ['plugin_tool_registry_changed'],
+    reconnectDelayMs: options.reconnectDelayMs,
+    onNotification: (notification) => {
+      if (notification.kind === 'lagged') {
+        options.onLagged?.(notification.data.skipped)
+        return
+      }
+      if (notification.kind !== 'event') return
+      if (notification.data.event.kind !== 'plugin_tool_registry_changed') return
+      options.onEvent(notification.data.event.payload as unknown as ToolRegistryChangedEvent)
+    },
+    onError: options.onError,
+    onOpen: options.onOpen,
+  })
 }
 
 export async function forkSession(input: {

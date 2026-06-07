@@ -11,6 +11,7 @@ use agena_api::{
         RewindSessionParams, SubmitMessageParams, UpdateSessionParams, UpdateWorkspaceParams,
         UpsertPermissionRuleParams,
     },
+    notifications::Notification,
     queries::{
         GetMessageParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
         ListEventsParams, ListMessagesParams, ListPermissionRulesParams,
@@ -24,8 +25,40 @@ use agena_api::{
         SessionExecutionResource, SessionResource, WorkspaceResource,
     },
 };
+use futures_util::StreamExt;
+use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::error::ClientError;
+use crate::ws::SubscriptionEvent;
+
+pub struct NotificationSubscription {
+    rx: mpsc::Receiver<Result<SubscriptionEvent, ClientError>>,
+    task: Option<JoinHandle<()>>,
+}
+
+impl NotificationSubscription {
+    pub async fn recv(&mut self) -> Option<Result<SubscriptionEvent, ClientError>> {
+        self.rx.recv().await
+    }
+
+    pub fn close(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+impl Drop for NotificationSubscription {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+#[derive(Debug, Default)]
+struct ParsedSseEvent {
+    event: String,
+    data: String,
+}
 
 /// Stateless REST client. Holds a `reqwest::Client` and the base URL like
 /// `http://localhost:7878`.
@@ -53,6 +86,47 @@ impl AgenaClient {
         self.base_url
             .join(path.trim_start_matches('/'))
             .expect("valid endpoint")
+    }
+
+    fn append_event_query(url: &mut url::Url, params: &ListEventsParams) {
+        let mut q = url.query_pairs_mut();
+        if let Some(seq) = params.since_seq_global {
+            q.append_pair("since_seq_global", &seq.to_string());
+        }
+        if let Some(limit) = params.limit {
+            q.append_pair("limit", &limit.to_string());
+        }
+        match &params.scope {
+            agena::event::Scope::Global => {}
+            agena::event::Scope::Workspace { workspace_id } => {
+                q.append_pair("scope_kind", "workspace");
+                q.append_pair("workspace_id", &workspace_id.to_string());
+            }
+            agena::event::Scope::Session { session_id } => {
+                q.append_pair("scope_kind", "session");
+                q.append_pair("session_id", &session_id.to_string());
+            }
+        }
+        if let Some(kinds) = &params.kinds {
+            let csv = kinds
+                .iter()
+                .map(|k| k.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            q.append_pair("kinds", &csv);
+        }
+    }
+
+    fn events_url(&self, params: &ListEventsParams) -> url::Url {
+        let mut url = self.endpoint("/api/v1/events");
+        Self::append_event_query(&mut url, params);
+        url
+    }
+
+    fn events_stream_url(&self, params: &ListEventsParams) -> url::Url {
+        let mut url = self.endpoint("/api/v1/events/stream");
+        Self::append_event_query(&mut url, params);
+        url
     }
 
     async fn parse_json<T: serde::de::DeserializeOwned>(
@@ -126,6 +200,56 @@ impl AgenaClient {
             return Err(ClientError::Api(api));
         }
         Ok(text)
+    }
+
+    fn normalize_sse_buffer(mut buffer: String) -> String {
+        if buffer.contains('\r') {
+            buffer = buffer.replace("\r\n", "\n").replace('\r', "\n");
+        }
+        buffer
+    }
+
+    fn parse_sse_event_block(block: &str) -> ParsedSseEvent {
+        let mut event = String::from("message");
+        let mut data = Vec::new();
+        for raw_line in block.lines() {
+            if raw_line.is_empty() || raw_line.starts_with(':') {
+                continue;
+            }
+            let (field, value) = match raw_line.split_once(':') {
+                Some((field, value)) => (field, value.trim_start()),
+                None => (raw_line, ""),
+            };
+            match field {
+                "event" => {
+                    if !value.is_empty() {
+                        event.clear();
+                        event.push_str(value);
+                    }
+                }
+                "data" => data.push(value.to_string()),
+                _ => {}
+            }
+        }
+        ParsedSseEvent {
+            event,
+            data: data.join("\n"),
+        }
+    }
+
+    async fn send_notification_frame(
+        tx: &mpsc::Sender<Result<SubscriptionEvent, ClientError>>,
+        notification: Notification,
+    ) -> bool {
+        let item = match notification {
+            Notification::Event { event, .. } => Ok(SubscriptionEvent::Event(*event)),
+            Notification::Lagged { skipped, .. } => Ok(SubscriptionEvent::Lagged(skipped)),
+            Notification::Resumed { .. } => return true,
+            Notification::SubscriptionClosed { reason, .. } => Err(ClientError::Protocol(format!(
+                "sse subscription closed: {reason}"
+            ))),
+        };
+        tx.send(item).await.is_ok()
     }
 
     // ─── high-level conveniences ───
@@ -238,37 +362,94 @@ impl AgenaClient {
         &self,
         params: ListEventsParams,
     ) -> Result<PaginatedEvents, ClientError> {
-        let mut url = self.endpoint("/api/v1/events");
-        {
-            let mut q = url.query_pairs_mut();
-            if let Some(seq) = params.since_seq_global {
-                q.append_pair("since_seq_global", &seq.to_string());
-            }
-            if let Some(limit) = params.limit {
-                q.append_pair("limit", &limit.to_string());
-            }
-            match &params.scope {
-                agena::event::Scope::Global => {}
-                agena::event::Scope::Workspace { workspace_id } => {
-                    q.append_pair("scope_kind", "workspace");
-                    q.append_pair("workspace_id", &workspace_id.to_string());
-                }
-                agena::event::Scope::Session { session_id } => {
-                    q.append_pair("scope_kind", "session");
-                    q.append_pair("session_id", &session_id.to_string());
-                }
-            }
-            if let Some(kinds) = &params.kinds {
-                let csv = kinds
-                    .iter()
-                    .map(|k| k.as_str())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                q.append_pair("kinds", &csv);
-            }
-        }
+        let url = self.events_url(&params);
         let response = self.http.get(url).send().await?;
         self.parse_json(response).await
+    }
+
+    pub async fn stream_notifications(
+        &self,
+        params: ListEventsParams,
+    ) -> Result<NotificationSubscription, ClientError> {
+        let url = self.events_stream_url(&params);
+        let response = self
+            .http
+            .get(url)
+            .header(reqwest::header::ACCEPT, "text/event-stream")
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await?;
+            if let Ok(api) = serde_json::from_str::<agena_api::error::ApiError>(&body) {
+                return Err(ClientError::Api(api));
+            }
+            return Err(ClientError::Transport(format!(
+                "notification stream request failed ({status}): {}",
+                body.trim()
+            )));
+        }
+
+        let (tx, rx) = mpsc::channel(256);
+        let mut stream = response.bytes_stream();
+        let task = tokio::spawn(async move {
+            let mut buffer = String::new();
+            while let Some(chunk) = stream.next().await {
+                let chunk = match chunk {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        let _ = tx.send(Err(ClientError::Transport(err.to_string()))).await;
+                        return;
+                    }
+                };
+                buffer.push_str(&String::from_utf8_lossy(&chunk));
+                buffer = Self::normalize_sse_buffer(buffer);
+
+                while let Some(boundary) = buffer.find("\n\n") {
+                    let block = buffer[..boundary].trim().to_string();
+                    buffer = buffer[boundary + 2..].to_string();
+                    if block.is_empty() {
+                        continue;
+                    }
+                    let parsed = Self::parse_sse_event_block(&block);
+                    if parsed.event != "notification" || parsed.data.trim().is_empty() {
+                        continue;
+                    }
+                    let notification: Notification = match serde_json::from_str(&parsed.data) {
+                        Ok(notification) => notification,
+                        Err(err) => {
+                            let _ = tx.send(Err(ClientError::Decode(err))).await;
+                            return;
+                        }
+                    };
+                    if !Self::send_notification_frame(&tx, notification).await {
+                        return;
+                    }
+                }
+            }
+
+            let trailing = buffer.trim();
+            if trailing.is_empty() {
+                return;
+            }
+            let parsed = Self::parse_sse_event_block(trailing);
+            if parsed.event != "notification" || parsed.data.trim().is_empty() {
+                return;
+            }
+            match serde_json::from_str::<Notification>(&parsed.data) {
+                Ok(notification) => {
+                    let _ = Self::send_notification_frame(&tx, notification).await;
+                }
+                Err(err) => {
+                    let _ = tx.send(Err(ClientError::Decode(err))).await;
+                }
+            }
+        });
+
+        Ok(NotificationSubscription {
+            rx,
+            task: Some(task),
+        })
     }
 
     /// Escape hatch: run any [`Command`] over REST where a dedicated route
@@ -750,5 +931,44 @@ impl AgenaClient {
                 ))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_sse_event_block_collects_multiline_data() {
+        let parsed = AgenaClient::parse_sse_event_block(
+            "event: notification\nid: 7\ndata: {\"kind\":\"lagged\", \ndata: \"data\":{\"skipped\":2}}\n",
+        );
+        assert_eq!(parsed.event, "notification");
+        assert_eq!(
+            parsed.data,
+            "{\"kind\":\"lagged\", \n\"data\":{\"skipped\":2}}"
+        );
+    }
+
+    #[test]
+    fn events_stream_url_encodes_scope_and_kinds() {
+        let client = AgenaClient::new("http://127.0.0.1:3210").expect("client");
+        let params = ListEventsParams {
+            scope: agena::event::Scope::Workspace { workspace_id: 9 },
+            kinds: Some(std::collections::HashSet::from([
+                agena_api::EventKindTag::from("plugin_tool_registry_changed"),
+                agena_api::EventKindTag::from("plugin_event"),
+            ])),
+            since_seq_global: Some(17),
+            limit: Some(50),
+        };
+        let url = client.events_stream_url(&params);
+        let query = url.query().expect("query");
+        assert!(query.contains("scope_kind=workspace"));
+        assert!(query.contains("workspace_id=9"));
+        assert!(query.contains("since_seq_global=17"));
+        assert!(query.contains("limit=50"));
+        assert!(query.contains("plugin_tool_registry_changed"));
+        assert!(query.contains("plugin_event"));
     }
 }

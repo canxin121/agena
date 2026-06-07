@@ -50,6 +50,30 @@ RuntimeConfigRegistry        PluginHostBuilder
 - 维护 plugin status、logs、quota 和 inspect 信息。
 - 在配置 reload 时复用配置完全一致的 plugin transport。
 
+## Tool Registry 观测
+
+Plugin tool registry 现在有三条统一观测路径，分别面向快照、增量和实时事件：
+
+- `GET /api/v1/runtime` 与 `GET /api/v1/plugins/ui` 返回当前 UI catalog 快照，同时带 `tool_registry_generation` 和 `tool_registry_last_event`。
+- `GET /api/v1/plugins/tools/changes?after_generation=<n>` 返回按 generation 递增的 registry change 列表，适合轮询式前端或 catalog cache。
+- `GET /api/v1/events/stream?kinds=plugin_tool_registry_changed` 在统一事件总线上实时推送 registry 变化，适合 Studio/TUI 或外部调试器做即时刷新。
+
+`plugin_tool_registry_changed` 的 payload 和 `/api/v1/plugins/tools/changes` 返回的单条记录一致，字段包括：
+
+- `kind`: `registered`、`updated`、`removed`
+- `generation`: 当前 registry generation
+- `plugin_id`
+- `original_name`
+- `exposed_name`
+- `tool`: 注册或更新时的 tool decl；删除时通常为空
+
+如果一个客户端同时消费 plugin UI 和 runtime 事件，推荐策略是：
+
+1. 启动时先读 `/api/v1/runtime` 或 `/api/v1/plugins/ui` 建立完整快照。
+2. 记住 `tool_registry_generation`。
+3. 运行中优先订阅 `/api/v1/events/stream?kinds=plugin_tool_registry_changed` 做实时刷新。
+4. 检测到断流、lagged 或重连后，用 `/api/v1/plugins/tools/changes?after_generation=<last_generation>` 做精确补齐。
+
 ## Plugin 和 Tool
 
 一个 plugin 是一组扩展能力。它可以只提供 hooks，也可以提供一个或多个 tools。

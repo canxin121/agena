@@ -97,8 +97,16 @@ pub struct RuntimeOperatorResource {
     pub lsp: RuntimeLspResource,
     pub agents: RuntimeAgentsResource,
     pub skills: RuntimeSkillsResource,
+    pub ui: RuntimePluginUiResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimePluginUiResource {
     #[serde(default)]
-    pub ui: agena::plugin::PluginUiCatalog,
+    pub catalog: agena::plugin::PluginUiCatalog,
+    pub tool_registry_generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_registry_last_event: Option<agena::plugin::sdk::host_api::ToolRegistryChangedEvent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

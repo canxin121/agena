@@ -13,13 +13,38 @@ pub async fn list_plugins(State(state): State<AppState>) -> Result<impl IntoResp
 pub async fn get_plugin_ui_catalog(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
+    let snapshot = state.runtime().current_snapshot();
+    let plugin_manager = snapshot.plugin_manager();
     Ok(Json(PluginUiCatalogResponse {
-        catalog: state
-            .runtime()
-            .current_snapshot()
-            .plugin_manager()
-            .ui_catalog(),
+        catalog: plugin_manager.ui_catalog(),
+        tool_registry_generation: plugin_manager.tool_registry_generation(),
+        tool_registry_last_event: plugin_manager
+            .tool_registry_events_since(None, 1)
+            .into_iter()
+            .next(),
     }))
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct PluginToolRegistryChangesQuery {
+    #[serde(default)]
+    pub after_generation: Option<u64>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+pub async fn list_plugin_tool_registry_changes(
+    State(state): State<AppState>,
+    AxumQuery(query): AxumQuery<PluginToolRegistryChangesQuery>,
+) -> Result<impl IntoResponse, ServerError> {
+    let plugin_manager = state.runtime().current_snapshot().plugin_manager();
+    Ok(Json(serde_json::json!({
+        "generation": plugin_manager.tool_registry_generation(),
+        "events": plugin_manager.tool_registry_events_since(
+            query.after_generation,
+            query.limit.unwrap_or(100),
+        ),
+    })))
 }
 
 pub async fn invoke_plugin_ui_tool(
@@ -146,10 +171,26 @@ fn invoke_plugin_tool_for_ui(
         None => host.lookup_tool(tool_name),
     }
     .ok_or_else(|| {
-        let prefix = plugin_id
-            .map(|plugin_id| format!("{plugin_id}/"))
-            .unwrap_or_default();
-        ServerError::NotFound(format!("plugin tool not found: {prefix}{tool_name}"))
+        let visible_name = plugin_id
+            .and_then(|plugin_id| {
+                state
+                    .runtime()
+                    .current_snapshot()
+                    .plugin_manager()
+                    .plugin_inspect(plugin_id)
+                    .and_then(|inspect| inspect.manifest)
+                    .map(|manifest| {
+                        format!(
+                            "{}__{}",
+                            agena::plugin::registry::exposed_tool_name_segment(
+                                manifest.name.as_str()
+                            ),
+                            agena::plugin::registry::exposed_tool_name_segment(tool_name),
+                        )
+                    })
+            })
+            .unwrap_or_else(|| tool_name.to_string());
+        ServerError::NotFound(format!("plugin tool not found: {visible_name}"))
     })?;
 
     let input = match input {

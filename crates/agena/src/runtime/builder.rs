@@ -146,6 +146,7 @@ impl AgenaRuntimeBuilder {
             let host_handle = initial_snapshot.plugin_manager().host_handle();
             let client = super::host_client_for(runtime.clone());
             host_handle.install_client(client).await;
+            super::host_client::install_plugin_host_event_publisher(host_handle, runtime.clone());
         }
 
         runtime.apply_tracing_filter(&initial_snapshot.config_resolution().config.tracing);
@@ -278,6 +279,7 @@ impl AgenaRuntime {
             let host_handle = next.plugin_manager().host_handle();
             let client = super::host_client_for(self.clone());
             host_handle.install_client(client).await;
+            super::host_client::install_plugin_host_event_publisher(host_handle, self.clone());
         }
         let _ = self.inner.snapshot_store.swap(next.clone());
         let _ = self.start_model_catalog_refresh_if_needed(RuntimeBackgroundTaskOrigin::System);

@@ -18,6 +18,7 @@ url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true }
 regex = { workspace = true }
 dashmap = { workspace = true }
+blake3 = { workspace = true }
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }

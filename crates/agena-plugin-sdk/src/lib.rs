@@ -42,8 +42,8 @@ pub use manifest::{
     PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView, PluginToolDecl,
     PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions, PluginUiAction,
     PluginUiContributions, PluginUiThemePalette, ToolDescriptionMode, ToolDisplayPreset,
-    ToolInputShape, ToolStreamingMode, ToolSuiteSurface, ToolSurface, ToolTag, TransportKind,
-    UiTextDisplayMode, normalize_tool_tag_name,
+    ToolInputShape, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode, ToolSuiteSurface,
+    ToolSurface, ToolTag, TransportKind, UiTextDisplayMode, normalize_tool_tag_name,
 };
 pub use plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
 pub use schemars::JsonSchema;

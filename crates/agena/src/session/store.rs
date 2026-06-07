@@ -1434,7 +1434,8 @@ fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
         | EventKind::RunStarted(_)
         | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
-        | EventKind::PluginEvent(_) => {}
+        | EventKind::PluginEvent(_)
+        | EventKind::PluginToolRegistryChanged(_) => {}
     }
 }
 
@@ -1478,6 +1479,7 @@ fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
         | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
         | EventKind::PluginEvent(_)
+        | EventKind::PluginToolRegistryChanged(_)
         | EventKind::ToolCallIssued(_)
         | EventKind::SystemNoticeAppended(_) => {}
         EventKind::ToolCallCompleted(p) => {
@@ -1538,7 +1540,8 @@ fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64
         | EventKind::RunStarted(_)
         | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
-        | EventKind::PluginEvent(_) => {}
+        | EventKind::PluginEvent(_)
+        | EventKind::PluginToolRegistryChanged(_) => {}
     }
 }
 
@@ -1585,7 +1588,8 @@ fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64) {
         | EventKind::RunAborted(_)
         | EventKind::ToolCallIssued(_)
         | EventKind::SystemNoticeAppended(_)
-        | EventKind::PluginEvent(_) => {}
+        | EventKind::PluginEvent(_)
+        | EventKind::PluginToolRegistryChanged(_) => {}
         EventKind::ToolCallCompleted(p) => {
             if let Some(part) = &mut p.part {
                 part.id = f(part.id);
@@ -1621,7 +1625,8 @@ fn rewrite_event_session_ids(kind: &mut EventKind, session_id: i64) {
         | EventKind::ToolCallIssued(_)
         | EventKind::ToolCallCompleted(_)
         | EventKind::SystemNoticeAppended(_)
-        | EventKind::PluginEvent(_) => {}
+        | EventKind::PluginEvent(_)
+        | EventKind::PluginToolRegistryChanged(_) => {}
     }
 }
 

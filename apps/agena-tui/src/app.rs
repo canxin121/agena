@@ -21497,7 +21497,8 @@ fn timeline_event_message_id(record: &DomainEvent) -> Option<i64> {
         | AgenaSessionEvent::RunAborted(_)
         | AgenaSessionEvent::ToolCallIssued(_)
         | AgenaSessionEvent::ToolCallCompleted(_)
-        | AgenaSessionEvent::PluginEvent(_) => None,
+        | AgenaSessionEvent::PluginEvent(_)
+        | AgenaSessionEvent::PluginToolRegistryChanged(_) => None,
     }
 }
 
@@ -21526,7 +21527,9 @@ fn timeline_event_type_key(record: &DomainEvent) -> &'static str {
         AgenaSessionEvent::ToolCallIssued(_) => "timeline-type-tool-call-issued",
         AgenaSessionEvent::ToolCallCompleted(_) => "timeline-type-tool-call-completed",
         AgenaSessionEvent::SystemNoticeAppended(_) => "timeline-type-system-notice-appended",
-        AgenaSessionEvent::PluginEvent(_) => "timeline-type-plugin-event",
+        AgenaSessionEvent::PluginEvent(_) | AgenaSessionEvent::PluginToolRegistryChanged(_) => {
+            "timeline-type-plugin-event"
+        }
     }
 }
 
@@ -21675,6 +21678,16 @@ fn timeline_event_summary(i18n: &I18n, record: &DomainEvent) -> String {
                 "plugin_id" => p.plugin_id.clone(),
                 "kind_label" => p.kind_label.clone(),
             ),
+        ),
+        AgenaSessionEvent::PluginToolRegistryChanged(event) => format!(
+            "{} {} {}",
+            event.plugin_id,
+            match event.kind {
+                agena::plugin::sdk::host_api::ToolRegistryChangeKind::Registered => "registered",
+                agena::plugin::sdk::host_api::ToolRegistryChangeKind::Updated => "updated",
+                agena::plugin::sdk::host_api::ToolRegistryChangeKind::Removed => "removed",
+            },
+            event.exposed_name
         ),
     }
 }
@@ -22025,6 +22038,49 @@ fn timeline_event_detail_lines(i18n: &I18n, record: &DomainEvent) -> Vec<DetailT
                 timeline_excerpt(i18n, &p.payload.to_string(), 200),
             ),
         ],
+        AgenaSessionEvent::PluginToolRegistryChanged(event) => {
+            let mut lines = vec![
+                timeline_detail_labeled_line(
+                    i18n,
+                    "timeline-label-plugin-id",
+                    event.plugin_id.clone(),
+                ),
+                timeline_detail_labeled_line(
+                    i18n,
+                    "timeline-label-kind",
+                    match event.kind {
+                        agena::plugin::sdk::host_api::ToolRegistryChangeKind::Registered => {
+                            "registered"
+                        }
+                        agena::plugin::sdk::host_api::ToolRegistryChangeKind::Updated => "updated",
+                        agena::plugin::sdk::host_api::ToolRegistryChangeKind::Removed => "removed",
+                    },
+                ),
+                timeline_detail_labeled_line(
+                    i18n,
+                    "timeline-label-name",
+                    event.original_name.clone(),
+                ),
+                app_detail_plain_line(format!("exposed_name: {}", event.exposed_name)),
+                app_detail_plain_line(format!("generation: {}", event.generation)),
+                app_detail_plain_line(format!("timestamp_ms: {}", event.timestamp_ms)),
+            ];
+            if let Some(tool) = &event.tool {
+                lines.push(timeline_detail_labeled_line(
+                    i18n,
+                    "timeline-label-summary",
+                    tool.description
+                        .clone()
+                        .unwrap_or_else(|| tool.name.clone()),
+                ));
+                lines.push(timeline_detail_labeled_line(
+                    i18n,
+                    "timeline-label-payload",
+                    timeline_excerpt(i18n, &tool.input_schema.to_string(), 200),
+                ));
+            }
+            lines
+        }
     }
 }
 

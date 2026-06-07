@@ -113,6 +113,10 @@ pub fn router(state: AppState) -> Router {
             .route("/api/v1/plugins", get(rest::list_plugins))
             .route("/api/v1/plugins/ui", get(rest::get_plugin_ui_catalog))
             .route(
+                "/api/v1/plugins/tools/changes",
+                get(rest::list_plugin_tool_registry_changes),
+            )
+            .route(
                 "/api/v1/plugins/ui/invoke-tool",
                 post(rest::invoke_plugin_ui_tool),
             )

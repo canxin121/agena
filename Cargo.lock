@@ -381,6 +381,7 @@ dependencies = [
  "agena-plugin-sdk",
  "async-trait",
  "axum",
+ "blake3",
  "dashmap",
  "ed25519-dalek",
  "hex",

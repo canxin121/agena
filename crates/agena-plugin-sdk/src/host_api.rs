@@ -802,6 +802,28 @@ pub struct HostToolMutationResponse {
     pub exposed_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<PluginToolDecl>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<ToolRegistryChangedEvent>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolRegistryChangeKind {
+    Registered,
+    Updated,
+    Removed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolRegistryChangedEvent {
+    pub kind: ToolRegistryChangeKind,
+    pub generation: u64,
+    pub timestamp_ms: i64,
+    pub plugin_id: String,
+    pub original_name: String,
+    pub exposed_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<PluginToolDecl>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -817,6 +839,8 @@ pub struct HostRegisteredToolListResponse {
     pub generation: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<HostRegisteredToolDescriptor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_event: Option<ToolRegistryChangedEvent>,
 }
 
 // ---------------- plugin storage ----------------
@@ -1313,7 +1337,32 @@ pub struct HostHookListResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostHookRegistration {
     pub plugin_id: String,
-    pub hooks: Vec<String>,
+    pub plugin_name: String,
+    pub trust_level: String,
+    pub trust_status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provenance: Vec<String>,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<HostHookDescriptor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostHookDescriptor {
+    pub name: String,
+    #[serde(default)]
+    pub enabled: bool,
+    pub trust_level: String,
+    pub trust_status: String,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_hash: Option<String>,
 }
 
 // ---------------- mcp ----------------

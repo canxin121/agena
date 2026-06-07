@@ -35,8 +35,9 @@ use agena_api::{
         ModelCatalogResponse, RuntimeAgentResource, RuntimeAgentsResource,
         RuntimeAutomationResource, RuntimeBackgroundTaskResource, RuntimeLspResource,
         RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
-        RuntimeOperatorResource, RuntimeSessionCacheResource, RuntimeSkillResource,
-        RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource, WorkspaceResource,
+        RuntimeOperatorResource, RuntimePluginUiResource, RuntimeSessionCacheResource,
+        RuntimeSkillResource, RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource,
+        WorkspaceResource,
     },
 };
 
@@ -409,7 +410,15 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             lsp,
             agents,
             skills,
-            ui: snapshot.plugin_manager().ui_catalog(),
+            ui: RuntimePluginUiResource {
+                catalog: snapshot.plugin_manager().ui_catalog(),
+                tool_registry_generation: snapshot.plugin_manager().tool_registry_generation(),
+                tool_registry_last_event: snapshot
+                    .plugin_manager()
+                    .tool_registry_events_since(None, 1)
+                    .into_iter()
+                    .next(),
+            },
         },
     }
 }

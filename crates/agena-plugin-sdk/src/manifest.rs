@@ -202,7 +202,7 @@ pub struct PluginToolDecl {
     pub name: String,
     /// Alternate local tool names accepted by the host for the same tool.
     /// Hosts expose these in the same namespace as `name`, e.g. a tool alias
-    /// `cat` in plugin `agena.workflow` becomes `agena.workflow/cat`.
+    /// `cat` in plugin `agena.workflow` becomes `agena_workflow__cat`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -270,6 +270,8 @@ pub struct PluginToolDecl {
     pub strict: bool,
     #[serde(default)]
     pub streaming: ToolStreamingMode,
+    #[serde(default, skip_serializing_if = "ToolResultPolicy::is_default")]
+    pub result_policy: ToolResultPolicy,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_capabilities: Vec<HostCapability>,
 }
@@ -440,6 +442,41 @@ pub enum UiTextDisplayMode {
     #[default]
     Detailed,
     Summary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ToolResultPolicy {
+    /// Maximum text characters sent back to the model. The host truncates
+    /// `ToolInvokeOutput.output_text` after `tool.execute.after` hooks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_model_chars: Option<usize>,
+    /// Maximum preview lines rendered in compact UI surfaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_lines: Option<usize>,
+    /// Persist full text output to the workspace result store when the model
+    /// output is truncated by this policy.
+    #[serde(default)]
+    pub persist_large_output: bool,
+    #[serde(default)]
+    pub ui_render_kind: ToolResultRenderKind,
+}
+
+impl ToolResultPolicy {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolResultRenderKind {
+    #[default]
+    Text,
+    Markdown,
+    Json,
+    Log,
+    Diff,
+    Hidden,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -845,6 +882,23 @@ impl Default for HookSubscription {
     }
 }
 
+impl HookSubscription {
+    pub fn names(self) -> Vec<&'static str> {
+        HOOK_NAMES
+            .iter()
+            .filter_map(|(name, flag)| self.contains(*flag).then_some(*name))
+            .collect()
+    }
+
+    pub fn all_named() -> &'static [(&'static str, HookSubscription)] {
+        HOOK_NAMES
+    }
+
+    pub fn for_name(name: &str) -> Option<HookSubscription> {
+        hook_subscription_for_name(name)
+    }
+}
+
 impl Serialize for HookSubscription {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> std::result::Result<S::Ok, S::Error> {
         let mut names = Vec::new();
@@ -864,6 +918,10 @@ impl<'de> Deserialize<'de> for HookSubscription {
         for n in &names {
             if let Some(flag) = hook_subscription_for_name(n.as_str()) {
                 out |= flag;
+            } else {
+                return Err(serde::de::Error::custom(format!(
+                    "unknown hook subscription `{n}`"
+                )));
             }
         }
         Ok(out)
@@ -910,7 +968,7 @@ const HOOK_NAMES: &[(&str, HookSubscription)] = &[
     ("post_run", HookSubscription::POST_RUN),
 ];
 
-fn hook_subscription_for_name(name: &str) -> Option<HookSubscription> {
+pub fn hook_subscription_for_name(name: &str) -> Option<HookSubscription> {
     HOOK_NAMES
         .iter()
         .find_map(|(hook_name, flag)| (*hook_name == name).then_some(*flag))
@@ -1182,6 +1240,7 @@ impl PluginToolDecl {
             concurrency_safe: false,
             strict: false,
             streaming: ToolStreamingMode::Buffered,
+            result_policy: ToolResultPolicy::default(),
             host_capabilities: Vec::new(),
         }
     }
@@ -1358,6 +1417,31 @@ impl PluginToolDecl {
 
     pub fn streaming(mut self, streaming: ToolStreamingMode) -> Self {
         self.streaming = streaming;
+        self
+    }
+
+    pub fn result_policy(mut self, policy: ToolResultPolicy) -> Self {
+        self.result_policy = policy;
+        self
+    }
+
+    pub fn max_model_chars(mut self, max_model_chars: usize) -> Self {
+        self.result_policy.max_model_chars = Some(max_model_chars);
+        self
+    }
+
+    pub fn preview_lines(mut self, preview_lines: usize) -> Self {
+        self.result_policy.preview_lines = Some(preview_lines);
+        self
+    }
+
+    pub fn persist_large_output(mut self, persist: bool) -> Self {
+        self.result_policy.persist_large_output = persist;
+        self
+    }
+
+    pub fn ui_render_kind(mut self, kind: ToolResultRenderKind) -> Self {
+        self.result_policy.ui_render_kind = kind;
         self
     }
 
@@ -1605,6 +1689,29 @@ mod tests {
         assert_eq!(decl.summary_text(), Some("Dummy summary."));
         assert_eq!(decl.description_text(), "Dummy description.");
         assert_eq!(decl.help_text(), Some("Dummy help."));
+    }
+
+    #[test]
+    fn plugin_tool_decl_supports_result_policy_builder() {
+        let decl = PluginToolDecl::new("dummy", serde_json::json!({"type":"object"}))
+            .max_model_chars(1200)
+            .preview_lines(8)
+            .persist_large_output(true)
+            .ui_render_kind(ToolResultRenderKind::Markdown);
+
+        assert_eq!(decl.result_policy.max_model_chars, Some(1200));
+        assert_eq!(decl.result_policy.preview_lines, Some(8));
+        assert!(decl.result_policy.persist_large_output);
+        assert_eq!(
+            decl.result_policy.ui_render_kind,
+            ToolResultRenderKind::Markdown
+        );
+
+        let value = serde_json::to_value(&decl).expect("tool decl serializes");
+        assert_eq!(value["result_policy"]["max_model_chars"], 1200);
+        assert_eq!(value["result_policy"]["preview_lines"], 8);
+        assert_eq!(value["result_policy"]["persist_large_output"], true);
+        assert_eq!(value["result_policy"]["ui_render_kind"], "markdown");
     }
 
     #[test]

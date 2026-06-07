@@ -4,14 +4,14 @@
 //! - the dedicated tokio runtime that drives plugin transports,
 //! - the host-callback router used by stdio/http plugins.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::config::{ConfiguredPlugin, PluginsConfig, TimeoutsConfig};
+use crate::config::{ConfiguredPlugin, PluginPackage, PluginsConfig, TimeoutsConfig};
 use crate::dispatcher::{self, call_with_timeout};
 use crate::error::{HostError, TransportError};
 use crate::loader::{StaticRegistration, load_entry, shutdown_transport};
@@ -25,7 +25,7 @@ use crate::sdk::host_api::{
     HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
     HostAgentSwitchRequest, HostAgentSwitchResponse, HostCallbackContext, HostClient,
     HostConfigReloadResponse, HostEnterWorktreeRequest, HostExitWorktreeRequest,
-    HostHookListResponse, HostHookRegistration, HostLspListDiagnosticsRequest,
+    HostHookDescriptor, HostHookListResponse, HostHookRegistration, HostLspListDiagnosticsRequest,
     HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
     HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
     HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
@@ -42,7 +42,8 @@ use crate::sdk::host_api::{
     HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
     HostToolUpdateRequest, HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest,
     MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
-    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, ToolRegistryChangeKind,
+    ToolRegistryChangedEvent,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
@@ -251,6 +252,8 @@ pub struct PluginInspect {
     pub manifest: Option<PluginManifest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authority: Option<PluginAuthoritySummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<HostHookRegistration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub configured_plugin: Option<crate::config::ConfiguredPlugin>,
 }
@@ -457,6 +460,15 @@ impl PluginHost {
         Arc::clone(&self.logs)
     }
 
+    pub fn tool_registry_events_since(
+        &self,
+        after_generation: Option<u64>,
+        limit: usize,
+    ) -> Vec<ToolRegistryChangedEvent> {
+        self._host_handle
+            .tool_registry_events_since(after_generation, limit)
+    }
+
     pub fn append_plugin_log(
         &self,
         plugin_id: impl Into<String>,
@@ -485,10 +497,15 @@ impl PluginHost {
         let configured_plugin = plugin
             .as_ref()
             .map(|plugin| plugin.configured_plugin.clone());
+        let hooks = plugin
+            .as_ref()
+            .map(|plugin| vec![hook_registration_for_plugin(plugin)])
+            .unwrap_or_default();
         Some(PluginInspect {
             status,
             manifest,
             authority,
+            hooks,
             configured_plugin,
         })
     }
@@ -1792,6 +1809,72 @@ fn plugin_has_capability(plugin: &LoadedPlugin, capability: HostCapability) -> b
     .contains(&capability)
 }
 
+fn hook_registration_for_plugin(plugin: &LoadedPlugin) -> HostHookRegistration {
+    let (source, source_path) = plugin_source_summary(&plugin.configured_plugin);
+    let trust_status = trust_status_for_level(plugin.trust_level.as_str()).to_string();
+    let manifest_hash = manifest_hash(&plugin.manifest);
+    let hooks = plugin
+        .manifest
+        .hooks
+        .names()
+        .into_iter()
+        .map(|name| HostHookDescriptor {
+            name: name.to_string(),
+            enabled: true,
+            trust_level: plugin.trust_level.clone(),
+            trust_status: trust_status.clone(),
+            source: source.clone(),
+            source_path: source_path.clone(),
+            current_hash: manifest_hash.clone(),
+        })
+        .collect();
+
+    HostHookRegistration {
+        plugin_id: plugin.id.clone(),
+        plugin_name: plugin.manifest.name.clone(),
+        trust_level: plugin.trust_level.clone(),
+        trust_status,
+        provenance: plugin.provenance.clone(),
+        source,
+        source_path,
+        manifest_hash,
+        hooks,
+    }
+}
+
+fn plugin_source_summary(configured_plugin: &ConfiguredPlugin) -> (String, Option<String>) {
+    match &configured_plugin.package {
+        PluginPackage::Static {} => ("static".to_string(), None),
+        PluginPackage::Cdylib { path, .. } => {
+            ("cdylib".to_string(), Some(path.display().to_string()))
+        }
+        PluginPackage::Stdio { command, .. } => ("stdio".to_string(), Some(command.clone())),
+        PluginPackage::Http { url, .. } => ("http".to_string(), Some(url.to_string())),
+        PluginPackage::Wasm { path, .. } => ("wasm".to_string(), Some(path.display().to_string())),
+    }
+}
+
+fn trust_status_for_level(level: &str) -> &'static str {
+    match level {
+        "static" | "verified" => "trusted",
+        "checksummed" => "verified",
+        "remote" => "remote",
+        _ => "untrusted",
+    }
+}
+
+fn manifest_hash(manifest: &PluginManifest) -> Option<String> {
+    let bytes = serde_json::to_vec(manifest).ok()?;
+    Some(blake3::hash(&bytes).to_hex().to_string())
+}
+
+fn unix_timestamp_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or_default()
+}
+
 fn transport_to_plugin_error(e: TransportError) -> PluginError {
     match e {
         TransportError::Plugin(pe) => pe,
@@ -2042,6 +2125,7 @@ impl PluginHostBuilder {
                         crate::registry::per_tool_host_capabilities(&reused.manifest.tools),
                     )
                     .await;
+                host_handle.set_plugin_hook_catalog(hook_registration_for_plugin(&reused));
                 if let Some(previous_status) = self
                     .previous
                     .as_ref()
@@ -2097,6 +2181,7 @@ impl PluginHostBuilder {
                             crate::registry::per_tool_host_capabilities(&plugin.manifest.tools),
                         )
                         .await;
+                    host_handle.set_plugin_hook_catalog(hook_registration_for_plugin(&plugin));
                     let status_kind = plugin.kind;
                     let initial =
                         crate::status::PluginStatus::initial(plugin.id.clone(), status_kind);
@@ -2164,6 +2249,9 @@ pub struct HostHandle {
     tool_registry: Arc<RwLock<PluginToolRegistry>>,
     plugin_indices: Arc<RwLock<HashMap<String, usize>>>,
     plugin_names: Arc<RwLock<HashMap<String, String>>>,
+    hook_catalog: Arc<RwLock<BTreeMap<String, HostHookRegistration>>>,
+    tool_registry_events: Arc<RwLock<VecDeque<ToolRegistryChangedEvent>>>,
+    tool_registry_event_listener: Arc<RwLock<Option<ToolRegistryEventListener>>>,
     statuses: Arc<crate::status::StatusRegistry>,
     logs: Arc<PluginLogStore>,
     statusline: Arc<RwLock<std::collections::BTreeMap<(String, String), HostStatuslineSegment>>>,
@@ -2179,6 +2267,8 @@ pub struct HostHandle {
     /// rendering) without holding a reference to PluginHost itself.
     plugin_transports: tokio::sync::RwLock<HashMap<String, Arc<dyn PluginTransport>>>,
 }
+
+type ToolRegistryEventListener = Arc<dyn Fn(ToolRegistryChangedEvent) + Send + Sync>;
 
 impl HostHandle {
     pub fn new(inner: Arc<dyn HostClient>) -> Self {
@@ -2221,6 +2311,9 @@ impl HostHandle {
             tool_registry,
             plugin_indices,
             plugin_names,
+            hook_catalog: Arc::new(RwLock::new(BTreeMap::new())),
+            tool_registry_events: Arc::new(RwLock::new(VecDeque::new())),
+            tool_registry_event_listener: Arc::new(RwLock::new(None)),
             statuses,
             logs,
             statusline: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
@@ -2279,6 +2372,69 @@ impl HostHandle {
 
     pub fn log_store(&self) -> Arc<PluginLogStore> {
         Arc::clone(&self.logs)
+    }
+
+    pub fn set_plugin_hook_catalog(&self, registration: HostHookRegistration) {
+        if let Ok(mut catalog) = self.hook_catalog.write() {
+            catalog.insert(registration.plugin_id.clone(), registration);
+        }
+    }
+
+    pub fn set_tool_registry_event_listener(&self, listener: Option<ToolRegistryEventListener>) {
+        if let Ok(mut slot) = self.tool_registry_event_listener.write() {
+            *slot = listener;
+        }
+    }
+
+    pub fn latest_tool_registry_event(&self) -> Option<ToolRegistryChangedEvent> {
+        self.tool_registry_events
+            .read()
+            .ok()
+            .and_then(|events| events.back().cloned())
+    }
+
+    pub fn tool_registry_events_since(
+        &self,
+        after_generation: Option<u64>,
+        limit: usize,
+    ) -> Vec<ToolRegistryChangedEvent> {
+        let limit = limit.max(1).min(500);
+        self.tool_registry_events
+            .read()
+            .map(|events| {
+                events
+                    .iter()
+                    .filter(|event| {
+                        after_generation
+                            .map(|generation| event.generation > generation)
+                            .unwrap_or(true)
+                    })
+                    .rev()
+                    .take(limit)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn record_tool_registry_event(&self, event: ToolRegistryChangedEvent) {
+        let listener = self
+            .tool_registry_event_listener
+            .read()
+            .ok()
+            .and_then(|slot| slot.clone());
+        if let Ok(mut events) = self.tool_registry_events.write() {
+            events.push_back(event.clone());
+            while events.len() > 256 {
+                events.pop_front();
+            }
+        }
+        if let Some(listener) = listener {
+            listener(event);
+        }
     }
 
     pub fn append_plugin_log(
@@ -3434,11 +3590,31 @@ impl HostHandle {
             .ok_or_else(|| {
                 host_unavailable(format!("plugin `{plugin_id}` manifest name missing"))
             })?;
+        let original_name = decl.name.clone();
+        let kind = if tool_registry
+            .lookup_for_plugin(plugin_id, &original_name)
+            .is_some()
+        {
+            ToolRegistryChangeKind::Updated
+        } else {
+            ToolRegistryChangeKind::Registered
+        };
         let tool = tool_registry.upsert_from_plugin(plugin_id, &plugin_name, decl);
+        let event = ToolRegistryChangedEvent {
+            kind,
+            generation: tool_registry.generation(),
+            timestamp_ms: unix_timestamp_ms(),
+            plugin_id: plugin_id.to_string(),
+            original_name: tool.original_name.clone(),
+            exposed_name: tool.exposed_name.clone(),
+            tool: Some(tool.decl.clone()),
+        };
+        self.record_tool_registry_event(event.clone());
         Ok(HostToolMutationResponse {
             generation: tool_registry.generation(),
             exposed_name: Some(tool.exposed_name.clone()),
             tool: Some(tool.decl.clone()),
+            event: Some(event),
         })
     }
 
@@ -3457,10 +3633,23 @@ impl HostHandle {
         } else {
             tool_registry.remove_from_plugin(plugin_id, name)
         };
+        let event = removed.as_ref().map(|tool| ToolRegistryChangedEvent {
+            kind: ToolRegistryChangeKind::Removed,
+            generation: tool_registry.generation(),
+            timestamp_ms: unix_timestamp_ms(),
+            plugin_id: plugin_id.to_string(),
+            original_name: tool.original_name.clone(),
+            exposed_name: tool.exposed_name.clone(),
+            tool: Some(tool.decl.clone()),
+        });
+        if let Some(event) = event.as_ref() {
+            self.record_tool_registry_event(event.clone());
+        }
         Ok(HostToolMutationResponse {
             generation: tool_registry.generation(),
             exposed_name: removed.as_ref().map(|tool| tool.exposed_name.clone()),
             tool: removed.map(|tool| tool.decl),
+            event,
         })
     }
 
@@ -3483,6 +3672,7 @@ impl HostHandle {
         Ok(HostRegisteredToolListResponse {
             generation: snapshot.generation,
             tools,
+            last_event: self.latest_tool_registry_event(),
         })
     }
 
@@ -3504,24 +3694,11 @@ impl HostHandle {
     }
 
     async fn hook_list_response(&self) -> HostHookListResponse {
-        // Walk capability metadata to surface plugins that subscribed to
-        // any tool/event hook. We approximate by listing every plugin id we
-        // know capabilities for; the actual hook subscription bitmask lives
-        // on `LoadedPlugin.manifest.hooks` but is not directly accessible
-        // from within HostHandle without holding the PluginHost. Plugins
-        // can introspect `tool.registry.list` to map capabilities and tools to
-        // each plugin id.
-        let capabilities = self.capabilities.read().await;
-        let hooks = capabilities
-            .iter()
-            .map(|(plugin_id, caps)| HostHookRegistration {
-                plugin_id: plugin_id.clone(),
-                hooks: caps
-                    .iter()
-                    .map(|cap| format!("{cap:?}"))
-                    .collect::<Vec<_>>(),
-            })
-            .collect();
+        let hooks = self
+            .hook_catalog
+            .read()
+            .map(|catalog| catalog.values().cloned().collect())
+            .unwrap_or_default();
         HostHookListResponse { hooks }
     }
 
@@ -4533,5 +4710,121 @@ impl HostClient for ScopedHostClient {
             .await?;
         let removed = self.handle.theme_remove(&self.plugin_id, &req.id);
         Ok(HostThemeRemoveResponse { removed })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sdk::PluginToolDecl;
+    use serde_json::json;
+    use std::sync::Mutex;
+
+    fn build_host_handle_for_registry() -> HostHandle {
+        let tool_registry = Arc::new(RwLock::new(PluginToolRegistry::new()));
+        let plugin_indices = Arc::new(RwLock::new(HashMap::from([(
+            "fixture".to_string(),
+            0usize,
+        )])));
+        let plugin_names = Arc::new(RwLock::new(HashMap::from([(
+            "fixture".to_string(),
+            "fixture.plugin".to_string(),
+        )])));
+        HostHandle::new_with_components(
+            Arc::new(NoopHostClient),
+            tool_registry,
+            plugin_indices,
+            plugin_names,
+            Arc::new(crate::status::StatusRegistry::new()),
+            Arc::new(PluginLogStore::default()),
+        )
+    }
+
+    #[test]
+    fn tool_registry_mutations_emit_structured_change_events() {
+        let handle = build_host_handle_for_registry();
+
+        let registered = handle
+            .tool_upsert_for_plugin(
+                "fixture",
+                PluginToolDecl::new("echo", json!({ "type": "object" })),
+            )
+            .expect("register should succeed");
+        assert_eq!(
+            registered.event.as_ref().map(|event| event.kind),
+            Some(ToolRegistryChangeKind::Registered)
+        );
+        assert_eq!(
+            registered
+                .event
+                .as_ref()
+                .map(|event| event.exposed_name.as_str()),
+            Some("fixture_plugin__echo")
+        );
+
+        let updated = handle
+            .tool_upsert_for_plugin(
+                "fixture",
+                PluginToolDecl::new("echo", json!({ "type": "object" })).description("updated"),
+            )
+            .expect("update should succeed");
+        assert_eq!(
+            updated.event.as_ref().map(|event| event.kind),
+            Some(ToolRegistryChangeKind::Updated)
+        );
+
+        let listed = handle
+            .registered_tool_list_response()
+            .expect("list response should succeed");
+        assert_eq!(
+            listed.last_event.as_ref().map(|event| event.kind),
+            Some(ToolRegistryChangeKind::Updated)
+        );
+
+        let removed = handle
+            .tool_remove_for_plugin("fixture", "echo", false)
+            .expect("remove should succeed");
+        assert_eq!(
+            removed.event.as_ref().map(|event| event.kind),
+            Some(ToolRegistryChangeKind::Removed)
+        );
+        assert_eq!(handle.tool_registry_events_since(None, 10).len(), 3);
+    }
+
+    #[test]
+    fn tool_registry_mutations_notify_listener() {
+        let handle = build_host_handle_for_registry();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        handle.set_tool_registry_event_listener(Some(Arc::new({
+            let seen = Arc::clone(&seen);
+            move |event| {
+                seen.lock().expect("listener mutex").push(event.kind);
+            }
+        })));
+
+        handle
+            .tool_upsert_for_plugin(
+                "fixture",
+                PluginToolDecl::new("echo", json!({ "type": "object" })),
+            )
+            .expect("register should succeed");
+        handle
+            .tool_upsert_for_plugin(
+                "fixture",
+                PluginToolDecl::new("echo", json!({ "type": "object" })).description("updated"),
+            )
+            .expect("update should succeed");
+        handle
+            .tool_remove_for_plugin("fixture", "echo", false)
+            .expect("remove should succeed");
+
+        assert_eq!(
+            seen.lock().expect("listener mutex").as_slice(),
+            &[
+                ToolRegistryChangeKind::Registered,
+                ToolRegistryChangeKind::Updated,
+                ToolRegistryChangeKind::Removed,
+            ]
+        );
     }
 }

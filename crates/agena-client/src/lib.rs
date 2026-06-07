@@ -31,5 +31,5 @@ pub mod ws;
 pub use agena::event as agena_event;
 pub use agena_api;
 pub use error::ClientError;
-pub use http::AgenaClient;
-pub use ws::{Subscription, WsClient};
+pub use http::{AgenaClient, NotificationSubscription};
+pub use ws::{Subscription, SubscriptionEvent, WsClient};

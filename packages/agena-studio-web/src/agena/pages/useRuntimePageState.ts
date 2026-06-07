@@ -2,6 +2,7 @@ import { computed } from 'vue'
 
 import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
 
+import { usePluginToolRegistryRuntimeSync } from '../lib/usePluginToolRegistryRuntimeSync'
 import { runtimeTabs, type RuntimeRouteSection } from './runtimePageStateModel'
 import { useRuntimeDerivedState } from './useRuntimeDerivedState'
 import { useRuntimePageAssembly } from './useRuntimePageAssembly'
@@ -83,6 +84,18 @@ export function useRuntimePageState(input: {
     workflowLoading,
     workspaces,
   } = useRuntimePageStore()
+
+  usePluginToolRegistryRuntimeSync(
+    {
+      runtime,
+    },
+    undefined,
+    {
+      onError: (error) => {
+        actionError.value = error.message
+      },
+    },
+  )
 
   const derived = useRuntimeDerivedState({
     desktopConfig,

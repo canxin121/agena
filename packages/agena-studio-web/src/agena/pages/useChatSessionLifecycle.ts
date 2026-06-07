@@ -6,12 +6,14 @@ import {
   fetchRuntimeStatus,
   getSessionState,
   getSessionTree,
+  listPluginToolRegistryChanges,
   listMessages,
   listProviders,
   listRewindCheckpoints,
   listSessionTimeline,
   listSessions,
   listWorkspaces,
+  streamPluginToolRegistryChanges,
   streamSessionEvents,
   type MessageResource,
   type ProviderModel,
@@ -23,6 +25,7 @@ import {
   type SessionTreeResource,
   type WorkspaceResource,
 } from '../lib/agenaApi'
+import { usePluginToolRegistryRuntimeSync } from '../lib/usePluginToolRegistryRuntimeSync'
 import { readChatRouteSessionId, readChatRouteSlash, readChatRouteWorkspaceId } from './chatRouteState'
 import { applySessionEvent } from './chatPageModel'
 import { useChatConversationRuntime } from './useChatConversationRuntime'
@@ -60,12 +63,14 @@ export type ChatSessionLifecycleDeps = {
   fetchRuntimeStatus: typeof fetchRuntimeStatus
   getSessionState: typeof getSessionState
   getSessionTree: typeof getSessionTree
+  listPluginToolRegistryChanges: typeof listPluginToolRegistryChanges
   listMessages: typeof listMessages
   listProviders: typeof listProviders
   listRewindCheckpoints: typeof listRewindCheckpoints
   listSessionTimeline: typeof listSessionTimeline
   listSessions: typeof listSessions
   listWorkspaces: typeof listWorkspaces
+  streamPluginToolRegistryChanges: typeof streamPluginToolRegistryChanges
   streamSessionEvents: typeof streamSessionEvents
 }
 
@@ -74,12 +79,14 @@ const defaultDeps: ChatSessionLifecycleDeps = {
   fetchRuntimeStatus,
   getSessionState,
   getSessionTree,
+  listPluginToolRegistryChanges,
   listMessages,
   listProviders,
   listRewindCheckpoints,
   listSessionTimeline,
   listSessions,
   listWorkspaces,
+  streamPluginToolRegistryChanges,
   streamSessionEvents,
 }
 
@@ -93,6 +100,22 @@ export function useChatSessionLifecycle(
   options: ChatSessionLifecycleOptions = {},
 ) {
   const registerComponentLifecycle = options.registerComponentLifecycle !== false
+  usePluginToolRegistryRuntimeSync(
+    {
+      runtime: input.runtime,
+    },
+    {
+      fetchRuntimeStatus: deps.fetchRuntimeStatus,
+      listPluginToolRegistryChanges: deps.listPluginToolRegistryChanges,
+      streamPluginToolRegistryChanges: deps.streamPluginToolRegistryChanges,
+    },
+    {
+      registerComponentLifecycle,
+      onError: (error) => {
+        console.warn('chat plugin tool registry sync failed', error)
+      },
+    },
+  )
 
   const conversationRuntime = useChatConversationRuntime(
     {

@@ -16,6 +16,7 @@ const props = defineProps<{
           <strong>Session Runtime:</strong> {{ props.runtime.session_runtime_available ? 'enabled' : 'disabled' }}
         </div>
         <div><strong>Watch Paths:</strong> {{ props.runtime.watch_paths.length }}</div>
+        <div><strong>Tool Registry:</strong> {{ props.runtime.operator.ui?.tool_registry_generation ?? 0 }}</div>
       </div>
     </section>
     <section class="card">
@@ -34,6 +35,10 @@ const props = defineProps<{
         <div><strong>Diagnostics:</strong> {{ props.runtime.operator.lsp.diagnostics_count }}</div>
         <div><strong>Skills:</strong> {{ props.runtime.operator.skills.skill_count }}</div>
         <div><strong>Commands:</strong> {{ props.runtime.operator.skills.command_count }}</div>
+        <div>
+          <strong>Last Tool Event:</strong>
+          {{ props.runtime.operator.ui?.tool_registry_last_event?.exposed_name || 'n/a' }}
+        </div>
       </div>
     </section>
   </div>

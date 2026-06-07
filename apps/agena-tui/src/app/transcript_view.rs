@@ -6,6 +6,7 @@ use tui_markdown::from_str as markdown_to_text;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+#[cfg(test)]
 pub(super) fn render_message(
     message: &MessageResource,
     width: u16,
@@ -85,6 +86,22 @@ pub(super) fn render_message_detailed(
     }
 
     RenderedMessageBlock { lines, nodes }
+}
+
+pub(super) fn render_message_export(
+    message: &MessageResource,
+    width: u16,
+    i18n: &I18n,
+    defaults: TranscriptDetailDefaults,
+) -> Vec<RenderedLine> {
+    render_message_detailed(
+        message,
+        width,
+        i18n,
+        defaults,
+        &std::collections::BTreeMap::new(),
+    )
+    .lines
 }
 
 #[derive(Debug, Clone)]
@@ -175,9 +192,17 @@ pub(super) fn render_transcript_export_markdown(
         out.push(String::new());
         out.push("~~~~text".to_string());
         out.extend(
-            render_message(message, u16::MAX, i18n)
-                .into_iter()
-                .map(|line| line.text),
+            render_message_export(
+                message,
+                u16::MAX,
+                i18n,
+                TranscriptDetailDefaults {
+                    tool_output_expanded: true,
+                    thinking_expanded: false,
+                },
+            )
+            .into_iter()
+            .map(|line| line.text),
         );
         out.push("~~~~".to_string());
         out.push(String::new());
@@ -297,6 +322,7 @@ fn push_message_header(
     }
 }
 
+#[cfg(test)]
 fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n: &I18n) {
     match transcript_part_content(part) {
         PartContent::Text(text) => push_markdown(out, "  ", text.text.as_str(), width),
@@ -518,6 +544,7 @@ fn render_part_node(
     }
 }
 
+#[cfg(test)]
 fn render_reasoning_summary(
     summary: &str,
     out: &mut Vec<RenderedLine>,
@@ -624,33 +651,41 @@ fn render_tool_execution(
         }
     }
 
-    if let Some(diff) = apply_patch_diff(&tool.details) {
+    let apply_patch = apply_patch_details(&tool.details);
+    if let Some(changes) = apply_patch
+        .as_ref()
+        .filter(|payload| !payload.changes.is_empty())
+        .map(|payload| payload.changes.as_slice())
+    {
+        render_file_changes(changes, out, width, i18n);
+    }
+
+    if let Some(diff) = apply_patch
+        .as_ref()
+        .map(|payload| payload.diff.as_str())
+        .filter(|diff| !diff.trim().is_empty())
+    {
+        let stats = diff_stats(
+            diff,
+            apply_patch
+                .as_ref()
+                .map(|payload| payload.changes.as_slice()),
+        );
         push_label_value(
             out,
             "    ",
-            &ui_text::operation_diff_summary(i18n, diff.lines().count()),
+            &ui_text::operation_diff_summary(
+                i18n,
+                stats.file_count,
+                stats.additions,
+                stats.deletions,
+                stats.renames,
+                stats.line_count,
+            ),
             Style::default().fg(Color::DarkGray),
             width,
         );
-        if expanded {
-            push_limited_tool_text(
-                out,
-                "    ",
-                diff.as_str(),
-                Style::default().fg(Color::DarkGray),
-                width,
-                i18n,
-            );
-        } else {
-            push_collapsible_text(
-                out,
-                "    ",
-                diff.as_str(),
-                Style::default().fg(Color::DarkGray),
-                width,
-                i18n,
-            );
-        }
+        push_limited_diff_text(out, "    ", diff, width, i18n);
     }
 
     render_operation_blocks(
@@ -660,6 +695,9 @@ fn render_tool_execution(
         i18n,
         expanded,
         failure_text,
+        apply_patch
+            .as_ref()
+            .is_some_and(|payload| !payload.changes.is_empty()),
     );
 }
 
@@ -670,6 +708,7 @@ fn render_operation_blocks(
     i18n: &I18n,
     expanded: bool,
     skipped_text: Option<&str>,
+    skip_file_changes: bool,
 ) {
     for block in blocks {
         match block {
@@ -760,14 +799,7 @@ fn render_operation_blocks(
             }
             OperationBlock::Diff { diff, .. } => {
                 if expanded {
-                    push_limited_tool_text(
-                        out,
-                        "    ",
-                        diff,
-                        Style::default().fg(Color::DarkGray),
-                        width,
-                        i18n,
-                    );
+                    push_limited_diff_text(out, "    ", diff, width, i18n);
                 } else {
                     push_collapsible_text(
                         out,
@@ -780,7 +812,9 @@ fn render_operation_blocks(
                 }
             }
             OperationBlock::FileChanges { changes } => {
-                render_file_changes(changes, out, width, i18n)
+                if !skip_file_changes {
+                    render_file_changes(changes, out, width, i18n)
+                }
             }
             OperationBlock::Checklist { items } => render_checklist(items, out, width, i18n),
             OperationBlock::SearchResults { query, results } => {
@@ -924,24 +958,11 @@ fn render_file_changes(
         width,
     );
     for entry in changes {
-        let path = if entry.kind == FileChangeKind::Moved {
-            entry
-                .from_path
-                .as_ref()
-                .map(|from_path| format!("{from_path} -> {}", entry.path))
-                .unwrap_or_else(|| entry.path.clone())
-        } else {
-            entry.path.clone()
-        };
         push_label_value(
             out,
             "      - ",
-            &format!(
-                "{} ({})",
-                path,
-                ui_text::file_change_kind_label(i18n, entry.kind)
-            ),
-            Style::default(),
+            &file_change_list_item_text(entry, i18n),
+            file_change_style(entry.kind),
             width,
         );
     }
@@ -1207,7 +1228,7 @@ fn tool_output_copy_text(part: &MessagePart, tool: &OperationPart, i18n: &I18n) 
     if should_render_tool_model_output(tool, tool.error_message()) {
         sections.push(tool.model_output.text.trim().to_string());
     }
-    if let Some(diff) = apply_patch_diff(&tool.details)
+    if let Some(diff) = apply_patch_details(&tool.details).map(|payload| payload.diff)
         && !diff.trim().is_empty()
     {
         sections.push(diff.trim().to_string());
@@ -1242,11 +1263,26 @@ fn tool_execution_collapsed_summary(
     tool: &OperationPart,
     i18n: &I18n,
 ) -> String {
-    ui_text::message_tool_summary(
-        i18n,
-        part.status,
-        tool_invocation_label(&tool.invocation).as_str(),
-    )
+    let base_label = if tool.title.trim().is_empty() {
+        tool_invocation_label(&tool.invocation)
+    } else {
+        tool.title.clone()
+    };
+    let label = apply_patch_details(&tool.details)
+        .filter(|payload| !payload.changes.is_empty())
+        .map(|payload| {
+            format!(
+                "{} · {}",
+                base_label,
+                ui_text::file_changes_preview(
+                    i18n,
+                    payload.changes.len(),
+                    summarize_change_paths(i18n, payload.changes.as_slice(), 3).as_str(),
+                )
+            )
+        })
+        .unwrap_or(base_label);
+    ui_text::message_tool_summary(i18n, part.status, label.as_str())
 }
 
 fn transcript_message_parts(message: &MessageResource) -> &[MessagePart] {
@@ -1322,7 +1358,7 @@ fn operation_block_copy_text(block: &OperationBlock, i18n: &I18n) -> String {
             .join("\n"),
         OperationBlock::FileChanges { changes } => changes
             .iter()
-            .map(|change| change.path.clone())
+            .map(|change| file_change_list_item_text(change, i18n))
             .collect::<Vec<_>>()
             .join("\n"),
         OperationBlock::ResourceLink { uri, title, .. }
@@ -2192,14 +2228,183 @@ fn strip_terminal_ansi_sequences(text: &str) -> String {
     out
 }
 
-fn apply_patch_diff(details: &agena::message::ToolOutput) -> Option<String> {
-    details
+#[derive(Debug, Clone, Default)]
+struct ApplyPatchDisplay {
+    changes: Vec<agena::message::FileChangeRecord>,
+    diff: String,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DiffStats {
+    file_count: usize,
+    additions: usize,
+    deletions: usize,
+    renames: usize,
+    line_count: usize,
+}
+
+fn apply_patch_details(details: &agena::message::ToolOutput) -> Option<ApplyPatchDisplay> {
+    let changes: Vec<agena::message::FileChangeRecord> = details
+        .payload
+        .get("changes")
+        .cloned()
+        .and_then(|value| serde_json::from_value(serde_json::Value::from(value)).ok())
+        .unwrap_or_default();
+    let diff = details
         .payload
         .get("diff")
         .and_then(agena::message::StructuredValue::as_text)
         .map(str::trim)
-        .filter(|diff| !diff.is_empty())
-        .map(str::to_string)
+        .unwrap_or_default()
+        .to_string();
+
+    if details.payload.get("operation_id").is_none() && changes.is_empty() && diff.is_empty() {
+        return None;
+    }
+
+    Some(ApplyPatchDisplay { changes, diff })
+}
+
+fn diff_stats(diff: &str, changes: Option<&[agena::message::FileChangeRecord]>) -> DiffStats {
+    let mut stats = DiffStats {
+        file_count: diff
+            .lines()
+            .filter(|line| line.starts_with("diff --git "))
+            .count(),
+        line_count: diff.lines().count(),
+        ..DiffStats::default()
+    };
+    for line in diff.lines() {
+        if line.starts_with("+++ ") || line.starts_with("--- ") {
+            continue;
+        }
+        if line.starts_with('+') {
+            stats.additions += 1;
+        } else if line.starts_with('-') {
+            stats.deletions += 1;
+        }
+    }
+    if let Some(changes) = changes {
+        stats.file_count = stats.file_count.max(changes.len());
+        stats.renames = changes
+            .iter()
+            .filter(|change| change.kind == FileChangeKind::Moved)
+            .count();
+    }
+    stats
+}
+
+fn summarize_change_paths(
+    i18n: &I18n,
+    changes: &[agena::message::FileChangeRecord],
+    preview_limit: usize,
+) -> String {
+    let mut preview = changes
+        .iter()
+        .take(preview_limit)
+        .map(file_change_display_path)
+        .collect::<Vec<_>>();
+    let omitted = changes.len().saturating_sub(preview.len());
+    if omitted > 0 {
+        preview.push(ui_text::file_changes_more(i18n, omitted));
+    }
+    preview.join(", ")
+}
+
+fn file_change_display_path(change: &agena::message::FileChangeRecord) -> String {
+    if change.kind == FileChangeKind::Moved {
+        change
+            .from_path
+            .as_ref()
+            .map(|from_path| format!("{from_path} -> {}", change.path))
+            .unwrap_or_else(|| change.path.clone())
+    } else {
+        change.path.clone()
+    }
+}
+
+fn file_change_marker(kind: FileChangeKind) -> &'static str {
+    match kind {
+        FileChangeKind::Added => "A",
+        FileChangeKind::Updated => "M",
+        FileChangeKind::Deleted => "D",
+        FileChangeKind::Moved => "R",
+    }
+}
+
+fn file_change_style(kind: FileChangeKind) -> Style {
+    match kind {
+        FileChangeKind::Added => Style::default().fg(Color::Green),
+        FileChangeKind::Updated => Style::default().fg(Color::Yellow),
+        FileChangeKind::Deleted => Style::default().fg(Color::Red),
+        FileChangeKind::Moved => Style::default().fg(Color::Cyan),
+    }
+}
+
+fn file_change_list_item_text(change: &agena::message::FileChangeRecord, i18n: &I18n) -> String {
+    format!(
+        "{} {} ({})",
+        file_change_marker(change.kind),
+        file_change_display_path(change),
+        ui_text::file_change_kind_label(i18n, change.kind)
+    )
+}
+
+fn push_limited_diff_text(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    text: &str,
+    width: u16,
+    i18n: &I18n,
+) {
+    let preview = tool_output_preview_with_limits(
+        text,
+        TOOL_EXPANDED_PREVIEW_LINES,
+        TOOL_EXPANDED_PREVIEW_CHARS,
+    );
+    for raw_line in preview.text.lines() {
+        push_wrapped_line(
+            out,
+            prefix,
+            prefix,
+            raw_line,
+            diff_line_style(raw_line),
+            width,
+        );
+    }
+    if preview.omitted_lines > 0 {
+        push_multiline(
+            out,
+            prefix,
+            &i18n.text_args(
+                "message-tool-output-collapsed",
+                &crate::fl_args!("lines" => preview.omitted_lines as i64),
+            ),
+            Style::default().fg(Color::DarkGray),
+            width,
+        );
+    }
+}
+
+fn diff_line_style(line: &str) -> Style {
+    if line.starts_with("diff --git ")
+        || line.starts_with("rename from ")
+        || line.starts_with("rename to ")
+        || line.starts_with("new file mode ")
+        || line.starts_with("deleted file mode ")
+        || line.starts_with("--- ")
+        || line.starts_with("+++ ")
+    {
+        Style::default().fg(Color::Cyan)
+    } else if line.starts_with("@@") {
+        Style::default().fg(Color::Yellow)
+    } else if line.starts_with('+') {
+        Style::default().fg(Color::Green)
+    } else if line.starts_with('-') {
+        Style::default().fg(Color::Red)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    }
 }
 
 fn tool_invocation_label(invocation: &ToolInvocation) -> String {
@@ -2322,6 +2527,66 @@ mod tests {
     }
 
     #[test]
+    fn transcript_export_markdown_keeps_apply_patch_details_expanded() {
+        let i18n = I18n::english();
+        let invocation = ToolInvocation::new(
+            "apply_patch",
+            serde_json::from_value(json!({ "path": "src/app.rs" }))
+                .expect("valid structured input"),
+        );
+        let details = agena::message::ToolOutput::from_json_payload(Some(&json!({
+            "operation_id": "op-export",
+            "changes": [
+                { "path": "src/app.rs", "kind": "updated" }
+            ],
+            "diff": "diff --git a/src/app.rs b/src/app.rs\n--- a/src/app.rs\n+++ b/src/app.rs\n@@\n-old value\n+new value"
+        })))
+        .expect("valid apply_patch payload");
+        let tool = OperationPart::completed(
+            73,
+            invocation,
+            "Applied patch to 1 file: src/app.rs",
+            Vec::new(),
+            Vec::new(),
+            details,
+            agena::message::TimeRange::default(),
+        )
+        .with_title("Apply patch (op-export)");
+        let created_at = Utc::now();
+        let message = MessageResource {
+            id: 7,
+            session_id: 1,
+            role: MessageRole::Assistant,
+            state: MessageStatus::Completed,
+            created_at,
+            updated_at: created_at,
+            metadata: Default::default(),
+            usage: None,
+            part_count: 1,
+            parts: Some(vec![MessagePart::with_content(
+                1,
+                7,
+                created_at,
+                ExecutionStatus::Completed,
+                PartContent::Operation(tool),
+            )]),
+        };
+
+        let markdown = render_transcript_export_markdown(
+            &i18n,
+            Some(1),
+            "Patch session",
+            None,
+            &[message],
+            false,
+        );
+
+        assert!(markdown.contains("file changes"));
+        assert!(markdown.contains("M src/app.rs (updated)"));
+        assert!(markdown.contains("diff --git a/src/app.rs b/src/app.rs"));
+    }
+
+    #[test]
     fn operation_block_copy_text_localizes_search_headings() {
         let i18n = I18n::resolve(Some("zh-CN"), None);
         let text = operation_block_copy_text(
@@ -2422,6 +2687,98 @@ mod tests {
         assert!(rendered[0].contains("tool"));
         assert!(rendered[0].contains("completed"));
         assert!(rendered[0].contains("bash"));
+    }
+
+    #[test]
+    fn collapsed_apply_patch_summary_lists_changed_files() {
+        let invocation = ToolInvocation::new(
+            "apply_patch",
+            serde_json::from_value(json!({ "path": "src/lib.rs" }))
+                .expect("valid structured input"),
+        );
+        let details = agena::message::ToolOutput::from_json_payload(Some(&json!({
+            "operation_id": "op-1",
+            "changes": [
+                { "path": "src/lib.rs", "kind": "updated" },
+                { "path": "src/ui.rs", "kind": "updated" },
+                { "path": "README.md", "kind": "added" },
+                { "path": "docs/notes.md", "kind": "deleted" }
+            ]
+        })))
+        .expect("valid apply_patch payload");
+        let tool = OperationPart::completed(
+            70,
+            invocation,
+            "Applied patch to 4 files: src/lib.rs, src/ui.rs, README.md, +1 more",
+            Vec::new(),
+            Vec::new(),
+            details,
+            agena::message::TimeRange::default(),
+        )
+        .with_title("Apply patch (op-1)");
+        let part = MessagePart::with_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(tool.clone()),
+        );
+
+        let mut out = Vec::new();
+        render_tool_execution(&part, &tool, &mut out, 120, &I18n::english(), false);
+
+        let rendered = out.into_iter().map(|line| line.text).collect::<Vec<_>>();
+        assert_eq!(rendered.len(), 1);
+        assert!(rendered[0].contains("Apply patch (op-1)"));
+        assert!(rendered[0].contains("4 files"));
+        assert!(rendered[0].contains("src/lib.rs"));
+        assert!(rendered[0].contains("+1 more"));
+    }
+
+    #[test]
+    fn collapsed_notebook_edit_summary_lists_changed_file() {
+        let invocation = ToolInvocation::new(
+            "notebook_edit",
+            serde_json::from_value(json!({ "notebook_path": "demo.ipynb" }))
+                .expect("valid structured input"),
+        );
+        let details = agena::message::ToolOutput::from_json_payload(Some(&json!({
+            "path": "demo.ipynb",
+            "edit_mode": "replace",
+            "cell_index": 0,
+            "cell_count": 3,
+            "changes": [
+                { "path": "demo.ipynb", "kind": "updated" }
+            ],
+            "diff": "diff --git a/demo.ipynb b/demo.ipynb\n--- a/demo.ipynb\n+++ b/demo.ipynb\n@@\n-old\n+new"
+        })))
+        .expect("valid notebook_edit payload");
+        let tool = OperationPart::completed(
+            70,
+            invocation,
+            "Updated notebook demo.ipynb: replace cell 0; notebook now has 3 cells",
+            Vec::new(),
+            Vec::new(),
+            details,
+            agena::message::TimeRange::default(),
+        )
+        .with_title("Notebook edit demo.ipynb");
+        let part = MessagePart::with_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(tool.clone()),
+        );
+
+        let mut out = Vec::new();
+        render_tool_execution(&part, &tool, &mut out, 120, &I18n::english(), false);
+
+        let rendered = out.into_iter().map(|line| line.text).collect::<Vec<_>>();
+        assert_eq!(rendered.len(), 1);
+        assert!(rendered[0].contains("Notebook edit demo.ipynb"));
+        assert!(rendered[0].contains("1 file"));
+        assert!(rendered[0].contains("demo.ipynb"));
     }
 
     #[test]
@@ -2677,6 +3034,115 @@ mod tests {
             .map(|line| sanitize_terminal_text(line.text.as_str()))
             .collect::<Vec<_>>();
         assert!(rendered.iter().any(|line| line.contains("diff：2 行")));
+    }
+
+    #[test]
+    fn expanded_apply_patch_renders_file_list_before_diff_details() {
+        let invocation = ToolInvocation::new(
+            "apply_patch",
+            serde_json::from_value(json!({ "path": "src/app.rs" }))
+                .expect("valid structured input"),
+        );
+        let details = agena::message::ToolOutput::from_json_payload(Some(&json!({
+            "operation_id": "op-2",
+            "changes": [
+                { "path": "src/app.rs", "kind": "updated" }
+            ],
+            "diff": "diff --git a/src/app.rs b/src/app.rs\n--- a/src/app.rs\n+++ b/src/app.rs\n@@\n-old value\n+new value"
+        })))
+        .expect("valid apply_patch payload");
+        let tool = OperationPart::completed(
+            71,
+            invocation,
+            "Applied patch to 1 file: src/app.rs",
+            Vec::new(),
+            Vec::new(),
+            details,
+            agena::message::TimeRange::default(),
+        )
+        .with_title("Apply patch (op-2)");
+        let part = MessagePart::with_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(tool.clone()),
+        );
+
+        let mut out = Vec::new();
+        render_tool_execution(&part, &tool, &mut out, 120, &I18n::english(), true);
+
+        let rendered = out
+            .into_iter()
+            .map(|line| sanitize_terminal_text(line.text.as_str()))
+            .collect::<Vec<_>>();
+        let file_change_index = rendered
+            .iter()
+            .position(|line| line.contains("M src/app.rs (updated)"))
+            .expect("file change line");
+        let diff_index = rendered
+            .iter()
+            .position(|line| line.contains("diff --git a/src/app.rs b/src/app.rs"))
+            .expect("diff body line");
+        assert!(file_change_index < diff_index);
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("diff: 1 file, +1 -1"))
+        );
+    }
+
+    #[test]
+    fn render_message_export_keeps_apply_patch_details_expanded() {
+        let invocation = ToolInvocation::new(
+            "apply_patch",
+            serde_json::from_value(json!({ "path": "src/app.rs" }))
+                .expect("valid structured input"),
+        );
+        let details = agena::message::ToolOutput::from_json_payload(Some(&json!({
+            "operation_id": "op-3",
+            "changes": [
+                { "path": "src/app.rs", "kind": "updated" }
+            ],
+            "diff": "diff --git a/src/app.rs b/src/app.rs\n--- a/src/app.rs\n+++ b/src/app.rs\n@@\n-old value\n+new value"
+        })))
+        .expect("valid apply_patch payload");
+        let tool = OperationPart::completed(
+            72,
+            invocation,
+            "Applied patch to 1 file: src/app.rs",
+            Vec::new(),
+            Vec::new(),
+            details,
+            agena::message::TimeRange::default(),
+        )
+        .with_title("Apply patch (op-3)");
+        let message = transcript_message(vec![MessagePart::with_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(tool),
+        )]);
+
+        let rendered = render_message_export(
+            &message,
+            u16::MAX,
+            &I18n::english(),
+            TranscriptDetailDefaults {
+                tool_output_expanded: true,
+                thinking_expanded: false,
+            },
+        );
+        let export_text = rendered
+            .into_iter()
+            .map(|line| sanitize_terminal_text(line.text.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(export_text.contains("file changes"));
+        assert!(export_text.contains("M src/app.rs (updated)"));
+        assert!(export_text.contains("diff --git a/src/app.rs b/src/app.rs"));
     }
 
     #[test]

@@ -37,13 +37,39 @@ const BUILTIN_TOOL_NAMES: &[&str] = &[
 ];
 
 fn apply_patch_output_text(result: &apply_patch::ApplyPatchExecution) -> String {
-    let mut lines = vec![format!(
-        "Applied {} file changes in patch operation {}.",
+    if result.files.is_empty() {
+        return format!("Applied patch operation {}.", result.operation_id);
+    }
+
+    let preview = summarize_file_paths(result.files.iter().map(|file| file.path.as_str()), 3);
+    format!(
+        "Applied patch to {} file{}: {}",
         result.files.len(),
-        result.operation_id
-    )];
-    lines.extend(result.progress.iter().map(|line| format!("- {line}")));
-    lines.join("\n")
+        if result.files.len() == 1 { "" } else { "s" },
+        preview
+    )
+}
+
+fn summarize_file_paths<'a, I>(paths: I, preview_limit: usize) -> String
+where
+    I: Iterator<Item = &'a str>,
+{
+    let mut preview = Vec::new();
+    let mut omitted = 0_usize;
+
+    for path in paths {
+        if preview.len() < preview_limit {
+            preview.push(path.to_string());
+        } else {
+            omitted += 1;
+        }
+    }
+
+    if omitted > 0 {
+        preview.push(format!("+{omitted} more"));
+    }
+
+    preview.join(", ")
 }
 
 pub(crate) fn execute_tool(

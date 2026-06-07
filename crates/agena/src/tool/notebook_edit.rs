@@ -1,8 +1,11 @@
 use std::fs;
 
+use diff::Result as DiffResult;
 use serde_json::{Map, Value};
 
-use crate::message::{NotebookCellType, NotebookEditMode, NotebookEditToolInput};
+use crate::message::{
+    FileChangeKind, FileChangeRecord, NotebookCellType, NotebookEditMode, NotebookEditToolInput,
+};
 
 use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
@@ -34,19 +37,30 @@ pub(super) fn execute(
     let cell_count = cells.len();
     let serialized = serde_json::to_string_pretty(&notebook)
         .map_err(|err| ToolError::InvalidInput(format!("serialize notebook: {err}")))?;
-    fs::write(&target, format!("{serialized}\n"))?;
+    let updated = format!("{serialized}\n");
+    fs::write(&target, &updated)?;
 
     let display_path = executor.display_path(&target);
     let action = input.edit_mode.as_str();
+    let changes = vec![FileChangeRecord {
+        path: display_path.clone(),
+        kind: FileChangeKind::Updated,
+        from_path: None,
+    }];
+    let diff = render_notebook_diff(display_path.as_str(), raw.as_str(), updated.as_str());
     let output = ToolPayloadOutput::NotebookEdit {
         path: display_path.clone(),
         edit_mode: action.to_string(),
         cell_index: index as u32,
         cell_count: cell_count as u32,
+        changes,
+        diff,
     };
     let mut view = ToolExecutionView::simple(
         format!("Notebook edit {display_path}"),
-        format!("{action} cell {index} in {display_path}; notebook now has {cell_count} cells"),
+        format!(
+            "Updated notebook {display_path}: {action} cell {index}; notebook now has {cell_count} cells"
+        ),
     );
     view.metadata.insert("path".to_string(), display_path);
     view.metadata
@@ -57,6 +71,95 @@ pub(super) fn execute(
         .insert("cell_count".to_string(), cell_count.to_string());
 
     Ok(ToolPayloadExecution::new(output, view))
+}
+
+fn render_notebook_diff(path: &str, before: &str, after: &str) -> String {
+    let normalized_before = normalize_lf(before);
+    let normalized_after = normalize_lf(after);
+    if normalized_before == normalized_after {
+        return String::new();
+    }
+
+    let mut lines = vec![format!("diff --git a/{path} b/{path}")];
+    lines.push(format!("--- a/{path}"));
+    lines.push(format!("+++ b/{path}"));
+
+    for hunk in grouped_hunks(normalized_before.as_str(), normalized_after.as_str(), 3) {
+        lines.push("@@".to_string());
+        for diff_line in hunk {
+            let prefix = match diff_line.kind {
+                DiffLineKind::Context => ' ',
+                DiffLineKind::Added => '+',
+                DiffLineKind::Deleted => '-',
+            };
+            lines.push(format!("{prefix}{}", diff_line.text));
+        }
+    }
+
+    lines.join("\n")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiffLineKind {
+    Context,
+    Added,
+    Deleted,
+}
+
+#[derive(Debug, Clone)]
+struct DiffLine {
+    kind: DiffLineKind,
+    text: String,
+}
+
+fn grouped_hunks(before: &str, after: &str, context: usize) -> Vec<Vec<DiffLine>> {
+    let lines = diff::lines(before, after)
+        .into_iter()
+        .map(|line| match line {
+            DiffResult::Both(text, _) => DiffLine {
+                kind: DiffLineKind::Context,
+                text: text.to_string(),
+            },
+            DiffResult::Left(text) => DiffLine {
+                kind: DiffLineKind::Deleted,
+                text: text.to_string(),
+            },
+            DiffResult::Right(text) => DiffLine {
+                kind: DiffLineKind::Added,
+                text: text.to_string(),
+            },
+        })
+        .collect::<Vec<_>>();
+    let changed_indices = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| (line.kind != DiffLineKind::Context).then_some(index))
+        .collect::<Vec<_>>();
+    if changed_indices.is_empty() {
+        return Vec::new();
+    }
+
+    let mut ranges = Vec::<(usize, usize)>::new();
+    for index in changed_indices {
+        let start = index.saturating_sub(context);
+        let end = (index + context).min(lines.len().saturating_sub(1));
+        if let Some((_, previous_end)) = ranges.last_mut()
+            && start <= previous_end.saturating_add(1)
+        {
+            *previous_end = (*previous_end).max(end);
+        } else {
+            ranges.push((start, end));
+        }
+    }
+
+    ranges
+        .into_iter()
+        .map(|(start, end)| lines[start..=end].to_vec())
+        .collect()
+}
+
+fn normalize_lf(input: &str) -> String {
+    input.replace("\r\n", "\n")
 }
 
 fn apply_edit(cells: &mut Vec<Value>, input: &NotebookEditToolInput) -> Result<usize, ToolError> {

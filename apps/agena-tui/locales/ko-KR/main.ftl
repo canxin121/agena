@@ -121,6 +121,9 @@ message-empty = (빈 메시지)
 message-thinking = 생각: {$summary}
 message-command-status = 상태: {$status}, exit={$exit}
 message-file-changes = 파일 변경
+message-file-changes-preview-one = 파일 1개: {$paths}
+message-file-changes-preview-many = 파일 {$count}개: {$paths}
+message-file-changes-more = 외 {$count}개
 message-search = 검색: {$query}
 message-todo-list = 할 일 목록
 message-error = 오류 [{$code}]: {$message}

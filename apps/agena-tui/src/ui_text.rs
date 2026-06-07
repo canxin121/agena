@@ -289,10 +289,39 @@ pub fn operation_command_exit_line(i18n: &I18n, exit_code: i32) -> String {
     )
 }
 
-pub fn operation_diff_summary(i18n: &I18n, line_count: usize) -> String {
+pub fn operation_diff_summary(
+    i18n: &I18n,
+    file_count: usize,
+    additions: usize,
+    deletions: usize,
+    renames: usize,
+    line_count: usize,
+) -> String {
+    if file_count == 0 {
+        return i18n.text_args(
+            "operation-diff-summary",
+            &fl_args!("count" => line_count as i64),
+        );
+    }
+
+    let key = if file_count == 1 && renames > 0 {
+        "operation-diff-summary-detailed-one-rename"
+    } else if file_count == 1 {
+        "operation-diff-summary-detailed-one"
+    } else if renames > 0 {
+        "operation-diff-summary-detailed-renames"
+    } else {
+        "operation-diff-summary-detailed"
+    };
+
     i18n.text_args(
-        "operation-diff-summary",
-        &fl_args!("count" => line_count as i64),
+        key,
+        &fl_args!(
+            "files" => file_count as i64,
+            "added" => additions as i64,
+            "deleted" => deletions as i64,
+            "renamed" => renames as i64,
+        ),
     )
 }
 
@@ -324,6 +353,22 @@ pub fn message_tool_summary(i18n: &I18n, status: ExecutionStatus, label: &str) -
             "status" => execution_status_label(i18n, status),
             "label" => label,
         ),
+    )
+}
+
+pub fn file_changes_preview(i18n: &I18n, count: usize, paths: &str) -> String {
+    let key = if count == 1 {
+        "message-file-changes-preview-one"
+    } else {
+        "message-file-changes-preview-many"
+    };
+    i18n.text_args(key, &fl_args!("count" => count as i64, "paths" => paths))
+}
+
+pub fn file_changes_more(i18n: &I18n, count: usize) -> String {
+    i18n.text_args(
+        "message-file-changes-more",
+        &fl_args!("count" => count as i64),
     )
 }
 

@@ -10,7 +10,6 @@ pub(crate) mod grep;
 pub(crate) mod lsp;
 pub(crate) mod monitor;
 pub(crate) mod monitor_tool;
-pub(crate) mod notebook_edit;
 pub(crate) mod orchestrator;
 pub(crate) mod payload;
 pub(crate) mod powershell;
@@ -56,9 +55,10 @@ use crate::plugin::{
     },
 };
 use crate::plugins::provided::{
-    code as provided_code, cron as provided_cron, fs as provided_fs, lsp as provided_lsp, mcp,
-    router as in_process_router, schema_lab as provided_schema_lab, settings as provided_settings,
-    shell as provided_shell, skills, workflow as provided_workflow,
+    catalog as provided_catalog, code as provided_code, cron as provided_cron, fs as provided_fs,
+    lsp as provided_lsp, mcp, planning as provided_planning, repo as provided_repo,
+    router as in_process_router, runtime as provided_runtime, schema_lab as provided_schema_lab,
+    settings as provided_settings, shell as provided_shell, skills, tasks as provided_tasks,
 };
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
@@ -722,12 +722,54 @@ pub fn new_shell_plugin() -> impl crate::plugin::sdk::Plugin {
     provided_shell::new_plugin()
 }
 
-pub fn workflow_plugin_id() -> &'static str {
-    provided_workflow::WORKFLOW_PLUGIN_ID
+pub fn catalog_plugin_id() -> &'static str {
+    provided_catalog::CATALOG_PLUGIN_ID
 }
 
-pub fn new_workflow_plugin() -> impl crate::plugin::sdk::Plugin {
-    provided_workflow::new_plugin()
+pub fn new_catalog_plugin() -> impl crate::plugin::sdk::Plugin {
+    provided_catalog::CatalogPlugin::new()
+}
+
+pub fn runtime_plugin_id() -> &'static str {
+    provided_runtime::RUNTIME_PLUGIN_ID
+}
+
+pub fn new_runtime_plugin() -> impl crate::plugin::sdk::Plugin {
+    provided_runtime::RuntimePlugin::new()
+}
+
+pub fn planning_plugin_id() -> &'static str {
+    provided_planning::PLANNING_PLUGIN_ID
+}
+
+pub fn new_planning_plugin() -> impl crate::plugin::sdk::Plugin {
+    provided_planning::PlanningPlugin::new()
+}
+
+pub fn tasks_plugin_id() -> &'static str {
+    provided_tasks::TASKS_PLUGIN_ID
+}
+
+pub fn new_tasks_plugin() -> impl crate::plugin::sdk::Plugin {
+    provided_tasks::TasksPlugin::new()
+}
+
+pub fn repo_plugin_id() -> &'static str {
+    provided_repo::REPO_PLUGIN_ID
+}
+
+pub fn new_repo_plugin() -> impl crate::plugin::sdk::Plugin {
+    provided_repo::RepoPlugin::new()
+}
+
+#[cfg(feature = "schema-lab")]
+pub const fn schema_lab_builtin_enabled() -> bool {
+    true
+}
+
+#[cfg(not(feature = "schema-lab"))]
+pub const fn schema_lab_builtin_enabled() -> bool {
+    false
 }
 
 pub fn schema_lab_plugin_id() -> &'static str {
@@ -2583,7 +2625,7 @@ fn invocation_effective_tags(
         ("agena_fs__fs", "read" | "glob" | "grep") => {
             set_invocation_access_tags(&mut tags, true, false, true, false)
         }
-        ("agena_fs__fs", "apply_patch" | "notebook_edit") => {
+        ("agena_fs__fs", "apply_patch") => {
             set_invocation_access_tags(&mut tags, false, true, false, true)
         }
         ("agena_settings__settings", "get" | "list" | "validate") => {
@@ -2604,10 +2646,10 @@ fn invocation_effective_tags(
         ("agena_shell__monitor", "start" | "stop") => {
             set_invocation_access_tags(&mut tags, false, true, false, false)
         }
-        ("agena_workflow__session", "get") => {
+        ("agena_runtime__session", "get") => {
             set_invocation_access_tags(&mut tags, true, false, false, false)
         }
-        ("agena_workflow__session", "rename") => {
+        ("agena_runtime__session", "rename") => {
             set_invocation_access_tags(&mut tags, false, true, false, false)
         }
         ("agena_mcp__mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => {
@@ -2663,15 +2705,15 @@ fn is_concurrency_safe_tool_invocation(
 
     match (registered_tool.behavior_exposed_name(), command) {
         ("agena_fs__fs", "read" | "glob" | "grep") => true,
-        ("agena_fs__fs", "apply_patch" | "notebook_edit") => false,
+        ("agena_fs__fs", "apply_patch") => false,
         ("agena_shell__monitor", "list" | "read") => true,
         ("agena_shell__monitor", "start" | "stop") => false,
         ("agena_settings__settings", "get" | "list" | "validate") => true,
         ("agena_settings__settings", "set" | "delete" | "patch") => false,
         ("agena_cron__schedule", "list") => true,
         ("agena_cron__schedule", "create" | "delete" | "wakeup") => false,
-        ("agena_workflow__session", "get") => true,
-        ("agena_workflow__session", "rename") => false,
+        ("agena_runtime__session", "get") => true,
+        ("agena_runtime__session", "rename") => false,
         ("agena_mcp__mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => {
             true
         }
@@ -2935,10 +2977,10 @@ mod tests {
     use crate::message::{
         ApplyPatchToolInput, EnterWorktreeToolInput, FileChangeKind, FilesystemAccess,
         FilesystemEffect, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
-        LspPositionToolInput, Message, MonitorToolInput, NetworkEffect, NotebookEditMode,
-        NotebookEditToolInput, PartContent, ReadToolInput, ShellCommandInput, StructuredObject,
-        TaskSubagentType, TaskToolInput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput,
-        ToolInvocation, WebFetchToolInput, WebSearchToolInput,
+        LspPositionToolInput, Message, MonitorToolInput, NetworkEffect, PartContent, ReadToolInput,
+        ShellCommandInput, StructuredObject, TaskSubagentType, TaskToolInput, TodoItem,
+        TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation, WebFetchToolInput,
+        WebSearchToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
@@ -2968,9 +3010,9 @@ mod tests {
     const GENERATED_HELP_TOOL: &str = "fixture__generated_help";
     const MERGED_HELP_TOOL: &str = "fixture__merged_help";
     const SHELL_BASH_TOOL: &str = "agena_shell__exec_bash";
-    const TOOLS_TOOL: &str = "agena_workflow__tools";
-    const TODO_TOOL: &str = "agena_workflow__todo";
-    const TASK_TOOL: &str = "agena_workflow__task";
+    const TOOLS_TOOL: &str = "agena_catalog__tools";
+    const TODO_TOOL: &str = "agena_planning__todo";
+    const TASK_TOOL: &str = "agena_tasks__task";
     const FIXTURE_ECHO_TOOL: &str = "fixture__plugin_echo";
     const WEB_FETCH_TOOL: &str = "agena_web__fetch";
     const WEB_QUERY_TOOL: &str = "agena_web__store_query";
@@ -5358,7 +5400,7 @@ mod tests {
 
         async fn list_tools(&self) -> SdkResult<Vec<ToolDescriptor>> {
             Ok(vec![
-                crate::plugins::provided::workflow::tools_tool_descriptor_for_tests(),
+                crate::plugins::provided::catalog::tools_tool_descriptor_for_tests(),
                 ToolDescriptor {
                     name: FS_TOOL.to_string(),
                     aliases: Vec::new(),
@@ -5718,8 +5760,11 @@ mod tests {
         let fs_id = super::fs_plugin_id().to_string();
         let settings_id = super::settings_plugin_id().to_string();
         let shell_id = super::shell_plugin_id().to_string();
-        let workflow_id = super::workflow_plugin_id().to_string();
-        let schema_lab_id = super::schema_lab_plugin_id().to_string();
+        let catalog_id = super::catalog_plugin_id().to_string();
+        let runtime_id = super::runtime_plugin_id().to_string();
+        let planning_id = super::planning_plugin_id().to_string();
+        let tasks_id = super::tasks_plugin_id().to_string();
+        let repo_id = super::repo_plugin_id().to_string();
         let web_id = crate::web::web_plugin_id().to_string();
         let mut list = BTreeMap::new();
         for id in [
@@ -5730,16 +5775,26 @@ mod tests {
             &fs_id,
             &settings_id,
             &shell_id,
-            &workflow_id,
-            &schema_lab_id,
+            &catalog_id,
+            &runtime_id,
+            &planning_id,
+            &tasks_id,
+            &repo_id,
             &web_id,
         ] {
-            let config = if id == &workflow_id {
+            let config = if id == &catalog_id || id == &planning_id {
                 serde_json::json!({})
             } else {
                 serde_json::Value::Null
             };
             list.insert((*id).clone(), ConfiguredPlugin::static_config(config));
+        }
+        let schema_lab_id = super::schema_lab_plugin_id().to_string();
+        if super::schema_lab_builtin_enabled() {
+            list.insert(
+                schema_lab_id.clone(),
+                ConfiguredPlugin::static_config(serde_json::Value::Null),
+            );
         }
         list.insert("fixture".to_string(), ConfiguredPlugin::static_default());
         let config = PluginsConfig {
@@ -5748,7 +5803,7 @@ mod tests {
             list,
         };
         test_plugin_runtime().block_on(async {
-            PluginHostBuilder::new(root, "test")
+            let mut builder = PluginHostBuilder::new(root, "test")
                 .with_config(config)
                 .with_host_client(Arc::new(TestToolHost::default()))
                 .register_static(skills_id, super::new_skills_plugin())
@@ -5758,8 +5813,15 @@ mod tests {
                 .register_static(fs_id, super::new_fs_plugin())
                 .register_static(settings_id, super::new_settings_plugin())
                 .register_static(shell_id, super::new_shell_plugin())
-                .register_static(workflow_id, super::new_workflow_plugin())
-                .register_static(schema_lab_id, super::new_schema_lab_plugin())
+                .register_static(catalog_id, super::new_catalog_plugin())
+                .register_static(runtime_id, super::new_runtime_plugin())
+                .register_static(planning_id, super::new_planning_plugin())
+                .register_static(tasks_id, super::new_tasks_plugin())
+                .register_static(repo_id, super::new_repo_plugin());
+            if super::schema_lab_builtin_enabled() {
+                builder = builder.register_static(schema_lab_id, super::new_schema_lab_plugin());
+            }
+            builder
                 .register_static(web_id, crate::web::new_web_plugin())
                 .register_static("fixture", FixturePlugin)
                 .build()
@@ -5778,8 +5840,11 @@ mod tests {
         let fs_id = super::fs_plugin_id().to_string();
         let settings_id = super::settings_plugin_id().to_string();
         let shell_id = super::shell_plugin_id().to_string();
-        let workflow_id = super::workflow_plugin_id().to_string();
-        let schema_lab_id = super::schema_lab_plugin_id().to_string();
+        let catalog_id = super::catalog_plugin_id().to_string();
+        let runtime_id = super::runtime_plugin_id().to_string();
+        let planning_id = super::planning_plugin_id().to_string();
+        let tasks_id = super::tasks_plugin_id().to_string();
+        let repo_id = super::repo_plugin_id().to_string();
         let web_id = crate::web::web_plugin_id().to_string();
         let mut list = BTreeMap::new();
         for id in [
@@ -5790,16 +5855,26 @@ mod tests {
             &fs_id,
             &settings_id,
             &shell_id,
-            &workflow_id,
-            &schema_lab_id,
+            &catalog_id,
+            &runtime_id,
+            &planning_id,
+            &tasks_id,
+            &repo_id,
             &web_id,
         ] {
-            let config = if id == &workflow_id {
+            let config = if id == &catalog_id || id == &planning_id {
                 serde_json::json!({})
             } else {
                 serde_json::Value::Null
             };
             list.insert((*id).clone(), ConfiguredPlugin::static_config(config));
+        }
+        let schema_lab_id = super::schema_lab_plugin_id().to_string();
+        if super::schema_lab_builtin_enabled() {
+            list.insert(
+                schema_lab_id.clone(),
+                ConfiguredPlugin::static_config(serde_json::Value::Null),
+            );
         }
         let config = PluginsConfig {
             host: Default::default(),
@@ -5807,7 +5882,7 @@ mod tests {
             list,
         };
         test_plugin_runtime().block_on(async {
-            PluginHostBuilder::new(root, "test")
+            let mut builder = PluginHostBuilder::new(root, "test")
                 .with_config(config)
                 .with_host_client(Arc::new(TestToolHost::default()))
                 .register_static(skills_id, super::new_skills_plugin())
@@ -5817,8 +5892,15 @@ mod tests {
                 .register_static(fs_id, super::new_fs_plugin())
                 .register_static(settings_id, super::new_settings_plugin())
                 .register_static(shell_id, super::new_shell_plugin())
-                .register_static(workflow_id, super::new_workflow_plugin())
-                .register_static(schema_lab_id, super::new_schema_lab_plugin())
+                .register_static(catalog_id, super::new_catalog_plugin())
+                .register_static(runtime_id, super::new_runtime_plugin())
+                .register_static(planning_id, super::new_planning_plugin())
+                .register_static(tasks_id, super::new_tasks_plugin())
+                .register_static(repo_id, super::new_repo_plugin());
+            if super::schema_lab_builtin_enabled() {
+                builder = builder.register_static(schema_lab_id, super::new_schema_lab_plugin());
+            }
+            builder
                 .register_static(web_id, crate::web::new_web_plugin())
                 .build()
                 .await
@@ -5836,8 +5918,11 @@ mod tests {
         let fs_id = super::fs_plugin_id().to_string();
         let settings_id = super::settings_plugin_id().to_string();
         let shell_id = super::shell_plugin_id().to_string();
-        let workflow_id = super::workflow_plugin_id().to_string();
-        let schema_lab_id = super::schema_lab_plugin_id().to_string();
+        let catalog_id = super::catalog_plugin_id().to_string();
+        let runtime_id = super::runtime_plugin_id().to_string();
+        let planning_id = super::planning_plugin_id().to_string();
+        let tasks_id = super::tasks_plugin_id().to_string();
+        let repo_id = super::repo_plugin_id().to_string();
         let web_id = crate::web::web_plugin_id().to_string();
         let mut list = BTreeMap::new();
         for id in [
@@ -5848,16 +5933,26 @@ mod tests {
             &fs_id,
             &settings_id,
             &shell_id,
-            &workflow_id,
-            &schema_lab_id,
+            &catalog_id,
+            &runtime_id,
+            &planning_id,
+            &tasks_id,
+            &repo_id,
             &web_id,
         ] {
-            let config = if id == &workflow_id {
+            let config = if id == &catalog_id || id == &planning_id {
                 serde_json::json!({})
             } else {
                 serde_json::Value::Null
             };
             list.insert((*id).clone(), ConfiguredPlugin::static_config(config));
+        }
+        let schema_lab_id = super::schema_lab_plugin_id().to_string();
+        if super::schema_lab_builtin_enabled() {
+            list.insert(
+                schema_lab_id.clone(),
+                ConfiguredPlugin::static_config(serde_json::Value::Null),
+            );
         }
         let config = PluginsConfig {
             host: Default::default(),
@@ -5865,7 +5960,7 @@ mod tests {
             list,
         };
         test_plugin_runtime().block_on(async {
-            PluginHostBuilder::new(root, "test")
+            let mut builder = PluginHostBuilder::new(root, "test")
                 .with_config(config)
                 .register_static(skills_id, super::new_skills_plugin())
                 .register_static(lsp_id, super::new_lsp_plugin())
@@ -5874,8 +5969,15 @@ mod tests {
                 .register_static(fs_id, super::new_fs_plugin())
                 .register_static(settings_id, super::new_settings_plugin())
                 .register_static(shell_id, super::new_shell_plugin())
-                .register_static(workflow_id, super::new_workflow_plugin())
-                .register_static(schema_lab_id, super::new_schema_lab_plugin())
+                .register_static(catalog_id, super::new_catalog_plugin())
+                .register_static(runtime_id, super::new_runtime_plugin())
+                .register_static(planning_id, super::new_planning_plugin())
+                .register_static(tasks_id, super::new_tasks_plugin())
+                .register_static(repo_id, super::new_repo_plugin());
+            if super::schema_lab_builtin_enabled() {
+                builder = builder.register_static(schema_lab_id, super::new_schema_lab_plugin());
+            }
+            builder
                 .register_static(web_id, crate::web::new_web_plugin())
                 .build()
                 .await
@@ -6054,57 +6156,6 @@ mod tests {
                 assert!(diff.matches("@@").count() >= 2);
             }
             other => panic!("expected apply_patch output, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn notebook_edit_reports_structured_file_change_and_diff() {
-        let workspace = TempWorkspace::new();
-        fs::write(
-            workspace.root.join("demo.ipynb"),
-            r#"{
-  "cells": [
-    {
-      "cell_type": "code",
-      "execution_count": null,
-      "metadata": {},
-      "outputs": [],
-      "source": [
-        "print('before')\n"
-      ]
-    }
-  ],
-  "metadata": {},
-  "nbformat": 4,
-  "nbformat_minor": 5
-}
-"#,
-        )
-        .expect("failed to seed notebook");
-        let executor = build_executor(&workspace.root);
-
-        let result = executor
-            .execute_tool_payload_detailed(&ToolPayloadInput::NotebookEdit(NotebookEditToolInput {
-                notebook_path: "demo.ipynb".to_string(),
-                cell_number: Some(0),
-                new_source: "print('after')\n".to_string(),
-                edit_mode: NotebookEditMode::Replace,
-                cell_type: None,
-            }))
-            .expect("notebook_edit should succeed");
-
-        match result.output {
-            ToolPayloadOutput::NotebookEdit { changes, diff, .. } => {
-                assert_eq!(changes.len(), 1);
-                assert_eq!(changes[0].path, "demo.ipynb");
-                assert_eq!(changes[0].kind, FileChangeKind::Updated);
-                assert!(diff.contains("diff --git a/demo.ipynb b/demo.ipynb"));
-                assert!(diff.contains("print('before')"));
-                assert!(diff.contains("print('after')"));
-                assert!(diff.lines().any(|line| line.starts_with('-')));
-                assert!(diff.lines().any(|line| line.starts_with('+')));
-            }
-            other => panic!("expected notebook_edit output, got {other:?}"),
         }
     }
 
@@ -6404,7 +6455,7 @@ mod tests {
             result
                 .view
                 .output_text
-                .contains("Aliases: agena_workflow__tool_catalog, agena_workflow__tool_help")
+                .contains("Aliases: agena_catalog__tool_catalog, agena_catalog__tool_help")
         );
     }
 
@@ -6417,7 +6468,7 @@ mod tests {
             TOOLS_TOOL,
             StructuredObject::try_from(serde_json::json!({
                 "action": "help",
-                "tool": "agena_workflow__tool_catalog",
+                "tool": "agena_catalog__tool_catalog",
                 "include_schema": false
             }))
             .expect("tools help input should serialize"),
@@ -6430,13 +6481,13 @@ mod tests {
             result
                 .view
                 .output_text
-                .contains("Tool: agena_workflow__tools")
+                .contains("Tool: agena_catalog__tools")
         );
         assert!(
             result
                 .view
                 .output_text
-                .contains("Aliases: agena_workflow__tool_catalog, agena_workflow__tool_help")
+                .contains("Aliases: agena_catalog__tool_catalog, agena_catalog__tool_help")
         );
     }
 
@@ -6446,7 +6497,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let invocation = ToolInvocation::new(
-            "agena_workflow__tool_catalog",
+            "agena_catalog__tool_catalog",
             StructuredObject::try_from(serde_json::json!({
                 "action": "usage"
             }))
@@ -6468,7 +6519,7 @@ mod tests {
         let tools = executor.available_model_tools();
         let alias = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_workflow__tool_catalog")
+            .find(|tool| tool.exposed_name == "agena_catalog__tool_catalog")
             .expect("declared tool alias should be model-visible");
 
         assert_eq!(alias.base_exposed_name.as_deref(), Some(TOOLS_TOOL));
@@ -6477,7 +6528,7 @@ mod tests {
         assert!(
             alias
                 .description_text()
-                .contains("Alias for `agena_workflow__tools`.")
+                .contains("Alias for `agena_catalog__tools`.")
         );
     }
 
@@ -6754,49 +6805,49 @@ mod tests {
         assert!(
             !tools
                 .iter()
-                .any(|tool| tool.exposed_name == "agena_workflow__plan")
+                .any(|tool| tool.exposed_name == "agena_planning__plan")
         );
         assert!(
             !tools
                 .iter()
-                .any(|tool| tool.exposed_name == "agena_workflow__plan_get")
+                .any(|tool| tool.exposed_name == "agena_planning__plan_get")
         );
         assert!(
             !tools
                 .iter()
-                .any(|tool| tool.exposed_name == "agena_workflow__plan_submit")
+                .any(|tool| tool.exposed_name == "agena_planning__plan_submit")
         );
         assert!(
             !tools
                 .iter()
-                .any(|tool| tool.exposed_name == "agena_workflow__plan_next")
+                .any(|tool| tool.exposed_name == "agena_planning__plan_next")
         );
         assert!(
             !tools
                 .iter()
-                .any(|tool| tool.exposed_name == "agena_workflow__plan_replace")
+                .any(|tool| tool.exposed_name == "agena_planning__plan_replace")
         );
         assert!(
             !tools
                 .iter()
-                .any(|tool| tool.exposed_name == "agena_workflow__worktree")
+                .any(|tool| tool.exposed_name == "agena_repo__worktree")
         );
 
         let plan_set_status = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_workflow__plan_set_status")
+            .find(|tool| tool.exposed_name == "agena_planning__plan_set_status")
             .expect("plan.set_status alias should be model-visible");
         let plan_current = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_workflow__plan_current")
+            .find(|tool| tool.exposed_name == "agena_planning__plan_current")
             .expect("plan.current alias should be model-visible");
         let check_update = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_workflow__plan_update_check")
+            .find(|tool| tool.exposed_name == "agena_planning__plan_update_check")
             .expect("plan.update_check alias should be model-visible");
         let worktree_existing = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_workflow__worktree_enter_existing")
+            .find(|tool| tool.exposed_name == "agena_repo__worktree_enter_existing")
             .expect("nested worktree.enter.existing alias should be model-visible");
 
         let plan_set_schema =
@@ -6854,11 +6905,11 @@ mod tests {
         let tools = executor.available_model_tools();
         let plan_create = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_workflow__plan_create")
+            .find(|tool| tool.exposed_name == "agena_planning__plan_create")
             .expect("plan.create alias should be model-visible");
         let plan_set_status = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_workflow__plan_set_status")
+            .find(|tool| tool.exposed_name == "agena_planning__plan_set_status")
             .expect("plan.set_status alias should be model-visible");
 
         assert!(
@@ -6903,7 +6954,6 @@ mod tests {
         assert!(names.contains("agena_fs__fs_glob"));
         assert!(names.contains("agena_fs__fs_grep"));
         assert!(!names.contains("agena_fs__fs_apply_patch"));
-        assert!(!names.contains("agena_fs__fs_notebook_edit"));
     }
 
     #[test]
@@ -7066,7 +7116,7 @@ mod tests {
             .expect("tools catalog should be model-visible");
         assert_eq!(
             workflow_tools.description_text(),
-            "Show usage examples, search tools, or fetch detailed tool help. See `tools.help` for `agena_workflow__tools`."
+            "Show usage examples, search tools, or fetch detailed tool help. See `tools.help` for `agena_catalog__tools`."
         );
 
         let web_search = tools
@@ -8184,7 +8234,7 @@ mod tests {
         let executor = ToolExecutor::new(workspace.root.clone(), agent)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
         let invocation = ToolInvocation::new(
-            "agena_workflow__plan",
+            "agena_planning__plan",
             StructuredObject::try_from(json!({ "action": "current" }))
                 .expect("plan invocation input should be valid"),
         );

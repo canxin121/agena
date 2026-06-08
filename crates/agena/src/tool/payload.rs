@@ -8,8 +8,8 @@ use crate::message::{
     CronDeleteToolInput, CronListToolInput, EnterWorktreeToolInput, ExitWorktreeToolInput,
     FileChangeRecord, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
     LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, MonitorEvent,
-    MonitorStatus, MonitorToolInput, NotebookEditToolInput, ReadToolInput, ScheduleWakeupToolInput,
-    ShellCommandInput, StructuredObject, TodoItem, TodoWriteToolInput, ToolInvocation, ToolOutput,
+    MonitorStatus, MonitorToolInput, ReadToolInput, ScheduleWakeupToolInput, ShellCommandInput,
+    StructuredObject, TodoItem, TodoWriteToolInput, ToolInvocation, ToolOutput,
     ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
 };
 
@@ -40,7 +40,6 @@ pub enum ToolPayloadInput {
     LspReferences(LspReferencesToolInput),
     LspHover(LspHoverToolInput),
     LspDiagnostics(LspDiagnosticsToolInput),
-    NotebookEdit(NotebookEditToolInput),
     PowerShell(ShellCommandInput),
 }
 
@@ -70,7 +69,6 @@ impl ToolPayloadInput {
             Self::LspReferences(_) => "lsp_references",
             Self::LspHover(_) => "lsp_hover",
             Self::LspDiagnostics(_) => "lsp_diagnostics",
-            Self::NotebookEdit(_) => "notebook_edit",
             Self::PowerShell(_) => "powershell",
         }
     }
@@ -267,16 +265,6 @@ pub enum ToolPayloadOutput {
     LspDiagnostics {
         entries: Vec<String>,
     },
-    NotebookEdit {
-        path: String,
-        edit_mode: String,
-        cell_index: u32,
-        cell_count: u32,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        changes: Vec<FileChangeRecord>,
-        #[serde(default, skip_serializing_if = "String::is_empty")]
-        diff: String,
-    },
     PowerShell {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,
@@ -330,7 +318,6 @@ impl ToolPayloadOutput {
             Self::LspReferences { .. } => "lsp_references",
             Self::LspHover { .. } => "lsp_hover",
             Self::LspDiagnostics { .. } => "lsp_diagnostics",
-            Self::NotebookEdit { .. } => "notebook_edit",
             Self::PowerShell { .. } => "powershell",
         }
     }
@@ -377,12 +364,11 @@ const DIRECT_GROUPED_TOOL_MAPPINGS: &[(&str, &str, &str, &str)] = &[
     ("glob", "agena.fs", "fs", "glob"),
     ("grep", "agena.fs", "fs", "grep"),
     ("apply_patch", "agena.fs", "fs", "apply_patch"),
-    ("notebook_edit", "agena.fs", "fs", "notebook_edit"),
-    ("task", "agena.workflow", "task", "run"),
-    ("tool_search", "agena.workflow", "tools", "search"),
-    ("todo_write", "agena.workflow", "todo", "write"),
-    ("ask_user", "agena.workflow", "user", "request_input"),
-    ("exit_worktree", "agena.workflow", "worktree", "exit"),
+    ("task", "agena.tasks", "task", "run"),
+    ("tool_search", "agena.catalog", "tools", "search"),
+    ("todo_write", "agena.planning", "todo", "write"),
+    ("ask_user", "agena.runtime", "user", "request_input"),
+    ("exit_worktree", "agena.repo", "worktree", "exit"),
     ("lsp_definition", "agena.lsp", "lsp", "definition"),
     ("lsp_references", "agena.lsp", "lsp", "references"),
     ("lsp_hover", "agena.lsp", "lsp", "hover"),
@@ -464,7 +450,7 @@ fn invocation_name_for_payload_tool(
                 "action".to_string(),
                 serde_json::Value::String("enter".to_string()),
             );
-            exposed_tool_name("agena.workflow", "worktree")
+            exposed_tool_name("agena.repo", "worktree")
         }
         _ => {
             let (plugin, entry, action) = grouped_mapping_for_tool(tool)?;
@@ -616,12 +602,12 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
         "agena_cron__schedule_wakeup" | "schedule.wakeup" => Some("schedule_wakeup".to_string()),
         "agena_shell__shell" | "shell" => None,
         "agena_fs__fs" | "fs" => None,
-        "agena_workflow__task" | "task" => Some("task".to_string()),
-        "agena_workflow__tools" | "tools" => Some("tool_search".to_string()),
-        "agena_workflow__todo" | "todo" => Some("todo_write".to_string()),
-        "agena_workflow__user" | "user" => Some("ask_user".to_string()),
-        "agena_workflow__plan" | "plan" => None,
-        "agena_workflow__worktree" | "worktree" => None,
+        "agena_tasks__task" | "task" => Some("task".to_string()),
+        "agena_catalog__tools" | "tools" => Some("tool_search".to_string()),
+        "agena_planning__todo" | "todo" => Some("todo_write".to_string()),
+        "agena_runtime__user" | "user" => Some("ask_user".to_string()),
+        "agena_planning__plan" | "plan" => None,
+        "agena_repo__worktree" | "worktree" => None,
         "agena_cron__schedule" | "schedule" => None,
         "agena_lsp__lsp" | "lsp" => None,
         _ => None,

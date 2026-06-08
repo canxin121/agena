@@ -14,7 +14,7 @@ fn static_entry(config: serde_json::Value) -> ConfiguredPlugin {
 }
 
 pub(crate) fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
-    BTreeMap::from([
+    let mut entries = BTreeMap::from([
         (
             crate::tool::skills_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
@@ -44,11 +44,23 @@ pub(crate) fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
             static_entry(serde_json::Value::Null),
         ),
         (
-            crate::tool::workflow_plugin_id().to_string(),
+            crate::tool::catalog_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
         (
-            crate::tool::schema_lab_plugin_id().to_string(),
+            crate::tool::runtime_plugin_id().to_string(),
+            static_entry(serde_json::Value::Null),
+        ),
+        (
+            crate::tool::planning_plugin_id().to_string(),
+            static_entry(serde_json::Value::Null),
+        ),
+        (
+            crate::tool::tasks_plugin_id().to_string(),
+            static_entry(serde_json::Value::Null),
+        ),
+        (
+            crate::tool::repo_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
         (
@@ -63,7 +75,14 @@ pub(crate) fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
             crate::tool::mcp_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
-    ])
+    ]);
+    if crate::tool::schema_lab_builtin_enabled() {
+        entries.insert(
+            crate::tool::schema_lab_plugin_id().to_string(),
+            static_entry(serde_json::Value::Null),
+        );
+    }
+    entries
 }
 
 pub(crate) fn resolve_plugin_config(configured: PluginsConfig) -> PluginsConfig {
@@ -105,13 +124,32 @@ pub(crate) fn register_static_transports(
             crate::tool::new_shell_plugin(),
         )
         .register_static(
-            crate::tool::workflow_plugin_id(),
-            crate::tool::new_workflow_plugin(),
+            crate::tool::catalog_plugin_id(),
+            crate::tool::new_catalog_plugin(),
         )
         .register_static(
+            crate::tool::runtime_plugin_id(),
+            crate::tool::new_runtime_plugin(),
+        )
+        .register_static(
+            crate::tool::planning_plugin_id(),
+            crate::tool::new_planning_plugin(),
+        )
+        .register_static(
+            crate::tool::tasks_plugin_id(),
+            crate::tool::new_tasks_plugin(),
+        )
+        .register_static(
+            crate::tool::repo_plugin_id(),
+            crate::tool::new_repo_plugin(),
+        );
+    if crate::tool::schema_lab_builtin_enabled() {
+        builder = builder.register_static(
             crate::tool::schema_lab_plugin_id(),
             crate::tool::new_schema_lab_plugin(),
-        )
+        );
+    }
+    builder = builder
         .register_static(crate::web::web_plugin_id(), crate::web::new_web_plugin())
         .register_static(
             crate::memory::memory_plugin_id(),

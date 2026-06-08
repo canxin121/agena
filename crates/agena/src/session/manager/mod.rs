@@ -863,11 +863,6 @@ fn operation_blocks_from_tool_output(
         Some(crate::tool::ToolPayloadOutput::ApplyPatch { changes, .. }) if !changes.is_empty() => {
             blocks.push(OperationBlock::FileChanges { changes });
         }
-        Some(crate::tool::ToolPayloadOutput::NotebookEdit { changes, .. })
-            if !changes.is_empty() =>
-        {
-            blocks.push(OperationBlock::FileChanges { changes });
-        }
         Some(crate::tool::ToolPayloadOutput::TodoWrite { items }) if !items.is_empty() => {
             blocks.push(OperationBlock::Checklist { items });
         }

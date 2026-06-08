@@ -204,6 +204,7 @@ pub async fn load_entry(
             plugin: plugin_id.to_string(),
             message: e.to_string(),
         })?;
+    host_handle.set_plugin_manifest_name(plugin_id.to_string(), prefetched_manifest.name.clone());
     host_handle
         .set_plugin_capabilities(
             plugin_id.to_string(),

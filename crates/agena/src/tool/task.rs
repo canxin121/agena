@@ -7,6 +7,6 @@ pub(super) fn execute(
     _input: &TaskToolInput,
 ) -> Result<ToolPayloadExecution, super::ToolError> {
     Err(super::ToolError::Plugin(
-        "task must be invoked through the agena.workflow host bridge".to_string(),
+        "task must be invoked through the agena.tasks host bridge".to_string(),
     ))
 }

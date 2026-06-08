@@ -540,53 +540,6 @@ pub struct LspDiagnosticsToolInput {
     pub file_path: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum NotebookEditMode {
-    Replace,
-    Insert,
-    Delete,
-}
-
-impl NotebookEditMode {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Replace => "replace",
-            Self::Insert => "insert",
-            Self::Delete => "delete",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum NotebookCellType {
-    Code,
-    Markdown,
-}
-
-impl NotebookCellType {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Code => "code",
-            Self::Markdown => "markdown",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("notebook_path", "new_source"), non_empty("notebook_path"))]
-pub struct NotebookEditToolInput {
-    pub notebook_path: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cell_number: Option<u32>,
-    #[serde(default)]
-    pub new_source: String,
-    pub edit_mode: NotebookEditMode,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cell_type: Option<NotebookCellType>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInvocation {
     pub tool_name: String,
@@ -1373,15 +1326,5 @@ mod tests {
         }))
         .expect("lsp hover should trim paths");
         assert_eq!(hover.position.file_path, "/tmp/main.rs");
-
-        let err = NotebookEditToolInput::parse_input(json!({
-            "notebook_path": "   ",
-            "edit_mode": "replace"
-        }))
-        .expect_err("notebook edit should reject blank path");
-        assert!(
-            err.to_string()
-                .contains("field `notebook_path` must not be empty")
-        );
     }
 }

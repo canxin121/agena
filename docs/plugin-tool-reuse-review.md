@@ -25,7 +25,7 @@
 不建议做的事情：
 
 - 不建议把整个 runtime 切到 Rig、Swiftide、LangChain、LangGraph 之类框架上。
-- 不建议把 `agena.fs`、`agena.workflow`、`agena.settings` 这种和宿主强绑定的 tool 改成外部 MCP server。
+- 不建议把 `agena.fs`、`agena.runtime` / `agena.planning` / `agena.repo` 这类和宿主强绑定的 tool 改成外部 MCP server。
 - 不建议为了当前规模的 tool catalog 引入 Meilisearch 这类重型服务。
 
 ## 当前仓库的边界
@@ -33,7 +33,7 @@
 从当前实现看，Agena 的抽象边界已经基本正确：
 
 - `PluginHost` 是统一扩展平面，内置 static plugin 和外部 plugin 走同一路径。
-- 内置能力已经按领域收敛成稳定入口：`agena.fs`、`agena.shell`、`agena.web`、`agena.workflow`、`agena.skills`、`agena.lsp`、`agena.memory`、`agena.mcp`、`agena.settings`。
+- 内置能力已经按领域收敛成稳定入口：`agena.fs`、`agena.shell`、`agena.web`、`agena.catalog`、`agena.runtime`、`agena.planning`、`agena.tasks`、`agena.repo`、`agena.skills`、`agena.lsp`、`agena.memory`、`agena.mcp`、`agena.settings`。
 - 对模型暴露的是高层 action tool，而不是零散 syscall 级工具。
 
 这意味着最合理的策略是：

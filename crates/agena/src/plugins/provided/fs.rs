@@ -1,8 +1,6 @@
 //! `agena.fs` plugin: filesystem read/write/search tools.
 
-use crate::message::{
-    ApplyPatchToolInput, GlobToolInput, GrepToolInput, NotebookEditToolInput, ReadToolInput,
-};
+use crate::message::{ApplyPatchToolInput, GlobToolInput, GrepToolInput, ReadToolInput};
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
     PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, ToolTag,
@@ -23,9 +21,9 @@ pub(crate) fn new_plugin() -> FsPlugin {
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "fs",
-    description = "Filesystem command tool. Set action to read, glob, grep, apply_patch, or notebook_edit.",
+    description = "Filesystem command tool. Set action to read, glob, grep, or apply_patch.",
     summary = "Read, search, or edit workspace files.",
-    help = "Use `read` for text previews, directory listings, or file attachments via `mode = text|attachment|auto` (default `auto`). Use `glob` for path discovery, `grep` for regex text search, `apply_patch` for text patch operations, and `notebook_edit` for notebook cell edits.",
+    help = "Use `read` for text previews, directory listings, or file attachments via `mode = text|attachment|auto` (default `auto`). Use `glob` for path discovery, `grep` for regex text search, and `apply_patch` for text patch operations.",
     examples(
         r#"{"action":"read","path":"Cargo.toml"}"#,
         r#"{"action":"grep","pattern":"StaticToolSurface","path":"crates"}"#
@@ -64,12 +62,6 @@ enum FsToolInput {
         #[serde(flatten)]
         args: ApplyPatchToolInput,
     },
-    #[tool(exec = "notebook_edit")]
-    NotebookEdit {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: NotebookEditToolInput,
-    },
 }
 
 #[crate::plugin::sdk::plugin(
@@ -90,7 +82,6 @@ impl FsPlugin {
             FsToolInput::Glob { args } => invoke_internal(context, "glob", args),
             FsToolInput::Grep { args } => invoke_internal(context, "grep", args),
             FsToolInput::ApplyPatch { args } => invoke_internal(context, "apply_patch", args),
-            FsToolInput::NotebookEdit { args } => invoke_internal(context, "notebook_edit", args),
         }
     }
 
@@ -101,7 +92,6 @@ impl FsPlugin {
             FsToolInput::Glob { args } => permission_paths_internal("glob", args),
             FsToolInput::Grep { args } => permission_paths_internal("grep", args),
             FsToolInput::ApplyPatch { args } => permission_paths_internal("apply_patch", args),
-            FsToolInput::NotebookEdit { args } => permission_paths_internal("notebook_edit", args),
         }
     }
 }

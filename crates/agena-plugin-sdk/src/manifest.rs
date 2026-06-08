@@ -202,7 +202,7 @@ pub struct PluginToolDecl {
     pub name: String,
     /// Alternate local tool names accepted by the host for the same tool.
     /// Hosts expose these in the same namespace as `name`, e.g. a tool alias
-    /// `cat` in plugin `agena.workflow` becomes `agena_workflow__cat`.
+    /// `cat` in plugin `agena.catalog` becomes `agena_catalog__cat`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

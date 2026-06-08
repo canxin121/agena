@@ -43,20 +43,22 @@ const SHELL_MONITOR_READ_TOOL: &str = "agena_shell__monitor_read";
 const SHELL_MONITOR_STOP_TOOL: &str = "agena_shell__monitor_stop";
 const WEB_FETCH_TOOL: &str = "agena_web__fetch";
 const WEB_QUERY_TOOL: &str = "agena_web__store_query";
-const TOOLS_TOOL: &str = "agena_workflow__tools";
-const TODO_TOOL: &str = "agena_workflow__todo";
-const USER_TOOL: &str = "agena_workflow__user";
-const PLAN_TOOL: &str = "agena_workflow__plan";
-const PLAN_CREATE_TOOL: &str = "agena_workflow__plan_create";
-const PLAN_UPDATE_STEP_TOOL: &str = "agena_workflow__plan_update_step";
-const PLAN_SET_STATUS_TOOL: &str = "agena_workflow__plan_set_status";
-const WORKTREE_ENTER_NEW_TOOL: &str = "agena_workflow__worktree_enter_new";
-const WORKTREE_EXIT_TOOL: &str = "agena_workflow__worktree_exit";
-const TASK_TOOL: &str = "agena_workflow__task";
+const TOOLS_TOOL: &str = "agena_catalog__tools";
+const TODO_TOOL: &str = "agena_planning__todo";
+const USER_TOOL: &str = "agena_runtime__user";
+const PLAN_TOOL: &str = "agena_planning__plan";
+const PLAN_CREATE_TOOL: &str = "agena_planning__plan_create";
+const PLAN_UPDATE_STEP_TOOL: &str = "agena_planning__plan_update_step";
+const PLAN_SET_STATUS_TOOL: &str = "agena_planning__plan_set_status";
+const WORKTREE_ENTER_NEW_TOOL: &str = "agena_repo__worktree_enter_new";
+const WORKTREE_EXIT_TOOL: &str = "agena_repo__worktree_exit";
+const TASK_TOOL: &str = "agena_tasks__task";
 const LSP_TOOL: &str = "agena_lsp__lsp";
-const WORKFLOW_TOOL: &str = "agena_workflow__workflow";
-const AGENT_TOOL: &str = "agena_workflow__agent";
-const SESSION_TOOL: &str = "agena_workflow__session";
+const INIT_SKILL_TOOL: &str = "agena_skills__init";
+const REVIEW_SKILL_TOOL: &str = "agena_skills__review";
+const SECURITY_REVIEW_SKILL_TOOL: &str = "agena_skills__security_review";
+const AGENT_TOOL: &str = "agena_runtime__agent";
+const SESSION_TOOL: &str = "agena_runtime__session";
 const SETTINGS_TOOL: &str = "agena_settings__settings";
 const SETTINGS_GET_TOOL: &str = "agena_settings__settings_get";
 const SETTINGS_VALIDATE_TOOL: &str = "agena_settings__settings_validate";
@@ -4981,19 +4983,6 @@ while True:
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_nb_edit_1"]) == 0 {
-                scripted_tool_call_events(vec![(
-                    "call_nb_edit_1",
-                    FS_TOOL,
-                    serde_json::json!({
-                        "action": "notebook_edit",
-                        "notebook_path": "demo.ipynb",
-                        "cell_number": 1,
-                        "new_source": "print(2)\n",
-                        "edit_mode": "replace"
-                    })
-                    .to_string(),
-                )])
             } else if completed_or_failed_operation_count(&request, &["call_fs_read_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_fs_read_1",
@@ -5073,7 +5062,6 @@ while True:
                     "call_fs_patch_1",
                     "call_fs_glob_1",
                     "call_fs_grep_1",
-                    "call_nb_edit_1",
                     "call_fs_read_1",
                     "call_worktree_exit_1",
                 ],
@@ -5121,10 +5109,6 @@ while True:
                 preview.contains("branch-only change"),
                 "worktree-scoped read should observe the patched file: {preview}"
             );
-
-            let notebook_payload = session_operation_payload(&session, "call_nb_edit_1");
-            assert_eq!(notebook_payload["edit_mode"].as_str(), Some("replace"));
-            assert_eq!(notebook_payload["cell_index"].as_u64(), Some(1));
 
             let root_notes = std::fs::read_to_string(workspace.root.join("notes.txt"))
                 .expect("original workspace notes should remain readable");
@@ -6101,9 +6085,8 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_workflow_review_1",
-                    WORKFLOW_TOOL,
+                    REVIEW_SKILL_TOOL,
                     serde_json::json!({
-                        "action": "review",
                         "args": "auth handlers"
                     })
                     .to_string(),
@@ -6136,9 +6119,8 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_workflow_security_review_1",
-                    WORKFLOW_TOOL,
+                    SECURITY_REVIEW_SKILL_TOOL,
                     serde_json::json!({
-                        "action": "security_review",
                         "args": "auth layer"
                     })
                     .to_string(),
@@ -6262,10 +6244,10 @@ while True:
             );
 
             let restore_after_review = session_operation_payload(&session, "call_agent_restore_1");
-            assert_eq!(restore_after_review["restored"].as_bool(), Some(true));
+            assert_eq!(restore_after_review["restored"].as_bool(), Some(false));
             assert_eq!(
-                restore_after_review["previous_agent"].as_str(),
-                Some("reviewer")
+                restore_after_review["previous_agent"],
+                serde_json::Value::Null
             );
             assert_eq!(
                 restore_after_review["current_agent"],
@@ -6301,11 +6283,11 @@ while True:
                 session_operation_payload(&session, "call_agent_restore_2");
             assert_eq!(
                 restore_after_security_review["restored"].as_bool(),
-                Some(true)
+                Some(false)
             );
             assert_eq!(
-                restore_after_security_review["previous_agent"].as_str(),
-                Some("reviewer")
+                restore_after_security_review["previous_agent"],
+                serde_json::Value::Null
             );
             assert_eq!(
                 restore_after_security_review["current_agent"],
@@ -6558,9 +6540,8 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_workflow_init_1",
-                    WORKFLOW_TOOL,
+                    INIT_SKILL_TOOL,
                     serde_json::json!({
-                        "action": "init",
                         "args": "backend service"
                     })
                     .to_string(),

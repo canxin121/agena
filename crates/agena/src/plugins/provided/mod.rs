@@ -1,11 +1,16 @@
+pub mod catalog;
 pub mod code;
 pub mod cron;
 pub mod fs;
 pub mod lsp;
 pub mod mcp;
+pub mod planning;
+pub mod repo;
 pub mod router;
+pub mod runtime;
 pub mod schema_lab;
 pub mod settings;
 pub mod shell;
 pub mod skills;
+pub mod tasks;
 pub mod workflow;

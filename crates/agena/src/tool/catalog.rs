@@ -3,11 +3,12 @@ use crate::plugin::registry::RegisteredTool;
 use crate::plugin::sdk::{PluginManifest, ToolTag};
 
 use crate::plugin::sdk::Plugin;
+use crate::plugins::provided::catalog as provided_catalog;
 use crate::plugins::provided::code as provided_code;
 use crate::plugins::provided::{
-    cron as provided_cron, fs as provided_fs, lsp as provided_lsp,
-    schema_lab as provided_schema_lab, settings as provided_settings, shell as provided_shell,
-    workflow as provided_workflow,
+    cron as provided_cron, fs as provided_fs, lsp as provided_lsp, planning as provided_planning,
+    repo as provided_repo, runtime as provided_runtime, schema_lab as provided_schema_lab,
+    settings as provided_settings, shell as provided_shell, tasks as provided_tasks,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,13 +110,28 @@ fn tool_entries() -> Vec<RegisteredTool> {
         provided_settings::SettingsPlugin::new().manifest(),
     );
     extend_manifest_entries(&mut entries, provided_shell::new_plugin().manifest());
-    extend_manifest_entries(&mut entries, crate::web::new_web_plugin().manifest());
-    extend_manifest_entries(&mut entries, crate::memory::new_memory_plugin().manifest());
-    extend_manifest_entries(&mut entries, provided_workflow::new_plugin().manifest());
     extend_manifest_entries(
         &mut entries,
-        provided_schema_lab::SchemaLabPlugin::new().manifest(),
+        provided_catalog::CatalogPlugin::new().manifest(),
     );
+    extend_manifest_entries(
+        &mut entries,
+        provided_runtime::RuntimePlugin::new().manifest(),
+    );
+    extend_manifest_entries(
+        &mut entries,
+        provided_planning::PlanningPlugin::new().manifest(),
+    );
+    extend_manifest_entries(&mut entries, provided_tasks::TasksPlugin::new().manifest());
+    extend_manifest_entries(&mut entries, provided_repo::RepoPlugin::new().manifest());
+    extend_manifest_entries(&mut entries, crate::web::new_web_plugin().manifest());
+    extend_manifest_entries(&mut entries, crate::memory::new_memory_plugin().manifest());
+    if crate::tool::schema_lab_builtin_enabled() {
+        extend_manifest_entries(
+            &mut entries,
+            provided_schema_lab::SchemaLabPlugin::new().manifest(),
+        );
+    }
     entries
 }
 

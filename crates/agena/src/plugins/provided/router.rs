@@ -12,7 +12,7 @@ use serde_json::Value as JsonValue;
 use crate::message::{
     ApplyPatchToolInput, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
     LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, MonitorToolInput,
-    NetworkEffect, NotebookEditToolInput, ReadToolInput, ShellCommandInput,
+    NetworkEffect, ReadToolInput, ShellCommandInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{NetworkRequest, Result as SdkResult, ToolInputShape, ToolInvokeOutput};
@@ -110,7 +110,7 @@ fn current_executor(
 
 fn routed_tool_name(tool_name: &str) -> Option<&'static str> {
     match tool_name {
-        "read" | "glob" | "grep" | "apply_patch" | "notebook_edit" => Some("fs"),
+        "read" | "glob" | "grep" | "apply_patch" => Some("fs"),
         "bash" => Some("exec.bash"),
         "powershell" => Some("exec.powershell"),
         "cron_list" => Some("schedule.list"),
@@ -205,12 +205,6 @@ pub(crate) fn permission_paths_for(
                 | MonitorToolInput::Read { .. }
                 | MonitorToolInput::Stop { .. } => Vec::new(),
             })
-        }
-        "notebook_edit" => {
-            let payload: NotebookEditToolInput = parse_shape_input(input)?;
-            Ok(vec![crate::plugin::sdk::PathRequest::write(
-                payload.notebook_path,
-            )])
         }
         "lsp_definition" => {
             let payload: LspDefinitionToolInput = parse_shape_input(input)?;
@@ -331,7 +325,7 @@ fn declared_shell_network_requests(
 pub(crate) fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -> ToolInvokeOutput {
     let mut metadata = execution.view.metadata;
     match &execution.output {
-        ToolPayloadOutput::ApplyPatch { .. } | ToolPayloadOutput::NotebookEdit { .. } => {
+        ToolPayloadOutput::ApplyPatch { .. } => {
             metadata.insert("agena.effect".to_string(), "file_changes".to_string());
         }
         ToolPayloadOutput::ToolSearch { .. } => {

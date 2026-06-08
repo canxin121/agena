@@ -2902,13 +2902,11 @@ impl McpServerBackend for AgenaMcpBackend {
             .registered_tools()
             .into_iter()
             .filter(|entry| {
-                matches!(
-                    entry.plugin_name.as_str(),
-                    "agena.workflow" | "agena.skills"
-                ) && entry.decl.input_schema
-                    == crate::tool::definition::json_schema_for::<
-                        crate::message::WorkflowPromptToolInput,
-                    >()
+                matches!(entry.plugin_name.as_str(), "agena.skills")
+                    && entry.decl.input_schema
+                        == crate::tool::definition::json_schema_for::<
+                            crate::message::WorkflowPromptToolInput,
+                        >()
             })
             .map(|entry| PromptDescriptor {
                 name: entry.exposed_name,
@@ -2925,11 +2923,10 @@ impl McpServerBackend for AgenaMcpBackend {
             .plugins
             .lookup_tool(params.name.as_str())
             .ok_or_else(|| McpServerError::NotFound(params.name.clone()))?;
-        if !matches!(
-            entry.plugin_name.as_str(),
-            "agena.workflow" | "agena.skills"
-        ) || entry.decl.input_schema
-            != crate::tool::definition::json_schema_for::<crate::message::WorkflowPromptToolInput>()
+        if !matches!(entry.plugin_name.as_str(), "agena.skills")
+            || entry.decl.input_schema
+                != crate::tool::definition::json_schema_for::<crate::message::WorkflowPromptToolInput>(
+                )
         {
             return Err(McpServerError::NotFound(params.name));
         }

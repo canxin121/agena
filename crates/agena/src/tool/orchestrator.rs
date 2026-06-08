@@ -7,8 +7,8 @@ use crate::plugin::sdk::ToolInputShape;
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
     ToolRuntimeContext, apply_patch, ask_user, bash, cron, glob, grep, lsp, monitor_tool,
-    notebook_edit, powershell, read, suggest_tool_names, task, todo_write, tool_search,
-    unknown_tool_hint, worktree,
+    powershell, read, suggest_tool_names, task, todo_write, tool_search, unknown_tool_hint,
+    worktree,
 };
 
 const BUILTIN_TOOL_NAMES: &[&str] = &[
@@ -26,7 +26,6 @@ const BUILTIN_TOOL_NAMES: &[&str] = &[
     "lsp_hover",
     "lsp_references",
     "monitor",
-    "notebook_edit",
     "powershell",
     "read",
     "schedule_wakeup",
@@ -144,7 +143,6 @@ pub(crate) fn execute_tool(
         "lsp_references" => lsp::execute_references(executor, &parse_shape_input(input)?),
         "lsp_hover" => lsp::execute_hover(executor, &parse_shape_input(input)?),
         "lsp_diagnostics" => lsp::execute_diagnostics(executor, &parse_shape_input(input)?),
-        "notebook_edit" => notebook_edit::execute(executor, &parse_shape_input(input)?),
         "powershell" => powershell::execute(executor, &parse_shape_input(input)?, context),
         other => {
             let suggestions = suggest_tool_names(other, BUILTIN_TOOL_NAMES, 1);

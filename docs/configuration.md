@@ -1378,7 +1378,7 @@ Network target 会先分到三类默认策略：`loopback` 匹配 `localhost`、
 
 ## Workflow Tool Search
 
-`agena.workflow/tools` 的 `search` action 现在使用进程内 Tantivy 索引。每次搜索都会基于当前已注册的 tool catalog 在本地重建索引，因此不依赖 Meilisearch 或其他外部服务。
+`agena.catalog/tools` 的 `search` action 现在使用进程内 Tantivy 索引。每次搜索都会基于当前已注册的 tool catalog 在本地重建索引，因此不依赖 Meilisearch 或其他外部服务。
 
 旧的 external search backend 配置已经移除。当前版本不会读取 `tool_search.url`、`tool_search.api_key`、`tool_search.index` 这些字段。
 
@@ -1485,7 +1485,7 @@ Tool presentation 支持全局、按 plugin、按 tool 覆盖。模式值：
         },
         "tools": {
           "fs": "detailed",
-          "agena.workflow/tools": "detailed"
+          "agena.catalog/tools": "detailed"
         }
       }
     }
@@ -1493,7 +1493,7 @@ Tool presentation 支持全局、按 plugin、按 tool 覆盖。模式值：
 }
 ```
 
-按 tool 覆盖可以使用模型可见名（如 `fs`）、`plugin_id/tool_name`（如 `agena.workflow/tools`），或无冲突的原始 tool 名。具体 tool 覆盖优先于 plugin 覆盖；plugin 覆盖优先于 manifest 的 `description_mode`；最后才使用 `default_mode`。
+按 tool 覆盖可以使用模型可见名（如 `fs`）、`plugin_id/tool_name`（如 `agena.catalog/tools`），或无冲突的原始 tool 名。具体 tool 覆盖优先于 plugin 覆盖；plugin 覆盖优先于 manifest 的 `description_mode`；最后才使用 `default_mode`。
 
 Plugin transport kind：
 
@@ -1509,7 +1509,7 @@ Plugin transport kind：
 {
   "plugins": {
     "list": {
-      "agena.workflow": {
+      "agena.catalog": {
         "package": {
           "kind": "static"
         },

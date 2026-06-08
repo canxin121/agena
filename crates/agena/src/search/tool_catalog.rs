@@ -363,7 +363,7 @@ mod tests {
                 "tools".to_string(),
                 "Find tools, including the memory tool, and inspect their help.".to_string(),
                 vec!["discovery".to_string()],
-                Some("agena.workflow".to_string()),
+                Some("agena.catalog".to_string()),
             ),
         ];
 

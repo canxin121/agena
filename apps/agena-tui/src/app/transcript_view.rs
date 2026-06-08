@@ -2836,7 +2836,7 @@ mod tests {
     fn failed_tool_output_deduplicates_repeated_error_text() {
         let failure = "plugin error: permission confirmation required";
         let invocation = ToolInvocation::new(
-            "agena.workflow/plan",
+            "agena.planning/plan",
             serde_json::from_value(json!({ "action": "enter" })).expect("valid structured input"),
         );
         let tool = OperationPart::failed(
@@ -2880,7 +2880,7 @@ mod tests {
     fn completed_tool_output_deduplicates_matching_text_blocks() {
         let plan_text = "Created a draft plan.\n\n# Plan Trial\n\n## Steps\n1. [ ] Create plan";
         let invocation = ToolInvocation::new(
-            "agena.workflow/plan",
+            "agena.planning/plan",
             serde_json::from_value(json!({ "action": "create" })).expect("valid structured input"),
         );
         let tool = OperationPart::completed(
@@ -2923,7 +2923,7 @@ mod tests {
     fn markdown_like_text_blocks_render_with_markdown_styling() {
         let plan_text = "Created a draft plan.\n\n# Plan Trial\n\n- [ ] Create plan";
         let invocation = ToolInvocation::new(
-            "agena.workflow/plan",
+            "agena.planning/plan",
             serde_json::from_value(json!({ "action": "create" })).expect("valid structured input"),
         );
         let tool = OperationPart::completed(
@@ -2958,7 +2958,7 @@ mod tests {
     fn tool_output_copy_text_deduplicates_matching_text_blocks() {
         let plan_text = "Created a draft plan.\n\n# Plan Trial\n\n- [ ] Create plan";
         let invocation = ToolInvocation::new(
-            "agena.workflow/plan",
+            "agena.planning/plan",
             serde_json::from_value(json!({ "action": "create" })).expect("valid structured input"),
         );
         let tool = OperationPart::completed(

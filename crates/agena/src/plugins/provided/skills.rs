@@ -50,7 +50,6 @@ enum DiscoveredToolKind {
 struct DiscoveredTool {
     skill: Skill,
     kind: DiscoveredToolKind,
-    alias: bool,
 }
 
 pub(crate) struct SkillsPlugin {
@@ -87,6 +86,28 @@ impl SkillsPlugin {
         }
     }
 
+    fn visible_aliases(skill: &Skill) -> Vec<String> {
+        let canonical =
+            crate::plugin::registry::exposed_tool_name_segment(skill.frontmatter.name.as_str());
+        let mut seen = BTreeSet::new();
+        skill
+            .frontmatter
+            .aliases
+            .iter()
+            .filter_map(|alias| {
+                let trimmed = alias.trim();
+                if trimmed.is_empty() {
+                    return None;
+                }
+                let normalized = crate::plugin::registry::exposed_tool_name_segment(trimmed);
+                if normalized.is_empty() || normalized == canonical || !seen.insert(normalized) {
+                    return None;
+                }
+                Some(trimmed.to_string())
+            })
+            .collect()
+    }
+
     async fn dispatch_run(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -120,20 +141,12 @@ impl SkillsPlugin {
             DiscoveredToolKind::Skill => "workflow",
             DiscoveredToolKind::Command => "command",
         };
-        let label = if discovered_tool.alias {
-            "alias"
-        } else {
-            category
-        };
-        let mut tags = vec![
+        let tags = vec![
             ToolTag::ReadOnly,
             ToolTag::custom(category).expect("category tags are valid"),
             ToolTag::custom(format!("skill:{}", discovered_tool.skill.frontmatter.name))
                 .expect("skill identity tags are valid"),
         ];
-        if discovered_tool.alias {
-            tags.push(ToolTag::custom("alias").expect("alias tag is valid"));
-        }
         let description = if discovered_tool
             .skill
             .frontmatter
@@ -142,7 +155,7 @@ impl SkillsPlugin {
             .is_empty()
         {
             format!(
-                "Generate the '{}' {label} prompt.",
+                "Generate the '{}' {category} prompt.",
                 discovered_tool.skill.frontmatter.name
             )
         } else {
@@ -152,6 +165,7 @@ impl SkillsPlugin {
             .description(description.clone())
             .summary(description)
             .help(discovered_tool.skill.body.clone())
+            .aliases(Self::visible_aliases(&discovered_tool.skill))
             .compact()
             .tags(tags)
             .concurrency_safe(true)
@@ -163,52 +177,36 @@ impl SkillsPlugin {
         let roots = default_roots(workspace.as_deref());
         let command_roots = default_command_roots(workspace.as_deref());
 
-        let skills_by_name: BTreeMap<String, Skill> = scan(&roots)
+        let mut skills_by_name: BTreeMap<String, Skill> = agena_skills::bundled::all()
             .unwrap_or_default()
             .into_iter()
             .map(|skill| (skill.frontmatter.name.clone(), skill))
             .collect();
+        skills_by_name.extend(
+            scan(&roots)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|skill| (skill.frontmatter.name.clone(), skill)),
+        );
 
         let mut tools = BTreeMap::new();
         for skill in skills_by_name.into_values() {
             tools.insert(
                 skill.frontmatter.name.clone(),
                 DiscoveredTool {
-                    skill: skill.clone(),
+                    skill,
                     kind: DiscoveredToolKind::Skill,
-                    alias: false,
                 },
             );
-            for alias in &skill.frontmatter.aliases {
-                tools.insert(
-                    alias.clone(),
-                    DiscoveredTool {
-                        skill: skill.clone(),
-                        kind: DiscoveredToolKind::Skill,
-                        alias: true,
-                    },
-                );
-            }
         }
         for command in scan_commands(&command_roots).unwrap_or_default() {
             tools.insert(
                 command.frontmatter.name.clone(),
                 DiscoveredTool {
-                    skill: command.clone(),
+                    skill: command,
                     kind: DiscoveredToolKind::Command,
-                    alias: false,
                 },
             );
-            for alias in &command.frontmatter.aliases {
-                tools.insert(
-                    alias.clone(),
-                    DiscoveredTool {
-                        skill: command.clone(),
-                        kind: DiscoveredToolKind::Command,
-                        alias: true,
-                    },
-                );
-            }
         }
         tools
     }
@@ -332,6 +330,53 @@ mod tests {
         );
     }
 
+    #[test]
+    fn skill_tool_decl_filters_aliases_that_collapse_to_canonical_name() {
+        let skill = Skill {
+            frontmatter: agena_skills::skill::SkillFrontmatter {
+                name: "security_review".to_string(),
+                aliases: vec![
+                    "security-review".to_string(),
+                    "security review".to_string(),
+                    "sec-review".to_string(),
+                    "sec review".to_string(),
+                ],
+                ..Default::default()
+            },
+            body: "Prompt".to_string(),
+            source_path: None,
+        };
+
+        let decl = SkillsPlugin::tool_decl(
+            "security_review",
+            &DiscoveredTool {
+                skill,
+                kind: DiscoveredToolKind::Skill,
+            },
+        );
+
+        assert_eq!(decl.aliases, vec!["sec-review".to_string()]);
+    }
+
+    #[test]
+    fn discovered_tools_include_bundled_skills() {
+        let workspace = tempfile::tempdir().expect("tempdir should create");
+        let ctx = InitContext {
+            agena_version: env!("CARGO_PKG_VERSION").to_string(),
+            workspace_root: workspace.path().to_path_buf(),
+            plugin_id: SKILLS_PLUGIN_ID.to_string(),
+            host_callback_url: None,
+            host_callback_token: None,
+            config: serde_json::Value::Null,
+            protocol_version: 1,
+        };
+
+        let tools = SkillsPlugin::discovered_tools(&ctx);
+        assert!(tools.contains_key("init"));
+        assert!(tools.contains_key("review"));
+        assert!(tools.contains_key("security_review"));
+    }
+
     #[tokio::test]
     async fn skill_tool_shape_dispatch_uses_context_tool_name() {
         let plugin = SkillsPlugin::new();
@@ -347,7 +392,6 @@ mod tests {
                     source_path: None,
                 },
                 kind: DiscoveredToolKind::Skill,
-                alias: false,
             },
         );
 

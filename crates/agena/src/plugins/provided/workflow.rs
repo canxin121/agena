@@ -1,5 +1,4 @@
-//! `agena.workflow` plugin: orchestration tools (task, tool catalog, todo,
-//! session, user input, plan, worktree, and workflow prompts).
+//! Shared implementation for the catalog/runtime/planning/tasks/repo plugins.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -7,7 +6,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::message::{
     AgentRestoreToolInput, AgentSwitchToolInput, AskUserToolInput, TaskToolInput, TodoItem,
-    TodoPriority, TodoStatus, TodoWriteToolInput, ToolSearchToolInput, WorkflowPromptToolInput,
+    TodoPriority, TodoStatus, TodoWriteToolInput, ToolSearchToolInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{
@@ -25,27 +24,24 @@ use crate::plugin::sdk::{
 };
 use crate::search::tool_catalog::{ToolCatalogDocument, search_tool_catalog};
 use crate::tool::{ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ask_user};
-use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
 use chrono::Utc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
-use crate::plugin::sdk::{InitContext, Plugin, ToolDescriptionMode, ToolInvokeInput};
-
-pub(crate) const WORKFLOW_PLUGIN_ID: &str = "agena.workflow";
+use crate::plugin::sdk::InitContext;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(default, deny_unknown_fields)]
-struct WorkflowPluginConfig {
-    tool_catalog: WorkflowToolCatalogConfig,
-    plan: WorkflowPlanConfig,
+pub(crate) struct WorkflowPluginConfig {
+    pub(crate) tool_catalog: WorkflowToolCatalogConfig,
+    pub(crate) plan: WorkflowPlanConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-struct WorkflowToolCatalogConfig {
-    search: WorkflowToolCatalogSearchConfig,
-    help: WorkflowToolCatalogHelpConfig,
+pub(crate) struct WorkflowToolCatalogConfig {
+    pub(crate) search: WorkflowToolCatalogSearchConfig,
+    pub(crate) help: WorkflowToolCatalogHelpConfig,
 }
 
 impl Default for WorkflowToolCatalogConfig {
@@ -59,9 +55,9 @@ impl Default for WorkflowToolCatalogConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-struct WorkflowToolCatalogSearchConfig {
-    default_limit: u32,
-    max_limit: u32,
+pub(crate) struct WorkflowToolCatalogSearchConfig {
+    pub(crate) default_limit: u32,
+    pub(crate) max_limit: u32,
 }
 
 impl Default for WorkflowToolCatalogSearchConfig {
@@ -75,8 +71,8 @@ impl Default for WorkflowToolCatalogSearchConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-struct WorkflowToolCatalogHelpConfig {
-    include_schema_by_default: bool,
+pub(crate) struct WorkflowToolCatalogHelpConfig {
+    pub(crate) include_schema_by_default: bool,
 }
 
 impl Default for WorkflowToolCatalogHelpConfig {
@@ -89,9 +85,9 @@ impl Default for WorkflowToolCatalogHelpConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-struct WorkflowPlanConfig {
-    default_autorun: bool,
-    allow_direct_approval: bool,
+pub(crate) struct WorkflowPlanConfig {
+    pub(crate) default_autorun: bool,
+    pub(crate) allow_direct_approval: bool,
 }
 
 impl Default for WorkflowPlanConfig {
@@ -103,57 +99,67 @@ impl Default for WorkflowPlanConfig {
     }
 }
 
-fn workflow_config_schema() -> serde_json::Value {
+pub(crate) fn tool_catalog_plugin_config_schema() -> serde_json::Value {
     let mut schema =
-        crate::tool::definition::json_schema_for_with_default(WorkflowPluginConfig::default());
+        crate::tool::definition::json_schema_for_with_default(WorkflowToolCatalogConfig::default());
     for (pointer, title, description) in [
         (
             "",
-            "Workflow Plugin Config",
-            "Defaults for workflow catalog search and tool help rendering.",
+            "Tool Catalog Plugin Config",
+            "Defaults for tool catalog search and tool help rendering.",
         ),
         (
-            "/properties/tool_catalog",
-            "Tool Catalog",
-            "Controls how the workflow plugin previews and searches the registered tool catalog.",
-        ),
-        (
-            "/properties/tool_catalog/properties/search",
+            "/properties/search",
             "Search",
-            "Default search behavior for agena_workflow__tools with action=search.",
+            "Default search behavior for agena_catalog__tools with action=search.",
         ),
         (
-            "/properties/tool_catalog/properties/search/properties/default_limit",
+            "/properties/search/properties/default_limit",
             "Default Limit",
             "Number of tool search results returned when the caller omits limit.",
         ),
         (
-            "/properties/tool_catalog/properties/search/properties/max_limit",
+            "/properties/search/properties/max_limit",
             "Max Limit",
             "Upper bound enforced for tool catalog search results.",
         ),
         (
-            "/properties/tool_catalog/properties/help",
+            "/properties/help",
             "Help",
-            "Defaults for agena_workflow__tools with action=help.",
+            "Defaults for agena_catalog__tools with action=help.",
         ),
         (
-            "/properties/tool_catalog/properties/help/properties/include_schema_by_default",
+            "/properties/help/properties/include_schema_by_default",
             "Include Schema by Default",
             "When enabled, tool help includes the registered input schema unless the caller opts out.",
         ),
+    ] {
+        crate::tool::definition::set_schema_metadata(
+            &mut schema,
+            pointer,
+            Some(title),
+            Some(description),
+        );
+    }
+    schema
+}
+
+pub(crate) fn planning_plugin_config_schema() -> serde_json::Value {
+    let mut schema =
+        crate::tool::definition::json_schema_for_with_default(WorkflowPlanConfig::default());
+    for (pointer, title, description) in [
         (
-            "/properties/plan",
-            "Plan",
-            "Defaults for the workflow plugin's shared-storage plan state machine.",
+            "",
+            "Planning Plugin Config",
+            "Defaults for the planning plugin's shared-storage plan state machine.",
         ),
         (
-            "/properties/plan/properties/default_autorun",
+            "/properties/default_autorun",
             "Default Autorun",
             "Default autorun value applied when plan.create omits the override.",
         ),
         (
-            "/properties/plan/properties/allow_direct_approval",
+            "/properties/allow_direct_approval",
             "Allow Direct Approval",
             "When enabled, plan.set_status may move a draft or cancelled plan directly into active, blocked, or completed. Disable this to make plan.set_status automatically request review before those transitions.",
         ),
@@ -168,610 +174,33 @@ fn workflow_config_schema() -> serde_json::Value {
     schema
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "workflow",
-    description = "Workflow scaffold command. Use action `init`, `review`, or `security_review` to generate reusable workflow instructions; this tool does not execute shell or filesystem actions by itself.",
-    summary = "Generate reusable workflow instructions.",
-    handler_receiver = WorkflowPlugin,
-    display = brief,
-    tags(ToolTag::ReadOnly),
-    host_capabilities(HostCapability::AgentRegistry),
-    concurrency_safe = true
-)]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-enum WorkflowToolInput {
-    #[tool(exec = "init", handle = WorkflowPlugin::invoke_workflow_init)]
-    Init {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: WorkflowPromptToolInput,
-    },
-    #[tool(exec = "review", handle = WorkflowPlugin::invoke_workflow_review)]
-    Review {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: WorkflowPromptToolInput,
-    },
-    #[tool(
-        exec = "security_review",
-        handle = WorkflowPlugin::invoke_workflow_security_review
-    )]
-    SecurityReview {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: WorkflowPromptToolInput,
-    },
-}
+mod catalog_tools;
+mod planning_tools;
+mod repo_tools;
+mod runtime_tools;
+mod task_tools;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "tools",
-    aliases("tool_catalog", "tool.help"),
-    description = "Tool catalog command. Use action `usage` for examples, `search` to find tools, or `help` to fetch detailed usage for a tool. This tool does not execute the target tool for you.",
-    before_help = "Quick reference for browsing the registered tool catalog.",
-    summary = "Show usage examples, search tools, or fetch detailed tool help.",
-    help = "Use action `usage` or pass `{}` to see quick examples. Use action `search` with `query` and optional `limit` to discover tools. Use action `help` with `tool` to retrieve the full registered help text and input schema for any model-visible tool.",
-    after_help = "To actually run a tool, call that tool directly after reading its help.",
-    handler_receiver = WorkflowPlugin,
-    trim("query", "tool"),
-    ui_display = detailed,
-    tags(ToolTag::ReadOnly, ToolTag::Discovery),
-    host_capabilities(HostCapability::ListTools),
-    concurrency_safe = true
-)]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-enum ToolsToolInput {
-    #[tool(
-        exec = "usage",
-        handle = WorkflowPlugin::invoke_tools_usage,
-        default_when_empty = true
-    )]
-    Usage,
-    #[tool(
-        exec = "search",
-        handle = WorkflowPlugin::invoke_tool_search,
-        non_empty("query"),
-        infer_when_present("query"),
-        drop_keys("include_schema", "tool")
-    )]
-    Search {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: ToolSearchToolInput,
-    },
-    #[tool(
-        exec = "help",
-        handle = WorkflowPlugin::invoke_tool_help,
-        non_empty("tool"),
-        infer_when_present("tool"),
-        drop_keys("query", "limit")
-    )]
-    Help {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: ToolsHelpInput,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("tool"), non_empty("tool"))]
-#[serde(deny_unknown_fields)]
-struct ToolsHelpInput {
-    /// Registered model-visible tool name to inspect.
-    pub tool: String,
-    /// Include the sanitized JSON input schema in the response.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include_schema: Option<bool>,
-}
+pub(crate) use catalog_tools::{ToolsHelpInput, ToolsToolInput};
+pub(crate) use planning_tools::{
+    PlanCreateInput, PlanSetStatusInput, PlanToolInput, PlanUpdateCheckpointInput,
+    PlanUpdateStepInput, TodoToolInput, WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor,
+    WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus,
+};
+pub(crate) use repo_tools::{
+    EnterWorktreeCommandInput, ExitWorktreeCommandInput, WorktreeToolInput,
+    worktree_enter_permission_paths,
+};
+pub(crate) use runtime_tools::{
+    AgentToolInput, SessionRenameToolInput, SessionToolInput, SessionToolResponse, UserToolInput,
+};
+pub(crate) use task_tools::TaskToolActionInput;
 
 #[cfg(test)]
-fn resolve_tools_tool_input(input: serde_json::Value) -> SdkResult<(String, serde_json::Value)> {
-    ToolsToolInput::resolve_tool("tools", input)
-}
-
+pub(crate) use catalog_tools::resolve_tools_tool_input;
 #[cfg(test)]
-pub(crate) fn tools_tool_descriptor_for_tests() -> ToolDescriptor {
-    let decl = ToolsToolInput::tool_decl();
-    ToolDescriptor {
-        name: "agena_workflow__tools".to_string(),
-        aliases: decl
-            .alias_texts()
-            .iter()
-            .map(|alias| crate::plugin::registry::exposed_tool_name(WORKFLOW_PLUGIN_ID, alias))
-            .collect(),
-        description: Some(decl.description_text().to_string()),
-        before_help: decl.before_help_text().map(ToString::to_string),
-        after_help: decl.after_help_text().map(ToString::to_string),
-        summary: decl.summary_text().map(ToString::to_string),
-        help: decl.help_text().map(ToString::to_string),
-        examples: vec![],
-        input_schema: Some(decl.sanitized_input_schema()),
-        description_mode: None,
-        tags: vec![
-            crate::plugin::sdk::ToolTag::ReadOnly,
-            crate::plugin::sdk::ToolTag::Discovery,
-        ],
-        plugin_id: None,
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "agent",
-    description = "Runtime agent profile command. Use action `switch` to change the current session's active agent profile or `restore` to bring back a saved profile. This tool does not spawn delegated subagent work; use `task` for that.",
-    summary = "Switch or restore the current runtime agent profile.",
-    handler_receiver = WorkflowPlugin,
-    display = brief,
-    host_capabilities(HostCapability::AgentRegistry),
-    concurrency_safe = false
-)]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum AgentToolInput {
-    #[tool(exec = "switch", handle = WorkflowPlugin::invoke_agent_switch)]
-    Switch {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: AgentSwitchToolInput,
-    },
-    #[tool(exec = "restore", handle = WorkflowPlugin::invoke_agent_restore)]
-    Restore {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: AgentRestoreToolInput,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "todo",
-    description = "Todo command. Use action `write` to replace the session todo list.",
-    summary = "Replace the session todo list.",
-    handler_receiver = WorkflowPlugin,
-    display = brief,
-    tags(ToolTag::Mutating, ToolTag::Planning),
-    concurrency_safe = false
-)]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum TodoToolInput {
-    #[tool(exec = "write", handle = WorkflowPlugin::invoke_todo_write)]
-    Write {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: TodoWriteToolInput,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "task",
-    description = "Delegated subagent task command. Use action `run` to create or resume a typed child task session for explore, implement, or verify work. This tool launches or resumes a separate task session; it does not switch the current runtime agent profile.",
-    summary = "Create or resume a delegated subagent task.",
-    handler_receiver = WorkflowPlugin,
-    display = detailed,
-    tags(ToolTag::Task, ToolTag::Subtask),
-    host_capabilities(HostCapability::SpawnSubtask, HostCapability::PluginStorage),
-    concurrency_safe = false
-)]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum TaskToolActionInput {
-    #[tool(exec = "run", handle = WorkflowPlugin::invoke_task)]
-    Run {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: TaskToolInput,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("title"), non_empty("title"))]
-struct SessionRenameToolInput {
-    pub title: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "session",
-    description = "Session metadata command. Use action `get` to inspect the current session metadata or `rename` to update the session title. This tool does not read chat history or execute workflow actions.",
-    summary = "Inspect or rename the current session.",
-    handler_receiver = WorkflowPlugin,
-    display = brief,
-    tags(ToolTag::ReadOnly, ToolTag::Mutating),
-    host_capabilities(HostCapability::SessionRegistry),
-    concurrency_safe = false
-)]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum SessionToolInput {
-    #[tool(exec = "get", handle = WorkflowPlugin::invoke_get_session)]
-    Get,
-    #[tool(exec = "rename", handle = WorkflowPlugin::invoke_rename_session)]
-    Rename {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: SessionRenameToolInput,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "user",
-    description = "User interaction command. Use action `request_input` to request structured short answers.",
-    summary = "Request short structured input from the user.",
-    handler_receiver = WorkflowPlugin,
-    display = brief,
-    tags(ToolTag::ReadOnly, ToolTag::Interactive),
-    host_capabilities(HostCapability::AskUser),
-    concurrency_safe = false
-)]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum UserToolInput {
-    #[tool(
-        exec = "request_input",
-        handle = WorkflowPlugin::invoke_ask_user,
-        min_items("questions", 1),
-        max_items("questions", 3),
-        max_items("questions[].options", 8),
-        max_chars("questions[].header", 12),
-        non_empty("questions[].id", "questions[].question"),
-        non_empty_if_present("questions[].options[].label"),
-        required_unless_present("questions[].allow_custom", "questions[].options"),
-        distinct_trimmed("questions[].id"),
-        distinct_trimmed_within("questions[].options[].label", "questions[]")
-    )]
-    RequestInput(AskUserToolInput),
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-#[serde(rename_all = "snake_case")]
-enum WorkflowPlanPhase {
-    #[default]
-    Draft,
-    #[serde(rename = "active")]
-    Active,
-    Blocked,
-    Completed,
-    Cancelled,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-#[serde(rename_all = "snake_case")]
-enum WorkflowPlanExecutor {
-    #[default]
-    Ai,
-    Human,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-#[serde(rename_all = "snake_case")]
-enum WorkflowPlanStepStatus {
-    #[default]
-    Pending,
-    InProgress,
-    Blocked,
-    Completed,
-    Skipped,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-#[serde(default, deny_unknown_fields)]
-struct WorkflowPlanCheckpoint {
-    id: String,
-    text: String,
-    status: WorkflowPlanStepStatus,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-#[serde(default, deny_unknown_fields)]
-struct WorkflowPlanStep {
-    id: String,
-    title: String,
-    description: String,
-    executor: WorkflowPlanExecutor,
-    status: WorkflowPlanStepStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    wait_until_ms: Option<i64>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    note: String,
-    #[serde(default, rename = "checks", skip_serializing_if = "Vec::is_empty")]
-    checkpoints: Vec<WorkflowPlanCheckpoint>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-#[serde(default, deny_unknown_fields)]
-struct WorkflowPlan {
-    title: String,
-    objective: String,
-    phase: WorkflowPlanPhase,
-    autorun: bool,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    document_markdown: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    steps: Vec<WorkflowPlanStep>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-#[serde(default, deny_unknown_fields)]
-#[schemars(description = "Plan check input. Each check item should use `text`.")]
-struct WorkflowPlanCheckpointInput {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    id: Option<String>,
-    #[schemars(description = "Check text.")]
-    text: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    status: Option<WorkflowPlanStepStatus>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-#[serde(default, deny_unknown_fields)]
-#[schemars(
-    description = "Plan step input. Each step uses `title`; nested checks under `checks` use `text`."
-)]
-struct WorkflowPlanStepInput {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    id: Option<String>,
-    #[schemars(description = "Human-readable step title.")]
-    title: String,
-    #[schemars(
-        description = "Optional longer explanation for the step. If omitted, the step title can serve as the short description."
-    )]
-    #[serde(default)]
-    description: String,
-    #[schemars(
-        description = "Who should execute the step. Use `ai` for agent work and `human` for manual work."
-    )]
-    #[serde(default)]
-    executor: WorkflowPlanExecutor,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    status: Option<WorkflowPlanStepStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    wait_until_ms: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    note: Option<String>,
-    #[schemars(
-        description = "Optional checklist checks for this step. Each check item uses `text`, not `title`."
-    )]
-    #[serde(default, rename = "checks", skip_serializing_if = "Vec::is_empty")]
-    checkpoints: Vec<WorkflowPlanCheckpointInput>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[serde(deny_unknown_fields)]
-#[schemars(
-    description = "Create or overwrite the current active-session plan in draft. If a plan already exists, this replaces it. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically."
-)]
-struct PlanCreateInput {
-    objective: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    document_markdown: Option<String>,
-    #[schemars(
-        description = "Ordered plan steps. Each step item uses `title`; nested checks use `text`."
-    )]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    steps: Vec<WorkflowPlanStepInput>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    autorun: Option<bool>,
-}
-
-#[derive(
-    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape, Default,
-)]
-#[tool_input(trim("summary"), at_least_one_of("phase", "autorun"))]
-#[serde(default, deny_unknown_fields)]
-#[schemars(
-    description = "Set the plan phase or autorun flag. Canonical phase values are `draft`, `active`, `blocked`, `completed`, and `cancelled`."
-)]
-struct PlanSetStatusInput {
-    #[schemars(
-        description = "Canonical plan phase. Use `draft`, `active`, `blocked`, `completed`, or `cancelled`."
-    )]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    phase: Option<WorkflowPlanPhase>,
-    #[schemars(description = "Whether an approved active plan should keep running automatically.")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    autorun: Option<bool>,
-    #[schemars(
-        description = "Optional completion summary. This is only applied when `phase` is `completed`."
-    )]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    summary: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("step_id", "note"), non_empty("step_id"))]
-#[serde(deny_unknown_fields)]
-struct PlanUpdateStepInput {
-    step_id: String,
-    status: WorkflowPlanStepStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    wait_until_ms: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    note: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("step_id", "check_id"), non_empty("step_id", "check_id"))]
-#[serde(deny_unknown_fields)]
-struct PlanUpdateCheckpointInput {
-    step_id: String,
-    #[serde(rename = "check_id")]
-    checkpoint_id: String,
-    status: WorkflowPlanStepStatus,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "plan",
-    description = "Plan command backed by shared plugin storage. Use it to create or overwrite the current draft plan, inspect the current step, and manage the active session plan.",
-    summary = "Create or overwrite plans, inspect the current step, update steps/checks, and use `set_status` for phase changes.",
-    handler_receiver = WorkflowPlugin,
-    help = "Use action `create` to write the current draft plan; if a plan already exists, `create` overwrites it and returns it to draft. Use action `current` to inspect the current actionable step and its goal. Use action `set_status` to move the plan between draft, active, blocked, completed, or cancelled. Use action `update_check` to update an individual check inside a step. Autorun on/off distinguishes active plans that should keep running automatically. If workflow plan config disables direct approval, plan.set_status automatically requests review before moving a draft or cancelled plan into active, blocked, or completed.",
-    display = brief,
-    tags(ToolTag::Planning, ToolTag::Mutating),
-    host_capabilities(
-        HostCapability::AskUser,
-        HostCapability::PluginStorage,
-        HostCapability::Statusline
-    ),
-    concurrency_safe = false
-)]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum PlanToolInput {
-    #[tool(exec = "current", handle = WorkflowPlugin::invoke_plan_current)]
-    Current,
-    #[tool(exec = "create", handle = WorkflowPlugin::invoke_plan_create)]
-    Create {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: PlanCreateInput,
-    },
-    #[tool(
-        exec = "set_status",
-        handle = WorkflowPlugin::invoke_plan_set_status,
-        at_least_one_of("phase", "autorun")
-    )]
-    SetStatus {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: PlanSetStatusInput,
-    },
-    #[tool(exec = "update_step", handle = WorkflowPlugin::invoke_plan_update_step)]
-    UpdateStep {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: PlanUpdateStepInput,
-    },
-    #[tool(
-        exec = "update_check",
-        handle = WorkflowPlugin::invoke_plan_update_checkpoint
-    )]
-    UpdateCheck {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: PlanUpdateCheckpointInput,
-    },
-    #[tool(exec = "clear", handle = WorkflowPlugin::invoke_plan_clear)]
-    Clear,
-}
-
+pub(crate) use planning_tools::resolve_plan_tool_input;
 #[cfg(test)]
-fn resolve_plan_tool_input(input: serde_json::Value) -> SdkResult<(String, serde_json::Value)> {
-    PlanToolInput::resolve_tool("plan", input)
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "worktree",
-    description = "Worktree command. Use action `enter` or `exit`; `enter` uses `target = new|existing` to create or attach to a git worktree and `exit` uses enum `exit_action = keep|remove`.",
-    summary = "Enter or exit a git worktree.",
-    handler_receiver = WorkflowPlugin,
-    display = brief,
-    tags(ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Worktree),
-    host_capabilities(HostCapability::WorktreeRegistry, HostCapability::PluginStorage),
-    concurrency_safe = false
-)]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum WorktreeToolInput {
-    #[tool(
-        exec = "enter",
-        handle = WorkflowPlugin::invoke_worktree_enter,
-        permission_paths_handle = WorkflowPlugin::permission_worktree_enter
-    )]
-    Enter {
-        #[serde(flatten)]
-        #[tool(flatten_shape)]
-        args: EnterWorktreeCommandInput,
-    },
-    #[tool(
-        exec = "exit",
-        handle = WorkflowPlugin::invoke_worktree_exit,
-        permission_paths_handle = WorkflowPlugin::permission_worktree_exit
-    )]
-    Exit {
-        #[serde(flatten)]
-        #[tool(flatten_shape)]
-        args: ExitWorktreeCommandInput,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("name", "path"))]
-#[serde(tag = "target", rename_all = "snake_case")]
-enum EnterWorktreeCommandInput {
-    /// Create a new worktree under the managed `worktrees` directory.
-    #[tool_input(non_empty_if_present("name"))]
-    New {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        name: Option<String>,
-    },
-    /// Attach to an already-existing worktree at the provided path.
-    #[tool_input(non_empty("path"))]
-    Existing { path: String },
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-enum ExitWorktreeAction {
-    Keep,
-    Remove,
-}
-
-impl ExitWorktreeAction {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Keep => "keep",
-            Self::Remove => "remove",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-struct ExitWorktreeCommandInput {
-    #[serde(rename = "exit_action")]
-    exit_action: ExitWorktreeAction,
-    #[serde(default)]
-    discard_changes: bool,
-}
-
-fn worktree_enter_permission_paths(
-    workspace_root: &Path,
-    input: &EnterWorktreeCommandInput,
-) -> SdkResult<Vec<PathRequest>> {
-    match input {
-        EnterWorktreeCommandInput::Existing { path } if !path.trim().is_empty() => Ok(vec![
-            PathRequest::read(path.clone()),
-            PathRequest::write(path.clone()),
-        ]),
-        EnterWorktreeCommandInput::Existing { .. } | EnterWorktreeCommandInput::New { .. } => {
-            let worktrees_dir =
-                crate::project_paths::project_state_dir(workspace_root).join("worktrees");
-            Ok(vec![PathRequest::write(
-                worktrees_dir.to_string_lossy().to_string(),
-            )])
-        }
-    }
-}
-
-#[allow(dead_code)]
-#[derive(Debug, ToolSuite)]
-#[tool_suite(handler_receiver = WorkflowPlugin)]
-enum WorkflowToolSuite {
-    Workflow(WorkflowToolInput),
-    Tools(ToolsToolInput),
-    Task(TaskToolActionInput),
-    Agent(AgentToolInput),
-    Todo(TodoToolInput),
-    Session(SessionToolInput),
-    User(UserToolInput),
-    Plan(PlanToolInput),
-    Worktree(WorktreeToolInput),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct SessionToolResponse {
-    session: HostSession,
-}
+pub(crate) use repo_tools::ExitWorktreeAction;
 
 const PLAN_NAMESPACE: &str = "workflow_plan";
 const PLAN_KEY_ACTIVE: &str = "active";
@@ -803,97 +232,14 @@ impl WorkflowPlugin {
         }
     }
 
-    fn provided_workflow(name: &str) -> SdkResult<agena_skills::Skill> {
-        agena_skills::bundled::all()
-            .map_err(|err| PluginError::new(err.to_string()))?
-            .into_iter()
-            .find(|skill| skill.frontmatter.name == name)
-            .ok_or_else(|| PluginError::new(format!("missing default workflow '{name}'")))
-    }
-
-    fn render_workflow_prompt(body: &str, args: &str) -> String {
-        let body = body.trim();
-        let args = args.trim();
-        if body.contains("$ARGUMENTS") {
-            return body.replace("$ARGUMENTS", args);
-        }
-        if args.is_empty() {
-            body.to_string()
-        } else {
-            format!("{body}\n\nUser arguments:\n{args}")
-        }
-    }
-
     fn config(&self) -> SdkResult<&WorkflowPluginConfig> {
         self.config
             .get()
             .ok_or_else(|| PluginError::new("workflow plugin invoked before init"))
     }
 
-    async fn invoke_workflow_init(
-        &self,
-        input: &WorkflowPromptToolInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        self.invoke_provided_workflow("init", input).await
-    }
-
-    async fn invoke_workflow_review(
-        &self,
-        input: &WorkflowPromptToolInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        self.invoke_agent_workflow("review", "reviewer", input)
-            .await
-    }
-
-    async fn invoke_workflow_security_review(
-        &self,
-        input: &WorkflowPromptToolInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        self.invoke_agent_workflow("security_review", "reviewer", input)
-            .await
-    }
-
     async fn invoke_tools_usage(&self) -> SdkResult<ToolInvokeOutput> {
         Ok(Self::invoke_tool_catalog_usage())
-    }
-
-    async fn invoke_provided_workflow(
-        &self,
-        workflow_name: &str,
-        input: &WorkflowPromptToolInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let workflow = Self::provided_workflow(workflow_name)?;
-        let prompt = Self::render_workflow_prompt(
-            workflow.body.as_str(),
-            input.args.as_deref().unwrap_or_default(),
-        );
-        Ok(ToolInvokeOutput::text(prompt)
-            .with_title(format!("{} workflow", workflow.frontmatter.name))
-            .with_metadata("workflow", workflow.frontmatter.name))
-    }
-
-    async fn invoke_agent_workflow(
-        &self,
-        workflow_name: &str,
-        agent_name: &str,
-        input: &WorkflowPromptToolInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let switch = self
-            .host()?
-            .agent_switch(HostAgentSwitchRequest {
-                agent: Some(agent_name.to_string()),
-                session_id: None,
-                push_previous: true,
-            })
-            .await?;
-        let mut output = self.invoke_provided_workflow(workflow_name, input).await?;
-        output = output
-            .with_metadata("workflow_agent", agent_name)
-            .with_metadata("agent_stack_depth", switch.stack_depth.to_string());
-        if let Some(previous) = switch.previous_agent {
-            output = output.with_metadata("previous_agent", previous);
-        }
-        Ok(output)
     }
 
     async fn switch_agent_for_tool(
@@ -1960,7 +1306,6 @@ impl WorkflowPlugin {
         if input.tool_name == "plan"
             || input.tool_name == "user"
             || input.tool_name == "tools"
-            || input.tool_name == "workflow"
             || input.tool_name == "session"
             || input.tool_name == "agent"
             || input.tool_name == "todo"
@@ -2735,33 +2080,13 @@ impl WorkflowPlugin {
     }
 }
 
-pub(crate) fn new_plugin() -> WorkflowPlugin {
-    WorkflowPlugin::new()
-}
-
-#[crate::plugin::sdk::plugin(
-    id = WORKFLOW_PLUGIN_ID,
-    version = env!("CARGO_PKG_VERSION"),
-    description = "Workflow orchestration tools.",
-    config_schema = workflow_config_schema(),
-    display = brief_detailed,
-    plugin_capabilities = [
-        HostCapability::AgentRegistry,
-        HostCapability::PluginStorage,
-        HostCapability::Statusline,
-    ]
-)]
 impl WorkflowPlugin {
-    #[hook]
-    async fn init(
+    pub(crate) fn initialize(
         &self,
         ctx: crate::plugin::sdk::InitContext,
+        config: WorkflowPluginConfig,
         host: Arc<dyn HostClient>,
-    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
-        let config = crate::plugin::sdk::macro_support::parse_defaulted_config(
-            ctx.config,
-            "invalid workflow config",
-        )?;
+    ) -> SdkResult<()> {
         self.config
             .set(config)
             .map_err(|_| PluginError::new("workflow plugin config already initialized"))?;
@@ -2772,23 +2097,10 @@ impl WorkflowPlugin {
             .host
             .write()
             .map_err(|_| PluginError::new("workflow plugin host lock poisoned"))? = Some(host);
-        Ok(crate::plugin::sdk::InitOutcome::ack(
-            crate::plugin::sdk::Plugin::manifest(self),
-        ))
+        Ok(())
     }
 
-    #[tool_suite]
-    async fn tool_invoke(&self, input: WorkflowToolSuite) -> SdkResult<ToolInvokeOutput> {
-        input.dispatch_tool_invoke(self).await
-    }
-
-    #[permission(paths)]
-    async fn permission_paths(&self, input: WorktreeToolInput) -> SdkResult<Vec<PathRequest>> {
-        input.dispatch_permission_paths(self).await
-    }
-
-    #[hook]
-    async fn tool_execute_before(
+    pub(crate) async fn tool_execute_before_hook(
         &self,
         input: ToolBeforeInput,
     ) -> SdkResult<Option<ToolBeforePatch>> {
@@ -2810,8 +2122,7 @@ impl WorkflowPlugin {
         }))
     }
 
-    #[hook]
-    async fn command_execute_before(
+    pub(crate) async fn command_execute_before_hook(
         &self,
         input: CommandBeforeInput,
     ) -> SdkResult<Option<CommandBeforeResponse>> {
@@ -2830,8 +2141,7 @@ impl WorkflowPlugin {
         }))
     }
 
-    #[hook]
-    async fn agent_stop(
+    pub(crate) async fn agent_stop_hook(
         &self,
         input: crate::plugin::AgentStopInput,
     ) -> SdkResult<Option<crate::plugin::AgentStopPatch>> {
@@ -3104,25 +2414,26 @@ mod tests {
             .enable_all()
             .build()
             .expect("workflow test runtime");
-        runtime
-            .block_on(Plugin::init(
-                &plugin,
+        plugin
+            .initialize(
                 InitContext {
                     agena_version: "test".to_string(),
                     workspace_root: PathBuf::from("."),
-                    plugin_id: WORKFLOW_PLUGIN_ID.to_string(),
+                    plugin_id: "planning-test".to_string(),
                     host_callback_url: None,
                     host_callback_token: None,
-                    config: json!({
-                        "plan": {
-                            "default_autorun": default_autorun,
-                            "allow_direct_approval": allow_direct_approval
-                        }
-                    }),
+                    config: json!({}),
                     protocol_version: 1,
                 },
+                WorkflowPluginConfig {
+                    tool_catalog: WorkflowToolCatalogConfig::default(),
+                    plan: WorkflowPlanConfig {
+                        default_autorun,
+                        allow_direct_approval,
+                    },
+                },
                 host.clone(),
-            ))
+            )
             .expect("workflow plugin should initialize");
         (plugin, host, runtime)
     }
@@ -3143,16 +2454,8 @@ mod tests {
         plugin: &WorkflowPlugin,
         input: serde_json::Value,
     ) -> SdkResult<ToolInvokeOutput> {
-        runtime.block_on(Plugin::tool_invoke(
-            plugin,
-            ToolInvokeInput {
-                tool_name: "plan".to_string(),
-                session_id: 7,
-                call_id: 1,
-                workspace_root: ".".to_string(),
-                input,
-            },
-        ))
+        let parsed = PlanToolInput::parse_input(input)?;
+        runtime.block_on(parsed.dispatch_tool_invoke(plugin))
     }
 
     fn invoke_plan(
@@ -3287,19 +2590,7 @@ mod tests {
     }
 
     #[test]
-    fn workflow_prompt_and_agent_inputs_trim_flattened_shape_fields_at_parse_time() {
-        let parsed = WorkflowToolInput::parse_input(json!({
-            "action": "review",
-            "args": "  inspect pending changes  "
-        }))
-        .expect("workflow prompt args should trim through flattened shape");
-        match parsed {
-            WorkflowToolInput::Review { args } => {
-                assert_eq!(args.args.as_deref(), Some("inspect pending changes"));
-            }
-            other => panic!("expected review variant, got {other:?}"),
-        }
-
+    fn agent_inputs_trim_flattened_shape_fields_at_parse_time() {
         let parsed = AgentToolInput::parse_input(json!({
             "action": "switch",
             "agent": "  reviewer  ",
@@ -3378,41 +2669,6 @@ mod tests {
     }
 
     #[test]
-    fn workflow_tool_suite_uses_surface_normalization_without_suite_hooks() {
-        let tools = WorkflowToolSuite::parse_tool(
-            "tools",
-            json!({
-                "query": "web search",
-                "limit": 2
-            }),
-        )
-        .expect("tool suite should reuse tools surface normalization");
-        match tools {
-            WorkflowToolSuite::Tools(ToolsToolInput::Search { args }) => {
-                assert_eq!(args.query, "web search");
-                assert_eq!(args.limit, Some(2));
-            }
-            other => panic!("expected normalized tools search, got {other:?}"),
-        }
-
-        let plan = WorkflowToolSuite::parse_tool(
-            "plan",
-            json!({
-                "action": "create",
-                "objective": "Rewrite plan",
-                "steps": []
-            }),
-        )
-        .expect("tool suite should reuse plan surface normalization");
-        match plan {
-            WorkflowToolSuite::Plan(PlanToolInput::Create { args }) => {
-                assert_eq!(args.objective, "Rewrite plan");
-            }
-            other => panic!("expected normalized plan create, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn tools_usage_action_is_declared_and_resolves() {
         let (action, action_input) = ToolsToolInput::resolve_tool(
             "tools",
@@ -3428,29 +2684,6 @@ mod tests {
         let schema = ToolsToolInput::tool_decl().sanitized_input_schema();
         let literals = schema_string_literals(&schema, &schema);
         assert!(literals.contains("usage"));
-    }
-
-    #[test]
-    fn workflow_manifest_defaults_to_brief_but_keeps_task_detailed() {
-        let manifest = new_plugin().manifest();
-        assert_eq!(
-            manifest.tool_description_mode,
-            Some(ToolDescriptionMode::Brief)
-        );
-
-        let task = manifest
-            .tools
-            .iter()
-            .find(|tool| tool.name == "task")
-            .expect("task tool should be declared");
-        assert_eq!(task.description_mode, Some(ToolDescriptionMode::Detailed));
-
-        let tools = manifest
-            .tools
-            .iter()
-            .find(|tool| tool.name == "tools")
-            .expect("tools catalog should be declared");
-        assert_eq!(tools.description_mode, None);
     }
 
     #[test]
@@ -3497,20 +2730,17 @@ mod tests {
             .expect("workflow test runtime");
 
         let patch = rt
-            .block_on(Plugin::tool_execute_before(
-                &plugin,
-                ToolBeforeInput {
-                    tool_name: "session".to_string(),
-                    plugin_name: WORKFLOW_PLUGIN_ID.to_string(),
-                    session_id: 1,
-                    call_id: 1,
-                    workspace_root: ".".to_string(),
-                    tags: vec![ToolTag::ReadOnly],
-                    input: json!({ "action": "get" }),
-                    title_override: None,
-                    metadata: Default::default(),
-                },
-            ))
+            .block_on(plugin.tool_execute_before_hook(ToolBeforeInput {
+                tool_name: "session".to_string(),
+                plugin_name: "runtime-test".to_string(),
+                session_id: 1,
+                call_id: 1,
+                workspace_root: ".".to_string(),
+                tags: vec![ToolTag::ReadOnly],
+                input: json!({ "action": "get" }),
+                title_override: None,
+                metadata: Default::default(),
+            }))
             .expect("allowlisted workflow tool should not need plan storage");
 
         assert!(patch.is_none());
@@ -3538,15 +2768,18 @@ mod tests {
         let (plugin, _host, runtime) = init_test_plugin(true, None);
 
         let existing_paths = runtime
-            .block_on(Plugin::permission_paths(
-                &plugin,
-                "worktree",
-                &json!({
+            .block_on(
+                WorktreeToolInput::parse_tool(
+                    "worktree",
+                    json!({
                     "action": "enter",
                     "target": "existing",
                     "path": "/tmp/existing-worktree"
-                }),
-            ))
+                    }),
+                )
+                .expect("parse existing worktree")
+                .dispatch_permission_paths(&plugin),
+            )
             .expect("existing worktree permission paths");
         assert_eq!(
             existing_paths,
@@ -3557,15 +2790,18 @@ mod tests {
         );
 
         let new_paths = runtime
-            .block_on(Plugin::permission_paths(
-                &plugin,
-                "worktree",
-                &json!({
+            .block_on(
+                WorktreeToolInput::parse_tool(
+                    "worktree",
+                    json!({
                     "action": "enter",
                     "target": "new",
                     "name": "feature-branch"
-                }),
-            ))
+                    }),
+                )
+                .expect("parse new worktree")
+                .dispatch_permission_paths(&plugin),
+            )
             .expect("new worktree permission paths");
         assert_eq!(new_paths.len(), 1);
         assert_eq!(new_paths[0].kind, crate::plugin::sdk::PathKind::Write);
@@ -3574,15 +2810,18 @@ mod tests {
         );
 
         let exit_paths = runtime
-            .block_on(Plugin::permission_paths(
-                &plugin,
-                "worktree",
-                &json!({
+            .block_on(
+                WorktreeToolInput::parse_tool(
+                    "worktree",
+                    json!({
                     "action": "exit",
                     "exit_action": "keep",
                     "discard_changes": false
-                }),
-            ))
+                    }),
+                )
+                .expect("parse exit worktree")
+                .dispatch_permission_paths(&plugin),
+            )
             .expect("exit worktree permission paths");
         assert!(exit_paths.is_empty());
     }
@@ -4678,14 +3917,11 @@ mod tests {
         assert!(activated_plan.autorun);
 
         let first_patch = runtime
-            .block_on(Plugin::agent_stop(
-                &plugin,
-                crate::plugin::sdk::AgentStopInput {
-                    session_id: 7,
-                    stop_hook_active: false,
-                    last_assistant_message: Some("done".to_string()),
-                },
-            ))
+            .block_on(plugin.agent_stop_hook(crate::plugin::sdk::AgentStopInput {
+                session_id: 7,
+                stop_hook_active: false,
+                last_assistant_message: Some("done".to_string()),
+            }))
             .expect("agent_stop should succeed")
             .expect("autorun should continue once");
         assert_eq!(first_patch.reason.as_deref(), Some("workflow plan autorun"));
@@ -4697,14 +3933,11 @@ mod tests {
         );
 
         let second_patch = runtime
-            .block_on(Plugin::agent_stop(
-                &plugin,
-                crate::plugin::sdk::AgentStopInput {
-                    session_id: 7,
-                    stop_hook_active: false,
-                    last_assistant_message: Some("done".to_string()),
-                },
-            ))
+            .block_on(plugin.agent_stop_hook(crate::plugin::sdk::AgentStopInput {
+                session_id: 7,
+                stop_hook_active: false,
+                last_assistant_message: Some("done".to_string()),
+            }))
             .expect("agent_stop should succeed");
         assert!(second_patch.is_none());
     }
@@ -4743,14 +3976,11 @@ mod tests {
         assert!(!activated_plan.autorun);
 
         let patch = runtime
-            .block_on(Plugin::agent_stop(
-                &plugin,
-                crate::plugin::sdk::AgentStopInput {
-                    session_id: 7,
-                    stop_hook_active: false,
-                    last_assistant_message: Some("done".to_string()),
-                },
-            ))
+            .block_on(plugin.agent_stop_hook(crate::plugin::sdk::AgentStopInput {
+                session_id: 7,
+                stop_hook_active: false,
+                last_assistant_message: Some("done".to_string()),
+            }))
             .expect("agent_stop should succeed");
         assert!(patch.is_none());
     }

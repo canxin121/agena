@@ -2479,6 +2479,16 @@ impl HostHandle {
             .insert(plugin_id.into(), capabilities);
     }
 
+    pub fn set_plugin_manifest_name(
+        &self,
+        plugin_id: impl Into<String>,
+        plugin_name: impl Into<String>,
+    ) {
+        if let Ok(mut names) = self.plugin_names.write() {
+            names.insert(plugin_id.into(), plugin_name.into());
+        }
+    }
+
     /// Register the per-tool capability map for `plugin_id`. Lookups on
     /// `tool_invoke` paths consult this first, falling back to the
     /// plugin-level union set via [`set_plugin_capabilities`].

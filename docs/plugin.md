@@ -140,7 +140,7 @@ Tool 的模型可见说明有两种模式：
         },
         "tools": {
           "fs": "detailed",
-          "agena.workflow/tools": "detailed"
+          "agena.catalog/tools": "detailed"
         }
       }
     }
@@ -162,8 +162,12 @@ Runtime build 注册：
 | `agena.shell` | shell exec / monitor 相关 tools |
 | `agena.web` | 本地 Spider/CRW web search/fetch/crawl、持久化抓取、去重、进程内 cache、可选 Agena 托管浏览器渲染和 Tantivy BM25/ngram 检索 tools |
 | `agena.code` | `ast-grep` / `tree-sitter` 驱动的结构化代码搜索 tools |
-| `agena.workflow` | plan mode、todo、worktree 等 workflow tools |
-| `agena.skills` | 扫描 `SKILL.md` 和 slash command，并动态注册 tools |
+| `agena.catalog` | tool catalog discovery/help tools |
+| `agena.runtime` | agent、session 和 user input 等 runtime control tools |
+| `agena.planning` | todo、plan 和 plan autorun 等 planning tools |
+| `agena.tasks` | delegated subtask orchestration tools |
+| `agena.repo` | repository worktree management tools |
+| `agena.skills` | 扫描 `SKILL.md`、slash command，以及内置 `init/review/security_review` skills，并动态注册 tools |
 | `agena.lsp` | LSP server 观测和 LSP 查询 tools |
 | `agena.cron` | cron 和 one-shot wakeup 调度 tools |
 | `agena.memory` | memory 配置和项目记忆相关能力 |
@@ -174,7 +178,7 @@ Runtime build 注册：
 
 | Tool | Action |
 | --- | --- |
-| `agena.fs/fs` | `read`, `glob`, `grep`, `apply_patch`, `notebook_edit` |
+| `agena.fs/fs` | `read`, `glob`, `grep`, `apply_patch` |
 | `agena.shell/shell` | `exec`, `monitor_start`, `monitor_list`, `monitor_read`, `monitor_stop` |
 | `agena.web/fetch`, `agena.web/search`, `agena.web/crawl`, `agena.web/query`, `agena.web/get`, `agena.web/list` | Direct web fetch/search/crawl/index actions |
 | `agena.code/code` | `search_ast`, `syntax_tree` |
@@ -182,16 +186,14 @@ Runtime build 注册：
 | `agena.memory/memory` | `search`, `get`, `list`, `write`, `delete` |
 | `agena.settings/settings` | `get`, `list`, `validate`, `set`, `delete`, `patch` |
 | `agena.cron/schedule` | `list`, `create`, `delete`, `wakeup` |
-| `agena.workflow/workflow` | `init`, `review`, `security_review` |
-| `agena.workflow/tools` | `search`, `help` |
-| `agena.workflow/task` | `run` |
-| `agena.workflow/agent` | `switch`, `restore` |
-| `agena.workflow/todo` | `write` |
-| `agena.workflow/session` | `get`, `rename` |
-| `agena.workflow/goal` | `get`, `create`, `clear`, `complete` |
-| `agena.workflow/user` | `request_input` |
-| `agena.workflow/plan` | `current`, `create`, `set_status`, `update_step`, `update_check`, `clear` |
-| `agena.workflow/worktree` | `enter`, `exit` |
+| `agena.catalog/tools` | `usage`, `search`, `help` |
+| `agena.runtime/agent` | `switch`, `restore` |
+| `agena.runtime/session` | `get`, `rename` |
+| `agena.runtime/user` | `request_input` |
+| `agena.planning/todo` | `write` |
+| `agena.planning/plan` | `current`, `create`, `set_status`, `update_step`, `update_check`, `clear` |
+| `agena.tasks/task` | `run` |
+| `agena.repo/worktree` | `enter`, `exit` |
 
 这些入口现在统一使用扁平 `{"action": "...", ...}` 形状。当前内置 static plugin 倾向把同域动作尽量收进一个顶层 tool，再通过 action 区分读、写、调度或交互行为。
 
@@ -199,7 +201,7 @@ Runtime build 注册：
 
 | Tool | 作用 |
 | --- | --- |
-| `mcp` | resource/prompt 读取和 MCP tool 调用：`list_resources`, `read_resource`, `list_prompts`, `get_prompt`, `call` |
+| `resources.list`, `resources.read`, `prompts.list`, `prompts.get`, `tools.call` | resource/prompt 读取和 MCP tool 调用 |
 
 因此，MCP 对模型的可见面统一进入 plugin host 和 plugin tool registry，同时不会随 server/tool 数量线性膨胀。MCP 的网络权限按调用里的 `server` 动态审计。
 

@@ -17,7 +17,7 @@
 优先级最高的建议：
 
 1. 用官方 MCP Rust SDK `rmcp` 替换或包裹现有 `agena-mcp-client` / `agena-mcp-server` 协议栈。
-2. 保留 `agena.shell` tool surface，但把执行后端抽象出来，优先接入真正的 sandbox backend，而不是继续只靠本地进程执行。
+2. 保留 `agena.process` tool surface，但把执行后端抽象出来，优先接入真正的 sandbox backend，而不是继续只靠本地进程执行。
 3. 不自建浏览器自动化 plugin；直接通过 `agena.mcp` 接入 Playwright MCP 一类现成 server。
 4. 保留 `agena.skills`，但把 skill/frontmatter 向公开格式靠拢，减少自定义规范维护成本。
 5. 增强代码理解能力时，不要造新的“全家桶 agent 框架”；直接给内置 tool 增加 `ast-grep` / `tree-sitter` 这一层能力。
@@ -33,7 +33,7 @@
 从当前实现看，Agena 的抽象边界已经基本正确：
 
 - `PluginHost` 是统一扩展平面，内置 static plugin 和外部 plugin 走同一路径。
-- 内置能力已经按领域收敛成稳定入口：`agena.fs`、`agena.shell`、`agena.web`、`agena.catalog`、`agena.runtime`、`agena.planning`、`agena.tasks`、`agena.repo`、`agena.skills`、`agena.lsp`、`agena.memory`、`agena.mcp`、`agena.settings`。
+- 内置能力已经按领域收敛成稳定入口：`agena.fs`、`agena.process`、`agena.web`、`agena.catalog`、`agena.runtime`、`agena.planning`、`agena.tasks`、`agena.repo`、`agena.skills`、`agena.lsp`、`agena.memory`、`agena.mcp`、`agena.settings`。
 - 对模型暴露的是高层 action tool，而不是零散 syscall 级工具。
 
 这意味着最合理的策略是：
@@ -47,11 +47,11 @@
 | 领域 | 当前仓库实现 | 调研候选 | 建议 | 优先级 |
 | --- | --- | --- | --- | --- |
 | MCP 协议 | `crates/agena-mcp-client` + `crates/agena-mcp-server` 自研 | `rmcp` / 官方 Rust SDK | 适合替换底层协议实现 | P0 |
-| Shell 执行 | `agena.shell` + 本地 executor/monitor | `microsandbox`、Daytona、E2B、SWE-ReX 思路 | 保留 tool surface，替换执行 backend | P1 |
+| Process 执行 | `agena.process` + 本地 executor/background process registry | `microsandbox`、Daytona、E2B、SWE-ReX 思路 | 保留 tool surface，替换执行 backend | P1 |
 | 浏览器自动化 | 当前无专门内置 browser plugin | Playwright MCP | 不自研，直接接入 `agena.mcp` | P1 |
 | Skills 格式 | `agena.skills` 扫描 `SKILL.md` / slash command | GitHub Agent Skills、Vercel Skills、AGENTS.md | 保留实现，增强兼容层 | P1 |
 | 代码结构化搜索 | 当前以 `glob`/`grep`/LSP 为主 | `ast-grep`、`tree-sitter` | 适合增强内置 tool | P1 |
-| Web 搜索/抓取 | `agena.web` 内置 search/fetch/crawl/query | 独立 search MCP / 第三方 server | 保持本地内置，不默认依赖外部搜索服务 | P2 |
+| Web 搜索/抓取 | `agena.web` 内置 search/fetch/crawl | 独立 search MCP / 第三方 server | 保持本地内置，不默认依赖外部搜索服务 | P2 |
 | Memory/RAG | `agena.memory` 已是文件持久化 + Tantivy 本地检索 + prompt 注入 | Qdrant、LanceDB、mem0 思路 | 适合新增更强 RAG/长期记忆能力，不适合替换当前本地 memory | P2 |
 | MCP 安全 | 当前主要靠权限系统和网络审计 | `mcp-firewall`、`mcp-scan`、`agent-scan` | 适合加在接入层和 CI，不适合塞进 tool body | P2 |
 | Tool discovery | `tool_search` 当前是内置 Tantivy 本地检索 | Meilisearch | 保持内置实现，暂不引入外部服务 | P3 |
@@ -92,19 +92,19 @@
 - 不要把 `agena.mcp` 的单一入口 tool surface 改回“一台 server 一个 tool”。
 - 不要把 MCP server 配置和 host capability 管理交给外部 SDK；这些仍然应该是 Agena runtime 自己的边界。
 
-### 2. `agena.shell` 的执行后端应该抽象，优先接 sandbox，不优先继续自研隔离
+### 2. `agena.process` 的执行后端应该抽象，优先接 sandbox，不优先继续自研隔离
 
-当前 `agena.shell` 的 tool 设计本身是对的：
+当前 `agena.process` 的 tool 设计本身是对的：
 
 - 模型必须显式声明 `filesystem_effects` 和 `network_effects`
-- `monitor_*` 和 `exec` 已经分层
+- 前台 `run` 和后台 process log/stop 已经统一成同一个 process tool
 - 权限系统已经能在执行前做检查
 
 真正重的是执行隔离，不是 tool surface。
 
 建议：
 
-- 保留 `shell` 这个顶层 tool。
+- 保留 `process` 这个顶层 tool。
 - 在 executor 后面增加 backend 抽象，例如：
   - `local`
   - `sandbox_local`
@@ -118,7 +118,7 @@
 
 不建议的做法：
 
-- 不要把 `agena.shell` 直接替换成外部 MCP shell server。这样会把最敏感的执行边界搬出 runtime。
+- 不要把 `agena.process` 直接替换成外部 MCP shell server。这样会把最敏感的执行边界搬出 runtime。
 - 不要把人类可审计的 `filesystem_effects` / `network_effects` 合约丢掉，即使接入 sandbox backend 也要保留。
 
 ## 二类：不替换当前内置 plugin，但很适合增强
@@ -130,7 +130,7 @@
 对浏览器这类高变动、高兼容性成本的领域，自研 plugin 不划算。最合适的路线是：
 
 - 继续保留 `agena.web` 负责轻量 search/fetch。
-- 让 `agena.web` 的 crawl/query action 承担多页抓取、本地语料落盘和后续检索。
+- 让 `agena.web` 的 crawl action 承担多页抓取、本地语料落盘和后续复用。
 - 通过 `agena.mcp` 接入 Playwright MCP 作为 browser/computer-use 能力。
 
 建议增强项：
@@ -240,13 +240,13 @@
 - 每个 server/tool 的风险标签和权限摘要
 - MCP tool 调用失败的结构化错误归类，而不是只返回文本
 
-### `agena.shell`
+### `agena.process`
 
 建议新增的能力：
 
 - backend 选择：`local` / `sandbox`
 - 执行工件回传：stdout/stderr 分离、退出码、生成文件列表
-- 对 monitor 类任务支持更明确的“完成/仍在运行”状态语义
+- 对后台 process 任务支持更明确的“完成/仍在运行”状态语义
 - 针对常见语言的 execution preset，例如 Rust/Node/Python 测试命令模板
 
 ### `agena.fs` 或新增 `agena.code`
@@ -343,7 +343,7 @@
 1. 为 MCP 栈做 `rmcp` 兼容性 spike。
 2. 给 `agena.mcp` 增加 `servers` / `inspect_tool` / `refresh`。
 3. 给 `agena.skills` 增加公开 frontmatter 字段兼容层。
-4. 为 `agena.shell` 设计 backend trait，为 sandbox 接入留接口。
+4. 为 `agena.process` 设计 backend trait，为 sandbox 接入留接口。
 5. 通过 preset/documentation 把 Playwright MCP 纳入标准接入路径。
 
 ### Phase 2

@@ -9,10 +9,10 @@ pub(crate) mod glob;
 pub(crate) mod grep;
 pub(crate) mod lsp;
 pub(crate) mod monitor;
-pub(crate) mod monitor_tool;
 pub(crate) mod orchestrator;
 pub(crate) mod payload;
 pub(crate) mod powershell;
+pub(crate) mod process_tool;
 pub(crate) mod read;
 pub(crate) mod result;
 pub(crate) mod shell;
@@ -56,9 +56,10 @@ use crate::plugin::{
 };
 use crate::plugins::provided::{
     catalog as provided_catalog, code as provided_code, cron as provided_cron, fs as provided_fs,
-    lsp as provided_lsp, mcp, planning as provided_planning, repo as provided_repo,
-    router as in_process_router, runtime as provided_runtime, schema_lab as provided_schema_lab,
-    settings as provided_settings, shell as provided_shell, skills, tasks as provided_tasks,
+    lsp as provided_lsp, mcp, planning as provided_planning, process as provided_process,
+    repo as provided_repo, router as in_process_router, runtime as provided_runtime,
+    schema_lab as provided_schema_lab, settings as provided_settings, skills,
+    tasks as provided_tasks,
 };
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
@@ -714,12 +715,12 @@ pub fn new_settings_plugin() -> impl crate::plugin::sdk::Plugin {
     provided_settings::SettingsPlugin::new()
 }
 
-pub fn shell_plugin_id() -> &'static str {
-    provided_shell::SHELL_PLUGIN_ID
+pub fn process_plugin_id() -> &'static str {
+    provided_process::PROCESS_PLUGIN_ID
 }
 
-pub fn new_shell_plugin() -> impl crate::plugin::sdk::Plugin {
-    provided_shell::new_plugin()
+pub fn new_process_plugin() -> impl crate::plugin::sdk::Plugin {
+    provided_process::new_plugin()
 }
 
 pub fn catalog_plugin_id() -> &'static str {
@@ -1702,33 +1703,37 @@ impl ToolExecutor {
         bash::prepare_command(self, input, session_id, call_id)
     }
 
-    pub fn prepare_bash_invocation(
+    pub fn prepare_process_invocation(
         &self,
         invocation: &ToolInvocation,
         session_id: i64,
         call_id: i64,
     ) -> Result<(ToolInvocation, Option<PreparedShellCommand>), ToolError> {
-        let Some(ToolPayloadInput::Bash(bash_input)) =
-            ToolPayloadInput::from_invocation(invocation)
+        let Some(ToolPayloadInput::Process(crate::message::ProcessToolInput::Run {
+            shell: crate::message::ProcessShell::Bash,
+            command: process_input,
+            background,
+        })) = ToolPayloadInput::from_invocation(invocation)
         else {
             return Ok((invocation.clone(), None));
         };
-        let prepared_shell = self.prepare_shell_command(&bash_input, session_id, call_id)?;
+        let prepared_shell = self.prepare_shell_command(&process_input, session_id, call_id)?;
         let Some(prepared_shell) = prepared_shell.clone() else {
             return Ok((invocation.clone(), None));
         };
-        if prepared_shell.command == bash_input.command {
+        if prepared_shell.command == process_input.command {
             return Ok((invocation.clone(), Some(prepared_shell)));
         }
-        let mut rewritten = bash_input;
+        let mut rewritten = process_input;
         rewritten.command = prepared_shell.command.clone();
-        let input_value = if invocation.name == "bash" {
-            serde_json::to_value(rewritten)
-                .map_err(|err| ToolError::InvalidInput(format!("bash input: {err}")))?
-        } else {
-            let rewritten_invocation = ToolPayloadInput::Bash(rewritten).into_invocation();
-            serde_json::Value::from(rewritten_invocation.input)
-        };
+        let rewritten_invocation =
+            ToolPayloadInput::Process(crate::message::ProcessToolInput::Run {
+                shell: crate::message::ProcessShell::Bash,
+                command: rewritten,
+                background,
+            })
+            .into_invocation();
+        let input_value = serde_json::Value::from(rewritten_invocation.input);
         let input = StructuredObject::try_from(input_value)
             .map_err(|err| ToolError::InvalidInput(err.to_string()))?;
         Ok((
@@ -2529,9 +2534,7 @@ fn validate_shell_filesystem_effects(
 fn shell_command_from_invocation(invocation: &ToolInvocation) -> Option<String> {
     if let Some(payload) = ToolPayloadInput::from_invocation(invocation) {
         let command = match payload {
-            ToolPayloadInput::Bash(payload) => Some(payload.command),
-            ToolPayloadInput::PowerShell(payload) => Some(payload.command),
-            ToolPayloadInput::Monitor(crate::message::MonitorToolInput::Start {
+            ToolPayloadInput::Process(crate::message::ProcessToolInput::Run {
                 command, ..
             }) => Some(command.command),
             _ => None,
@@ -2640,10 +2643,10 @@ fn invocation_effective_tags(
         ("agena_cron__schedule", "create" | "delete" | "wakeup") => {
             set_invocation_access_tags(&mut tags, false, true, false, false)
         }
-        ("agena_shell__monitor", "list" | "read") => {
+        ("agena_process__process", "list" | "logs") => {
             set_invocation_access_tags(&mut tags, true, false, false, false)
         }
-        ("agena_shell__monitor", "start" | "stop") => {
+        ("agena_process__process", "run" | "stop") => {
             set_invocation_access_tags(&mut tags, false, true, false, false)
         }
         ("agena_runtime__session", "get") => {
@@ -2706,8 +2709,8 @@ fn is_concurrency_safe_tool_invocation(
     match (registered_tool.behavior_exposed_name(), command) {
         ("agena_fs__fs", "read" | "glob" | "grep") => true,
         ("agena_fs__fs", "apply_patch") => false,
-        ("agena_shell__monitor", "list" | "read") => true,
-        ("agena_shell__monitor", "start" | "stop") => false,
+        ("agena_process__process", "list" | "logs") => true,
+        ("agena_process__process", "run" | "stop") => false,
         ("agena_settings__settings", "get" | "list" | "validate") => true,
         ("agena_settings__settings", "set" | "delete" | "patch") => false,
         ("agena_cron__schedule", "list") => true,
@@ -2977,9 +2980,9 @@ mod tests {
     use crate::message::{
         ApplyPatchToolInput, EnterWorktreeToolInput, FileChangeKind, FilesystemAccess,
         FilesystemEffect, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
-        LspPositionToolInput, Message, MonitorToolInput, NetworkEffect, PartContent, ReadToolInput,
-        ShellCommandInput, StructuredObject, TaskSubagentType, TaskToolInput, TodoItem,
-        TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation, WebFetchToolInput,
+        LspPositionToolInput, Message, NetworkEffect, PartContent, ProcessShell, ProcessToolInput,
+        ReadToolInput, ShellCommandInput, StructuredObject, TaskSubagentType, TaskToolInput,
+        TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation, WebFetchToolInput,
         WebSearchToolInput,
     };
     use crate::permission::PermissionPolicy;
@@ -3009,14 +3012,31 @@ mod tests {
     const FS_TOOL: &str = "agena_fs__fs";
     const GENERATED_HELP_TOOL: &str = "fixture__generated_help";
     const MERGED_HELP_TOOL: &str = "fixture__merged_help";
-    const SHELL_BASH_TOOL: &str = "agena_shell__exec_bash";
+    const PROCESS_TOOL: &str = "agena_process__process";
+    const PROCESS_RUN_TOOL: &str = "agena_process__process_run";
     const TOOLS_TOOL: &str = "agena_catalog__tools";
     const TODO_TOOL: &str = "agena_planning__todo";
     const TASK_TOOL: &str = "agena_tasks__task";
     const FIXTURE_ECHO_TOOL: &str = "fixture__plugin_echo";
+    const WEB_CRAWL_TOOL: &str = "agena_web__crawl";
     const WEB_FETCH_TOOL: &str = "agena_web__fetch";
-    const WEB_QUERY_TOOL: &str = "agena_web__store_query";
     const WEB_SEARCH_TOOL: &str = "agena_web__search";
+
+    fn bash_process_input(command: ShellCommandInput) -> ToolPayloadInput {
+        ToolPayloadInput::Process(ProcessToolInput::Run {
+            shell: ProcessShell::Bash,
+            command,
+            background: false,
+        })
+    }
+
+    fn background_bash_process_input(command: ShellCommandInput) -> ToolPayloadInput {
+        ToolPayloadInput::Process(ProcessToolInput::Run {
+            shell: ProcessShell::Bash,
+            command,
+            background: true,
+        })
+    }
 
     #[derive(Debug, Deserialize, Serialize, JsonSchema)]
     #[serde(deny_unknown_fields)]
@@ -5759,7 +5779,7 @@ mod tests {
         let code_id = super::code_plugin_id().to_string();
         let fs_id = super::fs_plugin_id().to_string();
         let settings_id = super::settings_plugin_id().to_string();
-        let shell_id = super::shell_plugin_id().to_string();
+        let process_id = super::process_plugin_id().to_string();
         let catalog_id = super::catalog_plugin_id().to_string();
         let runtime_id = super::runtime_plugin_id().to_string();
         let planning_id = super::planning_plugin_id().to_string();
@@ -5774,7 +5794,7 @@ mod tests {
             &code_id,
             &fs_id,
             &settings_id,
-            &shell_id,
+            &process_id,
             &catalog_id,
             &runtime_id,
             &planning_id,
@@ -5812,7 +5832,7 @@ mod tests {
                 .register_static(code_id, super::new_code_plugin())
                 .register_static(fs_id, super::new_fs_plugin())
                 .register_static(settings_id, super::new_settings_plugin())
-                .register_static(shell_id, super::new_shell_plugin())
+                .register_static(process_id, super::new_process_plugin())
                 .register_static(catalog_id, super::new_catalog_plugin())
                 .register_static(runtime_id, super::new_runtime_plugin())
                 .register_static(planning_id, super::new_planning_plugin())
@@ -5839,7 +5859,7 @@ mod tests {
         let code_id = super::code_plugin_id().to_string();
         let fs_id = super::fs_plugin_id().to_string();
         let settings_id = super::settings_plugin_id().to_string();
-        let shell_id = super::shell_plugin_id().to_string();
+        let process_id = super::process_plugin_id().to_string();
         let catalog_id = super::catalog_plugin_id().to_string();
         let runtime_id = super::runtime_plugin_id().to_string();
         let planning_id = super::planning_plugin_id().to_string();
@@ -5854,7 +5874,7 @@ mod tests {
             &code_id,
             &fs_id,
             &settings_id,
-            &shell_id,
+            &process_id,
             &catalog_id,
             &runtime_id,
             &planning_id,
@@ -5891,7 +5911,7 @@ mod tests {
                 .register_static(code_id, super::new_code_plugin())
                 .register_static(fs_id, super::new_fs_plugin())
                 .register_static(settings_id, super::new_settings_plugin())
-                .register_static(shell_id, super::new_shell_plugin())
+                .register_static(process_id, super::new_process_plugin())
                 .register_static(catalog_id, super::new_catalog_plugin())
                 .register_static(runtime_id, super::new_runtime_plugin())
                 .register_static(planning_id, super::new_planning_plugin())
@@ -5917,7 +5937,7 @@ mod tests {
         let code_id = super::code_plugin_id().to_string();
         let fs_id = super::fs_plugin_id().to_string();
         let settings_id = super::settings_plugin_id().to_string();
-        let shell_id = super::shell_plugin_id().to_string();
+        let process_id = super::process_plugin_id().to_string();
         let catalog_id = super::catalog_plugin_id().to_string();
         let runtime_id = super::runtime_plugin_id().to_string();
         let planning_id = super::planning_plugin_id().to_string();
@@ -5932,7 +5952,7 @@ mod tests {
             &code_id,
             &fs_id,
             &settings_id,
-            &shell_id,
+            &process_id,
             &catalog_id,
             &runtime_id,
             &planning_id,
@@ -5968,7 +5988,7 @@ mod tests {
                 .register_static(code_id, super::new_code_plugin())
                 .register_static(fs_id, super::new_fs_plugin())
                 .register_static(settings_id, super::new_settings_plugin())
-                .register_static(shell_id, super::new_shell_plugin())
+                .register_static(process_id, super::new_process_plugin())
                 .register_static(catalog_id, super::new_catalog_plugin())
                 .register_static(runtime_id, super::new_runtime_plugin())
                 .register_static(planning_id, super::new_planning_plugin())
@@ -6738,7 +6758,7 @@ mod tests {
         assert!(
             initial
                 .iter()
-                .any(|tool| tool.exposed_name == SHELL_BASH_TOOL)
+                .any(|tool| tool.exposed_name == PROCESS_RUN_TOOL)
         );
         assert!(initial.iter().any(|tool| tool.exposed_name == TASK_TOOL));
 
@@ -6763,7 +6783,7 @@ mod tests {
         assert!(
             available
                 .iter()
-                .any(|tool| tool.exposed_name == SHELL_BASH_TOOL)
+                .any(|tool| tool.exposed_name == PROCESS_RUN_TOOL)
         );
         assert!(available.iter().any(|tool| tool.exposed_name == TASK_TOOL));
     }
@@ -7101,13 +7121,13 @@ mod tests {
         let tools = executor.available_tools();
         let model_tools = executor.available_model_tools();
 
-        let web_query = model_tools
+        let web_crawl = model_tools
             .iter()
-            .find(|tool| tool.exposed_name == WEB_QUERY_TOOL)
-            .expect("web query should be model-visible");
+            .find(|tool| tool.exposed_name == WEB_CRAWL_TOOL)
+            .expect("web crawl should be model-visible");
         assert_eq!(
-            web_query.description_text(),
-            "Search locally stored crawl documents. See `tools.help` for `agena_web__store_query`."
+            web_crawl.description_text(),
+            "Crawl a site and cache indexed pages locally. See `tools.help` for `agena_web__crawl`."
         );
 
         let workflow_tools = tools
@@ -7241,7 +7261,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(ShellCommandInput {
+            .execute_tool_payload_detailed(&bash_process_input(ShellCommandInput {
                 command: "echo hello_agena".to_string(),
                 description: "smoke bash".to_string(),
                 timeout_ms: Some(30_000),
@@ -7252,10 +7272,13 @@ mod tests {
             .expect("bash default tool should succeed");
 
         match &result.output {
-            ToolPayloadOutput::Bash {
+            ToolPayloadOutput::Process {
                 output,
                 description,
+                shell,
+                ..
             } => {
+                assert_eq!(*shell, Some(ProcessShell::Bash));
                 let output = output
                     .as_deref()
                     .expect("output should exist")
@@ -7275,7 +7298,7 @@ mod tests {
 
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
-        let invocation = ToolPayloadInput::Bash(ShellCommandInput {
+        let invocation = bash_process_input(ShellCommandInput {
             command: "echo hello_shell_exec".to_string(),
             description: "grouped shell exec".to_string(),
             timeout_ms: Some(30_000),
@@ -7284,22 +7307,23 @@ mod tests {
             network_effects: Vec::new(),
         })
         .into_invocation();
-        assert_eq!(invocation.name, SHELL_BASH_TOOL);
+        assert_eq!(invocation.name, PROCESS_TOOL);
 
         let prepared = executor
             .prepare_invocation(&invocation, 7, 9)
-            .expect("prepare should succeed for shell.exec");
+            .expect("prepare should succeed for process.run");
         let payload = serde_json::Value::from(prepared.invocation.input.clone());
-        assert!(payload.get("action").is_none());
-        assert!(payload.get("shell").is_none());
+        assert_eq!(payload["action"], "run");
+        assert_eq!(payload["shell"], "bash");
+        assert_eq!(payload["background"], false);
         assert_eq!(payload["command"], "echo hello_shell_exec");
 
         let execution = executor
             .execute_invocation_detailed(&prepared.invocation, 7, 9)
-            .expect("grouped shell exec should succeed");
+            .expect("grouped process run should succeed");
 
-        match ToolPayloadOutput::from_tool_output("bash", &execution.output) {
-            Some(ToolPayloadOutput::Bash { output, .. }) => {
+        match ToolPayloadOutput::from_tool_output(PROCESS_TOOL, &execution.output) {
+            Some(ToolPayloadOutput::Process { output, .. }) => {
                 let output = output
                     .as_deref()
                     .expect("output should exist")
@@ -7322,7 +7346,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(ShellCommandInput {
+            .execute_tool_payload_detailed(&bash_process_input(ShellCommandInput {
                 command: "grep missing notes.txt".to_string(),
                 description: "search missing text".to_string(),
                 timeout_ms: Some(30_000),
@@ -7336,10 +7360,13 @@ mod tests {
             .expect("bash default tool should succeed");
 
         match result.output {
-            ToolPayloadOutput::Bash {
+            ToolPayloadOutput::Process {
                 output,
                 description,
+                shell,
+                ..
             } => {
+                assert_eq!(shell, Some(ProcessShell::Bash));
                 assert!(
                     output
                         .as_deref()
@@ -7376,7 +7403,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(ShellCommandInput {
+            .execute_tool_payload_detailed(&bash_process_input(ShellCommandInput {
                 command: "diff left.txt right.txt".to_string(),
                 description: "compare files".to_string(),
                 timeout_ms: Some(30_000),
@@ -7396,7 +7423,7 @@ mod tests {
             .expect("bash default tool should succeed");
 
         match &result.output {
-            ToolPayloadOutput::Bash { description, .. } => {
+            ToolPayloadOutput::Process { description, .. } => {
                 assert!(
                     description
                         .as_deref()
@@ -7426,7 +7453,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let err = executor
-            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(ShellCommandInput {
+            .execute_tool_payload_detailed(&bash_process_input(ShellCommandInput {
                 command: "echo hi > created.txt".to_string(),
                 description: "attempt write".to_string(),
                 timeout_ms: Some(30_000),
@@ -7960,31 +7987,25 @@ mod tests {
     }
 
     #[test]
-    fn collect_permission_checks_for_monitor_start_uses_declared_targets() {
+    fn collect_permission_checks_for_background_process_run_uses_declared_targets() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
-        let invocation = ToolPayloadInput::Monitor(MonitorToolInput::Start {
-            command: ShellCommandInput {
-                command: "curl https://status.example.com/health".to_string(),
-                description: "watch status".to_string(),
-                timeout_ms: Some(5_000),
-                workdir: Some("services/api".to_string()),
-                filesystem_effects: Vec::new(),
-                network_effects: vec![NetworkEffect {
-                    target: "https://status.example.com/health".to_string(),
-                }],
-            },
-            persistent: false,
-            include_pattern: None,
-            max_buffered_lines: None,
-            capture_stderr: true,
+        let invocation = background_bash_process_input(ShellCommandInput {
+            command: "curl https://status.example.com/health".to_string(),
+            description: "watch status".to_string(),
+            timeout_ms: Some(5_000),
+            workdir: Some("services/api".to_string()),
+            filesystem_effects: Vec::new(),
+            network_effects: vec![NetworkEffect {
+                target: "https://status.example.com/health".to_string(),
+            }],
         })
         .into_invocation();
 
         let checks = executor
             .collect_permission_checks_for_invocation(&invocation)
-            .expect("monitor permission collection should succeed");
+            .expect("background process permission collection should succeed");
         let path_actions = checks
             .iter()
             .filter_map(|check| match &check.action {
@@ -8262,7 +8283,7 @@ mod tests {
                 .and_then(|name| name.to_str())
                 .unwrap_or("agena")
         ));
-        let invocation = ToolPayloadInput::Bash(ShellCommandInput {
+        let invocation = bash_process_input(ShellCommandInput {
             command: "cat src/lib.rs > target/out.txt".to_string(),
             description: "declared effects".to_string(),
             timeout_ms: Some(30_000),
@@ -8362,7 +8383,7 @@ mod tests {
         );
         let executor = ToolExecutor::new(&workspace.root, agent)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
-        let invocation = ToolPayloadInput::Bash(ShellCommandInput {
+        let invocation = bash_process_input(ShellCommandInput {
             command: "touch created.txt".to_string(),
             description: "declared write".to_string(),
             timeout_ms: Some(30_000),
@@ -8470,7 +8491,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
-        let invocation = ToolPayloadInput::Bash(ShellCommandInput {
+        let invocation = bash_process_input(ShellCommandInput {
             command: "touch created.txt".to_string(),
             description: "missing effects".to_string(),
             timeout_ms: Some(30_000),
@@ -8497,7 +8518,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
-        let invocation = ToolPayloadInput::Bash(ShellCommandInput {
+        let invocation = bash_process_input(ShellCommandInput {
             command: "cat notes.txt".to_string(),
             description: "missing read effects".to_string(),
             timeout_ms: Some(30_000),
@@ -8524,7 +8545,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
-        let invocation = ToolPayloadInput::Bash(ShellCommandInput {
+        let invocation = bash_process_input(ShellCommandInput {
             command: "curl https://example.com/health".to_string(),
             description: "missing network targets".to_string(),
             timeout_ms: Some(30_000),
@@ -8551,7 +8572,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
-        let invocation = ToolPayloadInput::Bash(ShellCommandInput {
+        let invocation = bash_process_input(ShellCommandInput {
             command: "curl https://example.com/health".to_string(),
             description: "network only curl".to_string(),
             timeout_ms: Some(30_000),
@@ -8573,7 +8594,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
-        let invocation = ToolPayloadInput::Bash(ShellCommandInput {
+        let invocation = bash_process_input(ShellCommandInput {
             command: "curl -o download.json https://example.com/data.json".to_string(),
             description: "curl writes file".to_string(),
             timeout_ms: Some(30_000),
@@ -8615,7 +8636,7 @@ mod tests {
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
 
         let err = executor
-            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(ShellCommandInput {
+            .execute_tool_payload_detailed(&bash_process_input(ShellCommandInput {
                 command: "printf ok".to_string(),
                 description: "declared write denied".to_string(),
                 timeout_ms: Some(30_000),
@@ -8648,7 +8669,7 @@ mod tests {
 
         let execution = executor
             .execute_invocation_detailed(
-                &ToolPayloadInput::Bash(ShellCommandInput {
+                &bash_process_input(ShellCommandInput {
                     command: "printf %s \"$PLUGIN_FLAG\"".to_string(),
                     description: "print plugin env".to_string(),
                     timeout_ms: Some(30_000),
@@ -8662,10 +8683,11 @@ mod tests {
             )
             .expect("bash invocation should succeed");
 
-        match ToolPayloadOutput::from_tool_output("bash", &execution.output) {
-            Some(ToolPayloadOutput::Bash {
+        match ToolPayloadOutput::from_tool_output(PROCESS_TOOL, &execution.output) {
+            Some(ToolPayloadOutput::Process {
                 output,
                 description: _,
+                ..
             }) => {
                 assert_eq!(output.as_deref(), Some("from_plugin"));
             }

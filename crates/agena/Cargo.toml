@@ -52,8 +52,8 @@ parking_lot = { workspace = true }
 regex = { workspace = true }
 tantivy = { workspace = true }
 ast-grep-core = { workspace = true }
+ast-grep-language = { workspace = true }
 tree-sitter = { workspace = true }
-tree-sitter-rust = { workspace = true }
 html_escape = { workspace = true }
 indexmap = { workspace = true }
 urlencoding = { workspace = true }

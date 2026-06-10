@@ -5,7 +5,7 @@ use super::shell_tools::{
     validate_declared_filesystem_effects,
 };
 
-use crate::message::ShellCommandInput;
+use crate::message::{ProcessShell, ProcessStatus, ShellCommandInput};
 use crate::plugin::{CommandAfterInput, CommandBeforeInput, CommandBeforeOutcome};
 
 use super::{
@@ -188,9 +188,24 @@ pub(super) fn execute(
         trimmed_output.clone()
     };
 
-    let output = ToolPayloadOutput::Bash {
+    let output = ToolPayloadOutput::Process {
+        action: "run".to_string(),
+        shell: Some(ProcessShell::Bash),
+        background: false,
+        process_id: None,
+        status: Some(if execution.timed_out {
+            ProcessStatus::TimedOut
+        } else {
+            ProcessStatus::Exited
+        }),
         output: Some(display_output.clone()),
         description: Some(status_text.clone()),
+        events: Vec::new(),
+        processes: Vec::new(),
+        last_seq: 0,
+        has_more: false,
+        dropped_lines: 0,
+        exit_code: Some(execution.exit_code),
     };
 
     let title = if input.description.trim().is_empty() {

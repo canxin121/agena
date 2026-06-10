@@ -211,20 +211,32 @@ pub struct TodoWriteToolInput {
     pub items: Vec<TodoItem>,
 }
 
-/// Stream channel reported by the `monitor` tool for each captured event.
+/// Shell launcher used for a process run.
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Display, Default,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum ProcessShell {
+    #[default]
+    Bash,
+    Powershell,
+}
+
+/// Stream channel reported by the `process` tool for each captured event.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-pub enum MonitorStream {
+pub enum ProcessStream {
     Stdout,
     Stderr,
 }
 
-/// Lifecycle state of a registered monitor.
+/// Lifecycle state of a registered process.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-pub enum MonitorStatus {
+pub enum ProcessStatus {
     /// The child process is running and the buffer is being filled.
     Running,
     /// The child exited normally (use `exit_code` for the precise code).
@@ -237,19 +249,19 @@ pub enum MonitorStatus {
     Failed,
 }
 
-/// One captured event line from a monitored process.
+/// One captured event line from a background process.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-pub struct MonitorEvent {
-    /// Monotonic sequence number scoped to a single monitor (starts at 1).
+pub struct ProcessEvent {
+    /// Monotonic sequence number scoped to a single process (starts at 1).
     pub seq: u64,
-    pub stream: MonitorStream,
+    pub stream: ProcessStream,
     /// Wall-clock timestamp in milliseconds since the Unix epoch.
     pub ts_ms: i64,
     /// Captured line, without the trailing newline. Lossy UTF-8 if needed.
     pub line: String,
 }
 
-/// Action discriminator for the `monitor` tool payload.
+/// Action discriminator for the `process` tool payload.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
 #[tool_input(trim(
     "command",
@@ -257,36 +269,28 @@ pub struct MonitorEvent {
     "workdir",
     "filesystem_effects[].path",
     "network_effects[].target",
-    "include_pattern",
-    "monitor_id"
+    "process_id"
 ))]
 #[serde(tag = "action", rename_all = "snake_case")]
-pub enum MonitorToolInput {
-    /// Spawn a new background monitor and return its id.
+pub enum ProcessToolInput {
+    /// Run one process. Set `background = true` to keep it attached to the session.
     #[tool(non_empty("command"))]
-    Start {
+    Run {
+        #[serde(default)]
+        shell: ProcessShell,
         #[serde(flatten)]
         command: ShellCommandInput,
-        /// If true, the monitor runs until explicitly stopped or the session ends.
+        /// If true, keep the process attached to the session and return a process id.
         #[serde(default)]
-        persistent: bool,
-        /// Optional regex applied to each line; only matching lines are kept.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        include_pattern: Option<String>,
-        /// Ring buffer size in lines (default 1000, max 10_000).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        max_buffered_lines: Option<u32>,
-        /// Whether stderr lines are captured. Default true.
-        #[serde(default = "default_capture_stderr")]
-        capture_stderr: bool,
+        background: bool,
     },
-    /// List every active or recently-finished monitor in this session.
+    /// List every active or recently-finished background process in this session.
     #[tool(default_when_empty = true)]
     List {},
-    /// Read events from a monitor; optionally block waiting for new events.
-    #[tool(non_empty("monitor_id"))]
-    Read {
-        monitor_id: String,
+    /// Read buffered logs from a background process; optionally block waiting for new events.
+    #[tool(non_empty("process_id"))]
+    Logs {
+        process_id: String,
         /// Return only events with `seq > since_seq`. Default 0.
         #[serde(default)]
         since_seq: u64,
@@ -297,23 +301,19 @@ pub enum MonitorToolInput {
         #[serde(default)]
         wait_ms: u64,
     },
-    /// Terminate a running monitor.
-    #[tool(non_empty("monitor_id"))]
-    Stop { monitor_id: String },
-}
-
-fn default_capture_stderr() -> bool {
-    true
+    /// Terminate a running background process.
+    #[tool(non_empty("process_id"))]
+    Stop { process_id: String },
 }
 
 /// Lightweight summary record returned by `list` / embedded inside other outputs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MonitorSummary {
-    pub monitor_id: String,
+pub struct ProcessSummary {
+    pub process_id: String,
     pub command: String,
     pub description: String,
-    pub status: MonitorStatus,
-    pub persistent: bool,
+    pub status: ProcessStatus,
+    pub background: bool,
     pub started_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at_ms: Option<i64>,
@@ -1288,35 +1288,41 @@ mod tests {
     }
 
     #[test]
-    fn monitor_and_lsp_inputs_use_variant_and_shape_constraints_at_parse_time() {
-        let listed = MonitorToolInput::parse_input(json!({}))
-            .expect("empty monitor input should default to list");
-        assert!(matches!(listed, MonitorToolInput::List {}));
+    fn process_and_lsp_inputs_use_variant_and_shape_constraints_at_parse_time() {
+        let listed = ProcessToolInput::parse_input(json!({}))
+            .expect("empty process input should default to list");
+        assert!(matches!(listed, ProcessToolInput::List {}));
 
-        let parsed = MonitorToolInput::parse_input(json!({
-            "action": "start",
+        let parsed = ProcessToolInput::parse_input(json!({
+            "action": "run",
             "command": "  cargo test  ",
             "description": "  run tests  ",
             "filesystem_effects": [],
             "network_effects": []
         }))
-        .expect("monitor start should parse");
+        .expect("process run should parse");
         match parsed {
-            MonitorToolInput::Start { command, .. } => {
+            ProcessToolInput::Run {
+                command,
+                shell,
+                background,
+            } => {
                 assert_eq!(command.command, "cargo test");
                 assert_eq!(command.description, "run tests");
+                assert_eq!(shell, ProcessShell::Bash);
+                assert!(!background);
             }
-            other => panic!("expected start variant, got {other:?}"),
+            other => panic!("expected run variant, got {other:?}"),
         }
 
-        let err = MonitorToolInput::parse_input(json!({
-            "action": "read",
-            "monitor_id": "   "
+        let err = ProcessToolInput::parse_input(json!({
+            "action": "logs",
+            "process_id": "   "
         }))
-        .expect_err("monitor read should reject blank ids");
+        .expect_err("process logs should reject blank ids");
         assert!(
             err.to_string()
-                .contains("field `monitor_id` must not be empty")
+                .contains("field `process_id` must not be empty")
         );
 
         let hover = LspHoverToolInput::parse_input(json!({

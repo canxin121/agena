@@ -1,4 +1,4 @@
-use crate::message::ShellCommandInput;
+use crate::message::{ProcessShell, ProcessStatus, ShellCommandInput};
 
 use super::shell::ShellRequest;
 use super::shell_tools::{
@@ -65,13 +65,24 @@ pub(super) fn execute(
         trimmed_output.clone()
     };
 
-    let output = ToolPayloadOutput::PowerShell {
-        output: Some(display_output.clone()),
-        description: if input.description.trim().is_empty() {
-            None
+    let output = ToolPayloadOutput::Process {
+        action: "run".to_string(),
+        shell: Some(ProcessShell::Powershell),
+        background: false,
+        process_id: None,
+        status: Some(if execution.timed_out {
+            ProcessStatus::TimedOut
         } else {
-            Some(input.description.clone())
-        },
+            ProcessStatus::Exited
+        }),
+        output: Some(display_output.clone()),
+        description: Some(status_text.clone()),
+        events: Vec::new(),
+        processes: Vec::new(),
+        last_seq: 0,
+        has_more: false,
+        dropped_lines: 0,
+        exit_code: Some(execution.exit_code),
     };
     let mut view = ToolExecutionView::simple("PowerShell".to_string(), display_output);
     view.metadata

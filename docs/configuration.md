@@ -1905,15 +1905,14 @@ browser_wait_for_delay_ms
 - `respect_robots_txt` 打开后 Spider 会按 robots.txt 约束抓取。
 - `document_cache_ttl_secs` 控制已保存文档在后续 crawl 中被直接复用的时长。
 - `fetch_cache_ttl_secs` / `fetch_cache_capacity` 控制进程内 HTTP fetch cache。
-- `store_max_documents` / `store_max_bytes` 控制持久 crawl 语料的上限；每次 `crawl` 写入后会删除最旧文档并重建索引，避免本地目录无限增长。
+- `store_max_documents` / `store_max_bytes` 控制本地 crawl cache 的上限；每次 `crawl` 写入后会删除最旧文档并重建索引，避免本地目录无限增长。
 - `near_duplicate_hamming_distance` 用于基于 SimHash 的近重复过滤。
 - `web search` 的 `engine` 参数由 AI 在调用时选择：`auto`、`duckduckgo`、`bing` 或 `baidu`。省略或传 `auto` 时会按 `duckduckgo -> bing -> baidu` 自动尝试，直到拿到结果。
-- `web query` 不依赖模型，只使用本地 Tantivy BM25 / ngram 索引。
 - `browser_enabled` 会让 `web fetch` / `web crawl` 默认通过 Agena 托管的本地 Chrome/Chromium 进程抓取 JS 页面；单次 tool call 也可以用 `render_js` 覆盖。
 - `browser_executable_path` 可选，用于指定本地 Chrome/Chromium 可执行文件路径；不支持配置远端 DevTools/WebSocket 链接。
 - `browser_wait_for_network_idle`、`browser_wait_timeout_secs`、`browser_wait_for_selector` 和 `browser_wait_for_delay_ms` 控制渲染等待策略。
 
-如果你只是想临时拉一页内容，用 `web` 的 `fetch` action；如果你需要站内多页抓取、后续查询、或者想避免再接 Firecrawl 这类远程服务，用 `web` 的 `crawl` / `query` action。
+如果你只是想临时拉一页内容，用 `web` 的 `fetch` action；如果你需要站内多页抓取、复用本地 crawl cache、或者想避免再接 Firecrawl 这类远程服务，用 `web` 的 `crawl` action。
 
 如果要启用 OpenAI / Anthropic / Gemini 这类 provider-native remote tools，不要写在 `agena.web` plugin config，而是写在 `providers.<id>.adapters.<adapter>.models.<model>.native_tools.*`。
 

@@ -6,15 +6,13 @@ use crate::plugin::sdk::ToolInputShape;
 
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
-    ToolRuntimeContext, apply_patch, ask_user, bash, cron, glob, grep, lsp, monitor_tool,
-    powershell, read, suggest_tool_names, task, todo_write, tool_search, unknown_tool_hint,
-    worktree,
+    ToolRuntimeContext, apply_patch, ask_user, cron, glob, grep, lsp, process_tool, read,
+    suggest_tool_names, task, todo_write, tool_search, unknown_tool_hint, worktree,
 };
 
 const BUILTIN_TOOL_NAMES: &[&str] = &[
     "apply_patch",
     "ask_user",
-    "bash",
     "cron_create",
     "cron_delete",
     "cron_list",
@@ -25,8 +23,7 @@ const BUILTIN_TOOL_NAMES: &[&str] = &[
     "lsp_diagnostics",
     "lsp_hover",
     "lsp_references",
-    "monitor",
-    "powershell",
+    "process",
     "read",
     "schedule_wakeup",
     "task",
@@ -123,8 +120,7 @@ pub(crate) fn execute_tool(
         "tool_search" => tool_search::execute(executor, &parse_shape_input(input)?),
         "todo_write" => Ok(todo_write::execute(&parse_shape_input(input)?)),
         "ask_user" => ask_user::execute(&parse_shape_input(input)?),
-        "bash" => bash::execute(executor, &parse_shape_input(input)?, context),
-        "monitor" => monitor_tool::execute(executor, &parse_shape_input(input)?),
+        "process" => process_tool::execute(executor, &parse_shape_input(input)?, context),
         "enter_worktree" => {
             worktree::execute_enter(executor, &parse_shape_input(input)?, context.session_id)
         }
@@ -143,7 +139,6 @@ pub(crate) fn execute_tool(
         "lsp_references" => lsp::execute_references(executor, &parse_shape_input(input)?),
         "lsp_hover" => lsp::execute_hover(executor, &parse_shape_input(input)?),
         "lsp_diagnostics" => lsp::execute_diagnostics(executor, &parse_shape_input(input)?),
-        "powershell" => powershell::execute(executor, &parse_shape_input(input)?, context),
         other => {
             let suggestions = suggest_tool_names(other, BUILTIN_TOOL_NAMES, 1);
             if suggestions.is_empty() {

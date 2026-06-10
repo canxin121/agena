@@ -5441,7 +5441,7 @@ mod tests {
             tool::code_plugin_id().to_string(),
             tool::fs_plugin_id().to_string(),
             tool::settings_plugin_id().to_string(),
-            tool::shell_plugin_id().to_string(),
+            tool::process_plugin_id().to_string(),
             tool::schema_lab_plugin_id().to_string(),
             web::web_plugin_id().to_string(),
             tool::catalog_plugin_id().to_string(),

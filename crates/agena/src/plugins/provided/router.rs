@@ -11,8 +11,8 @@ use serde_json::Value as JsonValue;
 
 use crate::message::{
     ApplyPatchToolInput, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
-    LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, MonitorToolInput,
-    NetworkEffect, ReadToolInput, ShellCommandInput,
+    LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, NetworkEffect,
+    ProcessToolInput, ReadToolInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{NetworkRequest, Result as SdkResult, ToolInputShape, ToolInvokeOutput};
@@ -111,8 +111,6 @@ fn current_executor(
 fn routed_tool_name(tool_name: &str) -> Option<&'static str> {
     match tool_name {
         "read" | "glob" | "grep" | "apply_patch" => Some("fs"),
-        "bash" => Some("exec.bash"),
-        "powershell" => Some("exec.powershell"),
         "cron_list" => Some("schedule.list"),
         "cron_create" => Some("schedule.create"),
         "cron_delete" => Some("schedule.delete"),
@@ -126,12 +124,6 @@ fn routed_tool_name(tool_name: &str) -> Option<&'static str> {
 
 fn routed_internal_tool_names(tool_name: &str) -> &'static [&'static str] {
     match tool_name {
-        "exec" => &["bash", "powershell"],
-        "exec.bash" => &["bash"],
-        "exec.powershell" => &["powershell"],
-        "monitor" | "monitor.start" | "monitor.list" | "monitor.read" | "monitor.stop" => {
-            &["monitor"]
-        }
         "schedule" => &["cron_list", "cron_create", "cron_delete", "schedule_wakeup"],
         "schedule.list" => &["cron_list"],
         "schedule.create" => &["cron_create"],
@@ -179,14 +171,6 @@ pub(crate) fn permission_paths_for(
                 .map(crate::plugin::sdk::PathRequest::write)
                 .collect())
         }
-        "bash" => {
-            let payload: ShellCommandInput = parse_shape_input(input)?;
-            Ok(workdir_read_request(payload.workdir.as_deref()))
-        }
-        "powershell" => {
-            let payload: ShellCommandInput = parse_shape_input(input)?;
-            Ok(workdir_read_request(payload.workdir.as_deref()))
-        }
         "glob" => {
             let payload: GlobToolInput = parse_shape_input(input)?;
             Ok(base_path_read_request(payload.path.as_deref()))
@@ -195,15 +179,15 @@ pub(crate) fn permission_paths_for(
             let payload: GrepToolInput = parse_shape_input(input)?;
             Ok(base_path_read_request(payload.path.as_deref()))
         }
-        "monitor" => {
-            let payload: MonitorToolInput = parse_shape_input(input)?;
+        "process" => {
+            let payload: ProcessToolInput = parse_shape_input(input)?;
             Ok(match payload {
-                MonitorToolInput::Start { command, .. } => {
+                ProcessToolInput::Run { command, .. } => {
                     workdir_read_request(command.workdir.as_deref())
                 }
-                MonitorToolInput::List {}
-                | MonitorToolInput::Read { .. }
-                | MonitorToolInput::Stop { .. } => Vec::new(),
+                ProcessToolInput::List {}
+                | ProcessToolInput::Logs { .. }
+                | ProcessToolInput::Stop { .. } => Vec::new(),
             })
         }
         "lsp_definition" => {
@@ -248,33 +232,17 @@ pub(crate) fn permission_networks_for(
     input: &serde_json::Value,
 ) -> SdkResult<Vec<NetworkRequest>> {
     match tool {
-        "bash" => {
-            let payload: ShellCommandInput = parse_shape_input(input)?;
-            declared_shell_network_requests(
-                "bash",
-                payload.command.as_str(),
-                &payload.network_effects,
-            )
-        }
-        "powershell" => {
-            let payload: ShellCommandInput = parse_shape_input(input)?;
-            declared_shell_network_requests(
-                "powershell",
-                payload.command.as_str(),
-                &payload.network_effects,
-            )
-        }
-        "monitor" => {
-            let payload: MonitorToolInput = parse_shape_input(input)?;
+        "process" => {
+            let payload: ProcessToolInput = parse_shape_input(input)?;
             match payload {
-                MonitorToolInput::Start { command, .. } => declared_shell_network_requests(
-                    "monitor",
+                ProcessToolInput::Run { command, .. } => declared_shell_network_requests(
+                    "process",
                     command.command.as_str(),
                     &command.network_effects,
                 ),
-                MonitorToolInput::List {}
-                | MonitorToolInput::Read { .. }
-                | MonitorToolInput::Stop { .. } => Ok(Vec::new()),
+                ProcessToolInput::List {}
+                | ProcessToolInput::Logs { .. }
+                | ProcessToolInput::Stop { .. } => Ok(Vec::new()),
             }
         }
         _ => Ok(Vec::new()),

@@ -1,12 +1,12 @@
-//! Background process monitor.
+//! Background process registry.
 //!
-//! A monitor runs a long-lived shell command in the background and captures
-//! every stdout/stderr line as a numbered event. The model interacts with it
-//! through four actions on a single `monitor` plugin tool:
+//! A background process runs a long-lived shell command and captures every
+//! stdout/stderr line as a numbered event. The public model-visible tool
+//! surface is `process` with four actions:
 //!
-//! * `start`     — spawn a child, return a stable `monitor_id`
-//! * `list`      — enumerate active and recently-finished monitors
-//! * `read`      — pull events with `seq > since_seq`, optionally blocking
+//! * `run`       — spawn a child with `background = true`, return a stable `process_id`
+//! * `list`      — enumerate active and recently-finished background processes
+//! * `logs`      — pull events with `seq > since_seq`, optionally blocking
 //!   up to `wait_ms` for fresh output
 //! * `stop`      — kill a running child
 //!
@@ -41,7 +41,7 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::message::{MonitorEvent, MonitorStatus, MonitorStream, MonitorSummary};
+use crate::message::{ProcessEvent, ProcessStatus, ProcessStream, ProcessSummary};
 
 const DEFAULT_BUFFER_LINES: usize = 1_000;
 const MAX_BUFFER_LINES: usize = 10_000;
@@ -54,15 +54,15 @@ const READER_LINE_BYTE_CAP: usize = 64 * 1024;
 
 #[derive(Debug, Error)]
 pub enum MonitorError {
-    #[error("monitor '{0}' not found")]
+    #[error("background process '{0}' not found")]
     NotFound(String),
-    #[error("invalid monitor input: {0}")]
+    #[error("invalid background process input: {0}")]
     Invalid(String),
     #[error("invalid include_pattern: {0}")]
     InvalidPattern(#[from] regex::Error),
-    #[error("monitor registry not attached to a tokio runtime")]
+    #[error("background process registry not attached to a tokio runtime")]
     RuntimeMissing,
-    #[error("failed to spawn monitor command: {0}")]
+    #[error("failed to spawn background process command: {0}")]
     Spawn(String),
 }
 
@@ -91,8 +91,8 @@ pub struct ReadParams {
 #[derive(Debug, Clone)]
 pub struct MonitorRead {
     pub monitor_id: String,
-    pub status: MonitorStatus,
-    pub events: Vec<MonitorEvent>,
+    pub status: ProcessStatus,
+    pub events: Vec<ProcessEvent>,
     pub last_seq: u64,
     pub has_more: bool,
     pub dropped_lines: u64,
@@ -102,18 +102,18 @@ pub struct MonitorRead {
 /// Outcome of a `start` action.
 #[derive(Debug, Clone)]
 pub struct MonitorStart {
-    pub summary: MonitorSummary,
+    pub summary: ProcessSummary,
 }
 
 #[derive(Debug, Clone)]
 pub struct MonitorStopOutcome {
-    pub summary: MonitorSummary,
+    pub summary: ProcessSummary,
 }
 
 /// Trait so callers (and tests) can swap implementations.
 pub trait MonitorService: Send + Sync + std::fmt::Debug {
     fn start(&self, params: StartParams) -> Result<MonitorStart, MonitorError>;
-    fn list(&self) -> Vec<MonitorSummary>;
+    fn list(&self) -> Vec<ProcessSummary>;
     fn read(&self, params: ReadParams) -> Result<MonitorRead, MonitorError>;
     fn stop(&self, monitor_id: &str) -> Result<MonitorStopOutcome, MonitorError>;
 }
@@ -123,7 +123,6 @@ struct MonitorState {
     monitor_id: String,
     command: String,
     description: String,
-    persistent: bool,
     started_at_ms: i64,
     capacity: usize,
     /// Latest assigned seq (0 means no events yet).
@@ -136,22 +135,22 @@ struct MonitorState {
 
 #[derive(Debug)]
 struct MonitorInner {
-    buffer: VecDeque<MonitorEvent>,
-    status: MonitorStatus,
+    buffer: VecDeque<ProcessEvent>,
+    status: ProcessStatus,
     exit_code: Option<i32>,
     ended_at_ms: Option<i64>,
     abort: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl MonitorState {
-    fn snapshot(&self) -> MonitorSummary {
+    fn snapshot(&self) -> ProcessSummary {
         let inner = self.inner.lock().unwrap();
-        MonitorSummary {
-            monitor_id: self.monitor_id.clone(),
+        ProcessSummary {
+            process_id: self.monitor_id.clone(),
             command: self.command.clone(),
             description: self.description.clone(),
             status: inner.status,
-            persistent: self.persistent,
+            background: true,
             started_at_ms: self.started_at_ms,
             ended_at_ms: inner.ended_at_ms,
             buffered_lines: inner.buffer.len() as u32,
@@ -237,17 +236,16 @@ impl MonitorService for MonitorRegistry {
         let (abort_tx, abort_rx) = tokio::sync::oneshot::channel::<()>();
 
         let state = Arc::new(MonitorState {
-            monitor_id: format!("mon_{}", Uuid::new_v4().simple()),
+            monitor_id: format!("proc_{}", Uuid::new_v4().simple()),
             command: params.command.clone(),
             description: params.description.clone(),
-            persistent: params.persistent,
             started_at_ms: Utc::now().timestamp_millis(),
             capacity,
             last_seq: AtomicU64::new(0),
             dropped_lines: AtomicU64::new(0),
             inner: Mutex::new(MonitorInner {
                 buffer: VecDeque::with_capacity(capacity.min(256)),
-                status: MonitorStatus::Running,
+                status: ProcessStatus::Running,
                 exit_code: None,
                 ended_at_ms: None,
                 abort: Some(abort_tx),
@@ -284,9 +282,9 @@ impl MonitorService for MonitorRegistry {
         Ok(MonitorStart { summary })
     }
 
-    fn list(&self) -> Vec<MonitorSummary> {
+    fn list(&self) -> Vec<ProcessSummary> {
         let guard = self.monitors.lock().unwrap();
-        let mut out: Vec<MonitorSummary> = guard.values().map(|s| s.snapshot()).collect();
+        let mut out: Vec<ProcessSummary> = guard.values().map(|s| s.snapshot()).collect();
         out.sort_by(|a, b| a.started_at_ms.cmp(&b.started_at_ms));
         out
     }
@@ -303,7 +301,7 @@ impl MonitorService for MonitorRegistry {
 
         // Fast path: try once.
         if let Some(read) = collect_events(&state, params.since_seq, limit)
-            && (!read.events.is_empty() || wait_ms == 0 || read.status != MonitorStatus::Running)
+            && (!read.events.is_empty() || wait_ms == 0 || read.status != ProcessStatus::Running)
         {
             return Ok(read);
         }
@@ -337,7 +335,7 @@ impl MonitorService for MonitorRegistry {
                 notified.as_mut().enable();
 
                 if state_for_wait.last_seq.load(Ordering::Acquire) > since_seq
-                    || state_for_wait.inner.lock().unwrap().status != MonitorStatus::Running
+                    || state_for_wait.inner.lock().unwrap().status != ProcessStatus::Running
                 {
                     break;
                 }
@@ -366,8 +364,8 @@ impl MonitorService for MonitorRegistry {
             .ok_or_else(|| MonitorError::NotFound(monitor_id.to_string()))?;
         {
             let mut inner = state.inner.lock().unwrap();
-            if inner.status == MonitorStatus::Running {
-                inner.status = MonitorStatus::Stopped;
+            if inner.status == ProcessStatus::Running {
+                inner.status = ProcessStatus::Stopped;
                 if let Some(tx) = inner.abort.take() {
                     let _ = tx.send(());
                 }
@@ -383,7 +381,7 @@ impl MonitorService for MonitorRegistry {
 fn empty_read(state: &MonitorState, since_seq: u64) -> MonitorRead {
     let summary = state.snapshot();
     MonitorRead {
-        monitor_id: summary.monitor_id.clone(),
+        monitor_id: summary.process_id.clone(),
         status: summary.status,
         events: Vec::new(),
         last_seq: since_seq,
@@ -467,7 +465,7 @@ async fn run_monitor(
         tokio::spawn(stream_lines(
             stdout_state,
             s,
-            MonitorStream::Stdout,
+            ProcessStream::Stdout,
             stdout_include,
         ))
     });
@@ -478,14 +476,14 @@ async fn run_monitor(
         tokio::spawn(stream_lines(
             stderr_state,
             s,
-            MonitorStream::Stderr,
+            ProcessStream::Stderr,
             stderr_include,
         ))
     });
 
     let mut abort_rx = abort_rx;
 
-    let final_status: MonitorStatus;
+    let final_status: ProcessStatus;
     let final_exit_code: Option<i32>;
 
     let timeout_sleep = if persistent {
@@ -515,16 +513,16 @@ async fn run_monitor(
         TerminationCause::Stopped => {
             kill_child(&mut child).await;
             final_exit_code = child.wait().await.ok().and_then(|s| s.code());
-            final_status = MonitorStatus::Stopped;
+            final_status = ProcessStatus::Stopped;
         }
         TerminationCause::TimedOut => {
             kill_child(&mut child).await;
             final_exit_code = child.wait().await.ok().and_then(|s| s.code());
-            final_status = MonitorStatus::TimedOut;
+            final_status = ProcessStatus::TimedOut;
         }
         TerminationCause::Exited(code) => {
             final_exit_code = code;
-            final_status = MonitorStatus::Exited;
+            final_status = ProcessStatus::Exited;
         }
         TerminationCause::WaitError(reason) => {
             mark_failed(&state, format!("wait failed: {reason}"));
@@ -544,7 +542,7 @@ async fn run_monitor(
         // Don't downgrade an explicit Stopped from `stop()` to Exited if the
         // child happened to finish racing the kill.
         let preserve_stopped =
-            matches!(inner.status, MonitorStatus::Stopped) && final_status == MonitorStatus::Exited;
+            matches!(inner.status, ProcessStatus::Stopped) && final_status == ProcessStatus::Exited;
         if !preserve_stopped {
             inner.status = final_status;
         }
@@ -567,9 +565,9 @@ enum TerminationCause {
 }
 
 fn mark_failed(state: &MonitorState, reason: String) {
-    push_event(state, MonitorStream::Stderr, reason);
+    push_event(state, ProcessStream::Stderr, reason);
     let mut inner = state.inner.lock().unwrap();
-    inner.status = MonitorStatus::Failed;
+    inner.status = ProcessStatus::Failed;
     inner.ended_at_ms = Some(Utc::now().timestamp_millis());
     inner.abort = None;
     drop(inner);
@@ -579,7 +577,7 @@ fn mark_failed(state: &MonitorState, reason: String) {
 async fn stream_lines<R>(
     state: Arc<MonitorState>,
     reader: R,
-    stream: MonitorStream,
+    stream: ProcessStream,
     include: Option<Regex>,
 ) where
     R: tokio::io::AsyncRead + Unpin + Send,
@@ -613,9 +611,9 @@ async fn stream_lines<R>(
     }
 }
 
-fn push_event(state: &MonitorState, stream: MonitorStream, line: String) {
+fn push_event(state: &MonitorState, stream: ProcessStream, line: String) {
     let seq = state.last_seq.fetch_add(1, Ordering::AcqRel) + 1;
-    let event = MonitorEvent {
+    let event = ProcessEvent {
         seq,
         stream,
         ts_ms: Utc::now().timestamp_millis(),

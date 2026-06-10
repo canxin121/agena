@@ -1318,7 +1318,7 @@ impl SessionManager {
             }
         };
         let (prepared_invocation, prepared_shell_command) = match scoped_executor
-            .prepare_bash_invocation(&prepared.invocation, session.id, resolved.call_id)
+            .prepare_process_invocation(&prepared.invocation, session.id, resolved.call_id)
         {
             Ok(prepared) => prepared,
             Err(err) => {
@@ -1470,7 +1470,7 @@ impl SessionManager {
             }
         };
         let (prepared_invocation, prepared_shell_command) = match scoped_executor
-            .prepare_bash_invocation(&prepared.invocation, session.id, resolved.call_id)
+            .prepare_process_invocation(&prepared.invocation, session.id, resolved.call_id)
         {
             Ok(prepared) => prepared,
             Err(err) => {

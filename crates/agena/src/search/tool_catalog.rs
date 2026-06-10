@@ -327,10 +327,10 @@ mod tests {
     fn search_supports_keyword_and_cjk_queries() {
         let docs = vec![
             ToolCatalogDocument::new(
-                "shell".to_string(),
-                "Execute shell commands and monitor long-running jobs.".to_string(),
-                vec!["shell".to_string(), "process".to_string()],
-                Some("agena.shell".to_string()),
+                "process".to_string(),
+                "Run shell commands and manage background processes.".to_string(),
+                vec!["process".to_string(), "shell".to_string()],
+                Some("agena.process".to_string()),
             ),
             ToolCatalogDocument::new(
                 "fs".to_string(),
@@ -344,7 +344,7 @@ mod tests {
         ];
 
         let shell = search_tool_catalog(&docs, "shell", 5).expect("shell query succeeds");
-        assert_eq!(shell.first().map(|doc| doc.name.as_str()), Some("shell"));
+        assert_eq!(shell.first().map(|doc| doc.name.as_str()), Some("process"));
 
         let cjk = search_tool_catalog(&docs, "本地文件", 5).expect("cjk query succeeds");
         assert_eq!(cjk.first().map(|doc| doc.name.as_str()), Some("fs"));

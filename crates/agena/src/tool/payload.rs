@@ -7,8 +7,8 @@ use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, AttachmentKind, CronCreateToolInput,
     CronDeleteToolInput, CronListToolInput, EnterWorktreeToolInput, ExitWorktreeToolInput,
     FileChangeRecord, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
-    LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, MonitorEvent,
-    MonitorStatus, MonitorToolInput, ReadToolInput, ScheduleWakeupToolInput, ShellCommandInput,
+    LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, ProcessEvent, ProcessShell,
+    ProcessStatus, ProcessSummary, ProcessToolInput, ReadToolInput, ScheduleWakeupToolInput,
     StructuredObject, TodoItem, TodoWriteToolInput, ToolInvocation, ToolOutput,
     ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
 };
@@ -17,7 +17,7 @@ use crate::message::{
 #[serde(tag = "tool", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum ToolPayloadInput {
-    Bash(ShellCommandInput),
+    Process(ProcessToolInput),
     Read(ReadToolInput),
     ApplyPatch(ApplyPatchToolInput),
     Glob(GlobToolInput),
@@ -27,7 +27,6 @@ pub enum ToolPayloadInput {
     TodoWrite(TodoWriteToolInput),
     #[serde(rename = "ask_user")]
     AskUser(AskUserToolInput),
-    Monitor(MonitorToolInput),
     WebFetch(WebFetchToolInput),
     WebSearch(WebSearchToolInput),
     EnterWorktree(EnterWorktreeToolInput),
@@ -40,14 +39,13 @@ pub enum ToolPayloadInput {
     LspReferences(LspReferencesToolInput),
     LspHover(LspHoverToolInput),
     LspDiagnostics(LspDiagnosticsToolInput),
-    PowerShell(ShellCommandInput),
 }
 
 impl ToolPayloadInput {
     /// Stable tool name as serialized in the wire format.
     pub fn tool_name(&self) -> &'static str {
         match self {
-            Self::Bash(_) => "bash",
+            Self::Process(_) => "process",
             Self::Read(_) => "read",
             Self::ApplyPatch(_) => "apply_patch",
             Self::Glob(_) => "glob",
@@ -56,7 +54,6 @@ impl ToolPayloadInput {
             Self::ToolSearch(_) => "tool_search",
             Self::TodoWrite(_) => "todo_write",
             Self::AskUser(_) => "ask_user",
-            Self::Monitor(_) => "monitor",
             Self::WebFetch(_) => "web_fetch",
             Self::WebSearch(_) => "web_search",
             Self::EnterWorktree(_) => "enter_worktree",
@@ -69,7 +66,6 @@ impl ToolPayloadInput {
             Self::LspReferences(_) => "lsp_references",
             Self::LspHover(_) => "lsp_hover",
             Self::LspDiagnostics(_) => "lsp_diagnostics",
-            Self::PowerShell(_) => "powershell",
         }
     }
 
@@ -129,12 +125,6 @@ pub struct ReadAttachmentOutput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 pub enum ToolPayloadOutput {
-    Bash {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        output: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-    },
     Read {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         preview: Option<String>,
@@ -192,16 +182,24 @@ pub enum ToolPayloadOutput {
         )]
         answers: BTreeMap<String, Vec<String>>,
     },
-    Monitor {
+    Process {
         action: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        monitor_id: Option<String>,
+        shell: Option<ProcessShell>,
+        #[serde(default)]
+        background: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        status: Option<MonitorStatus>,
+        process_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<ProcessStatus>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        events: Vec<MonitorEvent>,
+        events: Vec<ProcessEvent>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        monitors: Vec<crate::message::MonitorSummary>,
+        processes: Vec<ProcessSummary>,
         #[serde(default)]
         last_seq: u64,
         #[serde(default)]
@@ -265,12 +263,6 @@ pub enum ToolPayloadOutput {
     LspDiagnostics {
         entries: Vec<String>,
     },
-    PowerShell {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        output: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -296,7 +288,7 @@ impl ToolPayloadOutput {
     /// Stable tool name as serialized in the wire format.
     pub fn tool_name(&self) -> &'static str {
         match self {
-            Self::Bash { .. } => "bash",
+            Self::Process { .. } => "process",
             Self::Read { .. } => "read",
             Self::ApplyPatch { .. } => "apply_patch",
             Self::Glob { .. } => "glob",
@@ -305,7 +297,6 @@ impl ToolPayloadOutput {
             Self::ToolSearch { .. } => "tool_search",
             Self::TodoWrite { .. } => "todo_write",
             Self::AskUser { .. } => "ask_user",
-            Self::Monitor { .. } => "monitor",
             Self::WebFetch { .. } => "web_fetch",
             Self::WebSearch { .. } => "web_search",
             Self::EnterWorktree { .. } => "enter_worktree",
@@ -318,7 +309,6 @@ impl ToolPayloadOutput {
             Self::LspReferences { .. } => "lsp_references",
             Self::LspHover { .. } => "lsp_hover",
             Self::LspDiagnostics { .. } => "lsp_diagnostics",
-            Self::PowerShell { .. } => "powershell",
         }
     }
 
@@ -402,21 +392,7 @@ fn invocation_name_for_payload_tool(
     Some(match tool {
         "web_fetch" => exposed_tool_name("agena.web", "fetch"),
         "web_search" => exposed_tool_name("agena.web", "search"),
-        "bash" => exposed_tool_name("agena.shell", "exec.bash"),
-        "powershell" => exposed_tool_name("agena.shell", "exec.powershell"),
-        "monitor" => {
-            let command = input
-                .remove("action")
-                .and_then(|value| value.as_str().map(str::to_string))
-                .unwrap_or_default();
-            match command.as_str() {
-                "start" => exposed_tool_name("agena.shell", "monitor.start"),
-                "list" => exposed_tool_name("agena.shell", "monitor.list"),
-                "read" => exposed_tool_name("agena.shell", "monitor.read"),
-                "stop" => exposed_tool_name("agena.shell", "monitor.stop"),
-                _ => return None,
-            }
-        }
+        "process" => exposed_tool_name("agena.process", "process"),
         "cron_create" => exposed_tool_name("agena.cron", "schedule.create"),
         "cron_list" => exposed_tool_name("agena.cron", "schedule.list"),
         "cron_delete" => exposed_tool_name("agena.cron", "schedule.delete"),
@@ -470,35 +446,33 @@ fn payload_name_for_invocation(
     match invocation_name {
         "agena_web__fetch" | "web_fetch" => return Some("web_fetch".to_string()),
         "agena_web__search" | "web_search" => return Some("web_search".to_string()),
-        "agena_shell__exec_bash" => return Some("bash".to_string()),
-        "agena_shell__exec_powershell" => return Some("powershell".to_string()),
-        "agena_shell__monitor_start" => {
+        "agena_process__process_run" => {
             input.insert(
                 "action".to_string(),
-                serde_json::Value::String("start".to_string()),
+                serde_json::Value::String("run".to_string()),
             );
-            return Some("monitor".to_string());
+            return Some("process".to_string());
         }
-        "agena_shell__monitor_list" => {
+        "agena_process__process_list" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("list".to_string()),
             );
-            return Some("monitor".to_string());
+            return Some("process".to_string());
         }
-        "agena_shell__monitor_read" => {
+        "agena_process__process_logs" => {
             input.insert(
                 "action".to_string(),
-                serde_json::Value::String("read".to_string()),
+                serde_json::Value::String("logs".to_string()),
             );
-            return Some("monitor".to_string());
+            return Some("process".to_string());
         }
-        "agena_shell__monitor_stop" => {
+        "agena_process__process_stop" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("stop".to_string()),
             );
-            return Some("monitor".to_string());
+            return Some("process".to_string());
         }
         "agena_cron__schedule_create" => return Some("cron_create".to_string()),
         "agena_cron__schedule_list" => return Some("cron_list".to_string()),
@@ -516,46 +490,14 @@ fn grouped_tool_payload_name(
 ) -> Option<&'static str> {
     let action = input.get("action")?.as_str()?.to_string();
     let tool = match (entry, action.as_str()) {
-        ("shell", "exec") => match input.get("shell").and_then(serde_json::Value::as_str) {
-            Some("bash") => "bash",
-            Some("powershell") => "powershell",
-            _ => return None,
-        },
-        ("shell", "monitor_start") => "monitor",
-        ("shell", "monitor_list") => "monitor",
-        ("shell", "monitor_read") => "monitor",
-        ("shell", "monitor_stop") => "monitor",
+        ("process", "run" | "list" | "logs" | "stop") => "process",
         ("worktree", "enter") => "enter_worktree",
         _ => tool_name_for_grouped_mapping(entry, action.as_str())?,
     };
     input.remove("action");
     match tool {
-        "bash" | "powershell" => {
-            input.remove("shell");
-        }
-        "monitor" if action == "monitor_start" => {
-            input.insert(
-                "action".to_string(),
-                serde_json::Value::String("start".to_string()),
-            );
-        }
-        "monitor" if action == "monitor_list" => {
-            input.insert(
-                "action".to_string(),
-                serde_json::Value::String("list".to_string()),
-            );
-        }
-        "monitor" if action == "monitor_read" => {
-            input.insert(
-                "action".to_string(),
-                serde_json::Value::String("read".to_string()),
-            );
-        }
-        "monitor" if action == "monitor_stop" => {
-            input.insert(
-                "action".to_string(),
-                serde_json::Value::String("stop".to_string()),
-            );
+        "process" => {
+            input.insert("action".to_string(), serde_json::Value::String(action));
         }
         "enter_worktree" => match input
             .get("target")
@@ -586,21 +528,16 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
     match tool_name {
         "agena_web__fetch" | "web_fetch" | "fetch" => Some("web_fetch".to_string()),
         "agena_web__search" | "web_search" | "search" => Some("web_search".to_string()),
-        "agena_shell__exec_bash" | "exec.bash" => Some("bash".to_string()),
-        "agena_shell__exec_powershell" | "exec.powershell" => Some("powershell".to_string()),
-        "agena_shell__monitor_start"
-        | "agena_shell__monitor_list"
-        | "agena_shell__monitor_read"
-        | "agena_shell__monitor_stop"
-        | "monitor.start"
-        | "monitor.list"
-        | "monitor.read"
-        | "monitor.stop" => Some("monitor".to_string()),
+        "agena_process__process"
+        | "agena_process__process_run"
+        | "agena_process__process_list"
+        | "agena_process__process_logs"
+        | "agena_process__process_stop"
+        | "process" => Some("process".to_string()),
         "agena_cron__schedule_create" | "schedule.create" => Some("cron_create".to_string()),
         "agena_cron__schedule_list" | "schedule.list" => Some("cron_list".to_string()),
         "agena_cron__schedule_delete" | "schedule.delete" => Some("cron_delete".to_string()),
         "agena_cron__schedule_wakeup" | "schedule.wakeup" => Some("schedule_wakeup".to_string()),
-        "agena_shell__shell" | "shell" => None,
         "agena_fs__fs" | "fs" => None,
         "agena_tasks__task" | "task" => Some("task".to_string()),
         "agena_catalog__tools" | "tools" => Some("tool_search".to_string()),

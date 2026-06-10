@@ -8,7 +8,7 @@ use std::{collections::BTreeMap, future::Future, sync::Arc};
 use async_trait::async_trait;
 
 use crate::message::{
-    AskUserToolInput, EnterWorktreeToolInput, ExitWorktreeToolInput, MonitorStatus, MonitorStream,
+    AskUserToolInput, EnterWorktreeToolInput, ExitWorktreeToolInput, ProcessStatus, ProcessStream,
     StructuredObject, TaskSubagentType, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput,
     ToolInvocation, UserInputOption, UserInputQuestion,
 };
@@ -677,7 +677,7 @@ impl HostClient for RuntimeHostClient {
     async fn monitor_start(&self, req: MonitorStartRequest) -> Result<MonitorHandle, PluginError> {
         let (executor, registry) = self.executor_feature(
             |executor| executor.monitor_registry().cloned(),
-            "monitor registry is not enabled in this runtime",
+            "background process registry is not enabled in this runtime",
         )?;
         let cwd = req
             .cwd
@@ -713,7 +713,7 @@ impl HostClient for RuntimeHostClient {
     async fn monitor_list(&self) -> Result<Vec<MonitorHandle>, PluginError> {
         let (_, registry) = self.executor_feature(
             |executor| executor.monitor_registry().cloned(),
-            "monitor registry is not enabled in this runtime",
+            "background process registry is not enabled in this runtime",
         )?;
         Ok(registry
             .list()
@@ -728,7 +728,7 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<MonitorReadResponse, PluginError> {
         let (_, registry) = self.executor_feature(
             |executor| executor.monitor_registry().cloned(),
-            "monitor registry is not enabled in this runtime",
+            "background process registry is not enabled in this runtime",
         )?;
         let read = registry
             .read(MonitorReadParams {
@@ -748,7 +748,7 @@ impl HostClient for RuntimeHostClient {
     async fn monitor_stop(&self, req: MonitorStopRequest) -> Result<MonitorHandle, PluginError> {
         let (_, registry) = self.executor_feature(
             |executor| executor.monitor_registry().cloned(),
-            "monitor registry is not enabled in this runtime",
+            "background process registry is not enabled in this runtime",
         )?;
         let stop = registry.stop(req.id.as_str()).map_err(map_monitor_error)?;
         Ok(render_monitor_handle(stop.summary))

@@ -6561,14 +6561,6 @@ fn plugin_semantic_diagnostics(plugin: &PluginWorkbenchPlugin) -> Vec<ConfigDiag
             "store.retention.max_bytes",
         ),
         (
-            config_path(["store", "listing", "default_limit"]),
-            "store.listing.default_limit",
-        ),
-        (
-            config_path(["store", "listing", "max_limit"]),
-            "store.listing.max_limit",
-        ),
-        (
             config_path(["browser", "wait", "timeout_secs"]),
             "browser.wait.timeout_secs",
         ),

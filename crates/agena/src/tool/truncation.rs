@@ -36,8 +36,7 @@ impl ToolOutputTruncator {
             truncate_text(&execution.view.output_text, self.policy.max_chars);
 
         match &mut execution.output {
-            ToolPayloadOutput::Bash { output, .. }
-            | ToolPayloadOutput::PowerShell { output, .. } => {
+            ToolPayloadOutput::Process { output, .. } => {
                 if let Some(text) = output.as_mut() {
                     *text = truncate_text(text, self.policy.max_chars);
                 }
@@ -61,7 +60,6 @@ impl ToolOutputTruncator {
             | ToolPayloadOutput::ToolSearch { .. }
             | ToolPayloadOutput::TodoWrite { .. }
             | ToolPayloadOutput::AskUser { .. }
-            | ToolPayloadOutput::Monitor { .. }
             | ToolPayloadOutput::WebFetch { .. }
             | ToolPayloadOutput::WebSearch { .. }
             | ToolPayloadOutput::EnterWorktree { .. }

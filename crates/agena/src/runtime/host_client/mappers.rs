@@ -122,22 +122,22 @@ pub(super) fn render_tool_descriptor(
     }
 }
 
-pub(super) fn render_monitor_handle(summary: crate::message::MonitorSummary) -> MonitorHandle {
+pub(super) fn render_monitor_handle(summary: crate::message::ProcessSummary) -> MonitorHandle {
     MonitorHandle {
-        id: summary.monitor_id,
+        id: summary.process_id,
         label: (!summary.description.trim().is_empty()).then_some(summary.description),
         command: (!summary.command.trim().is_empty()).then_some(summary.command),
         status: Some(
             match summary.status {
-                MonitorStatus::Running => "running",
-                MonitorStatus::Exited => "exited",
-                MonitorStatus::Failed => "failed",
-                MonitorStatus::Stopped => "stopped",
-                MonitorStatus::TimedOut => "timed_out",
+                ProcessStatus::Running => "running",
+                ProcessStatus::Exited => "exited",
+                ProcessStatus::Failed => "failed",
+                ProcessStatus::Stopped => "stopped",
+                ProcessStatus::TimedOut => "timed_out",
             }
             .to_string(),
         ),
-        persistent: summary.persistent,
+        persistent: summary.background,
         started_at_ms: summary.started_at_ms,
         ended_at_ms: summary.ended_at_ms,
         buffered_lines: summary.buffered_lines,
@@ -147,7 +147,7 @@ pub(super) fn render_monitor_handle(summary: crate::message::MonitorSummary) -> 
     }
 }
 
-pub(super) fn render_monitor_event(event: crate::message::MonitorEvent) -> MonitorEvent {
+pub(super) fn render_monitor_event(event: crate::message::ProcessEvent) -> MonitorEvent {
     MonitorEvent {
         seq: event.seq,
         stream: event.stream.to_string(),
@@ -164,8 +164,8 @@ pub(super) fn render_monitor_read(read: crate::tool::MonitorRead) -> MonitorRead
         .into_iter()
         .map(|event| {
             match event.stream {
-                MonitorStream::Stdout => stdout.push(event.line.clone()),
-                MonitorStream::Stderr => stderr.push(event.line.clone()),
+                ProcessStream::Stdout => stdout.push(event.line.clone()),
+                ProcessStream::Stderr => stderr.push(event.line.clone()),
             }
             render_monitor_event(event)
         })
@@ -176,7 +176,7 @@ pub(super) fn render_monitor_read(read: crate::tool::MonitorRead) -> MonitorRead
         monitors: Vec::new(),
         stdout: stdout.join("\n"),
         stderr: stderr.join("\n"),
-        running: matches!(read.status, MonitorStatus::Running),
+        running: matches!(read.status, ProcessStatus::Running),
         status: Some(read.status.to_string()),
         last_seq: read.last_seq,
         has_more: read.has_more,

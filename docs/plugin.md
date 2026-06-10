@@ -159,9 +159,9 @@ Runtime build 注册：
 | Plugin id | 作用 |
 | --- | --- |
 | `agena.fs` | 文件系统读写相关 tools |
-| `agena.shell` | shell exec / monitor 相关 tools |
-| `agena.web` | 本地 Spider/CRW web search/fetch/crawl、持久化抓取、去重、进程内 cache、可选 Agena 托管浏览器渲染和 Tantivy BM25/ngram 检索 tools |
-| `agena.code` | `ast-grep` / `tree-sitter` 驱动的结构化代码搜索 tools |
+| `agena.process` | 前台命令执行和后台进程管理 tools |
+| `agena.web` | 本地 Spider/CRW web search/fetch/crawl、嵌入式 crawl cache、去重、进程内 cache 和可选 Agena 托管浏览器渲染 tools |
+| `agena.code` | `ast-grep` / `tree-sitter` 驱动的多语言结构化代码搜索和语法树检查 tools |
 | `agena.catalog` | tool catalog discovery/help tools |
 | `agena.runtime` | agent、session 和 user input 等 runtime control tools |
 | `agena.planning` | todo、plan 和 plan autorun 等 planning tools |
@@ -179,8 +179,8 @@ Runtime build 注册：
 | Tool | Action |
 | --- | --- |
 | `agena.fs/fs` | `read`, `glob`, `grep`, `apply_patch` |
-| `agena.shell/shell` | `exec`, `monitor_start`, `monitor_list`, `monitor_read`, `monitor_stop` |
-| `agena.web/fetch`, `agena.web/search`, `agena.web/crawl`, `agena.web/query`, `agena.web/get`, `agena.web/list` | Direct web fetch/search/crawl/index actions |
+| `agena.process/process` | `run`, `list`, `logs`, `stop` |
+| `agena.web/fetch`, `agena.web/search`, `agena.web/crawl` | Direct live web fetch/search/crawl actions |
 | `agena.code/code` | `search_ast`, `syntax_tree` |
 | `agena.lsp/lsp` | `servers`, `definition`, `references`, `hover`, `diagnostics` |
 | `agena.memory/memory` | `search`, `get`, `list`, `write`, `delete` |

@@ -627,7 +627,7 @@ impl SessionManager {
             .prepare_invocation(&invocation, session.id, call_id)
             .map_err(tool_error_to_app_error)?;
         let (invocation, prepared_shell_command) = scoped_executor
-            .prepare_bash_invocation(&prepared.invocation, session.id, call_id)
+            .prepare_process_invocation(&prepared.invocation, session.id, call_id)
             .map_err(tool_error_to_app_error)?;
         self.require_immediate_tool_permissions(session.id, &scoped_executor, &invocation)
             .await?;

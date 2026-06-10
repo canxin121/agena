@@ -7,8 +7,8 @@ use crate::plugins::provided::catalog as provided_catalog;
 use crate::plugins::provided::code as provided_code;
 use crate::plugins::provided::{
     cron as provided_cron, fs as provided_fs, lsp as provided_lsp, planning as provided_planning,
-    repo as provided_repo, runtime as provided_runtime, schema_lab as provided_schema_lab,
-    settings as provided_settings, shell as provided_shell, tasks as provided_tasks,
+    process as provided_process, repo as provided_repo, runtime as provided_runtime,
+    schema_lab as provided_schema_lab, settings as provided_settings, tasks as provided_tasks,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,7 +109,7 @@ fn tool_entries() -> Vec<RegisteredTool> {
         &mut entries,
         provided_settings::SettingsPlugin::new().manifest(),
     );
-    extend_manifest_entries(&mut entries, provided_shell::new_plugin().manifest());
+    extend_manifest_entries(&mut entries, provided_process::new_plugin().manifest());
     extend_manifest_entries(
         &mut entries,
         provided_catalog::CatalogPlugin::new().manifest(),

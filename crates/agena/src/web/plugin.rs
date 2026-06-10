@@ -8,9 +8,9 @@ use std::time::Duration;
 use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
 use agena_web::{
     BrowserRenderOptions, CrawlPageFetcher, CrawlRunOptions, CrawlRunReport, CrawlStore,
-    CrawlStoreRetention, FetchedPage, LocalBrowserOptions, SpiderFetchOptions, StoredDocument,
-    WebSearchEngine, WebSearchOptions, WebSearchResult, crawl_site, ensure_index_exists,
-    fetch_page_with_spider, prepare_fetch_url, preview_text, results_to_text, search_web,
+    CrawlStoreRetention, FetchedPage, LocalBrowserOptions, SpiderFetchOptions, WebSearchEngine,
+    WebSearchOptions, WebSearchResult, crawl_site, fetch_page_with_spider, prepare_fetch_url,
+    preview_text, results_to_text, search_web,
 };
 use governor::{DefaultKeyedRateLimiter, Quota};
 use moka::future::Cache;
@@ -181,14 +181,12 @@ impl Default for WebSearchConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct WebStoreConfig {
     pub retention: WebStoreRetentionConfig,
-    pub listing: WebStoreListingConfig,
 }
 
 impl Default for WebStoreConfig {
     fn default() -> Self {
         Self {
             retention: WebStoreRetentionConfig::default(),
-            listing: WebStoreListingConfig::default(),
         }
     }
 }
@@ -205,22 +203,6 @@ impl Default for WebStoreRetentionConfig {
         Self {
             max_documents: 200,
             max_bytes: 100 * 1024 * 1024,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct WebStoreListingConfig {
-    pub default_limit: u32,
-    pub max_limit: u32,
-}
-
-impl Default for WebStoreListingConfig {
-    fn default() -> Self {
-        Self {
-            default_limit: 20,
-            max_limit: 100,
         }
     }
 }
@@ -287,7 +269,7 @@ fn web_config_schema() -> serde_json::Value {
         (
             "",
             "Web Plugin Config",
-            "Fetch, crawl, search, storage, and browser defaults for the agena.web plugin.",
+            "Fetch, crawl, search, embedded cache, and browser defaults for the agena.web plugin.",
         ),
         (
             "/properties/fetch",
@@ -416,38 +398,23 @@ fn web_config_schema() -> serde_json::Value {
         ),
         (
             "/properties/store",
-            "Store",
-            "Retention and listing defaults for the embedded web document store.",
+            "Cache",
+            "Retention defaults for the embedded crawl document cache.",
         ),
         (
             "/properties/store/properties/retention",
             "Retention",
-            "Maximum document count and byte size retained in local web storage.",
+            "Maximum document count and byte size retained in the local crawl cache.",
         ),
         (
             "/properties/store/properties/retention/properties/max_documents",
             "Max Documents",
-            "Maximum number of stored documents retained locally.",
+            "Maximum number of cached crawl documents retained locally.",
         ),
         (
             "/properties/store/properties/retention/properties/max_bytes",
             "Max Bytes",
-            "Maximum total byte size retained by the local document store.",
-        ),
-        (
-            "/properties/store/properties/listing",
-            "Listing",
-            "Default and maximum limits for document listing operations.",
-        ),
-        (
-            "/properties/store/properties/listing/properties/default_limit",
-            "Default Limit",
-            "Number of stored documents listed when callers omit a limit.",
-        ),
-        (
-            "/properties/store/properties/listing/properties/max_limit",
-            "Max Limit",
-            "Largest number of stored documents a caller may request in one list call.",
+            "Maximum total byte size retained by the local crawl cache.",
         ),
         (
             "/properties/browser",
@@ -587,38 +554,6 @@ enum WebSearchEngineSelection {
     Baidu,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
-#[tool_input(trim("query"), non_empty("query"))]
-#[serde(deny_unknown_fields)]
-struct CrawlQueryInput {
-    query: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    limit: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    max_results: Option<u32>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    allowed_domains: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    blocked_domains: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
-#[tool_input(trim("id", "url"), exactly_one_of("id", "url"))]
-#[serde(deny_unknown_fields)]
-struct CrawlGetInput {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    url: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
-#[serde(deny_unknown_fields)]
-struct CrawlListInput {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    limit: Option<u32>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "search",
@@ -678,9 +613,9 @@ struct FetchToolInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    tool = "crawl.run",
-    description = "Crawl a site into the local web document store.",
-    summary = "Crawl a site into the local document store.",
+    tool = "crawl",
+    description = "Crawl a site and cache indexed pages locally.",
+    summary = "Crawl a site and cache indexed pages locally.",
     handler_receiver = WebPlugin,
     handle = WebPlugin::invoke_crawl,
     handle_field = args,
@@ -703,72 +638,6 @@ struct CrawlToolInput {
     args: CrawlRunInput,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "store.query",
-    description = "Search locally stored crawl documents.",
-    summary = "Search locally stored crawl documents.",
-    handler_receiver = WebPlugin,
-    handle = WebPlugin::invoke_query,
-    handle_field = args,
-    permission_paths_handle = WebPlugin::permission_paths_store_query,
-    permission_networks_handle = WebPlugin::permission_networks_store_query,
-    ui_display = detailed,
-    tags(ToolTag::ReadOnly, ToolTag::Discovery),
-    host_capabilities(HostCapability::PermissionCheck),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct StoreQueryToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: CrawlQueryInput,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "store.get",
-    description = "Get one stored crawl document by id or url.",
-    summary = "Get one stored crawl document.",
-    handler_receiver = WebPlugin,
-    handle = WebPlugin::invoke_get,
-    handle_field = args,
-    permission_paths_handle = WebPlugin::permission_paths_store_get,
-    permission_networks_handle = WebPlugin::permission_networks_store_get,
-    ui_display = detailed,
-    tags(ToolTag::ReadOnly, ToolTag::Discovery),
-    host_capabilities(HostCapability::PermissionCheck),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct StoreGetToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: CrawlGetInput,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "store.list",
-    description = "List stored crawl documents.",
-    summary = "List stored crawl documents.",
-    handler_receiver = WebPlugin,
-    handle = WebPlugin::invoke_list,
-    handle_field = args,
-    permission_paths_handle = WebPlugin::permission_paths_store_list,
-    permission_networks_handle = WebPlugin::permission_networks_store_list,
-    ui_display = detailed,
-    tags(ToolTag::ReadOnly, ToolTag::Discovery),
-    host_capabilities(HostCapability::PermissionCheck),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct StoreListToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: CrawlListInput,
-}
-
 #[allow(dead_code)]
 #[derive(Debug, ToolSuite)]
 #[tool_suite(handler_receiver = WebPlugin)]
@@ -776,9 +645,6 @@ enum WebToolSuite {
     Search(SearchToolInput),
     Fetch(FetchToolInput),
     Crawl(CrawlToolInput),
-    StoreQuery(StoreQueryToolInput),
-    StoreGet(StoreGetToolInput),
-    StoreList(StoreListToolInput),
 }
 
 #[derive(Debug, Serialize)]
@@ -787,12 +653,6 @@ struct CrawlWebSearchOutput {
     engine: String,
     attempted_engines: Vec<String>,
     results: Vec<WebSearchResult>,
-}
-
-#[derive(Debug, Serialize)]
-struct CrawlQueryOutput {
-    query: String,
-    results: Vec<agena_web::CrawlSearchHit>,
 }
 
 impl WebPlugin {
@@ -1040,116 +900,10 @@ impl WebPlugin {
             .collect())
     }
 
-    async fn invoke_query(&self, input: &CrawlQueryInput) -> SdkResult<ToolInvokeOutput> {
-        let query = input.query.as_str();
-        let config = self.config()?;
-        let limit = clamp_limit(
-            input.limit.or(input.max_results),
-            config.search.default_limit as usize,
-            config.search.max_limit as usize,
-        );
-        let store = self.store()?;
-        ensure_index_exists(&store).map_err(crawl_error_to_plugin)?;
-        let hits = store
-            .search(query, limit)
-            .map_err(crawl_error_to_plugin)?
-            .into_iter()
-            .filter(|hit| domain_allowed(&hit.url, &input.allowed_domains, &input.blocked_domains))
-            .take(limit)
-            .collect::<Vec<_>>();
-        let mut lines = vec![format!(
-            "Found {} crawl hit(s) for '{}'.",
-            hits.len(),
-            query
-        )];
-        for hit in &hits {
-            lines.push(format!(
-                "- {} [{}] {} ({})",
-                hit.title,
-                hit.chunk_index,
-                hit.url,
-                hit.match_sources.join("+")
-            ));
-            lines.push(format!("  {}", hit.preview));
-        }
-        let output = CrawlQueryOutput {
-            query: query.to_string(),
-            results: hits,
-        };
-        let payload =
-            serde_json::to_value(output).map_err(|err| PluginError::new(err.to_string()))?;
-        Ok(ToolInvokeOutput::text(lines.join("\n"))
-            .with_title("web query")
-            .with_payload(payload))
-    }
-
-    async fn invoke_get(&self, input: &CrawlGetInput) -> SdkResult<ToolInvokeOutput> {
-        let store = self.store()?;
-        let document = match (
-            input
-                .id
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty()),
-            input
-                .url
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty()),
-        ) {
-            (Some(id), None) => store.get_document(id).map_err(crawl_error_to_plugin)?,
-            (None, Some(url)) => store
-                .find_by_url(url)
-                .map_err(crawl_error_to_plugin)?
-                .ok_or_else(|| PluginError::new(format!("web document for '{url}' not found")))?,
-            _ => unreachable!("store.get validation should guarantee exactly one selector"),
-        };
-        let payload =
-            serde_json::to_value(&document).map_err(|err| PluginError::new(err.to_string()))?;
-        Ok(ToolInvokeOutput::text(format_document(&document))
-            .with_title("web get")
-            .with_payload(payload))
-    }
-
-    async fn invoke_list(&self, input: &CrawlListInput) -> SdkResult<ToolInvokeOutput> {
-        let config = self.config()?;
-        let limit = clamp_limit(
-            input.limit,
-            config.store.listing.default_limit as usize,
-            config.store.listing.max_limit as usize,
-        );
-        let store = self.store()?;
-        let documents = store.list_summaries(limit).map_err(crawl_error_to_plugin)?;
-        let text = if documents.is_empty() {
-            "No crawl documents stored.".to_string()
-        } else {
-            let mut lines = vec![format!("Stored {} crawl document(s).", documents.len())];
-            for document in &documents {
-                lines.push(format!(
-                    "- {} [{} chunk(s), depth {}] {}",
-                    document.title, document.chunk_count, document.depth, document.url
-                ));
-            }
-            lines.join("\n")
-        };
-        let payload =
-            serde_json::to_value(&documents).map_err(|err| PluginError::new(err.to_string()))?;
-        Ok(ToolInvokeOutput::text(text)
-            .with_title("web list")
-            .with_payload(payload))
-    }
-
-    fn store_permission_requests(
-        &self,
-        kind: PathKindForPermission,
-    ) -> SdkResult<Vec<PathRequest>> {
+    fn store_write_permission_requests(&self) -> SdkResult<Vec<PathRequest>> {
         let store = self.store()?;
         let path = store.dir().display().to_string();
-        let request = match kind {
-            PathKindForPermission::Read => PathRequest::read(path),
-            PathKindForPermission::Write => PathRequest::write(path),
-        };
-        Ok(vec![request])
+        Ok(vec![PathRequest::write(path)])
     }
 
     async fn permission_paths_search(
@@ -1188,7 +942,7 @@ impl WebPlugin {
     }
 
     async fn permission_paths_crawl(&self, _input: &CrawlRunInput) -> SdkResult<Vec<PathRequest>> {
-        self.store_permission_requests(PathKindForPermission::Write)
+        self.store_write_permission_requests()
     }
 
     async fn permission_networks_crawl(
@@ -1201,54 +955,12 @@ impl WebPlugin {
                 .to_string(),
         )])
     }
-
-    async fn permission_paths_store_query(
-        &self,
-        _input: &CrawlQueryInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        self.store_permission_requests(PathKindForPermission::Write)
-    }
-
-    async fn permission_networks_store_query(
-        &self,
-        _input: &CrawlQueryInput,
-    ) -> SdkResult<Vec<NetworkRequest>> {
-        Ok(Vec::new())
-    }
-
-    async fn permission_paths_store_get(
-        &self,
-        _input: &CrawlGetInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        self.store_permission_requests(PathKindForPermission::Read)
-    }
-
-    async fn permission_networks_store_get(
-        &self,
-        _input: &CrawlGetInput,
-    ) -> SdkResult<Vec<NetworkRequest>> {
-        Ok(Vec::new())
-    }
-
-    async fn permission_paths_store_list(
-        &self,
-        _input: &CrawlListInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        self.store_permission_requests(PathKindForPermission::Read)
-    }
-
-    async fn permission_networks_store_list(
-        &self,
-        _input: &CrawlListInput,
-    ) -> SdkResult<Vec<NetworkRequest>> {
-        Ok(Vec::new())
-    }
 }
 
 #[crate::plugin::sdk::plugin(
     id = WEB_PLUGIN_ID,
     version = env!("CARGO_PKG_VERSION"),
-    description = "Local web search/fetch/crawl plugin with embedded storage, caching, and Tantivy retrieval.",
+    description = "Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering.",
     config_schema = web_config_schema(),
     display = brief_detailed
 )]
@@ -1287,11 +999,6 @@ impl WebPlugin {
     async fn permission_networks(&self, input: WebToolSuite) -> SdkResult<Vec<NetworkRequest>> {
         input.dispatch_permission_networks(self).await
     }
-}
-
-enum PathKindForPermission {
-    Read,
-    Write,
 }
 
 fn crawl_error_to_plugin(err: agena_web::CrawlError) -> PluginError {
@@ -1347,11 +1054,6 @@ fn validate_web_config(web: &WebConfig) -> SdkResult<()> {
         ),
         ("search.default_limit", web.search.default_limit),
         ("search.max_limit", web.search.max_limit),
-        (
-            "store.listing.default_limit",
-            web.store.listing.default_limit,
-        ),
-        ("store.listing.max_limit", web.store.listing.max_limit),
     ] {
         if value == 0 {
             return Err(PluginError::new(format!(
@@ -1399,11 +1101,6 @@ fn validate_web_config(web: &WebConfig) -> SdkResult<()> {
     if web.search.default_limit > web.search.max_limit {
         return Err(PluginError::new(
             "web plugin config `search.default_limit` must be less than or equal to `search.max_limit`",
-        ));
-    }
-    if web.store.listing.default_limit > web.store.listing.max_limit {
-        return Err(PluginError::new(
-            "web plugin config `store.listing.default_limit` must be less than or equal to `store.listing.max_limit`",
         ));
     }
     if web
@@ -1488,21 +1185,6 @@ fn format_fetched_page(page: &FetchedPage) -> String {
     lines.join("\n")
 }
 
-fn format_document(document: &StoredDocument) -> String {
-    let mut lines = vec![format!("Title: {}", document.title)];
-    lines.push(format!("URL: {}", document.canonical_url));
-    lines.push(format!("Status: {}", document.status));
-    lines.push(format!("Depth: {}", document.depth));
-    lines.push(format!(
-        "Rendered: {}",
-        if document.rendered { "yes" } else { "no" }
-    ));
-    lines.push(format!("Fetched: {}", document.fetched_at.to_rfc3339()));
-    lines.push(String::new());
-    lines.push(preview_text(document.markdown.as_str(), 5000));
-    lines.join("\n")
-}
-
 fn format_web_search(output: &CrawlWebSearchOutput) -> String {
     if output.results.is_empty() {
         if output.engine == "auto" {
@@ -1528,7 +1210,7 @@ fn format_web_search(output: &CrawlWebSearchOutput) -> String {
 
 fn format_crawl_run(output: &CrawlRunReport) -> String {
     let mut lines = vec![format!(
-        "Crawled from {} via {} (rendered: {}). New pages stored: {}. Cached pages reused: {}. Exact duplicates skipped: {}. Near duplicates skipped: {}. Old pages pruned: {} ({} bytes). Failures: {}. Total indexed documents: {}.",
+        "Crawled from {} via {} (rendered: {}). New pages indexed: {}. Cached pages reused: {}. Exact duplicates skipped: {}. Near duplicates skipped: {}. Old pages pruned: {} ({} bytes). Failures: {}. Total cached documents: {}.",
         output.start_url,
         output.engine,
         if output.rendered { "yes" } else { "no" },
@@ -1582,8 +1264,8 @@ fn host_matches(host: &str, pattern: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        FetchToolInput, SearchToolInput, StoreGetToolInput, StoreQueryToolInput, WebConfig,
-        WebToolSuite, fetch_cache_key, parse_web_config, search_engines,
+        CrawlToolInput, FetchToolInput, SearchToolInput, WebConfig, WebToolSuite, fetch_cache_key,
+        parse_web_config, search_engines,
     };
     use crate::plugin::sdk::{HostCapability, Plugin as _, ToolDescriptionMode};
     use serde_json::json;
@@ -1591,7 +1273,7 @@ mod tests {
     #[test]
     fn web_decls_declare_permission_check_host_capability() {
         let decls = WebToolSuite::tool_decls();
-        assert_eq!(decls.len(), 6);
+        assert_eq!(decls.len(), 3);
         assert!(decls.iter().all(|decl| {
             decl.host_capabilities
                 .contains(&HostCapability::PermissionCheck)
@@ -1601,14 +1283,7 @@ mod tests {
                 .iter()
                 .map(|decl| decl.name.as_str())
                 .collect::<Vec<_>>(),
-            vec![
-                "search",
-                "fetch",
-                "crawl.run",
-                "store.query",
-                "store.get",
-                "store.list"
-            ]
+            vec!["search", "fetch", "crawl"]
         );
     }
 
@@ -1629,7 +1304,7 @@ mod tests {
             assert_eq!(tool.description_mode, Some(ToolDescriptionMode::Detailed));
         }
 
-        for tool_name in ["crawl.run", "store.query", "store.get", "store.list"] {
+        for tool_name in ["crawl"] {
             let tool = manifest
                 .tools
                 .iter()
@@ -1705,7 +1380,6 @@ mod tests {
         assert_eq!(config.fetch.request.timeout_secs, 30);
         assert_eq!(config.crawl.defaults.max_pages, 10);
         assert_eq!(config.search.default_limit, 5);
-        assert_eq!(config.store.listing.default_limit, 20);
         assert_eq!(config.browser.wait.timeout_secs, 10);
     }
 
@@ -1749,10 +1423,6 @@ mod tests {
                 "retention": {
                     "max_documents": 400,
                     "max_bytes": 209715200
-                },
-                "listing": {
-                    "default_limit": 30,
-                    "max_limit": 120
                 }
             },
             "browser": {
@@ -1774,7 +1444,6 @@ mod tests {
         assert_eq!(config.crawl.limits.max_depth, 6);
         assert_eq!(config.search.max_limit, 25);
         assert_eq!(config.store.retention.max_documents, 400);
-        assert_eq!(config.store.listing.max_limit, 120);
         assert_eq!(
             config.browser.executable_path.as_deref(),
             Some("/usr/bin/chromium")
@@ -1796,27 +1465,20 @@ mod tests {
     }
 
     #[test]
-    fn web_tool_inputs_validate_empty_queries_and_store_get_selector_pairs() {
+    fn web_tool_inputs_validate_empty_queries_and_trim_fetch_fields() {
         let err = SearchToolInput::parse_input(json!({
             "query": "   "
         }))
         .expect_err("web search should reject empty query during parse");
         assert!(err.to_string().contains("field `query` must not be empty"));
 
-        let err = StoreQueryToolInput::parse_input(json!({
-            "query": ""
+        let err = CrawlToolInput::parse_input(json!({
+            "start_url": "   "
         }))
-        .expect_err("web query should reject empty query during parse");
-        assert!(err.to_string().contains("field `query` must not be empty"));
-
-        let err = StoreGetToolInput::parse_input(json!({
-            "id": "doc_1",
-            "url": "https://example.com"
-        }))
-        .expect_err("store.get should reject duplicate selectors during parse");
+        .expect_err("web crawl should reject empty start_url during parse");
         assert!(
             err.to_string()
-                .contains("exactly one of `id` or `url` is required")
+                .contains("field `start_url` must not be empty")
         );
 
         let parsed = SearchToolInput::parse_input(json!({
@@ -1824,12 +1486,6 @@ mod tests {
         }))
         .expect("web search should trim query during parse");
         assert_eq!(parsed.args.query, "Rust schemars derive examples");
-
-        let parsed = StoreQueryToolInput::parse_input(json!({
-            "query": "  local docs  "
-        }))
-        .expect("store.query should trim query during parse");
-        assert_eq!(parsed.args.query, "local docs");
 
         let fetch = FetchToolInput::parse_input(json!({
             "url": "  https://example.com/docs  ",
@@ -1839,10 +1495,10 @@ mod tests {
         assert_eq!(fetch.args.url, "https://example.com/docs");
         assert_eq!(fetch.args.prompt.as_deref(), Some("summarize key points"));
 
-        let get = StoreGetToolInput::parse_input(json!({
-            "url": "  https://example.com/post  "
+        let crawl = CrawlToolInput::parse_input(json!({
+            "start_url": "  https://example.com/post  "
         }))
-        .expect("store.get should trim selector fields during parse");
-        assert_eq!(get.args.url.as_deref(), Some("https://example.com/post"));
+        .expect("crawl should trim nested fields during parse");
+        assert_eq!(crawl.args.start_url, "https://example.com/post");
     }
 }

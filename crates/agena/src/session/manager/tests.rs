@@ -35,14 +35,10 @@ use super::*;
 use crate::session::cache::SessionCachePolicy;
 
 const FS_TOOL: &str = "agena_fs__fs";
-const SHELL_BASH_TOOL: &str = "agena_shell__exec_bash";
-const SHELL_POWERSHELL_TOOL: &str = "agena_shell__exec_powershell";
-const SHELL_MONITOR_START_TOOL: &str = "agena_shell__monitor_start";
-const SHELL_MONITOR_LIST_TOOL: &str = "agena_shell__monitor_list";
-const SHELL_MONITOR_READ_TOOL: &str = "agena_shell__monitor_read";
-const SHELL_MONITOR_STOP_TOOL: &str = "agena_shell__monitor_stop";
+const PROCESS_TOOL: &str = "agena_process__process";
+const PROCESS_RUN_TOOL: &str = "agena_process__process_run";
+const WEB_CRAWL_TOOL: &str = "agena_web__crawl";
 const WEB_FETCH_TOOL: &str = "agena_web__fetch";
-const WEB_QUERY_TOOL: &str = "agena_web__store_query";
 const TOOLS_TOOL: &str = "agena_catalog__tools";
 const TODO_TOOL: &str = "agena_planning__todo";
 const USER_TOOL: &str = "agena_runtime__user";
@@ -65,6 +61,17 @@ const SETTINGS_VALIDATE_TOOL: &str = "agena_settings__settings_validate";
 const SCHEDULE_LIST_TOOL: &str = "agena_cron__schedule_list";
 const STREAM_FIXTURE_PLUGIN: &str = "streaming-fixture";
 const STREAM_FIXTURE_TOOL: &str = "streaming_fixture__stream_fixture_count";
+
+fn bash_process_input(
+    command: crate::message::ShellCommandInput,
+    background: bool,
+) -> crate::tool::ToolPayloadInput {
+    crate::tool::ToolPayloadInput::Process(crate::message::ProcessToolInput::Run {
+        shell: crate::message::ProcessShell::Bash,
+        command,
+        background,
+    })
+}
 
 struct TempWorkspace {
     root: std::path::PathBuf,
@@ -3284,19 +3291,22 @@ fn pending_permission_request_aggregates_invocation_actions() {
         let test_executor = executor.clone();
         let manager = SessionManager::new(db, processor, executor)
             .with_config(SessionManagerConfig::default());
-        let invocation = crate::tool::ToolPayloadInput::Bash(crate::message::ShellCommandInput {
-            command: "curl https://api.example.com/health && cat notes.txt".to_string(),
-            description: "aggregate permission request".to_string(),
-            timeout_ms: Some(5_000),
-            workdir: Some(".".to_string()),
-            filesystem_effects: vec![crate::message::FilesystemEffect {
-                path: "notes.txt".to_string(),
-                access: crate::message::FilesystemAccess::Read,
-            }],
-            network_effects: vec![crate::message::NetworkEffect {
-                target: "https://api.example.com/health".to_string(),
-            }],
-        })
+        let invocation = bash_process_input(
+            crate::message::ShellCommandInput {
+                command: "curl https://api.example.com/health && cat notes.txt".to_string(),
+                description: "aggregate permission request".to_string(),
+                timeout_ms: Some(5_000),
+                workdir: Some(".".to_string()),
+                filesystem_effects: vec![crate::message::FilesystemEffect {
+                    path: "notes.txt".to_string(),
+                    access: crate::message::FilesystemAccess::Read,
+                }],
+                network_effects: vec![crate::message::NetworkEffect {
+                    target: "https://api.example.com/health".to_string(),
+                }],
+            },
+            false,
+        )
         .into_invocation();
         let checks = test_executor
             .collect_permission_checks_for_invocation(&invocation)
@@ -3331,15 +3341,13 @@ fn pending_permission_request_aggregates_invocation_actions() {
             request.related_actions.iter().any(|action| matches!(
                 action,
                 PermissionAction::Tool { tool_name, .. }
-                    if tool_name == "shell"
-                        || tool_name == "bash"
-                        || tool_name == "exec.bash"
-                        || tool_name == SHELL_BASH_TOOL
-                        || tool_name.ends_with("__shell")
-                        || tool_name.ends_with("__bash")
-                        || tool_name.ends_with("__exec_bash")
+                    if tool_name == "process"
+                        || tool_name == PROCESS_TOOL
+                        || tool_name == PROCESS_RUN_TOOL
+                        || tool_name.ends_with("__process")
+                        || tool_name.ends_with("__process_run")
             )),
-            "aggregated request should include the shell tool action: {:?}",
+            "aggregated request should include the process tool action: {:?}",
             request.related_actions
         );
         assert!(
@@ -5127,10 +5135,10 @@ while True:
     }
 
     #[derive(Clone)]
-    struct ShellRuntimeProvider;
+    struct ProcessRuntimeProvider;
 
     #[async_trait]
-    impl ModelRuntime for ShellRuntimeProvider {
+    impl ModelRuntime for ProcessRuntimeProvider {
         fn id(&self) -> &str {
             "runtime-tools"
         }
@@ -5163,36 +5171,37 @@ while True:
             AppError,
         > {
             let bash_command = if cfg!(windows) {
-                "echo shell-runtime && type notes.txt"
+                "echo process-runtime && type notes.txt"
             } else {
-                "printf 'shell-runtime\\n'; cat notes.txt"
+                "printf 'process-runtime\\n'; cat notes.txt"
             };
-            let monitor_command = if cfg!(windows) {
+            let background_command = if cfg!(windows) {
                 "echo tick-1 && echo tick-2 && ping -n 6 127.0.0.1 >nul"
             } else {
                 "printf 'tick-1\\n'; printf 'tick-2\\n'; sleep 5"
             };
 
-            let events = if completed_or_failed_operation_count(&request, &["call_tools_shell_1"])
+            let events = if completed_or_failed_operation_count(&request, &["call_tools_process_1"])
                 == 0
             {
                 scripted_tool_call_events(vec![(
-                    "call_tools_shell_1",
+                    "call_tools_process_1",
                     TOOLS_TOOL,
                     serde_json::json!({
                         "action": "help",
-                        "tool": SHELL_BASH_TOOL,
+                        "tool": PROCESS_TOOL,
                         "include_schema": false
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_shell_exec_1"]) == 0 {
+            } else if completed_or_failed_operation_count(&request, &["call_process_run_1"]) == 0 {
                 scripted_tool_call_events(vec![(
-                    "call_shell_exec_1",
-                    SHELL_BASH_TOOL,
+                    "call_process_run_1",
+                    PROCESS_TOOL,
                     serde_json::json!({
+                        "action": "run",
                         "command": bash_command,
-                        "description": "read notes via shell",
+                        "description": "read notes via process.run",
                         "workdir": ".",
                         "timeout_ms": 5_000,
                         "filesystem_effects": [{"path": "notes.txt", "access": "read"}],
@@ -5200,13 +5209,15 @@ while True:
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_shell_powershell_1"])
+            } else if completed_or_failed_operation_count(&request, &["call_process_powershell_1"])
                 == 0
             {
                 scripted_tool_call_events(vec![(
-                    "call_shell_powershell_1",
-                    SHELL_POWERSHELL_TOOL,
+                    "call_process_powershell_1",
+                    PROCESS_TOOL,
                     serde_json::json!({
+                        "action": "run",
+                        "shell": "powershell",
                         "command": "Get-Location",
                         "description": "probe powershell availability",
                         "filesystem_effects": [],
@@ -5214,70 +5225,73 @@ while True:
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_monitor_start_1"]) == 0
+            } else if completed_or_failed_operation_count(&request, &["call_process_background_1"])
+                == 0
             {
                 scripted_tool_call_events(vec![(
-                    "call_monitor_start_1",
-                    SHELL_MONITOR_START_TOOL,
+                    "call_process_background_1",
+                    PROCESS_TOOL,
                     serde_json::json!({
-                        "command": monitor_command,
-                        "description": "tick monitor",
+                        "action": "run",
+                        "background": true,
+                        "command": background_command,
+                        "description": "tick background process",
                         "timeout_ms": 10_000,
-                        "persistent": false,
-                        "capture_stderr": true,
                         "filesystem_effects": [{"path": ".", "access": "read"}],
                         "network_effects": []
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_monitor_list_1"]) == 0 {
+            } else if completed_or_failed_operation_count(&request, &["call_process_list_1"]) == 0 {
                 scripted_tool_call_events(vec![(
-                    "call_monitor_list_1",
-                    SHELL_MONITOR_LIST_TOOL,
-                    serde_json::json!({}).to_string(),
+                    "call_process_list_1",
+                    PROCESS_TOOL,
+                    serde_json::json!({"action": "list"}).to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_monitor_read_1"]) == 0 {
-                let monitor_id = request_operation_payload(&request, "call_monitor_start_1")
-                    .get("monitor_id")
+            } else if completed_or_failed_operation_count(&request, &["call_process_logs_1"]) == 0 {
+                let process_id = request_operation_payload(&request, "call_process_background_1")
+                    .get("process_id")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string)
                     .unwrap_or_else(|| {
                         panic!(
-                            "monitor start should return monitor_id: {}",
-                            request_operation_debug(&request, "call_monitor_start_1")
+                            "background process run should return process_id: {}",
+                            request_operation_debug(&request, "call_process_background_1")
                         )
                     });
                 scripted_tool_call_events(vec![(
-                    "call_monitor_read_1",
-                    SHELL_MONITOR_READ_TOOL,
+                    "call_process_logs_1",
+                    PROCESS_TOOL,
                     serde_json::json!({
-                        "monitor_id": monitor_id,
+                        "action": "logs",
+                        "process_id": process_id,
                         "since_seq": 0,
                         "wait_ms": 1_000
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_monitor_stop_1"]) == 0 {
-                let monitor_id = request_operation_payload(&request, "call_monitor_start_1")
-                    .get("monitor_id")
+            } else if completed_or_failed_operation_count(&request, &["call_process_stop_1"]) == 0 {
+                let process_id = request_operation_payload(&request, "call_process_background_1")
+                    .get("process_id")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string)
                     .unwrap_or_else(|| {
                         panic!(
-                            "monitor start should return monitor_id: {}",
-                            request_operation_debug(&request, "call_monitor_start_1")
+                            "background process run should return process_id: {}",
+                            request_operation_debug(&request, "call_process_background_1")
                         )
                     });
                 scripted_tool_call_events(vec![(
-                    "call_monitor_stop_1",
-                    SHELL_MONITOR_STOP_TOOL,
+                    "call_process_stop_1",
+                    PROCESS_TOOL,
                     serde_json::json!({
-                        "monitor_id": monitor_id
+                        "action": "stop",
+                        "process_id": process_id
                     })
                     .to_string(),
                 )])
             } else {
-                scripted_text_events("runtime shell flow finished")
+                scripted_text_events("runtime process flow finished")
             };
 
             Ok(Box::pin(stream::iter(events)))
@@ -5285,21 +5299,24 @@ while True:
     }
 
     #[test]
-    fn runtime_shell_flow_exercises_exec_and_monitor_paths() {
+    fn runtime_process_flow_exercises_foreground_and_background_paths() {
         run_async_with_large_stack(async move {
             let workspace = TempWorkspace::new();
             init_git_workspace(&workspace.root);
-            let db = open_runtime_tool_database(&workspace.root, "runtime-tools-shell.db").await;
-            let (manager, _host) =
-                build_runtime_tool_manager_with_provider(&workspace.root, db, ShellRuntimeProvider)
-                    .await;
+            let db = open_runtime_tool_database(&workspace.root, "runtime-tools-process.db").await;
+            let (manager, _host) = build_runtime_tool_manager_with_provider(
+                &workspace.root,
+                db,
+                ProcessRuntimeProvider,
+            )
+            .await;
 
-            let created = create_runtime_tool_session(manager.as_ref(), "runtime-shell").await;
+            let created = create_runtime_tool_session(manager.as_ref(), "runtime-process").await;
             let session = submit_runtime_tool_prompt(
                 manager.as_ref(),
                 created.id,
-                "exercise shell runtime tools",
-                "runtime shell run should succeed",
+                "exercise process runtime tools",
+                "runtime process run should succeed",
             )
             .await;
 
@@ -5310,24 +5327,24 @@ while True:
                     .any(|message| message.role == Role::Assistant
                         && message
                             .as_text_lossy()
-                            .contains("runtime shell flow finished")),
-                "assistant should acknowledge the shell flow completion"
+                            .contains("runtime process flow finished")),
+                "assistant should acknowledge the process flow completion"
             );
 
             assert_operations_completed(
                 &session,
                 &[
-                    "call_tools_shell_1",
-                    "call_shell_exec_1",
-                    "call_monitor_start_1",
-                    "call_monitor_list_1",
-                    "call_monitor_read_1",
-                    "call_monitor_stop_1",
+                    "call_tools_process_1",
+                    "call_process_run_1",
+                    "call_process_background_1",
+                    "call_process_list_1",
+                    "call_process_logs_1",
+                    "call_process_stop_1",
                 ],
             );
 
             let (powershell_status, powershell_error, powershell_output) =
-                operation_snapshot(&session, "call_shell_powershell_1");
+                operation_snapshot(&session, "call_process_powershell_1");
             if cfg!(windows) {
                 assert_eq!(
                     powershell_status,
@@ -5353,61 +5370,62 @@ while True:
                 );
             }
 
-            let shell_exec_payload = session_operation_payload(&session, "call_shell_exec_1");
+            let shell_exec_payload = session_operation_payload(&session, "call_process_run_1");
             let shell_output = shell_exec_payload["output"]
                 .as_str()
-                .expect("shell exec payload should contain output");
+                .expect("process run payload should contain output");
             assert!(
-                shell_output.contains("shell-runtime"),
-                "shell exec output should include the marker: {shell_output}"
+                shell_output.contains("process-runtime"),
+                "process run output should include the marker: {shell_output}"
             );
             assert!(
                 shell_output.contains("base line"),
-                "shell exec output should read notes.txt: {shell_output}"
+                "process run output should read notes.txt: {shell_output}"
             );
 
-            let monitor_start_payload = session_operation_payload(&session, "call_monitor_start_1");
-            let monitor_id = monitor_start_payload["monitor_id"]
+            let background_payload =
+                session_operation_payload(&session, "call_process_background_1");
+            let process_id = background_payload["process_id"]
                 .as_str()
-                .expect("monitor start should return monitor_id");
+                .expect("background process run should return process_id");
             assert!(
-                monitor_id.starts_with("mon_"),
-                "monitor ids should use the expected prefix: {monitor_id}"
+                process_id.starts_with("proc_"),
+                "process ids should use the expected prefix: {process_id}"
             );
 
-            let monitor_list_payload = session_operation_payload(&session, "call_monitor_list_1");
-            let listed = monitor_list_payload["monitors"]
+            let process_list_payload = session_operation_payload(&session, "call_process_list_1");
+            let listed = process_list_payload["processes"]
                 .as_array()
-                .expect("monitor list should include monitors");
+                .expect("process list should include processes");
             assert!(
                 listed.iter().any(|entry| {
-                    entry.get("monitor_id").and_then(serde_json::Value::as_str) == Some(monitor_id)
+                    entry.get("process_id").and_then(serde_json::Value::as_str) == Some(process_id)
                 }),
-                "monitor list should include the started monitor"
+                "process list should include the started process"
             );
 
-            let monitor_read_payload = session_operation_payload(&session, "call_monitor_read_1");
-            let events = monitor_read_payload["events"]
+            let process_logs_payload = session_operation_payload(&session, "call_process_logs_1");
+            let events = process_logs_payload["events"]
                 .as_array()
-                .expect("monitor read should include events");
+                .expect("process logs should include events");
             assert!(
                 events.iter().any(|event| {
                     event.get("line").and_then(serde_json::Value::as_str) == Some("tick-1")
                 }),
-                "monitor read should capture tick-1"
+                "process logs should capture tick-1"
             );
             assert!(
                 events.iter().any(|event| {
                     event.get("line").and_then(serde_json::Value::as_str) == Some("tick-2")
                 }),
-                "monitor read should capture tick-2"
+                "process logs should capture tick-2"
             );
 
-            let monitor_stop_payload = session_operation_payload(&session, "call_monitor_stop_1");
-            assert_eq!(monitor_stop_payload["action"].as_str(), Some("stop"));
+            let process_stop_payload = session_operation_payload(&session, "call_process_stop_1");
+            assert_eq!(process_stop_payload["action"].as_str(), Some("stop"));
             assert_eq!(
-                monitor_stop_payload["monitor_id"].as_str(),
-                Some(monitor_id)
+                process_stop_payload["process_id"].as_str(),
+                Some(process_id)
             );
         });
     }
@@ -5470,14 +5488,16 @@ while True:
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_web_search_1"]) == 0 {
+            } else if completed_or_failed_operation_count(&request, &["call_web_crawl_1"]) == 0 {
                 scripted_tool_call_events(vec![(
-                    "call_web_search_1",
-                    WEB_QUERY_TOOL,
+                    "call_web_crawl_1",
+                    WEB_CRAWL_TOOL,
                     serde_json::json!({
-                        "query": "runtime web",
-                        "allowed_domains": ["127.0.0.1"],
-                        "max_results": 5
+                        "start_url": self.fetch_url,
+                        "max_pages": 1,
+                        "max_depth": 0,
+                        "same_host_only": true,
+                        "use_cache": true
                     })
                     .to_string(),
                 )])
@@ -5490,37 +5510,11 @@ while True:
     }
 
     #[test]
-    fn runtime_web_flow_exercises_fetch_cache_and_search() {
+    fn runtime_web_flow_exercises_fetch_cache_and_crawl() {
         run_async_with_large_stack(async move {
             let workspace = TempWorkspace::new();
             init_git_workspace(&workspace.root);
             let web_fixture = start_local_web_fixture().await;
-            let crawl_store = agena_web::CrawlStore::for_workspace(&workspace.root);
-            crawl_store
-                .save_document(&agena_web::StoredDocument {
-                    id: "runtime-web-docs".to_string(),
-                    url: format!("{}/docs/runtime-web", web_fixture.base_url),
-                    canonical_url: format!("{}/docs/runtime-web", web_fixture.base_url),
-                    title: "Runtime Web Docs".to_string(),
-                    markdown: "Runtime web local crawl search result.".to_string(),
-                    chunks: vec!["Runtime web local crawl search result.".to_string()],
-                    chunk_hashes: vec!["chunk-runtime-web".to_string()],
-                    links: Vec::new(),
-                    content_type: "text/html".to_string(),
-                    status: 200,
-                    truncated: false,
-                    rendered: false,
-                    hash: "hash-runtime-web".to_string(),
-                    raw_html_hash: "raw-runtime-web".to_string(),
-                    markdown_hash: "markdown-runtime-web".to_string(),
-                    simhash: 1,
-                    etag: None,
-                    last_modified: None,
-                    depth: 0,
-                    fetched_at: chrono::Utc::now(),
-                })
-                .expect("seed crawl document");
-            crawl_store.rebuild_index().expect("seed crawl index");
             let db = open_runtime_tool_database(&workspace.root, "runtime-tools-web.db").await;
             let (manager, _host) = build_runtime_tool_manager_with_provider_and_executor(
                 &workspace.root,
@@ -5552,7 +5546,7 @@ while True:
                 "assistant should acknowledge the web flow completion"
             );
 
-            for operation_id in ["call_web_fetch_1", "call_web_fetch_2", "call_web_search_1"] {
+            for operation_id in ["call_web_fetch_1", "call_web_fetch_2", "call_web_crawl_1"] {
                 let (status, error, _) = operation_snapshot(&session, operation_id);
                 assert_eq!(
                     status,
@@ -5579,31 +5573,35 @@ while True:
                 "loopback fetch should preserve HTTP for the local fixture"
             );
 
-            let search_payload = session_operation_payload(&session, "call_web_search_1");
-            let results = search_payload["results"]
+            let crawl_payload = session_operation_payload(&session, "call_web_crawl_1");
+            let results = crawl_payload["documents"]
                 .as_array()
-                .expect("crawl query should return results");
+                .expect("crawl run should return documents");
             assert_eq!(
                 results.len(),
                 1,
-                "allowed_domains should filter the crawl-index result"
+                "crawl should return the indexed page summary"
             );
+            let expected_page_url = format!("{}/page", web_fixture.base_url);
             assert_eq!(
                 results[0]["title"].as_str(),
-                Some("Runtime Web Docs"),
-                "crawl query should return the local crawl-index result"
+                Some(expected_page_url.as_str()),
+                "crawl should preserve the fetched page summary title"
             );
             assert!(
                 results[0]["url"]
                     .as_str()
-                    .is_some_and(|url| url.starts_with(&format!("{}/docs/", web_fixture.base_url))),
-                "web search should keep the indexed result URL"
+                    .is_some_and(|url| url == expected_page_url),
+                "crawl should keep the indexed result URL"
             );
+            assert_eq!(crawl_payload["stored_count"].as_u64(), Some(1));
+            assert_eq!(crawl_payload["cached_count"].as_u64(), Some(0));
+            assert_eq!(crawl_payload["total_documents"].as_u64(), Some(1));
 
             assert_eq!(
                 web_fixture.fetch_hits.load(Ordering::SeqCst),
                 1,
-                "the second fetch should be served from cache"
+                "the second fetch and crawl should be served from cache"
             );
         });
     }

@@ -5,8 +5,8 @@ use agena_macros::{StaticToolSurface, ToolInputShape};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "worktree",
-    description = "Worktree command. Use action `enter` or `exit`; `enter` uses `target = new|existing` to create or attach to a git worktree and `exit` uses enum `exit_action = keep|remove`.",
-    summary = "Enter or exit a git worktree.",
+    description = "Managed workspace command. Use action `enter` or `exit`; `enter` uses `target = new|existing` to create or attach to a managed workspace. Agena prefers Rift snapshots and falls back to git worktree when Rift cannot be used. `exit` uses enum `exit_action = keep|remove`.",
+    summary = "Enter or exit a managed workspace snapshot.",
     handler_receiver = WorkflowPlugin,
     display = brief,
     tags(ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Worktree),
@@ -41,7 +41,7 @@ pub(crate) enum WorktreeToolInput {
 #[tool_input(trim("name", "path"))]
 #[serde(tag = "target", rename_all = "snake_case")]
 pub(crate) enum EnterWorktreeCommandInput {
-    /// Create a new worktree under the managed `worktrees` directory.
+    /// Create a new managed workspace under the managed `worktrees` directory.
     #[tool_input(non_empty_if_present("name"))]
     New {
         #[serde(default, skip_serializing_if = "Option::is_none")]

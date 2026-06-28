@@ -26,7 +26,7 @@ impl RepoPlugin {
 impl Plugin for RepoPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder(REPO_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
-            .description("Repository worktree management tools.")
+            .description("Repository workspace snapshot tools backed by Rift or git worktree.")
             .brief_detailed()
             .hooks(HookSubscription::TOOL_INVOKE)
             .tool(WorktreeToolInput::tool_decl())

@@ -73,9 +73,9 @@ pub use result::{ToolExecutionView, ToolInvocationExecution, ToolPayloadExecutio
 pub use shell::{ShellError, ShellOutput, ShellRequest};
 pub use truncation::{ToolOutputTruncationPolicy, ToolOutputTruncator};
 pub use worktree::{
-    ActiveWorktree, ManagedWorktree, WorktreeRegistry, list_active as worktree_list_active,
-    list_managed as worktree_list_managed, prune_stale as worktree_prune_stale,
-    registry_for_executor as worktree_registry_for_executor,
+    ActiveWorktree, ManagedWorktree, WorktreeBackend, WorktreeRegistry,
+    list_active as worktree_list_active, list_managed as worktree_list_managed,
+    prune_stale as worktree_prune_stale, registry_for_executor as worktree_registry_for_executor,
 };
 
 pub fn skills_plugin_id() -> &'static str {

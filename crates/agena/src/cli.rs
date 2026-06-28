@@ -963,6 +963,7 @@ struct ActiveWorktreeOutput {
     session_id: i64,
     path: String,
     branch: String,
+    backend: String,
     created_here: bool,
 }
 
@@ -971,7 +972,9 @@ struct ManagedWorktreeOutput {
     path: String,
     session_id: Option<i64>,
     branch: Option<String>,
+    backend: Option<String>,
     registered_with_git: bool,
+    registered_with_rift: bool,
     stale: bool,
 }
 
@@ -2233,6 +2236,7 @@ impl AgenaCli {
                 session_id: entry.session_id,
                 path: entry.path.display().to_string(),
                 branch: entry.branch,
+                backend: entry.backend.as_str().to_string(),
                 created_here: entry.created_here,
             })
             .collect::<Vec<_>>();
@@ -2244,7 +2248,9 @@ impl AgenaCli {
                     path: entry.path.display().to_string(),
                     session_id: entry.session_id,
                     branch: entry.branch,
+                    backend: entry.backend.map(|backend| backend.as_str().to_string()),
                     registered_with_git: entry.registered_with_git,
+                    registered_with_rift: entry.registered_with_rift,
                     stale,
                 }
             })

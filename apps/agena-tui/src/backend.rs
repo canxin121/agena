@@ -3972,8 +3972,9 @@ impl Backend {
         rows.extend(active.into_iter().map(|entry| InspectorRow {
             label: format!("session #{}", entry.session_id),
             detail: format!(
-                "{} | branch={} | created_here={}",
+                "{} | backend={} | branch={} | created_here={}",
                 entry.path.display(),
+                entry.backend.as_str(),
                 entry.branch,
                 entry.created_here
             ),
@@ -3991,8 +3992,13 @@ impl Backend {
             InspectorRow {
                 label: entry.path.display().to_string(),
                 detail: format!(
-                    "session={} | branch={} | git_registered={} | stale={}",
-                    session_id, branch, entry.registered_with_git, stale
+                    "session={} | backend={} | branch={} | git_registered={} | rift_registered={} | stale={}",
+                    session_id,
+                    entry.backend.map(|backend| backend.as_str()).unwrap_or("unknown"),
+                    branch,
+                    entry.registered_with_git,
+                    entry.registered_with_rift,
+                    stale
                 ),
             }
         }));

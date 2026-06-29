@@ -58,7 +58,7 @@ pub struct WorktreeCommandOutput {
 }
 
 fn parse_worktree_payload(payload: Option<serde_json::Value>) -> Result<WorktreeCommandOutput> {
-    let payload = payload.ok_or_else(|| anyhow!("worktree tool returned no payload"))?;
+    let payload = payload.ok_or_else(|| anyhow!("snapshot tool returned no payload"))?;
     serde_json::from_value(payload).map_err(|error| anyhow!(error.to_string()))
 }
 
@@ -3957,7 +3957,7 @@ impl Backend {
         let executor = manager.tool_executor();
         let Some(registry) = executor.worktree_registry() else {
             return vec![InspectorRow {
-                label: "worktree_registry".to_string(),
+                label: "snapshot_registry".to_string(),
                 detail: "unavailable".to_string(),
             }];
         };

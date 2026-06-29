@@ -2770,7 +2770,7 @@ mod tests {
         let existing_paths = runtime
             .block_on(
                 WorktreeToolInput::parse_tool(
-                    "worktree",
+                    "snapshot",
                     json!({
                     "action": "enter",
                     "target": "existing",
@@ -2792,7 +2792,7 @@ mod tests {
         let new_paths = runtime
             .block_on(
                 WorktreeToolInput::parse_tool(
-                    "worktree",
+                    "snapshot",
                     json!({
                     "action": "enter",
                     "target": "new",
@@ -2812,7 +2812,7 @@ mod tests {
         let exit_paths = runtime
             .block_on(
                 WorktreeToolInput::parse_tool(
-                    "worktree",
+                    "snapshot",
                     json!({
                     "action": "exit",
                     "exit_action": "keep",

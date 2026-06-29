@@ -14133,7 +14133,7 @@ impl App {
                 if path.is_empty() {
                     self.flash_warning(self.i18n.text_args(
                         "flash-command-usage",
-                        &crate::fl_args!("usage" => "/worktree attach <path>"),
+                        &crate::fl_args!("usage" => "/snapshot attach <path>"),
                     ));
                     return;
                 }
@@ -14178,14 +14178,14 @@ impl App {
                     _ => {
                         self.flash_warning(self.i18n.text_args(
                             "flash-command-usage",
-                            &crate::fl_args!("usage" => "/worktree exit [keep|remove [force]]"),
+                            &crate::fl_args!("usage" => "/snapshot exit [keep|remove [force]]"),
                         ));
                     }
                 }
             }
             _ => self.flash_warning(self.i18n.text_args(
                 "flash-command-usage",
-                &crate::fl_args!("usage" => "/worktree [list|enter [name]|attach <path>|exit [keep|remove [force]]]"),
+                &crate::fl_args!("usage" => "/snapshot [list|enter [name]|attach <path>|exit [keep|remove [force]]]"),
             )),
         }
     }

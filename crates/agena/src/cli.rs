@@ -135,7 +135,7 @@ pub enum AgenaCommand {
     Review(ReviewArgs),
     Sessions(SessionsCommand),
     Tui(TuiArgs),
-    Worktree(WorktreeArgs),
+    Snapshot(SnapshotArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -336,7 +336,7 @@ pub struct PermissionsReplyArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct WorktreeArgs {
+pub struct SnapshotArgs {
     #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
@@ -1030,8 +1030,8 @@ struct GitOutput {
     untracked_files: u64,
     changed_files: u64,
     clean: bool,
-    worktree_active_sessions: u64,
-    worktree_managed_dirs: u64,
+    snapshot_active_sessions: u64,
+    snapshot_managed_dirs: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -1205,7 +1205,7 @@ impl AgenaCli {
             Some(AgenaCommand::Tui(_)) => Err(AppError::Config(
                 "tui command must be handled by the agena-cli binary".to_owned(),
             )),
-            Some(AgenaCommand::Worktree(args)) => self.run_worktree(args).await,
+            Some(AgenaCommand::Snapshot(args)) => self.run_snapshot(args).await,
             None => self.run_default(loader, tracing_reload_handle).await,
         }
     }
@@ -1737,8 +1737,8 @@ impl AgenaCli {
         Ok(())
     }
 
-    async fn run_worktree(self, args: WorktreeArgs) -> Result<(), AppError> {
-        let output = self.render_worktree_command(args).await?;
+    async fn run_snapshot(self, args: SnapshotArgs) -> Result<(), AppError> {
+        let output = self.render_snapshot_command(args).await?;
         println!("{output}");
         Ok(())
     }
@@ -2235,14 +2235,14 @@ impl AgenaCli {
         )
     }
 
-    async fn render_worktree_command(&self, args: WorktreeArgs) -> Result<String, AppError> {
+    async fn render_snapshot_command(&self, args: SnapshotArgs) -> Result<String, AppError> {
         let runtime = self.session_runtime().await?;
         let manager = runtime
             .session_manager()
             .ok_or_else(session_storage_error)?;
         let executor = manager.tool_executor();
         let registry = executor.worktree_registry().ok_or_else(|| {
-            AppError::Config("worktree registry is not enabled in this runtime".to_owned())
+            AppError::Config("snapshot registry is not enabled in this runtime".to_owned())
         })?;
         let capabilities = crate::tool::worktree_backend_capabilities(runtime.workspace_root());
         let active = crate::tool::worktree_list_active(registry)
@@ -2298,7 +2298,7 @@ impl AgenaCli {
         let workspace_root = runtime.workspace_root().to_path_buf();
         let preflight = collect_git_preflight(&workspace_root)?;
 
-        let (worktree_active_sessions, worktree_managed_dirs) = match runtime.session_manager() {
+        let (snapshot_active_sessions, snapshot_managed_dirs) = match runtime.session_manager() {
             Some(manager) => {
                 let executor = manager.tool_executor();
                 match executor.worktree_registry() {
@@ -2329,8 +2329,8 @@ impl AgenaCli {
                 untracked_files: preflight.untracked_files,
                 changed_files: preflight.changed_files,
                 clean: preflight.clean,
-                worktree_active_sessions,
-                worktree_managed_dirs,
+                snapshot_active_sessions,
+                snapshot_managed_dirs,
             },
         )
     }

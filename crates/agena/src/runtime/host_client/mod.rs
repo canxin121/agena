@@ -901,7 +901,7 @@ impl HostClient for RuntimeHostClient {
     async fn worktree_list(&self) -> Result<HostWorktreeListResponse, PluginError> {
         let (_, registry) = self.executor_feature(
             |executor| executor.worktree_registry().cloned(),
-            "worktree registry is not enabled in this runtime",
+            "snapshot registry is not enabled in this runtime",
         )?;
         let worktrees: Vec<HostWorktreeSummary> = crate::tool::worktree_list_active(&registry)
             .into_iter()

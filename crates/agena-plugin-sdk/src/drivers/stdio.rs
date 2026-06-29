@@ -25,7 +25,7 @@ use crate::host_api::{
     HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
     HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
     HostAgentSwitchRequest, HostAgentSwitchResponse, HostClient, HostConfigReloadResponse,
-    HostEnterWorktreeRequest, HostExitWorktreeRequest, HostHookListResponse,
+    HostEnterSnapshotRequest, HostExitSnapshotRequest, HostHookListResponse,
     HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
     HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
     HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
@@ -33,16 +33,15 @@ use crate::host_api::{
     HostPluginStatusListResponse, HostRegisteredToolListResponse, HostSchedulerCreateRequest,
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
     HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSnapshotListResponse,
     HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveRequest,
     HostStatuslineRemoveResponse, HostStorageDeleteRequest, HostStorageGetRequest,
     HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
     HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
     HostThemeRemoveResponse, HostTodoWriteRequest, HostToolMutationResponse,
-    HostToolRegisterRequest, HostToolRemoveRequest, HostToolUpdateRequest,
-    HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
-    MonitorStartRequest, MonitorStopRequest, SpawnSubtaskRequest, SpawnSubtaskResponse,
-    ToolDescriptor,
+    HostToolRegisterRequest, HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MonitorHandle,
+    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
+    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
 };
 use crate::plugin::Plugin;
 use crate::rpc::{
@@ -488,12 +487,12 @@ impl HostClient for StdioHostClient {
         .await
     }
 
-    async fn enter_worktree(
+    async fn enter_snapshot(
         &self,
-        req: HostEnterWorktreeRequest,
+        req: HostEnterSnapshotRequest,
     ) -> crate::error::Result<ToolInvokeOutput> {
         self.call(
-            method::HOST_WORKTREE_ENTER,
+            method::HOST_SNAPSHOT_ENTER,
             serde_json::json!({
                 "request": req,
                 "context": crate::host_api::current_host_callback_context(),
@@ -502,12 +501,12 @@ impl HostClient for StdioHostClient {
         .await
     }
 
-    async fn exit_worktree(
+    async fn exit_snapshot(
         &self,
-        req: HostExitWorktreeRequest,
+        req: HostExitSnapshotRequest,
     ) -> crate::error::Result<ToolInvokeOutput> {
         self.call(
-            method::HOST_WORKTREE_EXIT,
+            method::HOST_SNAPSHOT_EXIT,
             serde_json::json!({
                 "request": req,
                 "context": crate::host_api::current_host_callback_context(),
@@ -766,9 +765,9 @@ impl HostClient for StdioHostClient {
         .await
     }
 
-    async fn worktree_list(&self) -> crate::error::Result<HostWorktreeListResponse> {
+    async fn snapshot_list(&self) -> crate::error::Result<HostSnapshotListResponse> {
         self.call(
-            method::HOST_WORKTREE_LIST,
+            method::HOST_SNAPSHOT_LIST,
             serde_json::json!({
                 "context": crate::host_api::current_host_callback_context(),
             }),

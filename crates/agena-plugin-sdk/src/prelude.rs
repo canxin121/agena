@@ -28,14 +28,15 @@ pub use crate::host_api::{
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
     HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
-    HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveRequest,
-    HostStatuslineRemoveResponse, HostStatuslineSegment, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
-    HostStorageRecord, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
-    HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest,
-    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
-    HostToolRemoveRequest, HostToolUpdateRequest, HostWorktreeListResponse, HostWorktreeSummary,
-    LogLevel, NoopHostClient, ToolRegistryChangeKind, ToolRegistryChangedEvent,
+    HostSnapshotListResponse, HostSnapshotSummary, HostStatuslineContributeRequest,
+    HostStatuslineListResponse, HostStatuslineRemoveRequest, HostStatuslineRemoveResponse,
+    HostStatuslineSegment, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageRecord, HostStorageScope,
+    HostStorageSetRequest, HostStorageVisibility, HostThemeListResponse, HostThemePalette,
+    HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
+    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
+    HostToolUpdateRequest, LogLevel, NoopHostClient, ToolRegistryChangeKind,
+    ToolRegistryChangedEvent,
 };
 pub use crate::macro_support::{schema_example_texts, schema_usage_text};
 pub use crate::manifest::{

@@ -62,8 +62,8 @@ impl ToolOutputTruncator {
             | ToolPayloadOutput::AskUser { .. }
             | ToolPayloadOutput::WebFetch { .. }
             | ToolPayloadOutput::WebSearch { .. }
-            | ToolPayloadOutput::EnterWorktree { .. }
-            | ToolPayloadOutput::ExitWorktree { .. }
+            | ToolPayloadOutput::EnterSnapshot { .. }
+            | ToolPayloadOutput::ExitSnapshot { .. }
             | ToolPayloadOutput::CronCreate { .. }
             | ToolPayloadOutput::CronList { .. }
             | ToolPayloadOutput::CronDelete { .. }

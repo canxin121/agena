@@ -6,8 +6,8 @@ use crate::plugin::sdk::ToolInputShape;
 
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
-    ToolRuntimeContext, apply_patch, ask_user, cron, glob, grep, lsp, process_tool, read,
-    suggest_tool_names, task, todo_write, tool_search, unknown_tool_hint, worktree,
+    ToolRuntimeContext, apply_patch, ask_user, cron, glob, grep, lsp, process_tool, read, snapshot,
+    suggest_tool_names, task, todo_write, tool_search, unknown_tool_hint,
 };
 
 const BUILTIN_TOOL_NAMES: &[&str] = &[
@@ -16,7 +16,7 @@ const BUILTIN_TOOL_NAMES: &[&str] = &[
     "cron_create",
     "cron_delete",
     "cron_list",
-    "exit_worktree",
+    "exit_snapshot",
     "glob",
     "grep",
     "lsp_definition",
@@ -29,7 +29,7 @@ const BUILTIN_TOOL_NAMES: &[&str] = &[
     "task",
     "todo_write",
     "tool_search",
-    "enter_worktree",
+    "enter_snapshot",
 ];
 
 fn apply_patch_output_text(result: &apply_patch::ApplyPatchExecution) -> String {
@@ -121,11 +121,11 @@ pub(crate) fn execute_tool(
         "todo_write" => Ok(todo_write::execute(&parse_shape_input(input)?)),
         "ask_user" => ask_user::execute(&parse_shape_input(input)?),
         "process" => process_tool::execute(executor, &parse_shape_input(input)?, context),
-        "enter_worktree" => {
-            worktree::execute_enter(executor, &parse_shape_input(input)?, context.session_id)
+        "enter_snapshot" => {
+            snapshot::execute_enter(executor, &parse_shape_input(input)?, context.session_id)
         }
-        "exit_worktree" => {
-            worktree::execute_exit(executor, &parse_shape_input(input)?, context.session_id)
+        "exit_snapshot" => {
+            snapshot::execute_exit(executor, &parse_shape_input(input)?, context.session_id)
         }
         "cron_create" => {
             cron::execute_create(executor, &parse_shape_input(input)?, context.session_id)

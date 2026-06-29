@@ -439,11 +439,11 @@ pub struct WorkflowPromptToolInput {
     non_empty_if_present("name", "path"),
     conflicts_with("name", "path")
 )]
-pub struct EnterWorktreeToolInput {
+pub struct EnterSnapshotToolInput {
     /// Optional name; when absent a slug is generated from the timestamp.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Path of an already-existing worktree to enter.  Mutually
+    /// Path of an already-existing snapshot to enter. Mutually
     /// exclusive with `name`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -451,10 +451,10 @@ pub struct EnterWorktreeToolInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
 #[tool_input(trim("action"), non_empty("action"))]
-pub struct ExitWorktreeToolInput {
-    /// "keep" leaves the worktree on disk; "remove" deletes it.
+pub struct ExitSnapshotToolInput {
+    /// "keep" leaves the snapshot on disk; "remove" deletes it.
     pub action: String,
-    /// Required `true` when `action = "remove"` and the worktree has
+    /// Required `true` when `action = "remove"` and the snapshot has
     /// uncommitted changes / unpushed commits.
     #[serde(default)]
     pub discard_changes: bool,
@@ -1257,8 +1257,8 @@ mod tests {
     }
 
     #[test]
-    fn worktree_and_cron_inputs_validate_at_parse_time() {
-        let err = EnterWorktreeToolInput::parse_input(json!({
+    fn snapshot_and_cron_inputs_validate_at_parse_time() {
+        let err = EnterSnapshotToolInput::parse_input(json!({
             "name": " feature-x ",
             "path": " /tmp/wt "
         }))

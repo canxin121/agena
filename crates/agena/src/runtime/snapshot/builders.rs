@@ -71,18 +71,18 @@ pub(super) fn build_tool_executor(
         crate::agent::PermissionConfig::default(),
         resolution,
     );
-    let worktree_registry = crate::tool::worktree_registry_for_executor();
+    let snapshot_registry = crate::tool::snapshot_registry_for_executor();
 
-    // Drop any orphan worktrees left over from a previously-crashed
+    // Drop any orphan snapshots left over from a previously-crashed
     // session so a clean startup does not accumulate
-    // managed worktree directories indefinitely. Stale = no live
+    // managed snapshot directories indefinitely. Stale = no live
     // session and not registered with `git worktree list`.
-    let pruned = crate::tool::worktree_prune_stale(workspace_root, &worktree_registry);
+    let pruned = crate::tool::snapshot_prune_stale(workspace_root, &snapshot_registry);
     if !pruned.is_empty() {
         tracing::info!(
-            target: "agena::runtime::worktree",
+            target: "agena::runtime::snapshot",
             removed = pruned.len(),
-            "pruned stale worktree directories at startup"
+            "pruned stale snapshot directories at startup"
         );
     }
 
@@ -90,7 +90,7 @@ pub(super) fn build_tool_executor(
         .with_plugin_manager(plugins)
         .with_tool_presentation(resolution.config.plugins.policy.tool_presentation.clone())
         .with_subagent_registry(agents)
-        .with_worktree_registry(worktree_registry);
+        .with_snapshot_registry(snapshot_registry);
 
     if let Some(manager) = session_manager {
         executor = executor.with_scheduler(build_scheduler(manager));

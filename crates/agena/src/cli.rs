@@ -959,7 +959,7 @@ struct PermissionsOutput {
 }
 
 #[derive(Debug, Serialize)]
-struct ActiveWorktreeOutput {
+struct ActiveSnapshotOutput {
     session_id: i64,
     path: String,
     branch: String,
@@ -968,7 +968,7 @@ struct ActiveWorktreeOutput {
 }
 
 #[derive(Debug, Serialize)]
-struct ManagedWorktreeOutput {
+struct ManagedSnapshotOutput {
     path: String,
     session_id: Option<i64>,
     branch: Option<String>,
@@ -979,24 +979,24 @@ struct ManagedWorktreeOutput {
 }
 
 #[derive(Debug, Serialize)]
-struct WorktreeBackendSupportOutput {
+struct SnapshotBackendSupportOutput {
     available: bool,
     detail: String,
 }
 
 #[derive(Debug, Serialize)]
-struct WorktreeCapabilitiesOutput {
+struct SnapshotCapabilitiesOutput {
     preferred_backend: Option<String>,
-    git: WorktreeBackendSupportOutput,
-    rift: WorktreeBackendSupportOutput,
+    git: SnapshotBackendSupportOutput,
+    rift: SnapshotBackendSupportOutput,
 }
 
 #[derive(Debug, Serialize)]
-struct WorktreeOutput {
+struct SnapshotOutput {
     workspace_root: String,
-    capabilities: WorktreeCapabilitiesOutput,
-    active: Vec<ActiveWorktreeOutput>,
-    managed: Vec<ManagedWorktreeOutput>,
+    capabilities: SnapshotCapabilitiesOutput,
+    active: Vec<ActiveSnapshotOutput>,
+    managed: Vec<ManagedSnapshotOutput>,
 }
 
 #[derive(Debug, Clone)]
@@ -2241,13 +2241,13 @@ impl AgenaCli {
             .session_manager()
             .ok_or_else(session_storage_error)?;
         let executor = manager.tool_executor();
-        let registry = executor.worktree_registry().ok_or_else(|| {
+        let registry = executor.snapshot_registry().ok_or_else(|| {
             AppError::Config("snapshot registry is not enabled in this runtime".to_owned())
         })?;
-        let capabilities = crate::tool::worktree_backend_capabilities(runtime.workspace_root());
-        let active = crate::tool::worktree_list_active(registry)
+        let capabilities = crate::tool::snapshot_backend_capabilities(runtime.workspace_root());
+        let active = crate::tool::snapshot_list_active(registry)
             .into_iter()
-            .map(|entry| ActiveWorktreeOutput {
+            .map(|entry| ActiveSnapshotOutput {
                 session_id: entry.session_id,
                 path: entry.path.display().to_string(),
                 branch: entry.branch,
@@ -2255,15 +2255,17 @@ impl AgenaCli {
                 created_here: entry.created_here,
             })
             .collect::<Vec<_>>();
-        let managed = crate::tool::worktree_list_managed(runtime.workspace_root(), registry)
+        let managed = crate::tool::snapshot_list_managed(runtime.workspace_root(), registry)
             .into_iter()
-            .map(|entry| {
+            .map(|entry: crate::tool::ManagedSnapshot| {
                 let stale = entry.is_stale();
-                ManagedWorktreeOutput {
+                ManagedSnapshotOutput {
                     path: entry.path.display().to_string(),
                     session_id: entry.session_id,
                     branch: entry.branch,
-                    backend: entry.backend.map(|backend| backend.as_str().to_string()),
+                    backend: entry
+                        .backend
+                        .map(|backend: crate::tool::SnapshotBackend| backend.as_str().to_string()),
                     registered_with_git: entry.registered_with_git,
                     registered_with_rift: entry.registered_with_rift,
                     stale,
@@ -2272,17 +2274,17 @@ impl AgenaCli {
             .collect::<Vec<_>>();
         render_serialized(
             args.format,
-            &WorktreeOutput {
+            &SnapshotOutput {
                 workspace_root: runtime.workspace_root().display().to_string(),
-                capabilities: WorktreeCapabilitiesOutput {
+                capabilities: SnapshotCapabilitiesOutput {
                     preferred_backend: capabilities
                         .preferred_backend
-                        .map(|backend| backend.as_str().to_string()),
-                    git: WorktreeBackendSupportOutput {
+                        .map(|backend: crate::tool::SnapshotBackend| backend.as_str().to_string()),
+                    git: SnapshotBackendSupportOutput {
                         available: capabilities.git.available,
                         detail: capabilities.git.detail,
                     },
-                    rift: WorktreeBackendSupportOutput {
+                    rift: SnapshotBackendSupportOutput {
                         available: capabilities.rift.available,
                         detail: capabilities.rift.detail,
                     },
@@ -2301,10 +2303,10 @@ impl AgenaCli {
         let (snapshot_active_sessions, snapshot_managed_dirs) = match runtime.session_manager() {
             Some(manager) => {
                 let executor = manager.tool_executor();
-                match executor.worktree_registry() {
+                match executor.snapshot_registry() {
                     Some(registry) => (
-                        crate::tool::worktree_list_active(registry).len() as u64,
-                        crate::tool::worktree_list_managed(runtime.workspace_root(), registry).len()
+                        crate::tool::snapshot_list_active(registry).len() as u64,
+                        crate::tool::snapshot_list_managed(runtime.workspace_root(), registry).len()
                             as u64,
                     ),
                     None => (0, 0),

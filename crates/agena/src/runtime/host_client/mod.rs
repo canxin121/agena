@@ -8,7 +8,7 @@ use std::{collections::BTreeMap, future::Future, sync::Arc};
 use async_trait::async_trait;
 
 use crate::message::{
-    AskUserToolInput, EnterWorktreeToolInput, ExitWorktreeToolInput, ProcessStatus, ProcessStream,
+    AskUserToolInput, EnterSnapshotToolInput, ExitSnapshotToolInput, ProcessStatus, ProcessStream,
     StructuredObject, TaskSubagentType, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput,
     ToolInvocation, UserInputOption, UserInputQuestion,
 };
@@ -17,7 +17,7 @@ use crate::plugin::sdk::host_api::{
     HostAgentGetResponse, HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
     HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
     HostAgentSelectionConfig, HostAgentSwitchRequest, HostAgentSwitchResponse, HostCallbackContext,
-    HostClient, HostConfigReloadResponse, HostEnterWorktreeRequest, HostExitWorktreeRequest,
+    HostClient, HostConfigReloadResponse, HostEnterSnapshotRequest, HostExitSnapshotRequest,
     HostGetSessionRequest, HostGetSessionResponse, HostLspDiagnostic,
     HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
     HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
@@ -28,12 +28,12 @@ use crate::plugin::sdk::host_api::{
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
     HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
-    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageRecord, HostStorageSetRequest,
-    HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostWorktreeListResponse,
-    HostWorktreeSummary, LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
-    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
+    HostSnapshotListResponse, HostSnapshotSummary, HostStorageDeleteRequest, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageRecord,
+    HostStorageSetRequest, HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest,
+    LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
+    MonitorStartRequest, MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest,
+    SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -646,13 +646,13 @@ impl HostClient for RuntimeHostClient {
         })
     }
 
-    async fn enter_worktree(
+    async fn enter_snapshot(
         &self,
-        req: HostEnterWorktreeRequest,
+        req: HostEnterSnapshotRequest,
     ) -> Result<ToolInvokeOutput, PluginError> {
         self.run_workflow_tool(
-            "enter_worktree",
-            EnterWorktreeToolInput {
+            "enter_snapshot",
+            EnterSnapshotToolInput {
                 name: req.name,
                 path: req.path,
             },
@@ -660,13 +660,13 @@ impl HostClient for RuntimeHostClient {
         .await
     }
 
-    async fn exit_worktree(
+    async fn exit_snapshot(
         &self,
-        req: HostExitWorktreeRequest,
+        req: HostExitSnapshotRequest,
     ) -> Result<ToolInvokeOutput, PluginError> {
         self.run_workflow_tool(
-            "exit_worktree",
-            ExitWorktreeToolInput {
+            "exit_snapshot",
+            ExitSnapshotToolInput {
                 action: req.action,
                 discard_changes: req.discard_changes,
             },
@@ -898,21 +898,21 @@ impl HostClient for RuntimeHostClient {
         })
     }
 
-    async fn worktree_list(&self) -> Result<HostWorktreeListResponse, PluginError> {
+    async fn snapshot_list(&self) -> Result<HostSnapshotListResponse, PluginError> {
         let (_, registry) = self.executor_feature(
-            |executor| executor.worktree_registry().cloned(),
+            |executor| executor.snapshot_registry().cloned(),
             "snapshot registry is not enabled in this runtime",
         )?;
-        let worktrees: Vec<HostWorktreeSummary> = crate::tool::worktree_list_active(&registry)
+        let snapshots: Vec<HostSnapshotSummary> = crate::tool::snapshot_list_active(&registry)
             .into_iter()
-            .map(|w| HostWorktreeSummary {
+            .map(|w| HostSnapshotSummary {
                 session_id: w.session_id,
                 path: w.path.display().to_string(),
                 branch: w.branch,
                 created_here: w.created_here,
             })
             .collect();
-        Ok(HostWorktreeListResponse { worktrees })
+        Ok(HostSnapshotListResponse { snapshots })
     }
 
     async fn scheduler_list(&self) -> Result<HostSchedulerListResponse, PluginError> {

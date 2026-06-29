@@ -24,16 +24,16 @@ impl ApiService {
                 untracked_files: 0,
                 changed_files: 0,
                 clean: true,
-                worktree_active_sessions: 0,
-                worktree_managed_dirs: 0,
+                snapshot_active_sessions: 0,
+                snapshot_managed_dirs: 0,
             });
         };
 
         let executor = manager.tool_executor();
-        let (worktree_active_sessions, worktree_managed_dirs) = match executor.worktree_registry() {
+        let (snapshot_active_sessions, snapshot_managed_dirs) = match executor.snapshot_registry() {
             Some(registry) => (
-                agena::tool::worktree_list_active(registry).len() as u64,
-                agena::tool::worktree_list_managed(&workspace_root, registry).len() as u64,
+                agena::tool::snapshot_list_active(registry).len() as u64,
+                agena::tool::snapshot_list_managed(&workspace_root, registry).len() as u64,
             ),
             None => (0, 0),
         };
@@ -53,8 +53,8 @@ impl ApiService {
                 untracked_files: 0,
                 changed_files: 0,
                 clean: true,
-                worktree_active_sessions,
-                worktree_managed_dirs,
+                snapshot_active_sessions,
+                snapshot_managed_dirs,
             });
         }
 
@@ -74,8 +74,8 @@ impl ApiService {
                 untracked_files: 0,
                 changed_files: 0,
                 clean: true,
-                worktree_active_sessions,
-                worktree_managed_dirs,
+                snapshot_active_sessions,
+                snapshot_managed_dirs,
             });
         }
 
@@ -117,8 +117,8 @@ impl ApiService {
             untracked_files,
             changed_files,
             clean: changed_files == 0,
-            worktree_active_sessions,
-            worktree_managed_dirs,
+            snapshot_active_sessions,
+            snapshot_managed_dirs,
         })
     }
 

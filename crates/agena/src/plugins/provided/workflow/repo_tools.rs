@@ -9,39 +9,39 @@ use agena_macros::{StaticToolSurface, ToolInputShape};
     summary = "Enter or exit a managed repository snapshot.",
     handler_receiver = WorkflowPlugin,
     display = brief,
-    tags(ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Worktree),
-    host_capabilities(HostCapability::WorktreeRegistry, HostCapability::PluginStorage),
+    tags(ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Snapshot),
+    host_capabilities(HostCapability::SnapshotRegistry, HostCapability::PluginStorage),
     concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
-pub(crate) enum WorktreeToolInput {
+pub(crate) enum SnapshotToolInput {
     #[tool(
         exec = "enter",
-        handle = WorkflowPlugin::invoke_worktree_enter,
-        permission_paths_handle = WorkflowPlugin::permission_worktree_enter
+        handle = WorkflowPlugin::invoke_snapshot_enter,
+        permission_paths_handle = WorkflowPlugin::permission_snapshot_enter
     )]
     Enter {
         #[serde(flatten)]
         #[tool(flatten_shape)]
-        args: EnterWorktreeCommandInput,
+        args: EnterSnapshotCommandInput,
     },
     #[tool(
         exec = "exit",
-        handle = WorkflowPlugin::invoke_worktree_exit,
-        permission_paths_handle = WorkflowPlugin::permission_worktree_exit
+        handle = WorkflowPlugin::invoke_snapshot_exit,
+        permission_paths_handle = WorkflowPlugin::permission_snapshot_exit
     )]
     Exit {
         #[serde(flatten)]
         #[tool(flatten_shape)]
-        args: ExitWorktreeCommandInput,
+        args: ExitSnapshotCommandInput,
     },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
 #[tool_input(trim("name", "path"))]
 #[serde(tag = "target", rename_all = "snake_case")]
-pub(crate) enum EnterWorktreeCommandInput {
-    /// Create a new managed snapshot under the managed `worktrees` directory.
+pub(crate) enum EnterSnapshotCommandInput {
+    /// Create a new managed snapshot under the managed `snapshots` directory.
     #[tool_input(non_empty_if_present("name"))]
     New {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -54,12 +54,12 @@ pub(crate) enum EnterWorktreeCommandInput {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ExitWorktreeAction {
+pub(crate) enum ExitSnapshotAction {
     Keep,
     Remove,
 }
 
-impl ExitWorktreeAction {
+impl ExitSnapshotAction {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Keep => "keep",
@@ -69,27 +69,27 @@ impl ExitWorktreeAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-pub(crate) struct ExitWorktreeCommandInput {
+pub(crate) struct ExitSnapshotCommandInput {
     #[serde(rename = "exit_action")]
-    pub(crate) exit_action: ExitWorktreeAction,
+    pub(crate) exit_action: ExitSnapshotAction,
     #[serde(default)]
     pub(crate) discard_changes: bool,
 }
 
-pub(crate) fn worktree_enter_permission_paths(
+pub(crate) fn snapshot_enter_permission_paths(
     workspace_root: &Path,
-    input: &EnterWorktreeCommandInput,
+    input: &EnterSnapshotCommandInput,
 ) -> SdkResult<Vec<PathRequest>> {
     match input {
-        EnterWorktreeCommandInput::Existing { path } if !path.trim().is_empty() => Ok(vec![
+        EnterSnapshotCommandInput::Existing { path } if !path.trim().is_empty() => Ok(vec![
             PathRequest::read(path.clone()),
             PathRequest::write(path.clone()),
         ]),
-        EnterWorktreeCommandInput::Existing { .. } | EnterWorktreeCommandInput::New { .. } => {
-            let worktrees_dir =
-                crate::project_paths::project_state_dir(workspace_root).join("worktrees");
+        EnterSnapshotCommandInput::Existing { .. } | EnterSnapshotCommandInput::New { .. } => {
+            let snapshots_dir =
+                crate::project_paths::project_state_dir(workspace_root).join("snapshots");
             Ok(vec![PathRequest::write(
-                worktrees_dir.to_string_lossy().to_string(),
+                snapshots_dir.to_string_lossy().to_string(),
             )])
         }
     }

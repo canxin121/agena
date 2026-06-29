@@ -169,8 +169,8 @@ pub mod method {
     pub const HOST_SUBTASK_SPAWN: &str = "host/subtask.spawn";
     pub const HOST_TOOL_LIST: &str = "host/tool.list";
     pub const HOST_TODO_WRITE: &str = "host/todo.write";
-    pub const HOST_WORKTREE_ENTER: &str = "host/worktree.enter";
-    pub const HOST_WORKTREE_EXIT: &str = "host/worktree.exit";
+    pub const HOST_SNAPSHOT_ENTER: &str = "host/snapshot.enter";
+    pub const HOST_SNAPSHOT_EXIT: &str = "host/snapshot.exit";
     pub const HOST_MONITOR_START: &str = "host/monitor.start";
     pub const HOST_MONITOR_LIST: &str = "host/monitor.list";
     pub const HOST_MONITOR_READ: &str = "host/monitor.read";
@@ -191,7 +191,7 @@ pub mod method {
     pub const HOST_PLUGIN_STATUS_GET: &str = "host/plugin.status.get";
     pub const HOST_LSP_LIST_SERVERS: &str = "host/lsp.list_servers";
     pub const HOST_LSP_LIST_DIAGNOSTICS: &str = "host/lsp.list_diagnostics";
-    pub const HOST_WORKTREE_LIST: &str = "host/worktree.list";
+    pub const HOST_SNAPSHOT_LIST: &str = "host/snapshot.list";
     pub const HOST_SCHEDULER_LIST: &str = "host/scheduler.list";
     pub const HOST_SCHEDULER_CREATE: &str = "host/scheduler.create";
     pub const HOST_SCHEDULER_DELETE: &str = "host/scheduler.delete";

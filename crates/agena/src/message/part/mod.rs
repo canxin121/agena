@@ -21,7 +21,7 @@ pub use structured::{StructuredField, StructuredObject, StructuredValue};
 pub use tool::{
     AgentRestoreToolInput, AgentSwitchToolInput, ApplyPatchToolInput, ArtifactRef,
     AskUserToolInput, CronCreateToolInput, CronDeleteToolInput, CronListToolInput,
-    EnterWorktreeToolInput, ExitWorktreeToolInput, FilesystemAccess, FilesystemEffect,
+    EnterSnapshotToolInput, ExitSnapshotToolInput, FilesystemAccess, FilesystemEffect,
     GlobToolInput, GrepToolInput, LspDefinitionToolInput, LspDiagnosticsToolInput,
     LspHoverToolInput, LspPositionToolInput, LspReferencesToolInput, ModelVisibleOutput,
     NetworkEffect, OperationBlock, OperationError, OperationPart, PluginInvocation, ProcessEvent,

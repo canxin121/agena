@@ -10,8 +10,8 @@ pub use metadata::{AssistantReasoningField, MessageMetadata, MessageProviderStat
 pub use part::{
     AgentRestoreToolInput, AgentSwitchToolInput, ApplyPatchToolInput, ArtifactRef,
     AskUserToolInput, AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource,
-    CronCreateToolInput, CronDeleteToolInput, CronListToolInput, EnterWorktreeToolInput, ErrorPart,
-    ExecutionStatus, ExitWorktreeToolInput, FileChangeKind, FileChangeRecord, FilesystemAccess,
+    CronCreateToolInput, CronDeleteToolInput, CronListToolInput, EnterSnapshotToolInput, ErrorPart,
+    ExecutionStatus, ExitSnapshotToolInput, FileChangeKind, FileChangeRecord, FilesystemAccess,
     FilesystemEffect, GlobToolInput, GrepToolInput, InteractiveRequestPart, LspDefinitionToolInput,
     LspDiagnosticsToolInput, LspHoverToolInput, LspPositionToolInput, LspReferencesToolInput,
     MessagePart, ModelVisibleOutput, NetworkEffect, OperationBlock, OperationError, OperationPart,

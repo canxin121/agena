@@ -61,8 +61,8 @@ pub struct GitStatusResource {
     pub untracked_files: u64,
     pub changed_files: u64,
     pub clean: bool,
-    pub worktree_active_sessions: u64,
-    pub worktree_managed_dirs: u64,
+    pub snapshot_active_sessions: u64,
+    pub snapshot_managed_dirs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

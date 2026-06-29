@@ -14111,11 +14111,20 @@ impl App {
                         .enter_worktree(session_id, Some(argument.to_string()), None)
                 };
                 match result {
-                    Ok(output) => self.flash_success(ui_text::worktree_ready_message(
-                        &self.i18n,
-                        output.path.as_str(),
-                        output.branch.as_deref(),
-                    )),
+                    Ok(output) => {
+                        let mut message = ui_text::worktree_ready_message(
+                            &self.i18n,
+                            output.path.as_str(),
+                            output.branch.as_deref(),
+                        );
+                        if let Some(backend) = output.backend.as_deref() {
+                            message.push_str(format!(" | backend={backend}").as_str());
+                        }
+                        if let Some(note) = output.note.as_deref() {
+                            message.push_str(format!(" | {note}").as_str());
+                        }
+                        self.flash_success(message)
+                    }
                     Err(error) => self.flash_error(error.to_string()),
                 }
             }
@@ -14132,11 +14141,20 @@ impl App {
                     .backend
                     .enter_worktree(session_id, None, Some(path.to_string()))
                 {
-                    Ok(output) => self.flash_success(ui_text::worktree_attached_message(
-                        &self.i18n,
-                        output.path.as_str(),
-                        output.branch.as_deref(),
-                    )),
+                    Ok(output) => {
+                        let mut message = ui_text::worktree_attached_message(
+                            &self.i18n,
+                            output.path.as_str(),
+                            output.branch.as_deref(),
+                        );
+                        if let Some(backend) = output.backend.as_deref() {
+                            message.push_str(format!(" | backend={backend}").as_str());
+                        }
+                        if let Some(note) = output.note.as_deref() {
+                            message.push_str(format!(" | {note}").as_str());
+                        }
+                        self.flash_success(message)
+                    }
                     Err(error) => self.flash_error(error.to_string()),
                 }
             }

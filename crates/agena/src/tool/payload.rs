@@ -230,6 +230,10 @@ pub enum ToolPayloadOutput {
     EnterWorktree {
         path: String,
         branch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        backend: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     ExitWorktree {
         action: String,

@@ -979,8 +979,22 @@ struct ManagedWorktreeOutput {
 }
 
 #[derive(Debug, Serialize)]
+struct WorktreeBackendSupportOutput {
+    available: bool,
+    detail: String,
+}
+
+#[derive(Debug, Serialize)]
+struct WorktreeCapabilitiesOutput {
+    preferred_backend: Option<String>,
+    git: WorktreeBackendSupportOutput,
+    rift: WorktreeBackendSupportOutput,
+}
+
+#[derive(Debug, Serialize)]
 struct WorktreeOutput {
     workspace_root: String,
+    capabilities: WorktreeCapabilitiesOutput,
     active: Vec<ActiveWorktreeOutput>,
     managed: Vec<ManagedWorktreeOutput>,
 }
@@ -2230,6 +2244,7 @@ impl AgenaCli {
         let registry = executor.worktree_registry().ok_or_else(|| {
             AppError::Config("worktree registry is not enabled in this runtime".to_owned())
         })?;
+        let capabilities = crate::tool::worktree_backend_capabilities(runtime.workspace_root());
         let active = crate::tool::worktree_list_active(registry)
             .into_iter()
             .map(|entry| ActiveWorktreeOutput {
@@ -2259,6 +2274,19 @@ impl AgenaCli {
             args.format,
             &WorktreeOutput {
                 workspace_root: runtime.workspace_root().display().to_string(),
+                capabilities: WorktreeCapabilitiesOutput {
+                    preferred_backend: capabilities
+                        .preferred_backend
+                        .map(|backend| backend.as_str().to_string()),
+                    git: WorktreeBackendSupportOutput {
+                        available: capabilities.git.available,
+                        detail: capabilities.git.detail,
+                    },
+                    rift: WorktreeBackendSupportOutput {
+                        available: capabilities.rift.available,
+                        detail: capabilities.rift.detail,
+                    },
+                },
                 active,
                 managed,
             },

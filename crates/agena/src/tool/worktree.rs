@@ -11,6 +11,7 @@
 //! multiple tool invocations.
 
 use std::collections::{HashMap, HashSet};
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::Arc;
@@ -37,6 +38,29 @@ impl WorktreeBackend {
 }
 
 #[derive(Debug, Clone)]
+pub struct WorktreeBackendSupport {
+    pub backend: WorktreeBackend,
+    pub available: bool,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorktreeBackendCapabilities {
+    pub preferred_backend: Option<WorktreeBackend>,
+    pub git: WorktreeBackendSupport,
+    pub rift: WorktreeBackendSupport,
+}
+
+impl WorktreeBackendCapabilities {
+    pub fn for_backend(&self, backend: WorktreeBackend) -> &WorktreeBackendSupport {
+        match backend {
+            WorktreeBackend::Rift => &self.rift,
+            WorktreeBackend::Git => &self.git,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct WorktreeSession {
     pub path: PathBuf,
     pub branch: String,
@@ -51,6 +75,21 @@ pub type WorktreeRegistry = Arc<RwLock<std::collections::HashMap<i64, WorktreeSe
 
 pub fn registry_for_executor() -> WorktreeRegistry {
     Arc::new(RwLock::new(std::collections::HashMap::new()))
+}
+
+#[derive(Debug, Clone)]
+struct EnterWorkspaceResolution {
+    session: WorktreeSession,
+    note: Option<String>,
+}
+
+impl EnterWorkspaceResolution {
+    fn without_note(session: WorktreeSession) -> Self {
+        Self {
+            session,
+            note: None,
+        }
+    }
 }
 
 pub(super) fn execute_enter(
@@ -79,24 +118,32 @@ pub(super) fn execute_enter(
         ));
     }
 
-    let session = if let Some(path) = input.path.as_deref() {
-        enter_existing(&workspace, path)?
+    let resolution = if let Some(path) = input.path.as_deref() {
+        EnterWorkspaceResolution::without_note(enter_existing(&workspace, path)?)
     } else {
         create_new(&workspace, input.name.as_deref())?
     };
+    let EnterWorkspaceResolution { session, note } = resolution;
+    let note_line = note
+        .as_deref()
+        .map(|note| format!("  note:    {note}\n"))
+        .unwrap_or_default();
 
     let view = ToolExecutionView::simple(
         format!("Workspace → {}", session.path.display()),
         format!(
-            "Switched to managed workspace:\n  backend: {}\n  path:    {}\n  branch:  {}\n",
+            "Switched to managed workspace:\n  backend: {}\n  path:    {}\n  branch:  {}\n{}",
             session.backend.as_str(),
             session.path.display(),
             session.branch,
+            note_line,
         ),
     );
     let output = ToolPayloadOutput::EnterWorktree {
         path: session.path.to_string_lossy().to_string(),
         branch: session.branch.clone(),
+        backend: Some(session.backend.as_str().to_string()),
+        note,
     };
 
     registry.write().insert(session_id, session);
@@ -146,7 +193,7 @@ pub(super) fn execute_exit(
     ))
 }
 
-fn create_new(workspace: &Path, name: Option<&str>) -> Result<WorktreeSession, ToolError> {
+fn create_new(workspace: &Path, name: Option<&str>) -> Result<EnterWorkspaceResolution, ToolError> {
     let slug = name
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -161,31 +208,184 @@ fn create_new(workspace: &Path, name: Option<&str>) -> Result<WorktreeSession, T
         )));
     }
 
-    let rift_error = match try_create_new_with_rift(workspace, &base, &slug) {
-        Ok(session) => return Ok(session),
+    let capabilities = backend_capabilities(workspace);
+    let (rift_failure, note) = if capabilities.rift.available {
+        match try_create_new_with_rift(workspace, &base, &slug) {
+            Ok(session) => return Ok(EnterWorkspaceResolution::without_note(session)),
+            Err(error) => {
+                tracing::info!(
+                    target: "agena::worktree",
+                    workspace = %workspace.display(),
+                    slug = %slug,
+                    error = %error,
+                    "falling back to git worktree because the rift backend could not be used"
+                );
+                (
+                    Some(error.clone()),
+                    Some(format!(
+                        "used git_worktree because Rift could not create a snapshot here: {error}"
+                    )),
+                )
+            }
+        }
+    } else {
+        (
+            Some(capabilities.rift.detail.clone()),
+            capabilities.git.available.then(|| {
+                format!(
+                    "used git_worktree because Rift is unavailable: {}",
+                    capabilities.rift.detail
+                )
+            }),
+        )
+    };
+
+    if !capabilities.git.available {
+        return Err(create_new_backend_error(
+            &capabilities,
+            rift_failure.as_deref(),
+            None,
+        ));
+    }
+
+    match create_new_with_git(workspace, &target, &slug) {
+        Ok(session) => Ok(EnterWorkspaceResolution { session, note }),
+        Err(git_error) => {
+            let git_failure = git_error.to_string();
+            Err(create_new_backend_error(
+                &capabilities,
+                rift_failure.as_deref(),
+                Some(git_failure.as_str()),
+            ))
+        }
+    }
+}
+
+fn create_new_backend_error(
+    capabilities: &WorktreeBackendCapabilities,
+    rift_failure: Option<&str>,
+    git_failure: Option<&str>,
+) -> ToolError {
+    let preferred = capabilities
+        .preferred_backend
+        .map(WorktreeBackend::as_str)
+        .unwrap_or("none");
+    let mut detail = vec![
+        format!("preferred backend: {preferred}"),
+        format!(
+            "rift: available={} | {}",
+            capabilities.rift.available, capabilities.rift.detail
+        ),
+        format!(
+            "git_worktree: available={} | {}",
+            capabilities.git.available, capabilities.git.detail
+        ),
+    ];
+    if let Some(rift_failure) = rift_failure {
+        detail.push(format!("rift create attempt: {rift_failure}"));
+    }
+    if let Some(git_failure) = git_failure {
+        detail.push(format!("git worktree create attempt: {git_failure}"));
+    }
+    ToolError::Plugin(format!(
+        "enter_worktree: could not create a managed workspace\n  {}",
+        detail.join("\n  ")
+    ))
+}
+
+pub fn backend_capabilities(workspace: &Path) -> WorktreeBackendCapabilities {
+    let git = probe_git_backend(workspace);
+    let rift = probe_rift_backend();
+    let preferred_backend = if rift.available {
+        Some(WorktreeBackend::Rift)
+    } else if git.available {
+        Some(WorktreeBackend::Git)
+    } else {
+        None
+    };
+    WorktreeBackendCapabilities {
+        preferred_backend,
+        git,
+        rift,
+    }
+}
+
+fn probe_git_backend(workspace: &Path) -> WorktreeBackendSupport {
+    if let Err(detail) = probe_command_presence("git", &["--version"], "git CLI") {
+        return WorktreeBackendSupport {
+            backend: WorktreeBackend::Git,
+            available: false,
+            detail,
+        };
+    }
+
+    let output = match Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(workspace)
+        .output()
+    {
+        Ok(output) => output,
         Err(error) => {
-            tracing::info!(
-                target: "agena::worktree",
-                workspace = %workspace.display(),
-                slug = %slug,
-                error = %error,
-                "falling back to git worktree because the rift backend could not be used"
-            );
-            Some(error)
+            return WorktreeBackendSupport {
+                backend: WorktreeBackend::Git,
+                available: false,
+                detail: format!(
+                    "failed to execute `git` in {}: {error}",
+                    workspace.display()
+                ),
+            };
         }
     };
 
-    match create_new_with_git(workspace, &target, &slug) {
-        Ok(session) => Ok(session),
-        Err(git_error) => {
-            if let Some(rift_error) = rift_error {
-                Err(ToolError::Plugin(format!(
-                    "enter_worktree: rift backend failed ({rift_error}); git worktree fallback failed ({git_error})"
-                )))
-            } else {
-                Err(git_error)
-            }
+    if output.status.success() {
+        WorktreeBackendSupport {
+            backend: WorktreeBackend::Git,
+            available: true,
+            detail: "git CLI is available and the workspace is a git repository".to_string(),
         }
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let detail = if stderr.is_empty() {
+            format!("workspace {} is not a git repository", workspace.display())
+        } else {
+            format!(
+                "workspace {} is not a git repository: {stderr}",
+                workspace.display()
+            )
+        };
+        WorktreeBackendSupport {
+            backend: WorktreeBackend::Git,
+            available: false,
+            detail,
+        }
+    }
+}
+
+fn probe_rift_backend() -> WorktreeBackendSupport {
+    let binary = rift_bin();
+    match probe_command_presence(binary.as_str(), &["--help"], "Rift CLI") {
+        Ok(()) => WorktreeBackendSupport {
+            backend: WorktreeBackend::Rift,
+            available: true,
+            detail: format!(
+                "Rift CLI `{binary}` is available; filesystem and repository compatibility are verified when a snapshot is created"
+            ),
+        },
+        Err(detail) => WorktreeBackendSupport {
+            backend: WorktreeBackend::Rift,
+            available: false,
+            detail,
+        },
+    }
+}
+
+fn probe_command_presence(command: &str, args: &[&str], label: &str) -> Result<(), String> {
+    match Command::new(command).args(args).output() {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            Err(format!("{label} `{command}` was not found on PATH"))
+        }
+        Err(error) => Err(format!("failed to start {label} `{command}`: {error}")),
     }
 }
 
@@ -283,6 +483,14 @@ fn enter_existing(workspace: &Path, path: &str) -> Result<WorktreeSession, ToolE
             backend: WorktreeBackend::Rift,
             created_here: false,
         });
+    }
+
+    let capabilities = backend_capabilities(workspace);
+    if !capabilities.git.available {
+        return Err(ToolError::Plugin(format!(
+            "enter_worktree: cannot attach existing git worktree: {}",
+            capabilities.git.detail
+        )));
     }
 
     let listing = git(workspace, &["worktree", "list", "--porcelain"])?;
@@ -807,12 +1015,14 @@ exit 0
         }
         let _rift_guard = RiftBinGuard::set(&fake_rift);
 
-        let session = create_new(&workspace, Some("demo")).unwrap();
+        let created = create_new(&workspace, Some("demo")).unwrap();
+        let EnterWorkspaceResolution { session, note } = created;
 
         assert_eq!(session.backend, WorktreeBackend::Rift);
         assert!(session.created_here);
         assert_eq!(session.path, managed_worktrees_dir(&workspace).join("demo"));
         assert_eq!(session.branch, "snapshot");
+        assert!(note.is_none());
     }
 
     #[test]
@@ -867,11 +1077,53 @@ exit 0
             .unwrap();
         assert!(output.status.success());
 
-        let session = create_new(&workspace, Some("demo")).unwrap();
+        let created = create_new(&workspace, Some("demo")).unwrap();
+        let EnterWorkspaceResolution { session, note } = created;
 
         assert_eq!(session.backend, WorktreeBackend::Git);
         assert_eq!(session.branch, "agena/demo");
         assert!(session.path.exists());
+        assert!(
+            note.as_deref()
+                .is_some_and(|note| note.contains("unsupported filesystem"))
+        );
+    }
+
+    #[test]
+    fn backend_capabilities_report_preferred_backend_and_rift_caveat() {
+        let _env_guard = env_lock().lock().unwrap();
+        let temp = TempDir::new().unwrap();
+        let _home_guard = TestHomeGuard::set(temp.path());
+
+        let workspace = temp.path().join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+
+        let fake_rift = temp.path().join("fake-rift.sh");
+        fs::write(&fake_rift, "#!/usr/bin/env bash\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&fake_rift).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&fake_rift, perms).unwrap();
+        }
+        let _rift_guard = RiftBinGuard::set(&fake_rift);
+
+        let output = Command::new("git")
+            .args(["init"])
+            .current_dir(&workspace)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+
+        let capabilities = backend_capabilities(&workspace);
+
+        assert_eq!(capabilities.preferred_backend, Some(WorktreeBackend::Rift));
+        assert!(capabilities.git.available);
+        assert!(capabilities.rift.available);
+        assert!(capabilities.rift.detail.contains(
+            "filesystem and repository compatibility are verified when a snapshot is created"
+        ));
     }
 
     #[test]

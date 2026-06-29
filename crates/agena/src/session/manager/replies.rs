@@ -2793,13 +2793,13 @@ impl SessionManager {
             &execution.output,
         ) {
             match output {
-                crate::tool::ToolPayloadOutput::EnterWorktree { path, .. } => {
+                crate::tool::ToolPayloadOutput::EnterSnapshot { path, .. } => {
                     session
                         .runtime
                         .set_effective_workspace_root(Some(PathBuf::from(path)));
                     return;
                 }
-                crate::tool::ToolPayloadOutput::ExitWorktree { .. } => {
+                crate::tool::ToolPayloadOutput::ExitSnapshot { .. } => {
                     session.runtime.set_effective_workspace_root(None);
                     return;
                 }
@@ -2813,7 +2813,7 @@ impl SessionManager {
             .get("agena.effect")
             .map(String::as_str)
         {
-            Some("enter_worktree") => {
+            Some("enter_snapshot") => {
                 if let Some(path) = custom_payload_value(&execution.output)
                     .and_then(|value| value.get("path").cloned())
                     .and_then(|value| value.as_str().map(str::to_string))
@@ -2823,7 +2823,7 @@ impl SessionManager {
                         .set_effective_workspace_root(Some(PathBuf::from(path)));
                 }
             }
-            Some("exit_worktree") => {
+            Some("exit_snapshot") => {
                 session.runtime.set_effective_workspace_root(None);
             }
             _ => {}

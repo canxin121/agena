@@ -46,8 +46,8 @@ const PLAN_TOOL: &str = "agena_planning__plan";
 const PLAN_CREATE_TOOL: &str = "agena_planning__plan_create";
 const PLAN_UPDATE_STEP_TOOL: &str = "agena_planning__plan_update_step";
 const PLAN_SET_STATUS_TOOL: &str = "agena_planning__plan_set_status";
-const WORKTREE_ENTER_NEW_TOOL: &str = "agena_repo__snapshot_enter_new";
-const WORKTREE_EXIT_TOOL: &str = "agena_repo__snapshot_exit";
+const SNAPSHOT_ENTER_NEW_TOOL: &str = "agena_repo__snapshot_enter_new";
+const SNAPSHOT_EXIT_TOOL: &str = "agena_repo__snapshot_exit";
 const TASK_TOOL: &str = "agena_tasks__task";
 const LSP_TOOL: &str = "agena_lsp__lsp";
 const INIT_SKILL_TOOL: &str = "agena_skills__init";
@@ -3565,11 +3565,11 @@ mod runtime_builtin_tool_tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::time::Duration;
 
-    use crate::message::{EnterWorktreeToolInput, ExitWorktreeToolInput};
+    use crate::message::{EnterSnapshotToolInput, ExitSnapshotToolInput};
     use crate::plugin::sdk::host_api::{
         AskUserRequest, AskUserResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
         HostAgentSwitchRequest, HostAgentSwitchResponse, HostCallbackContext, HostClient,
-        HostConfigReloadResponse, HostEnterWorktreeRequest, HostExitWorktreeRequest,
+        HostConfigReloadResponse, HostEnterSnapshotRequest, HostExitSnapshotRequest,
         HostGetSessionRequest, HostGetSessionResponse, HostLspDiagnostic,
         HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
         HostLspServer, HostNetworkPermissionCheckRequest, HostPermissionCheckResponse,
@@ -4235,13 +4235,13 @@ mod runtime_builtin_tool_tests {
             })
         }
 
-        async fn enter_worktree(
+        async fn enter_snapshot(
             &self,
-            req: HostEnterWorktreeRequest,
+            req: HostEnterSnapshotRequest,
         ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
             self.workflow_tool_output(
-                "enter_worktree",
-                serde_json::to_value(EnterWorktreeToolInput {
+                "enter_snapshot",
+                serde_json::to_value(EnterSnapshotToolInput {
                     name: req.name,
                     path: req.path,
                 })
@@ -4250,13 +4250,13 @@ mod runtime_builtin_tool_tests {
             .await
         }
 
-        async fn exit_worktree(
+        async fn exit_snapshot(
             &self,
-            req: HostExitWorktreeRequest,
+            req: HostExitSnapshotRequest,
         ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
             self.workflow_tool_output(
-                "exit_worktree",
-                serde_json::to_value(ExitWorktreeToolInput {
+                "exit_snapshot",
+                serde_json::to_value(ExitSnapshotToolInput {
                     action: req.action,
                     discard_changes: req.discard_changes,
                 })
@@ -4392,7 +4392,7 @@ mod runtime_builtin_tool_tests {
                     .with_tool_policy(ToolPermissionPolicy::allow_all()),
             )
             .with_subagent_registry(agents)
-            .with_worktree_registry(crate::tool::worktree_registry_for_executor())
+            .with_snapshot_registry(crate::tool::snapshot_registry_for_executor())
             .with_scheduler(scheduler)
             .with_lsp_registry(Arc::new(agena_lsp::LspRegistry::new(
                 root.to_path_buf(),
@@ -4857,10 +4857,10 @@ while True:
     }
 
     #[derive(Clone)]
-    struct FsPlanWorktreeProvider;
+    struct FsPlanSnapshotProvider;
 
     #[async_trait]
-    impl ModelRuntime for FsPlanWorktreeProvider {
+    impl ModelRuntime for FsPlanSnapshotProvider {
         fn id(&self) -> &str {
             "runtime-tools"
         }
@@ -4908,9 +4908,9 @@ while True:
                     "call_plan_create_1",
                     PLAN_CREATE_TOOL,
                     serde_json::json!({
-                        "objective": "Exercise the runtime plan host bridge before worktree edits.",
+                        "objective": "Exercise the runtime plan host bridge before snapshot edits.",
                         "title": "Runtime Plan",
-                        "document_markdown": "# Runtime Plan\n\n- inspect the repo state\n- enter a throwaway worktree\n- verify edits stay isolated\n",
+                        "document_markdown": "# Runtime Plan\n\n- inspect the repo state\n- enter a throwaway snapshot\n- verify edits stay isolated\n",
                         "steps": [{
                             "id": "step_runtime_plan",
                             "title": "Inspect the repo state",
@@ -4945,15 +4945,15 @@ while True:
                     PLAN_SET_STATUS_TOOL,
                     serde_json::json!({
                         "phase": "completed",
-                        "summary": "Runtime plan finished before entering the worktree."
+                        "summary": "Runtime plan finished before entering the snapshot."
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_worktree_enter_1"]) == 0
+            } else if completed_or_failed_operation_count(&request, &["call_snapshot_enter_1"]) == 0
             {
                 scripted_tool_call_events(vec![(
-                    "call_worktree_enter_1",
-                    WORKTREE_ENTER_NEW_TOOL,
+                    "call_snapshot_enter_1",
+                    SNAPSHOT_ENTER_NEW_TOOL,
                     serde_json::json!({
                         "name": "demo"
                     })
@@ -5001,11 +5001,11 @@ while True:
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_worktree_exit_1"]) == 0
+            } else if completed_or_failed_operation_count(&request, &["call_snapshot_exit_1"]) == 0
             {
                 scripted_tool_call_events(vec![(
-                    "call_worktree_exit_1",
-                    WORKTREE_EXIT_TOOL,
+                    "call_snapshot_exit_1",
+                    SNAPSHOT_EXIT_TOOL,
                     serde_json::json!({
                         "exit_action": "remove",
                         "discard_changes": true
@@ -5021,26 +5021,26 @@ while True:
     }
 
     #[test]
-    fn runtime_fs_plan_worktree_flow_exercises_real_host_bridges() {
+    fn runtime_fs_plan_snapshot_flow_exercises_real_host_bridges() {
         run_async_with_large_stack(async move {
             let workspace = TempWorkspace::new();
             init_git_workspace(&workspace.root);
             let db =
-                open_runtime_tool_database(&workspace.root, "runtime-tools-fs-plan-worktree.db")
+                open_runtime_tool_database(&workspace.root, "runtime-tools-fs-plan-snapshot.db")
                     .await;
             let (manager, _host) = build_runtime_tool_manager_with_provider(
                 &workspace.root,
                 db,
-                FsPlanWorktreeProvider,
+                FsPlanSnapshotProvider,
             )
             .await;
 
             let created =
-                create_runtime_tool_session(manager.as_ref(), "runtime-fs-plan-worktree").await;
+                create_runtime_tool_session(manager.as_ref(), "runtime-fs-plan-snapshot").await;
             let session = submit_runtime_tool_prompt(
                 manager.as_ref(),
                 created.id,
-                "exercise fs plan and worktree tools",
+                "exercise fs plan and snapshot tools",
                 "runtime tool run should succeed",
             )
             .await;
@@ -5066,12 +5066,12 @@ while True:
                     "call_plan_create_1",
                     "call_plan_update_step_1",
                     "call_plan_set_status_1",
-                    "call_worktree_enter_1",
+                    "call_snapshot_enter_1",
                     "call_fs_patch_1",
                     "call_fs_glob_1",
                     "call_fs_grep_1",
                     "call_fs_read_1",
-                    "call_worktree_exit_1",
+                    "call_snapshot_exit_1",
                 ],
             );
 
@@ -5115,21 +5115,21 @@ while True:
                 .expect("read payload should contain preview");
             assert!(
                 preview.contains("branch-only change"),
-                "worktree-scoped read should observe the patched file: {preview}"
+                "snapshot-scoped read should observe the patched file: {preview}"
             );
 
             let root_notes = std::fs::read_to_string(workspace.root.join("notes.txt"))
                 .expect("original workspace notes should remain readable");
             assert_eq!(
                 root_notes, "base line\n",
-                "worktree mutation should not leak back into the original workspace"
+                "snapshot mutation should not leak back into the original workspace"
             );
             assert!(
                 !crate::project_paths::project_state_dir(&workspace.root)
-                    .join("worktrees")
+                    .join("snapshots")
                     .join("demo")
                     .exists(),
-                "worktree exit remove should clean up the temporary worktree"
+                "snapshot exit remove should clean up the temporary snapshot"
             );
         });
     }

@@ -24,7 +24,7 @@ use crate::sdk::host_api::{
     HostAgentGetResponse, HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
     HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
     HostAgentSwitchRequest, HostAgentSwitchResponse, HostCallbackContext, HostClient,
-    HostConfigReloadResponse, HostEnterWorktreeRequest, HostExitWorktreeRequest,
+    HostConfigReloadResponse, HostEnterSnapshotRequest, HostExitSnapshotRequest,
     HostHookDescriptor, HostHookListResponse, HostHookRegistration, HostLspListDiagnosticsRequest,
     HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
     HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
@@ -34,16 +34,15 @@ use crate::sdk::host_api::{
     HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
     HostSchedulerDeleteResponse, HostSchedulerListResponse, HostSecretDeleteRequest,
     HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
-    HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveRequest,
-    HostStatuslineRemoveResponse, HostStatuslineSegment, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
-    HostStorageSetRequest, HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest,
-    HostThemeRemoveRequest, HostThemeRemoveResponse, HostTodoWriteRequest,
-    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
-    HostToolUpdateRequest, HostWorktreeListResponse, LogLevel, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
-    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, ToolRegistryChangeKind,
-    ToolRegistryChangedEvent,
+    HostSnapshotListResponse, HostStatuslineContributeRequest, HostStatuslineListResponse,
+    HostStatuslineRemoveRequest, HostStatuslineRemoveResponse, HostStatuslineSegment,
+    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
+    HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
+    HostTodoWriteRequest, HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
+    HostToolUpdateRequest, LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
+    MonitorStartRequest, MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest,
+    SpawnSubtaskResponse, ToolDescriptor, ToolRegistryChangeKind, ToolRegistryChangedEvent,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
@@ -2941,33 +2940,33 @@ impl HostHandle {
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
-                    method::HOST_WORKTREE_ENTER => {
+                    method::HOST_SNAPSHOT_ENTER => {
                         self.require_capability(
                             plugin_id.as_deref(),
                             method,
-                            HostCapability::WorktreeRegistry,
+                            HostCapability::SnapshotRegistry,
                         )
                         .await?;
-                        let p: HostEnterWorktreeParams = parse(params)?;
+                        let p: HostEnterSnapshotParams = parse(params)?;
                         let out = host_api::with_host_callback_context(
                             scoped_context(plugin_id, p.context),
-                            inner.enter_worktree(p.request),
+                            inner.enter_snapshot(p.request),
                         )
                         .await?;
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
-                    method::HOST_WORKTREE_EXIT => {
+                    method::HOST_SNAPSHOT_EXIT => {
                         self.require_capability(
                             plugin_id.as_deref(),
                             method,
-                            HostCapability::WorktreeRegistry,
+                            HostCapability::SnapshotRegistry,
                         )
                         .await?;
-                        let p: HostExitWorktreeParams = parse(params)?;
+                        let p: HostExitSnapshotParams = parse(params)?;
                         let out = host_api::with_host_callback_context(
                             scoped_context(plugin_id, p.context),
-                            inner.exit_worktree(p.request),
+                            inner.exit_snapshot(p.request),
                         )
                         .await?;
                         serde_json::to_value(&out)
@@ -3276,17 +3275,17 @@ impl HostHandle {
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
-                    method::HOST_WORKTREE_LIST => {
+                    method::HOST_SNAPSHOT_LIST => {
                         self.require_capability(
                             plugin_id.as_deref(),
                             method,
-                            HostCapability::WorktreeRegistry,
+                            HostCapability::SnapshotRegistry,
                         )
                         .await?;
-                        let p: HostWorktreeListParams = parse(params)?;
+                        let p: HostSnapshotListParams = parse(params)?;
                         let out = host_api::with_host_callback_context(
                             scoped_context(plugin_id, p.context),
-                            inner.worktree_list(),
+                            inner.snapshot_list(),
                         )
                         .await?;
                         serde_json::to_value(&out)
@@ -3882,16 +3881,16 @@ struct HostTodoWriteParams {
 }
 
 #[derive(serde::Deserialize, Default)]
-struct HostEnterWorktreeParams {
+struct HostEnterSnapshotParams {
     #[serde(default)]
-    request: HostEnterWorktreeRequest,
+    request: HostEnterSnapshotRequest,
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
-struct HostExitWorktreeParams {
-    request: HostExitWorktreeRequest,
+struct HostExitSnapshotParams {
+    request: HostExitSnapshotRequest,
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
@@ -4022,7 +4021,7 @@ struct HostLspListDiagnosticsParams {
 }
 
 #[derive(serde::Deserialize, Default)]
-struct HostWorktreeListParams {
+struct HostSnapshotListParams {
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
@@ -4342,27 +4341,27 @@ impl HostClient for ScopedHostClient {
         host_api::with_host_callback_context(self.context(), inner.rename_session(req)).await
     }
 
-    async fn enter_worktree(
+    async fn enter_snapshot(
         &self,
-        req: HostEnterWorktreeRequest,
+        req: HostEnterSnapshotRequest,
     ) -> crate::sdk::Result<ToolInvokeOutput> {
         self.require_capability(
-            method::HOST_WORKTREE_ENTER,
-            HostCapability::WorktreeRegistry,
+            method::HOST_SNAPSHOT_ENTER,
+            HostCapability::SnapshotRegistry,
         )
         .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.enter_worktree(req)).await
+        host_api::with_host_callback_context(self.context(), inner.enter_snapshot(req)).await
     }
 
-    async fn exit_worktree(
+    async fn exit_snapshot(
         &self,
-        req: HostExitWorktreeRequest,
+        req: HostExitSnapshotRequest,
     ) -> crate::sdk::Result<ToolInvokeOutput> {
-        self.require_capability(method::HOST_WORKTREE_EXIT, HostCapability::WorktreeRegistry)
+        self.require_capability(method::HOST_SNAPSHOT_EXIT, HostCapability::SnapshotRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.exit_worktree(req)).await
+        host_api::with_host_callback_context(self.context(), inner.exit_snapshot(req)).await
     }
 
     async fn monitor_start(&self, req: MonitorStartRequest) -> crate::sdk::Result<MonitorHandle> {
@@ -4547,11 +4546,11 @@ impl HostClient for ScopedHostClient {
         host_api::with_host_callback_context(self.context(), inner.lsp_list_diagnostics(req)).await
     }
 
-    async fn worktree_list(&self) -> crate::sdk::Result<HostWorktreeListResponse> {
-        self.require_capability(method::HOST_WORKTREE_LIST, HostCapability::WorktreeRegistry)
+    async fn snapshot_list(&self) -> crate::sdk::Result<HostSnapshotListResponse> {
+        self.require_capability(method::HOST_SNAPSHOT_LIST, HostCapability::SnapshotRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.worktree_list()).await
+        host_api::with_host_callback_context(self.context(), inner.snapshot_list()).await
     }
 
     async fn scheduler_list(&self) -> crate::sdk::Result<HostSchedulerListResponse> {

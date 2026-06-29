@@ -5,7 +5,7 @@ use strum::Display;
 
 use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, AttachmentKind, CronCreateToolInput,
-    CronDeleteToolInput, CronListToolInput, EnterWorktreeToolInput, ExitWorktreeToolInput,
+    CronDeleteToolInput, CronListToolInput, EnterSnapshotToolInput, ExitSnapshotToolInput,
     FileChangeRecord, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
     LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, ProcessEvent, ProcessShell,
     ProcessStatus, ProcessSummary, ProcessToolInput, ReadToolInput, ScheduleWakeupToolInput,
@@ -29,8 +29,8 @@ pub enum ToolPayloadInput {
     AskUser(AskUserToolInput),
     WebFetch(WebFetchToolInput),
     WebSearch(WebSearchToolInput),
-    EnterWorktree(EnterWorktreeToolInput),
-    ExitWorktree(ExitWorktreeToolInput),
+    EnterSnapshot(EnterSnapshotToolInput),
+    ExitSnapshot(ExitSnapshotToolInput),
     CronCreate(CronCreateToolInput),
     CronList(CronListToolInput),
     CronDelete(CronDeleteToolInput),
@@ -56,8 +56,8 @@ impl ToolPayloadInput {
             Self::AskUser(_) => "ask_user",
             Self::WebFetch(_) => "web_fetch",
             Self::WebSearch(_) => "web_search",
-            Self::EnterWorktree(_) => "enter_worktree",
-            Self::ExitWorktree(_) => "exit_worktree",
+            Self::EnterSnapshot(_) => "enter_snapshot",
+            Self::ExitSnapshot(_) => "exit_snapshot",
             Self::CronCreate(_) => "cron_create",
             Self::CronList(_) => "cron_list",
             Self::CronDelete(_) => "cron_delete",
@@ -227,7 +227,7 @@ pub enum ToolPayloadOutput {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         results: Vec<WebSearchHit>,
     },
-    EnterWorktree {
+    EnterSnapshot {
         path: String,
         branch: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -235,7 +235,7 @@ pub enum ToolPayloadOutput {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
     },
-    ExitWorktree {
+    ExitSnapshot {
         action: String,
         path: String,
     },
@@ -303,8 +303,8 @@ impl ToolPayloadOutput {
             Self::AskUser { .. } => "ask_user",
             Self::WebFetch { .. } => "web_fetch",
             Self::WebSearch { .. } => "web_search",
-            Self::EnterWorktree { .. } => "enter_worktree",
-            Self::ExitWorktree { .. } => "exit_worktree",
+            Self::EnterSnapshot { .. } => "enter_snapshot",
+            Self::ExitSnapshot { .. } => "exit_snapshot",
             Self::CronCreate { .. } => "cron_create",
             Self::CronList { .. } => "cron_list",
             Self::CronDelete { .. } => "cron_delete",
@@ -362,7 +362,7 @@ const DIRECT_GROUPED_TOOL_MAPPINGS: &[(&str, &str, &str, &str)] = &[
     ("tool_search", "agena.catalog", "tools", "search"),
     ("todo_write", "agena.planning", "todo", "write"),
     ("ask_user", "agena.runtime", "user", "request_input"),
-    ("exit_worktree", "agena.repo", "snapshot", "exit"),
+    ("exit_snapshot", "agena.repo", "snapshot", "exit"),
     ("lsp_definition", "agena.lsp", "lsp", "definition"),
     ("lsp_references", "agena.lsp", "lsp", "references"),
     ("lsp_hover", "agena.lsp", "lsp", "hover"),
@@ -401,7 +401,7 @@ fn invocation_name_for_payload_tool(
         "cron_list" => exposed_tool_name("agena.cron", "schedule.list"),
         "cron_delete" => exposed_tool_name("agena.cron", "schedule.delete"),
         "schedule_wakeup" => exposed_tool_name("agena.cron", "schedule.wakeup"),
-        "enter_worktree" => {
+        "enter_snapshot" => {
             let name = input
                 .remove("name")
                 .and_then(|value| value.as_str().map(str::to_string));
@@ -495,7 +495,7 @@ fn grouped_tool_payload_name(
     let action = input.get("action")?.as_str()?.to_string();
     let tool = match (entry, action.as_str()) {
         ("process", "run" | "list" | "logs" | "stop") => "process",
-        ("snapshot", "enter") => "enter_worktree",
+        ("snapshot", "enter") => "enter_snapshot",
         _ => tool_name_for_grouped_mapping(entry, action.as_str())?,
     };
     input.remove("action");
@@ -503,7 +503,7 @@ fn grouped_tool_payload_name(
         "process" => {
             input.insert("action".to_string(), serde_json::Value::String(action));
         }
-        "enter_worktree" => match input
+        "enter_snapshot" => match input
             .get("target")
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
@@ -518,7 +518,7 @@ fn grouped_tool_payload_name(
             }
             _ => {}
         },
-        "exit_worktree" => {
+        "exit_snapshot" => {
             if let Some(exit_action) = input.remove("exit_action") {
                 input.insert("action".to_string(), exit_action);
             }

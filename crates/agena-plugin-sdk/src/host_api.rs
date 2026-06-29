@@ -112,13 +112,13 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Enter a git worktree for the current session.
-    async fn enter_worktree(&self, _req: HostEnterWorktreeRequest) -> Result<ToolInvokeOutput> {
+    /// Enter a managed snapshot for the current session.
+    async fn enter_snapshot(&self, _req: HostEnterSnapshotRequest) -> Result<ToolInvokeOutput> {
         Err(unavailable())
     }
 
-    /// Exit the current session's git worktree.
-    async fn exit_worktree(&self, _req: HostExitWorktreeRequest) -> Result<ToolInvokeOutput> {
+    /// Exit the current session's active snapshot.
+    async fn exit_snapshot(&self, _req: HostExitSnapshotRequest) -> Result<ToolInvokeOutput> {
         Err(unavailable())
     }
 
@@ -232,8 +232,8 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Worktree registry — list active worktrees.
-    async fn worktree_list(&self) -> Result<HostWorktreeListResponse> {
+    /// Snapshot registry — list active snapshots.
+    async fn snapshot_list(&self) -> Result<HostSnapshotListResponse> {
         Err(unavailable())
     }
 
@@ -663,7 +663,7 @@ pub struct HostRenameSessionResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HostEnterWorktreeRequest {
+pub struct HostEnterSnapshotRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -671,7 +671,7 @@ pub struct HostEnterWorktreeRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostExitWorktreeRequest {
+pub struct HostExitSnapshotRequest {
     pub action: String,
     #[serde(default)]
     pub discard_changes: bool,
@@ -1034,16 +1034,16 @@ pub struct HostLspDiagnostic {
     pub code: Option<String>,
 }
 
-// ---------------- worktree / scheduler ----------------
+// ---------------- snapshot / scheduler ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HostWorktreeListResponse {
+pub struct HostSnapshotListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub worktrees: Vec<HostWorktreeSummary>,
+    pub snapshots: Vec<HostSnapshotSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostWorktreeSummary {
+pub struct HostSnapshotSummary {
     pub session_id: i64,
     pub path: String,
     pub branch: String,

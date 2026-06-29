@@ -372,39 +372,39 @@ pub fn file_changes_more(i18n: &I18n, count: usize) -> String {
     )
 }
 
-pub fn worktree_picker_title(i18n: &I18n) -> String {
-    t(i18n, "overlay-worktree-title")
+pub fn snapshot_picker_title(i18n: &I18n) -> String {
+    t(i18n, "overlay-snapshot-title")
 }
 
-pub fn worktree_picker_prompt(i18n: &I18n) -> String {
-    t(i18n, "command-worktree-summary")
+pub fn snapshot_picker_prompt(i18n: &I18n) -> String {
+    t(i18n, "command-snapshot-summary")
 }
 
-pub fn worktree_ready_message(i18n: &I18n, path: &str, branch: Option<&str>) -> String {
+pub fn snapshot_ready_message(i18n: &I18n, path: &str, branch: Option<&str>) -> String {
     let branch = branch
         .map(str::to_owned)
         .unwrap_or_else(|| t(i18n, "value-unknown"));
     i18n.text_args(
-        "flash-worktree-ready",
+        "flash-snapshot-ready",
         &fl_args!("path" => path, "branch" => branch),
     )
 }
 
-pub fn worktree_attached_message(i18n: &I18n, path: &str, branch: Option<&str>) -> String {
+pub fn snapshot_attached_message(i18n: &I18n, path: &str, branch: Option<&str>) -> String {
     let branch = branch
         .map(str::to_owned)
         .unwrap_or_else(|| t(i18n, "value-unknown"));
     i18n.text_args(
-        "flash-worktree-attached",
+        "flash-snapshot-attached",
         &fl_args!("path" => path, "branch" => branch),
     )
 }
 
-pub fn worktree_exit_message(i18n: &I18n, action: Option<&str>, path: &str) -> String {
+pub fn snapshot_exit_message(i18n: &I18n, action: Option<&str>, path: &str) -> String {
     i18n.text_args(
-        "flash-worktree-exited",
+        "flash-snapshot-exited",
         &fl_args!(
-            "action" => worktree_action_label(i18n, action),
+            "action" => snapshot_action_label(i18n, action),
             "path" => path,
         ),
     )
@@ -754,11 +754,11 @@ pub fn format_bytes(i18n: &I18n, bytes: u64) -> String {
     }
 }
 
-fn worktree_action_label(i18n: &I18n, action: Option<&str>) -> String {
+fn snapshot_action_label(i18n: &I18n, action: Option<&str>) -> String {
     match action.unwrap_or_default().to_ascii_lowercase().as_str() {
-        "" => t(i18n, "worktree-action-exit"),
-        "keep" => t(i18n, "worktree-action-keep"),
-        "remove" => t(i18n, "worktree-action-remove"),
+        "" => t(i18n, "snapshot-action-exit"),
+        "keep" => t(i18n, "snapshot-action-keep"),
+        "remove" => t(i18n, "snapshot-action-remove"),
         other => other.to_string(),
     }
 }
@@ -772,20 +772,20 @@ mod tests {
     }
 
     #[test]
-    fn worktree_and_command_feedback_follow_locale() {
+    fn snapshot_and_command_feedback_follow_locale() {
         let i18n = I18n::resolve(Some("zh-CN"), None);
 
-        assert_eq!(worktree_picker_title(&i18n), "Snapshot");
+        assert_eq!(snapshot_picker_title(&i18n), "Snapshot");
         assert_eq!(
-            worktree_picker_prompt(&i18n),
+            snapshot_picker_prompt(&i18n),
             "查看当前活跃与托管的 snapshot"
         );
         assert_eq!(
-            normalize_fluent_markup(worktree_ready_message(&i18n, "/tmp/wt", Some("main"))),
+            normalize_fluent_markup(snapshot_ready_message(&i18n, "/tmp/wt", Some("main"))),
             "snapshot 已就绪：/tmp/wt (main)"
         );
         assert_eq!(
-            normalize_fluent_markup(worktree_exit_message(&i18n, Some("remove"), "/tmp/wt")),
+            normalize_fluent_markup(snapshot_exit_message(&i18n, Some("remove"), "/tmp/wt")),
             "snapshot 已移除：/tmp/wt"
         );
         assert_eq!(

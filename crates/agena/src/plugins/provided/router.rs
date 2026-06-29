@@ -302,11 +302,11 @@ pub(crate) fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -
         ToolPayloadOutput::TodoWrite { .. } => {
             metadata.insert("agena.effect".to_string(), "todo_list".to_string());
         }
-        ToolPayloadOutput::EnterWorktree { .. } => {
-            metadata.insert("agena.effect".to_string(), "enter_worktree".to_string());
+        ToolPayloadOutput::EnterSnapshot { .. } => {
+            metadata.insert("agena.effect".to_string(), "enter_snapshot".to_string());
         }
-        ToolPayloadOutput::ExitWorktree { .. } => {
-            metadata.insert("agena.effect".to_string(), "exit_worktree".to_string());
+        ToolPayloadOutput::ExitSnapshot { .. } => {
+            metadata.insert("agena.effect".to_string(), "exit_snapshot".to_string());
         }
         _ => {}
     }

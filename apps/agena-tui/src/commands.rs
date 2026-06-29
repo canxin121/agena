@@ -14,7 +14,7 @@ pub enum CommandId {
     Permissions,
     Model,
     Review,
-    Worktree,
+    Snapshot,
     Commit,
     Pr,
     Export,
@@ -167,11 +167,11 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary_key: "command-review-summary",
     },
     CommandSpec {
-        id: CommandId::Worktree,
+        id: CommandId::Snapshot,
         name: "snapshot",
         aliases: &[],
         arguments: "[query]",
-        summary_key: "command-worktree-summary",
+        summary_key: "command-snapshot-summary",
     },
     CommandSpec {
         id: CommandId::Commit,

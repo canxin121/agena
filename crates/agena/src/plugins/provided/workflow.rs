@@ -12,7 +12,7 @@ use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{
     AskUserOption as HostAskUserOption, AskUserQuestion as HostAskUserQuestion, AskUserRequest,
     HostAgentRestoreRequest, HostAgentRestoreResponse, HostAgentSwitchRequest,
-    HostAgentSwitchResponse, HostClient, HostEnterWorktreeRequest, HostExitWorktreeRequest,
+    HostAgentSwitchResponse, HostClient, HostEnterSnapshotRequest, HostExitSnapshotRequest,
     HostGetSessionRequest, HostRenameSessionRequest, HostSession, HostStatuslineContributeRequest,
     HostStatuslineRemoveRequest, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageScope,
     HostStorageSetRequest, HostStorageVisibility, HostTodoItem, HostTodoPriority, HostTodoStatus,
@@ -187,8 +187,8 @@ pub(crate) use planning_tools::{
     WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus,
 };
 pub(crate) use repo_tools::{
-    EnterWorktreeCommandInput, ExitWorktreeCommandInput, WorktreeToolInput,
-    worktree_enter_permission_paths,
+    EnterSnapshotCommandInput, ExitSnapshotCommandInput, SnapshotToolInput,
+    snapshot_enter_permission_paths,
 };
 pub(crate) use runtime_tools::{
     AgentToolInput, SessionRenameToolInput, SessionToolInput, SessionToolResponse, UserToolInput,
@@ -200,7 +200,7 @@ pub(crate) use catalog_tools::resolve_tools_tool_input;
 #[cfg(test)]
 pub(crate) use planning_tools::resolve_plan_tool_input;
 #[cfg(test)]
-pub(crate) use repo_tools::ExitWorktreeAction;
+pub(crate) use repo_tools::ExitSnapshotAction;
 
 const PLAN_NAMESPACE: &str = "workflow_plan";
 const PLAN_KEY_ACTIVE: &str = "active";
@@ -1332,7 +1332,7 @@ impl WorkflowPlugin {
         if input.tags.iter().any(|tag| {
             matches!(
                 tag,
-                ToolTag::Mutating | ToolTag::FilesystemWrite | ToolTag::Worktree
+                ToolTag::Mutating | ToolTag::FilesystemWrite | ToolTag::Snapshot
             )
         }) {
             return false;
@@ -1645,45 +1645,45 @@ impl WorkflowPlugin {
             .with_payload(payload))
     }
 
-    async fn invoke_worktree_enter(
+    async fn invoke_snapshot_enter(
         &self,
-        args: &EnterWorktreeCommandInput,
+        args: &EnterSnapshotCommandInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let request = match args {
-            EnterWorktreeCommandInput::New { name } => HostEnterWorktreeRequest {
+            EnterSnapshotCommandInput::New { name } => HostEnterSnapshotRequest {
                 name: name.clone(),
                 path: None,
             },
-            EnterWorktreeCommandInput::Existing { path } => HostEnterWorktreeRequest {
+            EnterSnapshotCommandInput::Existing { path } => HostEnterSnapshotRequest {
                 name: None,
                 path: Some(path.clone()),
             },
         };
-        self.host()?.enter_worktree(request).await
+        self.host()?.enter_snapshot(request).await
     }
 
-    async fn invoke_worktree_exit(
+    async fn invoke_snapshot_exit(
         &self,
-        args: &ExitWorktreeCommandInput,
+        args: &ExitSnapshotCommandInput,
     ) -> SdkResult<ToolInvokeOutput> {
         self.host()?
-            .exit_worktree(HostExitWorktreeRequest {
+            .exit_snapshot(HostExitSnapshotRequest {
                 action: args.exit_action.as_str().to_string(),
                 discard_changes: args.discard_changes,
             })
             .await
     }
 
-    async fn permission_worktree_enter(
+    async fn permission_snapshot_enter(
         &self,
-        args: &EnterWorktreeCommandInput,
+        args: &EnterSnapshotCommandInput,
     ) -> SdkResult<Vec<PathRequest>> {
-        worktree_enter_permission_paths(self.workspace_root()?, args)
+        snapshot_enter_permission_paths(self.workspace_root()?, args)
     }
 
-    async fn permission_worktree_exit(
+    async fn permission_snapshot_exit(
         &self,
-        _args: &ExitWorktreeCommandInput,
+        _args: &ExitSnapshotCommandInput,
     ) -> SdkResult<Vec<PathRequest>> {
         Ok(Vec::new())
     }
@@ -2747,7 +2747,7 @@ mod tests {
     }
 
     #[test]
-    fn task_and_worktree_tools_declare_plan_storage_capability() {
+    fn task_and_snapshot_tools_declare_plan_storage_capability() {
         let task_decl = TaskToolActionInput::tool_decl();
         assert!(
             task_decl
@@ -2755,43 +2755,43 @@ mod tests {
                 .contains(&HostCapability::PluginStorage)
         );
 
-        let worktree_decl = WorktreeToolInput::tool_decl();
+        let snapshot_decl = SnapshotToolInput::tool_decl();
         assert!(
-            worktree_decl
+            snapshot_decl
                 .host_capabilities
                 .contains(&HostCapability::PluginStorage)
         );
     }
 
     #[test]
-    fn worktree_permission_paths_follow_surface_shape() {
+    fn snapshot_permission_paths_follow_surface_shape() {
         let (plugin, _host, runtime) = init_test_plugin(true, None);
 
         let existing_paths = runtime
             .block_on(
-                WorktreeToolInput::parse_tool(
+                SnapshotToolInput::parse_tool(
                     "snapshot",
                     json!({
                     "action": "enter",
                     "target": "existing",
-                    "path": "/tmp/existing-worktree"
+                    "path": "/tmp/existing-snapshot"
                     }),
                 )
-                .expect("parse existing worktree")
+                .expect("parse existing snapshot")
                 .dispatch_permission_paths(&plugin),
             )
-            .expect("existing worktree permission paths");
+            .expect("existing snapshot permission paths");
         assert_eq!(
             existing_paths,
             vec![
-                PathRequest::read("/tmp/existing-worktree"),
-                PathRequest::write("/tmp/existing-worktree"),
+                PathRequest::read("/tmp/existing-snapshot"),
+                PathRequest::write("/tmp/existing-snapshot"),
             ]
         );
 
         let new_paths = runtime
             .block_on(
-                WorktreeToolInput::parse_tool(
+                SnapshotToolInput::parse_tool(
                     "snapshot",
                     json!({
                     "action": "enter",
@@ -2799,19 +2799,19 @@ mod tests {
                     "name": "feature-branch"
                     }),
                 )
-                .expect("parse new worktree")
+                .expect("parse new snapshot")
                 .dispatch_permission_paths(&plugin),
             )
-            .expect("new worktree permission paths");
+            .expect("new snapshot permission paths");
         assert_eq!(new_paths.len(), 1);
         assert_eq!(new_paths[0].kind, crate::plugin::sdk::PathKind::Write);
         assert!(
-            new_paths[0].path.ends_with("/worktrees") || new_paths[0].path.ends_with("\\worktrees")
+            new_paths[0].path.ends_with("/snapshots") || new_paths[0].path.ends_with("\\snapshots")
         );
 
         let exit_paths = runtime
             .block_on(
-                WorktreeToolInput::parse_tool(
+                SnapshotToolInput::parse_tool(
                     "snapshot",
                     json!({
                     "action": "exit",
@@ -2819,53 +2819,53 @@ mod tests {
                     "discard_changes": false
                     }),
                 )
-                .expect("parse exit worktree")
+                .expect("parse exit snapshot")
                 .dispatch_permission_paths(&plugin),
             )
-            .expect("exit worktree permission paths");
+            .expect("exit snapshot permission paths");
         assert!(exit_paths.is_empty());
     }
 
     #[test]
-    fn worktree_surface_flattened_enter_shape_reuses_inner_rules_at_parse_time() {
-        let parsed = WorktreeToolInput::parse_input(json!({
+    fn snapshot_surface_flattened_enter_shape_reuses_inner_rules_at_parse_time() {
+        let parsed = SnapshotToolInput::parse_input(json!({
             "action": "enter",
             "target": "new",
             "name": "  feature-x  "
         }))
-        .expect("worktree enter should parse");
-        let WorktreeToolInput::Enter { args } = parsed else {
+        .expect("snapshot enter should parse");
+        let SnapshotToolInput::Enter { args } = parsed else {
             panic!("expected enter variant");
         };
-        let EnterWorktreeCommandInput::New { name } = args else {
+        let EnterSnapshotCommandInput::New { name } = args else {
             panic!("expected new target variant");
         };
         assert_eq!(name.as_deref(), Some("feature-x"));
 
-        let parsed = WorktreeToolInput::parse_input(json!({
+        let parsed = SnapshotToolInput::parse_input(json!({
             "action": "enter",
             "target": "existing",
-            "path": "/tmp/existing-worktree"
+            "path": "/tmp/existing-snapshot"
         }))
-        .expect("worktree enter existing should parse");
-        let WorktreeToolInput::Enter { args } = parsed else {
+        .expect("snapshot enter existing should parse");
+        let SnapshotToolInput::Enter { args } = parsed else {
             panic!("expected enter variant");
         };
-        let EnterWorktreeCommandInput::Existing { path } = args else {
+        let EnterSnapshotCommandInput::Existing { path } = args else {
             panic!("expected existing target variant");
         };
-        assert_eq!(path, "/tmp/existing-worktree");
+        assert_eq!(path, "/tmp/existing-snapshot");
 
-        let parsed = WorktreeToolInput::parse_input(json!({
+        let parsed = SnapshotToolInput::parse_input(json!({
             "action": "exit",
             "exit_action": "remove",
             "discard_changes": true
         }))
-        .expect("worktree exit should parse");
-        let WorktreeToolInput::Exit { args } = parsed else {
+        .expect("snapshot exit should parse");
+        let SnapshotToolInput::Exit { args } = parsed else {
             panic!("expected exit variant");
         };
-        assert_eq!(args.exit_action, ExitWorktreeAction::Remove);
+        assert_eq!(args.exit_action, ExitSnapshotAction::Remove);
         assert!(args.discard_changes);
     }
 

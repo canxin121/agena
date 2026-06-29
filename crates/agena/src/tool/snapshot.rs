@@ -1,8 +1,8 @@
-//! `enter_worktree` / `exit_worktree` plugin tools.
+//! `enter_snapshot` / `exit_snapshot` plugin tools.
 //!
 //! Agena now prefers `rift` snapshots when available and falls back to
 //! `git worktree` when Rift cannot be used. Both backends write into the
-//! same managed directory under `~/agena/projects/<workspace-key>/worktrees`,
+//! same managed directory under `~/agena/projects/<workspace-key>/snapshots`,
 //! so the model-facing workflow stays stable while Rift can reduce clone
 //! storage through copy-on-write snapshots and filtered copies.
 //!
@@ -18,73 +18,73 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::message::{EnterWorktreeToolInput, ExitWorktreeToolInput};
+use crate::message::{EnterSnapshotToolInput, ExitSnapshotToolInput};
 
 use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorktreeBackend {
+pub enum SnapshotBackend {
     Rift,
     Git,
 }
 
-impl WorktreeBackend {
+impl SnapshotBackend {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Rift => "rift",
-            Self::Git => "git_worktree",
+            Self::Git => "git",
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct WorktreeBackendSupport {
-    pub backend: WorktreeBackend,
+pub struct SnapshotBackendSupport {
+    pub backend: SnapshotBackend,
     pub available: bool,
     pub detail: String,
 }
 
 #[derive(Debug, Clone)]
-pub struct WorktreeBackendCapabilities {
-    pub preferred_backend: Option<WorktreeBackend>,
-    pub git: WorktreeBackendSupport,
-    pub rift: WorktreeBackendSupport,
+pub struct SnapshotBackendCapabilities {
+    pub preferred_backend: Option<SnapshotBackend>,
+    pub git: SnapshotBackendSupport,
+    pub rift: SnapshotBackendSupport,
 }
 
-impl WorktreeBackendCapabilities {
-    pub fn for_backend(&self, backend: WorktreeBackend) -> &WorktreeBackendSupport {
+impl SnapshotBackendCapabilities {
+    pub fn for_backend(&self, backend: SnapshotBackend) -> &SnapshotBackendSupport {
         match backend {
-            WorktreeBackend::Rift => &self.rift,
-            WorktreeBackend::Git => &self.git,
+            SnapshotBackend::Rift => &self.rift,
+            SnapshotBackend::Git => &self.git,
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct WorktreeSession {
+pub struct SnapshotSession {
     pub path: PathBuf,
     pub branch: String,
     pub original_workspace: PathBuf,
-    pub backend: WorktreeBackend,
+    pub backend: SnapshotBackend,
     /// True when we created the snapshot (and so are responsible for
     /// cleaning it up on `remove`).
     pub created_here: bool,
 }
 
-pub type WorktreeRegistry = Arc<RwLock<std::collections::HashMap<i64, WorktreeSession>>>;
+pub type SnapshotRegistry = Arc<RwLock<std::collections::HashMap<i64, SnapshotSession>>>;
 
-pub fn registry_for_executor() -> WorktreeRegistry {
+pub fn registry_for_executor() -> SnapshotRegistry {
     Arc::new(RwLock::new(std::collections::HashMap::new()))
 }
 
 #[derive(Debug, Clone)]
 struct EnterWorkspaceResolution {
-    session: WorktreeSession,
+    session: SnapshotSession,
     note: Option<String>,
 }
 
 impl EnterWorkspaceResolution {
-    fn without_note(session: WorktreeSession) -> Self {
+    fn without_note(session: SnapshotSession) -> Self {
         Self {
             session,
             note: None,
@@ -94,14 +94,14 @@ impl EnterWorkspaceResolution {
 
 pub(super) fn execute_enter(
     executor: &ToolExecutor,
-    input: &EnterWorktreeToolInput,
+    input: &EnterSnapshotToolInput,
     session_id: Option<i64>,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let session_id = session_id.ok_or_else(|| {
         ToolError::Plugin("snapshot.enter: no session in execution context".to_string())
     })?;
     let registry = executor
-        .worktree_registry()
+        .snapshot_registry()
         .ok_or_else(|| ToolError::Plugin("snapshot.enter: registry not configured".to_string()))?;
 
     if registry.read().contains_key(&session_id) {
@@ -139,7 +139,7 @@ pub(super) fn execute_enter(
             note_line,
         ),
     );
-    let output = ToolPayloadOutput::EnterWorktree {
+    let output = ToolPayloadOutput::EnterSnapshot {
         path: session.path.to_string_lossy().to_string(),
         branch: session.branch.clone(),
         backend: Some(session.backend.as_str().to_string()),
@@ -152,14 +152,14 @@ pub(super) fn execute_enter(
 
 pub(super) fn execute_exit(
     executor: &ToolExecutor,
-    input: &ExitWorktreeToolInput,
+    input: &ExitSnapshotToolInput,
     session_id: Option<i64>,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let session_id = session_id.ok_or_else(|| {
         ToolError::Plugin("snapshot.exit: no session in execution context".to_string())
     })?;
     let registry = executor
-        .worktree_registry()
+        .snapshot_registry()
         .ok_or_else(|| ToolError::Plugin("snapshot.exit: registry not configured".to_string()))?;
 
     let session = registry
@@ -185,7 +185,7 @@ pub(super) fn execute_exit(
         ),
     );
     Ok(ToolPayloadExecution::new(
-        ToolPayloadOutput::ExitWorktree {
+        ToolPayloadOutput::ExitSnapshot {
             action: action.to_string(),
             path: session.path.to_string_lossy().to_string(),
         },
@@ -198,7 +198,7 @@ fn create_new(workspace: &Path, name: Option<&str>) -> Result<EnterWorkspaceReso
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(generate_slug);
-    let base = managed_worktrees_dir(workspace);
+    let base = managed_snapshots_dir(workspace);
     std::fs::create_dir_all(&base)
         .map_err(|error| ToolError::Plugin(format!("snapshot.enter: mkdir {base:?}: {error}")))?;
     let target = base.join(&slug);
@@ -214,7 +214,7 @@ fn create_new(workspace: &Path, name: Option<&str>) -> Result<EnterWorkspaceReso
             Ok(session) => return Ok(EnterWorkspaceResolution::without_note(session)),
             Err(error) => {
                 tracing::info!(
-                    target: "agena::worktree",
+                    target: "agena::snapshot",
                     workspace = %workspace.display(),
                     slug = %slug,
                     error = %error,
@@ -223,7 +223,7 @@ fn create_new(workspace: &Path, name: Option<&str>) -> Result<EnterWorkspaceReso
                 (
                     Some(error.clone()),
                     Some(format!(
-                        "used git_worktree because Rift could not create a snapshot here: {error}"
+                        "used git backend because Rift could not create a snapshot here: {error}"
                     )),
                 )
             }
@@ -233,7 +233,7 @@ fn create_new(workspace: &Path, name: Option<&str>) -> Result<EnterWorkspaceReso
             Some(capabilities.rift.detail.clone()),
             capabilities.git.available.then(|| {
                 format!(
-                    "used git_worktree because Rift is unavailable: {}",
+                    "used git backend because Rift is unavailable: {}",
                     capabilities.rift.detail
                 )
             }),
@@ -262,13 +262,13 @@ fn create_new(workspace: &Path, name: Option<&str>) -> Result<EnterWorkspaceReso
 }
 
 fn create_new_backend_error(
-    capabilities: &WorktreeBackendCapabilities,
+    capabilities: &SnapshotBackendCapabilities,
     rift_failure: Option<&str>,
     git_failure: Option<&str>,
 ) -> ToolError {
     let preferred = capabilities
         .preferred_backend
-        .map(WorktreeBackend::as_str)
+        .map(SnapshotBackend::as_str)
         .unwrap_or("none");
     let mut detail = vec![
         format!("preferred backend: {preferred}"),
@@ -277,7 +277,7 @@ fn create_new_backend_error(
             capabilities.rift.available, capabilities.rift.detail
         ),
         format!(
-            "git_worktree: available={} | {}",
+            "git: available={} | {}",
             capabilities.git.available, capabilities.git.detail
         ),
     ];
@@ -293,27 +293,27 @@ fn create_new_backend_error(
     ))
 }
 
-pub fn backend_capabilities(workspace: &Path) -> WorktreeBackendCapabilities {
+pub fn backend_capabilities(workspace: &Path) -> SnapshotBackendCapabilities {
     let git = probe_git_backend(workspace);
     let rift = probe_rift_backend();
     let preferred_backend = if rift.available {
-        Some(WorktreeBackend::Rift)
+        Some(SnapshotBackend::Rift)
     } else if git.available {
-        Some(WorktreeBackend::Git)
+        Some(SnapshotBackend::Git)
     } else {
         None
     };
-    WorktreeBackendCapabilities {
+    SnapshotBackendCapabilities {
         preferred_backend,
         git,
         rift,
     }
 }
 
-fn probe_git_backend(workspace: &Path) -> WorktreeBackendSupport {
+fn probe_git_backend(workspace: &Path) -> SnapshotBackendSupport {
     if let Err(detail) = probe_command_presence("git", &["--version"], "git CLI") {
-        return WorktreeBackendSupport {
-            backend: WorktreeBackend::Git,
+        return SnapshotBackendSupport {
+            backend: SnapshotBackend::Git,
             available: false,
             detail,
         };
@@ -326,8 +326,8 @@ fn probe_git_backend(workspace: &Path) -> WorktreeBackendSupport {
     {
         Ok(output) => output,
         Err(error) => {
-            return WorktreeBackendSupport {
-                backend: WorktreeBackend::Git,
+            return SnapshotBackendSupport {
+                backend: SnapshotBackend::Git,
                 available: false,
                 detail: format!(
                     "failed to execute `git` in {}: {error}",
@@ -338,8 +338,8 @@ fn probe_git_backend(workspace: &Path) -> WorktreeBackendSupport {
     };
 
     if output.status.success() {
-        WorktreeBackendSupport {
-            backend: WorktreeBackend::Git,
+        SnapshotBackendSupport {
+            backend: SnapshotBackend::Git,
             available: true,
             detail: "git CLI is available and the workspace is a git repository".to_string(),
         }
@@ -353,26 +353,26 @@ fn probe_git_backend(workspace: &Path) -> WorktreeBackendSupport {
                 workspace.display()
             )
         };
-        WorktreeBackendSupport {
-            backend: WorktreeBackend::Git,
+        SnapshotBackendSupport {
+            backend: SnapshotBackend::Git,
             available: false,
             detail,
         }
     }
 }
 
-fn probe_rift_backend() -> WorktreeBackendSupport {
+fn probe_rift_backend() -> SnapshotBackendSupport {
     let binary = rift_bin();
     match probe_command_presence(binary.as_str(), &["--help"], "Rift CLI") {
-        Ok(()) => WorktreeBackendSupport {
-            backend: WorktreeBackend::Rift,
+        Ok(()) => SnapshotBackendSupport {
+            backend: SnapshotBackend::Rift,
             available: true,
             detail: format!(
                 "Rift CLI `{binary}` is available; filesystem and repository compatibility are verified when a snapshot is created"
             ),
         },
-        Err(detail) => WorktreeBackendSupport {
-            backend: WorktreeBackend::Rift,
+        Err(detail) => SnapshotBackendSupport {
+            backend: SnapshotBackend::Rift,
             available: false,
             detail,
         },
@@ -393,7 +393,7 @@ fn create_new_with_git(
     workspace: &Path,
     target: &Path,
     slug: &str,
-) -> Result<WorktreeSession, ToolError> {
+) -> Result<SnapshotSession, ToolError> {
     let branch = format!("agena/{slug}");
     git(
         workspace,
@@ -406,11 +406,11 @@ fn create_new_with_git(
         ],
     )?;
 
-    Ok(WorktreeSession {
+    Ok(SnapshotSession {
         path: target.to_path_buf(),
         branch,
         original_workspace: workspace.to_path_buf(),
-        backend: WorktreeBackend::Git,
+        backend: SnapshotBackend::Git,
         created_here: true,
     })
 }
@@ -419,7 +419,7 @@ fn try_create_new_with_rift(
     workspace: &Path,
     base: &Path,
     slug: &str,
-) -> Result<WorktreeSession, String> {
+) -> Result<SnapshotSession, String> {
     let db_path = rift_database_path(workspace);
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)
@@ -458,16 +458,16 @@ fn try_create_new_with_rift(
     let branch = ensure_rift_branch(&created_path, slug)
         .unwrap_or_else(|| describe_workspace_head(&created_path));
 
-    Ok(WorktreeSession {
+    Ok(SnapshotSession {
         path: created_path,
         branch,
         original_workspace: workspace.to_path_buf(),
-        backend: WorktreeBackend::Rift,
+        backend: SnapshotBackend::Rift,
         created_here: true,
     })
 }
 
-fn enter_existing(workspace: &Path, path: &str) -> Result<WorktreeSession, ToolError> {
+fn enter_existing(workspace: &Path, path: &str) -> Result<SnapshotSession, ToolError> {
     let path_buf = PathBuf::from(path);
     if !path_buf.exists() {
         return Err(ToolError::Plugin(format!(
@@ -476,11 +476,11 @@ fn enter_existing(workspace: &Path, path: &str) -> Result<WorktreeSession, ToolE
     }
 
     if is_managed_rift_workspace(workspace, &path_buf) {
-        return Ok(WorktreeSession {
+        return Ok(SnapshotSession {
             path: path_buf.clone(),
             branch: describe_workspace_head(&path_buf),
             original_workspace: workspace.to_path_buf(),
-            backend: WorktreeBackend::Rift,
+            backend: SnapshotBackend::Rift,
             created_here: false,
         });
     }
@@ -528,18 +528,18 @@ fn enter_existing(workspace: &Path, path: &str) -> Result<WorktreeSession, ToolE
             "snapshot.enter: {path:?} is not a registered git worktree of this repo"
         ))
     })?;
-    Ok(WorktreeSession {
+    Ok(SnapshotSession {
         path: path_buf,
         branch,
         original_workspace: workspace.to_path_buf(),
-        backend: WorktreeBackend::Git,
+        backend: SnapshotBackend::Git,
         created_here: false,
     })
 }
 
 fn remove_created_workspace(
     executor: &ToolExecutor,
-    session: &WorktreeSession,
+    session: &SnapshotSession,
     discard_changes: bool,
 ) -> Result<(), ToolError> {
     executor.ensure_read_permission(&session.path)?;
@@ -552,12 +552,12 @@ fn remove_created_workspace(
     }
 
     match session.backend {
-        WorktreeBackend::Rift => remove_with_rift(&session.original_workspace, &session.path),
-        WorktreeBackend::Git => remove_with_git(&session.original_workspace, session),
+        SnapshotBackend::Rift => remove_with_rift(&session.original_workspace, &session.path),
+        SnapshotBackend::Git => remove_with_git(&session.original_workspace, session),
     }
 }
 
-fn remove_with_git(workspace: &Path, session: &WorktreeSession) -> Result<(), ToolError> {
+fn remove_with_git(workspace: &Path, session: &SnapshotSession) -> Result<(), ToolError> {
     git(
         workspace,
         &[
@@ -577,7 +577,7 @@ fn remove_with_rift(workspace: &Path, path: &Path) -> Result<(), ToolError> {
     rift(workspace, &db_path, &["remove", path_str.as_str()])?;
     if let Err(error) = rift(workspace, &db_path, &["gc"]) {
         tracing::warn!(
-            target: "agena::worktree",
+            target: "agena::snapshot",
             workspace = %workspace.display(),
             path = %path.display(),
             error = %error,
@@ -637,8 +637,8 @@ fn rift_bin() -> String {
         .unwrap_or_else(|| "rift".to_string())
 }
 
-fn managed_worktrees_dir(workspace: &Path) -> PathBuf {
-    crate::project_paths::project_state_dir(workspace).join("worktrees")
+fn managed_snapshots_dir(workspace: &Path) -> PathBuf {
+    crate::project_paths::project_state_dir(workspace).join("snapshots")
 }
 
 fn rift_database_path(workspace: &Path) -> PathBuf {
@@ -649,7 +649,7 @@ fn is_managed_rift_workspace(workspace: &Path, path: &Path) -> bool {
     if !has_rift_marker(path) {
         return false;
     }
-    let base = managed_worktrees_dir(workspace);
+    let base = managed_snapshots_dir(workspace);
     let canonical_base = base.canonicalize().unwrap_or(base);
     let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     canonical_path.starts_with(canonical_base)
@@ -697,29 +697,29 @@ fn generate_slug() -> String {
 // Public lifecycle API used by TUI / CLI / `/snapshot` slash command.
 // ---------------------------------------------------------------------------
 
-/// One record in the in-memory session → worktree map.
+/// One record in the in-memory session → snapshot map.
 #[derive(Debug, Clone)]
-pub struct ActiveWorktree {
+pub struct ActiveSnapshot {
     pub session_id: i64,
     pub path: PathBuf,
     pub branch: String,
-    pub backend: WorktreeBackend,
+    pub backend: SnapshotBackend,
     pub created_here: bool,
 }
 
-/// One record from the on-disk managed worktrees scan, cross-referenced
+/// One record from the on-disk managed snapshots scan, cross-referenced
 /// against the registry plus both managed backends.
 #[derive(Debug, Clone)]
-pub struct ManagedWorktree {
+pub struct ManagedSnapshot {
     pub path: PathBuf,
     pub session_id: Option<i64>,
     pub branch: Option<String>,
-    pub backend: Option<WorktreeBackend>,
+    pub backend: Option<SnapshotBackend>,
     pub registered_with_git: bool,
     pub registered_with_rift: bool,
 }
 
-impl ManagedWorktree {
+impl ManagedSnapshot {
     /// True when no live session owns this directory and neither managed
     /// backend still recognizes it. These are orphans `prune_stale` will remove.
     pub fn is_stale(&self) -> bool {
@@ -727,12 +727,12 @@ impl ManagedWorktree {
     }
 }
 
-/// Snapshot every session that currently holds a worktree.
-pub fn list_active(registry: &WorktreeRegistry) -> Vec<ActiveWorktree> {
-    let mut out: Vec<ActiveWorktree> = registry
+/// Snapshot every session that currently holds an active snapshot.
+pub fn list_active(registry: &SnapshotRegistry) -> Vec<ActiveSnapshot> {
+    let mut out: Vec<ActiveSnapshot> = registry
         .read()
         .iter()
-        .map(|(session_id, session)| ActiveWorktree {
+        .map(|(session_id, session)| ActiveSnapshot {
             session_id: *session_id,
             path: session.path.clone(),
             branch: session.branch.clone(),
@@ -744,16 +744,16 @@ pub fn list_active(registry: &WorktreeRegistry) -> Vec<ActiveWorktree> {
     out
 }
 
-/// Walk the home-level managed worktrees directory and report every directory there,
+/// Walk the home-level managed snapshots directory and report every directory there,
 /// joined with what the registry, Rift markers, and `git worktree list` know about it.
-pub fn list_managed(workspace: &Path, registry: &WorktreeRegistry) -> Vec<ManagedWorktree> {
-    let base = managed_worktrees_dir(workspace);
-    let mut out: Vec<ManagedWorktree> = Vec::new();
+pub fn list_managed(workspace: &Path, registry: &SnapshotRegistry) -> Vec<ManagedSnapshot> {
+    let base = managed_snapshots_dir(workspace);
+    let mut out: Vec<ManagedSnapshot> = Vec::new();
     let Ok(entries) = std::fs::read_dir(&base) else {
         return out;
     };
 
-    let sessions_by_path: HashMap<PathBuf, WorktreeSession> = registry
+    let sessions_by_path: HashMap<PathBuf, SnapshotSession> = registry
         .read()
         .iter()
         .map(|(_session_id, session)| (session.path.clone(), session.clone()))
@@ -763,7 +763,7 @@ pub fn list_managed(workspace: &Path, registry: &WorktreeRegistry) -> Vec<Manage
         .iter()
         .map(|(session_id, session)| (session.path.clone(), *session_id))
         .collect();
-    let git_paths: HashSet<PathBuf> = scan_git_worktrees(workspace);
+    let git_paths: HashSet<PathBuf> = scan_git_backend_paths(workspace);
 
     for dirent in entries.flatten() {
         let path = dirent.path();
@@ -784,9 +784,9 @@ pub fn list_managed(workspace: &Path, registry: &WorktreeRegistry) -> Vec<Manage
         let registered_with_rift = has_rift_marker(&path);
         let backend = active_session.map(|session| session.backend).or_else(|| {
             if registered_with_rift {
-                Some(WorktreeBackend::Rift)
+                Some(SnapshotBackend::Rift)
             } else if registered_with_git {
-                Some(WorktreeBackend::Git)
+                Some(SnapshotBackend::Git)
             } else {
                 None
             }
@@ -798,7 +798,7 @@ pub fn list_managed(workspace: &Path, registry: &WorktreeRegistry) -> Vec<Manage
                     .then(|| describe_workspace_head(&path))
             });
 
-        out.push(ManagedWorktree {
+        out.push(ManagedSnapshot {
             path,
             session_id,
             branch,
@@ -815,7 +815,7 @@ pub fn list_managed(workspace: &Path, registry: &WorktreeRegistry) -> Vec<Manage
 /// registered with either managed backend. Also triggers a best-effort
 /// Rift garbage collection pass so removed snapshots do not linger in
 /// `.trash`. Returns the paths that were removed.
-pub fn prune_stale(workspace: &Path, registry: &WorktreeRegistry) -> Vec<PathBuf> {
+pub fn prune_stale(workspace: &Path, registry: &SnapshotRegistry) -> Vec<PathBuf> {
     let mut removed = rift_gc(workspace);
     for entry in list_managed(workspace, registry) {
         if !entry.is_stale() {
@@ -825,7 +825,7 @@ pub fn prune_stale(workspace: &Path, registry: &WorktreeRegistry) -> Vec<PathBuf
             removed.push(entry.path);
         } else {
             tracing::warn!(
-                target: "agena::worktree",
+                target: "agena::snapshot",
                 "prune_stale: failed to remove {}",
                 entry.path.display()
             );
@@ -850,7 +850,7 @@ fn rift_gc(workspace: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn scan_git_worktrees(workspace: &Path) -> HashSet<PathBuf> {
+fn scan_git_backend_paths(workspace: &Path) -> HashSet<PathBuf> {
     let mut out = HashSet::new();
     let Ok(output) = git(workspace, &["worktree", "list", "--porcelain"]) else {
         return out;
@@ -1018,9 +1018,9 @@ exit 0
         let created = create_new(&workspace, Some("demo")).unwrap();
         let EnterWorkspaceResolution { session, note } = created;
 
-        assert_eq!(session.backend, WorktreeBackend::Rift);
+        assert_eq!(session.backend, SnapshotBackend::Rift);
         assert!(session.created_here);
-        assert_eq!(session.path, managed_worktrees_dir(&workspace).join("demo"));
+        assert_eq!(session.path, managed_snapshots_dir(&workspace).join("demo"));
         assert_eq!(session.branch, "snapshot");
         assert!(note.is_none());
     }
@@ -1080,7 +1080,7 @@ exit 0
         let created = create_new(&workspace, Some("demo")).unwrap();
         let EnterWorkspaceResolution { session, note } = created;
 
-        assert_eq!(session.backend, WorktreeBackend::Git);
+        assert_eq!(session.backend, SnapshotBackend::Git);
         assert_eq!(session.branch, "agena/demo");
         assert!(session.path.exists());
         assert!(
@@ -1118,7 +1118,7 @@ exit 0
 
         let capabilities = backend_capabilities(&workspace);
 
-        assert_eq!(capabilities.preferred_backend, Some(WorktreeBackend::Rift));
+        assert_eq!(capabilities.preferred_backend, Some(SnapshotBackend::Rift));
         assert!(capabilities.git.available);
         assert!(capabilities.rift.available);
         assert!(capabilities.rift.detail.contains(
@@ -1133,7 +1133,7 @@ exit 0
         let _home_guard = TestHomeGuard::set(temp.path());
 
         let workspace = temp.path().join("workspace");
-        let base = managed_worktrees_dir(&workspace);
+        let base = managed_snapshots_dir(&workspace);
         let rift_dir = base.join("demo");
         let trash_dir = base.join(".trash");
 
@@ -1146,7 +1146,7 @@ exit 0
 
         assert_eq!(managed.len(), 1);
         assert_eq!(managed[0].path, rift_dir);
-        assert_eq!(managed[0].backend, Some(WorktreeBackend::Rift));
+        assert_eq!(managed[0].backend, Some(SnapshotBackend::Rift));
         assert!(managed[0].registered_with_rift);
         assert!(!managed[0].is_stale());
     }

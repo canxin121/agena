@@ -1313,7 +1313,7 @@ enum ConfirmAction {
     PermissionStudioDeleteToolRule {
         tool_name: String,
     },
-    ExitWorktree {
+    ExitSnapshot {
         session_id: i64,
         discard_changes: bool,
     },
@@ -11779,15 +11779,15 @@ impl App {
         )));
     }
 
-    fn open_worktree_remove_confirm(&mut self, session_id: i64, discard_changes: bool) {
-        let mut body_lines = vec![ui_text::t(&self.i18n, "overlay-worktree-remove-body")];
+    fn open_snapshot_remove_confirm(&mut self, session_id: i64, discard_changes: bool) {
+        let mut body_lines = vec![ui_text::t(&self.i18n, "overlay-snapshot-remove-body")];
         if discard_changes {
-            body_lines.push(ui_text::t(&self.i18n, "overlay-worktree-remove-force"));
+            body_lines.push(ui_text::t(&self.i18n, "overlay-snapshot-remove-force"));
         }
         self.overlay = Some(Overlay::Confirm(self.build_confirm_overlay(
-            ui_text::t(&self.i18n, "overlay-worktree-remove-title"),
+            ui_text::t(&self.i18n, "overlay-snapshot-remove-title"),
             body_lines,
-            ConfirmAction::ExitWorktree {
+            ConfirmAction::ExitSnapshot {
                 session_id,
                 discard_changes,
             },
@@ -13798,14 +13798,14 @@ impl App {
             ConfirmAction::PermissionStudioDeleteToolRule { tool_name } => {
                 self.delete_permission_studio_tool_rule(tool_name.as_str())
             }
-            ConfirmAction::ExitWorktree {
+            ConfirmAction::ExitSnapshot {
                 session_id,
                 discard_changes,
             } => match self
                 .backend
-                .exit_worktree(session_id, "remove".to_string(), discard_changes)
+                .exit_snapshot(session_id, "remove".to_string(), discard_changes)
             {
-                Ok(output) => self.flash_success(ui_text::worktree_exit_message(
+                Ok(output) => self.flash_success(ui_text::snapshot_exit_message(
                     &self.i18n,
                     output.action.as_deref(),
                     output.path.as_str(),
@@ -13844,7 +13844,7 @@ impl App {
             CommandId::Permissions => self.handle_permissions_command(args),
             CommandId::Model => self.open_session_model_chooser(),
             CommandId::Review => self.handle_review_command(args),
-            CommandId::Worktree => self.handle_worktree_command(args),
+            CommandId::Snapshot => self.handle_snapshot_command(args),
             CommandId::Commit => self.handle_commit_command(args),
             CommandId::Pr => self.handle_pr_command(args),
             CommandId::Export => self.handle_export_command(args),
@@ -14084,14 +14084,14 @@ impl App {
         self.execute_runtime_tool_prompt("review", args);
     }
 
-    fn handle_worktree_command(&mut self, args: &str) {
+    fn handle_snapshot_command(&mut self, args: &str) {
         let trimmed = args.trim();
         if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("list") {
             self.open_inspector_picker(
-                ui_text::worktree_picker_title(&self.i18n),
-                ui_text::worktree_picker_prompt(&self.i18n),
+                ui_text::snapshot_picker_title(&self.i18n),
+                ui_text::snapshot_picker_prompt(&self.i18n),
                 "",
-                self.backend.worktree_inspector_rows(),
+                self.backend.snapshot_inspector_rows(),
             );
             return;
         }
@@ -14105,14 +14105,14 @@ impl App {
             "enter" => {
                 let argument = rest.trim();
                 let result = if argument.is_empty() {
-                    self.backend.enter_worktree(session_id, None, None)
+                    self.backend.enter_snapshot(session_id, None, None)
                 } else {
                     self.backend
-                        .enter_worktree(session_id, Some(argument.to_string()), None)
+                        .enter_snapshot(session_id, Some(argument.to_string()), None)
                 };
                 match result {
                     Ok(output) => {
-                        let mut message = ui_text::worktree_ready_message(
+                        let mut message = ui_text::snapshot_ready_message(
                             &self.i18n,
                             output.path.as_str(),
                             output.branch.as_deref(),
@@ -14139,10 +14139,10 @@ impl App {
                 }
                 match self
                     .backend
-                    .enter_worktree(session_id, None, Some(path.to_string()))
+                    .enter_snapshot(session_id, None, Some(path.to_string()))
                 {
                     Ok(output) => {
-                        let mut message = ui_text::worktree_attached_message(
+                        let mut message = ui_text::snapshot_attached_message(
                             &self.i18n,
                             output.path.as_str(),
                             output.branch.as_deref(),
@@ -14162,8 +14162,8 @@ impl App {
                 let exit_args = rest.trim();
                 let (mode, extra) = split_command_args_once(exit_args).unwrap_or((exit_args, ""));
                 match mode.to_ascii_lowercase().as_str() {
-                    "" | "keep" => match self.backend.exit_worktree(session_id, "keep".to_string(), false) {
-                        Ok(output) => self.flash_success(ui_text::worktree_exit_message(
+                    "" | "keep" => match self.backend.exit_snapshot(session_id, "keep".to_string(), false) {
+                        Ok(output) => self.flash_success(ui_text::snapshot_exit_message(
                             &self.i18n,
                             output.action.as_deref(),
                             output.path.as_str(),
@@ -14173,7 +14173,7 @@ impl App {
                     "remove" => {
                         let discard_changes =
                             matches!(extra.trim().to_ascii_lowercase().as_str(), "force" | "discard");
-                        self.open_worktree_remove_confirm(session_id, discard_changes);
+                        self.open_snapshot_remove_confirm(session_id, discard_changes);
                     }
                     _ => {
                         self.flash_warning(self.i18n.text_args(

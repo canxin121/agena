@@ -6,7 +6,7 @@ use crate::plugin::sdk::{
     HookSubscription, InitContext, InitOutcome, PathRequest, Plugin, PluginManifest,
     Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, async_trait,
 };
-use crate::plugins::provided::workflow::{WorkflowPlugin, WorkflowPluginConfig, WorktreeToolInput};
+use crate::plugins::provided::workflow::{SnapshotToolInput, WorkflowPlugin, WorkflowPluginConfig};
 
 pub(crate) const REPO_PLUGIN_ID: &str = "agena.repo";
 
@@ -29,7 +29,7 @@ impl Plugin for RepoPlugin {
             .description("Repository snapshot tools backed by Rift or git worktree.")
             .brief_detailed()
             .hooks(HookSubscription::TOOL_INVOKE)
-            .tool(WorktreeToolInput::tool_decl())
+            .tool(SnapshotToolInput::tool_decl())
             .build()
     }
 
@@ -46,7 +46,7 @@ impl Plugin for RepoPlugin {
                 input.tool_name
             )));
         }
-        let parsed = WorktreeToolInput::parse_input(input.input)?;
+        let parsed = SnapshotToolInput::parse_input(input.input)?;
         parsed.dispatch_tool_invoke(&self.inner).await
     }
 
@@ -55,7 +55,7 @@ impl Plugin for RepoPlugin {
         tool: &str,
         input: &serde_json::Value,
     ) -> SdkResult<Vec<PathRequest>> {
-        let parsed = WorktreeToolInput::parse_tool(tool, input.clone())?;
+        let parsed = SnapshotToolInput::parse_tool(tool, input.clone())?;
         parsed.dispatch_permission_paths(&self.inner).await
     }
 }

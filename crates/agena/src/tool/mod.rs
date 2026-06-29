@@ -17,11 +17,11 @@ pub(crate) mod read;
 pub(crate) mod result;
 pub(crate) mod shell;
 pub(crate) mod shell_tools;
+pub(crate) mod snapshot;
 pub(crate) mod task;
 pub(crate) mod todo_write;
 pub(crate) mod tool_search;
 pub(crate) mod truncation;
-pub(crate) mod worktree;
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -71,14 +71,14 @@ pub use monitor::{
 pub use payload::{CronJobSummary, ToolPayloadInput, ToolPayloadOutput, WebSearchHit};
 pub use result::{ToolExecutionView, ToolInvocationExecution, ToolPayloadExecution};
 pub use shell::{ShellError, ShellOutput, ShellRequest};
-pub use truncation::{ToolOutputTruncationPolicy, ToolOutputTruncator};
-pub use worktree::{
-    ActiveWorktree, ManagedWorktree, WorktreeBackend, WorktreeBackendCapabilities,
-    WorktreeBackendSupport, WorktreeRegistry,
-    backend_capabilities as worktree_backend_capabilities, list_active as worktree_list_active,
-    list_managed as worktree_list_managed, prune_stale as worktree_prune_stale,
-    registry_for_executor as worktree_registry_for_executor,
+pub use snapshot::{
+    ActiveSnapshot, ManagedSnapshot, SnapshotBackend, SnapshotBackendCapabilities,
+    SnapshotBackendSupport, SnapshotRegistry,
+    backend_capabilities as snapshot_backend_capabilities, list_active as snapshot_list_active,
+    list_managed as snapshot_list_managed, prune_stale as snapshot_prune_stale,
+    registry_for_executor as snapshot_registry_for_executor,
 };
+pub use truncation::{ToolOutputTruncationPolicy, ToolOutputTruncator};
 
 pub fn skills_plugin_id() -> &'static str {
     skills::SKILLS_PLUGIN_ID
@@ -961,7 +961,7 @@ pub struct ToolExecutor {
     monitor_registry: Option<Arc<dyn MonitorService>>,
     truncator: ToolOutputTruncator,
     plugins: Arc<PluginHost>,
-    worktree_registry: Option<worktree::WorktreeRegistry>,
+    snapshot_registry: Option<snapshot::SnapshotRegistry>,
     scheduler: Option<Arc<agena_scheduler::Scheduler>>,
     lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     permission_mode: PermissionEnforcementMode,
@@ -978,7 +978,7 @@ impl ToolExecutor {
             monitor_registry: monitor::default_registry(),
             truncator: ToolOutputTruncator::default(),
             plugins: PluginHost::new_empty(),
-            worktree_registry: None,
+            snapshot_registry: None,
             scheduler: None,
             lsp_registry: None,
             permission_mode: PermissionEnforcementMode::Enforced,
@@ -1023,13 +1023,13 @@ impl ToolExecutor {
         self
     }
 
-    pub fn with_worktree_registry(mut self, reg: worktree::WorktreeRegistry) -> Self {
-        self.worktree_registry = Some(reg);
+    pub fn with_snapshot_registry(mut self, reg: snapshot::SnapshotRegistry) -> Self {
+        self.snapshot_registry = Some(reg);
         self
     }
 
-    pub fn worktree_registry(&self) -> Option<&worktree::WorktreeRegistry> {
-        self.worktree_registry.as_ref()
+    pub fn snapshot_registry(&self) -> Option<&snapshot::SnapshotRegistry> {
+        self.snapshot_registry.as_ref()
     }
 
     pub fn with_scheduler(mut self, scheduler: Arc<agena_scheduler::Scheduler>) -> Self {
@@ -2980,7 +2980,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::message::{
-        ApplyPatchToolInput, EnterWorktreeToolInput, FileChangeKind, FilesystemAccess,
+        ApplyPatchToolInput, EnterSnapshotToolInput, FileChangeKind, FilesystemAccess,
         FilesystemEffect, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
         LspPositionToolInput, Message, NetworkEffect, PartContent, ProcessShell, ProcessToolInput,
         ReadToolInput, ShellCommandInput, StructuredObject, TaskSubagentType, TaskToolInput,
@@ -6867,7 +6867,7 @@ mod tests {
             .iter()
             .find(|tool| tool.exposed_name == "agena_planning__plan_update_check")
             .expect("plan.update_check alias should be model-visible");
-        let worktree_existing = tools
+        let snapshot_existing = tools
             .iter()
             .find(|tool| tool.exposed_name == "agena_repo__snapshot_enter_existing")
             .expect("nested snapshot.enter.existing tool should be model-visible");
@@ -6875,8 +6875,8 @@ mod tests {
         let plan_set_schema =
             super::model_safe_tool_schema(&plan_set_status.sanitized_input_schema());
         let check_schema = super::model_safe_tool_schema(&check_update.sanitized_input_schema());
-        let worktree_schema =
-            super::model_safe_tool_schema(&worktree_existing.sanitized_input_schema());
+        let snapshot_schema =
+            super::model_safe_tool_schema(&snapshot_existing.sanitized_input_schema());
 
         let plan_set_properties = plan_set_schema
             .get("properties")
@@ -6886,7 +6886,7 @@ mod tests {
             .get("properties")
             .and_then(serde_json::Value::as_object)
             .expect("plan.update_check schema should expose properties");
-        let worktree_properties = worktree_schema
+        let snapshot_properties = snapshot_schema
             .get("properties")
             .and_then(serde_json::Value::as_object)
             .expect("snapshot.enter.existing schema should expose properties");
@@ -6909,13 +6909,13 @@ mod tests {
         assert!(check_properties.contains_key("status"));
         assert!(!check_properties.contains_key("phase"));
         assert_eq!(
-            worktree_properties
+            snapshot_properties
                 .get("path")
                 .and_then(|value| value.get("type"))
                 .and_then(serde_json::Value::as_str),
             Some("string")
         );
-        assert!(!worktree_properties.contains_key("target"));
+        assert!(!snapshot_properties.contains_key("target"));
     }
 
     #[test]
@@ -7809,19 +7809,19 @@ mod tests {
     }
 
     #[test]
-    fn collect_permission_checks_for_workflow_worktree_use_project_state_paths_only() {
+    fn collect_permission_checks_for_workflow_snapshot_use_project_state_paths_only() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
 
-        let named_invocation = ToolPayloadInput::EnterWorktree(EnterWorktreeToolInput {
+        let named_invocation = ToolPayloadInput::EnterSnapshot(EnterSnapshotToolInput {
             name: Some("demo".to_string()),
             path: None,
         })
         .into_invocation();
         let named_checks = executor
             .collect_permission_checks_for_invocation(&named_invocation)
-            .expect("named worktree permission collection should succeed");
+            .expect("named snapshot permission collection should succeed");
         let named_paths = named_checks
             .iter()
             .filter_map(|check| match &check.action {
@@ -7838,28 +7838,28 @@ mod tests {
             std::collections::HashSet::from([(
                 "write".to_string(),
                 super::normalize_path_for_display(
-                    &crate::project_paths::project_state_dir(&workspace.root).join("worktrees"),
+                    &crate::project_paths::project_state_dir(&workspace.root).join("snapshots"),
                 ),
             )]),
-            "new worktree creation should only request the managed worktrees directory"
+            "new snapshot creation should only request the managed snapshots directory"
         );
 
         let outside = workspace.root.with_file_name(format!(
-            "{}-existing-worktree",
+            "{}-existing-snapshot",
             workspace
                 .root
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("agena")
         ));
-        let existing_invocation = ToolPayloadInput::EnterWorktree(EnterWorktreeToolInput {
+        let existing_invocation = ToolPayloadInput::EnterSnapshot(EnterSnapshotToolInput {
             name: None,
             path: Some(outside.to_string_lossy().to_string()),
         })
         .into_invocation();
         let existing_checks = executor
             .collect_permission_checks_for_invocation(&existing_invocation)
-            .expect("existing worktree permission collection should succeed");
+            .expect("existing snapshot permission collection should succeed");
         let existing_paths = existing_checks
             .iter()
             .filter_map(|check| match &check.action {
@@ -7878,7 +7878,7 @@ mod tests {
                 ("read".to_string(), outside_display.clone()),
                 ("write".to_string(), outside_display),
             ]),
-            "existing worktrees should request read/write access to the selected path only"
+            "existing snapshots should request read/write access to the selected path only"
         );
     }
 

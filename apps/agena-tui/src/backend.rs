@@ -51,6 +51,10 @@ pub struct WorktreeCommandOutput {
     pub path: String,
     #[serde(default)]
     pub branch: Option<String>,
+    #[serde(default)]
+    pub backend: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 fn parse_worktree_payload(payload: Option<serde_json::Value>) -> Result<WorktreeCommandOutput> {
@@ -3959,7 +3963,29 @@ impl Backend {
         };
         let active = tool::worktree_list_active(registry);
         let managed = tool::worktree_list_managed(&self.workspace_root, registry);
+        let capabilities = tool::worktree_backend_capabilities(&self.workspace_root);
         let mut rows = vec![
+            InspectorRow {
+                label: "preferred_backend".to_string(),
+                detail: capabilities
+                    .preferred_backend
+                    .map(|backend| backend.as_str().to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+            },
+            InspectorRow {
+                label: "rift_backend".to_string(),
+                detail: format!(
+                    "available={} | {}",
+                    capabilities.rift.available, capabilities.rift.detail
+                ),
+            },
+            InspectorRow {
+                label: "git_backend".to_string(),
+                detail: format!(
+                    "available={} | {}",
+                    capabilities.git.available, capabilities.git.detail
+                ),
+            },
             InspectorRow {
                 label: "active_sessions".to_string(),
                 detail: active.len().to_string(),

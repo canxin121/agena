@@ -7,7 +7,7 @@
 //! storage through copy-on-write snapshots and filtered copies.
 //!
 //! State is held in a process-wide registry keyed by session id so
-//! `enter` and `exit` can refer to the same managed workspace across
+//! `enter` and `exit` can refer to the same managed snapshot across
 //! multiple tool invocations.
 
 use std::collections::{HashMap, HashSet};
@@ -66,7 +66,7 @@ pub struct WorktreeSession {
     pub branch: String,
     pub original_workspace: PathBuf,
     pub backend: WorktreeBackend,
-    /// True when we created the worktree (and so are responsible for
+    /// True when we created the snapshot (and so are responsible for
     /// cleaning it up on `remove`).
     pub created_here: bool,
 }
@@ -98,15 +98,15 @@ pub(super) fn execute_enter(
     session_id: Option<i64>,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let session_id = session_id.ok_or_else(|| {
-        ToolError::Plugin("enter_worktree: no session in execution context".to_string())
+        ToolError::Plugin("snapshot.enter: no session in execution context".to_string())
     })?;
     let registry = executor
         .worktree_registry()
-        .ok_or_else(|| ToolError::Plugin("enter_worktree: registry not configured".to_string()))?;
+        .ok_or_else(|| ToolError::Plugin("snapshot.enter: registry not configured".to_string()))?;
 
     if registry.read().contains_key(&session_id) {
         return Err(ToolError::Plugin(
-            "enter_worktree: session is already in a worktree; call exit_worktree first"
+            "snapshot.enter: session is already in a snapshot; call `snapshot exit` first"
                 .to_string(),
         ));
     }
@@ -114,7 +114,7 @@ pub(super) fn execute_enter(
     let workspace = executor.workspace_root().to_path_buf();
     if input.name.is_some() && input.path.is_some() {
         return Err(ToolError::Plugin(
-            "enter_worktree: provide either `name` or `path`, not both".to_string(),
+            "snapshot.enter: provide either `name` or `path`, not both".to_string(),
         ));
     }
 
@@ -130,9 +130,9 @@ pub(super) fn execute_enter(
         .unwrap_or_default();
 
     let view = ToolExecutionView::simple(
-        format!("Workspace → {}", session.path.display()),
+        format!("Snapshot → {}", session.path.display()),
         format!(
-            "Switched to managed workspace:\n  backend: {}\n  path:    {}\n  branch:  {}\n{}",
+            "Switched to managed snapshot:\n  backend: {}\n  path:    {}\n  branch:  {}\n{}",
             session.backend.as_str(),
             session.path.display(),
             session.branch,
@@ -156,16 +156,16 @@ pub(super) fn execute_exit(
     session_id: Option<i64>,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let session_id = session_id.ok_or_else(|| {
-        ToolError::Plugin("exit_worktree: no session in execution context".to_string())
+        ToolError::Plugin("snapshot.exit: no session in execution context".to_string())
     })?;
     let registry = executor
         .worktree_registry()
-        .ok_or_else(|| ToolError::Plugin("exit_worktree: registry not configured".to_string()))?;
+        .ok_or_else(|| ToolError::Plugin("snapshot.exit: registry not configured".to_string()))?;
 
     let session = registry
         .write()
         .remove(&session_id)
-        .ok_or_else(|| ToolError::Plugin("exit_worktree: not in a worktree".to_string()))?;
+        .ok_or_else(|| ToolError::Plugin("snapshot.exit: not in a snapshot".to_string()))?;
 
     let action = input.action.trim();
     if action == "remove" && session.created_here {
@@ -176,9 +176,9 @@ pub(super) fn execute_exit(
     }
 
     let view = ToolExecutionView::simple(
-        format!("Workspace exited ({action})"),
+        format!("Snapshot exited ({action})"),
         format!(
-            "Workspace at {} (backend {}, branch {}) — action: {action}",
+            "Snapshot at {} (backend {}, branch {}) — action: {action}",
             session.path.display(),
             session.backend.as_str(),
             session.branch,
@@ -200,11 +200,11 @@ fn create_new(workspace: &Path, name: Option<&str>) -> Result<EnterWorkspaceReso
         .unwrap_or_else(generate_slug);
     let base = managed_worktrees_dir(workspace);
     std::fs::create_dir_all(&base)
-        .map_err(|error| ToolError::Plugin(format!("enter_worktree: mkdir {base:?}: {error}")))?;
+        .map_err(|error| ToolError::Plugin(format!("snapshot.enter: mkdir {base:?}: {error}")))?;
     let target = base.join(&slug);
     if target.exists() {
         return Err(ToolError::Plugin(format!(
-            "enter_worktree: target {target:?} already exists"
+            "snapshot.enter: target {target:?} already exists"
         )));
     }
 
@@ -288,7 +288,7 @@ fn create_new_backend_error(
         detail.push(format!("git worktree create attempt: {git_failure}"));
     }
     ToolError::Plugin(format!(
-        "enter_worktree: could not create a managed workspace\n  {}",
+        "snapshot.enter: could not create a managed snapshot\n  {}",
         detail.join("\n  ")
     ))
 }
@@ -471,7 +471,7 @@ fn enter_existing(workspace: &Path, path: &str) -> Result<WorktreeSession, ToolE
     let path_buf = PathBuf::from(path);
     if !path_buf.exists() {
         return Err(ToolError::Plugin(format!(
-            "enter_worktree: path {path:?} does not exist"
+            "snapshot.enter: path {path:?} does not exist"
         )));
     }
 
@@ -488,7 +488,7 @@ fn enter_existing(workspace: &Path, path: &str) -> Result<WorktreeSession, ToolE
     let capabilities = backend_capabilities(workspace);
     if !capabilities.git.available {
         return Err(ToolError::Plugin(format!(
-            "enter_worktree: cannot attach existing git worktree: {}",
+            "snapshot.enter: cannot attach existing git worktree: {}",
             capabilities.git.detail
         )));
     }
@@ -525,7 +525,7 @@ fn enter_existing(workspace: &Path, path: &str) -> Result<WorktreeSession, ToolE
     }
     let branch = found_branch.ok_or_else(|| {
         ToolError::Plugin(format!(
-            "enter_worktree: {path:?} is not a registered worktree of this repo"
+            "snapshot.enter: {path:?} is not a registered git worktree of this repo"
         ))
     })?;
     Ok(WorktreeSession {
@@ -546,7 +546,7 @@ fn remove_created_workspace(
     executor.ensure_edit_permission(&session.path)?;
     if !discard_changes && workspace_has_local_changes(&session.path)? {
         return Err(ToolError::Plugin(
-            "exit_worktree: workspace has local changes; re-call with `discard_changes: true` to force removal"
+            "snapshot.exit: snapshot has local changes; re-call with `discard_changes: true` to force removal"
                 .to_string(),
         ));
     }
@@ -690,11 +690,11 @@ fn git_detached_head_label(path: &Path) -> Option<String> {
 
 fn generate_slug() -> String {
     let now = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-    format!("wt-{now}")
+    format!("snapshot-{now}")
 }
 
 // ---------------------------------------------------------------------------
-// Public lifecycle API used by TUI / CLI / `/worktrees` slash command.
+// Public lifecycle API used by TUI / CLI / `/snapshot` slash command.
 // ---------------------------------------------------------------------------
 
 /// One record in the in-memory session → worktree map.

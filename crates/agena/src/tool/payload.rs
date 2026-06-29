@@ -362,7 +362,7 @@ const DIRECT_GROUPED_TOOL_MAPPINGS: &[(&str, &str, &str, &str)] = &[
     ("tool_search", "agena.catalog", "tools", "search"),
     ("todo_write", "agena.planning", "todo", "write"),
     ("ask_user", "agena.runtime", "user", "request_input"),
-    ("exit_worktree", "agena.repo", "worktree", "exit"),
+    ("exit_worktree", "agena.repo", "snapshot", "exit"),
     ("lsp_definition", "agena.lsp", "lsp", "definition"),
     ("lsp_references", "agena.lsp", "lsp", "references"),
     ("lsp_hover", "agena.lsp", "lsp", "hover"),
@@ -430,7 +430,7 @@ fn invocation_name_for_payload_tool(
                 "action".to_string(),
                 serde_json::Value::String("enter".to_string()),
             );
-            exposed_tool_name("agena.repo", "worktree")
+            exposed_tool_name("agena.repo", "snapshot")
         }
         _ => {
             let (plugin, entry, action) = grouped_mapping_for_tool(tool)?;
@@ -495,7 +495,7 @@ fn grouped_tool_payload_name(
     let action = input.get("action")?.as_str()?.to_string();
     let tool = match (entry, action.as_str()) {
         ("process", "run" | "list" | "logs" | "stop") => "process",
-        ("worktree", "enter") => "enter_worktree",
+        ("snapshot", "enter") => "enter_worktree",
         _ => tool_name_for_grouped_mapping(entry, action.as_str())?,
     };
     input.remove("action");
@@ -548,7 +548,7 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
         "agena_planning__todo" | "todo" => Some("todo_write".to_string()),
         "agena_runtime__user" | "user" => Some("ask_user".to_string()),
         "agena_planning__plan" | "plan" => None,
-        "agena_repo__worktree" | "worktree" => None,
+        "agena_repo__snapshot" | "snapshot" => None,
         "agena_cron__schedule" | "schedule" => None,
         "agena_lsp__lsp" | "lsp" => None,
         _ => None,

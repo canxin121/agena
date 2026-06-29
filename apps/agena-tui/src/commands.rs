@@ -168,8 +168,8 @@ pub const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         id: CommandId::Worktree,
-        name: "worktree",
-        aliases: &["wt"],
+        name: "snapshot",
+        aliases: &[],
         arguments: "[query]",
         summary_key: "command-worktree-summary",
     },

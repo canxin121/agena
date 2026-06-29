@@ -775,18 +775,18 @@ mod tests {
     fn worktree_and_command_feedback_follow_locale() {
         let i18n = I18n::resolve(Some("zh-CN"), None);
 
-        assert_eq!(worktree_picker_title(&i18n), "Worktree");
+        assert_eq!(worktree_picker_title(&i18n), "Snapshot");
         assert_eq!(
             worktree_picker_prompt(&i18n),
-            "查看当前活跃与托管的 worktree"
+            "查看当前活跃与托管的 snapshot"
         );
         assert_eq!(
             normalize_fluent_markup(worktree_ready_message(&i18n, "/tmp/wt", Some("main"))),
-            "worktree 已就绪：/tmp/wt (main)"
+            "snapshot 已就绪：/tmp/wt (main)"
         );
         assert_eq!(
             normalize_fluent_markup(worktree_exit_message(&i18n, Some("remove"), "/tmp/wt")),
-            "worktree 已移除：/tmp/wt"
+            "snapshot 已移除：/tmp/wt"
         );
         assert_eq!(
             normalize_fluent_markup(commit_created_message(&i18n, "abc123", "feat: update")),

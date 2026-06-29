@@ -6852,7 +6852,7 @@ mod tests {
         assert!(
             !tools
                 .iter()
-                .any(|tool| tool.exposed_name == "agena_repo__worktree")
+                .any(|tool| tool.exposed_name == "agena_repo__snapshot")
         );
 
         let plan_set_status = tools
@@ -6869,8 +6869,8 @@ mod tests {
             .expect("plan.update_check alias should be model-visible");
         let worktree_existing = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_repo__worktree_enter_existing")
-            .expect("nested worktree.enter.existing alias should be model-visible");
+            .find(|tool| tool.exposed_name == "agena_repo__snapshot_enter_existing")
+            .expect("nested snapshot.enter.existing tool should be model-visible");
 
         let plan_set_schema =
             super::model_safe_tool_schema(&plan_set_status.sanitized_input_schema());
@@ -6889,7 +6889,7 @@ mod tests {
         let worktree_properties = worktree_schema
             .get("properties")
             .and_then(serde_json::Value::as_object)
-            .expect("worktree.enter.existing schema should expose properties");
+            .expect("snapshot.enter.existing schema should expose properties");
 
         assert!(!plan_set_properties.contains_key("action"));
         assert!(

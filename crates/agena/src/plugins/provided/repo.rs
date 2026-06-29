@@ -26,7 +26,7 @@ impl RepoPlugin {
 impl Plugin for RepoPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder(REPO_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
-            .description("Repository workspace snapshot tools backed by Rift or git worktree.")
+            .description("Repository snapshot tools backed by Rift or git worktree.")
             .brief_detailed()
             .hooks(HookSubscription::TOOL_INVOKE)
             .tool(WorktreeToolInput::tool_decl())
@@ -40,7 +40,7 @@ impl Plugin for RepoPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        if input.tool_name != "worktree" {
+        if input.tool_name != "snapshot" {
             return Err(PluginError::not_implemented(format!(
                 "tool_invoke({})",
                 input.tool_name

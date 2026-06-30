@@ -120,10 +120,13 @@ fn tool_entries() -> Vec<RegisteredTool> {
     );
     extend_manifest_entries(
         &mut entries,
-        provided_planning::PlanningPlugin::new().manifest(),
+        provided_planning::PlanPlugin::new().manifest(),
     );
     extend_manifest_entries(&mut entries, provided_tasks::TasksPlugin::new().manifest());
-    extend_manifest_entries(&mut entries, provided_repo::RepoPlugin::new().manifest());
+    extend_manifest_entries(
+        &mut entries,
+        provided_repo::SnapshotPlugin::new().manifest(),
+    );
     extend_manifest_entries(&mut entries, crate::web::new_web_plugin().manifest());
     extend_manifest_entries(&mut entries, crate::memory::new_memory_plugin().manifest());
     if crate::tool::schema_lab_builtin_enabled() {

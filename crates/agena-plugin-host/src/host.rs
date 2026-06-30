@@ -39,7 +39,7 @@ use crate::sdk::host_api::{
     HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
     HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
     HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
-    HostTodoWriteRequest, HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
+    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
     HostToolUpdateRequest, LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
     MonitorStartRequest, MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest,
     SpawnSubtaskResponse, ToolDescriptor, ToolRegistryChangeKind, ToolRegistryChangedEvent,
@@ -2930,16 +2930,6 @@ impl HostHandle {
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
-                    method::HOST_TODO_WRITE => {
-                        let p: HostTodoWriteParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
-                            scoped_context(plugin_id, p.context),
-                            inner.todo_write(p.request),
-                        )
-                        .await?;
-                        serde_json::to_value(&out)
-                            .map_err(|e| PluginError::invalid_params(e.to_string()))
-                    }
                     method::HOST_SNAPSHOT_ENTER => {
                         self.require_capability(
                             plugin_id.as_deref(),
@@ -3873,13 +3863,6 @@ struct HostListToolsParams {
     context: Option<HostCallbackContext>,
 }
 
-#[derive(serde::Deserialize)]
-struct HostTodoWriteParams {
-    request: HostTodoWriteRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
-}
-
 #[derive(serde::Deserialize, Default)]
 struct HostEnterSnapshotParams {
     #[serde(default)]
@@ -4314,11 +4297,6 @@ impl HostClient for ScopedHostClient {
             .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.list_tools()).await
-    }
-
-    async fn todo_write(&self, req: HostTodoWriteRequest) -> crate::sdk::Result<ToolInvokeOutput> {
-        let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.todo_write(req)).await
     }
 
     async fn get_session(

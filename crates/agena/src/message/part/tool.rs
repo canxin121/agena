@@ -203,14 +203,6 @@ pub struct ToolSearchToolInput {
     pub limit: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("items[].content"), non_empty_if_present("items[].content"))]
-pub struct TodoWriteToolInput {
-    /// Todo items to replace or persist.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub items: Vec<TodoItem>,
-}
-
 /// Shell launcher used for a process run.
 #[derive(
     Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Display, Default,

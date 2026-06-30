@@ -58,7 +58,6 @@ impl ToolOutputTruncator {
             | ToolPayloadOutput::Grep { .. }
             | ToolPayloadOutput::Task { .. }
             | ToolPayloadOutput::ToolSearch { .. }
-            | ToolPayloadOutput::TodoWrite { .. }
             | ToolPayloadOutput::AskUser { .. }
             | ToolPayloadOutput::WebFetch { .. }
             | ToolPayloadOutput::WebSearch { .. }

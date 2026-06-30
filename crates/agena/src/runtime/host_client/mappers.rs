@@ -266,23 +266,6 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
     )
 }
 
-pub(super) fn todo_item_from_host(item: HostTodoItem) -> TodoItem {
-    TodoItem {
-        content: item.content,
-        status: match item.status {
-            HostTodoStatus::Pending => TodoStatus::Pending,
-            HostTodoStatus::InProgress => TodoStatus::InProgress,
-            HostTodoStatus::Completed => TodoStatus::Completed,
-            HostTodoStatus::Cancelled => TodoStatus::Cancelled,
-        },
-        priority: match item.priority {
-            HostTodoPriority::High => TodoPriority::High,
-            HostTodoPriority::Medium => TodoPriority::Medium,
-            HostTodoPriority::Low => TodoPriority::Low,
-        },
-    }
-}
-
 pub(super) fn host_session_from_session(session: &crate::session::Session) -> HostSession {
     HostSession {
         id: session.id,

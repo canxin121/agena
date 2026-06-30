@@ -9,8 +9,8 @@ use crate::message::{
     FileChangeRecord, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
     LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, ProcessEvent, ProcessShell,
     ProcessStatus, ProcessSummary, ProcessToolInput, ReadToolInput, ScheduleWakeupToolInput,
-    StructuredObject, TodoItem, TodoWriteToolInput, ToolInvocation, ToolOutput,
-    ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
+    StructuredObject, ToolInvocation, ToolOutput, ToolSearchToolInput, WebFetchToolInput,
+    WebSearchToolInput,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
@@ -24,7 +24,6 @@ pub enum ToolPayloadInput {
     Grep(GrepToolInput),
     Task(crate::message::TaskToolInput),
     ToolSearch(ToolSearchToolInput),
-    TodoWrite(TodoWriteToolInput),
     #[serde(rename = "ask_user")]
     AskUser(AskUserToolInput),
     WebFetch(WebFetchToolInput),
@@ -52,7 +51,6 @@ impl ToolPayloadInput {
             Self::Grep(_) => "grep",
             Self::Task(_) => "task",
             Self::ToolSearch(_) => "tool_search",
-            Self::TodoWrite(_) => "todo_write",
             Self::AskUser(_) => "ask_user",
             Self::WebFetch(_) => "web_fetch",
             Self::WebSearch(_) => "web_search",
@@ -168,10 +166,6 @@ pub enum ToolPayloadOutput {
     ToolSearch {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         results: Vec<String>,
-    },
-    TodoWrite {
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        items: Vec<TodoItem>,
     },
     #[serde(rename = "ask_user")]
     AskUser {
@@ -299,7 +293,6 @@ impl ToolPayloadOutput {
             Self::Grep { .. } => "grep",
             Self::Task { .. } => "task",
             Self::ToolSearch { .. } => "tool_search",
-            Self::TodoWrite { .. } => "todo_write",
             Self::AskUser { .. } => "ask_user",
             Self::WebFetch { .. } => "web_fetch",
             Self::WebSearch { .. } => "web_search",
@@ -360,9 +353,8 @@ const DIRECT_GROUPED_TOOL_MAPPINGS: &[(&str, &str, &str, &str)] = &[
     ("apply_patch", "agena.fs", "fs", "apply_patch"),
     ("task", "agena.tasks", "task", "run"),
     ("tool_search", "agena.catalog", "tools", "search"),
-    ("todo_write", "agena.planning", "todo", "write"),
     ("ask_user", "agena.runtime", "user", "request_input"),
-    ("exit_snapshot", "agena.repo", "snapshot", "exit"),
+    ("exit_snapshot", "agena.snapshot", "snapshot", "exit"),
     ("lsp_definition", "agena.lsp", "lsp", "definition"),
     ("lsp_references", "agena.lsp", "lsp", "references"),
     ("lsp_hover", "agena.lsp", "lsp", "hover"),
@@ -430,7 +422,7 @@ fn invocation_name_for_payload_tool(
                 "action".to_string(),
                 serde_json::Value::String("enter".to_string()),
             );
-            exposed_tool_name("agena.repo", "snapshot")
+            exposed_tool_name("agena.snapshot", "snapshot")
         }
         _ => {
             let (plugin, entry, action) = grouped_mapping_for_tool(tool)?;
@@ -545,10 +537,9 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
         "agena_fs__fs" | "fs" => None,
         "agena_tasks__task" | "task" => Some("task".to_string()),
         "agena_catalog__tools" | "tools" => Some("tool_search".to_string()),
-        "agena_planning__todo" | "todo" => Some("todo_write".to_string()),
         "agena_runtime__user" | "user" => Some("ask_user".to_string()),
-        "agena_planning__plan" | "plan" => None,
-        "agena_repo__snapshot" | "snapshot" => None,
+        "agena_plan__plan" | "plan" => None,
+        "agena_snapshot__snapshot" | "snapshot" => None,
         "agena_cron__schedule" | "schedule" => None,
         "agena_lsp__lsp" | "lsp" => None,
         _ => None,

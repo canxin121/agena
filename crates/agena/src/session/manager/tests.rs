@@ -15,8 +15,8 @@ use crate::db::entities::activity_message;
 use crate::db::init_schema;
 use crate::event::EventKind;
 use crate::message::{
-    ApplyPatchToolInput, AskUserToolInput, ExecutionStatus, MessageMetadata, MessagePart, TodoItem,
-    TodoPriority, TodoStatus, TodoWriteToolInput, UserInputOption, UserInputQuestion,
+    ApplyPatchToolInput, AskUserToolInput, ExecutionStatus, MessageMetadata, MessagePart,
+    UserInputOption, UserInputQuestion,
 };
 use crate::model::{ModelId, ModelRef, ProviderId};
 use crate::permission::{
@@ -40,14 +40,13 @@ const PROCESS_RUN_TOOL: &str = "agena_process__process_run";
 const WEB_CRAWL_TOOL: &str = "agena_web__crawl";
 const WEB_FETCH_TOOL: &str = "agena_web__fetch";
 const TOOLS_TOOL: &str = "agena_catalog__tools";
-const TODO_TOOL: &str = "agena_planning__todo";
+const PERMISSION_TOOL: &str = FS_TOOL;
 const USER_TOOL: &str = "agena_runtime__user";
-const PLAN_TOOL: &str = "agena_planning__plan";
-const PLAN_CREATE_TOOL: &str = "agena_planning__plan_create";
-const PLAN_UPDATE_STEP_TOOL: &str = "agena_planning__plan_update_step";
-const PLAN_SET_STATUS_TOOL: &str = "agena_planning__plan_set_status";
-const SNAPSHOT_ENTER_NEW_TOOL: &str = "agena_repo__snapshot_enter_new";
-const SNAPSHOT_EXIT_TOOL: &str = "agena_repo__snapshot_exit";
+const PLAN_TOOL: &str = "agena_plan__plan";
+const PLAN_SET_TOOL: &str = "agena_plan__plan_set";
+const PLAN_UPDATE_TOOL: &str = "agena_plan__plan_update";
+const SNAPSHOT_ENTER_NEW_TOOL: &str = "agena_snapshot__snapshot_enter_new";
+const SNAPSHOT_EXIT_TOOL: &str = "agena_snapshot__snapshot_exit";
 const TASK_TOOL: &str = "agena_tasks__task";
 const LSP_TOOL: &str = "agena_lsp__lsp";
 const INIT_SKILL_TOOL: &str = "agena_skills__init";
@@ -71,6 +70,18 @@ fn bash_process_input(
         command,
         background,
     })
+}
+
+fn permission_tool_value() -> serde_json::Value {
+    serde_json::json!({
+        "action": "glob",
+        "pattern": "*"
+    })
+}
+
+fn permission_tool_input() -> crate::message::StructuredObject {
+    crate::message::StructuredObject::try_from(permission_tool_value())
+        .expect("permission tool input should serialize")
 }
 
 struct TempWorkspace {
@@ -381,7 +392,7 @@ impl ModelRuntime for ScriptedProvider {
         });
         let todo_result = request.messages.iter().find_map(|message| {
             message.parts.iter().find_map(|part| {
-                if part.operation_id.as_deref() != Some("call_todo_1") {
+                if part.operation_id.as_deref() != Some("call_plan_set_1") {
                     return None;
                 }
                 let operation = match part.content.as_ref() {
@@ -436,25 +447,15 @@ impl ModelRuntime for ScriptedProvider {
                 }
             })
         });
-        let events = if last_user_text.contains("permission todo") && todo_result.is_none() {
+        let events = if last_user_text.contains("permission plan") && todo_result.is_none() {
             vec![
                 Ok(CompletionStreamEvent::ToolCallDelta {
                     provider_id: scripted_provider_id(),
                     model: scripted_model_id(),
-                    stream_key: "call_todo_1".to_string(),
-                    id: Some("call_todo_1".to_string()),
-                    name: Some(TODO_TOOL.to_string()),
-                    arguments_delta: serde_json::json!({
-                        "action": "write",
-                        "items": TodoWriteToolInput {
-                            items: vec![TodoItem {
-                                content: "confirm permission recovery".to_string(),
-                                status: TodoStatus::Completed,
-                                priority: TodoPriority::Low,
-                            }],
-                        }.items,
-                    })
-                    .to_string(),
+                    stream_key: "call_plan_set_1".to_string(),
+                    id: Some("call_plan_set_1".to_string()),
+                    name: Some(PERMISSION_TOOL.to_string()),
+                    arguments_delta: permission_tool_value().to_string(),
                 }),
                 Ok(CompletionStreamEvent::Completed {
                     provider_id: scripted_provider_id(),
@@ -466,8 +467,8 @@ impl ModelRuntime for ScriptedProvider {
             ]
         } else if let Some(todo_result) = todo_result {
             let delta = match todo_result {
-                Ok(()) => "permission todo done".to_string(),
-                Err(_) => "permission todo failed".to_string(),
+                Ok(()) => "permission plan done".to_string(),
+                Err(_) => "permission plan failed".to_string(),
             };
             vec![
                 Ok(CompletionStreamEvent::TextDelta {
@@ -1010,24 +1011,6 @@ impl crate::plugin::sdk::host_api::HostClient for SessionTestHostClient {
                 }
             })
             .collect())
-    }
-
-    async fn todo_write(
-        &self,
-        req: crate::plugin::sdk::host_api::HostTodoWriteRequest,
-    ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
-        let context =
-            crate::plugin::sdk::host_api::current_host_callback_context().unwrap_or_default();
-        self.executor
-            .execute_tool_payload_for_host(
-                "todo_write",
-                serde_json::to_value(req)
-                    .map_err(|err| crate::plugin::PluginError::new(err.to_string()))?,
-                context.session_id.filter(|id| *id >= 0),
-                context.call_id.filter(|id| *id >= 0),
-                None,
-            )
-            .map_err(|err| crate::plugin::PluginError::new(err.to_string()))
     }
 }
 
@@ -2045,7 +2028,7 @@ fn blocked_permission_survives_restart_and_reply_continues() {
         let workspace = TempWorkspace::new();
         let db = open_temp_database(&workspace.root, "permission-resume.db").await;
         let tool_policy =
-            ToolPermissionPolicy::allow_all().with_tool_mode(TODO_TOOL, PermissionMode::Ask);
+            ToolPermissionPolicy::allow_all().with_tool_mode(PERMISSION_TOOL, PermissionMode::Ask);
         let first = build_manager_with_provider_on_db(
             &workspace.root,
             db.clone(),
@@ -2068,7 +2051,7 @@ fn blocked_permission_survives_restart_and_reply_continues() {
             .submit_user_message(SessionUserMessageRequest::new(
                 session_id,
                 run_options(),
-                vec![PartContent::text("permission todo")],
+                vec![PartContent::text("permission plan")],
             ))
             .await
             .expect("run should block on permission");
@@ -2117,7 +2100,7 @@ fn blocked_permission_survives_restart_and_reply_continues() {
         assert!(
             completed.messages.iter().any(|message| {
                 message.role == Role::Assistant
-                    && message.as_text_lossy().contains("permission todo done")
+                    && message.as_text_lossy().contains("permission plan done")
             }),
             "completed session missing final assistant reply: messages={:?}, runtime={:?}",
             completed.messages,
@@ -2135,7 +2118,7 @@ fn duplicate_permission_reply_is_idempotent() {
             &workspace.root,
             db,
             PermissionPolicy::allow_all(),
-            ToolPermissionPolicy::allow_all().with_tool_mode(TODO_TOOL, PermissionMode::Ask),
+            ToolPermissionPolicy::allow_all().with_tool_mode(PERMISSION_TOOL, PermissionMode::Ask),
             SessionManagerConfig::default(),
             ContextPolicy::default(),
             ScriptedProvider,
@@ -2153,7 +2136,7 @@ fn duplicate_permission_reply_is_idempotent() {
             .submit_user_message(SessionUserMessageRequest::new(
                 created.id,
                 run_options(),
-                vec![PartContent::text("permission todo")],
+                vec![PartContent::text("permission plan")],
             ))
             .await
             .expect("run should block on permission");
@@ -2189,7 +2172,7 @@ fn duplicate_permission_reply_is_idempotent() {
             session
                 .messages
                 .iter()
-                .any(|message| message.as_text_lossy().contains("permission todo done")),
+                .any(|message| message.as_text_lossy().contains("permission plan done")),
             "final assistant reply should survive duplicate permission reply: messages={:?}",
             session.messages
         );
@@ -2205,7 +2188,7 @@ fn duplicate_pending_permission_parts_are_resolved_by_single_reply() {
             &workspace.root,
             db,
             PermissionPolicy::allow_all(),
-            ToolPermissionPolicy::allow_all().with_tool_mode(TODO_TOOL, PermissionMode::Ask),
+            ToolPermissionPolicy::allow_all().with_tool_mode(PERMISSION_TOOL, PermissionMode::Ask),
             SessionManagerConfig::default(),
             ContextPolicy::default(),
             ScriptedProvider,
@@ -2223,7 +2206,7 @@ fn duplicate_pending_permission_parts_are_resolved_by_single_reply() {
             .submit_user_message(SessionUserMessageRequest::new(
                 created.id,
                 run_options(),
-                vec![PartContent::text("permission todo")],
+                vec![PartContent::text("permission plan")],
             ))
             .await
             .expect("run should block on permission");
@@ -2326,7 +2309,7 @@ fn permission_requested_event_is_persisted_after_request_part_update() {
             &workspace.root,
             db,
             PermissionPolicy::allow_all(),
-            ToolPermissionPolicy::allow_all().with_tool_mode(TODO_TOOL, PermissionMode::Ask),
+            ToolPermissionPolicy::allow_all().with_tool_mode(PERMISSION_TOOL, PermissionMode::Ask),
             SessionManagerConfig::default(),
             ContextPolicy::default(),
             ScriptedProvider,
@@ -2344,7 +2327,7 @@ fn permission_requested_event_is_persisted_after_request_part_update() {
             .submit_user_message(SessionUserMessageRequest::new(
                 created.id,
                 run_options(),
-                vec![PartContent::text("permission todo")],
+                vec![PartContent::text("permission plan")],
             ))
             .await
             .expect("run should block on permission");
@@ -2404,7 +2387,7 @@ fn workspace_permission_reply_persists_for_project_and_applies_to_new_sessions()
         let workspace = TempWorkspace::new();
         let db = open_temp_database(&workspace.root, "workspace-permission-persist.db").await;
         let tool_policy =
-            ToolPermissionPolicy::allow_all().with_tool_mode(TODO_TOOL, PermissionMode::Ask);
+            ToolPermissionPolicy::allow_all().with_tool_mode(PERMISSION_TOOL, PermissionMode::Ask);
 
         let first = build_manager_with_provider_on_db(
             &workspace.root,
@@ -2427,7 +2410,7 @@ fn workspace_permission_reply_persists_for_project_and_applies_to_new_sessions()
             .submit_user_message(SessionUserMessageRequest::new(
                 first_session.id,
                 run_options(),
-                vec![PartContent::text("permission todo")],
+                vec![PartContent::text("permission plan")],
             ))
             .await
             .expect("run should block on permission");
@@ -2454,7 +2437,7 @@ fn workspace_permission_reply_persists_for_project_and_applies_to_new_sessions()
             completed
                 .messages
                 .iter()
-                .any(|message| message.as_text_lossy().contains("permission todo done")),
+                .any(|message| message.as_text_lossy().contains("permission plan done")),
             "session should complete after workspace allow reply: messages={:?}",
             completed.messages
         );
@@ -2498,7 +2481,7 @@ fn workspace_permission_reply_persists_for_project_and_applies_to_new_sessions()
             .submit_user_message(SessionUserMessageRequest::new(
                 second_session.id,
                 run_options(),
-                vec![PartContent::text("permission todo")],
+                vec![PartContent::text("permission plan")],
             ))
             .await
             .expect("workspace permission should auto-allow in a new session");
@@ -2512,7 +2495,7 @@ fn workspace_permission_reply_persists_for_project_and_applies_to_new_sessions()
             continued
                 .messages
                 .iter()
-                .any(|message| message.as_text_lossy().contains("permission todo done")),
+                .any(|message| message.as_text_lossy().contains("permission plan done")),
             "new session should complete without another permission prompt: messages={:?}",
             continued.messages
         );
@@ -2911,22 +2894,14 @@ fn replied_host_user_input_survives_restart_and_restores_answer_from_history() {
             .reserve_message_ids(2)
             .await
             .expect("message ids should reserve");
-        let todo_input = crate::message::StructuredObject::try_from(serde_json::json!({
-            "action": "write",
-            "items": [{
-                "content": "resume host input",
-                "status": "completed",
-                "priority": "low",
-            }],
-        }))
-        .expect("todo tool input should serialize");
+        let todo_input = permission_tool_input();
         let mut assistant_message = build_message(
             ids,
             Role::Assistant,
             MessageStatus::Pending,
             vec![PartContent::Operation(OperationPart::pending(
                 1,
-                ToolInvocation::new(TODO_TOOL, todo_input),
+                ToolInvocation::new(PERMISSION_TOOL, todo_input),
                 "todo",
                 TimeRange::default(),
             ))],
@@ -3038,7 +3013,7 @@ fn concurrent_permission_replies_for_distinct_requests_are_serialized() {
             &workspace.root,
             db,
             PermissionPolicy::allow_all(),
-            ToolPermissionPolicy::allow_all().with_tool_mode(TODO_TOOL, PermissionMode::Ask),
+            ToolPermissionPolicy::allow_all().with_tool_mode(PERMISSION_TOOL, PermissionMode::Ask),
             SessionManagerConfig::default(),
             ContextPolicy::default(),
             ScriptedProvider,
@@ -3062,24 +3037,8 @@ fn concurrent_permission_replies_for_distinct_requests_are_serialized() {
             .reserve_message_ids(2)
             .await
             .expect("message ids should reserve");
-        let todo_input_one = crate::message::StructuredObject::try_from(serde_json::json!({
-            "action": "write",
-            "items": [{
-                "content": "approve permission one",
-                "status": "completed",
-                "priority": "low",
-            }],
-        }))
-        .expect("todo tool input one should serialize");
-        let todo_input_two = crate::message::StructuredObject::try_from(serde_json::json!({
-            "action": "write",
-            "items": [{
-                "content": "approve permission two",
-                "status": "completed",
-                "priority": "low",
-            }],
-        }))
-        .expect("todo tool input two should serialize");
+        let todo_input_one = permission_tool_input();
+        let todo_input_two = permission_tool_input();
         let mut assistant_message = build_message(
             ids,
             Role::Assistant,
@@ -3087,13 +3046,13 @@ fn concurrent_permission_replies_for_distinct_requests_are_serialized() {
             vec![
                 PartContent::Operation(OperationPart::pending(
                     1,
-                    ToolInvocation::new(TODO_TOOL, todo_input_one),
+                    ToolInvocation::new(PERMISSION_TOOL, todo_input_one),
                     "todo",
                     TimeRange::default(),
                 )),
                 PartContent::Operation(OperationPart::pending(
                     2,
-                    ToolInvocation::new(TODO_TOOL, todo_input_two),
+                    ToolInvocation::new(PERMISSION_TOOL, todo_input_two),
                     "todo",
                     TimeRange::default(),
                 )),
@@ -3124,10 +3083,10 @@ fn concurrent_permission_replies_for_distinct_requests_are_serialized() {
             .await
             .expect("manual pending tools should persist through history");
         let pending_action = PermissionAction::Tool {
-            tool_name: TODO_TOOL.to_string(),
+            tool_name: PERMISSION_TOOL.to_string(),
             qualifier: None,
         };
-        let pending_reason = format!("tool '{TODO_TOOL}' requires confirmation by policy");
+        let pending_reason = format!("tool '{PERMISSION_TOOL}' requires confirmation by policy");
         let pending_trace = vec![crate::permission::DecisionTraceStep {
             source_kind: crate::permission::PolicySourceKind::StaticPolicy,
             summary: pending_reason.clone(),
@@ -3579,9 +3538,8 @@ mod runtime_builtin_tool_tests {
         HostStatuslineListResponse, HostStatuslineRemoveRequest, HostStatuslineRemoveResponse,
         HostStatuslineSegment, HostStorageDeleteRequest, HostStorageGetRequest,
         HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageRecord,
-        HostStorageScope, HostStorageSetRequest, HostStorageVisibility, HostTodoPriority,
-        HostTodoStatus, HostTodoWriteRequest, LogLevel, SpawnSubtaskRequest, SpawnSubtaskResponse,
-        ToolDescriptor, current_host_callback_context,
+        HostStorageScope, HostStorageSetRequest, HostStorageVisibility, LogLevel,
+        SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
     };
     use crate::plugin::sdk::{EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision};
     use axum::{Router, extract::State, response::Html, routing::get};
@@ -4093,43 +4051,6 @@ mod runtime_builtin_tool_tests {
                     }
                 })
                 .collect())
-        }
-
-        async fn todo_write(
-            &self,
-            req: HostTodoWriteRequest,
-        ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
-            let context = self.callback_context()?;
-            let payload = TodoWriteToolInput {
-                items: req
-                    .items
-                    .into_iter()
-                    .map(|item| TodoItem {
-                        content: item.content,
-                        status: match item.status {
-                            HostTodoStatus::Pending => TodoStatus::Pending,
-                            HostTodoStatus::InProgress => TodoStatus::InProgress,
-                            HostTodoStatus::Completed => TodoStatus::Completed,
-                            HostTodoStatus::Cancelled => TodoStatus::Cancelled,
-                        },
-                        priority: match item.priority {
-                            HostTodoPriority::High => TodoPriority::High,
-                            HostTodoPriority::Medium => TodoPriority::Medium,
-                            HostTodoPriority::Low => TodoPriority::Low,
-                        },
-                    })
-                    .collect(),
-            };
-            self.executor
-                .execute_tool_payload_for_host(
-                    "todo_write",
-                    serde_json::to_value(payload)
-                        .map_err(|err| crate::plugin::PluginError::new(err.to_string()))?,
-                    context.session_id.filter(|id| *id >= 0),
-                    context.call_id.filter(|id| *id >= 0),
-                    None,
-                )
-                .map_err(|err| crate::plugin::PluginError::new(err.to_string()))
         }
 
         async fn get_session(
@@ -4903,10 +4824,10 @@ while True:
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_plan_create_1"]) == 0 {
+            } else if completed_or_failed_operation_count(&request, &["call_plan_set_1"]) == 0 {
                 scripted_tool_call_events(vec![(
-                    "call_plan_create_1",
-                    PLAN_CREATE_TOOL,
+                    "call_plan_set_1",
+                    PLAN_SET_TOOL,
                     serde_json::json!({
                         "objective": "Exercise the runtime plan host bridge before snapshot edits.",
                         "title": "Runtime Plan",
@@ -4924,12 +4845,10 @@ while True:
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_plan_update_step_1"])
-                == 0
-            {
+            } else if completed_or_failed_operation_count(&request, &["call_plan_update_1"]) == 0 {
                 scripted_tool_call_events(vec![(
-                    "call_plan_update_step_1",
-                    PLAN_UPDATE_STEP_TOOL,
+                    "call_plan_update_1",
+                    PLAN_UPDATE_TOOL,
                     serde_json::json!({
                         "step_id": "step_runtime_plan",
                         "status": "completed",
@@ -4937,12 +4856,11 @@ while True:
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_plan_set_status_1"])
-                == 0
+            } else if completed_or_failed_operation_count(&request, &["call_plan_complete_1"]) == 0
             {
                 scripted_tool_call_events(vec![(
-                    "call_plan_set_status_1",
-                    PLAN_SET_STATUS_TOOL,
+                    "call_plan_complete_1",
+                    PLAN_UPDATE_TOOL,
                     serde_json::json!({
                         "phase": "completed",
                         "summary": "Runtime plan finished before entering the snapshot."
@@ -5063,9 +4981,9 @@ while True:
                 &session,
                 &[
                     "call_tools_1",
-                    "call_plan_create_1",
-                    "call_plan_update_step_1",
-                    "call_plan_set_status_1",
+                    "call_plan_set_1",
+                    "call_plan_update_1",
+                    "call_plan_complete_1",
                     "call_snapshot_enter_1",
                     "call_fs_patch_1",
                     "call_fs_glob_1",
@@ -5075,25 +4993,25 @@ while True:
                 ],
             );
 
-            let created_plan = session_operation_payload(&session, "call_plan_create_1");
+            let created_plan = session_operation_payload(&session, "call_plan_set_1");
             let created_plan = &created_plan["plan"];
             assert_eq!(
                 created_plan["title"].as_str(),
                 Some("Runtime Plan"),
-                "plan create should return the runtime plan title"
+                "plan.set should return the runtime plan title"
             );
             assert_eq!(
                 created_plan["phase"].as_str(),
-                Some("draft"),
-                "new runtime plans should start in draft"
+                Some("planning"),
+                "new runtime plans should start in planning"
             );
 
-            let updated_plan = session_operation_payload(&session, "call_plan_update_step_1");
+            let updated_plan = session_operation_payload(&session, "call_plan_update_1");
             let updated_plan = &updated_plan["plan"];
             assert_eq!(
                 updated_plan["steps"][0]["status"].as_str(),
                 Some("completed"),
-                "plan update_step should complete the scripted step"
+                "plan.update should complete the scripted step"
             );
             assert_eq!(
                 updated_plan["steps"][0]["checks"][0]["status"].as_str(),
@@ -5101,12 +5019,12 @@ while True:
                 "completing the step should also complete its check"
             );
 
-            let completed_plan = session_operation_payload(&session, "call_plan_set_status_1");
+            let completed_plan = session_operation_payload(&session, "call_plan_complete_1");
             let completed_plan = &completed_plan["plan"];
             assert_eq!(
                 completed_plan["phase"].as_str(),
                 Some("completed"),
-                "plan set_status should finalize the runtime plan"
+                "plan.update should finalize the runtime plan"
             );
 
             let read_payload = session_operation_payload(&session, "call_fs_read_1");
@@ -6590,24 +6508,27 @@ while True:
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_todo_1"]) == 0 {
+            } else if completed_or_failed_operation_count(&request, &["call_plan_set_1"]) == 0 {
                 scripted_tool_call_events(vec![(
-                    "call_todo_1",
-                    TODO_TOOL,
+                    "call_plan_set_1",
+                    PLAN_SET_TOOL,
                     serde_json::json!({
-                        "action": "write",
-                        "items": [
+                        "objective": "Cover runtime workflow host tools and settings integrations.",
+                        "steps": [
                             {
-                                "content": "cover workflow host tools",
+                                "id": "step_host_tools",
+                                "title": "Cover workflow host tools",
                                 "status": "completed",
-                                "priority": "high"
+                                "executor": "ai"
                             },
                             {
-                                "content": "cover settings and schedule",
+                                "id": "step_settings_schedule",
+                                "title": "Cover settings and schedule",
                                 "status": "in_progress",
-                                "priority": "medium"
+                                "executor": "ai"
                             }
-                        ]
+                        ],
+                        "autorun": false
                     })
                     .to_string(),
                 )])
@@ -6687,7 +6608,7 @@ while True:
                     "call_tools_help_1",
                     "call_session_get_1",
                     "call_user_1",
-                    "call_todo_1",
+                    "call_plan_set_1",
                     "call_settings_get_1",
                     "call_settings_validate_1",
                     "call_schedule_list_1",
@@ -6747,11 +6668,11 @@ while True:
             let user_payload = session_operation_payload(&session, "call_user_1");
             assert_eq!(user_payload["answers"]["confirm"][0].as_str(), Some("yes"));
 
-            let todo_payload = session_operation_payload(&session, "call_todo_1");
-            let todo_items = todo_payload["items"]
+            let plan_payload = session_operation_payload(&session, "call_plan_set_1");
+            let plan_steps = plan_payload["plan"]["steps"]
                 .as_array()
-                .expect("todo write should return items");
-            assert_eq!(todo_items.len(), 2);
+                .expect("plan.set should return plan steps");
+            assert_eq!(plan_steps.len(), 2);
 
             let settings_get_payload = session_operation_payload(&session, "call_settings_get_1");
             assert_eq!(

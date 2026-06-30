@@ -27,6 +27,6 @@ pub use tool::{
     NetworkEffect, OperationBlock, OperationError, OperationPart, PluginInvocation, ProcessEvent,
     ProcessShell, ProcessStatus, ProcessStream, ProcessSummary, ProcessToolInput, ReadMode,
     ReadToolInput, ScheduleWakeupToolInput, SearchResultItem, ShellCommandInput, TableColumn,
-    TaskSubagentType, TaskToolInput, TodoWriteToolInput, ToolInvocation, ToolOutput,
-    ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput, WorkflowPromptToolInput,
+    TaskSubagentType, TaskToolInput, ToolInvocation, ToolOutput, ToolSearchToolInput,
+    WebFetchToolInput, WebSearchToolInput, WorkflowPromptToolInput,
 };

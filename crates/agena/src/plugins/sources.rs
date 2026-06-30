@@ -52,7 +52,7 @@ pub(crate) fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
             static_entry(serde_json::Value::Null),
         ),
         (
-            crate::tool::planning_plugin_id().to_string(),
+            crate::tool::plan_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
         (
@@ -60,7 +60,7 @@ pub(crate) fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
             static_entry(serde_json::Value::Null),
         ),
         (
-            crate::tool::repo_plugin_id().to_string(),
+            crate::tool::snapshot_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
         (
@@ -132,16 +132,16 @@ pub(crate) fn register_static_transports(
             crate::tool::new_runtime_plugin(),
         )
         .register_static(
-            crate::tool::planning_plugin_id(),
-            crate::tool::new_planning_plugin(),
+            crate::tool::plan_plugin_id(),
+            crate::tool::new_plan_plugin(),
         )
         .register_static(
             crate::tool::tasks_plugin_id(),
             crate::tool::new_tasks_plugin(),
         )
         .register_static(
-            crate::tool::repo_plugin_id(),
-            crate::tool::new_repo_plugin(),
+            crate::tool::snapshot_plugin_id(),
+            crate::tool::new_snapshot_plugin(),
         );
     if crate::tool::schema_lab_builtin_enabled() {
         builder = builder.register_static(

@@ -38,10 +38,10 @@ use crate::host_api::{
     HostStatuslineRemoveResponse, HostStorageDeleteRequest, HostStorageGetRequest,
     HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
     HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
-    HostThemeRemoveResponse, HostTodoWriteRequest, HostToolMutationResponse,
-    HostToolRegisterRequest, HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MonitorHandle,
-    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
-    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
+    HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, SpawnSubtaskRequest,
+    SpawnSubtaskResponse, ToolDescriptor,
 };
 use crate::plugin::Plugin;
 use crate::rpc::{
@@ -467,20 +467,6 @@ impl HostClient for StdioHostClient {
         self.call(
             method::HOST_TOOL_LIST,
             serde_json::json!({
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn todo_write(
-        &self,
-        req: HostTodoWriteRequest,
-    ) -> crate::error::Result<ToolInvokeOutput> {
-        self.call(
-            method::HOST_TODO_WRITE,
-            serde_json::json!({
-                "request": req,
                 "context": crate::host_api::current_host_callback_context(),
             }),
         )

@@ -8,13 +8,13 @@ use crate::plugin::sdk::{
 };
 use crate::plugins::provided::workflow::{SnapshotToolInput, WorkflowPlugin, WorkflowPluginConfig};
 
-pub(crate) const REPO_PLUGIN_ID: &str = "agena.repo";
+pub(crate) const SNAPSHOT_PLUGIN_ID: &str = "agena.snapshot";
 
-pub(crate) struct RepoPlugin {
+pub(crate) struct SnapshotPlugin {
     inner: WorkflowPlugin,
 }
 
-impl RepoPlugin {
+impl SnapshotPlugin {
     pub(crate) fn new() -> Self {
         Self {
             inner: WorkflowPlugin::new(),
@@ -23,10 +23,10 @@ impl RepoPlugin {
 }
 
 #[async_trait]
-impl Plugin for RepoPlugin {
+impl Plugin for SnapshotPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(REPO_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
-            .description("Repository snapshot tools backed by Rift or git worktree.")
+        PluginManifest::builder(SNAPSHOT_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
+            .description("Managed snapshot tools backed by Rift or git worktree.")
             .brief_detailed()
             .hooks(HookSubscription::TOOL_INVOKE)
             .tool(SnapshotToolInput::tool_decl())

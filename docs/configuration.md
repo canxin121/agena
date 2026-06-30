@@ -1171,12 +1171,10 @@ Agent 也可以有自己的权限：
         "tools": {
           "names": {
             "plan": "allow",
-            "todo": "allow",
             "tools": "allow",
             "user": "allow",
             "agent": "allow",
-            "session": "allow",
-            "workflow": "allow"
+            "session": "allow"
           }
         }
       }
@@ -1661,7 +1659,7 @@ HTTP plugin auth 支持：
 ]
 ```
 
-Runtime-provided static plugins 由 runtime 注册，包括文件系统、shell、web、workflow、skills、LSP、cron、memory、MCP、settings 等。它们和用户配置的 plugin 一样进入 plugin host 与 tool registry。
+Runtime-provided static plugins 由 runtime 注册，包括文件系统、shell、web、plan、skills、LSP、cron、memory、MCP、settings 等。它们和用户配置的 plugin 一样进入 plugin host 与 tool registry。
 
 插件存储默认目录是 `~/agena/plugin-storage`，可通过 `AGENA_PLUGIN_STORAGE_DIR` 覆盖。插件 secret 默认使用 `agena.plugin` keyring service，并可 fallback 到文件。
 

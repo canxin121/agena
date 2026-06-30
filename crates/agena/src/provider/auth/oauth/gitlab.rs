@@ -64,9 +64,19 @@ fn gitlab_oauth_client(
     let instance = instance_url.trim_end_matches('/');
     let client_id = std::env::var("GITLAB_CLIENT_ID")
         .map_err(|_| AppError::Config("GITLAB_CLIENT_ID is not set".to_owned()))?;
-    let client_secret = include_secret
-        .then(|| std::env::var("GITLAB_CLIENT_SECRET").ok())
-        .flatten();
+    let client_secret = if include_secret {
+        let client_secret = std::env::var("GITLAB_CLIENT_SECRET")
+            .map_err(|_| AppError::Config("GITLAB_CLIENT_SECRET is not set".to_owned()))?;
+        let client_secret = client_secret.trim();
+        if client_secret.is_empty() {
+            return Err(AppError::Config(
+                "GITLAB_CLIENT_SECRET cannot be empty".to_owned(),
+            ));
+        }
+        Some(client_secret.to_owned())
+    } else {
+        None
+    };
 
     oauth_client(
         "gitlab",

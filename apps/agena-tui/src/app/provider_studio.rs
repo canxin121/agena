@@ -426,7 +426,7 @@ pub(super) fn provider_studio_start_auth_summary(
             .openai_chatgpt
             .browser
             .as_ref()
-            .map(|_| ui_text::t(i18n, "provider-studio-auth-openai-ready"))
+            .map(|session| session.authorize_url.clone())
             .unwrap_or_else(|| status.to_owned()),
         Some(CredentialIssuer::GithubCopilot) => dialog
             .draft
@@ -436,11 +436,7 @@ pub(super) fn provider_studio_start_auth_summary(
             .as_ref()
             .and_then(|device| {
                 let mut parts = Vec::new();
-                if let Some(url) =
-                    provider_studio_summary_value(device.verification_url.as_str(), 40)
-                {
-                    parts.push(url);
-                }
+                parts.push(device.verification_url.clone());
                 if let Some(code) = provider_studio_labeled_summary(
                     i18n,
                     ProviderStudioSummaryLabel::Code,
@@ -458,7 +454,7 @@ pub(super) fn provider_studio_start_auth_summary(
             .gitlab
             .browser
             .as_ref()
-            .map(|_| ui_text::t(i18n, "provider-studio-auth-gitlab-ready"))
+            .map(|session| session.authorize_url.clone())
             .unwrap_or_else(|| status.to_owned()),
         Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => status,
     }

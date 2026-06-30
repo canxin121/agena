@@ -7420,13 +7420,8 @@ impl App {
             Ok(action) => {
                 dialog.draft = action.draft;
                 self.sync_provider_studio_shape(&mut dialog);
-                if let Some(text) = action.clipboard_text
-                    && let Err(error) = set_clipboard_text(text.as_str())
-                {
-                    self.flash_error(self.i18n.text_args(
-                        "flash-clipboard-copy-failed",
-                        &crate::fl_args!("error" => error.to_string()),
-                    ));
+                if let Some(text) = action.clipboard_text {
+                    let _ = set_clipboard_text(text.as_str());
                 }
                 self.flash_success(provider_draft_auth_action_message(
                     &self.i18n,

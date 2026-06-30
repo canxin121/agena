@@ -6,6 +6,7 @@ use oauth2::{
     PkceCodeVerifier, RedirectUrl, Scope, StandardTokenResponse, TokenResponse, TokenUrl,
     basic::BasicClient, basic::BasicTokenType,
 };
+use serde_json::Value;
 
 use crate::error::{AppError, ProviderErrorKind};
 
@@ -172,6 +173,93 @@ where
         .unwrap_or(0)
 }
 
+pub(super) fn oauth_error_message(body: &str) -> Option<String> {
+    let body = body.trim();
+    if body.is_empty() {
+        return None;
+    }
+
+    let json = serde_json::from_str::<Value>(body).ok();
+    if let Some(json) = json.as_ref() {
+        if let Some(error) = json.get("error") {
+            match error {
+                Value::Object(obj) => {
+                    for key in ["message", "error_description", "description", "detail"] {
+                        if let Some(message) = obj.get(key).and_then(Value::as_str) {
+                            let message = message.trim();
+                            if !message.is_empty() {
+                                return Some(message.to_owned());
+                            }
+                        }
+                    }
+                }
+                Value::String(message) => {
+                    let message = message.trim();
+                    if !message.is_empty() {
+                        return Some(message.to_owned());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for key in ["error_description", "message", "detail"] {
+            if let Some(message) = json.get(key).and_then(Value::as_str) {
+                let message = message.trim();
+                if !message.is_empty() {
+                    return Some(message.to_owned());
+                }
+            }
+        }
+    }
+
+    Some(body.to_owned())
+}
+
+pub(super) fn oauth_error_code(body: &str) -> Option<String> {
+    let body = body.trim();
+    if body.is_empty() {
+        return None;
+    }
+
+    let Value::Object(map) = serde_json::from_str::<Value>(body).ok()? else {
+        return None;
+    };
+
+    if let Some(error_value) = map.get("error") {
+        match error_value {
+            Value::Object(obj) => {
+                if let Some(code) = obj.get("code").and_then(Value::as_str) {
+                    return Some(code.to_owned());
+                }
+                if let Some(code) = obj.get("error").and_then(Value::as_str) {
+                    return Some(code.to_owned());
+                }
+            }
+            Value::String(code) => {
+                let code = code.trim();
+                if !code.is_empty() {
+                    return Some(code.to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    map.get("code")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            map.get("error_code")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+}
+
+pub(super) fn oauth_error_summary(body: &str) -> String {
+    oauth_error_message(body).unwrap_or_else(|| "Unknown error".to_owned())
+}
+
 pub(super) async fn ensure_http_success(
     provider: &str,
     context: Option<&str>,
@@ -186,6 +274,7 @@ pub(super) async fn ensure_http_success(
         .text()
         .await
         .unwrap_or_else(|_| "<empty>".to_owned());
+    let body = oauth_error_summary(body.as_str());
     let body = match context {
         Some(context) => format!("{context}: {body}"),
         None => body,
@@ -196,7 +285,7 @@ pub(super) async fn ensure_http_success(
         status,
         body,
         kind: ProviderErrorKind::ApiError,
-        retryable: false,
+        retryable: status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error(),
     })
 }
 
@@ -263,4 +352,41 @@ pub(super) fn extract_openai_account_id(jwt: &str) -> Option<String> {
                 .and_then(|value| value.as_str())
                 .map(ToOwned::to_owned)
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{oauth_error_code, oauth_error_message, oauth_error_summary};
+
+    #[test]
+    fn oauth_error_message_prefers_nested_message() {
+        let body = r#"{
+  "error": {
+    "message": "token expired",
+    "code": "refresh_token_expired"
+  }
+}"#;
+
+        assert_eq!(oauth_error_message(body).as_deref(), Some("token expired"));
+    }
+
+    #[test]
+    fn oauth_error_code_extracts_nested_code() {
+        let body = r#"{
+  "error": {
+    "message": "token expired",
+    "code": "refresh_token_expired"
+  }
+}"#;
+
+        assert_eq!(
+            oauth_error_code(body).as_deref(),
+            Some("refresh_token_expired")
+        );
+    }
+
+    #[test]
+    fn oauth_error_summary_falls_back_to_raw_text() {
+        assert_eq!(oauth_error_summary("plain failure"), "plain failure");
+    }
 }

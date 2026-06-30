@@ -840,10 +840,7 @@ pub fn parse_sap_ai_core_service_key(raw: &str) -> Result<SapAiCoreServiceKey, s
 }
 
 pub fn should_retry_credential(status: reqwest::StatusCode) -> bool {
-    matches!(
-        status,
-        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
-    )
+    status == reqwest::StatusCode::UNAUTHORIZED
 }
 
 fn normalize_optional_text(value: String) -> Option<String> {
@@ -1009,5 +1006,11 @@ mod tests {
         let resolved = credential.resolve().await.expect("resolve stored access");
         assert_eq!(resolved, "fresh-access");
         assert_eq!(*shared.lock().await, fresh);
+    }
+
+    #[test]
+    fn credential_retry_only_retries_401() {
+        assert!(should_retry_credential(reqwest::StatusCode::UNAUTHORIZED));
+        assert!(!should_retry_credential(reqwest::StatusCode::FORBIDDEN));
     }
 }

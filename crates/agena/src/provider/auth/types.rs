@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+const OAUTH_EXPIRY_BUFFER_MS: i64 = 5 * 60 * 1_000;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialIssuer {
@@ -119,7 +121,8 @@ impl AuthData {
     pub fn is_oauth_expired(&self, now: DateTime<Utc>) -> bool {
         match self {
             Self::OAuth { expires_at_ms, .. } => {
-                *expires_at_ms > 0 && *expires_at_ms <= now.timestamp_millis()
+                *expires_at_ms > 0
+                    && *expires_at_ms <= now.timestamp_millis() + OAUTH_EXPIRY_BUFFER_MS
             }
             _ => false,
         }

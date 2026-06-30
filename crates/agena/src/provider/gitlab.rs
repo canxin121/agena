@@ -45,7 +45,7 @@ impl Default for GitlabProviderConfig {
             ai_gateway_headers: HashMap::from([
                 (
                     "User-Agent".to_owned(),
-                    crate::provider::CLAUDE_CODE_API_USER_AGENT.to_owned(),
+                    crate::provider::claude_code_api_user_agent(),
                 ),
                 (
                     "anthropic-beta".to_owned(),

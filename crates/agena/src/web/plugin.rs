@@ -557,8 +557,9 @@ enum WebSearchEngineSelection {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "search",
-    description = "Search the public web through the configured search engine.",
-    summary = "Search the public web.",
+    description = "Search the public web for candidate pages. Search results are discovery-only; for factual answers, continue by fetching the most relevant result URLs.",
+    summary = "Find candidate public-web pages to fetch.",
+    help = "Use this tool to discover candidate pages, not to answer from result snippets alone. After searching, fetch 1-3 relevant result URLs before answering when the user needs facts, summaries, comparisons, or latest information. Use allowed_domains and blocked_domains to steer source quality.",
     handler_receiver = WebPlugin,
     handle = WebPlugin::invoke_search,
     handle_field = args,
@@ -566,7 +567,7 @@ enum WebSearchEngineSelection {
     permission_networks_handle = WebPlugin::permission_networks_search,
     examples(
         r#"{"query":"Agena plugin architecture","limit":5}"#,
-        r#"{"query":"Rust schemars derive examples"}"#
+        r#"{"query":"Rust schemars derive examples","allowed_domains":["docs.rs","github.com"]}"#
     ),
     display = detailed,
     tags(
@@ -588,8 +589,9 @@ struct SearchToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "fetch",
-    description = "Fetch a web page and return readable page content.",
-    summary = "Fetch one web page as readable content.",
+    description = "Fetch one web page and return readable page content or focused excerpts. Use this after search to inspect the most relevant result pages.",
+    summary = "Fetch one web page and inspect its actual content.",
+    help = "Use this tool after search when you need evidence from the actual page rather than search snippets. If you already know what facts you need, set `prompt` so Agena prioritizes the most relevant excerpts from the page in the returned text output.",
     handler_receiver = WebPlugin,
     handle = WebPlugin::invoke_fetch,
     handle_field = args,
@@ -597,7 +599,7 @@ struct SearchToolInput {
     permission_networks_handle = WebPlugin::permission_networks_fetch,
     examples(
         r#"{"url":"https://openai.com"}"#,
-        r#"{"url":"https://example.com/docs","render_mode":"plain"}"#
+        r#"{"url":"https://example.com/docs","prompt":"extract the release date and breaking changes"}"#
     ),
     display = detailed,
     tags(ToolTag::ReadOnly, ToolTag::Network, ToolTag::Internet),
@@ -700,7 +702,7 @@ impl WebPlugin {
             max_body_bytes: config.fetch.request.max_body_bytes as usize,
             timeout: Duration::from_secs(config.fetch.request.timeout_secs),
             delay_ms: config.fetch.request.delay_ms,
-            user_agent: crate::provider::CLAUDE_USER_WEB_FETCH_USER_AGENT.to_string(),
+            user_agent: crate::provider::claude_user_web_fetch_user_agent(),
             respect_robots_txt: config.fetch.request.respect_robots_txt,
             browser: BrowserRenderOptions {
                 enabled: rendered,
@@ -767,7 +769,7 @@ impl WebPlugin {
             .await?;
         let payload =
             serde_json::to_value(&page).map_err(|err| PluginError::new(err.to_string()))?;
-        let text = format_fetched_page(&page);
+        let text = format_fetched_page(&page, input.prompt.as_deref());
         Ok(ToolInvokeOutput::text(text)
             .with_title("web fetch")
             .with_payload(payload))
@@ -887,7 +889,7 @@ impl WebPlugin {
             engine,
             limit,
             timeout: Duration::from_secs(config.fetch.request.timeout_secs),
-            user_agent: crate::provider::CLAUDE_USER_WEB_FETCH_USER_AGENT.to_string(),
+            user_agent: crate::provider::claude_user_web_fetch_user_agent(),
         };
         Ok(search_web(query, &options)
             .await
@@ -1166,7 +1168,7 @@ fn fetch_cache_key(url: &url::Url, render_js: bool) -> String {
     )
 }
 
-fn format_fetched_page(page: &FetchedPage) -> String {
+fn format_fetched_page(page: &FetchedPage, focus: Option<&str>) -> String {
     let mut lines = vec![format!("Title: {}", page.title)];
     lines.push(format!("URL: {}", page.canonical_url));
     lines.push(format!("Status: {}", page.status));
@@ -1181,7 +1183,27 @@ fn format_fetched_page(page: &FetchedPage) -> String {
         lines.push(format!("Last-Modified: {last_modified}"));
     }
     lines.push(String::new());
-    lines.push(preview_text(page.markdown.as_str(), 4000));
+    let focus = focus.map(str::trim).filter(|value| !value.is_empty());
+    if let Some(focus) = focus {
+        lines.push(format!("Focus: {focus}"));
+        lines.push(String::new());
+        let excerpts = focused_page_excerpts(page.markdown.as_str(), focus);
+        if excerpts.is_empty() {
+            lines.push(
+                "No strongly matching excerpt was found for that focus; returning a general page preview."
+                    .to_string(),
+            );
+            lines.push(String::new());
+            lines.push(preview_text(page.markdown.as_str(), 3000));
+        } else {
+            lines.push("Relevant excerpts:".to_string());
+            for (index, excerpt) in excerpts.iter().enumerate() {
+                lines.push(format!("{}. {}", index + 1, excerpt));
+            }
+        }
+    } else {
+        lines.push(preview_text(page.markdown.as_str(), 4000));
+    }
     lines.join("\n")
 }
 
@@ -1200,12 +1222,92 @@ fn format_web_search(output: &CrawlWebSearchOutput) -> String {
         );
     }
     format!(
-        "Found {} web search result(s) for '{}' via {}.\n\n{}",
+        "Found {} web search result(s) for '{}' via {}.\n\nThese are candidate links, not final evidence. For questions that need real facts, comparisons, or latest information, fetch 1-3 of the most relevant URLs before answering. If you already know what to extract, use fetch with `prompt`.\n\n{}",
         output.results.len(),
         output.query,
         output.engine,
         results_to_text(&output.results)
     )
+}
+
+fn focused_page_excerpts(markdown: &str, focus: &str) -> Vec<String> {
+    let focus = focus.trim();
+    if focus.is_empty() {
+        return Vec::new();
+    }
+    let terms = focus_terms(focus);
+    if terms.is_empty() {
+        return Vec::new();
+    }
+    let mut scored_blocks: Vec<(usize, usize, String)> = markdown
+        .split("\n\n")
+        .enumerate()
+        .filter_map(|(index, block)| {
+            let trimmed = block.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            let score = score_focus_block(trimmed, terms.as_slice());
+            (score > 0).then(|| (score, index, preview_text(trimmed, 700)))
+        })
+        .collect();
+    scored_blocks.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    scored_blocks.truncate(3);
+    scored_blocks
+        .into_iter()
+        .map(|(_, _, block)| block)
+        .collect()
+}
+
+fn focus_terms(focus: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    let normalized_focus = focus.trim().to_lowercase();
+    if !normalized_focus.is_empty() {
+        terms.push(normalized_focus);
+    }
+
+    let mut token = String::new();
+    for ch in focus.chars() {
+        if ch.is_alphanumeric() {
+            token.extend(ch.to_lowercase());
+        } else if !token.is_empty() {
+            push_focus_term(&mut terms, &mut token);
+        }
+    }
+    if !token.is_empty() {
+        push_focus_term(&mut terms, &mut token);
+    }
+
+    terms.sort();
+    terms.dedup();
+    terms
+}
+
+fn push_focus_term(terms: &mut Vec<String>, token: &mut String) {
+    let keep = token.chars().count() >= 3
+        || token
+            .chars()
+            .any(|ch| !ch.is_ascii() && !ch.is_whitespace());
+    if keep {
+        terms.push(std::mem::take(token));
+    } else {
+        token.clear();
+    }
+}
+
+fn score_focus_block(block: &str, terms: &[String]) -> usize {
+    let normalized = block.to_lowercase();
+    let mut score = 0;
+    for term in terms {
+        if normalized.contains(term) {
+            score += if term.contains(' ') || term.chars().count() > 12 {
+                4
+            } else {
+                1
+            };
+        }
+    }
+    score
 }
 
 fn format_crawl_run(output: &CrawlRunReport) -> String {
@@ -1264,10 +1366,12 @@ fn host_matches(host: &str, pattern: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CrawlToolInput, FetchToolInput, SearchToolInput, WebConfig, WebToolSuite, fetch_cache_key,
-        parse_web_config, search_engines,
+        CrawlToolInput, CrawlWebSearchOutput, FetchToolInput, SearchToolInput, WebConfig,
+        WebToolSuite, fetch_cache_key, format_fetched_page, format_web_search, parse_web_config,
+        search_engines,
     };
     use crate::plugin::sdk::{HostCapability, Plugin as _, ToolDescriptionMode};
+    use agena_web::{FetchedPage, WebSearchResult};
     use serde_json::json;
 
     #[test]
@@ -1500,5 +1604,60 @@ mod tests {
         }))
         .expect("crawl should trim nested fields during parse");
         assert_eq!(crawl.args.start_url, "https://example.com/post");
+    }
+
+    #[test]
+    fn format_web_search_explicitly_requires_follow_up_fetch() {
+        let output = CrawlWebSearchOutput {
+            query: "rust async runtime".to_string(),
+            engine: "duckduckgo".to_string(),
+            attempted_engines: vec!["duckduckgo".to_string()],
+            results: vec![WebSearchResult {
+                title: "Tokio".to_string(),
+                url: "https://tokio.rs".to_string(),
+                description: "An async runtime for Rust.".to_string(),
+                source: "tokio.rs".to_string(),
+                engine: "duckduckgo".to_string(),
+            }],
+        };
+
+        let rendered = format_web_search(&output);
+        assert!(rendered.contains("candidate links, not final evidence"));
+        assert!(rendered.contains("fetch 1-3 of the most relevant URLs"));
+        assert!(rendered.contains("use fetch with `prompt`"));
+    }
+
+    #[test]
+    fn format_fetched_page_uses_focus_to_surface_relevant_excerpts() {
+        let page = FetchedPage {
+            url: "https://example.com/releases".to_string(),
+            canonical_url: "https://example.com/releases".to_string(),
+            title: "Release notes".to_string(),
+            markdown: "\
+# Release notes
+
+The release date is 2026-06-30 and the rollout starts immediately.
+
+Breaking changes include removing legacy workflow aliases and renaming agena.repo to agena.snapshot.
+
+This paragraph is unrelated filler about project history."
+                .to_string(),
+            content_type: "text/html".to_string(),
+            status: 200,
+            truncated: false,
+            rendered: false,
+            raw_html_hash: "hash".to_string(),
+            etag: None,
+            last_modified: None,
+            links: Vec::new(),
+        };
+
+        let rendered =
+            format_fetched_page(&page, Some("extract the release date and breaking changes"));
+        assert!(rendered.contains("Focus: extract the release date and breaking changes"));
+        assert!(rendered.contains("Relevant excerpts:"));
+        assert!(rendered.contains("The release date is 2026-06-30"));
+        assert!(rendered.contains("Breaking changes include removing legacy workflow aliases"));
+        assert!(!rendered.contains("This paragraph is unrelated filler"));
     }
 }

@@ -36,7 +36,6 @@ use crate::{
 };
 
 const CHATGPT_CODEX_ORIGINATOR: &str = crate::provider::CODEX_ORIGINATOR;
-const CHATGPT_CODEX_USER_AGENT: &str = crate::provider::CODEX_USER_AGENT;
 const DEFAULT_COPILOT_BASE_URL: &str = "https://api.githubcopilot.com";
 const ADAPTER_KIND: &str = "openai";
 
@@ -156,10 +155,13 @@ impl OpenAiAdapter {
             auth_header: "authorization".to_owned(),
             auth_scheme: Some("Bearer".to_owned()),
             capability_family: CapabilityFamily::OpenAi,
-            extra_headers: HashMap::from([(
-                reqwest::header::USER_AGENT.as_str().to_owned(),
-                crate::provider::CODEX_USER_AGENT.to_owned(),
-            )]),
+            extra_headers: HashMap::from([
+                (
+                    reqwest::header::USER_AGENT.as_str().to_owned(),
+                    crate::provider::codex_user_agent(),
+                ),
+                ("originator".to_owned(), CHATGPT_CODEX_ORIGINATOR.to_owned()),
+            ]),
             stream_mode: OpenAiStreamMode::Sse,
             realtime_ws_url: None,
             top_level_prompt_cache_override: None,
@@ -167,7 +169,21 @@ impl OpenAiAdapter {
     }
 
     pub fn with_extra_headers(mut self, headers: HashMap<String, String>) -> Self {
-        self.extra_headers = headers;
+        if headers
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()))
+        {
+            self.extra_headers
+                .retain(|key, _| !key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()));
+        }
+        if headers
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case("originator"))
+        {
+            self.extra_headers
+                .retain(|key, _| !key.eq_ignore_ascii_case("originator"));
+        }
+        self.extra_headers.extend(headers);
         self
     }
 
@@ -2100,42 +2116,58 @@ impl OpenAiAdapter {
 
     fn resolved_headers(&self, context: RequestHeaderContext<'_>) -> BTreeMap<String, String> {
         let mut headers = self.extra_headers.clone();
+        utils::ensure_header_case_insensitive(&mut headers, "originator", || {
+            CHATGPT_CODEX_ORIGINATOR.to_owned()
+        });
+        utils::ensure_header_case_insensitive(
+            &mut headers,
+            reqwest::header::USER_AGENT.as_str(),
+            crate::provider::codex_user_agent,
+        );
 
         if matches!(self.backend, OpenAiBackend::ChatgptCodex) {
-            headers
-                .entry("originator".to_owned())
-                .or_insert_with(|| CHATGPT_CODEX_ORIGINATOR.to_owned());
-            headers
-                .entry(reqwest::header::USER_AGENT.as_str().to_owned())
-                .or_insert_with(|| CHATGPT_CODEX_USER_AGENT.to_owned());
-
             if let Some(account_id) = self.chatgpt_account_id() {
-                headers.insert("ChatGPT-Account-Id".to_owned(), account_id);
+                utils::insert_header_case_insensitive(
+                    &mut headers,
+                    "ChatGPT-Account-ID",
+                    account_id,
+                );
             }
 
             if let Some(window_id) = context.window_id_header() {
-                headers.insert("x-codex-window-id".to_owned(), window_id);
+                utils::insert_header_case_insensitive(&mut headers, "x-codex-window-id", window_id);
             }
         }
 
         if matches!(self.profile, OpenAiProfile::GithubCopilot) {
-            headers
-                .entry(reqwest::header::USER_AGENT.as_str().to_owned())
-                .or_insert_with(|| crate::provider::CODEX_USER_AGENT.to_owned());
-            headers
-                .entry("Openai-Intent".to_owned())
-                .or_insert_with(|| "conversation-edits".to_owned());
-            headers.insert(
-                "x-initiator".to_owned(),
-                context.initiator_header().to_owned(),
+            utils::ensure_header_case_insensitive(
+                &mut headers,
+                reqwest::header::USER_AGENT.as_str(),
+                crate::provider::codex_user_agent,
+            );
+            utils::ensure_header_case_insensitive(&mut headers, "Openai-Intent", || {
+                "conversation-edits".to_owned()
+            });
+            utils::insert_header_case_insensitive(
+                &mut headers,
+                "x-initiator",
+                context.initiator_header(),
             );
             if context.vision_request {
-                headers.insert("Copilot-Vision-Request".to_owned(), "true".to_owned());
+                utils::insert_header_case_insensitive(
+                    &mut headers,
+                    "Copilot-Vision-Request",
+                    "true",
+                );
             }
         }
 
         if let Some(session_affinity) = context.session_affinity_header() {
-            headers.insert("x-session-affinity".to_owned(), session_affinity.to_owned());
+            utils::insert_header_case_insensitive(
+                &mut headers,
+                "x-session-affinity",
+                session_affinity,
+            );
         }
 
         if let Some(request_headers) = context.request_headers {
@@ -3674,6 +3706,72 @@ mod tests {
         assert_eq!(
             responses_finish_reason_with_tool_calls(Some(CompletionFinishReason::Stop), false),
             Some(CompletionFinishReason::Stop)
+        );
+    }
+
+    #[test]
+    fn default_openai_headers_include_codex_identity() {
+        let adapter = OpenAiAdapter::new_managed_with_id(
+            "openai",
+            reqwest::Client::new(),
+            ManagedCredential::static_value("openai api key", "test".to_owned()),
+            "https://api.openai.com/v1",
+            "gpt-5",
+        )
+        .with_extra_headers(std::collections::HashMap::from([(
+            "x-test".to_owned(),
+            "1".to_owned(),
+        )]));
+
+        let headers = adapter.resolved_headers(RequestHeaderContext::none());
+        assert_eq!(
+            headers.get("originator").map(String::as_str),
+            Some(crate::provider::CODEX_ORIGINATOR)
+        );
+        assert!(
+            headers
+                .get("user-agent")
+                .is_some_and(|value| value.starts_with(crate::provider::CODEX_USER_AGENT))
+        );
+        assert_eq!(headers.get("x-test").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn mixed_case_openai_header_overrides_do_not_reintroduce_defaults() {
+        let adapter = OpenAiAdapter::new_managed_with_id(
+            "openai",
+            reqwest::Client::new(),
+            ManagedCredential::static_value("openai api key", "test".to_owned()),
+            "https://api.openai.com/v1",
+            "gpt-5",
+        )
+        .with_extra_headers(std::collections::HashMap::from([
+            ("User-Agent".to_owned(), "custom-agent".to_owned()),
+            ("Originator".to_owned(), "custom-originator".to_owned()),
+        ]));
+
+        let headers = adapter.resolved_headers(RequestHeaderContext::none());
+        assert_eq!(
+            headers
+                .iter()
+                .filter(|(key, _)| key.eq_ignore_ascii_case("user-agent"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            headers
+                .iter()
+                .filter(|(key, _)| key.eq_ignore_ascii_case("originator"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            headers.get("User-Agent").map(String::as_str),
+            Some("custom-agent")
+        );
+        assert_eq!(
+            headers.get("Originator").map(String::as_str),
+            Some("custom-originator")
         );
     }
 }

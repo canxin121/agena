@@ -77,8 +77,9 @@ impl GeminiAdapter {
             api_key,
             base_url: utils::normalize_base_url(base_url.into().as_str()),
             default_model,
-            auth_mode: GeminiAuthMode::QueryParameter {
-                name: "key".to_owned(),
+            auth_mode: GeminiAuthMode::Header {
+                name: "x-goog-api-key".to_owned(),
+                scheme: None,
             },
             extra_headers: HashMap::from([(
                 reqwest::header::USER_AGENT.as_str().to_owned(),
@@ -101,8 +102,20 @@ impl GeminiAdapter {
         self
     }
 
+    pub fn with_auth_query_parameter(mut self, name: impl Into<String>) -> Self {
+        self.auth_mode = GeminiAuthMode::QueryParameter { name: name.into() };
+        self
+    }
+
     pub fn with_extra_headers(mut self, headers: HashMap<String, String>) -> Self {
-        self.extra_headers = headers;
+        if headers
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()))
+        {
+            self.extra_headers
+                .retain(|key, _| !key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()));
+        }
+        self.extra_headers.extend(headers);
         self
     }
 
@@ -322,7 +335,28 @@ impl GeminiAdapter {
             ))
         })?;
 
-        if let GeminiAuthMode::Header { name, scheme } = &self.auth_mode {
+        let uses_first_party_api_key_header = matches!(
+            &self.auth_mode,
+            GeminiAuthMode::Header { name, scheme }
+                if name.eq_ignore_ascii_case("x-goog-api-key") && scheme.is_none()
+        ) && request
+            .uri()
+            .host()
+            .is_some_and(|host| host.eq_ignore_ascii_case("generativelanguage.googleapis.com"));
+
+        if uses_first_party_api_key_header {
+            let mut url = url::Url::parse(request.uri().to_string().as_str()).map_err(|err| {
+                AppError::Config(format!(
+                    "gemini realtime websocket handshake url is invalid: {err}"
+                ))
+            })?;
+            url.query_pairs_mut().append_pair("key", api_key);
+            *request.uri_mut() = url.to_string().parse().map_err(|err| {
+                AppError::Config(format!(
+                    "gemini realtime websocket handshake uri is invalid: {err}"
+                ))
+            })?;
+        } else if let GeminiAuthMode::Header { name, scheme } = &self.auth_mode {
             let auth_header_name =
                 http::header::HeaderName::from_bytes(name.as_bytes()).map_err(|err| {
                     AppError::Config(format!("gemini auth header name is invalid: {err}"))
@@ -1989,5 +2023,68 @@ mod tests {
         assert_eq!(metadata.limits.context_window_tokens, Some(1_048_576));
         assert_eq!(metadata.limits.max_input_tokens, Some(1_048_576));
         assert_eq!(metadata.limits.max_output_tokens, Some(65_536));
+    }
+
+    #[test]
+    fn gemini_defaults_use_x_goog_api_key_header_and_official_user_agent() {
+        let adapter = GeminiAdapter::new_managed(
+            reqwest::Client::new(),
+            ManagedCredential::static_value("gemini api key", "test".to_owned()),
+            "https://generativelanguage.googleapis.com/v1beta",
+            "gemini-2.5-pro",
+        )
+        .with_extra_headers(std::collections::HashMap::from([(
+            "x-test".to_owned(),
+            "1".to_owned(),
+        )]));
+
+        assert!(matches!(
+            &adapter.auth_mode,
+            GeminiAuthMode::Header { name, scheme }
+                if name == "x-goog-api-key" && scheme.is_none()
+        ));
+        assert!(
+            adapter
+                .extra_headers
+                .get(reqwest::header::USER_AGENT.as_str())
+                .is_some_and(|value| value.starts_with(
+                    format!(
+                        "{}/gemini-2.5-pro",
+                        crate::provider::GEMINI_CLI_USER_AGENT_PREFIX
+                    )
+                    .as_str()
+                ))
+        );
+        assert_eq!(
+            adapter.extra_headers.get("x-test").map(String::as_str),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn gemini_realtime_first_party_ws_uses_key_query_parameter() {
+        let adapter = GeminiAdapter::new_managed(
+            reqwest::Client::new(),
+            ManagedCredential::static_value("gemini api key", "test".to_owned()),
+            "https://generativelanguage.googleapis.com/v1beta",
+            "gemini-2.5-pro",
+        );
+
+        let endpoint = adapter
+            .realtime_ws_endpoint()
+            .expect("realtime websocket endpoint");
+        let request = adapter
+            .realtime_handshake_request(&endpoint, "test", &adapter.extra_headers)
+            .expect("realtime handshake request");
+
+        assert!(
+            request.uri().to_string().contains("key=test"),
+            "expected api key query parameter in {}",
+            request.uri()
+        );
+        assert!(
+            request.headers().get("x-goog-api-key").is_none(),
+            "official realtime websocket should not send x-goog-api-key header"
+        );
     }
 }

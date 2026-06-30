@@ -75,7 +75,7 @@ pub async fn start_openai_headless_device_code() -> Result<DeviceCodeStart, AppE
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .header(
             reqwest::header::USER_AGENT,
-            crate::provider::CODEX_USER_AGENT,
+            crate::provider::codex_user_agent(),
         )
         .json(&serde_json::json!({
             "client_id": OPENAI_CLIENT_ID,
@@ -117,7 +117,7 @@ pub async fn poll_openai_headless_device_code(
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .header(
             reqwest::header::USER_AGENT,
-            crate::provider::CODEX_USER_AGENT,
+            crate::provider::codex_user_agent(),
         )
         .json(&serde_json::json!({
             "device_auth_id": device_auth_id,
@@ -156,7 +156,7 @@ pub async fn poll_openai_headless_device_code(
         )
         .header(
             reqwest::header::USER_AGENT,
-            crate::provider::CODEX_USER_AGENT,
+            crate::provider::codex_user_agent(),
         )
         .body(encoded_form)
         .send()

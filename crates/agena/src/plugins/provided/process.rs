@@ -21,7 +21,7 @@ pub(crate) fn new_plugin() -> ProcessPlugin {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
 #[serde(deny_unknown_fields)]
-struct ProcessRunToolArgs {
+pub(crate) struct ProcessRunToolArgs {
     #[serde(default)]
     shell: ProcessShell,
     #[serde(flatten)]
@@ -34,7 +34,7 @@ struct ProcessRunToolArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
 #[tool_input(trim("process_id"), non_empty("process_id"))]
 #[serde(deny_unknown_fields)]
-struct ProcessLogsToolArgs {
+pub(crate) struct ProcessLogsToolArgs {
     process_id: String,
     #[serde(default)]
     since_seq: u64,
@@ -47,7 +47,7 @@ struct ProcessLogsToolArgs {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
 #[tool_input(trim("process_id"), non_empty("process_id"))]
 #[serde(deny_unknown_fields)]
-struct ProcessStopToolArgs {
+pub(crate) struct ProcessStopToolArgs {
     process_id: String,
 }
 
@@ -62,7 +62,7 @@ struct ProcessStopToolArgs {
     concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
-enum ProcessToolSurfaceInput {
+pub(crate) enum ProcessToolSurfaceInput {
     #[tool(exec = "run")]
     Run {
         #[serde(flatten)]
@@ -170,11 +170,10 @@ mod tests {
             }),
         )
         .expect("process run should resolve");
-        assert_eq!(run_tool, "process");
+        assert_eq!(run_tool, "run");
         assert_eq!(
             run_input,
             json!({
-                "action": "run",
                 "shell": "bash",
                 "command": "echo ok",
                 "description": "smoke",
@@ -194,11 +193,10 @@ mod tests {
             }),
         )
         .expect("process logs should resolve");
-        assert_eq!(logs_tool, "process");
+        assert_eq!(logs_tool, "logs");
         assert_eq!(
             logs_input,
             json!({
-                "action": "logs",
                 "process_id": "proc_1",
                 "since_seq": 5,
                 "wait_ms": 20

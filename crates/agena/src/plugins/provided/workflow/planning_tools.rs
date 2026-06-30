@@ -6,8 +6,7 @@ use agena_macros::{StaticToolSurface, ToolInputShape};
 #[serde(rename_all = "snake_case")]
 pub(crate) enum WorkflowPlanPhase {
     #[default]
-    Draft,
-    #[serde(rename = "active")]
+    Planning,
     Active,
     Blocked,
     Completed,
@@ -118,9 +117,9 @@ pub(crate) struct WorkflowPlanStepInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
 #[serde(deny_unknown_fields)]
 #[schemars(
-    description = "Create or overwrite the current active-session plan in draft. If a plan already exists, this replaces it. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically."
+    description = "Create or overwrite the current active-session plan in planning. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically."
 )]
-pub(crate) struct PlanCreateInput {
+pub(crate) struct PlanSetInput {
     pub(crate) objective: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) title: Option<String>,
@@ -136,16 +135,36 @@ pub(crate) struct PlanCreateInput {
 }
 
 #[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape, Default,
+)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PlanGetView {
+    #[default]
+    Current,
+    Summary,
+    Full,
+}
+
+#[derive(
     Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape, Default,
 )]
-#[tool_input(trim("summary"), at_least_one_of("phase", "autorun"))]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct PlanGetInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) view: Option<PlanGetView>,
+}
+
+#[derive(
+    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape, Default,
+)]
+#[tool_input(trim("summary", "step_id", "check_id", "note"))]
 #[serde(default, deny_unknown_fields)]
 #[schemars(
-    description = "Set the plan phase or autorun flag. Canonical phase values are `draft`, `active`, `blocked`, `completed`, and `cancelled`."
+    description = "Update the current plan. Use `phase` / `autorun` for plan-level state changes, `step_id` + `status` to update a step, or `step_id` + `check_id` + `status` to update a check. Canonical phase values are `planning`, `active`, `blocked`, `completed`, and `cancelled`."
 )]
-pub(crate) struct PlanSetStatusInput {
+pub(crate) struct PlanUpdateInput {
     #[schemars(
-        description = "Canonical plan phase. Use `draft`, `active`, `blocked`, `completed`, or `cancelled`."
+        description = "Canonical plan phase. Use `planning`, `active`, `blocked`, `completed`, or `cancelled`."
     )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) phase: Option<WorkflowPlanPhase>,
@@ -157,57 +176,25 @@ pub(crate) struct PlanSetStatusInput {
     )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) summary: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("step_id", "note"), non_empty("step_id"))]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PlanUpdateStepInput {
-    pub(crate) step_id: String,
-    pub(crate) status: WorkflowPlanStepStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) step_id: Option<String>,
+    #[serde(default, rename = "check_id", skip_serializing_if = "Option::is_none")]
+    pub(crate) checkpoint_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) status: Option<WorkflowPlanStepStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) wait_until_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) note: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("step_id", "check_id"), non_empty("step_id", "check_id"))]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PlanUpdateCheckpointInput {
-    pub(crate) step_id: String,
-    #[serde(rename = "check_id")]
-    pub(crate) checkpoint_id: String,
-    pub(crate) status: WorkflowPlanStepStatus,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "todo",
-    description = "Todo command. Use action `write` to replace the session todo list.",
-    summary = "Replace the session todo list.",
-    handler_receiver = WorkflowPlugin,
-    display = brief,
-    tags(ToolTag::Mutating, ToolTag::Planning),
-    concurrency_safe = false
-)]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub(crate) enum TodoToolInput {
-    #[tool(exec = "write", handle = WorkflowPlugin::invoke_todo_write)]
-    Write {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: TodoWriteToolInput,
-    },
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "plan",
-    description = "Plan command backed by shared plugin storage. Use it to create or overwrite the current draft plan, inspect the current step, and manage the active session plan.",
-    summary = "Create or overwrite plans, inspect the current step, update steps/checks, and use `set_status` for phase changes.",
+    description = "Plan command backed by shared plugin storage. Use it to set the current plan, inspect its current state, or update plan, step, and check status.",
+    summary = "Set, get, update, or clear the current plan.",
     handler_receiver = WorkflowPlugin,
-    help = "Use action `create` to write the current draft plan; if a plan already exists, `create` overwrites it and returns it to draft. Use action `current` to inspect the current actionable step and its goal. Use action `set_status` to move the plan between draft, active, blocked, completed, or cancelled. Use action `update_check` to update an individual check inside a step. Autorun on/off distinguishes active plans that should keep running automatically. If workflow plan config disables direct approval, plan.set_status automatically requests review before moving a draft or cancelled plan into active, blocked, or completed.",
+    help = "Use action `set` to create or replace the current plan and return it to planning. Use action `get` to inspect the current plan with `view = current|summary|full`. Use action `update` to change the plan phase / autorun flag, a step's status, or a check's status. Use action `clear` to remove the current plan. If workflow plan config disables direct approval, `plan.update` automatically requests review before moving a planning or cancelled plan into active, blocked, or completed.",
     display = brief,
     tags(ToolTag::Planning, ToolTag::Mutating),
     host_capabilities(
@@ -219,38 +206,23 @@ pub(crate) enum TodoToolInput {
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub(crate) enum PlanToolInput {
-    #[tool(exec = "current", handle = WorkflowPlugin::invoke_plan_current)]
-    Current,
-    #[tool(exec = "create", handle = WorkflowPlugin::invoke_plan_create)]
-    Create {
+    #[tool(exec = "get", handle = WorkflowPlugin::invoke_plan_get, default_when_empty = true)]
+    Get {
         #[tool(flatten_shape)]
         #[serde(flatten)]
-        args: PlanCreateInput,
+        args: PlanGetInput,
     },
-    #[tool(
-        exec = "set_status",
-        handle = WorkflowPlugin::invoke_plan_set_status,
-        at_least_one_of("phase", "autorun")
-    )]
-    SetStatus {
+    #[tool(exec = "set", handle = WorkflowPlugin::invoke_plan_set)]
+    Set {
         #[tool(flatten_shape)]
         #[serde(flatten)]
-        args: PlanSetStatusInput,
+        args: PlanSetInput,
     },
-    #[tool(exec = "update_step", handle = WorkflowPlugin::invoke_plan_update_step)]
-    UpdateStep {
+    #[tool(exec = "update", handle = WorkflowPlugin::invoke_plan_update)]
+    Update {
         #[tool(flatten_shape)]
         #[serde(flatten)]
-        args: PlanUpdateStepInput,
-    },
-    #[tool(
-        exec = "update_check",
-        handle = WorkflowPlugin::invoke_plan_update_checkpoint
-    )]
-    UpdateCheck {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: PlanUpdateCheckpointInput,
+        args: PlanUpdateInput,
     },
     #[tool(exec = "clear", handle = WorkflowPlugin::invoke_plan_clear)]
     Clear,

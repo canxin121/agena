@@ -493,8 +493,8 @@ mod tests {
     #[test]
     fn exposed_tool_names_use_double_underscore_between_normalized_segments() {
         assert_eq!(
-            exposed_tool_name("agena.planning", "plan.create"),
-            "agena_planning__plan_create"
+            exposed_tool_name("agena.plan", "plan.set"),
+            "agena_plan__plan_set"
         );
         assert_eq!(
             exposed_tool_name("streaming-fixture", "stream_fixture.count"),

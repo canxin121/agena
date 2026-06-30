@@ -19,7 +19,6 @@ pub(crate) mod shell;
 pub(crate) mod shell_tools;
 pub(crate) mod snapshot;
 pub(crate) mod task;
-pub(crate) mod todo_write;
 pub(crate) mod tool_search;
 pub(crate) mod truncation;
 
@@ -741,12 +740,12 @@ pub fn new_runtime_plugin() -> impl crate::plugin::sdk::Plugin {
     provided_runtime::RuntimePlugin::new()
 }
 
-pub fn planning_plugin_id() -> &'static str {
-    provided_planning::PLANNING_PLUGIN_ID
+pub fn plan_plugin_id() -> &'static str {
+    provided_planning::PLAN_PLUGIN_ID
 }
 
-pub fn new_planning_plugin() -> impl crate::plugin::sdk::Plugin {
-    provided_planning::PlanningPlugin::new()
+pub fn new_plan_plugin() -> impl crate::plugin::sdk::Plugin {
+    provided_planning::PlanPlugin::new()
 }
 
 pub fn tasks_plugin_id() -> &'static str {
@@ -757,12 +756,12 @@ pub fn new_tasks_plugin() -> impl crate::plugin::sdk::Plugin {
     provided_tasks::TasksPlugin::new()
 }
 
-pub fn repo_plugin_id() -> &'static str {
-    provided_repo::REPO_PLUGIN_ID
+pub fn snapshot_plugin_id() -> &'static str {
+    provided_repo::SNAPSHOT_PLUGIN_ID
 }
 
-pub fn new_repo_plugin() -> impl crate::plugin::sdk::Plugin {
-    provided_repo::RepoPlugin::new()
+pub fn new_snapshot_plugin() -> impl crate::plugin::sdk::Plugin {
+    provided_repo::SnapshotPlugin::new()
 }
 
 #[cfg(feature = "schema-lab")]
@@ -2984,15 +2983,14 @@ mod tests {
         FilesystemEffect, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
         LspPositionToolInput, Message, NetworkEffect, PartContent, ProcessShell, ProcessToolInput,
         ReadToolInput, ShellCommandInput, StructuredObject, TaskSubagentType, TaskToolInput,
-        TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation, WebFetchToolInput,
-        WebSearchToolInput,
+        ToolInvocation, WebFetchToolInput, WebSearchToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
         EventSubscription, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
         HostStorageListRequest, HostStorageListResponse, HostStorageRecord, HostStorageScope,
-        HostStorageSetRequest, HostStorageVisibility, HostTodoPriority, HostTodoStatus, LogLevel,
-        SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+        HostStorageSetRequest, HostStorageVisibility, LogLevel, SpawnSubtaskRequest,
+        SpawnSubtaskResponse, ToolDescriptor,
     };
     use crate::plugin::sdk::prelude::*;
     use crate::plugin::sdk::{
@@ -3006,18 +3004,15 @@ mod tests {
     use crate::role::Role;
 
     use super::{
-        ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadInput,
-        ToolPayloadOutput, ToolRuntimeContext, orchestrator,
+        ToolError, ToolExecutor, ToolPayloadInput, ToolPayloadOutput, ToolRuntimeContext,
+        orchestrator,
     };
-    use crate::plugins::provided::router as in_process_router;
 
     const FS_TOOL: &str = "agena_fs__fs";
     const GENERATED_HELP_TOOL: &str = "fixture__generated_help";
     const MERGED_HELP_TOOL: &str = "fixture__merged_help";
     const PROCESS_TOOL: &str = "agena_process__process";
-    const PROCESS_RUN_TOOL: &str = "agena_process__process_run";
     const TOOLS_TOOL: &str = "agena_catalog__tools";
-    const TODO_TOOL: &str = "agena_planning__todo";
     const TASK_TOOL: &str = "agena_tasks__task";
     const FIXTURE_ECHO_TOOL: &str = "fixture__plugin_echo";
     const WEB_CRAWL_TOOL: &str = "agena_web__crawl";
@@ -5552,37 +5547,6 @@ mod tests {
                 },
             ])
         }
-
-        async fn todo_write(
-            &self,
-            req: crate::plugin::sdk::host_api::HostTodoWriteRequest,
-        ) -> SdkResult<ToolInvokeOutput> {
-            Ok(in_process_router::tool_execution_to_invoke_output(
-                ToolPayloadExecution::new(
-                    ToolPayloadOutput::TodoWrite {
-                        items: req
-                            .items
-                            .into_iter()
-                            .map(|item| TodoItem {
-                                content: item.content,
-                                status: match item.status {
-                                    HostTodoStatus::Pending => TodoStatus::Pending,
-                                    HostTodoStatus::InProgress => TodoStatus::InProgress,
-                                    HostTodoStatus::Completed => TodoStatus::Completed,
-                                    HostTodoStatus::Cancelled => TodoStatus::Cancelled,
-                                },
-                                priority: match item.priority {
-                                    HostTodoPriority::High => TodoPriority::High,
-                                    HostTodoPriority::Medium => TodoPriority::Medium,
-                                    HostTodoPriority::Low => TodoPriority::Low,
-                                },
-                            })
-                            .collect(),
-                    },
-                    ToolExecutionView::simple("Todo write", "Updated todo list"),
-                ),
-            ))
-        }
     }
 
     #[derive(Debug, Default)]
@@ -5784,9 +5748,9 @@ mod tests {
         let process_id = super::process_plugin_id().to_string();
         let catalog_id = super::catalog_plugin_id().to_string();
         let runtime_id = super::runtime_plugin_id().to_string();
-        let planning_id = super::planning_plugin_id().to_string();
+        let planning_id = super::plan_plugin_id().to_string();
         let tasks_id = super::tasks_plugin_id().to_string();
-        let repo_id = super::repo_plugin_id().to_string();
+        let repo_id = super::snapshot_plugin_id().to_string();
         let web_id = crate::web::web_plugin_id().to_string();
         let mut list = BTreeMap::new();
         for id in [
@@ -5837,9 +5801,9 @@ mod tests {
                 .register_static(process_id, super::new_process_plugin())
                 .register_static(catalog_id, super::new_catalog_plugin())
                 .register_static(runtime_id, super::new_runtime_plugin())
-                .register_static(planning_id, super::new_planning_plugin())
+                .register_static(planning_id, super::new_plan_plugin())
                 .register_static(tasks_id, super::new_tasks_plugin())
-                .register_static(repo_id, super::new_repo_plugin());
+                .register_static(repo_id, super::new_snapshot_plugin());
             if super::schema_lab_builtin_enabled() {
                 builder = builder.register_static(schema_lab_id, super::new_schema_lab_plugin());
             }
@@ -5864,9 +5828,9 @@ mod tests {
         let process_id = super::process_plugin_id().to_string();
         let catalog_id = super::catalog_plugin_id().to_string();
         let runtime_id = super::runtime_plugin_id().to_string();
-        let planning_id = super::planning_plugin_id().to_string();
+        let planning_id = super::plan_plugin_id().to_string();
         let tasks_id = super::tasks_plugin_id().to_string();
-        let repo_id = super::repo_plugin_id().to_string();
+        let repo_id = super::snapshot_plugin_id().to_string();
         let web_id = crate::web::web_plugin_id().to_string();
         let mut list = BTreeMap::new();
         for id in [
@@ -5916,9 +5880,9 @@ mod tests {
                 .register_static(process_id, super::new_process_plugin())
                 .register_static(catalog_id, super::new_catalog_plugin())
                 .register_static(runtime_id, super::new_runtime_plugin())
-                .register_static(planning_id, super::new_planning_plugin())
+                .register_static(planning_id, super::new_plan_plugin())
                 .register_static(tasks_id, super::new_tasks_plugin())
-                .register_static(repo_id, super::new_repo_plugin());
+                .register_static(repo_id, super::new_snapshot_plugin());
             if super::schema_lab_builtin_enabled() {
                 builder = builder.register_static(schema_lab_id, super::new_schema_lab_plugin());
             }
@@ -5942,9 +5906,9 @@ mod tests {
         let process_id = super::process_plugin_id().to_string();
         let catalog_id = super::catalog_plugin_id().to_string();
         let runtime_id = super::runtime_plugin_id().to_string();
-        let planning_id = super::planning_plugin_id().to_string();
+        let planning_id = super::plan_plugin_id().to_string();
         let tasks_id = super::tasks_plugin_id().to_string();
-        let repo_id = super::repo_plugin_id().to_string();
+        let repo_id = super::snapshot_plugin_id().to_string();
         let web_id = crate::web::web_plugin_id().to_string();
         let mut list = BTreeMap::new();
         for id in [
@@ -5993,9 +5957,9 @@ mod tests {
                 .register_static(process_id, super::new_process_plugin())
                 .register_static(catalog_id, super::new_catalog_plugin())
                 .register_static(runtime_id, super::new_runtime_plugin())
-                .register_static(planning_id, super::new_planning_plugin())
+                .register_static(planning_id, super::new_plan_plugin())
                 .register_static(tasks_id, super::new_tasks_plugin())
-                .register_static(repo_id, super::new_repo_plugin());
+                .register_static(repo_id, super::new_snapshot_plugin());
             if super::schema_lab_builtin_enabled() {
                 builder = builder.register_static(schema_lab_id, super::new_schema_lab_plugin());
             }
@@ -6756,12 +6720,7 @@ mod tests {
 
         let initial = executor.available_tools();
         assert!(initial.iter().any(|tool| tool.exposed_name == TOOLS_TOOL));
-        assert!(initial.iter().any(|tool| tool.exposed_name == TODO_TOOL));
-        assert!(
-            initial
-                .iter()
-                .any(|tool| tool.exposed_name == PROCESS_RUN_TOOL)
-        );
+        assert!(initial.iter().any(|tool| tool.exposed_name == PROCESS_TOOL));
         assert!(initial.iter().any(|tool| tool.exposed_name == TASK_TOOL));
 
         let messages = vec![Message {
@@ -6785,7 +6744,7 @@ mod tests {
         assert!(
             available
                 .iter()
-                .any(|tool| tool.exposed_name == PROCESS_RUN_TOOL)
+                .any(|tool| tool.exposed_name == PROCESS_TOOL)
         );
         assert!(available.iter().any(|tool| tool.exposed_name == TASK_TOOL));
     }
@@ -6827,87 +6786,88 @@ mod tests {
         assert!(
             !tools
                 .iter()
-                .any(|tool| tool.exposed_name == "agena_planning__plan")
+                .any(|tool| tool.exposed_name == "agena_plan__plan")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.exposed_name == "agena_plan__plan_get")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.exposed_name == "agena_plan__plan_set")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.exposed_name == "agena_plan__plan_update")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.exposed_name == "agena_plan__plan_clear")
         );
         assert!(
             !tools
                 .iter()
-                .any(|tool| tool.exposed_name == "agena_planning__plan_get")
-        );
-        assert!(
-            !tools
-                .iter()
-                .any(|tool| tool.exposed_name == "agena_planning__plan_submit")
-        );
-        assert!(
-            !tools
-                .iter()
-                .any(|tool| tool.exposed_name == "agena_planning__plan_next")
-        );
-        assert!(
-            !tools
-                .iter()
-                .any(|tool| tool.exposed_name == "agena_planning__plan_replace")
-        );
-        assert!(
-            !tools
-                .iter()
-                .any(|tool| tool.exposed_name == "agena_repo__snapshot")
+                .any(|tool| tool.exposed_name == "agena_snapshot__snapshot")
         );
 
-        let plan_set_status = tools
+        let plan_update = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_planning__plan_set_status")
-            .expect("plan.set_status alias should be model-visible");
-        let plan_current = tools
+            .find(|tool| tool.exposed_name == "agena_plan__plan_update")
+            .expect("plan.update alias should be model-visible");
+        let plan_get = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_planning__plan_current")
-            .expect("plan.current alias should be model-visible");
-        let check_update = tools
+            .find(|tool| tool.exposed_name == "agena_plan__plan_get")
+            .expect("plan.get alias should be model-visible");
+        let plan_set = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_planning__plan_update_check")
-            .expect("plan.update_check alias should be model-visible");
+            .find(|tool| tool.exposed_name == "agena_plan__plan_set")
+            .expect("plan.set alias should be model-visible");
         let snapshot_existing = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_repo__snapshot_enter_existing")
+            .find(|tool| tool.exposed_name == "agena_snapshot__snapshot_enter_existing")
             .expect("nested snapshot.enter.existing tool should be model-visible");
 
-        let plan_set_schema =
-            super::model_safe_tool_schema(&plan_set_status.sanitized_input_schema());
-        let check_schema = super::model_safe_tool_schema(&check_update.sanitized_input_schema());
+        let plan_update_schema =
+            super::model_safe_tool_schema(&plan_update.sanitized_input_schema());
+        let plan_set_schema = super::model_safe_tool_schema(&plan_set.sanitized_input_schema());
         let snapshot_schema =
             super::model_safe_tool_schema(&snapshot_existing.sanitized_input_schema());
 
+        let plan_update_properties = plan_update_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("plan.update schema should expose properties");
         let plan_set_properties = plan_set_schema
             .get("properties")
             .and_then(serde_json::Value::as_object)
-            .expect("plan.set_status schema should expose properties");
-        let check_properties = check_schema
-            .get("properties")
-            .and_then(serde_json::Value::as_object)
-            .expect("plan.update_check schema should expose properties");
+            .expect("plan.set schema should expose properties");
         let snapshot_properties = snapshot_schema
             .get("properties")
             .and_then(serde_json::Value::as_object)
             .expect("snapshot.enter.existing schema should expose properties");
 
-        assert!(!plan_set_properties.contains_key("action"));
         assert!(
-            plan_set_properties.contains_key("phase") || plan_set_properties.contains_key("status")
+            plan_update_properties.contains_key("phase")
+                || plan_update_properties.contains_key("status")
         );
-        assert!(!plan_set_properties.contains_key("step_id"));
+        assert!(plan_update_properties.contains_key("step_id"));
+        assert!(plan_update_properties.contains_key("check_id"));
+        assert!(!plan_update_properties.contains_key("action"));
         assert!(
-            plan_current
+            plan_get
                 .sanitized_input_schema()
                 .get("required")
                 .and_then(serde_json::Value::as_array)
                 .is_none_or(|required| required.is_empty()),
-            "plan.current should not require any input fields"
+            "plan.get should not require any input fields"
         );
-        assert!(check_properties.contains_key("step_id"));
-        assert!(check_properties.contains_key("check_id"));
-        assert!(check_properties.contains_key("status"));
-        assert!(!check_properties.contains_key("phase"));
+        assert!(plan_set_properties.contains_key("objective"));
+        assert!(plan_set_properties.contains_key("steps"));
+        assert!(!plan_set_properties.contains_key("phase"));
         assert_eq!(
             snapshot_properties
                 .get("path")
@@ -6925,30 +6885,30 @@ mod tests {
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
 
         let tools = executor.available_model_tools();
-        let plan_create = tools
+        let plan_set = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_planning__plan_create")
-            .expect("plan.create alias should be model-visible");
-        let plan_set_status = tools
+            .find(|tool| tool.exposed_name == "agena_plan__plan_set")
+            .expect("plan.set alias should be model-visible");
+        let plan_update = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_planning__plan_set_status")
-            .expect("plan.set_status alias should be model-visible");
+            .find(|tool| tool.exposed_name == "agena_plan__plan_update")
+            .expect("plan.update alias should be model-visible");
 
         assert!(
-            plan_create.description_text().contains("steps[].title"),
-            "plan.create description should explain step titles explicitly"
+            plan_set.description_text().contains("steps[].title"),
+            "plan.set description should explain step titles explicitly"
         );
         assert!(
-            plan_create
+            plan_set
                 .description_text()
                 .contains("steps[].checks[].text"),
-            "plan.create description should explain check text explicitly"
+            "plan.set description should explain check text explicitly"
         );
         assert!(
-            plan_set_status
+            plan_update
                 .description_text()
-                .contains("`draft`, `active`, `blocked`, `completed`, and `cancelled`"),
-            "plan.set_status description should emphasize canonical phases"
+                .contains("`planning`, `active`, `blocked`, `completed`, and `cancelled`"),
+            "plan.update description should emphasize canonical phases"
         );
     }
 
@@ -7224,31 +7184,6 @@ mod tests {
         expected.sort();
 
         assert_eq!(names, expected);
-    }
-
-    #[test]
-    fn todo_write_provided_returns_items_for_session_state() {
-        let workspace = TempWorkspace::new();
-        let executor = build_executor(&workspace.root);
-
-        let result = executor
-            .execute_tool_payload_detailed(&ToolPayloadInput::TodoWrite(TodoWriteToolInput {
-                items: vec![TodoItem {
-                    content: "Implement tool_search".to_string(),
-                    status: TodoStatus::InProgress,
-                    priority: TodoPriority::High,
-                }],
-            }))
-            .expect("todo_write should succeed");
-
-        match result.output {
-            ToolPayloadOutput::TodoWrite { items } => {
-                assert_eq!(items.len(), 1);
-                assert_eq!(items[0].content, "Implement tool_search");
-                assert_eq!(items[0].status, TodoStatus::InProgress);
-            }
-            other => panic!("expected todo_write output, got {other:?}"),
-        }
     }
 
     #[test]
@@ -8110,7 +8045,7 @@ mod tests {
     }
 
     #[test]
-    fn read_glob_grep_and_todo_inputs_trim_and_validate_at_parse_time() {
+    fn read_glob_and_grep_inputs_trim_and_validate_at_parse_time() {
         let read = ReadToolInput::parse_input(json!({
             "file_path": "  docs/README.md  ",
             "offset": 3,
@@ -8161,25 +8096,6 @@ mod tests {
         assert!(grep_usage.contains("Optional glob filter applied before matching lines."));
         assert!(grep_usage.contains("`include` <string, optional, min_length=1>"));
 
-        let todo = TodoWriteToolInput::parse_input(json!({
-            "items": [
-                {
-                    "content": "  write docs  ",
-                    "status": "pending",
-                    "priority": "high"
-                }
-            ]
-        }))
-        .expect("todo write input should parse");
-        assert_eq!(todo.items[0].content, "write docs");
-
-        let todo_schema = TodoWriteToolInput::input_schema();
-        let todo_usage =
-            crate::tool::definition::schema_usage_text(&todo_schema).expect("todo usage");
-        assert!(todo_usage.contains("Todo items to replace or persist."));
-        assert!(todo_usage.contains("Todo item text."));
-        assert!(todo_usage.contains("`items[].content` <string, required, min_length=1>"));
-
         let ask_usage = crate::tool::definition::schema_usage_text(
             &crate::message::AskUserToolInput::input_schema(),
         )
@@ -8221,21 +8137,6 @@ mod tests {
             err.to_string()
                 .contains("field `include` must not be empty")
         );
-
-        let err = TodoWriteToolInput::parse_input(json!({
-            "items": [
-                {
-                    "content": "   ",
-                    "status": "pending",
-                    "priority": "low"
-                }
-            ]
-        }))
-        .expect_err("blank todo content should be rejected");
-        assert!(
-            err.to_string()
-                .contains("field `items[].content` must not be empty")
-        );
     }
 
     #[test]
@@ -8257,9 +8158,8 @@ mod tests {
         let executor = ToolExecutor::new(workspace.root.clone(), agent)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
         let invocation = ToolInvocation::new(
-            "agena_planning__plan",
-            StructuredObject::try_from(json!({ "action": "current" }))
-                .expect("plan invocation input should be valid"),
+            "agena_plan__plan_get",
+            StructuredObject::try_from(json!({})).expect("plan invocation input should be valid"),
         );
 
         let checks = executor

@@ -5478,9 +5478,9 @@ mod tests {
             web::web_plugin_id().to_string(),
             tool::catalog_plugin_id().to_string(),
             tool::runtime_plugin_id().to_string(),
-            tool::planning_plugin_id().to_string(),
+            tool::plan_plugin_id().to_string(),
             tool::tasks_plugin_id().to_string(),
-            tool::repo_plugin_id().to_string(),
+            tool::snapshot_plugin_id().to_string(),
             memory::memory_plugin_id().to_string(),
             tool::mcp_plugin_id().to_string(),
         ]);

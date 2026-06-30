@@ -1,6 +1,6 @@
 # Plugin 体系
 
-Agena 的扩展能力统一通过 plugin host 接入。模型可见的 tools、MCP server 暴露出来的能力、LSP 查询、skills、workflow、memory、cron 等，都会在 runtime 中表达为 plugin 或 plugin tool，然后进入同一个 tool registry。
+Agena 的扩展能力统一通过 plugin host 接入。模型可见的 tools、MCP server 暴露出来的能力、LSP 查询、skills、plan、memory、cron 等，都会在 runtime 中表达为 plugin 或 plugin tool，然后进入同一个 tool registry。
 
 这意味着使用者和开发者应该把 plugin 当成主要抽象：
 
@@ -164,9 +164,9 @@ Runtime build 注册：
 | `agena.code` | `ast-grep` / `tree-sitter` 驱动的多语言结构化代码搜索和语法树检查 tools |
 | `agena.catalog` | tool catalog discovery/help tools |
 | `agena.runtime` | agent、session 和 user input 等 runtime control tools |
-| `agena.planning` | todo、plan 和 plan autorun 等 planning tools |
+| `agena.plan` | plan 和 plan autorun 等 planning tools |
 | `agena.tasks` | delegated subtask orchestration tools |
-| `agena.repo` | repository worktree management tools |
+| `agena.snapshot` | repository worktree management tools |
 | `agena.skills` | 扫描 `SKILL.md`、slash command，以及内置 `init/review/security_review` skills，并动态注册 tools |
 | `agena.lsp` | LSP server 观测和 LSP 查询 tools |
 | `agena.cron` | cron 和 one-shot wakeup 调度 tools |
@@ -190,10 +190,9 @@ Runtime build 注册：
 | `agena.runtime/agent` | `switch`, `restore` |
 | `agena.runtime/session` | `get`, `rename` |
 | `agena.runtime/user` | `request_input` |
-| `agena.planning/todo` | `write` |
-| `agena.planning/plan` | `current`, `create`, `set_status`, `update_step`, `update_check`, `clear` |
+| `agena.plan/plan` | `get`, `set`, `update`, `clear` |
 | `agena.tasks/task` | `run` |
-| `agena.repo/worktree` | `enter`, `exit` |
+| `agena.snapshot/snapshot` | `enter`, `exit` |
 
 这些入口现在统一使用扁平 `{"action": "...", ...}` 形状。当前内置 static plugin 倾向把同域动作尽量收进一个顶层 tool，再通过 action 区分读、写、调度或交互行为。
 

@@ -9,8 +9,7 @@ use async_trait::async_trait;
 
 use crate::message::{
     AskUserToolInput, EnterSnapshotToolInput, ExitSnapshotToolInput, ProcessStatus, ProcessStream,
-    StructuredObject, TaskSubagentType, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput,
-    ToolInvocation, UserInputOption, UserInputQuestion,
+    StructuredObject, TaskSubagentType, ToolInvocation, UserInputOption, UserInputQuestion,
 };
 use crate::plugin::sdk::host_api::{
     AskUserRequest, AskUserResponse, EventSubscription, HostAgentDescriptor, HostAgentGetRequest,
@@ -30,10 +29,9 @@ use crate::plugin::sdk::host_api::{
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
     HostSnapshotListResponse, HostSnapshotSummary, HostStorageDeleteRequest, HostStorageGetRequest,
     HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageRecord,
-    HostStorageSetRequest, HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest,
-    LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
-    MonitorStartRequest, MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest,
-    SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
+    HostStorageSetRequest, LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
+    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -599,16 +597,6 @@ impl HostClient for RuntimeHostClient {
             .into_iter()
             .map(render_tool_descriptor)
             .collect())
-    }
-
-    async fn todo_write(&self, req: HostTodoWriteRequest) -> Result<ToolInvokeOutput, PluginError> {
-        self.run_workflow_tool(
-            "todo_write",
-            TodoWriteToolInput {
-                items: req.items.into_iter().map(todo_item_from_host).collect(),
-            },
-        )
-        .await
     }
 
     async fn get_session(

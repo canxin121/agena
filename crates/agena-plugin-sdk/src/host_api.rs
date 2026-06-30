@@ -94,11 +94,6 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Replace the session todo list with a short execution plan.
-    async fn todo_write(&self, _req: HostTodoWriteRequest) -> Result<ToolInvokeOutput> {
-        Err(unavailable())
-    }
-
     /// Read the current session metadata.
     async fn get_session(&self, _req: HostGetSessionRequest) -> Result<HostGetSessionResponse> {
         Err(unavailable())
@@ -595,36 +590,6 @@ pub struct ToolDescriptor {
     pub tags: Vec<ToolTag>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum HostTodoStatus {
-    Pending,
-    InProgress,
-    Completed,
-    Cancelled,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum HostTodoPriority {
-    High,
-    Medium,
-    Low,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HostTodoItem {
-    pub content: String,
-    pub status: HostTodoStatus,
-    pub priority: HostTodoPriority,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HostTodoWriteRequest {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub items: Vec<HostTodoItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

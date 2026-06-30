@@ -8,17 +8,16 @@ use crate::plugin::sdk::{
     ToolInvokeInput, ToolInvokeOutput, async_trait,
 };
 use crate::plugins::provided::workflow::{
-    PlanToolInput, TodoToolInput, WorkflowPlugin, WorkflowPluginConfig,
-    planning_plugin_config_schema,
+    PlanToolInput, WorkflowPlugin, WorkflowPluginConfig, planning_plugin_config_schema,
 };
 
-pub(crate) const PLANNING_PLUGIN_ID: &str = "agena.planning";
+pub(crate) const PLAN_PLUGIN_ID: &str = "agena.plan";
 
-pub(crate) struct PlanningPlugin {
+pub(crate) struct PlanPlugin {
     inner: WorkflowPlugin,
 }
 
-impl PlanningPlugin {
+impl PlanPlugin {
     pub(crate) fn new() -> Self {
         Self {
             inner: WorkflowPlugin::new(),
@@ -27,10 +26,10 @@ impl PlanningPlugin {
 }
 
 #[async_trait]
-impl Plugin for PlanningPlugin {
+impl Plugin for PlanPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(PLANNING_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
-            .description("Planning, todo, and plan-autorun orchestration tools.")
+        PluginManifest::builder(PLAN_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
+            .description("Plan orchestration and plan-autorun tools.")
             .config_schema(planning_plugin_config_schema())
             .brief_detailed()
             .hooks(
@@ -40,7 +39,7 @@ impl Plugin for PlanningPlugin {
                     | HookSubscription::AGENT_STOP,
             )
             .plugin_capabilities([HostCapability::PluginStorage, HostCapability::Statusline])
-            .tools([TodoToolInput::tool_decl(), PlanToolInput::tool_decl()])
+            .tool(PlanToolInput::tool_decl())
             .build()
     }
 
@@ -61,20 +60,14 @@ impl Plugin for PlanningPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        match input.tool_name.as_str() {
-            "todo" => {
-                let parsed = TodoToolInput::parse_input(input.input)?;
-                parsed.dispatch_tool_invoke(&self.inner).await
-            }
-            "plan" => {
-                let parsed = PlanToolInput::parse_input(input.input)?;
-                parsed.dispatch_tool_invoke(&self.inner).await
-            }
-            _ => Err(PluginError::not_implemented(format!(
+        if input.tool_name != "plan" {
+            return Err(PluginError::not_implemented(format!(
                 "tool_invoke({})",
                 input.tool_name
-            ))),
+            )));
         }
+        let parsed = PlanToolInput::parse_input(input.input)?;
+        parsed.dispatch_tool_invoke(&self.inner).await
     }
 
     async fn tool_execute_before(

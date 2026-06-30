@@ -7,7 +7,7 @@ use crate::plugin::sdk::ToolInputShape;
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
     ToolRuntimeContext, apply_patch, ask_user, cron, glob, grep, lsp, process_tool, read, snapshot,
-    suggest_tool_names, task, todo_write, tool_search, unknown_tool_hint,
+    suggest_tool_names, task, tool_search, unknown_tool_hint,
 };
 
 const BUILTIN_TOOL_NAMES: &[&str] = &[
@@ -27,7 +27,6 @@ const BUILTIN_TOOL_NAMES: &[&str] = &[
     "read",
     "schedule_wakeup",
     "task",
-    "todo_write",
     "tool_search",
     "enter_snapshot",
 ];
@@ -118,7 +117,6 @@ pub(crate) fn execute_tool(
         "grep" => grep::execute(executor, &parse_shape_input(input)?),
         "task" => task::execute(executor, &parse_shape_input(input)?),
         "tool_search" => tool_search::execute(executor, &parse_shape_input(input)?),
-        "todo_write" => Ok(todo_write::execute(&parse_shape_input(input)?)),
         "ask_user" => ask_user::execute(&parse_shape_input(input)?),
         "process" => process_tool::execute(executor, &parse_shape_input(input)?, context),
         "enter_snapshot" => {

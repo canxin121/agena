@@ -63,12 +63,10 @@
         "tools": {
           "names": {
             "plan": "allow",
-            "todo": "allow",
             "tools": "allow",
             "user": "allow",
             "agent": "allow",
-            "session": "allow",
-            "workflow": "allow"
+            "session": "allow"
           }
         }
       }
@@ -170,7 +168,7 @@
           "kind": "static"
         }
       },
-      "agena.workflow": {
+      "agena.plan": {
         "package": {
           "kind": "static"
         },

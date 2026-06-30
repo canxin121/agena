@@ -2836,7 +2836,7 @@ mod tests {
     fn failed_tool_output_deduplicates_repeated_error_text() {
         let failure = "plugin error: permission confirmation required";
         let invocation = ToolInvocation::new(
-            "agena.planning/plan",
+            "agena.plan/plan",
             serde_json::from_value(json!({ "action": "enter" })).expect("valid structured input"),
         );
         let tool = OperationPart::failed(
@@ -2878,10 +2878,10 @@ mod tests {
 
     #[test]
     fn completed_tool_output_deduplicates_matching_text_blocks() {
-        let plan_text = "Created a draft plan.\n\n# Plan Trial\n\n## Steps\n1. [ ] Create plan";
+        let plan_text = "Saved the plan.\n\n# Plan Trial\n\n## Steps\n1. [ ] Create plan";
         let invocation = ToolInvocation::new(
-            "agena.planning/plan",
-            serde_json::from_value(json!({ "action": "create" })).expect("valid structured input"),
+            "agena.plan/plan",
+            serde_json::from_value(json!({ "action": "set" })).expect("valid structured input"),
         );
         let tool = OperationPart::completed(
             10,
@@ -2912,7 +2912,7 @@ mod tests {
         assert_eq!(
             rendered
                 .iter()
-                .filter(|line| line.contains("Created a draft plan."))
+                .filter(|line| line.contains("Saved the plan."))
                 .count(),
             1,
             "completed tool rendering should not repeat identical model output and text blocks"
@@ -2921,10 +2921,10 @@ mod tests {
 
     #[test]
     fn markdown_like_text_blocks_render_with_markdown_styling() {
-        let plan_text = "Created a draft plan.\n\n# Plan Trial\n\n- [ ] Create plan";
+        let plan_text = "Saved the plan.\n\n# Plan Trial\n\n- [ ] Create plan";
         let invocation = ToolInvocation::new(
-            "agena.planning/plan",
-            serde_json::from_value(json!({ "action": "create" })).expect("valid structured input"),
+            "agena.plan/plan",
+            serde_json::from_value(json!({ "action": "set" })).expect("valid structured input"),
         );
         let tool = OperationPart::completed(
             11,
@@ -2956,10 +2956,10 @@ mod tests {
 
     #[test]
     fn tool_output_copy_text_deduplicates_matching_text_blocks() {
-        let plan_text = "Created a draft plan.\n\n# Plan Trial\n\n- [ ] Create plan";
+        let plan_text = "Saved the plan.\n\n# Plan Trial\n\n- [ ] Create plan";
         let invocation = ToolInvocation::new(
-            "agena.planning/plan",
-            serde_json::from_value(json!({ "action": "create" })).expect("valid structured input"),
+            "agena.plan/plan",
+            serde_json::from_value(json!({ "action": "set" })).expect("valid structured input"),
         );
         let tool = OperationPart::completed(
             12,
@@ -2988,7 +2988,7 @@ mod tests {
             },
             &I18n::english(),
         );
-        assert_eq!(copied.matches("Created a draft plan.").count(), 1);
+        assert_eq!(copied.matches("Saved the plan.").count(), 1);
     }
 
     #[test]

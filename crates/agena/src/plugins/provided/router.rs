@@ -299,9 +299,6 @@ pub(crate) fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -
         ToolPayloadOutput::ToolSearch { .. } => {
             metadata.insert("agena.effect".to_string(), "load_tools".to_string());
         }
-        ToolPayloadOutput::TodoWrite { .. } => {
-            metadata.insert("agena.effect".to_string(), "todo_list".to_string());
-        }
         ToolPayloadOutput::EnterSnapshot { .. } => {
             metadata.insert("agena.effect".to_string(), "enter_snapshot".to_string());
         }
@@ -327,22 +324,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn permission_helpers_use_shape_normalization_for_monitor_inputs() {
-        let paths = permission_paths_for("monitor", &json!({}))
-            .expect("empty monitor input should normalize to list");
+    fn permission_helpers_extract_process_workdir_paths() {
+        let paths = permission_paths_for("process", &json!({ "action": "list" }))
+            .expect("process list should not request any paths");
         assert!(paths.is_empty());
 
         let paths = permission_paths_for(
-            "monitor",
+            "process",
             &json!({
-                "action": "start",
+                "action": "run",
+                "shell": "bash",
                 "command": "echo ok",
+                "description": "",
                 "workdir": "  crates/agena  ",
                 "filesystem_effects": [],
-                "network_effects": []
+                "network_effects": [],
+                "background": false
             }),
         )
-        .expect("monitor start should parse through ToolInputShape");
+        .expect("process run should parse through ProcessToolInput");
         assert_eq!(
             paths,
             vec![crate::plugin::sdk::PathRequest::read("crates/agena")]

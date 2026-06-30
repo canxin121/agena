@@ -33,7 +33,7 @@ impl ModelCatalogService {
             client: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(5))
                 .timeout(Duration::from_secs(20))
-                .user_agent(crate::provider::CODEX_USER_AGENT)
+                .user_agent(crate::provider::codex_user_agent())
                 .build()?,
             remote_sources,
         })

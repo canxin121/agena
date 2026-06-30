@@ -308,7 +308,7 @@ fn default_adapter_model_list_adapters(
                     user_agent: None,
                     extra_headers: BTreeMap::new(),
                     options: GeminiProviderOptions {
-                        auth_header: None,
+                        auth_header: Some("x-goog-api-key".to_owned()),
                         auth_scheme: None,
                         stream_mode: StreamTransportMode::Sse,
                         realtime_ws_url: None,
@@ -479,5 +479,28 @@ mod tests {
         };
         assert_eq!(config.options.auth_header, "authorization");
         assert_eq!(config.options.auth_scheme.as_deref(), Some("Bearer"));
+    }
+
+    #[test]
+    fn draft_api_listing_uses_gemini_header_auth_defaults() {
+        let target = draft_provider_adapter_models_target(
+            Some("google"),
+            "https://generativelanguage.googleapis.com",
+            ProviderProtocolPathsConfig::default(),
+            Some("test"),
+            None,
+            &["gemini".to_owned()],
+        )
+        .expect("target should build");
+
+        let adapter = target.adapters.get("gemini").expect("gemini adapter");
+        let ProviderAdapterDefinition::Gemini(config) = &adapter.definition else {
+            panic!("expected gemini adapter");
+        };
+        assert_eq!(
+            config.options.auth_header.as_deref(),
+            Some("x-goog-api-key")
+        );
+        assert_eq!(config.options.auth_scheme, None);
     }
 }

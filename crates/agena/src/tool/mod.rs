@@ -7107,7 +7107,7 @@ mod tests {
             .expect("web search should be model-visible");
         assert_eq!(
             web_search.description_text(),
-            "Search the public web through the configured search engine."
+            "Search the public web for candidate pages. Search results are discovery-only; for factual answers, continue by fetching the most relevant result URLs."
         );
 
         let task = tools

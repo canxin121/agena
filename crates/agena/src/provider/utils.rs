@@ -121,12 +121,36 @@ pub fn apply_resolved_request_headers(
     req
 }
 
+pub fn insert_header_case_insensitive(
+    headers: &mut HashMap<String, String>,
+    key: impl Into<String>,
+    value: impl Into<String>,
+) {
+    let key = key.into();
+    headers.retain(|existing, _| !existing.eq_ignore_ascii_case(key.as_str()));
+    headers.insert(key, value.into());
+}
+
+pub fn ensure_header_case_insensitive<F>(headers: &mut HashMap<String, String>, key: &str, value: F)
+where
+    F: FnOnce() -> String,
+{
+    if headers
+        .keys()
+        .any(|existing| existing.eq_ignore_ascii_case(key))
+    {
+        return;
+    }
+    headers.insert(key.to_owned(), value());
+}
+
 pub fn merged_request_headers(
     base_headers: &HashMap<String, String>,
     request_headers: &BTreeMap<String, String>,
 ) -> HashMap<String, String> {
     let mut merged = base_headers.clone();
     for (key, value) in request_headers {
+        merged.retain(|existing, _| !existing.eq_ignore_ascii_case(key));
         merged.insert(key.clone(), value.clone());
     }
     merged
@@ -1439,6 +1463,40 @@ mod tests {
                 .stream_key_candidates("openai")
                 .expect("stream keys"),
             vec![format!("item:{oversized_id}")]
+        );
+    }
+
+    #[test]
+    fn merged_request_headers_replaces_base_keys_case_insensitively() {
+        let base = HashMap::from([
+            ("user-agent".to_owned(), "default".to_owned()),
+            ("originator".to_owned(), "codex_cli_rs".to_owned()),
+        ]);
+        let request = BTreeMap::from([
+            ("User-Agent".to_owned(), "custom".to_owned()),
+            ("Originator".to_owned(), "override".to_owned()),
+        ]);
+
+        let merged = merged_request_headers(&base, &request);
+
+        assert_eq!(merged.get("User-Agent").map(String::as_str), Some("custom"));
+        assert_eq!(
+            merged.get("Originator").map(String::as_str),
+            Some("override")
+        );
+        assert_eq!(
+            merged
+                .keys()
+                .filter(|key| key.eq_ignore_ascii_case("user-agent"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            merged
+                .keys()
+                .filter(|key| key.eq_ignore_ascii_case("originator"))
+                .count(),
+            1
         );
     }
 }

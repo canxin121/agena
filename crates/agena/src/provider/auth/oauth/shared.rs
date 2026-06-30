@@ -208,7 +208,7 @@ pub(super) fn oauth_http_client(use_codex_user_agent: bool) -> &'static oauth2::
         CODEX_CLIENT.get_or_init(|| {
             oauth2::reqwest::ClientBuilder::new()
                 .redirect(oauth2::reqwest::redirect::Policy::none())
-                .user_agent(crate::provider::CODEX_USER_AGENT)
+                .user_agent(crate::provider::codex_user_agent())
                 .build()
                 .expect("oauth reqwest client should build")
         })

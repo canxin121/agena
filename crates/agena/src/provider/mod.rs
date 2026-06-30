@@ -56,10 +56,12 @@ pub use openai::{OpenAiAdapter, OpenAiApiMode, OpenAiBackend, OpenAiProfile, Ope
 pub use prompt_cache_shape::{PromptCacheShape, PromptCacheShapeChange, PromptCacheShapeDiff};
 pub use registry::{NamedProvider, ProviderRegistry};
 pub use runtime::{
-    CLAUDE_CODE_API_USER_AGENT, CLAUDE_CODE_USER_AGENT, CLAUDE_USER_WEB_FETCH_USER_AGENT,
-    CODEX_MCP_CLIENT_NAME, CODEX_ORIGINATOR, CODEX_PACKAGE_VERSION, CODEX_USER_AGENT,
-    GEMINI_CLI_USER_AGENT_PREFIX, ProviderHttpClientConfig, ProviderRequestRetryConfig,
-    ProviderRuntimeConfig, ProviderStreamReplayConfig, gemini_cli_user_agent,
+    CLAUDE_CODE_API_USER_AGENT, CLAUDE_CODE_USER_AGENT, CLAUDE_CODE_VERSION,
+    CLAUDE_USER_WEB_FETCH_USER_AGENT, CODEX_MCP_CLIENT_NAME, CODEX_ORIGINATOR,
+    CODEX_PACKAGE_VERSION, CODEX_USER_AGENT, GEMINI_CLI_USER_AGENT_PREFIX, GEMINI_CLI_VERSION,
+    ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
+    ProviderStreamReplayConfig, claude_code_api_user_agent, claude_code_user_agent,
+    claude_user_web_fetch_user_agent, codex_user_agent, gemini_cli_user_agent,
 };
 pub(crate) use wire_message::{
     WirePart as ProjectedSessionPart, project as project_session_parts,

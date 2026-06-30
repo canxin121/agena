@@ -28,8 +28,7 @@ use crate::{
 const PROVIDER_ID: &str = "anthropic";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const FIRST_PARTY_ANTHROPIC_HOSTS: &[&str] = &["api.anthropic.com", "api-staging.anthropic.com"];
-const DEFAULT_ANTHROPIC_BETA_HEADER: &str =
-    "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
+const DEFAULT_ANTHROPIC_BETA_HEADER: &str = "claude-code-20250219,interleaved-thinking-2025-05-14";
 const DEFAULT_COPILOT_BASE_URL: &str = "https://api.githubcopilot.com";
 const DEFAULT_COPILOT_ANTHROPIC_BETA_HEADER: &str = "interleaved-thinking-2025-05-14";
 const ADAPTER_KIND: &str = "anthropic";
@@ -99,7 +98,7 @@ impl AnthropicAdapter {
         }
         extra_headers.insert(
             reqwest::header::USER_AGENT.as_str().to_owned(),
-            crate::provider::CLAUDE_CODE_API_USER_AGENT.to_owned(),
+            crate::provider::claude_code_api_user_agent(),
         );
 
         Self {
@@ -669,19 +668,26 @@ impl AnthropicAdapter {
             })
             .unwrap_or_else(|| self.extra_headers.clone());
         if matches!(self.profile, AnthropicProfile::GithubCopilot) {
-            headers
-                .entry(reqwest::header::USER_AGENT.as_str().to_owned())
-                .or_insert_with(|| crate::provider::CLAUDE_CODE_API_USER_AGENT.to_owned());
-            headers
-                .entry("openai-intent".to_owned())
-                .or_insert_with(|| "conversation-edits".to_owned());
+            utils::ensure_header_case_insensitive(
+                &mut headers,
+                reqwest::header::USER_AGENT.as_str(),
+                crate::provider::claude_code_api_user_agent,
+            );
+            utils::ensure_header_case_insensitive(&mut headers, "openai-intent", || {
+                "conversation-edits".to_owned()
+            });
             if let Some(request) = request {
-                headers.insert(
-                    "x-initiator".to_owned(),
-                    Self::initiator(request).to_owned(),
+                utils::insert_header_case_insensitive(
+                    &mut headers,
+                    "x-initiator",
+                    Self::initiator(request),
                 );
                 if Self::is_vision_request(request) {
-                    headers.insert("Copilot-Vision-Request".to_owned(), "true".to_owned());
+                    utils::insert_header_case_insensitive(
+                        &mut headers,
+                        "Copilot-Vision-Request",
+                        "true",
+                    );
                 }
             }
         }

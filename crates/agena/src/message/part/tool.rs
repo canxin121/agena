@@ -368,9 +368,8 @@ pub struct ApplyPatchToolInput {
 pub struct WebFetchToolInput {
     /// Absolute URL to fetch. HTTP is upgraded to HTTPS.
     pub url: String,
-    /// Optional follow-up instruction; when present, the fetched markdown
-    /// is summarized by the session's default LLM provider before being
-    /// returned.
+    /// Optional follow-up instruction used to prioritize the most relevant
+    /// excerpts from the fetched page in the returned text output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
 }

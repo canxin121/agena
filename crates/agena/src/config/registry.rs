@@ -1135,8 +1135,8 @@ fn http_adapter_default_user_agent(
     default_model: &str,
 ) -> String {
     credential_user_agent(auth, default_model).unwrap_or_else(|| match adapter {
-        HttpAdapterKind::OpenAi => crate::provider::CODEX_USER_AGENT.to_owned(),
-        HttpAdapterKind::Anthropic => crate::provider::CLAUDE_CODE_API_USER_AGENT.to_owned(),
+        HttpAdapterKind::OpenAi => crate::provider::codex_user_agent(),
+        HttpAdapterKind::Anthropic => crate::provider::claude_code_api_user_agent(),
         HttpAdapterKind::Gemini => crate::provider::gemini_cli_user_agent(default_model),
     })
 }
@@ -1148,7 +1148,7 @@ fn credential_user_agent(auth: &ProviderAuthConfig, default_model: &str) -> Opti
 
     match config.issuer {
         crate::provider::auth::CredentialIssuer::OpenaiChatgpt => {
-            Some(crate::provider::CODEX_USER_AGENT.to_owned())
+            Some(crate::provider::codex_user_agent())
         }
         crate::provider::auth::CredentialIssuer::GoogleAdc => {
             Some(crate::provider::gemini_cli_user_agent(default_model))

@@ -1802,7 +1802,8 @@ fn resolve_adapter_config(
                 user_agent: normalize_optional(user_agent),
                 extra_headers,
                 options: super::GeminiProviderOptions {
-                    auth_header: normalize_optional(auth_header),
+                    auth_header: normalize_optional(auth_header)
+                        .or_else(|| Some("x-goog-api-key".to_owned())),
                     auth_scheme: normalize_optional(auth_scheme),
                     stream_mode,
                     realtime_ws_url,
@@ -3762,5 +3763,42 @@ mod tests {
         assert!(!model.native_tools.enabled);
         assert!(model.native_tool_bindings().is_empty());
         assert!(model.native_tools.routes.is_empty());
+    }
+
+    #[test]
+    fn gemini_adapter_defaults_to_x_goog_api_key_header() {
+        let resolved = resolve_config(json!({
+            "providers": {
+                "default": "google",
+                "google": {
+                    "defaults": {
+                        "adapter": "gemini",
+                        "model": "gemini-2.5-pro"
+                    },
+                    "auth": {
+                        "mode": "api",
+                        "base_url": "https://generativelanguage.googleapis.com",
+                        "api_key": "test"
+                    },
+                    "adapters": {
+                        "gemini": {
+                            "enabled": true
+                        }
+                    }
+                }
+            }
+        }))
+        .expect("gemini provider should resolve");
+
+        let provider = resolved.providers.get("google").expect("provider");
+        let adapter = provider.adapters.get("gemini").expect("gemini adapter");
+        let ProviderAdapterDefinition::Gemini(config) = &adapter.definition else {
+            panic!("expected gemini adapter");
+        };
+        assert_eq!(
+            config.options.auth_header.as_deref(),
+            Some("x-goog-api-key")
+        );
+        assert_eq!(config.options.auth_scheme, None);
     }
 }

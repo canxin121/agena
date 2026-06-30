@@ -955,13 +955,13 @@ provider-studio-summary-poll-every = poll every {$seconds}s
 provider-studio-summary-paste-callback = paste callback_url
 provider-studio-summary-poll-browser = poll browser result
 
-provider-studio-auth-openai-ready = OAuth browser session ready · open the copied authorize URL
+provider-studio-auth-openai-ready = OAuth browser session ready · the full authorize URL was copied to the clipboard
 provider-studio-auth-authorize = authorize {$url}
 provider-studio-auth-paste-callback = paste the final callback URL, then press p · state {$state}
 provider-studio-auth-copilot-ready = device login ready · open the copied verification URL and enter {$code}
 provider-studio-auth-verify = verify {$url}
 provider-studio-auth-poll = press p to poll · interval {$seconds}s
-provider-studio-auth-gitlab-ready = GitLab browser session ready · open the copied authorize URL
+provider-studio-auth-gitlab-ready = GitLab browser session ready · the full authorize URL was copied to the clipboard
 provider-studio-auth-atomgit-ready = AtomGit browser session ready · open the copied authorize URL
 provider-studio-auth-finish-browser = finish the browser flow, then press p · state {$state}
 
@@ -1418,9 +1418,9 @@ flash-provider-studio-invalid-model-json = invalid model JSON: {$error}
 flash-provider-studio-live-listing-unavailable = live model listing is unavailable for auth {$auth}
 flash-provider-studio-draft-listing-unsupported = draft model listing only supports adapters with live model discovery. Unsupported: {$adapters}
 flash-provider-studio-listing-auth-required = listing adapter models requires live model discovery for the current auth/adapter pair or an existing saved provider; current auth is {$auth}
-flash-provider-auth-openai-browser-started = OpenAI browser auth started. Open the copied authorize URL, then paste the redirected callback URL and press p.
+flash-provider-auth-openai-browser-started = OpenAI browser auth started. The full authorize URL was copied to the clipboard; open it, then paste the redirected callback URL and press p.
 flash-provider-auth-copilot-device-started = Copilot device login started. Open the copied verification URL, enter code {$code}, then press p.
-flash-provider-auth-gitlab-browser-started = GitLab browser auth started. Open the copied authorize URL, then paste the redirected callback URL and press p.
+flash-provider-auth-gitlab-browser-started = GitLab browser auth started. The full authorize URL was copied to the clipboard; open it, then paste the redirected callback URL and press p.
 flash-provider-auth-atomgit-browser-started = AtomGit browser auth started. Open the copied authorize URL, complete the login, then press p to poll.
 flash-provider-auth-openai-captured = OpenAI OAuth credential captured into the draft.
 flash-provider-auth-copilot-pending = Copilot device login is still pending. Complete the browser approval, then press p again.

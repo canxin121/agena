@@ -426,7 +426,7 @@ pub(super) fn provider_studio_start_auth_summary(
             .openai_chatgpt
             .browser
             .as_ref()
-            .map(|session| session.authorize_url.clone())
+            .map(|session| session.display_authorize_url().to_owned())
             .unwrap_or_else(|| status.to_owned()),
         Some(CredentialIssuer::GithubCopilot) => dialog
             .draft
@@ -436,7 +436,7 @@ pub(super) fn provider_studio_start_auth_summary(
             .as_ref()
             .and_then(|device| {
                 let mut parts = Vec::new();
-                parts.push(device.verification_url.clone());
+                parts.push(device.display_verification_url().to_owned());
                 if let Some(code) = provider_studio_labeled_summary(
                     i18n,
                     ProviderStudioSummaryLabel::Code,
@@ -454,7 +454,7 @@ pub(super) fn provider_studio_start_auth_summary(
             .gitlab
             .browser
             .as_ref()
-            .map(|session| session.authorize_url.clone())
+            .map(|session| session.display_authorize_url().to_owned())
             .unwrap_or_else(|| status.to_owned()),
         Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => status,
     }
@@ -732,7 +732,7 @@ pub(super) fn provider_studio_auth_state_lines(
                     ui_text::t(i18n, "provider-studio-auth-openai-ready"),
                     i18n.text_args(
                         "provider-studio-auth-authorize",
-                        &crate::fl_args!("url" => session.authorize_url.clone()),
+                        &crate::fl_args!("url" => session.display_authorize_url().to_owned()),
                     ),
                     i18n.text_args(
                         "provider-studio-auth-paste-callback",
@@ -757,7 +757,7 @@ pub(super) fn provider_studio_auth_state_lines(
                     ),
                     i18n.text_args(
                         "provider-studio-auth-verify",
-                        &crate::fl_args!("url" => device.verification_url.clone()),
+                        &crate::fl_args!("url" => device.display_verification_url().to_owned()),
                     ),
                     i18n.text_args(
                         "provider-studio-auth-poll",
@@ -777,7 +777,7 @@ pub(super) fn provider_studio_auth_state_lines(
                     ui_text::t(i18n, "provider-studio-auth-gitlab-ready"),
                     i18n.text_args(
                         "provider-studio-auth-authorize",
-                        &crate::fl_args!("url" => session.authorize_url.clone()),
+                        &crate::fl_args!("url" => session.display_authorize_url().to_owned()),
                     ),
                     i18n.text_args(
                         "provider-studio-auth-paste-callback",

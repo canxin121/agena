@@ -597,6 +597,7 @@ dependencies = [
  "mime_guess",
  "ratatui",
  "regex",
+ "reqwest 0.13.3",
  "sea-orm",
  "serde",
  "serde_json",

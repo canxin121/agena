@@ -25390,7 +25390,7 @@ mod tests {
                     user_code: "ABCD-EFGH".to_string(),
                 }
             )),
-            "已开始 Copilot 设备登录。打开已复制的验证 URL，输入代码 ABCD-EFGH，然后按 p。"
+            "已开始 Copilot 设备登录。打开显示的验证 URL，输入代码 ABCD-EFGH，然后按 p。"
         );
         assert_eq!(
             sanitize_terminal_text(&provider_studio_save_result_message(

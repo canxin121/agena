@@ -8,6 +8,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+use crate::short_link::shorten_url_for_display;
 use agena::event::{EventFilter, Scope, bus::SubscriptionItem};
 use agena::permission::PermissionScope;
 use agena::{
@@ -464,16 +465,34 @@ pub struct ProviderOAuthTokensDraft {
 #[derive(Debug, Clone, Default)]
 pub struct ProviderBrowserAuthSessionDraft {
     pub authorize_url: String,
+    pub display_url: Option<String>,
     pub state: String,
     pub pkce_verifier: String,
+}
+
+impl ProviderBrowserAuthSessionDraft {
+    pub fn display_authorize_url(&self) -> &str {
+        self.display_url
+            .as_deref()
+            .unwrap_or(self.authorize_url.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ProviderDeviceAuthSessionDraft {
     pub verification_url: String,
+    pub display_url: Option<String>,
     pub user_code: String,
     pub device_code: String,
     pub interval_seconds: u64,
+}
+
+impl ProviderDeviceAuthSessionDraft {
+    pub fn display_verification_url(&self) -> &str {
+        self.display_url
+            .as_deref()
+            .unwrap_or(self.verification_url.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -4471,10 +4490,12 @@ async fn start_provider_draft_auth(
             )?;
             let start =
                 start_openai_browser_oauth(redirect_uri).map_err(ProviderDraftAuthError::other)?;
+            let display_url = shorten_url_for_display(start.authorize_url.as_str()).await;
             draft.credential_drafts.openai_chatgpt.callback_url.clear();
             draft.credential_drafts.openai_chatgpt.browser =
                 Some(ProviderBrowserAuthSessionDraft {
                     authorize_url: start.authorize_url.clone(),
+                    display_url,
                     state: start.state.clone(),
                     pkce_verifier: start.pkce_verifier,
                 });
@@ -4496,8 +4517,10 @@ async fn start_provider_draft_auth(
             let start = start_copilot_device_code(domain)
                 .await
                 .map_err(ProviderDraftAuthError::other)?;
+            let display_url = shorten_url_for_display(start.verification_url.as_str()).await;
             draft.credential_drafts.github_copilot.device = Some(ProviderDeviceAuthSessionDraft {
                 verification_url: start.verification_url.clone(),
+                display_url,
                 user_code: start.user_code.clone(),
                 device_code: start.device_code,
                 interval_seconds: start.interval_seconds,
@@ -4521,9 +4544,11 @@ async fn start_provider_draft_auth(
             )?;
             let start = start_gitlab_oauth(instance_url, redirect_uri)
                 .map_err(ProviderDraftAuthError::other)?;
+            let display_url = shorten_url_for_display(start.authorize_url.as_str()).await;
             draft.credential_drafts.gitlab.callback_url.clear();
             draft.credential_drafts.gitlab.browser = Some(ProviderBrowserAuthSessionDraft {
                 authorize_url: start.authorize_url.clone(),
+                display_url,
                 state: start.state.clone(),
                 pkce_verifier: start.pkce_verifier,
             });

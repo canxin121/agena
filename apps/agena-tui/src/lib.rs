@@ -7,6 +7,7 @@ mod external_editor;
 mod external_pager;
 mod i18n;
 mod keybindings;
+mod short_link;
 mod terminal;
 mod tui_config;
 mod ui_text;

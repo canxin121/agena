@@ -8,13 +8,16 @@ use super::{
     AuthData, AuthStore, CopilotDeployment, CredentialIssuer, DeviceCodeStart, OAuthAuthorizeStart,
     OAuthCallback, OAuthTokenResponse, OAuthUserInfo, exchange_gitlab_oauth_code,
     exchange_openai_oauth_code, poll_copilot_device_code, poll_openai_headless_device_code,
-    refresh_gitlab_token, refresh_openai_token, start_copilot_device_code, start_gitlab_oauth,
-    start_openai_browser_oauth, start_openai_headless_device_code, wait_for_oauth_callback,
+    refresh_gitlab_token, refresh_openai_token, revoke_openai_token, start_copilot_device_code,
+    start_gitlab_oauth, start_openai_browser_oauth, start_openai_headless_device_code,
+    wait_for_oauth_callback,
 };
 
 struct StoredOAuthCredential {
     refresh: String,
+    id_token: Option<String>,
     account_id: Option<String>,
+    chatgpt_account_is_fedramp: bool,
     enterprise_url: Option<String>,
     user: Option<OAuthUserInfo>,
 }
@@ -38,6 +41,31 @@ impl<S: AuthStore> AuthManager<S> {
 
     pub fn remove(&self, provider_id: &str) -> Result<(), AppError> {
         self.store.remove(provider_id)
+    }
+
+    pub async fn logout(&self, provider_id: &str) -> Result<Option<String>, AppError> {
+        let stored = self.store.get(provider_id)?;
+        let revoke_target = match stored.as_ref() {
+            Some(auth) if should_revoke_openai_oauth(provider_id, auth) => match auth {
+                AuthData::OAuth {
+                    refresh, access, ..
+                } => Some((refresh.clone(), access.clone())),
+                _ => None,
+            },
+            None => None,
+            _ => None,
+        };
+
+        let revoke_warning = match revoke_target {
+            Some((refresh, access)) => revoke_openai_token(refresh.as_str(), access.as_str())
+                .await
+                .err()
+                .map(|err| err.to_string()),
+            None => None,
+        };
+
+        self.store.remove(provider_id)?;
+        Ok(revoke_warning)
     }
 
     pub fn set_auth_data(&self, provider_id: &str, auth: AuthData) -> Result<(), AppError> {
@@ -98,8 +126,10 @@ impl<S: AuthStore> AuthManager<S> {
             CredentialIssuer::OpenaiChatgpt,
             token.refresh,
             token.access,
+            token.id_token,
             token.expires_at_ms,
             token.account_id,
+            token.chatgpt_account_is_fedramp,
             None,
         )?;
         self.persist_auth(provider_id, auth)
@@ -153,8 +183,10 @@ impl<S: AuthStore> AuthManager<S> {
             CredentialIssuer::OpenaiChatgpt,
             token.refresh,
             token.access,
+            token.id_token,
             token.expires_at_ms,
             token.account_id,
+            token.chatgpt_account_is_fedramp,
             None,
         )?;
         self.persist_auth(provider_id, auth).map(Some)
@@ -168,8 +200,10 @@ impl<S: AuthStore> AuthManager<S> {
             CredentialIssuer::OpenaiChatgpt,
             token.refresh,
             token.access,
+            token.id_token.or(stored.id_token),
             token.expires_at_ms,
             token.account_id,
+            token.chatgpt_account_is_fedramp || stored.chatgpt_account_is_fedramp,
             stored.enterprise_url,
             stored.user,
         )?;
@@ -212,8 +246,10 @@ impl<S: AuthStore> AuthManager<S> {
             CredentialIssuer::GithubCopilot,
             token.refresh,
             token.access,
+            token.id_token,
             token.expires_at_ms,
             None,
+            token.chatgpt_account_is_fedramp,
             enterprise_url,
         )?;
         self.persist_auth(provider_id, auth).map(Some)
@@ -252,8 +288,10 @@ impl<S: AuthStore> AuthManager<S> {
             CredentialIssuer::Gitlab,
             token.refresh,
             token.access,
+            token.id_token,
             token.expires_at_ms,
             None,
+            token.chatgpt_account_is_fedramp,
             None,
         )?;
         self.persist_auth(provider_id, auth)
@@ -272,8 +310,10 @@ impl<S: AuthStore> AuthManager<S> {
             CredentialIssuer::Gitlab,
             token.refresh,
             token.access,
+            token.id_token.or(stored.id_token),
             token.expires_at_ms,
             stored.account_id,
+            token.chatgpt_account_is_fedramp || stored.chatgpt_account_is_fedramp,
             None,
             stored.user,
         )?;
@@ -319,7 +359,9 @@ impl<S: AuthStore> AuthManager<S> {
     ) -> Result<StoredOAuthCredential, AppError> {
         let Some(AuthData::OAuth {
             refresh,
+            id_token,
             account_id,
+            chatgpt_account_is_fedramp,
             enterprise_url,
             user,
             ..
@@ -330,7 +372,9 @@ impl<S: AuthStore> AuthManager<S> {
 
         Ok(StoredOAuthCredential {
             refresh,
+            id_token,
             account_id,
+            chatgpt_account_is_fedramp,
             enterprise_url,
             user,
         })
@@ -355,13 +399,25 @@ impl<S: AuthStore> AuthManager<S> {
     }
 }
 
+fn should_revoke_openai_oauth(provider_id: &str, auth: &AuthData) -> bool {
+    matches!(
+        auth,
+        AuthData::OAuth {
+            issuer: Some(CredentialIssuer::OpenaiChatgpt),
+            ..
+        }
+    ) || matches!(auth, AuthData::OAuth { issuer: None, .. } if provider_id == "openai")
+}
+
 fn oauth_auth_data(
     provider_id: &str,
     issuer: CredentialIssuer,
     refresh: String,
     access: String,
+    id_token: Option<String>,
     expires_at_ms: i64,
     account_id: Option<String>,
+    chatgpt_account_is_fedramp: bool,
     enterprise_url: Option<String>,
 ) -> Result<AuthData, AppError> {
     oauth_auth_data_with_user(
@@ -369,8 +425,10 @@ fn oauth_auth_data(
         issuer,
         refresh,
         access,
+        id_token,
         expires_at_ms,
         account_id,
+        chatgpt_account_is_fedramp,
         enterprise_url,
         None,
     )
@@ -381,8 +439,10 @@ fn oauth_auth_data_with_user(
     issuer: CredentialIssuer,
     refresh: String,
     access: String,
+    id_token: Option<String>,
     expires_at_ms: i64,
     account_id: Option<String>,
+    chatgpt_account_is_fedramp: bool,
     enterprise_url: Option<String>,
     user: Option<OAuthUserInfo>,
 ) -> Result<AuthData, AppError> {
@@ -390,8 +450,10 @@ fn oauth_auth_data_with_user(
         issuer: Some(issuer),
         refresh,
         access,
+        id_token,
         expires_at_ms,
         account_id,
+        chatgpt_account_is_fedramp,
         enterprise_url,
         user,
     };

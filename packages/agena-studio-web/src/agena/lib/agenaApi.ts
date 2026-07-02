@@ -607,6 +607,7 @@ export type AuthProvider = {
   configured: boolean
   credential_present: boolean
   credential_type?: string | null
+  credential_issuer?: string | null
   key_preview?: string | null
   expires_at?: string | null
   expired?: boolean | null
@@ -616,6 +617,11 @@ export type AuthProvider = {
   display_name?: string | null
   email?: string | null
   avatar_url?: string | null
+  api_key_write_supported: boolean
+  refresh_supported: boolean
+  browser_login_kind?: 'openai_chatgpt' | 'gitlab' | null
+  browser_login_instance_url?: string | null
+  device_login_kind?: 'openai_chatgpt' | 'github_copilot' | null
 }
 
 export type AuthBrowserStartResponse = {
@@ -1184,9 +1190,7 @@ export async function listPluginToolRegistryChanges(input?: {
     params.set('limit', String(Math.trunc(input.limit)))
   }
   const suffix = params.toString()
-  return await apiJson<PluginToolRegistryChangesResponse>(
-    `/api/v1/plugins/tools/changes${suffix ? `?${suffix}` : ''}`,
-  )
+  return await apiJson<PluginToolRegistryChangesResponse>(`/api/v1/plugins/tools/changes${suffix ? `?${suffix}` : ''}`)
 }
 
 export async function invokePluginUiTool(input: {
@@ -1378,15 +1382,22 @@ export async function refreshProviderCredential(providerId: string): Promise<voi
   })
 }
 
-export async function startOpenAiBrowserAuth(redirectUri: string): Promise<AuthBrowserStartResponse> {
+export async function startOpenAiBrowserAuth(input: {
+  redirectUri: string
+  providerId?: string
+}): Promise<AuthBrowserStartResponse> {
   return await apiJson<AuthBrowserStartResponse>('/api/v1/auth/providers/openai/browser/start', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ redirect_uri: redirectUri }),
+    body: JSON.stringify({
+      redirect_uri: input.redirectUri,
+      ...(input.providerId?.trim() ? { provider_id: input.providerId.trim() } : {}),
+    }),
   })
 }
 
 export async function finishOpenAiBrowserAuth(input: {
+  providerId?: string
   code: string
   pkceVerifier: string
   redirectUri: string
@@ -1398,17 +1409,21 @@ export async function finishOpenAiBrowserAuth(input: {
       code: input.code,
       pkce_verifier: input.pkceVerifier,
       redirect_uri: input.redirectUri,
+      ...(input.providerId?.trim() ? { provider_id: input.providerId.trim() } : {}),
     }),
   })
 }
 
-export async function startOpenAiDeviceAuth(): Promise<AuthDeviceStartResponse> {
+export async function startOpenAiDeviceAuth(input?: { providerId?: string }): Promise<AuthDeviceStartResponse> {
   return await apiJson<AuthDeviceStartResponse>('/api/v1/auth/providers/openai/device/start', {
     method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input?.providerId?.trim() ? { provider_id: input.providerId.trim() } : {}),
   })
 }
 
 export async function pollOpenAiDeviceAuth(input: {
+  providerId?: string
   deviceCode: string
   userCode: string
 }): Promise<AuthLoginResultResponse> {
@@ -1418,26 +1433,27 @@ export async function pollOpenAiDeviceAuth(input: {
     body: JSON.stringify({
       device_code: input.deviceCode,
       user_code: input.userCode,
+      ...(input.providerId?.trim() ? { provider_id: input.providerId.trim() } : {}),
     }),
   })
 }
 
 export async function startGitLabBrowserAuth(input: {
-  instanceUrl: string
+  providerId?: string
   redirectUri: string
 }): Promise<AuthBrowserStartResponse> {
   return await apiJson<AuthBrowserStartResponse>('/api/v1/auth/providers/gitlab/browser/start', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      instance_url: input.instanceUrl,
       redirect_uri: input.redirectUri,
+      ...(input.providerId?.trim() ? { provider_id: input.providerId.trim() } : {}),
     }),
   })
 }
 
 export async function finishGitLabBrowserAuth(input: {
-  instanceUrl: string
+  providerId?: string
   code: string
   pkceVerifier: string
   redirectUri: string
@@ -1446,45 +1462,30 @@ export async function finishGitLabBrowserAuth(input: {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      instance_url: input.instanceUrl,
       code: input.code,
       pkce_verifier: input.pkceVerifier,
       redirect_uri: input.redirectUri,
+      ...(input.providerId?.trim() ? { provider_id: input.providerId.trim() } : {}),
     }),
   })
 }
 
-export async function startAtomGitBrowserAuth(providerId: string): Promise<AuthBrowserStartResponse> {
-  return await apiJson<AuthBrowserStartResponse>('/api/v1/auth/providers/atomgit/browser/start', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ provider_id: providerId }),
-  })
-}
-
-export async function pollAtomGitBrowserAuth(input: {
-  providerId: string
-  state: string
-}): Promise<AuthLoginResultResponse> {
-  return await apiJson<AuthLoginResultResponse>('/api/v1/auth/providers/atomgit/browser/poll', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      provider_id: input.providerId,
-      state: input.state,
-    }),
-  })
-}
-
-export async function startCopilotDeviceAuth(enterpriseDomain?: string): Promise<AuthDeviceStartResponse> {
+export async function startCopilotDeviceAuth(input?: {
+  providerId?: string
+  enterpriseDomain?: string
+}): Promise<AuthDeviceStartResponse> {
   return await apiJson<AuthDeviceStartResponse>('/api/v1/auth/providers/github-copilot/device/start', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(enterpriseDomain?.trim() ? { enterprise_domain: enterpriseDomain.trim() } : {}),
+    body: JSON.stringify({
+      ...(input?.providerId?.trim() ? { provider_id: input.providerId.trim() } : {}),
+      ...(input?.enterpriseDomain?.trim() ? { enterprise_domain: input.enterpriseDomain.trim() } : {}),
+    }),
   })
 }
 
 export async function pollCopilotDeviceAuth(input: {
+  providerId?: string
   deviceCode: string
   enterpriseDomain?: string
 }): Promise<AuthLoginResultResponse> {
@@ -1493,6 +1494,7 @@ export async function pollCopilotDeviceAuth(input: {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       device_code: input.deviceCode,
+      ...(input.providerId?.trim() ? { provider_id: input.providerId.trim() } : {}),
       ...(input.enterpriseDomain?.trim() ? { enterprise_domain: input.enterpriseDomain.trim() } : {}),
     }),
   })

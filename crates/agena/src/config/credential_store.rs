@@ -422,8 +422,10 @@ fn auth_data_item(auth: AuthData) -> JsonValue {
             issuer,
             refresh,
             access,
+            id_token,
             expires_at_ms,
             account_id,
+            chatgpt_account_is_fedramp,
             enterprise_url,
             user,
         } => {
@@ -436,9 +438,18 @@ fn auth_data_item(auth: AuthData) -> JsonValue {
             }
             table.insert("refresh".to_owned(), JsonValue::String(refresh));
             table.insert("access".to_owned(), JsonValue::String(access));
+            if let Some(id_token) = normalize_text(id_token.as_deref()) {
+                table.insert("id_token".to_owned(), JsonValue::String(id_token));
+            }
             table.insert("expires_at_ms".to_owned(), JsonValue::from(expires_at_ms));
             if let Some(account_id) = normalize_text(account_id.as_deref()) {
                 table.insert("account_id".to_owned(), JsonValue::String(account_id));
+            }
+            if chatgpt_account_is_fedramp {
+                table.insert(
+                    "chatgpt_account_is_fedramp".to_owned(),
+                    JsonValue::Bool(true),
+                );
             }
             if let Some(enterprise_url) = normalize_text(enterprise_url.as_deref()) {
                 table.insert(

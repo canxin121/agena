@@ -36,6 +36,15 @@ export function replaceProviderModelsRecord(
   Object.assign(providerModels, nextProviderModels)
 }
 
+function preferredOpenAiBrowserRedirectUri(): string {
+  if (typeof window === 'undefined' || !window.location) return 'http://localhost:1455/auth/callback'
+  const { protocol, hostname, port } = window.location
+  if ((protocol === 'http:' || protocol === 'https:') && (hostname === 'localhost' || hostname === '127.0.0.1')) {
+    return `${protocol}//localhost${port ? `:${port}` : ''}/auth/callback`
+  }
+  return 'http://localhost:1455/auth/callback'
+}
+
 export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
   let load = async () => {}
   const loadPageState = async () => {
@@ -106,6 +115,7 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
   const providerActions = useRuntimeProviderActions({
     actionError: input.actionError,
     actionMessage: input.actionMessage,
+    authProviders: input.authProviders,
     browserAuthCodeDrafts: input.browserAuthCodeDrafts,
     browserAuthInstanceDrafts: input.browserAuthInstanceDrafts,
     browserAuthStartState: input.browserAuthStartState,
@@ -118,10 +128,7 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
         window.open(url, '_blank', 'noopener,noreferrer')
       }
     },
-    readRedirectUri: () => {
-      if (typeof window === 'undefined') return ''
-      return `${window.location.origin}/auth/callback`
-    },
+    readRedirectUri: () => preferredOpenAiBrowserRedirectUri(),
   })
 
   const modelCatalogActions = useRuntimeModelCatalogActions({

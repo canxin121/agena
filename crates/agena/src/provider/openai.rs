@@ -17,9 +17,13 @@ use super::tool_stream::{
 use crate::{
     config::{NativeToolFreshness, ProviderNativeToolKind, ProviderNativeToolRoute},
     error::AppError,
-    message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, MessageUsage},
+    message::{
+        ArtifactRef, AttachmentItem, AttachmentKind, AttachmentSource, Message, MessageUsage,
+        OperationBlock, SearchResultItem, StructuredObject, ToolInvocation, ToolOutput,
+    },
     model::{
-        CapabilitySupport, ModelCapabilities, ModelId, ModelMetadata, ModelThinkingMode, ProviderId,
+        CapabilitySupport, ModelCapabilities, ModelId, ModelInputModality, ModelMetadata,
+        ModelThinkingMode, ProviderId,
     },
     provider::{
         CapabilityFamily, CompletionFinishReason, CompletionRequest, CompletionResponse,
@@ -289,6 +293,19 @@ impl OpenAiAdapter {
         }))
     }
 
+    fn list_models_endpoint(&self) -> Result<String, AppError> {
+        let endpoint = self.model_endpoint()?;
+        if matches!(self.backend, OpenAiBackend::ChatgptCodex) {
+            Ok(append_query_param(
+                endpoint.as_str(),
+                "client_version",
+                openai_client_version().as_str(),
+            ))
+        } else {
+            Ok(endpoint)
+        }
+    }
+
     fn responses_endpoint(&self) -> Result<String, AppError> {
         Ok(format!(
             "{}/responses",
@@ -481,6 +498,24 @@ impl OpenAiAdapter {
             .and_then(AuthData::account_id)
             .map(ToOwned::to_owned)
             .and_then(|value| utils::normalize_optional_text(Some(value)))
+    }
+
+    fn chatgpt_account_is_fedramp(&self) -> bool {
+        self.auth_data
+            .as_ref()
+            .and_then(|auth| auth.try_lock().ok())
+            .as_deref()
+            .is_some_and(AuthData::chatgpt_account_is_fedramp)
+    }
+
+    fn supports_codex_compat_headers(&self) -> bool {
+        matches!(self.backend, OpenAiBackend::ChatgptCodex)
+            || (matches!(self.profile, OpenAiProfile::Standard)
+                && !self.is_openai_compatible_family())
+    }
+
+    fn should_require_sse_content_type(&self) -> bool {
+        !matches!(self.backend, OpenAiBackend::ChatgptCodex)
     }
 
     fn realtime_ws_endpoint(&self, model: &str) -> Result<url::Url, AppError> {
@@ -1083,7 +1118,7 @@ impl OpenAiAdapter {
         let model_name = ModelId::new(model);
         let conversation_items =
             Self::realtime_conversation_items_for_messages(request.messages.as_slice())?;
-        let tool_plan = Self::responses_tool_plan(request)?;
+        let tool_plan = self.responses_tool_plan(request)?;
         let response_tools =
             (!tool_plan.tools.is_empty()).then(|| serde_json::Value::Array(tool_plan.tools));
         let system = request.system.clone();
@@ -1220,6 +1255,13 @@ impl OpenAiAdapter {
                         model: model_name.clone(),
                         delta,
                     };
+                }
+
+                if let Some(native_event) =
+                    responses_native_tool_event(&provider_id, &model_name, &event)?
+                {
+                    stream_has_content = true;
+                    yield native_event;
                 }
 
                 if let Some(tool_event) = utils::responses_tool_event(provider_name.as_str(), &event)? {
@@ -1397,6 +1439,7 @@ impl OpenAiAdapter {
     }
 
     fn responses_tool_plan(
+        &self,
         request: &CompletionRequest,
     ) -> Result<OpenAiResponsesToolPlan, AppError> {
         let mut plan = OpenAiResponsesToolPlan::default();
@@ -1543,10 +1586,10 @@ impl OpenAiAdapter {
                 }
                 ProviderNativeToolKind::FileSearch => {
                     let config = &request.native_tools.hosted.file_search;
-                    if config.vector_store_ids.is_empty() {
-                        return Err(AppError::Config(
-                            "openai native tool `file_search` requires at least one `vector_store_ids` entry".to_owned(),
-                        ));
+                    if matches!(self.backend, OpenAiBackend::ChatgptCodex)
+                        || config.vector_store_ids.is_empty()
+                    {
+                        continue;
                     }
                     let mut map = serde_json::Map::new();
                     map.insert(
@@ -1581,6 +1624,9 @@ impl OpenAiAdapter {
                     }
                 }
                 ProviderNativeToolKind::CodeExecution => {
+                    if matches!(self.backend, OpenAiBackend::ChatgptCodex) {
+                        continue;
+                    }
                     let config = &request.native_tools.hosted.code_execution;
                     let container = &config.container;
                     let mut map = serde_json::Map::new();
@@ -1643,11 +1689,46 @@ impl OpenAiAdapter {
                         "code_execution",
                     )?;
                     plan.tools.push(serde_json::Value::Object(map));
+                    plan.include.push("code_interpreter_call.outputs".to_owned());
                 }
                 ProviderNativeToolKind::ImageGeneration => {
-                    return Err(AppError::Config(
-                        "openai native tool `image_generation` is not enabled in Agena runtime yet because generated image outputs are not projected into assistant message parts".to_owned(),
-                    ));
+                    let config = &request.native_tools.hosted.image_generation;
+                    let mut map = serde_json::Map::new();
+                    map.insert(
+                        "type".to_owned(),
+                        serde_json::Value::String("image_generation".to_owned()),
+                    );
+                    map.insert(
+                        "output_format".to_owned(),
+                        serde_json::Value::String("png".to_owned()),
+                    );
+                    if let Some(background) = config.background.as_ref() {
+                        map.insert(
+                            "background".to_owned(),
+                            serde_json::Value::String(background.clone()),
+                        );
+                    }
+                    if let Some(size) = config.size.as_ref() {
+                        map.insert("size".to_owned(), serde_json::Value::String(size.clone()));
+                    }
+                    if let Some(quality) = config.quality.as_ref() {
+                        map.insert(
+                            "quality".to_owned(),
+                            serde_json::Value::String(quality.clone()),
+                        );
+                    }
+                    if let Some(moderation) = config.moderation.as_ref() {
+                        map.insert(
+                            "moderation".to_owned(),
+                            serde_json::Value::String(moderation.clone()),
+                        );
+                    }
+                    Self::merge_tool_provider_options(
+                        &mut map,
+                        config.provider_options.as_ref(),
+                        "image_generation",
+                    )?;
+                    plan.tools.push(serde_json::Value::Object(map));
                 }
                 other => {
                     return Err(AppError::Config(format!(
@@ -1703,9 +1784,65 @@ impl OpenAiAdapter {
         &self,
         request: &CompletionRequest,
     ) -> Result<Vec<OpenAiResponsesInputItem>, AppError> {
-        let mut input = Self::to_responses_input(request)?;
+        let mut input = Self::to_responses_input_with_system(request, false)?;
         clear_responses_prompt_cache_hints(input.as_mut_slice());
         Ok(input)
+    }
+
+    fn responses_instructions(request: &CompletionRequest) -> Option<String> {
+        request
+            .system
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
+    fn responses_parallel_tool_calls(request: &CompletionRequest) -> bool {
+        request
+            .request_override
+            .parallel_tool_calls()
+            .unwrap_or(false)
+    }
+
+    fn responses_service_tier(request: &CompletionRequest) -> Option<String> {
+        request
+            .request_override
+            .body_patch
+            .get("service_tier")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
+    fn responses_client_metadata(
+        context: RequestHeaderContext<'_>,
+    ) -> Option<HashMap<String, String>> {
+        context
+            .responses_api_metadata
+            .map(crate::provider::ResponsesApiRequestMetadata::client_metadata)
+            .or_else(|| {
+                let mut metadata = HashMap::new();
+                if let Some(window_id) = context.window_id_header() {
+                    metadata.insert("x-codex-window-id".to_owned(), window_id);
+                }
+                (!metadata.is_empty()).then_some(metadata)
+            })
+    }
+
+    fn responses_include(
+        mut include: Vec<String>,
+        reasoning: Option<&OpenAiResponsesReasoningConfig>,
+    ) -> Option<Vec<String>> {
+        if reasoning.is_some()
+            && !include
+                .iter()
+                .any(|value| value == "reasoning.encrypted_content")
+        {
+            include.push("reasoning.encrypted_content".to_owned());
+        }
+        (!include.is_empty()).then_some(include)
     }
 
     fn responses_reasoning_config(
@@ -1730,9 +1867,18 @@ impl OpenAiAdapter {
     fn to_responses_input(
         request: &CompletionRequest,
     ) -> Result<Vec<OpenAiResponsesInputItem>, AppError> {
+        Self::to_responses_input_with_system(request, true)
+    }
+
+    fn to_responses_input_with_system(
+        request: &CompletionRequest,
+        include_system: bool,
+    ) -> Result<Vec<OpenAiResponsesInputItem>, AppError> {
         let mut input = Vec::new();
 
-        if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
+        if include_system
+            && let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty())
+        {
             Self::push_responses_text_message(&mut input, "system", system.clone());
         }
 
@@ -2125,6 +2271,14 @@ impl OpenAiAdapter {
             crate::provider::codex_user_agent,
         );
 
+        if self.supports_codex_compat_headers()
+            && let Some(metadata) = context.responses_api_metadata
+        {
+            for (key, value) in metadata.session_headers() {
+                utils::insert_header_case_insensitive(&mut headers, key, value);
+            }
+        }
+
         if matches!(self.backend, OpenAiBackend::ChatgptCodex) {
             if let Some(account_id) = self.chatgpt_account_id() {
                 utils::insert_header_case_insensitive(
@@ -2133,8 +2287,17 @@ impl OpenAiAdapter {
                     account_id,
                 );
             }
+            if self.chatgpt_account_is_fedramp() {
+                utils::insert_header_case_insensitive(&mut headers, "X-OpenAI-Fedramp", "true");
+            }
+        }
 
-            if let Some(window_id) = context.window_id_header() {
+        if self.supports_codex_compat_headers() {
+            if let Some(metadata) = context.responses_api_metadata {
+                for (key, value) in metadata.compatibility_headers() {
+                    utils::insert_header_case_insensitive(&mut headers, key, value);
+                }
+            } else if let Some(window_id) = context.window_id_header() {
                 utils::insert_header_case_insensitive(&mut headers, "x-codex-window-id", window_id);
             }
         }
@@ -2189,6 +2352,60 @@ impl OpenAiAdapter {
         );
         headers
     }
+
+    fn provider_model_from_listed_model(&self, model: OpenAiListedModel) -> Option<ProviderModel> {
+        match model {
+            OpenAiListedModel::Compatible(model) => {
+                if self.profile == OpenAiProfile::GithubCopilot
+                    && (!model.copilot.visible() || model.copilot.uses_messages_endpoint())
+                {
+                    return None;
+                }
+
+                let metadata = model.metadata();
+                let mut provider_model = ProviderModel::new(self.id.as_str(), model.id);
+                let mut capabilities = self.model_capabilities(&provider_model.id);
+                if self.profile == OpenAiProfile::GithubCopilot {
+                    capabilities = model
+                        .copilot
+                        .capabilities()
+                        .with_fallbacks_from(&capabilities);
+                }
+                provider_model = provider_model.with_capabilities(capabilities);
+                if !metadata.is_empty() {
+                    provider_model = provider_model.with_metadata(metadata);
+                }
+
+                let display_name = model
+                    .display_name
+                    .or(model.name)
+                    .and_then(|value| utils::normalize_optional_text(Some(value)));
+                Some(match display_name {
+                    Some(display_name) => provider_model.with_display_name(display_name),
+                    None => provider_model,
+                })
+            }
+            OpenAiListedModel::Codex(model) => {
+                let metadata = model.metadata();
+                let capabilities = model.capabilities();
+                let display_name =
+                    utils::normalize_optional_text(model.display_name.or(model.name));
+                let slug = utils::normalize_optional_text(Some(model.slug))?;
+                let mut provider_model = ProviderModel::new(self.id.as_str(), slug);
+                let capabilities =
+                    capabilities.with_fallbacks_from(&self.model_capabilities(&provider_model.id));
+                provider_model = provider_model.with_capabilities(capabilities);
+                if !metadata.is_empty() {
+                    provider_model = provider_model.with_metadata(metadata);
+                }
+
+                Some(match display_name {
+                    Some(display_name) => provider_model.with_display_name(display_name),
+                    None => provider_model,
+                })
+            }
+        }
+    }
 }
 
 fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::Value> {
@@ -2197,6 +2414,7 @@ fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::Value
 
 #[derive(Clone, Copy, Default)]
 struct RequestHeaderContext<'a> {
+    responses_api_metadata: Option<&'a crate::provider::ResponsesApiRequestMetadata>,
     prompt_cache_key: Option<&'a str>,
     session_affinity: Option<&'a str>,
     prompt_window_generation: Option<u64>,
@@ -2208,6 +2426,7 @@ struct RequestHeaderContext<'a> {
 impl<'a> RequestHeaderContext<'a> {
     fn from_request(request: &'a CompletionRequest) -> Self {
         Self {
+            responses_api_metadata: request.responses_api_metadata.as_ref(),
             prompt_cache_key: request.prompt_cache_key.as_deref(),
             session_affinity: None,
             prompt_window_generation: request.prompt_window_generation,
@@ -2232,13 +2451,17 @@ impl<'a> RequestHeaderContext<'a> {
     }
 
     fn window_id_header(&self) -> Option<String> {
-        self.prompt_cache_key.map(|prompt_cache_key| {
-            format!(
-                "{}:{}",
-                prompt_cache_key,
-                self.prompt_window_generation.unwrap_or_default()
-            )
-        })
+        self.responses_api_metadata
+            .map(|metadata| metadata.window_id.clone())
+            .or_else(|| {
+                self.prompt_cache_key.map(|prompt_cache_key| {
+                    format!(
+                        "{}:{}",
+                        prompt_cache_key,
+                        self.prompt_window_generation.unwrap_or_default()
+                    )
+                })
+            })
     }
 
     fn session_affinity_header(&self) -> Option<&str> {
@@ -2270,7 +2493,7 @@ impl ModelRuntime for OpenAiAdapter {
         _adapter_id: Option<&crate::model::AdapterId>,
         request: &CompletionRequest,
     ) -> Result<(), AppError> {
-        Self::responses_tool_plan(request).map(|_| ())
+        self.responses_tool_plan(request).map(|_| ())
     }
 
     fn model_capabilities_for_adapter(
@@ -2357,7 +2580,7 @@ impl ModelRuntime for OpenAiAdapter {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        let endpoint = self.model_endpoint()?;
+        let endpoint = self.list_models_endpoint()?;
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
             let headers = self.auth_headers(RequestHeaderContext::none(), api_key);
             utils::adapter_log_http_request_json(
@@ -2383,27 +2606,7 @@ impl ModelRuntime for OpenAiAdapter {
         Ok(payload
             .into_items()
             .into_iter()
-            .filter(|m| {
-                self.profile != OpenAiProfile::GithubCopilot
-                    || (m.copilot.visible() && !m.copilot.uses_messages_endpoint())
-            })
-            .map(|m| {
-                let metadata = m.metadata();
-                let model = ProviderModel::new(self.id.as_str(), m.id);
-                let mut capabilities = self.model_capabilities(&model.id);
-                if self.profile == OpenAiProfile::GithubCopilot {
-                    capabilities = m.copilot.capabilities().with_fallbacks_from(&capabilities);
-                }
-                let mut model = model.with_capabilities(capabilities);
-                if !metadata.is_empty() {
-                    model = model.with_metadata(metadata);
-                }
-                if let Some(name) = m.display_name.or(m.name) {
-                    model.with_display_name(name)
-                } else {
-                    model
-                }
-            })
+            .filter_map(|model| self.provider_model_from_listed_model(model))
             .collect())
     }
 
@@ -2430,23 +2633,32 @@ impl ModelRuntime for OpenAiAdapter {
         }
 
         let input = self.responses_input_for_request(&request)?;
-        let tool_plan = Self::responses_tool_plan(&request)?;
+        let tool_plan = self.responses_tool_plan(&request)?;
+        let reasoning = Self::responses_reasoning_config(&request, model.as_str());
 
         let body = OpenAiResponsesRequest {
             model: model.to_string(),
+            instructions: Self::responses_instructions(&request),
             input,
             tools: tool_plan.tools,
-            include: (!tool_plan.include.is_empty()).then_some(tool_plan.include),
+            tool_choice: "auto".to_owned(),
+            parallel_tool_calls: Self::responses_parallel_tool_calls(&request),
+            include: Self::responses_include(tool_plan.include, reasoning.as_ref()),
             max_output_tokens: request.max_output_tokens,
             temperature: request.temperature,
             prompt_cache_key: request.prompt_cache_key.clone(),
             previous_response_id: request.previous_response_id.clone(),
+            store: false,
             stream: false,
             stop: (!request.stop_sequences.is_empty()).then(|| request.stop_sequences.clone()),
             top_p: request.top_p,
             seed: request.seed,
-            reasoning: Self::responses_reasoning_config(&request, model.as_str()),
+            reasoning,
+            service_tier: Self::responses_service_tier(&request),
             text: Self::responses_text_config(&request),
+            client_metadata: Self::responses_client_metadata(RequestHeaderContext::from_request(
+                &request,
+            )),
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -2517,19 +2729,17 @@ impl ModelRuntime for OpenAiAdapter {
         input_request.system = None;
         input_request.previous_response_id = None;
         let input = self.responses_input_for_request(&input_request)?;
-        let tool_plan = Self::responses_tool_plan(&request)?;
+        let tool_plan = self.responses_tool_plan(&request)?;
         let body = OpenAiResponsesCompactRequest {
             model: model.to_string(),
-            instructions: request.system.clone(),
+            instructions: Self::responses_instructions(&request),
             input,
             tools: tool_plan.tools,
             include: (!tool_plan.include.is_empty()).then_some(tool_plan.include),
-            parallel_tool_calls: request
-                .request_override
-                .parallel_tool_calls()
-                .unwrap_or(false),
+            parallel_tool_calls: Self::responses_parallel_tool_calls(&request),
             prompt_cache_key: request.prompt_cache_key.clone(),
             reasoning: Self::responses_reasoning_config(&request, model.as_str()),
+            service_tier: Self::responses_service_tier(&request),
             text: Self::responses_text_config(&request),
         };
         let body_json =
@@ -2588,23 +2798,32 @@ impl ModelRuntime for OpenAiAdapter {
         }
 
         let input = self.responses_input_for_request(&request)?;
-        let tool_plan = Self::responses_tool_plan(&request)?;
+        let tool_plan = self.responses_tool_plan(&request)?;
+        let reasoning = Self::responses_reasoning_config(&request, model.as_str());
 
         let body = OpenAiResponsesRequest {
             model: model.to_string(),
+            instructions: Self::responses_instructions(&request),
             input,
             tools: tool_plan.tools,
-            include: (!tool_plan.include.is_empty()).then_some(tool_plan.include),
+            tool_choice: "auto".to_owned(),
+            parallel_tool_calls: Self::responses_parallel_tool_calls(&request),
+            include: Self::responses_include(tool_plan.include, reasoning.as_ref()),
             max_output_tokens: request.max_output_tokens,
             temperature: request.temperature,
             prompt_cache_key: request.prompt_cache_key.clone(),
             previous_response_id: request.previous_response_id.clone(),
+            store: false,
             stream: true,
             stop: (!request.stop_sequences.is_empty()).then(|| request.stop_sequences.clone()),
             top_p: request.top_p,
             seed: request.seed,
-            reasoning: Self::responses_reasoning_config(&request, model.as_str()),
+            reasoning,
+            service_tier: Self::responses_service_tier(&request),
             text: Self::responses_text_config(&request),
+            client_metadata: Self::responses_client_metadata(RequestHeaderContext::from_request(
+                &request,
+            )),
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -2615,6 +2834,10 @@ impl ModelRuntime for OpenAiAdapter {
                 .expect("responses endpoint should resolve");
             let mut headers =
                 self.auth_headers(RequestHeaderContext::from_request(&request), api_key);
+            headers.insert(
+                reqwest::header::ACCEPT.as_str().to_owned(),
+                "text/event-stream".to_owned(),
+            );
             headers.insert(
                 reqwest::header::CONTENT_TYPE.as_str().to_owned(),
                 "application/json".to_owned(),
@@ -2651,7 +2874,9 @@ impl ModelRuntime for OpenAiAdapter {
             .await);
         }
 
-        utils::ensure_response_content_type(self.id.as_str(), &response, "text/event-stream")?;
+        if self.should_require_sse_content_type() {
+            utils::ensure_response_content_type(self.id.as_str(), &response, "text/event-stream")?;
+        }
         utils::adapter_log_http_response_open(
             self.id.as_str(),
             ADAPTER_KIND,
@@ -2702,6 +2927,13 @@ impl ModelRuntime for OpenAiAdapter {
                         model: model_name.clone(),
                         delta,
                     };
+                }
+
+                if let Some(native_event) =
+                    responses_native_tool_event(&provider_id, &model_name, &event)?
+                {
+                    stream_has_content = true;
+                    yield native_event;
                 }
 
                 if let Some(tool_event) = utils::responses_tool_event(provider_name.as_str(), &event)? {
@@ -2775,9 +3007,13 @@ impl ModelRuntime for OpenAiAdapter {
 #[derive(Debug, Serialize)]
 struct OpenAiResponsesRequest {
     model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instructions: Option<String>,
     input: Vec<OpenAiResponsesInputItem>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<serde_json::Value>,
+    tool_choice: String,
+    parallel_tool_calls: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     include: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2788,6 +3024,7 @@ struct OpenAiResponsesRequest {
     prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     previous_response_id: Option<String>,
+    store: bool,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     stop: Option<Vec<String>>,
@@ -2798,7 +3035,11 @@ struct OpenAiResponsesRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<OpenAiResponsesReasoningConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    service_tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<OpenAiResponsesTextConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_metadata: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2816,6 +3057,8 @@ struct OpenAiResponsesCompactRequest {
     prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<OpenAiResponsesReasoningConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    service_tier: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<OpenAiResponsesTextConfig>,
 }
@@ -3130,6 +3373,756 @@ fn completion_event_from_tool_stream_update(
     }
 }
 
+#[derive(Debug)]
+enum OpenAiNativeToolEvent {
+    Started {
+        stream_key: String,
+        id: Option<String>,
+        invocation: ToolInvocation,
+        title: String,
+        raw: Option<serde_json::Value>,
+    },
+    Completed {
+        stream_key: String,
+        id: Option<String>,
+        invocation: ToolInvocation,
+        title: String,
+        output_text: String,
+        blocks: Vec<OperationBlock>,
+        details: ToolOutput,
+        raw: Option<serde_json::Value>,
+    },
+}
+
+fn responses_native_tool_event(
+    provider_id: &ProviderId,
+    model: &ModelId,
+    event: &serde_json::Value,
+) -> Result<Option<CompletionStreamEvent>, AppError> {
+    let Some(event_type) = event.get("type").and_then(serde_json::Value::as_str) else {
+        return Ok(None);
+    };
+    if !matches!(
+        event_type,
+        "response.output_item.added" | "response.output_item.done"
+    ) {
+        return Ok(None);
+    }
+
+    let Some(item) = event.get("item") else {
+        return Ok(None);
+    };
+    let Some(item_kind) = item.get("type").and_then(serde_json::Value::as_str) else {
+        return Ok(None);
+    };
+
+    let native_event = match item_kind {
+        "web_search_call" => openai_web_search_tool_event(event_type, event, item)?,
+        "file_search_call" => openai_file_search_tool_event(event_type, event, item)?,
+        "code_interpreter_call" => openai_code_interpreter_tool_event(event_type, event, item)?,
+        "image_generation_call" => openai_image_generation_tool_event(event_type, event, item)?,
+        _ => None,
+    };
+
+    Ok(native_event.map(|native_event| match native_event {
+        OpenAiNativeToolEvent::Started {
+            stream_key,
+            id,
+            invocation,
+            title,
+            raw,
+        } => CompletionStreamEvent::NativeToolCallStarted {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            stream_key,
+            id,
+            invocation,
+            title,
+            raw,
+        },
+        OpenAiNativeToolEvent::Completed {
+            stream_key,
+            id,
+            invocation,
+            title,
+            output_text,
+            blocks,
+            details,
+            raw,
+        } => CompletionStreamEvent::NativeToolCallCompleted {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            stream_key,
+            id,
+            invocation,
+            title,
+            output_text,
+            blocks,
+            details,
+            raw,
+        },
+    }))
+}
+
+fn openai_web_search_tool_event(
+    event_type: &str,
+    event: &serde_json::Value,
+    item: &serde_json::Value,
+) -> Result<Option<OpenAiNativeToolEvent>, AppError> {
+    let id = utils::normalize_optional_text(
+        item.get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+    );
+    let output_index = event
+        .get("output_index")
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| value as usize);
+    let stream_key = native_responses_stream_key(id.as_deref(), output_index).ok_or_else(|| {
+        AppError::Provider(
+            "openai responses web_search_call event was missing both item id and output index"
+                .to_owned(),
+        )
+    })?;
+
+    let action = item.get("action");
+    let invocation = openai_web_search_invocation(action)?;
+    let details = ToolOutput::from_json_payload(Some(item)).map_err(AppError::Provider)?;
+    let raw = Some(item.clone());
+
+    Ok(Some(if event_type == "response.output_item.added" {
+        OpenAiNativeToolEvent::Started {
+            stream_key,
+            id,
+            invocation,
+            title: String::new(),
+            raw,
+        }
+    } else {
+        OpenAiNativeToolEvent::Completed {
+            stream_key,
+            id,
+            invocation,
+            title: String::new(),
+            output_text: String::new(),
+            blocks: openai_web_search_blocks(action),
+            details,
+            raw,
+        }
+    }))
+}
+
+fn openai_file_search_tool_event(
+    event_type: &str,
+    event: &serde_json::Value,
+    item: &serde_json::Value,
+) -> Result<Option<OpenAiNativeToolEvent>, AppError> {
+    let id = utils::normalize_optional_text(
+        item.get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+    );
+    let output_index = event
+        .get("output_index")
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| value as usize);
+    let stream_key = native_responses_stream_key(id.as_deref(), output_index).ok_or_else(|| {
+        AppError::Provider(
+            "openai responses file_search_call event was missing both item id and output index"
+                .to_owned(),
+        )
+    })?;
+
+    let queries = openai_file_search_queries(item);
+    let invocation = openai_file_search_invocation(queries.as_slice())?;
+    let title = openai_file_search_title(queries.as_slice());
+    let details = ToolOutput::from_json_payload(Some(item)).map_err(AppError::Provider)?;
+    let raw = Some(item.clone());
+
+    Ok(Some(if event_type == "response.output_item.added" {
+        OpenAiNativeToolEvent::Started {
+            stream_key,
+            id,
+            invocation,
+            title,
+            raw,
+        }
+    } else {
+        OpenAiNativeToolEvent::Completed {
+            stream_key,
+            id,
+            invocation,
+            title,
+            output_text: String::new(),
+            blocks: openai_file_search_blocks(queries.as_slice(), item.get("results")),
+            details,
+            raw,
+        }
+    }))
+}
+
+fn openai_code_interpreter_tool_event(
+    event_type: &str,
+    event: &serde_json::Value,
+    item: &serde_json::Value,
+) -> Result<Option<OpenAiNativeToolEvent>, AppError> {
+    let id = utils::normalize_optional_text(
+        item.get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+    );
+    let output_index = event
+        .get("output_index")
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| value as usize);
+    let stream_key =
+        native_responses_stream_key(id.as_deref(), output_index).ok_or_else(|| {
+            AppError::Provider(
+                "openai responses code_interpreter_call event was missing both item id and output index"
+                    .to_owned(),
+            )
+        })?;
+
+    let code = item
+        .get("code")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let invocation = openai_code_interpreter_invocation(code)?;
+    let title = if code.is_some() {
+        "code execution".to_owned()
+    } else {
+        "code interpreter".to_owned()
+    };
+    let details = ToolOutput::from_json_payload(Some(item)).map_err(AppError::Provider)?;
+    let raw = Some(item.clone());
+
+    Ok(Some(if event_type == "response.output_item.added" {
+        OpenAiNativeToolEvent::Started {
+            stream_key,
+            id,
+            invocation,
+            title,
+            raw,
+        }
+    } else {
+        let blocks = openai_code_interpreter_blocks(item.get("outputs"));
+        OpenAiNativeToolEvent::Completed {
+            stream_key,
+            id,
+            invocation,
+            title,
+            output_text: openai_code_interpreter_output_text(blocks.as_slice()),
+            blocks,
+            details,
+            raw,
+        }
+    }))
+}
+
+fn openai_image_generation_tool_event(
+    event_type: &str,
+    event: &serde_json::Value,
+    item: &serde_json::Value,
+) -> Result<Option<OpenAiNativeToolEvent>, AppError> {
+    let id = utils::normalize_optional_text(
+        item.get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+    );
+    let output_index = event
+        .get("output_index")
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| value as usize);
+    let stream_key =
+        native_responses_stream_key(id.as_deref(), output_index).ok_or_else(|| {
+            AppError::Provider(
+                "openai responses image_generation_call event was missing both item id and output index"
+                    .to_owned(),
+            )
+        })?;
+
+    let revised_prompt = item
+        .get("revised_prompt")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let invocation = openai_image_generation_invocation(revised_prompt)?;
+    let title = revised_prompt
+        .map(|prompt| format!("image generation {prompt}"))
+        .unwrap_or_else(|| "image generation".to_owned());
+    let details = ToolOutput::from_json_payload(Some(item)).map_err(AppError::Provider)?;
+    let raw = Some(item.clone());
+
+    Ok(Some(if event_type == "response.output_item.added" {
+        OpenAiNativeToolEvent::Started {
+            stream_key,
+            id,
+            invocation,
+            title,
+            raw,
+        }
+    } else {
+        OpenAiNativeToolEvent::Completed {
+            stream_key,
+            id,
+            invocation,
+            title,
+            output_text: revised_prompt.unwrap_or_default().to_owned(),
+            blocks: openai_image_generation_blocks(item),
+            details,
+            raw,
+        }
+    }))
+}
+
+fn native_responses_stream_key(
+    item_id: Option<&str>,
+    output_index: Option<usize>,
+) -> Option<String> {
+    item_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("item:{value}"))
+        .or_else(|| output_index.map(|value| format!("idx:{value}")))
+}
+
+fn openai_web_search_invocation(
+    action: Option<&serde_json::Value>,
+) -> Result<ToolInvocation, AppError> {
+    let action_type = action
+        .and_then(|value| value.get("type"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+
+    let input = match action_type {
+        "search" => {
+            let detail = web_search_action_detail(action);
+            StructuredObject::try_from(if detail.is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::json!({ "query": detail })
+            })
+            .map_err(AppError::Provider)?
+        }
+        "open_page" => {
+            let payload = if let Some(url) = action
+                .and_then(|value| value.get("url"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                serde_json::json!({ "url": url })
+            } else {
+                serde_json::json!({})
+            };
+            StructuredObject::try_from(payload).map_err(AppError::Provider)?
+        }
+        "find_in_page" => {
+            let url = action
+                .and_then(|value| value.get("url"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let pattern = action
+                .and_then(|value| value.get("pattern"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let payload = match (url, pattern) {
+                (Some(url), Some(pattern)) => serde_json::json!({
+                    "url": url,
+                    "pattern": pattern
+                }),
+                (Some(url), None) => serde_json::json!({ "url": url }),
+                (None, Some(pattern)) => serde_json::json!({ "pattern": pattern }),
+                (None, None) => serde_json::json!({}),
+            };
+            StructuredObject::try_from(payload).map_err(AppError::Provider)?
+        }
+        _ => StructuredObject::default(),
+    };
+
+    Ok(ToolInvocation::new("web.run", input))
+}
+
+fn openai_web_search_blocks(action: Option<&serde_json::Value>) -> Vec<OperationBlock> {
+    let Some(sources) = action
+        .and_then(|value| value.get("sources"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    let results = sources
+        .iter()
+        .filter_map(openai_web_search_result)
+        .collect::<Vec<_>>();
+    if results.is_empty() {
+        return Vec::new();
+    }
+
+    let query = web_search_action_detail(action);
+    vec![OperationBlock::SearchResults {
+        query: (!query.is_empty()).then_some(query),
+        results,
+    }]
+}
+
+fn openai_file_search_queries(item: &serde_json::Value) -> Vec<String> {
+    item.get("queries")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn openai_file_search_invocation(queries: &[String]) -> Result<ToolInvocation, AppError> {
+    let input = match queries {
+        [] => StructuredObject::default(),
+        [query] => StructuredObject::try_from(serde_json::json!({ "query": query }))
+            .map_err(AppError::Provider)?,
+        [first, ..] => StructuredObject::try_from(serde_json::json!({
+            "query": first,
+            "queries": queries,
+        }))
+        .map_err(AppError::Provider)?,
+    };
+    Ok(ToolInvocation::new("file_search", input))
+}
+
+fn openai_file_search_title(queries: &[String]) -> String {
+    queries
+        .first()
+        .map(|query| format!("file search {query}"))
+        .unwrap_or_else(|| "file search".to_owned())
+}
+
+fn openai_file_search_blocks(
+    queries: &[String],
+    results: Option<&serde_json::Value>,
+) -> Vec<OperationBlock> {
+    let Some(results) = results.and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+
+    let results = results
+        .iter()
+        .filter_map(openai_file_search_result)
+        .collect::<Vec<_>>();
+    if results.is_empty() {
+        return Vec::new();
+    }
+
+    let query = queries.first().cloned().map(|first| {
+        if queries.len() > 1 {
+            format!("{first} ...")
+        } else {
+            first
+        }
+    });
+    vec![OperationBlock::SearchResults { query, results }]
+}
+
+fn openai_file_search_result(source: &serde_json::Value) -> Option<SearchResultItem> {
+    let file_id = source
+        .get("file_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let filename = source
+        .get("filename")
+        .or_else(|| source.get("title"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let uri = file_id
+        .as_deref()
+        .map(|value| format!("file:{value}"))
+        .or_else(|| filename.clone())?;
+    let title = filename
+        .or(file_id)
+        .unwrap_or_else(|| "file result".to_owned());
+    let snippet = source
+        .get("text")
+        .or_else(|| source.get("snippet"))
+        .or_else(|| source.get("summary"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let score = source
+        .get("score")
+        .or_else(|| source.get("rank"))
+        .and_then(serde_json::Value::as_f64)
+        .map(|value| value as f32);
+
+    Some(SearchResultItem {
+        title,
+        uri,
+        snippet,
+        score,
+    })
+}
+
+fn openai_code_interpreter_invocation(
+    code: Option<&str>,
+) -> Result<ToolInvocation, AppError> {
+    let input = match code {
+        Some(code) => StructuredObject::try_from(serde_json::json!({ "code": code }))
+            .map_err(AppError::Provider)?,
+        None => StructuredObject::default(),
+    };
+    Ok(ToolInvocation::new("code_execution", input))
+}
+
+fn openai_code_interpreter_blocks(outputs: Option<&serde_json::Value>) -> Vec<OperationBlock> {
+    let Some(outputs) = outputs.and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+
+    let mut blocks = Vec::new();
+    for output in outputs {
+        let output_type = output
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        match output_type {
+            "logs" => {
+                let Some(logs) = output
+                    .get("logs")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                else {
+                    continue;
+                };
+                blocks.push(OperationBlock::Text {
+                    text: logs.to_owned(),
+                });
+            }
+            "files" => {
+                let Some(files) = output.get("files").and_then(serde_json::Value::as_array) else {
+                    continue;
+                };
+                for file in files {
+                    let Some(file_id) = file
+                        .get("file_id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                    else {
+                        continue;
+                    };
+                    let mime_type = file
+                        .get("mime_type")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or("application/octet-stream")
+                        .to_owned();
+                    let name = file
+                        .get("filename")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| file_id.to_owned());
+                    blocks.push(OperationBlock::Media {
+                        mime_type: mime_type.clone(),
+                        artifact: ArtifactRef {
+                            uri: format!("file:{file_id}"),
+                            mime: mime_type,
+                            name: Some(name),
+                            size_bytes: None,
+                            sha256: None,
+                        },
+                    });
+                }
+            }
+            _ => {
+                let pretty = serde_json::to_string_pretty(output)
+                    .unwrap_or_else(|_| output.to_string())
+                    .trim()
+                    .to_owned();
+                if !pretty.is_empty() {
+                    blocks.push(OperationBlock::Text { text: pretty });
+                }
+            }
+        }
+    }
+
+    blocks
+}
+
+fn openai_code_interpreter_output_text(blocks: &[OperationBlock]) -> String {
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            OperationBlock::Text { text } if !text.trim().is_empty() => Some(text.trim()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn openai_image_generation_invocation(
+    revised_prompt: Option<&str>,
+) -> Result<ToolInvocation, AppError> {
+    let input = match revised_prompt {
+        Some(prompt) => {
+            StructuredObject::try_from(serde_json::json!({ "description": prompt }))
+                .map_err(AppError::Provider)?
+        }
+        None => StructuredObject::default(),
+    };
+    Ok(ToolInvocation::new("image_generation", input))
+}
+
+fn openai_image_generation_blocks(item: &serde_json::Value) -> Vec<OperationBlock> {
+    let Some(result) = item
+        .get("result")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Vec::new();
+    };
+
+    let mime_type = item
+        .get("mime_type")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("image/png")
+        .to_owned();
+    let extension = mime_type
+        .strip_prefix("image/")
+        .filter(|value| !value.is_empty())
+        .unwrap_or("png");
+    let extension = extension.to_owned();
+    let data_url = format!("data:{mime_type};base64,{result}");
+
+    vec![OperationBlock::Media {
+        mime_type: mime_type.clone(),
+        artifact: ArtifactRef {
+            uri: data_url,
+            mime: mime_type,
+            name: Some(format!("generated-image.{extension}")),
+            size_bytes: None,
+            sha256: None,
+        },
+    }]
+}
+
+fn openai_web_search_result(source: &serde_json::Value) -> Option<SearchResultItem> {
+    let uri = source
+        .get("url")
+        .or_else(|| source.get("uri"))
+        .or_else(|| source.get("link"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_owned();
+    let title = source
+        .get("title")
+        .or_else(|| source.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| uri.clone());
+    let snippet = source
+        .get("snippet")
+        .or_else(|| source.get("summary"))
+        .or_else(|| source.get("text"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let score = source
+        .get("score")
+        .or_else(|| source.get("rank"))
+        .and_then(serde_json::Value::as_f64)
+        .map(|value| value as f32);
+
+    Some(SearchResultItem {
+        title,
+        uri,
+        snippet,
+        score,
+    })
+}
+
+fn web_search_action_detail(action: Option<&serde_json::Value>) -> String {
+    let Some(action) = action else {
+        return String::new();
+    };
+    let action_type = action
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    match action_type {
+        "search" => action
+            .get("query")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| {
+                let items = action
+                    .get("queries")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let first = items
+                    .first()
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_default()
+                    .to_owned();
+                if items.len() > 1 && !first.is_empty() {
+                    format!("{first} ...")
+                } else {
+                    first
+                }
+            }),
+        "open_page" => action
+            .get("url")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_default(),
+        "find_in_page" => {
+            let url = action
+                .get("url")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let pattern = action
+                .get("pattern")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            match (pattern, url) {
+                (Some(pattern), Some(url)) => format!("'{pattern}' in {url}"),
+                (Some(pattern), None) => format!("'{pattern}'"),
+                (None, Some(url)) => url.to_owned(),
+                (None, None) => String::new(),
+            }
+        }
+        _ => String::new(),
+    }
+}
+
 fn responses_finish_reason_with_tool_calls(
     finish_reason: Option<CompletionFinishReason>,
     saw_tool_call: bool,
@@ -3160,21 +4153,37 @@ enum DashscopeReasoningProfile {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum OpenAiModelListResponse {
-    Wrapped { data: Vec<OpenAiModel> },
-    Bare(Vec<OpenAiModel>),
+    CodexWrapped { models: Vec<OpenAiCodexModel> },
+    Wrapped { data: Vec<OpenAiCompatibleModel> },
+    Bare(Vec<OpenAiCompatibleModel>),
 }
 
 impl OpenAiModelListResponse {
-    fn into_items(self) -> Vec<OpenAiModel> {
+    fn into_items(self) -> Vec<OpenAiListedModel> {
         match self {
-            Self::Wrapped { data } => data,
-            Self::Bare(data) => data,
+            Self::CodexWrapped { models } => {
+                models.into_iter().map(OpenAiListedModel::Codex).collect()
+            }
+            Self::Wrapped { data } => data
+                .into_iter()
+                .map(OpenAiListedModel::Compatible)
+                .collect(),
+            Self::Bare(data) => data
+                .into_iter()
+                .map(OpenAiListedModel::Compatible)
+                .collect(),
         }
     }
 }
 
+#[derive(Debug)]
+enum OpenAiListedModel {
+    Compatible(OpenAiCompatibleModel),
+    Codex(OpenAiCodexModel),
+}
+
 #[derive(Debug, Deserialize)]
-struct OpenAiModel {
+struct OpenAiCompatibleModel {
     id: String,
     #[serde(default, flatten)]
     copilot: CopilotModelExtension,
@@ -3190,7 +4199,7 @@ struct OpenAiModel {
     max_output_tokens: Option<u64>,
 }
 
-impl OpenAiModel {
+impl OpenAiCompatibleModel {
     fn metadata(&self) -> ModelMetadata {
         let mut metadata = ModelMetadata::default();
 
@@ -3206,6 +4215,134 @@ impl OpenAiModel {
 
         metadata.with_fallbacks_from(&self.copilot.metadata(self.id.as_str()))
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCodexModel {
+    #[serde(default)]
+    slug: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    default_reasoning_level: Option<String>,
+    #[serde(default)]
+    supported_reasoning_levels: Vec<OpenAiCodexReasoningLevel>,
+    #[serde(default)]
+    support_verbosity: Option<bool>,
+    #[serde(default)]
+    default_verbosity: Option<String>,
+    #[serde(default)]
+    supports_parallel_tool_calls: Option<bool>,
+    #[serde(default)]
+    context_window: Option<u64>,
+    #[serde(default)]
+    max_context_window: Option<u64>,
+    #[serde(default)]
+    input_modalities: Vec<String>,
+}
+
+impl OpenAiCodexModel {
+    fn metadata(&self) -> ModelMetadata {
+        let mut metadata = ModelMetadata::default();
+
+        if let Some(description) = self
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            metadata = metadata.with_description(description);
+        }
+
+        if let Some(context_window_tokens) = self.context_window.or(self.max_context_window) {
+            metadata = metadata.with_context_window_tokens(clamp_u64_to_u32(context_window_tokens));
+        }
+
+        if let Some(default_thinking_mode) = self.default_thinking_mode_key() {
+            metadata = metadata.with_default_thinking_mode(default_thinking_mode);
+        }
+
+        if let Some(supports_parallel_tool_calls) = self.supports_parallel_tool_calls {
+            metadata = metadata.with_supports_parallel_tool_calls(supports_parallel_tool_calls);
+        }
+
+        if let Some(supports_verbosity) = self.support_verbosity {
+            metadata = metadata.with_supports_verbosity(supports_verbosity);
+        }
+
+        if let Some(default_verbosity) = self
+            .default_verbosity
+            .as_ref()
+            .and_then(|value| utils::normalize_optional_text(Some(value.clone())))
+        {
+            metadata = metadata.with_default_verbosity(default_verbosity);
+        }
+
+        metadata
+    }
+
+    fn capabilities(&self) -> ModelCapabilities {
+        let mut capabilities = ModelCapabilities::default();
+
+        if !self.input_modalities.is_empty() {
+            let supports = |modality: ModelInputModality| {
+                if self
+                    .input_modalities
+                    .iter()
+                    .any(|value| model_supports_input_modality(value.as_str(), modality))
+                {
+                    CapabilitySupport::Supported
+                } else {
+                    CapabilitySupport::Unsupported
+                }
+            };
+            capabilities = capabilities
+                .with_image_input(supports(ModelInputModality::Image))
+                .with_document_input(supports(ModelInputModality::Document))
+                .with_audio_input(supports(ModelInputModality::Audio))
+                .with_video_input(supports(ModelInputModality::Video))
+                .with_file_input(supports(ModelInputModality::File));
+            if supports(ModelInputModality::Text).is_unsupported() {
+                capabilities.text_input = CapabilitySupport::Unsupported;
+            }
+        }
+
+        if !self.supported_reasoning_levels.is_empty() {
+            capabilities = capabilities.with_reasoning(CapabilitySupport::Supported);
+        }
+
+        if self.supports_parallel_tool_calls == Some(true) {
+            capabilities = capabilities.with_tool_calling(CapabilitySupport::Supported);
+        }
+
+        capabilities
+    }
+
+    fn default_thinking_mode_key(&self) -> Option<String> {
+        let normalized = self
+            .default_reasoning_level
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?
+            .to_ascii_lowercase();
+        if normalized == "none" {
+            Some("no-thinking".to_owned())
+        } else {
+            Some(format!("thinking-{normalized}"))
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct OpenAiCodexReasoningLevel {
+    effort: String,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3359,6 +4496,27 @@ fn normalize_domain(value: &str) -> String {
         .to_owned()
 }
 
+fn openai_client_version() -> String {
+    crate::provider::CODEX_PACKAGE_VERSION.to_owned()
+}
+
+fn append_query_param(endpoint: &str, key: &str, value: &str) -> String {
+    let separator = if endpoint.contains('?') { '&' } else { '?' };
+    format!("{endpoint}{separator}{key}={value}")
+}
+
+fn model_supports_input_modality(input_modality: &str, modality: ModelInputModality) -> bool {
+    let normalized = input_modality.trim().to_ascii_lowercase();
+    match modality {
+        ModelInputModality::Text => normalized == "text",
+        ModelInputModality::Image => normalized == "image",
+        ModelInputModality::Document => normalized == "document",
+        ModelInputModality::Audio => normalized == "audio",
+        ModelInputModality::Video => normalized == "video",
+        ModelInputModality::File => normalized == "file",
+    }
+}
+
 fn clamp_u64_to_u32(value: u64) -> u32 {
     value.min(u32::MAX as u64) as u32
 }
@@ -3367,9 +4525,10 @@ fn clamp_u64_to_u32(value: u64) -> u32 {
 mod tests {
     use super::*;
     use crate::message::{
-        ExecutionStatus, MessagePart, OperationPart, PartContent, StructuredObject, TimeRange,
-        ToolInvocation, ToolOutput,
+        ExecutionStatus, MessagePart, OperationBlock, OperationPart, PartContent,
+        StructuredObject, TimeRange, ToolInvocation, ToolOutput,
     };
+    use mockito::Matcher;
 
     fn test_completion_request(messages: Vec<Message>) -> CompletionRequest {
         CompletionRequest {
@@ -3390,8 +4549,105 @@ mod tests {
             thinking: None,
             verbosity: None,
             response_format: None,
+            responses_api_metadata: None,
             request_override: crate::model::ModelSpeedModeRequestOverride::default(),
         }
+    }
+
+    #[test]
+    fn chatgpt_codex_responses_tool_plan_ignores_unsupported_hosted_tools() {
+        let adapter = OpenAiAdapter::new(
+            reqwest::Client::new(),
+            "test-token",
+            "https://chatgpt.com/backend-api/codex",
+            "gpt-5.5",
+        )
+        .with_backend(OpenAiBackend::ChatgptCodex);
+        let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
+        request.native_tools = crate::config::ProviderNativeToolsConfig {
+            enabled: true,
+            routes: crate::config::ProviderNativeToolRoutesConfig {
+                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                file_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                code_execution: Some(ProviderNativeToolRoute::ProviderHosted),
+                image_generation: Some(ProviderNativeToolRoute::ProviderHosted),
+                ..Default::default()
+            },
+            hosted: crate::config::ProviderHostedToolConfigs {
+                file_search: crate::config::ProviderHostedFileSearchConfig {
+                    vector_store_ids: vec!["vs_docs".to_owned()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let plan = adapter
+            .responses_tool_plan(&request)
+            .expect("tool plan should build");
+
+        assert_eq!(plan.tools.len(), 2);
+        assert_eq!(plan.tools[0]["type"], serde_json::json!("web_search"));
+        assert_eq!(plan.tools[1]["type"], serde_json::json!("image_generation"));
+        assert_eq!(plan.tools[1]["output_format"], serde_json::json!("png"));
+    }
+
+    #[test]
+    fn responses_tool_plan_enables_image_generation_and_code_interpreter_outputs() {
+        let adapter = OpenAiAdapter::new(
+            reqwest::Client::new(),
+            "test-token",
+            "https://api.openai.com/v1",
+            "gpt-5.5",
+        );
+        let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
+        request.native_tools = crate::config::ProviderNativeToolsConfig {
+            enabled: true,
+            routes: crate::config::ProviderNativeToolRoutesConfig {
+                code_execution: Some(ProviderNativeToolRoute::ProviderHosted),
+                image_generation: Some(ProviderNativeToolRoute::ProviderHosted),
+                ..Default::default()
+            },
+            hosted: crate::config::ProviderHostedToolConfigs {
+                code_execution: crate::config::ProviderHostedCodeExecutionConfig {
+                    container: crate::config::HostedCodeExecutionContainerConfig {
+                        kind: Some("auto".to_owned()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                image_generation: crate::config::ProviderHostedImageGenerationConfig {
+                    background: Some("transparent".to_owned()),
+                    size: Some("1024x1024".to_owned()),
+                    quality: Some("low".to_owned()),
+                    moderation: Some("auto".to_owned()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let plan = adapter
+            .responses_tool_plan(&request)
+            .expect("tool plan should build");
+
+        assert_eq!(plan.tools.len(), 2);
+        assert_eq!(plan.tools[0]["type"], serde_json::json!("code_interpreter"));
+        assert_eq!(plan.tools[1]["type"], serde_json::json!("image_generation"));
+        assert_eq!(plan.tools[1]["output_format"], serde_json::json!("png"));
+        assert_eq!(
+            plan.tools[1]["background"],
+            serde_json::json!("transparent")
+        );
+        assert_eq!(plan.tools[1]["size"], serde_json::json!("1024x1024"));
+        assert_eq!(plan.tools[1]["quality"], serde_json::json!("low"));
+        assert_eq!(plan.tools[1]["moderation"], serde_json::json!("auto"));
+        assert_eq!(
+            plan.include,
+            vec!["code_interpreter_call.outputs".to_string()]
+        );
     }
 
     #[test]
@@ -3413,10 +4669,187 @@ mod tests {
         let models = parsed.into_items();
         assert_eq!(models.len(), 1);
 
-        let metadata = models[0].metadata();
+        let OpenAiListedModel::Compatible(model) = &models[0] else {
+            panic!("expected compatible model variant");
+        };
+        let metadata = model.metadata();
         assert_eq!(metadata.limits.context_window_tokens, Some(262_144));
         assert_eq!(metadata.limits.max_input_tokens, Some(260_000));
         assert_eq!(metadata.limits.max_output_tokens, Some(64_000));
+    }
+
+    #[test]
+    fn openai_model_parses_codex_models_response() {
+        let payload = r#"{
+            "models": [
+                {
+                    "slug": "gpt-5.3-codex",
+                    "display_name": "GPT-5.3 Codex",
+                    "description": "Codex model",
+                    "default_reasoning_level": "medium",
+                    "supported_reasoning_levels": [
+                        { "effort": "low", "description": "Low" },
+                        { "effort": "medium", "description": "Medium" }
+                    ],
+                    "supports_parallel_tool_calls": true,
+                    "support_verbosity": true,
+                    "default_verbosity": "high",
+                    "input_modalities": ["text", "image"],
+                    "context_window": 272000
+                }
+            ]
+        }"#;
+
+        let parsed: OpenAiModelListResponse =
+            serde_json::from_str(payload).expect("parse codex model list");
+        let models = parsed.into_items();
+        assert_eq!(models.len(), 1);
+
+        let OpenAiListedModel::Codex(model) = &models[0] else {
+            panic!("expected codex model variant");
+        };
+        assert_eq!(model.slug, "gpt-5.3-codex");
+
+        let metadata = model.metadata();
+        assert_eq!(metadata.description.as_deref(), Some("Codex model"));
+        assert_eq!(metadata.limits.context_window_tokens, Some(272_000));
+        assert_eq!(
+            metadata.default_thinking_mode.as_deref(),
+            Some("thinking-medium")
+        );
+        assert_eq!(metadata.supports_parallel_tool_calls, Some(true));
+        assert_eq!(metadata.supports_verbosity, Some(true));
+        assert_eq!(metadata.default_verbosity.as_deref(), Some("high"));
+
+        let capabilities = model.capabilities();
+        assert!(capabilities.reasoning.is_supported());
+        assert!(capabilities.tool_calling.is_supported());
+        assert!(capabilities.image_input.is_supported());
+    }
+
+    #[test]
+    fn chatgpt_codex_models_use_official_codex_client_version() {
+        assert_eq!(
+            openai_client_version(),
+            crate::provider::CODEX_PACKAGE_VERSION
+        );
+    }
+
+    #[tokio::test]
+    async fn chatgpt_codex_list_models_matches_official_models_endpoint_shape() {
+        let mut server = mockito::Server::new_async().await;
+        let response = serde_json::json!({
+            "models": [
+                {
+                    "slug": "gpt-5.3-codex",
+                    "display_name": "GPT-5.3 Codex",
+                    "description": "Codex model",
+                    "default_reasoning_level": "medium",
+                    "supported_reasoning_levels": [
+                        { "effort": "low", "description": "Low" },
+                        { "effort": "medium", "description": "Medium" }
+                    ],
+                    "supports_parallel_tool_calls": true,
+                    "support_verbosity": true,
+                    "default_verbosity": "medium",
+                    "input_modalities": ["text", "image"],
+                    "context_window": 272000
+                }
+            ]
+        });
+        let mock = server
+            .mock("GET", "/backend-api/codex/models")
+            .match_query(Matcher::UrlEncoded(
+                "client_version".to_owned(),
+                openai_client_version(),
+            ))
+            .match_header("authorization", "Bearer test-token")
+            .match_header("originator", CHATGPT_CODEX_ORIGINATOR)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(response.to_string())
+            .create_async()
+            .await;
+
+        let adapter = OpenAiAdapter::new_managed_with_id(
+            "openai",
+            reqwest::Client::new(),
+            ManagedCredential::static_value("openai api key", "test-token".to_owned()),
+            format!("{}/backend-api/codex", server.url()),
+            "gpt-5.3-codex",
+        )
+        .with_backend(OpenAiBackend::ChatgptCodex);
+
+        let models = ModelRuntime::list_models(&adapter)
+            .await
+            .expect("list models should succeed");
+        mock.assert_async().await;
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id.as_str(), "gpt-5.3-codex");
+        assert_eq!(models[0].display_name.as_deref(), Some("GPT-5.3 Codex"));
+        assert_eq!(
+            models[0].metadata.default_thinking_mode.as_deref(),
+            Some("thinking-medium")
+        );
+        assert_eq!(models[0].metadata.supports_verbosity, Some(true));
+        assert!(models[0].capabilities.reasoning.is_supported());
+    }
+
+    #[tokio::test]
+    async fn chatgpt_codex_stream_accepts_missing_content_type_like_official_codex() {
+        let mut server = mockito::Server::new_async().await;
+        let response = concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_123\",\"status\":\"completed\"}}\n\n",
+        );
+        let mock = server
+            .mock("POST", "/backend-api/codex/responses")
+            .match_header("authorization", "Bearer test-token")
+            .match_header("originator", CHATGPT_CODEX_ORIGINATOR)
+            .match_header("accept", "text/event-stream")
+            .match_header("content-type", "application/json")
+            .with_status(200)
+            .with_body(response)
+            .create_async()
+            .await;
+
+        let adapter = OpenAiAdapter::new_managed_with_id(
+            "openai",
+            reqwest::Client::new(),
+            ManagedCredential::static_value("openai api key", "test-token".to_owned()),
+            format!("{}/backend-api/codex", server.url()),
+            "gpt-5.5",
+        )
+        .with_backend(OpenAiBackend::ChatgptCodex);
+        let request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
+
+        let mut stream = ModelRuntime::complete_stream(&adapter, request)
+            .await
+            .expect("stream should start");
+        let first = stream
+            .next()
+            .await
+            .expect("first event")
+            .expect("text delta");
+        let second = stream
+            .next()
+            .await
+            .expect("second event")
+            .expect("completed event");
+        mock.assert_async().await;
+
+        assert!(matches!(
+            first,
+            CompletionStreamEvent::TextDelta { ref delta, .. } if delta == "hello"
+        ));
+        assert!(matches!(
+            second,
+            CompletionStreamEvent::Completed {
+                provider_metadata: Some(_),
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -3563,6 +4996,344 @@ mod tests {
     }
 
     #[test]
+    fn responses_input_omits_provider_native_tool_history() {
+        let created_at = chrono::Utc::now();
+        let invocation = ToolInvocation::new(
+            "web.run",
+            StructuredObject::try_from(serde_json::json!({ "query": "weather seattle" }))
+                .expect("tool input"),
+        );
+        let mut operation = OperationPart::completed(
+            1,
+            invocation,
+            String::new(),
+            Vec::new(),
+            Vec::new(),
+            ToolOutput::from_json_payload(Some(&serde_json::json!({
+                "type": "web_search_call",
+                "status": "completed",
+                "action": { "type": "search", "query": "weather seattle" }
+            })))
+            .expect("tool output"),
+            TimeRange::default(),
+        );
+        operation.set_provider_native_only(true);
+        let mut tool_part = MessagePart::with_content(
+            1,
+            0,
+            created_at,
+            ExecutionStatus::Completed,
+            PartContent::Operation(operation),
+        );
+        tool_part.operation_id = Some("ws_1".to_string());
+
+        let assistant = Message {
+            id: 2,
+            role: Role::Assistant,
+            state: ExecutionStatus::Completed,
+            parts: vec![tool_part],
+            created_at,
+            metadata: Default::default(),
+            provider_state: None,
+            usage: None,
+        };
+        let request = test_completion_request(vec![
+            Message::prompt_text(Role::User, "check weather"),
+            assistant,
+        ]);
+
+        let input = OpenAiAdapter::to_responses_input(&request).expect("responses input");
+        let value = serde_json::to_value(&input).expect("serialize responses input");
+
+        assert_eq!(
+            value,
+            serde_json::json!([
+                {
+                    "role": "user",
+                    "content": [
+                        { "type": "input_text", "text": "check weather" }
+                    ]
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn responses_native_tool_event_projects_web_search_calls() {
+        let provider_id = ProviderId::new("openai");
+        let model = ModelId::new("gpt-5.5");
+        let added = serde_json::json!({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "web_search_call",
+                "id": "ws_1",
+                "status": "in_progress"
+            }
+        });
+        let done = serde_json::json!({
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "web_search_call",
+                "id": "ws_1",
+                "status": "completed",
+                "action": {
+                    "type": "search",
+                    "query": "weather seattle",
+                    "sources": [
+                        {
+                            "title": "Seattle forecast",
+                            "url": "https://example.com/weather",
+                            "snippet": "Current forecast"
+                        }
+                    ]
+                }
+            }
+        });
+
+        let started = responses_native_tool_event(&provider_id, &model, &added)
+            .expect("parse added event")
+            .expect("native start event");
+        let completed = responses_native_tool_event(&provider_id, &model, &done)
+            .expect("parse done event")
+            .expect("native completed event");
+
+        assert!(matches!(
+            started,
+            CompletionStreamEvent::NativeToolCallStarted {
+                ref stream_key,
+                ref id,
+                ref invocation,
+                ..
+            } if stream_key == "item:ws_1"
+                && id.as_deref() == Some("ws_1")
+                && invocation.name == "web.run"
+        ));
+
+        match completed {
+            CompletionStreamEvent::NativeToolCallCompleted {
+                stream_key,
+                id,
+                invocation,
+                blocks,
+                details,
+                ..
+            } => {
+                assert_eq!(stream_key, "item:ws_1");
+                assert_eq!(id.as_deref(), Some("ws_1"));
+                assert_eq!(invocation.name, "web.run");
+                assert_eq!(
+                    invocation.input.get("query").and_then(|value| value.as_text()),
+                    Some("weather seattle")
+                );
+                assert_eq!(blocks.len(), 1);
+                assert!(matches!(
+                    &blocks[0],
+                    OperationBlock::SearchResults { query, results }
+                        if query.as_deref() == Some("weather seattle")
+                            && results.len() == 1
+                            && results[0].title == "Seattle forecast"
+                            && results[0].uri == "https://example.com/weather"
+                ));
+                assert_eq!(
+                    details.payload.get("status").and_then(|value| value.as_text()),
+                    Some("completed")
+                );
+            }
+            other => panic!("unexpected completion event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_native_tool_event_projects_file_search_calls() {
+        let provider_id = ProviderId::new("openai");
+        let model = ModelId::new("gpt-5.5");
+        let done = serde_json::json!({
+            "type": "response.output_item.done",
+            "output_index": 1,
+            "item": {
+                "type": "file_search_call",
+                "id": "fs_1",
+                "status": "completed",
+                "queries": ["rust traits"],
+                "results": [
+                    {
+                        "file_id": "file_123",
+                        "filename": "notes.md",
+                        "score": 0.98,
+                        "text": "Traits define shared behavior."
+                    }
+                ]
+            }
+        });
+
+        let completed = responses_native_tool_event(&provider_id, &model, &done)
+            .expect("parse done event")
+            .expect("native completed event");
+
+        match completed {
+            CompletionStreamEvent::NativeToolCallCompleted {
+                stream_key,
+                id,
+                invocation,
+                blocks,
+                details,
+                ..
+            } => {
+                assert_eq!(stream_key, "item:fs_1");
+                assert_eq!(id.as_deref(), Some("fs_1"));
+                assert_eq!(invocation.name, "file_search");
+                assert_eq!(
+                    invocation.input.get("query").and_then(|value| value.as_text()),
+                    Some("rust traits")
+                );
+                assert!(matches!(
+                    &blocks[0],
+                    OperationBlock::SearchResults { query, results }
+                        if query.as_deref() == Some("rust traits")
+                            && results.len() == 1
+                            && results[0].title == "notes.md"
+                            && results[0].uri == "file:file_123"
+                            && results[0].snippet.as_deref() == Some("Traits define shared behavior.")
+                ));
+                assert_eq!(
+                    details.payload.get("status").and_then(|value| value.as_text()),
+                    Some("completed")
+                );
+            }
+            other => panic!("unexpected completion event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_native_tool_event_projects_code_interpreter_calls() {
+        let provider_id = ProviderId::new("openai");
+        let model = ModelId::new("gpt-5.5");
+        let done = serde_json::json!({
+            "type": "response.output_item.done",
+            "output_index": 2,
+            "item": {
+                "type": "code_interpreter_call",
+                "id": "ci_1",
+                "status": "completed",
+                "code": "print('hi')",
+                "outputs": [
+                    {
+                        "type": "logs",
+                        "logs": "hi"
+                    },
+                    {
+                        "type": "files",
+                        "files": [
+                            {
+                                "file_id": "file_img_1",
+                                "mime_type": "image/png"
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+
+        let completed = responses_native_tool_event(&provider_id, &model, &done)
+            .expect("parse done event")
+            .expect("native completed event");
+
+        match completed {
+            CompletionStreamEvent::NativeToolCallCompleted {
+                stream_key,
+                id,
+                invocation,
+                output_text,
+                blocks,
+                details,
+                ..
+            } => {
+                assert_eq!(stream_key, "item:ci_1");
+                assert_eq!(id.as_deref(), Some("ci_1"));
+                assert_eq!(invocation.name, "code_execution");
+                assert_eq!(
+                    invocation.input.get("code").and_then(|value| value.as_text()),
+                    Some("print('hi')")
+                );
+                assert_eq!(output_text, "hi");
+                assert!(matches!(
+                    &blocks[0],
+                    OperationBlock::Text { text } if text == "hi"
+                ));
+                assert!(matches!(
+                    &blocks[1],
+                    OperationBlock::Media { artifact, .. }
+                        if artifact.uri == "file:file_img_1"
+                            && artifact.name.as_deref() == Some("file_img_1")
+                ));
+                assert_eq!(
+                    details.payload.get("status").and_then(|value| value.as_text()),
+                    Some("completed")
+                );
+            }
+            other => panic!("unexpected completion event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_native_tool_event_projects_image_generation_calls() {
+        let provider_id = ProviderId::new("openai");
+        let model = ModelId::new("gpt-5.5");
+        let done = serde_json::json!({
+            "type": "response.output_item.done",
+            "output_index": 3,
+            "item": {
+                "type": "image_generation_call",
+                "id": "ig_1",
+                "status": "completed",
+                "revised_prompt": "A small blue square",
+                "result": "Zm9v"
+            }
+        });
+
+        let completed = responses_native_tool_event(&provider_id, &model, &done)
+            .expect("parse done event")
+            .expect("native completed event");
+
+        match completed {
+            CompletionStreamEvent::NativeToolCallCompleted {
+                stream_key,
+                id,
+                invocation,
+                output_text,
+                blocks,
+                details,
+                ..
+            } => {
+                assert_eq!(stream_key, "item:ig_1");
+                assert_eq!(id.as_deref(), Some("ig_1"));
+                assert_eq!(invocation.name, "image_generation");
+                assert_eq!(
+                    invocation
+                        .input
+                        .get("description")
+                        .and_then(|value| value.as_text()),
+                    Some("A small blue square")
+                );
+                assert_eq!(output_text, "A small blue square");
+                assert!(matches!(
+                    &blocks[0],
+                    OperationBlock::Media { artifact, .. }
+                        if artifact.uri == "data:image/png;base64,Zm9v"
+                            && artifact.name.as_deref() == Some("generated-image.png")
+                ));
+                assert_eq!(
+                    details.payload.get("status").and_then(|value| value.as_text()),
+                    Some("completed")
+                );
+            }
+            other => panic!("unexpected completion event: {other:?}"),
+        }
+    }
+
+    #[test]
     fn responses_input_hashes_oversized_tool_call_ids() {
         let created_at = chrono::Utc::now();
         let invocation = ToolInvocation::new(
@@ -3635,25 +5406,34 @@ mod tests {
 
         let body = OpenAiResponsesRequest {
             model: request.model.to_string(),
+            instructions: None,
             input: OpenAiAdapter::to_responses_input(&request).expect("responses input"),
             tools: Vec::new(),
+            tool_choice: "auto".to_owned(),
+            parallel_tool_calls: false,
             include: None,
             max_output_tokens: None,
             temperature: None,
             prompt_cache_key: None,
             previous_response_id: None,
+            store: false,
             stream: false,
             stop: None,
             top_p: None,
             seed: None,
             reasoning: OpenAiAdapter::responses_reasoning_config(&request, request.model.as_str()),
+            service_tier: None,
             text: OpenAiAdapter::responses_text_config(&request),
+            client_metadata: None,
         };
 
         let value = serde_json::to_value(&body).expect("serialize responses request");
 
         assert!(value.get("reasoning_effort").is_none());
         assert!(value.get("response_format").is_none());
+        assert_eq!(value["store"], serde_json::json!(false));
+        assert_eq!(value["tool_choice"], serde_json::json!("auto"));
+        assert_eq!(value["parallel_tool_calls"], serde_json::json!(false));
         assert_eq!(value["reasoning"], serde_json::json!({ "effort": "high" }));
         assert_eq!(
             value["text"],
@@ -3674,6 +5454,126 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn responses_request_uses_top_level_instructions_and_codex_metadata() {
+        let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
+        request.system = Some("follow repo policy".to_owned());
+        request.prompt_cache_key = Some("window-123".to_owned());
+        request.prompt_window_generation = Some(7);
+        request.responses_api_metadata = Some(crate::provider::ResponsesApiRequestMetadata {
+            installation_id: "workspace-42".to_owned(),
+            session_id: "101".to_owned(),
+            thread_id: "101".to_owned(),
+            turn_id: "turn-abc".to_owned(),
+            window_id: "window-123:7".to_owned(),
+            parent_thread_id: Some("100".to_owned()),
+            subagent_header: Some("collab_spawn".to_owned()),
+            subagent_kind: None,
+            request_kind: Some("turn".to_owned()),
+            turn_started_at_unix_ms: Some(1_700_000_000_000),
+            extra: std::collections::BTreeMap::from([(
+                "custom_context".to_owned(),
+                "enabled".to_owned(),
+            )]),
+        });
+        request.request_override.set_parallel_tool_calls(Some(true));
+        request.request_override.body_patch.insert(
+            "service_tier".to_owned(),
+            serde_json::Value::String("priority".to_owned()),
+        );
+
+        let adapter = OpenAiAdapter::new_managed_with_id(
+            "openai",
+            reqwest::Client::new(),
+            ManagedCredential::static_value("openai api key", "test".to_owned()),
+            "https://api.openai.com/v1",
+            request.model.to_string(),
+        );
+
+        let body = OpenAiResponsesRequest {
+            model: request.model.to_string(),
+            instructions: OpenAiAdapter::responses_instructions(&request),
+            input: adapter
+                .responses_input_for_request(&request)
+                .expect("responses input"),
+            tools: Vec::new(),
+            tool_choice: "auto".to_owned(),
+            parallel_tool_calls: OpenAiAdapter::responses_parallel_tool_calls(&request),
+            include: OpenAiAdapter::responses_include(Vec::new(), None),
+            max_output_tokens: None,
+            temperature: None,
+            prompt_cache_key: request.prompt_cache_key.clone(),
+            previous_response_id: None,
+            store: false,
+            stream: false,
+            stop: None,
+            top_p: None,
+            seed: None,
+            reasoning: None,
+            service_tier: OpenAiAdapter::responses_service_tier(&request),
+            text: None,
+            client_metadata: OpenAiAdapter::responses_client_metadata(
+                RequestHeaderContext::from_request(&request),
+            ),
+        };
+
+        let value = serde_json::to_value(&body).expect("serialize responses request");
+        let input = value["input"]
+            .as_array()
+            .expect("responses input should be an array");
+
+        assert_eq!(
+            value["instructions"],
+            serde_json::json!("follow repo policy")
+        );
+        assert_eq!(value["tool_choice"], serde_json::json!("auto"));
+        assert_eq!(value["parallel_tool_calls"], serde_json::json!(true));
+        assert_eq!(value["service_tier"], serde_json::json!("priority"));
+        assert_eq!(
+            value["client_metadata"]["x-codex-window-id"],
+            serde_json::json!("window-123:7")
+        );
+        assert_eq!(
+            value["client_metadata"]["x-codex-installation-id"],
+            serde_json::json!("workspace-42")
+        );
+        assert_eq!(
+            value["client_metadata"]["session_id"],
+            serde_json::json!("101")
+        );
+        assert_eq!(
+            value["client_metadata"]["thread_id"],
+            serde_json::json!("101")
+        );
+        assert_eq!(
+            value["client_metadata"]["turn_id"],
+            serde_json::json!("turn-abc")
+        );
+        assert_eq!(
+            value["client_metadata"]["x-openai-subagent"],
+            serde_json::json!("collab_spawn")
+        );
+        let turn_metadata = serde_json::from_str::<serde_json::Value>(
+            value["client_metadata"]["x-codex-turn-metadata"]
+                .as_str()
+                .expect("turn metadata string"),
+        )
+        .expect("turn metadata json");
+        assert_eq!(
+            turn_metadata["installation_id"],
+            serde_json::json!("workspace-42")
+        );
+        assert_eq!(turn_metadata["thread_id"], serde_json::json!("101"));
+        assert_eq!(turn_metadata["turn_id"], serde_json::json!("turn-abc"));
+        assert_eq!(turn_metadata["parent_thread_id"], serde_json::json!("100"));
+        assert_eq!(
+            turn_metadata["custom_context"],
+            serde_json::json!("enabled")
+        );
+        assert_eq!(input.len(), 1);
+        assert_eq!(input[0]["role"], serde_json::json!("user"));
     }
 
     #[test]
@@ -3773,5 +5673,94 @@ mod tests {
             headers.get("Originator").map(String::as_str),
             Some("custom-originator")
         );
+    }
+
+    #[test]
+    fn chatgpt_codex_headers_include_fedramp_routing() {
+        let auth = Arc::new(Mutex::new(AuthData::OAuth {
+            issuer: Some(crate::provider::auth::CredentialIssuer::OpenaiChatgpt),
+            refresh: "refresh-token".to_owned(),
+            access: "access-token".to_owned(),
+            id_token: Some("id-token".to_owned()),
+            expires_at_ms: 0,
+            account_id: Some("acct_123".to_owned()),
+            chatgpt_account_is_fedramp: true,
+            enterprise_url: None,
+            user: None,
+        }));
+        let adapter = OpenAiAdapter::new_managed_with_id(
+            "openai",
+            reqwest::Client::new(),
+            ManagedCredential::static_value("openai api key", "test".to_owned()),
+            "https://chatgpt.com/backend-api/codex",
+            "gpt-5",
+        )
+        .with_backend(OpenAiBackend::ChatgptCodex)
+        .with_auth_data(auth);
+
+        let headers = adapter.resolved_headers(RequestHeaderContext::none());
+
+        assert_eq!(
+            headers.get("ChatGPT-Account-ID").map(String::as_str),
+            Some("acct_123")
+        );
+        assert_eq!(
+            headers.get("X-OpenAI-Fedramp").map(String::as_str),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn chatgpt_codex_headers_include_turn_metadata_compatibility_headers() {
+        let request = CompletionRequest {
+            responses_api_metadata: Some(crate::provider::ResponsesApiRequestMetadata {
+                installation_id: "workspace-42".to_owned(),
+                session_id: "101".to_owned(),
+                thread_id: "101".to_owned(),
+                turn_id: "turn-abc".to_owned(),
+                window_id: "window-123:7".to_owned(),
+                parent_thread_id: Some("100".to_owned()),
+                subagent_header: Some("collab_spawn".to_owned()),
+                subagent_kind: Some("thread_spawn".to_owned()),
+                request_kind: Some("turn".to_owned()),
+                turn_started_at_unix_ms: Some(1_700_000_000_000),
+                extra: std::collections::BTreeMap::new(),
+            }),
+            ..test_completion_request(vec![Message::prompt_text(Role::User, "hi")])
+        };
+        let adapter = OpenAiAdapter::new_managed_with_id(
+            "openai",
+            reqwest::Client::new(),
+            ManagedCredential::static_value("openai api key", "test".to_owned()),
+            "https://chatgpt.com/backend-api/codex",
+            "gpt-5",
+        )
+        .with_backend(OpenAiBackend::ChatgptCodex);
+
+        let headers = adapter.resolved_headers(RequestHeaderContext::from_request(&request));
+
+        assert_eq!(
+            headers.get("x-codex-window-id").map(String::as_str),
+            Some("window-123:7")
+        );
+        assert_eq!(headers.get("session-id").map(String::as_str), Some("101"));
+        assert_eq!(headers.get("thread-id").map(String::as_str), Some("101"));
+        assert_eq!(
+            headers.get("x-codex-parent-thread-id").map(String::as_str),
+            Some("100")
+        );
+        assert_eq!(
+            headers.get("x-openai-subagent").map(String::as_str),
+            Some("collab_spawn")
+        );
+        let turn_metadata = serde_json::from_str::<serde_json::Value>(
+            headers
+                .get("x-codex-turn-metadata")
+                .map(String::as_str)
+                .expect("turn metadata header"),
+        )
+        .expect("turn metadata json");
+        assert_eq!(turn_metadata["turn_id"], serde_json::json!("turn-abc"));
+        assert_eq!(turn_metadata["request_kind"], serde_json::json!("turn"));
     }
 }

@@ -87,6 +87,7 @@ export function buildAuthProviderFacts(provider: AuthProvider): SessionExecution
     { label: 'Configured', value: provider.configured ? 'yes' : 'no' },
     { label: 'Credential', value: provider.credential_present ? 'present' : 'missing' },
     { label: 'Credential Type', value: provider.credential_type || 'unknown' },
+    { label: 'Credential Issuer', value: provider.credential_issuer || 'n/a' },
     { label: 'Preview', value: provider.key_preview || 'n/a', mono: Boolean(provider.key_preview) },
     { label: 'Expires At', value: provider.expires_at || 'n/a' },
     { label: 'Expired', value: provider.expired == null ? 'unknown' : provider.expired ? 'yes' : 'no' },
@@ -95,6 +96,10 @@ export function buildAuthProviderFacts(provider: AuthProvider): SessionExecution
     { label: 'Display Name', value: provider.display_name || 'n/a' },
     { label: 'Email', value: provider.email || 'n/a' },
     { label: 'Enterprise URL', value: provider.enterprise_url || 'n/a', mono: Boolean(provider.enterprise_url) },
+    { label: 'API Key Write', value: provider.api_key_write_supported ? 'yes' : 'no' },
+    { label: 'Refresh', value: provider.refresh_supported ? 'yes' : 'no' },
+    { label: 'Browser Login', value: provider.browser_login_kind || 'n/a' },
+    { label: 'Device Login', value: provider.device_login_kind || 'n/a' },
   ]
 }
 

@@ -8,8 +8,8 @@ use crate::{
 use super::super::{DeviceCodeStart, OAuthAuthorizeStart, OAuthTokenResponse};
 use super::shared::{
     OPENAI_CLIENT_ID, OPENAI_ISSUER, ensure_http_success, expires_at_ms_from_seconds,
-    extract_openai_account_id, oauth_authorize_start, oauth_client, oauth_error_code,
-    oauth_error_summary, parse_device_auth_interval,
+    extract_openai_account_id, extract_openai_fedramp_account, oauth_authorize_start, oauth_client,
+    oauth_error_code, oauth_error_summary, parse_device_auth_interval,
 };
 
 pub fn start_openai_browser_oauth(redirect_uri: &str) -> Result<OAuthAuthorizeStart, AppError> {
@@ -17,7 +17,14 @@ pub fn start_openai_browser_oauth(redirect_uri: &str) -> Result<OAuthAuthorizeSt
 
     Ok(oauth_authorize_start(
         &client,
-        &["openid", "profile", "email", "offline_access"],
+        &[
+            "openid",
+            "profile",
+            "email",
+            "offline_access",
+            "api.connectors.read",
+            "api.connectors.invoke",
+        ],
         &[
             ("id_token_add_organizations", "true"),
             ("codex_cli_simplified_flow", "true"),
@@ -75,6 +82,58 @@ pub async fn refresh_openai_token(refresh_token: &str) -> Result<OAuthTokenRespo
     .await
 }
 
+pub async fn revoke_openai_token(refresh_token: &str, access_token: &str) -> Result<(), AppError> {
+    let refresh_token = refresh_token.trim();
+    let access_token = access_token.trim();
+    let (token, token_type_hint, client_id) = if !refresh_token.is_empty() {
+        (
+            refresh_token,
+            "refresh_token",
+            Some(OPENAI_CLIENT_ID.to_owned()),
+        )
+    } else if !access_token.is_empty() {
+        (access_token, "access_token", None)
+    } else {
+        return Ok(());
+    };
+
+    let mut body = serde_json::Map::from_iter([
+        (
+            "token".to_owned(),
+            serde_json::Value::String(token.to_owned()),
+        ),
+        (
+            "token_type_hint".to_owned(),
+            serde_json::Value::String(token_type_hint.to_owned()),
+        ),
+    ]);
+    if let Some(client_id) = client_id {
+        body.insert("client_id".to_owned(), serde_json::Value::String(client_id));
+    }
+
+    let response = reqwest::Client::new()
+        .post(format!("{OPENAI_ISSUER}/oauth/revoke"))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header(
+            reqwest::header::USER_AGENT,
+            crate::provider::codex_user_agent(),
+        )
+        .json(&serde_json::Value::Object(body))
+        .send()
+        .await?;
+
+    if response.status().is_success() {
+        return Ok(());
+    }
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    Err(AppError::Provider(format!(
+        "openai oauth token revoke failed with status {status}: {}",
+        oauth_error_summary(body.as_str())
+    )))
+}
+
 pub async fn start_openai_headless_device_code() -> Result<DeviceCodeStart, AppError> {
     #[derive(Debug, Deserialize)]
     struct DeviceCodeResponse {
@@ -119,6 +178,8 @@ pub async fn poll_openai_headless_device_code(
 
     #[derive(Debug, Deserialize)]
     struct TokenResponseBody {
+        #[serde(default)]
+        id_token: Option<String>,
         access_token: String,
         #[serde(default)]
         refresh_token: Option<String>,
@@ -185,8 +246,16 @@ pub async fn poll_openai_headless_device_code(
     Ok(Some(OAuthTokenResponse {
         refresh: refresh_token,
         access: token_data.access_token.clone(),
+        id_token: token_data.id_token.clone(),
         expires_at_ms: expires_at_ms_from_seconds(token_data.expires_in),
-        account_id: extract_openai_account_id(token_data.access_token.as_str()),
+        account_id: openai_account_id_from_token_bodies(
+            token_data.id_token.as_deref(),
+            token_data.access_token.as_str(),
+        ),
+        chatgpt_account_is_fedramp: openai_fedramp_from_token_bodies(
+            token_data.id_token.as_deref(),
+            token_data.access_token.as_str(),
+        ),
         user: None,
     }))
 }
@@ -204,6 +273,8 @@ fn openai_oauth_client(redirect_uri: Option<&str>) -> Result<super::shared::OAut
 
 #[derive(Debug, Deserialize)]
 struct OpenAiTokenResponseBody {
+    #[serde(default)]
+    id_token: Option<String>,
     access_token: String,
     #[serde(default)]
     refresh_token: Option<String>,
@@ -245,10 +316,34 @@ async fn request_openai_oauth_token(
     Ok(OAuthTokenResponse {
         refresh,
         access: token.access_token.clone(),
+        id_token: token.id_token.clone(),
         expires_at_ms: expires_at_ms_from_seconds(token.expires_in),
-        account_id: extract_openai_account_id(token.access_token.as_str()),
+        account_id: openai_account_id_from_token_bodies(
+            token.id_token.as_deref(),
+            token.access_token.as_str(),
+        ),
+        chatgpt_account_is_fedramp: openai_fedramp_from_token_bodies(
+            token.id_token.as_deref(),
+            token.access_token.as_str(),
+        ),
         user: None,
     })
+}
+
+fn openai_account_id_from_token_bodies(
+    id_token: Option<&str>,
+    access_token: &str,
+) -> Option<String> {
+    id_token
+        .and_then(extract_openai_account_id)
+        .or_else(|| extract_openai_account_id(access_token))
+}
+
+fn openai_fedramp_from_token_bodies(id_token: Option<&str>, access_token: &str) -> bool {
+    id_token
+        .and_then(extract_openai_fedramp_account)
+        .or_else(|| extract_openai_fedramp_account(access_token))
+        .unwrap_or(false)
 }
 
 async fn openai_oauth_token_error(
@@ -295,7 +390,65 @@ fn openai_refresh_failure_message(body: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::openai_refresh_failure_message;
+    use super::{
+        openai_account_id_from_token_bodies, openai_fedramp_from_token_bodies,
+        openai_refresh_failure_message, start_openai_browser_oauth,
+    };
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    fn jwt(payload: serde_json::Value) -> String {
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
+        let payload = URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&payload).expect("jwt payload should encode"));
+        format!("{header}.{payload}.")
+    }
+
+    #[test]
+    fn openai_account_id_prefers_id_token_claims() {
+        let id_token = jwt(serde_json::json!({
+            "chatgpt_account_id": "workspace-from-id-token"
+        }));
+        let access_token = jwt(serde_json::json!({
+            "chatgpt_account_id": "workspace-from-access-token"
+        }));
+
+        assert_eq!(
+            openai_account_id_from_token_bodies(Some(id_token.as_str()), access_token.as_str())
+                .as_deref(),
+            Some("workspace-from-id-token")
+        );
+    }
+
+    #[test]
+    fn openai_account_id_falls_back_to_access_token_claims() {
+        let access_token = jwt(serde_json::json!({
+            "organizations": [
+                { "id": "workspace-from-access-token" }
+            ]
+        }));
+
+        assert_eq!(
+            openai_account_id_from_token_bodies(None, access_token.as_str()).as_deref(),
+            Some("workspace-from-access-token")
+        );
+    }
+
+    #[test]
+    fn openai_fedramp_prefers_id_token_claims() {
+        let id_token = jwt(serde_json::json!({
+            "https://api.openai.com/auth": {
+                "chatgpt_account_is_fedramp": true
+            }
+        }));
+        let access_token = jwt(serde_json::json!({
+            "chatgpt_account_is_fedramp": false
+        }));
+
+        assert!(openai_fedramp_from_token_bodies(
+            Some(id_token.as_str()),
+            access_token.as_str()
+        ));
+    }
 
     #[test]
     fn openai_refresh_failure_message_maps_known_codes() {
@@ -309,5 +462,55 @@ mod tests {
             openai_refresh_failure_message(body).expect("known code should map to message");
         assert!(message.contains("already used"));
         assert!(message.contains("sign in again"));
+    }
+
+    #[test]
+    fn openai_browser_authorize_url_matches_official_codex_shape() {
+        let start = start_openai_browser_oauth("http://localhost:1455/auth/callback")
+            .expect("authorize url");
+        let parsed = url::Url::parse(start.authorize_url.as_str()).expect("valid authorize url");
+
+        assert_eq!(
+            parsed.as_str().split('?').next(),
+            Some("https://auth.openai.com/oauth/authorize")
+        );
+        assert_eq!(
+            parsed
+                .query_pairs()
+                .find(|(key, _)| key == "redirect_uri")
+                .map(|(_, value)| value.into_owned()),
+            Some("http://localhost:1455/auth/callback".to_string())
+        );
+        assert_eq!(
+            parsed
+                .query_pairs()
+                .find(|(key, _)| key == "scope")
+                .map(|(_, value)| value.into_owned()),
+            Some(
+                "openid profile email offline_access api.connectors.read api.connectors.invoke"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            parsed
+                .query_pairs()
+                .find(|(key, _)| key == "code_challenge_method")
+                .map(|(_, value)| value.into_owned()),
+            Some("S256".to_string())
+        );
+        assert_eq!(
+            parsed
+                .query_pairs()
+                .find(|(key, _)| key == "codex_cli_simplified_flow")
+                .map(|(_, value)| value.into_owned()),
+            Some("true".to_string())
+        );
+        assert_eq!(
+            parsed
+                .query_pairs()
+                .find(|(key, _)| key == "id_token_add_organizations")
+                .map(|(_, value)| value.into_owned()),
+            Some("true".to_string())
+        );
     }
 }

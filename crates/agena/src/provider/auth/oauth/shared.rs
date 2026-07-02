@@ -324,16 +324,22 @@ fn oauth_token_response(
             .map(|value| value.secret().to_owned())
             .unwrap_or_else(|| refresh_fallback.unwrap_or_default().to_owned()),
         access: access.clone(),
+        id_token: None,
         expires_at_ms: expires_at_ms_from_duration(token.expires_in()),
         account_id: account_id_from_access(access.as_str()),
+        chatgpt_account_is_fedramp: false,
         user: None,
     }
 }
 
-pub(super) fn extract_openai_account_id(jwt: &str) -> Option<String> {
+fn decode_openai_jwt_payload(jwt: &str) -> Option<serde_json::Value> {
     let payload = jwt.split('.').nth(1)?;
     let decoded = URL_SAFE_NO_PAD.decode(payload).ok()?;
-    let json: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+    serde_json::from_slice(&decoded).ok()
+}
+
+pub(super) fn extract_openai_account_id(jwt: &str) -> Option<String> {
+    let json = decode_openai_jwt_payload(jwt)?;
 
     json.get("chatgpt_account_id")
         .and_then(|value| value.as_str())
@@ -351,6 +357,17 @@ pub(super) fn extract_openai_account_id(jwt: &str) -> Option<String> {
                 .and_then(|value| value.get("id"))
                 .and_then(|value| value.as_str())
                 .map(ToOwned::to_owned)
+        })
+}
+
+pub(super) fn extract_openai_fedramp_account(jwt: &str) -> Option<bool> {
+    let json = decode_openai_jwt_payload(jwt)?;
+    json.get("chatgpt_account_is_fedramp")
+        .and_then(|value| value.as_bool())
+        .or_else(|| {
+            json.get("https://api.openai.com/auth")
+                .and_then(|value| value.get("chatgpt_account_is_fedramp"))
+                .and_then(|value| value.as_bool())
         })
 }
 

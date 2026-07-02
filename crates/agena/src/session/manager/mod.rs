@@ -254,6 +254,7 @@ impl SessionRunOptions {
             thinking: self.thinking.clone(),
             verbosity: self.verbosity.clone(),
             response_format: None,
+            responses_api_metadata: None,
             request_override: self.request_override.clone(),
         }
     }

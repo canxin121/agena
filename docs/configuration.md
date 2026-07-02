@@ -504,7 +504,7 @@ route 约束：
 
 创建界面的默认勾选规则：
 
-- OpenAI first-party auth：默认勾选 `web_search`、`file_search`、`code_execution`
+- OpenAI first-party auth：默认勾选 `web_search`
 - Anthropic first-party auth：默认勾选 `web_search`
 - Gemini first-party auth：默认勾选 `web_search`、`url_context`、`code_execution`
 - 其他 auth provenance：默认不勾选，但只要 adapter 支持，仍可手动开启对应 preset
@@ -524,9 +524,7 @@ route 约束：
               "native_tools": {
                 "enabled": true,
                 "routes": {
-                  "web_search": "provider_hosted",
-                  "file_search": "provider_hosted",
-                  "code_execution": "provider_hosted"
+                  "web_search": "provider_hosted"
                 },
                 "hosted": {
                   "web_search": {
@@ -535,22 +533,6 @@ route 约束：
                       "developers.openai.com"
                     ],
                     "freshness": "cached"
-                  },
-                  "file_search": {
-                    "vector_store_ids": [
-                      "vs_docs_main"
-                    ],
-                    "max_results": 8,
-                    "include_results": true
-                  },
-                  "code_execution": {
-                    "container": {
-                      "type": "auto",
-                      "memory_limit": "4g",
-                      "file_ids": [
-                        "file_seed_csv"
-                      ]
-                    }
                   }
                 }
               }

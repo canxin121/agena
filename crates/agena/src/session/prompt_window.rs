@@ -750,6 +750,9 @@ fn assistant_tool_call_payload_chars(message: &Message) -> usize {
             let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
                 return 0;
             };
+            if exec.is_provider_native_only() {
+                return 0;
+            }
             let Some(tool_call_id) = tool_execution_call_id(part, exec) else {
                 return 0;
             };
@@ -768,7 +771,9 @@ fn tool_result_extra_payload_chars(message: &Message) -> usize {
         .parts
         .iter()
         .map(|part| match part.content.as_ref() {
-            Some(PartContent::Operation(exec)) => tool_result_output_text(part, exec).len(),
+            Some(PartContent::Operation(exec)) if !exec.is_provider_native_only() => {
+                tool_result_output_text(part, exec).len()
+            }
             _ => 0,
         })
         .sum()
@@ -786,6 +791,9 @@ fn extend_pending_tool_outputs(pending: &mut Vec<PendingToolCallOutput>, assista
         let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
             continue;
         };
+        if exec.is_provider_native_only() {
+            continue;
+        }
         let Some(tool_call_id) = tool_execution_call_id(part, exec) else {
             continue;
         };
@@ -862,6 +870,9 @@ fn completed_tool_result_ids(message: &Message) -> HashSet<String> {
             let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
                 return None;
             };
+            if exec.is_provider_native_only() {
+                return None;
+            }
             tool_execution_call_id(part, exec)
         })
         .collect()

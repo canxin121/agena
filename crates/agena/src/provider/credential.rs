@@ -650,7 +650,9 @@ async fn resolve_inline_auth_credential(
             let AuthData::OAuth {
                 issuer,
                 refresh: refresh_token,
+                id_token,
                 account_id,
+                chatgpt_account_is_fedramp,
                 enterprise_url,
                 user,
                 ..
@@ -665,8 +667,11 @@ async fn resolve_inline_auth_credential(
                 issuer,
                 refresh: refreshed.refresh,
                 access: refreshed.access,
+                id_token: refreshed.id_token.or(id_token),
                 expires_at_ms: refreshed.expires_at_ms,
                 account_id: refreshed.account_id.or(account_id),
+                chatgpt_account_is_fedramp: refreshed.chatgpt_account_is_fedramp
+                    || chatgpt_account_is_fedramp,
                 enterprise_url,
                 user,
             };
@@ -692,8 +697,10 @@ async fn resolve_inline_auth_credential(
                 issuer,
                 refresh: refreshed.refresh,
                 access: refreshed.access,
+                id_token: refreshed.id_token,
                 expires_at_ms: refreshed.expires_at_ms,
                 account_id,
+                chatgpt_account_is_fedramp: refreshed.chatgpt_account_is_fedramp,
                 enterprise_url,
                 user,
             };
@@ -879,8 +886,10 @@ mod tests {
             issuer: Some(issuer),
             refresh: refresh.to_owned(),
             access: access.to_owned(),
+            id_token: None,
             expires_at_ms,
             account_id: Some("acct_123".to_owned()),
+            chatgpt_account_is_fedramp: false,
             enterprise_url: enterprise_url.map(str::to_owned),
             user: None,
         }

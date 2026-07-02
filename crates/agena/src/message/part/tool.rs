@@ -946,6 +946,8 @@ pub struct OperationPart {
     pub lifecycle: TimeRange,
 }
 
+const PROVIDER_NATIVE_ONLY_METADATA_KEY: &str = "provider_native_only";
+
 impl OperationPart {
     pub fn pending(
         call_id: i64,
@@ -1049,6 +1051,24 @@ impl OperationPart {
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
         self
+    }
+
+    pub fn set_provider_native_only(&mut self, value: bool) {
+        if value {
+            self.metadata.insert(
+                PROVIDER_NATIVE_ONLY_METADATA_KEY.to_string(),
+                serde_json::Value::Bool(true),
+            );
+        } else {
+            self.metadata.remove(PROVIDER_NATIVE_ONLY_METADATA_KEY);
+        }
+    }
+
+    pub fn is_provider_native_only(&self) -> bool {
+        self.metadata
+            .get(PROVIDER_NATIVE_ONLY_METADATA_KEY)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
     }
 
     pub fn call_id(&self) -> i64 {

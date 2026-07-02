@@ -16,7 +16,8 @@ use crate::db::init_schema;
 use crate::event::EventKind;
 use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, ExecutionStatus, MessageMetadata, MessagePart,
-    UserInputOption, UserInputQuestion,
+    OperationBlock, StructuredObject, ToolInvocation, ToolOutput, UserInputOption,
+    UserInputQuestion,
 };
 use crate::model::{ModelId, ModelRef, ProviderId};
 use crate::permission::{
@@ -99,6 +100,7 @@ impl TempWorkspace {
 impl Drop for TempWorkspace {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
+        let _ = fs::remove_dir_all(crate::project_paths::project_state_dir(&self.root));
     }
 }
 
@@ -693,6 +695,154 @@ impl ModelRuntime for ScriptedProvider {
                     provider_metadata: None,
                 }),
             ]
+        } else if last_user_text.contains("native web search") {
+            vec![
+                Ok(CompletionStreamEvent::NativeToolCallStarted {
+                    provider_id: scripted_provider_id(),
+                    model: scripted_model_id(),
+                    stream_key: "item:ws_native_1".to_string(),
+                    id: Some("ws_native_1".to_string()),
+                    invocation: ToolInvocation::new(
+                        "web.run",
+                        StructuredObject::try_from(serde_json::json!({
+                            "query": "weather seattle"
+                        }))
+                        .expect("native web search input"),
+                    ),
+                    title: String::new(),
+                    raw: Some(serde_json::json!({
+                        "type": "web_search_call",
+                        "id": "ws_native_1",
+                        "status": "in_progress"
+                    })),
+                }),
+                Ok(CompletionStreamEvent::NativeToolCallCompleted {
+                    provider_id: scripted_provider_id(),
+                    model: scripted_model_id(),
+                    stream_key: "item:ws_native_1".to_string(),
+                    id: Some("ws_native_1".to_string()),
+                    invocation: ToolInvocation::new(
+                        "web.run",
+                        StructuredObject::try_from(serde_json::json!({
+                            "query": "weather seattle"
+                        }))
+                        .expect("native web search input"),
+                    ),
+                    title: String::new(),
+                    output_text: String::new(),
+                    blocks: vec![OperationBlock::SearchResults {
+                        query: Some("weather seattle".to_string()),
+                        results: vec![crate::message::SearchResultItem {
+                            title: "Seattle forecast".to_string(),
+                            uri: "https://example.com/weather".to_string(),
+                            snippet: Some("Current forecast".to_string()),
+                            score: None,
+                        }],
+                    }],
+                    details: ToolOutput::from_json_payload(Some(&serde_json::json!({
+                        "type": "web_search_call",
+                        "id": "ws_native_1",
+                        "status": "completed",
+                        "action": {
+                            "type": "search",
+                            "query": "weather seattle"
+                        }
+                    })))
+                    .expect("native web search details"),
+                    raw: Some(serde_json::json!({
+                        "type": "web_search_call",
+                        "id": "ws_native_1",
+                        "status": "completed",
+                        "action": {
+                            "type": "search",
+                            "query": "weather seattle"
+                        }
+                    })),
+                }),
+                Ok(CompletionStreamEvent::TextDelta {
+                    provider_id: scripted_provider_id(),
+                    model: scripted_model_id(),
+                    delta: "native search finished".to_string(),
+                }),
+                Ok(CompletionStreamEvent::Completed {
+                    provider_id: scripted_provider_id(),
+                    model: scripted_model_id(),
+                    finish_reason: Some(CompletionFinishReason::Stop),
+                    usage: None,
+                    provider_metadata: None,
+                }),
+            ]
+        } else if last_user_text.contains("native image generation") {
+            vec![
+                Ok(CompletionStreamEvent::NativeToolCallStarted {
+                    provider_id: scripted_provider_id(),
+                    model: scripted_model_id(),
+                    stream_key: "item:ig_native_1".to_string(),
+                    id: Some("ig_native_1".to_string()),
+                    invocation: ToolInvocation::new(
+                        "image_generation",
+                        StructuredObject::try_from(serde_json::json!({
+                            "description": "A tiny transparent PNG image"
+                        }))
+                        .expect("native image generation input"),
+                    ),
+                    title: String::new(),
+                    raw: Some(serde_json::json!({
+                        "type": "image_generation_call",
+                        "id": "ig_native_1",
+                        "status": "in_progress"
+                    })),
+                }),
+                Ok(CompletionStreamEvent::NativeToolCallCompleted {
+                    provider_id: scripted_provider_id(),
+                    model: scripted_model_id(),
+                    stream_key: "item:ig_native_1".to_string(),
+                    id: Some("ig_native_1".to_string()),
+                    invocation: ToolInvocation::new(
+                        "image_generation",
+                        StructuredObject::try_from(serde_json::json!({
+                            "description": "A tiny transparent PNG image"
+                        }))
+                        .expect("native image generation input"),
+                    ),
+                    title: String::new(),
+                    output_text: "A tiny transparent PNG image".to_string(),
+                    blocks: vec![OperationBlock::Media {
+                        mime_type: "image/png".to_string(),
+                        artifact: crate::message::ArtifactRef {
+                            uri: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO9W7tYAAAAASUVORK5CYII="
+                                .to_string(),
+                            mime: "image/png".to_string(),
+                            name: Some("generated-image.png".to_string()),
+                            size_bytes: None,
+                            sha256: None,
+                        },
+                    }],
+                    details: ToolOutput::from_json_payload(Some(&serde_json::json!({
+                        "type": "image_generation_call",
+                        "id": "ig_native_1",
+                        "status": "completed"
+                    })))
+                    .expect("native image generation details"),
+                    raw: Some(serde_json::json!({
+                        "type": "image_generation_call",
+                        "id": "ig_native_1",
+                        "status": "completed"
+                    })),
+                }),
+                Ok(CompletionStreamEvent::TextDelta {
+                    provider_id: scripted_provider_id(),
+                    model: scripted_model_id(),
+                    delta: "native image finished".to_string(),
+                }),
+                Ok(CompletionStreamEvent::Completed {
+                    provider_id: scripted_provider_id(),
+                    model: scripted_model_id(),
+                    finish_reason: Some(CompletionFinishReason::Stop),
+                    usage: None,
+                    provider_metadata: None,
+                }),
+            ]
         } else {
             vec![
                 Ok(CompletionStreamEvent::TextDelta {
@@ -1043,7 +1193,8 @@ where
     let mut registry = ProviderRegistry::new();
     registry.register(provider);
     let processor = SessionProcessor::new(Arc::new(registry), ContextGovernor::new(context_policy))
-        .with_plugin_host(Arc::clone(&plugins));
+        .with_plugin_host(Arc::clone(&plugins))
+        .with_workspace_root(root);
 
     SessionManager::new(db, processor, executor).with_config(config)
 }
@@ -1066,7 +1217,8 @@ where
     let mut registry = ProviderRegistry::new();
     registry.register(provider);
     let processor = SessionProcessor::new(Arc::new(registry), ContextGovernor::new(context_policy))
-        .with_plugin_host(Arc::clone(&plugins));
+        .with_plugin_host(Arc::clone(&plugins))
+        .with_workspace_root(root);
     let executor = ToolExecutor::new(
         root,
         Agent::new("build", permission_policy).with_tool_policy(tool_policy),
@@ -1530,6 +1682,186 @@ fn operation_snapshot(
             }
         })
         .unwrap_or_else(|| panic!("operation {operation_id} should exist"))
+}
+
+#[tokio::test]
+async fn provider_native_web_search_events_become_completed_operation_parts() {
+    let workspace = TempWorkspace::new();
+    let service = build_manager(
+        &workspace.root,
+        PermissionPolicy::allow_all(),
+        SessionManagerConfig::default(),
+    )
+    .await;
+
+    let created = service
+        .create_session(SessionCreateRequest {
+            title: "native-web-search".into(),
+            parent_session_id: None,
+        })
+        .await
+        .expect("create session");
+
+    let completed = service
+        .submit_user_message(SessionUserMessageRequest::new(
+            created.id,
+            run_options(),
+            vec![PartContent::text("please do native web search")],
+        ))
+        .await
+        .expect("submit message");
+
+    assert!(
+        completed.next_pending_tool().is_none(),
+        "provider-native web search must not queue a local pending tool"
+    );
+    let (status, error, output) = operation_snapshot(&completed, "ws_native_1");
+    assert_eq!(status, ExecutionStatus::Completed);
+    assert!(error.is_none(), "unexpected native-tool error: {error:?}");
+    assert!(output.is_empty(), "native web search should not invent tool output text");
+
+    let operation = completed
+        .messages
+        .iter()
+        .flat_map(|message| message.parts.iter())
+        .find_map(|part| {
+            if part.operation_id.as_deref() != Some("ws_native_1") {
+                return None;
+            }
+            match part.content.as_ref() {
+                Some(PartContent::Operation(operation)) => Some(operation),
+                _ => None,
+            }
+        })
+        .expect("native web search operation should exist");
+
+    assert!(operation.is_provider_native_only());
+    assert_eq!(operation.invocation.name, "web.run");
+    assert_eq!(
+        operation
+            .invocation
+            .input
+            .get("query")
+            .and_then(|value| value.as_text()),
+        Some("weather seattle")
+    );
+    assert!(matches!(
+        operation.blocks.first(),
+        Some(OperationBlock::SearchResults { query, results })
+            if query.as_deref() == Some("weather seattle")
+                && results.len() == 1
+                && results[0].title == "Seattle forecast"
+                && results[0].uri == "https://example.com/weather"
+    ));
+
+    let reloaded = service
+        .get_session(created.id)
+        .await
+        .expect("session should reload with native tool part");
+    assert!(
+        reloaded
+            .messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .any(|part| part.operation_id.as_deref() == Some("ws_native_1")),
+        "native web search operation should persist"
+    );
+}
+
+#[tokio::test]
+async fn provider_native_image_generation_events_persist_local_artifact_paths() {
+    let workspace = TempWorkspace::new();
+    let service = build_manager(
+        &workspace.root,
+        PermissionPolicy::allow_all(),
+        SessionManagerConfig::default(),
+    )
+    .await;
+
+    let created = service
+        .create_session(SessionCreateRequest {
+            title: "native-image-generation".into(),
+            parent_session_id: None,
+        })
+        .await
+        .expect("create session");
+
+    let completed = service
+        .submit_user_message(SessionUserMessageRequest::new(
+            created.id,
+            run_options(),
+            vec![PartContent::text("please do native image generation")],
+        ))
+        .await
+        .expect("submit message");
+
+    let operation = completed
+        .messages
+        .iter()
+        .flat_map(|message| message.parts.iter())
+        .find_map(|part| {
+            if part.operation_id.as_deref() != Some("ig_native_1") {
+                return None;
+            }
+            match part.content.as_ref() {
+                Some(PartContent::Operation(operation))
+                    if part.status == ExecutionStatus::Completed =>
+                {
+                    Some(operation)
+                }
+                _ => None,
+            }
+        })
+        .expect("native image generation operation should exist");
+
+    let artifact_path = operation
+        .blocks
+        .iter()
+        .find_map(|block| match block {
+            OperationBlock::Media { artifact, .. } => Some(artifact.uri.as_str()),
+            _ => None,
+        })
+        .expect("native image generation should expose a media artifact");
+    assert!(
+        artifact_path.starts_with(
+            crate::project_paths::project_state_dir(&workspace.root)
+                .join("generated_images")
+                .to_string_lossy()
+                .as_ref()
+        ),
+        "generated image path should be stored under the workspace state dir: {artifact_path}"
+    );
+    assert!(
+        !artifact_path.starts_with("data:"),
+        "generated image artifact should not remain an inline data URL"
+    );
+    assert!(
+        std::path::Path::new(artifact_path).is_file(),
+        "generated image artifact path should exist on disk: {artifact_path}"
+    );
+
+    let reloaded = service
+        .get_session(created.id)
+        .await
+        .expect("session should reload with persisted native image artifact");
+    assert!(
+        reloaded.messages.iter().flat_map(|message| message.parts.iter()).any(
+            |part| match part.content.as_ref() {
+                Some(PartContent::Operation(operation))
+                    if part.operation_id.as_deref() == Some("ig_native_1") =>
+                {
+                    operation.blocks.iter().any(|block| match block {
+                        OperationBlock::Media { artifact, .. } => {
+                            artifact.uri == artifact_path && std::path::Path::new(&artifact.uri).is_file()
+                        }
+                        _ => false,
+                    })
+                }
+                _ => false,
+            }
+        ),
+        "reloaded session should keep the persisted native image artifact path"
+    );
 }
 
 #[tokio::test]
@@ -3246,7 +3578,8 @@ fn pending_permission_request_aggregates_invocation_actions() {
             Arc::new(registry),
             ContextGovernor::new(ContextPolicy::default()),
         )
-        .with_plugin_host(Arc::clone(&plugins));
+        .with_plugin_host(Arc::clone(&plugins))
+        .with_workspace_root(&workspace.root);
         let test_executor = executor.clone();
         let manager = SessionManager::new(db, processor, executor)
             .with_config(SessionManagerConfig::default());
@@ -4334,7 +4667,8 @@ mod runtime_builtin_tool_tests {
             Arc::new(registry),
             ContextGovernor::new(ContextPolicy::default()),
         )
-        .with_plugin_host(Arc::clone(&plugins));
+        .with_plugin_host(Arc::clone(&plugins))
+        .with_workspace_root(root);
         let manager = Arc::new(
             SessionManager::new(db, processor, executor)
                 .with_config(SessionManagerConfig::default()),

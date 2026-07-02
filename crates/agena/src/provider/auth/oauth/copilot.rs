@@ -69,8 +69,10 @@ pub async fn poll_copilot_device_code(
         return Ok(Some(OAuthTokenResponse {
             refresh: token.clone(),
             access: token,
+            id_token: None,
             expires_at_ms: 0,
             account_id: None,
+            chatgpt_account_is_fedramp: false,
             user: None,
         }));
     }

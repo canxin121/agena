@@ -9,8 +9,9 @@ pub use agena_api::resource::{
 };
 
 pub use dto::{
-    AuthApiKeyWriteRequest, AuthBrowserStartResource, AuthCodeExchangeRequest, AuthCredentialType,
-    AuthDeviceStartResource, AuthEnterpriseDevicePollRequest, AuthEnterpriseDeviceRequest,
+    AuthApiKeyWriteRequest, AuthBrowserStartResource, AuthCodeExchangeRequest,
+    AuthCredentialIssuerResource, AuthCredentialType, AuthDeviceStartResource,
+    AuthEnterpriseDevicePollRequest, AuthEnterpriseDeviceRequest, AuthLoginKindResource,
     AuthLoginResultResource, AuthProviderRequest, AuthProviderResource, AuthRedirectRequest,
     AuthStatePollRequest, AuthUserCodeDevicePollRequest, CatalogModelResource,
     CursorPaginationQuery, HealthResponse, ItemsResponse, MarketplaceInstallOutcomeResource,

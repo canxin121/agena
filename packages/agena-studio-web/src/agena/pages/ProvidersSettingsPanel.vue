@@ -108,17 +108,14 @@ const providerCreateDraft = reactive({
   catalog_model_id: '',
   native_tools_profile: 'disabled' as ProviderCreateNativeToolsProfile,
 })
+const selectedOauthMethod = reactive<Record<string, 'browser' | 'device'>>({})
 
 const connectedCount = computed(
   () => props.authProviders.filter((provider) => provider.credential_present && !provider.expired).length,
 )
 const expiredCount = computed(() => props.authProviders.filter((provider) => provider.expired).length)
-const browserFlowCount = computed(
-  () => props.authProviders.filter((provider) => supportsBrowserLogin(provider.provider_id)).length,
-)
-const deviceFlowCount = computed(
-  () => props.authProviders.filter((provider) => supportsDeviceLogin(provider.provider_id)).length,
-)
+const browserFlowCount = computed(() => props.authProviders.filter((provider) => supportsBrowserLogin(provider)).length)
+const deviceFlowCount = computed(() => props.authProviders.filter((provider) => supportsDeviceLogin(provider)).length)
 const providerConfigCount = computed(() => props.providers.length)
 function mergeCatalogEntries(existing: ModelCatalogEntry[], incoming: ModelCatalogEntry[]) {
   const merged = new Map<string, ModelCatalogEntry>()
@@ -162,17 +159,124 @@ function credentialLabel(provider: AuthProvider) {
   return 'not configured'
 }
 
-function supportsBrowserLogin(providerId: string) {
-  return providerId === 'openai' || providerId === 'gitlab' || isAtomGitProvider(providerId)
+function supportsApiKeyWrite(provider: AuthProvider) {
+  return Boolean(provider.api_key_write_supported)
 }
 
-function supportsDeviceLogin(providerId: string) {
-  return providerId === 'openai' || providerId === 'github-copilot'
+function supportsBrowserLogin(provider: AuthProvider) {
+  return Boolean(provider.browser_login_kind)
 }
 
-function isAtomGitProvider(providerId: string) {
-  const normalized = providerId.toLowerCase()
-  return normalized === 'atomgit' || normalized.startsWith('atomgit-')
+function supportsDeviceLogin(provider: AuthProvider) {
+  return Boolean(provider.device_login_kind)
+}
+
+function canRefreshCredential(provider: AuthProvider) {
+  return Boolean(provider.refresh_supported && provider.credential_type === 'oauth')
+}
+
+function credentialIssuerLabel(provider: AuthProvider) {
+  const issuer = String(provider.credential_issuer || '').trim()
+  if (!issuer) return ''
+  if (issuer === 'openai_chatgpt') return 'openai_chatgpt'
+  if (issuer === 'github_copilot') return 'github_copilot'
+  return issuer
+}
+
+function browserLoginKindLabel(provider: AuthProvider) {
+  if (provider.browser_login_kind === 'openai_chatgpt') return 'ChatGPT Browser OAuth'
+  if (provider.browser_login_kind === 'gitlab') return 'GitLab Browser OAuth'
+  return 'Browser OAuth'
+}
+
+function deviceLoginKindLabel(provider: AuthProvider) {
+  if (provider.device_login_kind === 'openai_chatgpt') return 'ChatGPT Device Login'
+  if (provider.device_login_kind === 'github_copilot') return 'GitHub Copilot Device Login'
+  return 'Device Login'
+}
+
+function providerOauthMethodCount(provider: AuthProvider) {
+  let count = 0
+  if (supportsBrowserLogin(provider)) count += 1
+  if (supportsDeviceLogin(provider)) count += 1
+  return count
+}
+
+function preferredOauthMethod(provider: AuthProvider): 'browser' | 'device' | null {
+  if (props.deviceAuthStartState[provider.provider_id]) return 'device'
+  if (props.browserAuthStartState[provider.provider_id]) return 'browser'
+  if (supportsDeviceLogin(provider)) return 'device'
+  if (supportsBrowserLogin(provider)) return 'browser'
+  return null
+}
+
+function selectedOauthMethodFor(provider: AuthProvider): 'browser' | 'device' | null {
+  if (!supportsBrowserLogin(provider) && !supportsDeviceLogin(provider)) return null
+  const current = selectedOauthMethod[provider.provider_id]
+  if (current === 'browser' && supportsBrowserLogin(provider)) return current
+  if (current === 'device' && supportsDeviceLogin(provider)) return current
+  return preferredOauthMethod(provider)
+}
+
+function showBrowserLoginSection(provider: AuthProvider) {
+  if (!supportsBrowserLogin(provider)) return false
+  if (!supportsDeviceLogin(provider)) return true
+  return selectedOauthMethodFor(provider) === 'browser'
+}
+
+function showDeviceLoginSection(provider: AuthProvider) {
+  if (!supportsDeviceLogin(provider)) return false
+  if (!supportsBrowserLogin(provider)) return true
+  return selectedOauthMethodFor(provider) === 'device'
+}
+
+function browserLoginStartLabel(provider: AuthProvider) {
+  if (props.browserAuthStartState[provider.provider_id]) return 'Restart Browser Login'
+  if (provider.credential_present) return 'Re-auth in Browser'
+  return 'Start Browser Login'
+}
+
+function deviceLoginStartLabel(provider: AuthProvider) {
+  if (props.deviceAuthStartState[provider.provider_id]) return 'Restart Device Login'
+  if (provider.credential_present) return 'Re-auth on Device'
+  return 'Start Device Login'
+}
+
+function browserLoginInstanceUrl(provider: AuthProvider) {
+  return (
+    String(props.browserAuthStartState[provider.provider_id]?.instance_url || '').trim() ||
+    String(provider.browser_login_instance_url || '').trim() ||
+    String(props.browserAuthInstanceDrafts[provider.provider_id] || '').trim()
+  )
+}
+
+function browserRedirectUri() {
+  if (typeof window === 'undefined' || !window.location) return 'http://localhost:1455/auth/callback'
+  const { protocol, hostname, port } = window.location
+  if ((protocol === 'http:' || protocol === 'https:') && (hostname === 'localhost' || hostname === '127.0.0.1')) {
+    return `${protocol}//localhost${port ? `:${port}` : ''}/auth/callback`
+  }
+  return 'http://localhost:1455/auth/callback'
+}
+
+function openExternalUrl(url: string) {
+  const target = String(url || '').trim()
+  if (!target || typeof window === 'undefined') return
+  window.open(target, '_blank', 'noopener,noreferrer')
+}
+
+async function copyText(value: string, label: string) {
+  const text = String(value || '').trim()
+  if (!text) {
+    setConfigError(`${label} is empty.`)
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    setConfigMessage(`Copied ${label}.`)
+  } catch (err) {
+    setConfigError(err instanceof Error ? err.message : `Failed to copy ${label}.`)
+  }
 }
 
 function optionalText(value: string) {
@@ -217,7 +321,8 @@ const providerCreateNativeToolsOptions = computed(() => {
     {
       value: 'disabled',
       label: 'disabled',
-      detail: 'Write providers.<id>.adapters.<adapter>.models.<model>.native_tools.enabled = false for the default model.',
+      detail:
+        'Write providers.<id>.adapters.<adapter>.models.<model>.native_tools.enabled = false for the default model.',
     },
   ]
   const available = availableProviderCreateNativeToolsProfile()
@@ -225,7 +330,7 @@ const providerCreateNativeToolsOptions = computed(() => {
     options.push({
       value: available,
       label: 'openai hosted defaults',
-      detail: 'Write explicit hosted routes for web_search, file_search, and code_execution on the default model.',
+      detail: 'Write an explicit hosted route for web_search on the default model.',
     })
   } else if (available === 'anthropic_hosted_defaults') {
     options.push({
@@ -246,7 +351,8 @@ const providerCreateNativeToolsOptions = computed(() => {
 const providerCreateNativeToolsDetail = computed(
   () =>
     providerCreateNativeToolsOptions.value.find((option) => option.value === providerCreateDraft.native_tools_profile)
-      ?.detail || 'Remote native tools are written explicitly into providers.<id>.adapters.<adapter>.models.<model>.native_tools.',
+      ?.detail ||
+    'Remote native tools are written explicitly into providers.<id>.adapters.<adapter>.models.<model>.native_tools.',
 )
 
 watchEffect(() => {
@@ -274,8 +380,6 @@ function buildProviderCreateNativeToolsPatch(profile: ProviderCreateNativeToolsP
       enabled: true,
       routes: {
         web_search: 'provider_hosted',
-        file_search: 'provider_hosted',
-        code_execution: 'provider_hosted',
       },
     }
   }
@@ -346,6 +450,29 @@ watchEffect(() => {
   for (const provider of props.providers) {
     if (!savedProviderSelectedAdapterIds[provider.provider_id]) {
       savedProviderSelectedAdapterIds[provider.provider_id] = []
+    }
+  }
+})
+
+watchEffect(() => {
+  for (const provider of props.authProviders) {
+    const current = selectedOauthMethod[provider.provider_id]
+    const currentValid =
+      (current === 'browser' && supportsBrowserLogin(provider)) ||
+      (current === 'device' && supportsDeviceLogin(provider))
+    if (props.deviceAuthStartState[provider.provider_id]) {
+      selectedOauthMethod[provider.provider_id] = 'device'
+    } else if (props.browserAuthStartState[provider.provider_id]) {
+      selectedOauthMethod[provider.provider_id] = 'browser'
+    } else if (!currentValid) {
+      const preferred = preferredOauthMethod(provider)
+      if (preferred) selectedOauthMethod[provider.provider_id] = preferred
+      else delete selectedOauthMethod[provider.provider_id]
+    }
+
+    const instanceUrl = String(provider.browser_login_instance_url || '').trim()
+    if (instanceUrl && !String(props.browserAuthInstanceDrafts[provider.provider_id] || '').trim()) {
+      props.browserAuthInstanceDrafts[provider.provider_id] = instanceUrl
     }
   }
 })
@@ -935,9 +1062,7 @@ onMounted(() => {
         </div>
         <p v-if="provider.native_tools" class="muted" style="margin-top: 10px">
           Remote tools:
-          {{
-            provider.native_tools.enabled ? 'default model enabled' : 'default model disabled'
-          }}
+          {{ provider.native_tools.enabled ? 'default model enabled' : 'default model disabled' }}
           · {{ provider.native_tools.model_count }} model(s) configured
           <template v-if="provider.native_tools.bindings?.length">
             ·
@@ -1309,6 +1434,13 @@ onMounted(() => {
               {{ credentialLabel(provider) }}
             </span>
             <span class="badge neutral">{{ provider.credential_type || 'credential' }}</span>
+            <span v-if="credentialIssuerLabel(provider)" class="badge neutral">{{
+              credentialIssuerLabel(provider)
+            }}</span>
+            <span v-if="supportsApiKeyWrite(provider)" class="badge neutral">api key</span>
+            <span v-if="supportsBrowserLogin(provider)" class="badge neutral">browser oauth</span>
+            <span v-if="supportsDeviceLogin(provider)" class="badge neutral">device login</span>
+            <span v-if="canRefreshCredential(provider)" class="badge neutral">refresh</span>
           </div>
         </div>
 
@@ -1319,85 +1451,157 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="inline-fields">
-          <div class="field">
-            <label class="label" :for="`api-key-${provider.provider_id}`">API Key</label>
-            <input
-              :id="`api-key-${provider.provider_id}`"
-              v-model="props.drafts[provider.provider_id]"
-              class="input mono"
-              type="password"
-              placeholder="sk-..."
-            />
+        <div v-if="supportsApiKeyWrite(provider)" class="record-section">
+          <div class="settings-panel-header">
+            <div>
+              <p class="settings-panel-kicker">API Key</p>
+              <h4 class="settings-panel-title">Manual Key Entry</h4>
+            </div>
           </div>
-          <div class="button-row">
-            <button class="button primary" @click="props.saveApiKey(provider.provider_id)">Save Key</button>
-            <button class="button" @click="props.refreshCredential(provider.provider_id)">Refresh</button>
-            <button class="button danger" @click="props.clearCredential(provider.provider_id)">Delete</button>
+          <div class="inline-fields">
+            <div class="field">
+              <label class="label" :for="`api-key-${provider.provider_id}`">API Key</label>
+              <input
+                :id="`api-key-${provider.provider_id}`"
+                v-model="props.drafts[provider.provider_id]"
+                class="input mono"
+                type="password"
+                placeholder="sk-..."
+              />
+            </div>
+            <div class="button-row">
+              <button class="button primary" @click="props.saveApiKey(provider.provider_id)">Save Key</button>
+            </div>
           </div>
         </div>
 
-        <div v-if="supportsBrowserLogin(provider.provider_id)" class="record-section">
+        <div v-if="providerOauthMethodCount(provider) > 1" class="button-row" style="margin-top: 12px; flex-wrap: wrap">
+          <button
+            v-if="supportsBrowserLogin(provider)"
+            :class="selectedOauthMethodFor(provider) === 'browser' ? 'button primary' : 'button ghost'"
+            @click="selectedOauthMethod[provider.provider_id] = 'browser'"
+          >
+            {{ browserLoginKindLabel(provider) }}
+          </button>
+          <button
+            v-if="supportsDeviceLogin(provider)"
+            :class="selectedOauthMethodFor(provider) === 'device' ? 'button primary' : 'button ghost'"
+            @click="selectedOauthMethod[provider.provider_id] = 'device'"
+          >
+            {{ deviceLoginKindLabel(provider) }}
+          </button>
+        </div>
+
+        <div v-if="showBrowserLoginSection(provider)" class="record-section">
           <div class="settings-panel-header">
             <div>
               <p class="settings-panel-kicker">Browser Login</p>
-              <h4 class="settings-panel-title">
-                {{
-                  provider.provider_id === 'gitlab'
-                    ? 'GitLab OAuth'
-                    : isAtomGitProvider(provider.provider_id)
-                      ? 'AtomGit OAuth'
-                      : 'OAuth Redirect'
-                }}
-              </h4>
+              <h4 class="settings-panel-title">{{ browserLoginKindLabel(provider) }}</h4>
             </div>
-            <button class="button" @click="props.startBrowserAuth(provider.provider_id)">Start Browser Login</button>
+            <button class="button" @click="props.startBrowserAuth(provider.provider_id)">
+              {{ browserLoginStartLabel(provider) }}
+            </button>
           </div>
 
-          <div v-if="provider.provider_id === 'gitlab'" class="field">
-            <label class="label" :for="`browser-instance-${provider.provider_id}`">GitLab Instance URL</label>
+          <p class="muted">
+            Open the authorization link, finish the provider flow, then paste the full callback URL or the raw
+            authorization code here.
+          </p>
+
+          <div v-if="browserLoginInstanceUrl(provider)" class="field" style="margin-top: 12px">
+            <label class="label" :for="`browser-instance-${provider.provider_id}`">Instance URL</label>
             <input
               :id="`browser-instance-${provider.provider_id}`"
-              v-model="props.browserAuthInstanceDrafts[provider.provider_id]"
+              :value="browserLoginInstanceUrl(provider)"
               class="input mono"
-              placeholder="https://gitlab.com"
+              readonly
             />
           </div>
 
           <div v-if="props.browserAuthStartState[provider.provider_id]" class="form-grid">
-            <div v-if="!isAtomGitProvider(provider.provider_id)" class="field">
-              <label class="label" :for="`browser-code-${provider.provider_id}`">Authorization Code</label>
-              <input
-                :id="`browser-code-${provider.provider_id}`"
-                v-model="props.browserAuthCodeDrafts[provider.provider_id]"
+            <div class="field full">
+              <label class="label" :for="`browser-authorize-url-${provider.provider_id}`">Authorization URL</label>
+              <textarea
+                :id="`browser-authorize-url-${provider.provider_id}`"
                 class="input mono"
-                placeholder="paste callback code"
+                rows="3"
+                readonly
+                :value="props.browserAuthStartState[provider.provider_id]?.authorize_url || ''"
               />
             </div>
             <div class="field">
-              <label class="label">State</label>
-              <div class="input mono">{{ props.browserAuthStartState[provider.provider_id]?.state }}</div>
+              <label class="label" :for="`browser-redirect-uri-${provider.provider_id}`">Redirect URI</label>
+              <input
+                :id="`browser-redirect-uri-${provider.provider_id}`"
+                class="input mono"
+                :value="browserRedirectUri()"
+                readonly
+              />
             </div>
-            <div class="button-row full">
+            <div class="field">
+              <label class="label" :for="`browser-state-${provider.provider_id}`">State</label>
+              <input
+                :id="`browser-state-${provider.provider_id}`"
+                class="input mono"
+                :value="props.browserAuthStartState[provider.provider_id]?.state || ''"
+                readonly
+              />
+            </div>
+            <div class="field full">
+              <label class="label" :for="`browser-code-${provider.provider_id}`"
+                >Callback URL or Authorization Code</label
+              >
+              <textarea
+                :id="`browser-code-${provider.provider_id}`"
+                v-model="props.browserAuthCodeDrafts[provider.provider_id]"
+                class="input mono"
+                rows="3"
+                placeholder="https://app.example/auth/callback?code=...&state=... or paste just the code"
+              />
+            </div>
+            <div class="button-row full" style="flex-wrap: wrap">
+              <button
+                class="button"
+                @click="openExternalUrl(props.browserAuthStartState[provider.provider_id]?.authorize_url || '')"
+              >
+                Open Authorization URL
+              </button>
+              <button
+                class="button"
+                @click="
+                  copyText(props.browserAuthStartState[provider.provider_id]?.authorize_url || '', 'authorization URL')
+                "
+              >
+                Copy URL
+              </button>
+              <button class="button" @click="copyText(browserRedirectUri(), 'redirect URI')">Copy Redirect URI</button>
+              <button
+                class="button"
+                @click="copyText(props.browserAuthStartState[provider.provider_id]?.state || '', 'oauth state')"
+              >
+                Copy State
+              </button>
               <button class="button primary" @click="props.finishBrowserAuth(provider.provider_id)">
-                {{ isAtomGitProvider(provider.provider_id) ? 'Poll Browser Login' : 'Finish Browser Login' }}
+                Finish Browser Login
               </button>
             </div>
           </div>
         </div>
 
-        <div v-if="supportsDeviceLogin(provider.provider_id)" class="record-section">
+        <div v-if="showDeviceLoginSection(provider)" class="record-section">
           <div class="settings-panel-header">
             <div>
               <p class="settings-panel-kicker">Device Login</p>
-              <h4 class="settings-panel-title">
-                {{ provider.provider_id === 'github-copilot' ? 'GitHub Copilot' : 'Device Code' }}
-              </h4>
+              <h4 class="settings-panel-title">{{ deviceLoginKindLabel(provider) }}</h4>
             </div>
-            <button class="button" @click="props.startDeviceAuth(provider.provider_id)">Start Device Login</button>
+            <button class="button" @click="props.startDeviceAuth(provider.provider_id)">
+              {{ deviceLoginStartLabel(provider) }}
+            </button>
           </div>
 
-          <div v-if="provider.provider_id === 'github-copilot'" class="field">
+          <p class="muted">Open the verification page, approve the login, then return here and check the session.</p>
+
+          <div v-if="provider.device_login_kind === 'github_copilot'" class="field" style="margin-top: 12px">
             <label class="label" :for="`device-enterprise-${provider.provider_id}`">Enterprise Domain</label>
             <input
               :id="`device-enterprise-${provider.provider_id}`"
@@ -1407,27 +1611,74 @@ onMounted(() => {
             />
           </div>
 
-          <div v-if="props.deviceAuthStartState[provider.provider_id]" class="facts-grid">
-            <div class="fact-row">
-              <div class="fact-label">Verification URL</div>
-              <div class="fact-value mono">
-                {{ props.deviceAuthStartState[provider.provider_id]?.verification_url }}
-              </div>
+          <div v-if="props.deviceAuthStartState[provider.provider_id]" class="form-grid">
+            <div class="field full">
+              <label class="label" :for="`device-verification-url-${provider.provider_id}`">Verification URL</label>
+              <textarea
+                :id="`device-verification-url-${provider.provider_id}`"
+                class="input mono"
+                rows="3"
+                readonly
+                :value="props.deviceAuthStartState[provider.provider_id]?.verification_url || ''"
+              />
             </div>
-            <div class="fact-row">
-              <div class="fact-label">User Code</div>
-              <div class="fact-value mono">{{ props.deviceAuthStartState[provider.provider_id]?.user_code }}</div>
+            <div class="field">
+              <label class="label" :for="`device-user-code-${provider.provider_id}`">User Code</label>
+              <input
+                :id="`device-user-code-${provider.provider_id}`"
+                class="input mono"
+                :value="props.deviceAuthStartState[provider.provider_id]?.user_code || ''"
+                readonly
+              />
             </div>
-            <div class="fact-row">
-              <div class="fact-label">Interval</div>
-              <div class="fact-value">{{ props.deviceAuthStartState[provider.provider_id]?.interval_seconds }}s</div>
+            <div class="field">
+              <label class="label" :for="`device-interval-${provider.provider_id}`">Poll Interval</label>
+              <input
+                :id="`device-interval-${provider.provider_id}`"
+                class="input mono"
+                :value="`${props.deviceAuthStartState[provider.provider_id]?.interval_seconds || 0}s`"
+                readonly
+              />
             </div>
-            <div class="button-row">
+            <div class="button-row full" style="flex-wrap: wrap">
+              <button
+                class="button"
+                @click="openExternalUrl(props.deviceAuthStartState[provider.provider_id]?.verification_url || '')"
+              >
+                Open Verification Page
+              </button>
+              <button
+                class="button"
+                @click="
+                  copyText(props.deviceAuthStartState[provider.provider_id]?.verification_url || '', 'verification URL')
+                "
+              >
+                Copy URL
+              </button>
+              <button
+                class="button"
+                @click="copyText(props.deviceAuthStartState[provider.provider_id]?.user_code || '', 'device code')"
+              >
+                Copy Code
+              </button>
               <button class="button primary" @click="props.pollDeviceAuth(provider.provider_id)">
-                Poll Device Login
+                I Approved, Check Again
               </button>
             </div>
           </div>
+        </div>
+
+        <div class="button-row" style="margin-top: 12px; flex-wrap: wrap">
+          <button
+            v-if="canRefreshCredential(provider)"
+            class="button"
+            @click="props.refreshCredential(provider.provider_id)"
+          >
+            Refresh OAuth Token
+          </button>
+          <button class="button danger" @click="props.clearCredential(provider.provider_id)">
+            {{ provider.credential_present ? 'Delete Credential' : 'Clear Saved State' }}
+          </button>
         </div>
       </article>
     </section>

@@ -892,7 +892,7 @@ fn render_operation_blocks(
                 push_label_value(
                     out,
                     "    - ",
-                    artifact.name.as_deref().unwrap_or(artifact.uri.as_str()),
+                    media_artifact_label(artifact).as_str(),
                     Style::default().fg(Color::DarkGray),
                     width,
                 );
@@ -1368,10 +1368,7 @@ fn operation_block_copy_text(block: &OperationBlock, i18n: &I18n) -> String {
         OperationBlock::Image { url, .. }
         | OperationBlock::Audio { url, .. }
         | OperationBlock::File { url, .. } => url.clone(),
-        OperationBlock::Media { artifact, .. } => artifact
-            .name
-            .clone()
-            .unwrap_or_else(|| artifact.uri.clone()),
+        OperationBlock::Media { artifact, .. } => media_artifact_label(artifact),
         OperationBlock::Progress { message, .. } => message.clone(),
         OperationBlock::NestedTask {
             task_id,
@@ -1387,6 +1384,22 @@ fn operation_block_copy_text(block: &OperationBlock, i18n: &I18n) -> String {
         | OperationBlock::Log { .. }
         | OperationBlock::Custom { .. } => String::new(),
     }
+}
+
+fn media_artifact_label(artifact: &agena::message::ArtifactRef) -> String {
+    let uri = artifact.uri.trim();
+    if uri.starts_with("file://")
+        || uri.starts_with('/')
+        || uri.starts_with("./")
+        || uri.starts_with("../")
+    {
+        return uri.to_string();
+    }
+
+    artifact
+        .name
+        .clone()
+        .unwrap_or_else(|| artifact.uri.clone())
 }
 
 fn should_render_tool_model_output(tool: &OperationPart, skipped_text: Option<&str>) -> bool {
@@ -2606,6 +2619,25 @@ mod tests {
         assert!(first_line.contains("搜索"));
         assert!(first_line.contains("rust"));
         assert!(text.contains("https://www.rust-lang.org"));
+    }
+
+    #[test]
+    fn operation_block_copy_text_prefers_local_media_path_over_filename() {
+        let text = operation_block_copy_text(
+            &OperationBlock::Media {
+                mime_type: "image/png".to_string(),
+                artifact: agena::message::ArtifactRef {
+                    uri: "/tmp/generated_images/42/ig_1.png".to_string(),
+                    mime: "image/png".to_string(),
+                    name: Some("generated-image.png".to_string()),
+                    size_bytes: Some(67),
+                    sha256: None,
+                },
+            },
+            &I18n::english(),
+        );
+
+        assert_eq!(text, "/tmp/generated_images/42/ig_1.png");
     }
 
     #[test]

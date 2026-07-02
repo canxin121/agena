@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use tracing::Instrument;
@@ -12,8 +15,8 @@ use crate::event::{
 };
 use crate::message::{
     AssistantReasoningField, ExecutionStatus, Message, MessageMetadata, MessagePart,
-    MessageProviderState, MessageSource, MessageStatus, OperationPart, PartContent, ReasoningPart,
-    StructuredObject, TimeRange, ToolInvocation,
+    MessageProviderState, MessageSource, MessageStatus, OperationBlock, OperationPart,
+    PartContent, ReasoningPart, StructuredObject, TimeRange, ToolInvocation,
 };
 use crate::model::ModelRef;
 use crate::plugin::registry::RegisteredTool;
@@ -31,6 +34,7 @@ const REASONING_PLACEHOLDER: &str = "(no reasoning recorded)";
 
 #[derive(Clone)]
 pub(crate) struct SessionRunRequest {
+    pub run_id: RunId,
     pub session_id: i64,
     pub model: ModelRef,
     pub model_thinking_mode: Option<String>,
@@ -71,6 +75,7 @@ pub struct SessionProcessor {
     provider_registry: Arc<ProviderRegistry>,
     context_governor: ContextGovernor,
     plugins: Option<Arc<crate::plugin::PluginHost>>,
+    workspace_root: Option<PathBuf>,
 }
 
 impl SessionProcessor {
@@ -82,11 +87,17 @@ impl SessionProcessor {
             provider_registry,
             context_governor,
             plugins: None,
+            workspace_root: None,
         }
     }
 
     pub fn with_plugin_host(mut self, plugins: Arc<crate::plugin::PluginHost>) -> Self {
         self.plugins = Some(plugins);
+        self
+    }
+
+    pub fn with_workspace_root(mut self, workspace_root: impl Into<PathBuf>) -> Self {
+        self.workspace_root = Some(workspace_root.into());
         self
     }
 
@@ -195,7 +206,7 @@ impl SessionProcessor {
             usage: None,
         };
 
-        let run_id = RunId::new();
+        let run_id = run.run_id;
         let mut run_buffer = RunBuffer::new(run_id);
         let mut id_provider = FixedAssistantId::new(assistant_message_id);
         run_buffer.begin_assistant(&mut id_provider);
@@ -206,6 +217,7 @@ impl SessionProcessor {
         let mut active_text_part: Option<i64> = None;
         let mut active_reasoning_part: Option<i64> = None;
         let mut pending_calls: BTreeMap<String, PendingToolCall> = BTreeMap::new();
+        let mut pending_native_calls: BTreeMap<String, PendingNativeToolCall> = BTreeMap::new();
         let mut part_delta_sequences = BTreeMap::<i64, u64>::new();
         let mut provider_err: Option<AppError> = None;
         let mut usage = None;
@@ -214,6 +226,7 @@ impl SessionProcessor {
         let mut visible_text = String::new();
         let mut reasoning_text = String::new();
         let mut saw_tool_call = false;
+        let mut saw_native_tool_call = false;
 
         let cancel = run.cancel.clone();
         loop {
@@ -341,6 +354,64 @@ impl SessionProcessor {
                             .map_err(|err| AppError::Internal(err.to_string()))?;
                     }
                 }
+                Ok(CompletionStreamEvent::NativeToolCallStarted {
+                    stream_key,
+                    id,
+                    invocation,
+                    title,
+                    raw,
+                    ..
+                }) => {
+                    saw_native_tool_call = true;
+                    if let Some(part_id) = active_text_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
+                    if let Some(part_id) = active_reasoning_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
+
+                    let pending = pending_native_calls.entry(stream_key).or_default();
+                    pending.id = id;
+                    pending.invocation = Some(invocation);
+                    pending.title = title;
+                    pending.raw = raw;
+                    self.ensure_native_tool_call_part(&mut run, &mut assistant, pending)
+                        .await?;
+                }
+                Ok(CompletionStreamEvent::NativeToolCallCompleted {
+                    stream_key,
+                    id,
+                    invocation,
+                    title,
+                    output_text,
+                    blocks,
+                    details,
+                    raw,
+                    ..
+                }) => {
+                    saw_native_tool_call = true;
+                    if let Some(part_id) = active_text_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
+                    if let Some(part_id) = active_reasoning_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
+
+                    let pending = pending_native_calls.remove(&stream_key).unwrap_or_default();
+                    self.complete_native_tool_call_part(
+                        &mut run,
+                        &mut assistant,
+                        pending,
+                        id,
+                        invocation,
+                        title,
+                        output_text,
+                        blocks,
+                        details,
+                        raw,
+                    )
+                    .await?;
+                }
                 Ok(CompletionStreamEvent::Completed {
                     finish_reason,
                     usage: usage_value,
@@ -414,6 +485,7 @@ impl SessionProcessor {
         if provider_err.is_none()
             && visible_text.trim().is_empty()
             && !saw_tool_call
+            && !saw_native_tool_call
             && !reasoning_text.trim().is_empty()
             && reasoning_text.trim() != REASONING_PLACEHOLDER
         {
@@ -844,6 +916,250 @@ impl SessionProcessor {
         Ok(())
     }
 
+    async fn ensure_native_tool_call_part(
+        &self,
+        run: &mut SessionRunRequest,
+        assistant: &mut Message,
+        pending: &mut PendingNativeToolCall,
+    ) -> Result<(), AppError> {
+        let invocation = pending
+            .invocation
+            .clone()
+            .unwrap_or_else(|| ToolInvocation::new("native_tool", StructuredObject::default()));
+        let operation_title = native_tool_execution_title(
+            pending.title.as_str(),
+            invocation.name.as_str(),
+            &invocation.input,
+        );
+        let raw = pending.raw.clone();
+        let operation_id = pending
+            .id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let now = Utc::now();
+        let mut should_emit = false;
+
+        if pending.part_id.is_none() {
+            let part_id = run.part_ids.reserve().await?;
+            let call_id = run.next_call_id;
+            run.next_call_id += 1;
+            let start = now;
+            let mut operation = OperationPart::pending(
+                call_id,
+                invocation,
+                operation_title,
+                TimeRange {
+                    start_ms: start.timestamp_millis(),
+                    end_ms: None,
+                },
+            );
+            operation.set_provider_native_only(true);
+            operation.raw = raw;
+
+            let mut part = MessagePart::with_content(
+                part_id,
+                assistant.id,
+                start,
+                ExecutionStatus::InProgress,
+                PartContent::Operation(operation),
+            );
+            part.part_index = assistant.parts.len() as i32;
+            part.operation_id = operation_id.clone();
+            assistant.parts.push(part);
+            if assistant.state == MessageStatus::Pending {
+                let _ = assistant.transition_state(MessageStatus::InProgress);
+            }
+
+            pending.part_id = Some(part_id);
+            pending.call_id = Some(call_id);
+            pending.started_at_ms = Some(start.timestamp_millis());
+            should_emit = true;
+        } else if let Some(part_id) = pending.part_id {
+            let part = assistant
+                .parts
+                .iter_mut()
+                .find(|part| part.id == part_id)
+                .ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "native tool part missing from assistant snapshot: {part_id}"
+                    ))
+                })?;
+            let started_at_ms = pending.started_at_ms.unwrap_or_else(|| now.timestamp_millis());
+            let mut operation = OperationPart::pending(
+                pending.call_id.unwrap_or_default(),
+                invocation,
+                operation_title,
+                TimeRange {
+                    start_ms: started_at_ms,
+                    end_ms: None,
+                },
+            );
+            operation.set_provider_native_only(true);
+            operation.raw = raw;
+            part.set_content(PartContent::Operation(operation));
+            if part.status == ExecutionStatus::Pending {
+                part.transition_status(ExecutionStatus::InProgress)
+                    .map_err(|err| AppError::Internal(err.to_string()))?;
+            }
+            if part.operation_id != operation_id {
+                part.operation_id = operation_id.clone();
+            }
+            should_emit = true;
+        }
+
+        if should_emit && let Some(part_id) = pending.part_id {
+            self.emit_part_updated(run, assistant, part_id).await?;
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn complete_native_tool_call_part(
+        &self,
+        run: &mut SessionRunRequest,
+        assistant: &mut Message,
+        mut pending: PendingNativeToolCall,
+        id: Option<String>,
+        invocation: ToolInvocation,
+        title: String,
+        output_text: String,
+        blocks: Vec<crate::message::OperationBlock>,
+        details: crate::message::ToolOutput,
+        raw: Option<serde_json::Value>,
+    ) -> Result<(), AppError> {
+        pending.id = id;
+        pending.invocation = Some(invocation.clone());
+        pending.title = title.clone();
+        pending.raw = raw.clone();
+        self.ensure_native_tool_call_part(run, assistant, &mut pending)
+            .await?;
+
+        let artifact_key = pending
+            .id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| format!("native-tool-{}", pending.call_id.unwrap_or_default()));
+        let blocks = self
+            .persist_native_tool_media(run.session_id, artifact_key.as_str(), blocks)
+            .await;
+
+        let Some(part_id) = pending.part_id else {
+            return Ok(());
+        };
+        let part = assistant
+            .parts
+            .iter_mut()
+            .find(|part| part.id == part_id)
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "native tool part missing from assistant snapshot: {part_id}"
+                ))
+            })?;
+        let mut operation = OperationPart::completed(
+            pending.call_id.unwrap_or_default(),
+            invocation.clone(),
+            output_text,
+            blocks,
+            Vec::new(),
+            details,
+            TimeRange {
+                start_ms: pending.started_at_ms.unwrap_or_else(|| Utc::now().timestamp_millis()),
+                end_ms: Some(Utc::now().timestamp_millis()),
+            },
+        );
+        if !title.trim().is_empty() {
+            operation = operation.with_title(title);
+        }
+        operation.set_provider_native_only(true);
+        operation.raw = raw;
+        part.set_content(PartContent::Operation(operation));
+        if part.status != ExecutionStatus::Completed {
+            part.transition_status(ExecutionStatus::Completed)
+                .map_err(|err| AppError::Internal(err.to_string()))?;
+        }
+        if let Some(operation_id) = pending
+            .id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            part.operation_id = Some(operation_id.to_owned());
+        }
+
+        self.emit_part_updated(run, assistant, part_id).await?;
+        Ok(())
+    }
+
+    async fn persist_native_tool_media(
+        &self,
+        session_id: i64,
+        call_id: &str,
+        blocks: Vec<OperationBlock>,
+    ) -> Vec<OperationBlock> {
+        let Some(workspace_root) = self.workspace_root.as_deref() else {
+            return blocks;
+        };
+
+        let mut media_index = 0usize;
+        let mut persisted = Vec::with_capacity(blocks.len());
+        for block in blocks {
+            match block {
+                OperationBlock::Media {
+                    mime_type,
+                    mut artifact,
+                } => {
+                    let next_block = match persist_generated_media_artifact(
+                        workspace_root,
+                        session_id,
+                        call_id,
+                        media_index,
+                        mime_type.as_str(),
+                        artifact.name.as_deref(),
+                        artifact.uri.as_str(),
+                    )
+                    .await
+                    {
+                        Ok(Some(saved)) => {
+                            media_index += 1;
+                            artifact.uri = saved.path;
+                            artifact.size_bytes = Some(saved.size_bytes);
+                            if artifact.name.is_none() {
+                                artifact.name = Some(saved.filename);
+                            }
+                            OperationBlock::Media {
+                                mime_type,
+                                artifact,
+                            }
+                        }
+                        Ok(None) => OperationBlock::Media {
+                            mime_type,
+                            artifact,
+                        },
+                        Err(err) => {
+                            tracing::warn!(
+                                session_id,
+                                call_id,
+                                "failed to persist provider-native media artifact: {err}"
+                            );
+                            OperationBlock::Media {
+                                mime_type,
+                                artifact,
+                            }
+                        }
+                    };
+                    persisted.push(next_block);
+                }
+                other => persisted.push(other),
+            }
+        }
+        persisted
+    }
+
     async fn emit_part_updated(
         &self,
         run: &SessionRunRequest,
@@ -1013,8 +1329,124 @@ struct PendingToolCall {
     history_call_id: Option<ToolCallId>,
 }
 
+#[derive(Debug, Default, Clone)]
+struct PendingNativeToolCall {
+    part_id: Option<i64>,
+    call_id: Option<i64>,
+    started_at_ms: Option<i64>,
+    id: Option<String>,
+    invocation: Option<ToolInvocation>,
+    title: String,
+    raw: Option<serde_json::Value>,
+}
+
+#[derive(Debug)]
+struct PersistedMediaArtifact {
+    path: String,
+    filename: String,
+    size_bytes: u64,
+}
+
+async fn persist_generated_media_artifact(
+    workspace_root: &Path,
+    session_id: i64,
+    call_id: &str,
+    media_index: usize,
+    mime_type: &str,
+    filename_hint: Option<&str>,
+    uri: &str,
+) -> Result<Option<PersistedMediaArtifact>, AppError> {
+    let Some((decoded_mime, encoded)) = parse_base64_data_url(uri) else {
+        return Ok(None);
+    };
+    let effective_mime = if decoded_mime.is_empty() {
+        mime_type.trim()
+    } else {
+        decoded_mime.as_str()
+    };
+    if !effective_mime.starts_with("image/") {
+        return Ok(None);
+    }
+
+    let bytes = BASE64_STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|err| AppError::Internal(format!("invalid generated image payload: {err}")))?;
+    let extension = generated_media_extension(filename_hint, effective_mime);
+    let artifact_id = if media_index == 0 {
+        call_id.to_string()
+    } else {
+        format!("{call_id}-{media_index}")
+    };
+    let path = crate::project_paths::generated_image_artifact_path(
+        workspace_root,
+        session_id,
+        artifact_id.as_str(),
+        extension.as_str(),
+    );
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(&path, bytes.as_slice()).await?;
+
+    let filename = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("generated-image.{extension}"));
+    Ok(Some(PersistedMediaArtifact {
+        path: path.to_string_lossy().to_string(),
+        filename,
+        size_bytes: bytes.len() as u64,
+    }))
+}
+
+fn parse_base64_data_url(url: &str) -> Option<(String, String)> {
+    let trimmed = url.trim();
+    let payload = trimmed.strip_prefix("data:")?;
+    let (metadata, encoded) = payload.split_once(',')?;
+    let metadata = metadata.trim();
+    let encoded = encoded.trim();
+    if encoded.is_empty() {
+        return None;
+    }
+    let mime = metadata.strip_suffix(";base64")?.trim().to_owned();
+    Some((mime, encoded.to_owned()))
+}
+
+fn generated_media_extension(filename_hint: Option<&str>, mime_type: &str) -> String {
+    if let Some(extension) = filename_hint
+        .and_then(|value| Path::new(value).extension())
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return extension.to_ascii_lowercase();
+    }
+
+    mime_type
+        .trim()
+        .strip_prefix("image/")
+        .filter(|value| !value.is_empty())
+        .unwrap_or("png")
+        .to_ascii_lowercase()
+}
+
 fn tool_execution_title(name: Option<&str>) -> String {
     format!("Tool {}", name.unwrap_or("unknown").trim())
+}
+
+fn native_tool_execution_title(
+    title: &str,
+    tool_name: &str,
+    input: &StructuredObject,
+) -> String {
+    let trimmed = title.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_owned();
+    }
+
+    let invocation = ToolInvocation::new(tool_name.to_owned(), input.clone());
+    tool_invocation_label(&invocation)
 }
 
 fn placeholder_tool_invocation(
@@ -1077,6 +1509,30 @@ fn tool_invocation_for_definition(
         plugin_name: Some(tool.plugin_name.clone()),
         input,
     }
+}
+
+fn tool_invocation_label(invocation: &ToolInvocation) -> String {
+    let input = serde_json::Value::from(invocation.input.clone());
+    for key in [
+        "command",
+        "file_path",
+        "path",
+        "pattern",
+        "query",
+        "url",
+        "description",
+        "action",
+        "id",
+        "expression",
+        "notebook_path",
+    ] {
+        if let Some(value) = input.get(key).and_then(serde_json::Value::as_str)
+            && !value.trim().is_empty()
+        {
+            return format!("{} {}", invocation.name, value.trim());
+        }
+    }
+    invocation.name.clone()
 }
 
 fn parse_custom_input(arguments_json: &str) -> Result<StructuredObject, AppError> {

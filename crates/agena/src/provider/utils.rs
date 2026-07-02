@@ -749,6 +749,8 @@ where
                 }
                 state.arguments = arguments_json;
             }
+            CompletionStreamEvent::NativeToolCallStarted { .. }
+            | CompletionStreamEvent::NativeToolCallCompleted { .. } => {}
             CompletionStreamEvent::Completed {
                 provider_id: pid,
                 model,

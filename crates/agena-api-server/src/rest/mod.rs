@@ -5,8 +5,9 @@
 use std::{collections::BTreeSet, convert::Infallible, future::Future, sync::Arc};
 
 use crate::local_api::{
-    AuthApiKeyWriteRequest, AuthBrowserStartResource, AuthCodeExchangeRequest, AuthCredentialType,
-    AuthDeviceStartResource, AuthEnterpriseDevicePollRequest, AuthEnterpriseDeviceRequest,
+    AuthApiKeyWriteRequest, AuthBrowserStartResource, AuthCodeExchangeRequest,
+    AuthCredentialIssuerResource, AuthCredentialType, AuthDeviceStartResource,
+    AuthEnterpriseDevicePollRequest, AuthEnterpriseDeviceRequest, AuthLoginKindResource,
     AuthLoginResultResource, AuthProviderRequest, AuthProviderResource, AuthRedirectRequest,
     AuthUserCodeDevicePollRequest, HealthResponse, ItemsResponse, MarketplaceInstallRequest,
     MarketplaceInstalledPluginResource, MarketplaceOutdatedPluginResource,
@@ -29,9 +30,9 @@ use agena::config::{
     ConfigSettingsSource, ConfigSettingsValidateInput, ProviderAuthConfig, ProviderAuthTargetError,
     ProviderConfigCredentialStore, ProviderDeviceAuthTarget, ProviderOAuthTarget,
     ResolvedProviderConfig, delete_file_setting, get_json_path, list_file_settings, list_json_path,
-    patch_file_settings, provider_auth_data, provider_supports_api_key_write, read_file_setting,
-    resolve_provider_device_auth_target, resolve_provider_oauth_target, set_file_setting,
-    validate_file_settings,
+    patch_file_settings, provider_auth_data, provider_gitlab_instance_url,
+    provider_supports_api_key_write, read_file_setting, resolve_provider_device_auth_target,
+    resolve_provider_oauth_target, set_file_setting, validate_file_settings,
 };
 use agena::event::{EventStore, StoreRange};
 use agena::message::UserInputReply;

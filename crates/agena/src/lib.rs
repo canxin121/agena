@@ -6,6 +6,7 @@ pub mod db;
 pub mod error;
 pub mod event;
 pub mod execution_prefs;
+pub(crate) mod installation_id;
 pub mod memory;
 pub mod message;
 pub mod metrics;

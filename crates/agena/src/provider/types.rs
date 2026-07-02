@@ -1,8 +1,10 @@
+use std::collections::{BTreeMap, HashMap};
+
 use serde::{Deserialize, Serialize};
 
 use crate::{
     config::ProviderNativeToolsConfig,
-    message::{Message, MessageUsage},
+    message::{Message, MessageUsage, OperationBlock, ToolInvocation, ToolOutput},
     model::{ModelId, ModelSpeedModeRequestOverride, ProviderId},
     plugin::registry::RegisteredTool,
 };
@@ -87,6 +89,163 @@ pub enum ResponseFormat {
     },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResponsesApiRequestMetadata {
+    pub installation_id: String,
+    pub session_id: String,
+    pub thread_id: String,
+    pub turn_id: String,
+    pub window_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_header: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_started_at_unix_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, String>,
+}
+
+impl ResponsesApiRequestMetadata {
+    pub fn client_metadata(&self) -> HashMap<String, String> {
+        let mut metadata = HashMap::from([
+            (
+                "x-codex-installation-id".to_owned(),
+                self.installation_id.clone(),
+            ),
+            ("session_id".to_owned(), self.session_id.clone()),
+            ("thread_id".to_owned(), self.thread_id.clone()),
+            ("turn_id".to_owned(), self.turn_id.clone()),
+            ("x-codex-window-id".to_owned(), self.window_id.clone()),
+            (
+                "x-codex-turn-metadata".to_owned(),
+                self.turn_metadata_json(),
+            ),
+        ]);
+        if let Some(subagent_header) = self.subagent_header.as_ref() {
+            metadata.insert("x-openai-subagent".to_owned(), subagent_header.clone());
+        }
+        if let Some(parent_thread_id) = self.parent_thread_id.as_ref() {
+            metadata.insert(
+                "x-codex-parent-thread-id".to_owned(),
+                parent_thread_id.clone(),
+            );
+        }
+        metadata
+    }
+
+    pub fn compatibility_headers(&self) -> BTreeMap<String, String> {
+        let mut headers = BTreeMap::from([
+            ("x-codex-window-id".to_owned(), self.window_id.clone()),
+            (
+                "x-codex-turn-metadata".to_owned(),
+                self.turn_metadata_json(),
+            ),
+        ]);
+        if let Some(subagent_header) = self.subagent_header.as_ref() {
+            headers.insert("x-openai-subagent".to_owned(), subagent_header.clone());
+        }
+        if let Some(parent_thread_id) = self.parent_thread_id.as_ref() {
+            headers.insert(
+                "x-codex-parent-thread-id".to_owned(),
+                parent_thread_id.clone(),
+            );
+        }
+        headers
+    }
+
+    pub fn session_headers(&self) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("session-id".to_owned(), self.session_id.clone()),
+            ("thread-id".to_owned(), self.thread_id.clone()),
+        ])
+    }
+
+    pub fn turn_metadata_json(&self) -> String {
+        let mut value = serde_json::Map::from_iter([
+            (
+                "installation_id".to_owned(),
+                serde_json::Value::String(self.installation_id.clone()),
+            ),
+            (
+                "session_id".to_owned(),
+                serde_json::Value::String(self.session_id.clone()),
+            ),
+            (
+                "thread_id".to_owned(),
+                serde_json::Value::String(self.thread_id.clone()),
+            ),
+            (
+                "turn_id".to_owned(),
+                serde_json::Value::String(self.turn_id.clone()),
+            ),
+            (
+                "window_id".to_owned(),
+                serde_json::Value::String(self.window_id.clone()),
+            ),
+        ]);
+        if let Some(parent_thread_id) = self.parent_thread_id.as_ref() {
+            value.insert(
+                "parent_thread_id".to_owned(),
+                serde_json::Value::String(parent_thread_id.clone()),
+            );
+        }
+        if let Some(subagent_kind) = self.subagent_kind.as_ref() {
+            value.insert(
+                "subagent_kind".to_owned(),
+                serde_json::Value::String(subagent_kind.clone()),
+            );
+        }
+        if let Some(request_kind) = self.request_kind.as_ref() {
+            value.insert(
+                "request_kind".to_owned(),
+                serde_json::Value::String(request_kind.clone()),
+            );
+        }
+        if let Some(turn_started_at_unix_ms) = self.turn_started_at_unix_ms {
+            value.insert(
+                "turn_started_at_unix_ms".to_owned(),
+                serde_json::Value::from(turn_started_at_unix_ms),
+            );
+        }
+        for (key, field_value) in &self.extra {
+            if !key.trim().is_empty()
+                && !field_value.trim().is_empty()
+                && !reserved_responses_metadata_key(key)
+            {
+                value.insert(key.clone(), serde_json::Value::String(field_value.clone()));
+            }
+        }
+        serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_owned())
+    }
+}
+
+fn reserved_responses_metadata_key(key: &str) -> bool {
+    matches!(
+        key,
+        "installation_id"
+            | "x-codex-installation-id"
+            | "session_id"
+            | "session-id"
+            | "thread_id"
+            | "thread-id"
+            | "turn_id"
+            | "window_id"
+            | "x-codex-window-id"
+            | "x-codex-turn-metadata"
+            | "x-codex-parent-thread-id"
+            | "x-openai-subagent"
+            | "request_kind"
+            | "turn_started_at_unix_ms"
+            | "parent_thread_id"
+            | "subagent_kind"
+    )
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CompletionRequest {
     pub model: ModelId,
@@ -121,6 +280,8 @@ pub struct CompletionRequest {
     pub verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ResponseFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responses_api_metadata: Option<ResponsesApiRequestMetadata>,
     #[serde(
         default,
         skip_serializing_if = "ModelSpeedModeRequestOverride::is_empty"
@@ -256,6 +417,36 @@ pub enum CompletionStreamEvent {
         name: Option<String>,
         #[serde(default)]
         arguments_json: String,
+    },
+    NativeToolCallStarted {
+        provider_id: ProviderId,
+        model: ModelId,
+        stream_key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        invocation: ToolInvocation,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        raw: Option<serde_json::Value>,
+    },
+    NativeToolCallCompleted {
+        provider_id: ProviderId,
+        model: ModelId,
+        stream_key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        invocation: ToolInvocation,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        title: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        output_text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        blocks: Vec<OperationBlock>,
+        #[serde(default, skip_serializing_if = "ToolOutput::is_empty")]
+        details: ToolOutput,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        raw: Option<serde_json::Value>,
     },
     Completed {
         provider_id: ProviderId,

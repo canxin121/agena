@@ -762,14 +762,6 @@ impl App {
             Overlay::Picker(dialog) => {
                 self.render_picker_overlay(frame, area, dialog, SurfaceMode::Overlay);
             }
-            Overlay::SessionModelChooser(dialog) => {
-                self.render_session_model_chooser_overlay(
-                    frame,
-                    area,
-                    dialog,
-                    SurfaceMode::Overlay,
-                );
-            }
             Overlay::Timeline(dialog) => {
                 self.render_timeline_overlay(frame, area, dialog, SurfaceMode::Overlay);
             }
@@ -2504,13 +2496,7 @@ impl App {
         } else if let Some(detail_page) = dialog.detail_page.as_ref() {
             let detail_fields = provider_studio_detail_fields(dialog);
             let auth_state_lines = provider_studio_auth_state_lines(&self.i18n, dialog);
-            let mut lines = Vec::with_capacity(1 + auth_state_lines.len() + detail_fields.len());
-            lines.push(DetailTextLine::labeled(
-                provider_studio_field_label(&self.i18n, ProviderStudioField::AuthStatus),
-                sanitize_display_text(provider_studio_auth_status_summary(&self.i18n, dialog)),
-                Style::default().fg(Color::DarkGray),
-                Style::default().fg(Color::DarkGray),
-            ));
+            let mut lines = Vec::with_capacity(auth_state_lines.len() + detail_fields.len());
             lines.extend(auth_state_lines.into_iter().map(|line| {
                 DetailTextLine::plain(
                     sanitize_display_text(line),
@@ -3859,6 +3845,11 @@ fn provider_studio_main_field_display(
         ProviderStudioField::AuthMode => {
             provider_draft_auth_mode_label(i18n, &dialog.draft.auth_kind)
         }
+        ProviderStudioField::AuthLoginMethod => dialog
+            .draft
+            .interactive_login_kind()
+            .map(|kind| provider_studio_auth_login_kind_label(i18n, kind))
+            .unwrap_or_else(|| provider_studio_main_field_value(i18n, dialog, field)),
         ProviderStudioField::CredentialIssuer => dialog
             .draft
             .auth_kind

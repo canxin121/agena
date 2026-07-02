@@ -536,7 +536,7 @@ Browser OAuth start:
 
 ```json
 {
-  "redirect_uri": "http://127.0.0.1:1455/callback"
+  "redirect_uri": "http://localhost:1455/auth/callback"
 }
 ```
 
@@ -545,7 +545,7 @@ GitLab browser start additionally requires:
 ```json
 {
   "instance_url": "https://gitlab.com",
-  "redirect_uri": "http://127.0.0.1:1455/callback"
+  "redirect_uri": "http://localhost:1455/auth/callback"
 }
 ```
 

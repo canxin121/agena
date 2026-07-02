@@ -1329,6 +1329,7 @@ impl ProviderOverlay {
         }
         let auth = resolve_provider_auth(provider_id.as_str(), self.auth, adapters.values())?;
         validate_provider_auth(provider_id.as_str(), &auth, adapters.values())?;
+        normalize_provider_model_native_tools(&auth, &adapters, &mut models);
         validate_provider_model_native_tools(provider_id.as_str(), &models, harnesses, mcp)?;
         let default_adapter = if let Some(default_adapter) = provider_defaults.adapter.clone() {
             default_adapter
@@ -1351,20 +1352,7 @@ impl ProviderOverlay {
                 field: "defaults.adapter",
             });
         }
-        let default_model = if let Some(default_model) = provider_defaults.model.clone() {
-            default_model
-        } else {
-            return Err(ConfigError::MissingProviderField {
-                provider_id: provider_id.clone(),
-                field: "defaults.model",
-            });
-        };
-        if default_model.is_empty() {
-            return Err(ConfigError::MissingProviderField {
-                provider_id: provider_id.clone(),
-                field: "defaults.model",
-            });
-        }
+        let default_model = normalize_optional_string(provider_defaults.model.clone());
         let default_adapter_id = default_adapter.trim().to_owned();
         let default_adapter = adapters.get(default_adapter_id.as_str()).ok_or_else(|| {
             ConfigError::InvalidProviderConfig {
@@ -1382,14 +1370,17 @@ impl ProviderOverlay {
                 ),
             });
         }
-        let default_route = format!("{default_adapter_id}/{default_model}");
-        if matches!(models.get(default_route.as_str()), Some(configured) if !configured.enabled) {
-            return Err(ConfigError::InvalidProviderConfig {
-                provider_id: provider_id.clone(),
-                message: format!(
-                    "provider defaults.model `{default_model}` references disabled model route `{default_route}`"
-                ),
-            });
+        if let Some(default_model) = default_model.as_deref() {
+            let default_route = format!("{default_adapter_id}/{default_model}");
+            if matches!(models.get(default_route.as_str()), Some(configured) if !configured.enabled)
+            {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.clone(),
+                    message: format!(
+                        "provider defaults.model `{default_model}` references disabled model route `{default_route}`"
+                    ),
+                });
+            }
         }
 
         let resolved_provider_id = provider_id.clone();
@@ -1401,7 +1392,7 @@ impl ProviderOverlay {
                 defaults: ProviderDefaultsConfig {
                     provider: Some(resolved_provider_id),
                     adapter: Some(default_adapter_id),
-                    model: Some(default_model),
+                    model: default_model,
                     thinking_mode: provider_defaults.thinking_mode,
                     speed_mode: provider_defaults.speed_mode,
                     verbosity: provider_defaults.verbosity,
@@ -1413,6 +1404,80 @@ impl ProviderOverlay {
             },
         ))
     }
+}
+
+fn normalize_provider_model_native_tools(
+    auth: &ProviderAuthConfig,
+    adapters: &BTreeMap<String, ResolvedProviderAdapterConfig>,
+    models: &mut BTreeMap<String, ResolvedProviderModelConfig>,
+) {
+    let uses_openai_chatgpt = matches!(
+        auth,
+        ProviderAuthConfig::Credential(config) if config.issuer == CredentialIssuer::OpenaiChatgpt
+    );
+    if !uses_openai_chatgpt {
+        return;
+    }
+
+    for (route_id, model) in models.iter_mut() {
+        let Some((adapter_id, _model_id)) = route_id.split_once('/') else {
+            continue;
+        };
+        let Some(adapter) = adapters.get(adapter_id) else {
+            continue;
+        };
+        let ProviderAdapterDefinition::OpenAi(config) = &adapter.definition else {
+            continue;
+        };
+        if !matches!(config.options.backend, super::OpenAiBackendConfig::ChatgptCodex) {
+            continue;
+        }
+        normalize_openai_chatgpt_native_tools(&mut model.native_tools);
+    }
+}
+
+fn normalize_openai_chatgpt_native_tools(config: &mut ProviderNativeToolsConfig) {
+    if !openai_chatgpt_native_tools_match_legacy_default(config) {
+        return;
+    }
+
+    *config = ProviderNativeToolsConfig {
+        enabled: true,
+        routes: super::ProviderNativeToolRoutesConfig {
+            web_search: Some(ProviderNativeToolRoute::ProviderHosted),
+            image_generation: Some(ProviderNativeToolRoute::ProviderHosted),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+}
+
+fn openai_chatgpt_native_tools_match_legacy_default(config: &ProviderNativeToolsConfig) -> bool {
+    if !config.enabled
+        || !config.hosted.is_empty()
+        || !config.harness.is_empty()
+        || !config.connectors.is_empty()
+    {
+        return false;
+    }
+
+    let routes = &config.routes;
+    routes.web_search == Some(ProviderNativeToolRoute::ProviderHosted)
+        && routes.image_generation.is_none()
+        && matches!(
+            (routes.file_search, routes.code_execution),
+            (None, None)
+                | (None, Some(ProviderNativeToolRoute::ProviderHosted))
+                | (
+                    Some(ProviderNativeToolRoute::ProviderHosted),
+                    Some(ProviderNativeToolRoute::ProviderHosted)
+                )
+        )
+        && routes.computer.is_none()
+        && routes.bash.is_none()
+        && routes.text_editor.is_none()
+        && routes.url_context.is_none()
+        && routes.remote_mcp.is_none()
 }
 
 fn validate_provider_model_native_tools(
@@ -2847,6 +2912,33 @@ mod tests {
     }
 
     #[test]
+    fn provider_defaults_model_can_be_omitted() {
+        let resolved = resolve_config(json!({
+            "providers": {
+                "default": "local",
+                "local": {
+                    "defaults": {
+                        "adapter": "ollama"
+                    },
+                    "auth": {
+                        "mode": "none"
+                    },
+                    "adapters": {
+                        "ollama": {
+                            "enabled": true
+                        }
+                    }
+                }
+            }
+        }))
+        .expect("provider config should resolve without defaults.model");
+
+        let provider = resolved.providers.get("local").expect("provider");
+        assert_eq!(provider.defaults.adapter.as_deref(), Some("ollama"));
+        assert_eq!(provider.defaults.model, None);
+    }
+
+    #[test]
     fn project_merge_replaces_plugins_by_plugin_id() {
         let mut global = raw_config(json!({
             "plugins": {
@@ -3513,6 +3605,111 @@ mod tests {
                 && binding.connector_names == vec!["docs".to_owned()]
         }));
         assert_eq!(bindings.len(), 3);
+    }
+
+    #[test]
+    fn provider_hosted_file_search_without_vector_stores_is_ignored_in_bindings() {
+        let resolved = resolve_config(json!({
+            "providers": {
+                "default": "openai",
+                "openai": {
+                    "defaults": {
+                        "adapter": "openai",
+                        "model": "gpt-5"
+                    },
+                    "auth": {
+                        "mode": "api",
+                        "base_url": "https://api.openai.com",
+                        "api_key": "test"
+                    },
+                    "adapters": {
+                        "openai": {
+                            "enabled": true,
+                            "models": {
+                                "gpt-5": {
+                                    "native_tools": {
+                                        "enabled": true,
+                                        "routes": {
+                                            "web_search": "provider_hosted",
+                                            "file_search": "provider_hosted"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .expect("native tool config should resolve");
+
+        let provider = resolved.providers.get("openai").expect("provider");
+        let model = provider
+            .models
+            .get("openai/gpt-5")
+            .expect("configured model");
+        let bindings = model.native_tool_bindings();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].tool, ProviderNativeToolKind::WebSearch);
+    }
+
+    #[test]
+    fn chatgpt_codex_native_tools_legacy_defaults_are_normalized() {
+        let resolved = resolve_config(json!({
+            "providers": {
+                "default": "openai_chatgpt",
+                "openai_chatgpt": {
+                    "defaults": {
+                        "adapter": "openai",
+                        "model": "gpt-5.5"
+                    },
+                    "auth": {
+                        "mode": "credential",
+                        "issuer": "openai_chatgpt"
+                    },
+                    "adapters": {
+                        "openai": {
+                            "enabled": true,
+                            "backend": "chatgpt_codex",
+                            "models": {
+                                "gpt-5.5": {
+                                    "native_tools": {
+                                        "enabled": true,
+                                        "routes": {
+                                            "web_search": "provider_hosted",
+                                            "file_search": "provider_hosted",
+                                            "code_execution": "provider_hosted"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .expect("legacy chatgpt codex native tools should resolve");
+
+        let provider = resolved
+            .providers
+            .get("openai_chatgpt")
+            .expect("provider should resolve");
+        let model = provider
+            .models
+            .get("openai/gpt-5.5")
+            .expect("model should resolve");
+
+        assert!(model.native_tools.enabled);
+        assert_eq!(
+            model.native_tools.routes.web_search,
+            Some(ProviderNativeToolRoute::ProviderHosted)
+        );
+        assert_eq!(model.native_tools.routes.file_search, None);
+        assert_eq!(model.native_tools.routes.code_execution, None);
+        assert_eq!(
+            model.native_tools.routes.image_generation,
+            Some(ProviderNativeToolRoute::ProviderHosted)
+        );
     }
 
     #[test]

@@ -9,6 +9,36 @@ pub enum AuthCredentialType {
     WellKnown,
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthCredentialIssuerResource {
+    OpenaiChatgpt,
+    GithubCopilot,
+    Gitlab,
+    GoogleAdc,
+    SapAiCore,
+}
+
+impl From<agena::provider::auth::CredentialIssuer> for AuthCredentialIssuerResource {
+    fn from(value: agena::provider::auth::CredentialIssuer) -> Self {
+        match value {
+            agena::provider::auth::CredentialIssuer::OpenaiChatgpt => Self::OpenaiChatgpt,
+            agena::provider::auth::CredentialIssuer::GithubCopilot => Self::GithubCopilot,
+            agena::provider::auth::CredentialIssuer::Gitlab => Self::Gitlab,
+            agena::provider::auth::CredentialIssuer::GoogleAdc => Self::GoogleAdc,
+            agena::provider::auth::CredentialIssuer::SapAiCore => Self::SapAiCore,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthLoginKindResource {
+    OpenaiChatgpt,
+    GithubCopilot,
+    Gitlab,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthProviderResource {
     pub provider_id: String,
@@ -16,6 +46,8 @@ pub struct AuthProviderResource {
     pub credential_present: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_type: Option<AuthCredentialType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_issuer: Option<AuthCredentialIssuerResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_preview: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -34,6 +66,14 @@ pub struct AuthProviderResource {
     pub email: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub avatar_url: Option<String>,
+    pub api_key_write_supported: bool,
+    pub refresh_supported: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_login_kind: Option<AuthLoginKindResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_login_instance_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_login_kind: Option<AuthLoginKindResource>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

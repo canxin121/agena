@@ -822,6 +822,12 @@ impl ProviderNativeToolsConfig {
                 if route == ProviderNativeToolRoute::Disabled {
                     return None;
                 }
+                if tool == ProviderNativeToolKind::FileSearch
+                    && route == ProviderNativeToolRoute::ProviderHosted
+                    && self.hosted.file_search.vector_store_ids.is_empty()
+                {
+                    return None;
+                }
                 Some(ProviderNativeToolBinding {
                     tool,
                     route,

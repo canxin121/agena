@@ -1193,7 +1193,7 @@ impl AgenaCli {
             Some(AgenaCommand::Usage(args)) => self.run_usage(args).await,
             Some(AgenaCommand::Git(args)) => self.run_git(args).await,
             Some(AgenaCommand::Login(args)) => self.run_login(loader, args).await,
-            Some(AgenaCommand::Logout(args)) => self.run_logout(loader, args),
+            Some(AgenaCommand::Logout(args)) => self.run_logout(loader, args).await,
             Some(AgenaCommand::Memory(command)) => self.run_memory(command),
             Some(AgenaCommand::McpServer(args)) => self.run_mcp_server(args).await,
             Some(AgenaCommand::Permissions(args)) => self.run_permissions(args).await,
@@ -1659,7 +1659,7 @@ impl AgenaCli {
         Ok(())
     }
 
-    fn run_logout(
+    async fn run_logout(
         self,
         loader: ConfigLoader<ProcessEnvironment>,
         args: LogoutArgs,
@@ -1669,7 +1669,10 @@ impl AgenaCli {
             resolution.meta.config_path,
         ));
         let provider_id = normalize_login_provider(args.provider_id.as_str());
-        manager.remove(provider_id.as_str())?;
+        let revoke_warning = manager.logout(provider_id.as_str()).await?;
+        if let Some(warning) = revoke_warning {
+            eprintln!("warning: {warning}");
+        }
         println!("logged out: {provider_id}");
         Ok(())
     }

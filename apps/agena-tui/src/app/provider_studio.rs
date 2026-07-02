@@ -1,4 +1,5 @@
 use super::*;
+use crate::backend::provider_native_tools_suggested_preset_for_draft;
 
 pub(super) fn provider_studio_request_key(
     draft: &ProviderConfigDraft,
@@ -86,6 +87,7 @@ pub(super) fn restore_provider_studio_adapter_selection(
         })
         .cloned()
         .collect();
+    provider_studio_auto_select_single_adapter(dialog);
     if let Some(adapter_id) = selected_adapter_id
         && let Some(index) = dialog
             .adapter_candidate_ids
@@ -94,6 +96,22 @@ pub(super) fn restore_provider_studio_adapter_selection(
     {
         dialog.selection.set_left_selected(index);
     }
+}
+
+fn provider_studio_auto_select_single_adapter(dialog: &mut ProviderStudioOverlay) {
+    let mut selectable = dialog
+        .adapter_candidate_ids
+        .iter()
+        .enumerate()
+        .filter(|(_, adapter_id)| provider_studio_adapter_selectable(dialog, adapter_id.as_str()));
+    let Some((index, adapter_id)) = selectable.next() else {
+        return;
+    };
+    if selectable.next().is_some() {
+        return;
+    }
+    dialog.selected_adapter_ids = BTreeSet::from([adapter_id.clone()]);
+    dialog.selection.set_left_selected(index);
 }
 
 pub(super) fn provider_studio_adapter_rule(
@@ -207,23 +225,6 @@ pub(super) fn provider_studio_model_selected(
         .contains(provider_studio_model_key(adapter_id, model_id).as_str())
 }
 
-pub(super) fn provider_studio_selected_models_for_adapter<'a>(
-    dialog: &'a ProviderStudioOverlay,
-    adapter_models: &'a ProviderAdapterModelsResource,
-) -> Vec<&'a ProviderModel> {
-    adapter_models
-        .models
-        .iter()
-        .filter(|model| {
-            provider_studio_model_selected(
-                dialog,
-                adapter_models.adapter_id.as_str(),
-                model.id.as_str(),
-            )
-        })
-        .collect()
-}
-
 pub(super) fn provider_studio_restore_model_selection(dialog: &mut ProviderStudioOverlay) {
     let available = dialog
         .adapter_models
@@ -279,30 +280,19 @@ pub(super) fn provider_studio_first_selected_model<'a>(
 }
 
 pub(super) fn provider_studio_ensure_default_selection(dialog: &mut ProviderStudioOverlay) {
-    let default_adapter_valid = dialog.adapter_models.iter().any(|adapter_models| {
-        adapter_models.error.is_none()
-            && dialog
-                .selected_adapter_ids
-                .contains(adapter_models.adapter_id.as_str())
-            && adapter_models.adapter_id == dialog.draft.default_adapter
-            && adapter_models.models.iter().any(|model| {
-                provider_studio_model_selected(
-                    dialog,
-                    adapter_models.adapter_id.as_str(),
-                    model.id.as_str(),
-                )
-            })
-    });
+    provider_studio_auto_select_single_adapter(dialog);
+
+    let default_adapter_valid = dialog
+        .selected_adapter_ids
+        .contains(dialog.draft.default_adapter.as_str())
+        && provider_studio_adapter_selectable(dialog, dialog.draft.default_adapter.as_str());
     if !default_adapter_valid
-        && let Some(adapter_models) = dialog.adapter_models.iter().find(|adapter_models| {
-            adapter_models.error.is_none()
-                && dialog
-                    .selected_adapter_ids
-                    .contains(adapter_models.adapter_id.as_str())
-                && !provider_studio_selected_models_for_adapter(dialog, adapter_models).is_empty()
-        })
+        && let Some(adapter_id) = dialog
+            .adapter_candidate_ids
+            .iter()
+            .find(|adapter_id| dialog.selected_adapter_ids.contains(adapter_id.as_str()))
     {
-        dialog.draft.default_adapter = adapter_models.adapter_id.clone();
+        dialog.draft.default_adapter = adapter_id.clone();
     }
 
     let default_model_valid =
@@ -382,11 +372,12 @@ fn provider_studio_labeled_summary(
         .map(|value| format!("{} {value}", provider_studio_summary_label(i18n, label)))
 }
 
-pub(super) fn provider_studio_status_with_summary(
-    status: String,
+fn provider_studio_action_with_summary(
+    i18n: &I18n,
+    action_key: &str,
     summary: Option<String>,
 ) -> String {
-    let mut parts = vec![status];
+    let mut parts = vec![ui_text::t(i18n, action_key)];
     if let Some(summary) = summary {
         parts.push(summary);
     }
@@ -402,6 +393,77 @@ fn provider_studio_state_summary(i18n: &I18n, state: &str, max_width: usize) -> 
     })
 }
 
+fn provider_studio_required_field_summary(i18n: &I18n, field: ProviderStudioField) -> String {
+    i18n.text_args(
+        "provider-studio-summary-set-field",
+        &crate::fl_args!("field" => provider_studio_field_label(i18n, field)),
+    )
+}
+
+pub(super) fn provider_studio_auth_login_kind(
+    dialog: &ProviderStudioOverlay,
+) -> Option<ProviderDraftInteractiveLoginKind> {
+    dialog.draft.interactive_login_kind()
+}
+
+pub(super) fn provider_studio_auth_poll_interval(
+    dialog: &ProviderStudioOverlay,
+) -> Option<Duration> {
+    match dialog.draft.auth_kind.credential_issuer() {
+        Some(CredentialIssuer::OpenaiChatgpt) => {
+            if provider_studio_auth_login_kind(dialog)
+                != Some(ProviderDraftInteractiveLoginKind::Device)
+            {
+                return None;
+            }
+            dialog
+                .draft
+                .credential_drafts
+                .openai_chatgpt
+                .device
+                .as_ref()
+                .map(|device| Duration::from_secs(device.interval_seconds.max(1)))
+        }
+        Some(CredentialIssuer::GithubCopilot) => dialog
+            .draft
+            .credential_drafts
+            .github_copilot
+            .device
+            .as_ref()
+            .map(|device| Duration::from_secs(device.interval_seconds.max(1))),
+        Some(CredentialIssuer::Gitlab)
+        | Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore)
+        | None => None,
+    }
+}
+
+pub(super) fn provider_studio_available_login_kinds(
+    dialog: &ProviderStudioOverlay,
+) -> Vec<ProviderDraftInteractiveLoginKind> {
+    match dialog.draft.auth_kind.credential_issuer() {
+        Some(CredentialIssuer::OpenaiChatgpt) => vec![
+            ProviderDraftInteractiveLoginKind::Device,
+            ProviderDraftInteractiveLoginKind::Browser,
+        ],
+        Some(CredentialIssuer::GithubCopilot) => vec![ProviderDraftInteractiveLoginKind::Device],
+        Some(CredentialIssuer::Gitlab) => vec![ProviderDraftInteractiveLoginKind::Browser],
+        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => Vec::new(),
+    }
+}
+
+pub(super) fn provider_studio_auth_login_kind_label(
+    i18n: &I18n,
+    kind: ProviderDraftInteractiveLoginKind,
+) -> String {
+    ui_text::t(
+        i18n,
+        match kind {
+            ProviderDraftInteractiveLoginKind::Browser => "provider-auth-login-kind-browser-label",
+            ProviderDraftInteractiveLoginKind::Device => "provider-auth-login-kind-device-label",
+        },
+    )
+}
+
 pub(super) fn provider_studio_browser_continue_summary(
     i18n: &I18n,
     prefix_key: &str,
@@ -414,29 +476,253 @@ pub(super) fn provider_studio_browser_continue_summary(
     join_inline_segments(parts)
 }
 
+pub(super) fn provider_studio_detail_field_index(
+    dialog: &ProviderStudioOverlay,
+    field: ProviderStudioField,
+) -> Option<usize> {
+    provider_studio_detail_fields(dialog)
+        .iter()
+        .position(|candidate| *candidate == field)
+}
+
+pub(super) fn provider_studio_missing_start_auth_field(
+    dialog: &ProviderStudioOverlay,
+) -> Option<ProviderStudioField> {
+    match dialog.draft.auth_kind.credential_issuer() {
+        Some(CredentialIssuer::OpenaiChatgpt) => (provider_studio_auth_login_kind(dialog)
+            == Some(ProviderDraftInteractiveLoginKind::Browser)
+            && dialog
+                .draft
+                .credential_drafts
+                .openai_chatgpt
+                .redirect_uri
+                .trim()
+                .is_empty())
+        .then_some(ProviderStudioField::RedirectUri),
+        Some(CredentialIssuer::GithubCopilot) => None,
+        Some(CredentialIssuer::Gitlab) => {
+            if dialog.draft.auth.instance_url.trim().is_empty() {
+                Some(ProviderStudioField::InstanceUrl)
+            } else {
+                dialog
+                    .draft
+                    .credential_drafts
+                    .gitlab
+                    .redirect_uri
+                    .trim()
+                    .is_empty()
+                    .then_some(ProviderStudioField::RedirectUri)
+            }
+        }
+        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => None,
+    }
+}
+
+pub(super) fn provider_studio_missing_continue_auth_field(
+    dialog: &ProviderStudioOverlay,
+) -> Option<ProviderStudioField> {
+    match dialog.draft.auth_kind.credential_issuer() {
+        Some(CredentialIssuer::OpenaiChatgpt) => {
+            if provider_studio_auth_login_kind(dialog)
+                == Some(ProviderDraftInteractiveLoginKind::Browser)
+            {
+                if dialog
+                    .draft
+                    .credential_drafts
+                    .openai_chatgpt
+                    .redirect_uri
+                    .trim()
+                    .is_empty()
+                {
+                    Some(ProviderStudioField::RedirectUri)
+                } else {
+                    dialog
+                        .draft
+                        .credential_drafts
+                        .openai_chatgpt
+                        .browser
+                        .as_ref()
+                        .and_then(|_| {
+                            dialog
+                                .draft
+                                .credential_drafts
+                                .openai_chatgpt
+                                .callback_url
+                                .trim()
+                                .is_empty()
+                                .then_some(ProviderStudioField::CallbackUrl)
+                        })
+                }
+            } else {
+                None
+            }
+        }
+        Some(CredentialIssuer::GithubCopilot) => None,
+        Some(CredentialIssuer::Gitlab) => {
+            if dialog.draft.auth.instance_url.trim().is_empty() {
+                Some(ProviderStudioField::InstanceUrl)
+            } else if dialog
+                .draft
+                .credential_drafts
+                .gitlab
+                .redirect_uri
+                .trim()
+                .is_empty()
+            {
+                Some(ProviderStudioField::RedirectUri)
+            } else {
+                dialog
+                    .draft
+                    .credential_drafts
+                    .gitlab
+                    .browser
+                    .as_ref()
+                    .and_then(|_| {
+                        dialog
+                            .draft
+                            .credential_drafts
+                            .gitlab
+                            .callback_url
+                            .trim()
+                            .is_empty()
+                            .then_some(ProviderStudioField::CallbackUrl)
+                    })
+            }
+        }
+        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => None,
+    }
+}
+
+pub(super) fn provider_studio_preferred_detail_field_index(
+    dialog: &ProviderStudioOverlay,
+) -> usize {
+    provider_studio_missing_continue_auth_field(dialog)
+        .and_then(|field| provider_studio_detail_field_index(dialog, field))
+        .or_else(|| match dialog.draft.auth_kind.credential_issuer() {
+            Some(CredentialIssuer::OpenaiChatgpt)
+                if provider_studio_auth_login_kind(dialog)
+                    == Some(ProviderDraftInteractiveLoginKind::Browser) =>
+            {
+                dialog
+                    .draft
+                    .credential_drafts
+                    .openai_chatgpt
+                    .browser
+                    .as_ref()
+                    .and_then(|_| {
+                        provider_studio_detail_field_index(dialog, ProviderStudioField::CallbackUrl)
+                    })
+            }
+            Some(CredentialIssuer::OpenaiChatgpt) => None,
+            Some(CredentialIssuer::Gitlab) => dialog
+                .draft
+                .credential_drafts
+                .gitlab
+                .browser
+                .as_ref()
+                .and_then(|_| {
+                    provider_studio_detail_field_index(dialog, ProviderStudioField::CallbackUrl)
+                }),
+            Some(CredentialIssuer::GithubCopilot)
+            | Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore)
+            | None => None,
+        })
+        .or_else(|| {
+            provider_studio_missing_start_auth_field(dialog)
+                .and_then(|field| provider_studio_detail_field_index(dialog, field))
+        })
+        .unwrap_or(0)
+}
+
 pub(super) fn provider_studio_start_auth_summary(
     i18n: &I18n,
     dialog: &ProviderStudioOverlay,
 ) -> String {
-    let status = provider_studio_auth_status_summary(i18n, dialog);
     match dialog.draft.auth_kind.credential_issuer() {
-        Some(CredentialIssuer::OpenaiChatgpt) => dialog
-            .draft
-            .credential_drafts
-            .openai_chatgpt
-            .browser
-            .as_ref()
-            .map(|session| session.display_authorize_url().to_owned())
-            .unwrap_or_else(|| status.to_owned()),
-        Some(CredentialIssuer::GithubCopilot) => dialog
-            .draft
-            .credential_drafts
-            .github_copilot
-            .device
-            .as_ref()
-            .and_then(|device| {
-                let mut parts = Vec::new();
-                parts.push(device.display_verification_url().to_owned());
+        Some(CredentialIssuer::OpenaiChatgpt) => {
+            if let Some(field) = provider_studio_missing_start_auth_field(dialog) {
+                return provider_studio_required_field_summary(i18n, field);
+            }
+            match provider_studio_auth_login_kind(dialog) {
+                Some(ProviderDraftInteractiveLoginKind::Browser) => {
+                    if let Some(session) = dialog
+                        .draft
+                        .credential_drafts
+                        .openai_chatgpt
+                        .browser
+                        .as_ref()
+                    {
+                        return provider_studio_action_with_summary(
+                            i18n,
+                            "provider-studio-summary-open-authorize",
+                            Some(session.display_authorize_url().to_owned()),
+                        );
+                    }
+                    provider_studio_action_with_summary(
+                        i18n,
+                        if provider_studio_auth_is_configured(dialog) {
+                            "provider-studio-summary-restart-browser"
+                        } else {
+                            "provider-studio-summary-start-browser"
+                        },
+                        provider_studio_labeled_summary(
+                            i18n,
+                            ProviderStudioSummaryLabel::Redirect,
+                            dialog
+                                .draft
+                                .credential_drafts
+                                .openai_chatgpt
+                                .redirect_uri
+                                .as_str(),
+                            36,
+                        ),
+                    )
+                }
+                Some(ProviderDraftInteractiveLoginKind::Device) => {
+                    if let Some(device) = dialog
+                        .draft
+                        .credential_drafts
+                        .openai_chatgpt
+                        .device
+                        .as_ref()
+                    {
+                        let mut parts = vec![device.display_verification_url().to_owned()];
+                        if let Some(code) = provider_studio_labeled_summary(
+                            i18n,
+                            ProviderStudioSummaryLabel::Code,
+                            device.user_code.as_str(),
+                            18,
+                        ) {
+                            parts.push(code);
+                        }
+                        return provider_studio_action_with_summary(
+                            i18n,
+                            "provider-studio-summary-open-verify",
+                            Some(join_inline_segments(parts)),
+                        );
+                    }
+                    provider_studio_action_with_summary(
+                        i18n,
+                        if provider_studio_auth_is_configured(dialog) {
+                            "provider-studio-summary-restart-device"
+                        } else {
+                            "provider-studio-summary-start-device"
+                        },
+                        None,
+                    )
+                }
+                None => provider_studio_auth_status_summary(i18n, dialog),
+            }
+        }
+        Some(CredentialIssuer::GithubCopilot) => {
+            if let Some(device) = dialog
+                .draft
+                .credential_drafts
+                .github_copilot
+                .device
+                .as_ref()
+            {
+                let mut parts = vec![device.display_verification_url().to_owned()];
                 if let Some(code) = provider_studio_labeled_summary(
                     i18n,
                     ProviderStudioSummaryLabel::Code,
@@ -445,18 +731,63 @@ pub(super) fn provider_studio_start_auth_summary(
                 ) {
                     parts.push(code);
                 }
-                (!parts.is_empty()).then(|| join_inline_segments(parts))
-            })
-            .unwrap_or(status),
-        Some(CredentialIssuer::Gitlab) => dialog
-            .draft
-            .credential_drafts
-            .gitlab
-            .browser
-            .as_ref()
-            .map(|session| session.display_authorize_url().to_owned())
-            .unwrap_or_else(|| status.to_owned()),
-        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => status,
+                return provider_studio_action_with_summary(
+                    i18n,
+                    "provider-studio-summary-open-verify",
+                    Some(join_inline_segments(parts)),
+                );
+            }
+            provider_studio_action_with_summary(
+                i18n,
+                if provider_studio_auth_is_configured(dialog) {
+                    "provider-studio-summary-restart-device"
+                } else {
+                    "provider-studio-summary-start-device"
+                },
+                provider_studio_summary_value(
+                    dialog
+                        .draft
+                        .credential_drafts
+                        .github_copilot
+                        .enterprise_domain
+                        .as_str(),
+                    28,
+                ),
+            )
+        }
+        Some(CredentialIssuer::Gitlab) => {
+            if let Some(field) = provider_studio_missing_start_auth_field(dialog) {
+                return provider_studio_required_field_summary(i18n, field);
+            }
+            if let Some(session) = dialog.draft.credential_drafts.gitlab.browser.as_ref() {
+                return provider_studio_action_with_summary(
+                    i18n,
+                    "provider-studio-summary-open-authorize",
+                    Some(session.display_authorize_url().to_owned()),
+                );
+            }
+            provider_studio_action_with_summary(
+                i18n,
+                if provider_studio_auth_is_configured(dialog) {
+                    "provider-studio-summary-restart-browser"
+                } else {
+                    "provider-studio-summary-start-browser"
+                },
+                provider_studio_summary_value(dialog.draft.auth.instance_url.as_str(), 40).or_else(
+                    || {
+                        provider_studio_labeled_summary(
+                            i18n,
+                            ProviderStudioSummaryLabel::Redirect,
+                            dialog.draft.credential_drafts.gitlab.redirect_uri.as_str(),
+                            36,
+                        )
+                    },
+                ),
+            )
+        }
+        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => {
+            provider_studio_auth_status_summary(i18n, dialog)
+        }
     }
 }
 
@@ -464,46 +795,95 @@ pub(super) fn provider_studio_continue_auth_summary(
     i18n: &I18n,
     dialog: &ProviderStudioOverlay,
 ) -> String {
-    let status = provider_studio_auth_status_summary(i18n, dialog);
     match dialog.draft.auth_kind.credential_issuer() {
-        Some(CredentialIssuer::OpenaiChatgpt) => provider_studio_labeled_summary(
-            i18n,
-            ProviderStudioSummaryLabel::Callback,
-            dialog
-                .draft
-                .credential_drafts
-                .openai_chatgpt
-                .callback_url
-                .as_str(),
-            44,
-        )
-        .or_else(|| {
-            dialog
-                .draft
-                .credential_drafts
-                .openai_chatgpt
-                .browser
-                .as_ref()
-                .map(|session| {
-                    provider_studio_browser_continue_summary(
+        Some(CredentialIssuer::OpenaiChatgpt) => match provider_studio_auth_login_kind(dialog) {
+            Some(ProviderDraftInteractiveLoginKind::Browser) => {
+                if let Some(callback) = provider_studio_labeled_summary(
+                    i18n,
+                    ProviderStudioSummaryLabel::Callback,
+                    dialog
+                        .draft
+                        .credential_drafts
+                        .openai_chatgpt
+                        .callback_url
+                        .as_str(),
+                    44,
+                ) {
+                    return provider_studio_action_with_summary(
+                        i18n,
+                        "provider-studio-summary-finish-callback",
+                        Some(callback),
+                    );
+                }
+                if let Some(session) = dialog
+                    .draft
+                    .credential_drafts
+                    .openai_chatgpt
+                    .browser
+                    .as_ref()
+                {
+                    return provider_studio_browser_continue_summary(
                         i18n,
                         "provider-studio-summary-paste-callback",
                         session.state.as_str(),
-                    )
-                })
-        })
-        .unwrap_or(status),
-        Some(CredentialIssuer::GithubCopilot) => dialog
-            .draft
-            .credential_drafts
-            .github_copilot
-            .device
-            .as_ref()
-            .map(|device| {
-                let mut parts = vec![i18n.text_args(
-                    "provider-studio-summary-poll-every",
-                    &crate::fl_args!("seconds" => device.interval_seconds.max(1) as i64),
-                )];
+                    );
+                }
+                provider_studio_missing_continue_auth_field(dialog)
+                    .map(|field| provider_studio_required_field_summary(i18n, field))
+                    .unwrap_or_else(|| ui_text::t(i18n, "provider-studio-summary-start-auth-first"))
+            }
+            Some(ProviderDraftInteractiveLoginKind::Device) => {
+                if let Some(device) = dialog
+                    .draft
+                    .credential_drafts
+                    .openai_chatgpt
+                    .device
+                    .as_ref()
+                {
+                    let mut parts = vec![
+                        ui_text::t(i18n, "provider-studio-summary-poll-now"),
+                        i18n.text_args(
+                            "provider-studio-summary-poll-every",
+                            &crate::fl_args!("seconds" => device.interval_seconds.max(1) as i64),
+                        ),
+                    ];
+                    if let Some(code) = provider_studio_labeled_summary(
+                        i18n,
+                        ProviderStudioSummaryLabel::Code,
+                        device.user_code.as_str(),
+                        18,
+                    ) {
+                        parts.push(code);
+                    }
+                    return join_inline_segments(parts);
+                }
+                provider_studio_action_with_summary(
+                    i18n,
+                    if provider_studio_auth_is_configured(dialog) {
+                        "provider-studio-summary-restart-device"
+                    } else {
+                        "provider-studio-summary-start-device"
+                    },
+                    None,
+                )
+            }
+            None => provider_studio_auth_status_summary(i18n, dialog),
+        },
+        Some(CredentialIssuer::GithubCopilot) => {
+            if let Some(device) = dialog
+                .draft
+                .credential_drafts
+                .github_copilot
+                .device
+                .as_ref()
+            {
+                let mut parts = vec![
+                    ui_text::t(i18n, "provider-studio-summary-poll-now"),
+                    i18n.text_args(
+                        "provider-studio-summary-poll-every",
+                        &crate::fl_args!("seconds" => device.interval_seconds.max(1) as i64),
+                    ),
+                ];
                 if let Some(code) = provider_studio_labeled_summary(
                     i18n,
                     ProviderStudioSummaryLabel::Code,
@@ -512,32 +892,45 @@ pub(super) fn provider_studio_continue_auth_summary(
                 ) {
                     parts.push(code);
                 }
-                join_inline_segments(parts)
-            })
-            .unwrap_or(status),
-        Some(CredentialIssuer::Gitlab) => provider_studio_labeled_summary(
-            i18n,
-            ProviderStudioSummaryLabel::Callback,
-            dialog.draft.credential_drafts.gitlab.callback_url.as_str(),
-            44,
-        )
-        .or_else(|| {
-            dialog
-                .draft
-                .credential_drafts
-                .gitlab
-                .browser
-                .as_ref()
-                .map(|session| {
-                    provider_studio_browser_continue_summary(
-                        i18n,
-                        "provider-studio-summary-paste-callback",
-                        session.state.as_str(),
-                    )
-                })
-        })
-        .unwrap_or(status),
-        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => status,
+                return join_inline_segments(parts);
+            }
+            provider_studio_action_with_summary(
+                i18n,
+                if provider_studio_auth_is_configured(dialog) {
+                    "provider-studio-summary-restart-device"
+                } else {
+                    "provider-studio-summary-start-device"
+                },
+                None,
+            )
+        }
+        Some(CredentialIssuer::Gitlab) => {
+            if let Some(callback) = provider_studio_labeled_summary(
+                i18n,
+                ProviderStudioSummaryLabel::Callback,
+                dialog.draft.credential_drafts.gitlab.callback_url.as_str(),
+                44,
+            ) {
+                return provider_studio_action_with_summary(
+                    i18n,
+                    "provider-studio-summary-finish-callback",
+                    Some(callback),
+                );
+            }
+            if let Some(session) = dialog.draft.credential_drafts.gitlab.browser.as_ref() {
+                return provider_studio_browser_continue_summary(
+                    i18n,
+                    "provider-studio-summary-paste-callback",
+                    session.state.as_str(),
+                );
+            }
+            provider_studio_missing_continue_auth_field(dialog)
+                .map(|field| provider_studio_required_field_summary(i18n, field))
+                .unwrap_or_else(|| ui_text::t(i18n, "provider-studio-summary-start-auth-first"))
+        }
+        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => {
+            provider_studio_auth_status_summary(i18n, dialog)
+        }
     }
 }
 
@@ -574,20 +967,28 @@ pub(super) fn provider_studio_auth_details_hint(
                 24,
             )
             .or_else(|| {
-                provider_studio_labeled_summary(
-                    i18n,
-                    ProviderStudioSummaryLabel::Callback,
-                    draft.credential_drafts.openai_chatgpt.callback_url.as_str(),
-                    36,
-                )
+                (draft.interactive_login_kind() == Some(ProviderDraftInteractiveLoginKind::Browser))
+                    .then(|| {
+                        provider_studio_labeled_summary(
+                            i18n,
+                            ProviderStudioSummaryLabel::Callback,
+                            draft.credential_drafts.openai_chatgpt.callback_url.as_str(),
+                            36,
+                        )
+                    })
+                    .flatten()
             })
             .or_else(|| {
-                provider_studio_labeled_summary(
-                    i18n,
-                    ProviderStudioSummaryLabel::Redirect,
-                    draft.credential_drafts.openai_chatgpt.redirect_uri.as_str(),
-                    36,
-                )
+                (draft.interactive_login_kind() == Some(ProviderDraftInteractiveLoginKind::Browser))
+                    .then(|| {
+                        provider_studio_labeled_summary(
+                            i18n,
+                            ProviderStudioSummaryLabel::Redirect,
+                            draft.credential_drafts.openai_chatgpt.redirect_uri.as_str(),
+                            36,
+                        )
+                    })
+                    .flatten()
             })
             .or_else(|| {
                 draft
@@ -673,10 +1074,8 @@ pub(super) fn provider_studio_auth_details_summary(
     i18n: &I18n,
     dialog: &ProviderStudioOverlay,
 ) -> String {
-    provider_studio_status_with_summary(
-        provider_studio_auth_status_summary(i18n, dialog),
-        provider_studio_auth_details_hint(i18n, &dialog.draft),
-    )
+    provider_studio_auth_details_hint(i18n, &dialog.draft)
+        .unwrap_or_else(|| ui_text::t(i18n, "provider-studio-summary-review-fields"))
 }
 
 pub(super) fn provider_studio_main_field_value(
@@ -685,7 +1084,11 @@ pub(super) fn provider_studio_main_field_value(
     field: ProviderStudioField,
 ) -> String {
     match field {
-        ProviderStudioField::AuthStatus => provider_studio_auth_status_summary(i18n, dialog),
+        ProviderStudioField::AuthLoginMethod => dialog
+            .draft
+            .interactive_login_kind()
+            .map(|kind| kind.token().to_owned())
+            .unwrap_or_default(),
         ProviderStudioField::StartAuthAction => provider_studio_start_auth_summary(i18n, dialog),
         ProviderStudioField::ContinueAuthAction => {
             provider_studio_continue_auth_summary(i18n, dialog)
@@ -693,18 +1096,30 @@ pub(super) fn provider_studio_main_field_value(
         ProviderStudioField::EditAuthDetailsAction => {
             provider_studio_auth_details_summary(i18n, dialog)
         }
+        ProviderStudioField::DeleteProviderAction => {
+            ui_text::t(i18n, "provider-studio-summary-delete-provider")
+        }
         _ => provider_studio_field_value(&dialog.draft, field),
     }
 }
 
 fn provider_studio_has_pending_auth_state(dialog: &ProviderStudioOverlay) -> bool {
     match dialog.draft.auth_kind.credential_issuer() {
-        Some(CredentialIssuer::OpenaiChatgpt) => dialog
-            .draft
-            .credential_drafts
-            .openai_chatgpt
-            .browser
-            .is_some(),
+        Some(CredentialIssuer::OpenaiChatgpt) => match provider_studio_auth_login_kind(dialog) {
+            Some(ProviderDraftInteractiveLoginKind::Browser) => dialog
+                .draft
+                .credential_drafts
+                .openai_chatgpt
+                .browser
+                .is_some(),
+            Some(ProviderDraftInteractiveLoginKind::Device) => dialog
+                .draft
+                .credential_drafts
+                .openai_chatgpt
+                .device
+                .is_some(),
+            None => false,
+        },
         Some(CredentialIssuer::GithubCopilot) => dialog
             .draft
             .credential_drafts
@@ -721,28 +1136,65 @@ pub(super) fn provider_studio_auth_state_lines(
     dialog: &ProviderStudioOverlay,
 ) -> Vec<String> {
     match dialog.draft.auth_kind.credential_issuer() {
-        Some(CredentialIssuer::OpenaiChatgpt) => dialog
-            .draft
-            .credential_drafts
-            .openai_chatgpt
-            .browser
-            .as_ref()
-            .map(|session| {
-                vec![
-                    ui_text::t(i18n, "provider-studio-auth-openai-ready"),
-                    i18n.text_args(
-                        "provider-studio-auth-authorize",
-                        &crate::fl_args!("url" => session.display_authorize_url().to_owned()),
-                    ),
-                    i18n.text_args(
-                        "provider-studio-auth-paste-callback",
-                        &crate::fl_args!(
-                            "state" => truncate_display_width(session.state.as_str(), 24)
+        Some(CredentialIssuer::OpenaiChatgpt) => match provider_studio_auth_login_kind(dialog) {
+            Some(ProviderDraftInteractiveLoginKind::Browser) => dialog
+                .draft
+                .credential_drafts
+                .openai_chatgpt
+                .browser
+                .as_ref()
+                .map(|session| {
+                    vec![
+                        ui_text::t(i18n, "provider-studio-auth-openai-ready"),
+                        i18n.text_args(
+                            "provider-studio-auth-authorize",
+                            &crate::fl_args!("url" => session.display_authorize_url().to_owned()),
                         ),
-                    ),
-                ]
-            })
-            .unwrap_or_default(),
+                        i18n.text_args(
+                            "provider-studio-auth-redirect",
+                            &crate::fl_args!(
+                                "url" => dialog
+                                    .draft
+                                    .credential_drafts
+                                    .openai_chatgpt
+                                    .redirect_uri
+                                    .clone()
+                            ),
+                        ),
+                        i18n.text_args(
+                            "provider-studio-auth-paste-callback",
+                            &crate::fl_args!(
+                                "state" => truncate_display_width(session.state.as_str(), 24)
+                            ),
+                        ),
+                    ]
+                })
+                .unwrap_or_default(),
+            Some(ProviderDraftInteractiveLoginKind::Device) => dialog
+                .draft
+                .credential_drafts
+                .openai_chatgpt
+                .device
+                .as_ref()
+                .map(|device| {
+                    vec![
+                        i18n.text_args(
+                            "provider-studio-auth-openai-device-ready",
+                            &crate::fl_args!("code" => device.user_code.clone()),
+                        ),
+                        i18n.text_args(
+                            "provider-studio-auth-verify",
+                            &crate::fl_args!("url" => device.display_verification_url().to_owned()),
+                        ),
+                        i18n.text_args(
+                            "provider-studio-auth-poll",
+                            &crate::fl_args!("seconds" => device.interval_seconds.max(1) as i64),
+                        ),
+                    ]
+                })
+                .unwrap_or_default(),
+            None => Vec::new(),
+        },
         Some(CredentialIssuer::GithubCopilot) => dialog
             .draft
             .credential_drafts
@@ -761,7 +1213,7 @@ pub(super) fn provider_studio_auth_state_lines(
                     ),
                     i18n.text_args(
                         "provider-studio-auth-poll",
-                        &crate::fl_args!("seconds" => device.interval_seconds as i64),
+                        &crate::fl_args!("seconds" => device.interval_seconds.max(1) as i64),
                     ),
                 ]
             })
@@ -778,6 +1230,12 @@ pub(super) fn provider_studio_auth_state_lines(
                     i18n.text_args(
                         "provider-studio-auth-authorize",
                         &crate::fl_args!("url" => session.display_authorize_url().to_owned()),
+                    ),
+                    i18n.text_args(
+                        "provider-studio-auth-redirect",
+                        &crate::fl_args!(
+                            "url" => dialog.draft.credential_drafts.gitlab.redirect_uri.clone()
+                        ),
                     ),
                     i18n.text_args(
                         "provider-studio-auth-paste-callback",
@@ -838,14 +1296,22 @@ pub(super) fn provider_studio_detail_fields(
             ProviderStudioField::ApiKey,
         ],
         ProviderDraftAuthKind::Credential(issuer) => match issuer {
-            Some(CredentialIssuer::OpenaiChatgpt) => vec![
-                ProviderStudioField::RedirectUri,
-                ProviderStudioField::CallbackUrl,
-                ProviderStudioField::RefreshToken,
-                ProviderStudioField::AccessToken,
-                ProviderStudioField::ExpiresAtMs,
-                ProviderStudioField::AccountId,
-            ],
+            Some(CredentialIssuer::OpenaiChatgpt) => {
+                let mut fields = Vec::new();
+                if provider_studio_auth_login_kind(dialog)
+                    == Some(ProviderDraftInteractiveLoginKind::Browser)
+                {
+                    fields.push(ProviderStudioField::RedirectUri);
+                    fields.push(ProviderStudioField::CallbackUrl);
+                }
+                fields.extend([
+                    ProviderStudioField::RefreshToken,
+                    ProviderStudioField::AccessToken,
+                    ProviderStudioField::ExpiresAtMs,
+                    ProviderStudioField::AccountId,
+                ]);
+                fields
+            }
             Some(CredentialIssuer::GithubCopilot) => vec![
                 ProviderStudioField::EnterpriseDomain,
                 ProviderStudioField::RefreshToken,
@@ -963,6 +1429,9 @@ pub(super) fn provider_studio_visible_fields(
     if matches!(dialog.draft.auth_kind, ProviderDraftAuthKind::Credential(_)) {
         fields.push(ProviderStudioField::CredentialIssuer);
     }
+    if !provider_studio_available_login_kinds(dialog).is_empty() {
+        fields.push(ProviderStudioField::AuthLoginMethod);
+    }
     if !provider_studio_detail_fields(dialog).is_empty() {
         if dialog.draft.supports_interactive_auth() {
             fields.push(ProviderStudioField::StartAuthAction);
@@ -979,6 +1448,9 @@ pub(super) fn provider_studio_visible_fields(
             ProviderStudioField::DefaultModel,
         ]);
     }
+    if dialog.draft.source_provider_id.is_some() {
+        fields.push(ProviderStudioField::DeleteProviderAction);
+    }
     fields
 }
 
@@ -987,10 +1459,11 @@ fn provider_studio_field_label_key(field: ProviderStudioField) -> &'static str {
         ProviderStudioField::ProviderId => "provider-field-provider-id",
         ProviderStudioField::AuthMode => "provider-field-auth-mode",
         ProviderStudioField::CredentialIssuer => "provider-field-credential-issuer",
-        ProviderStudioField::AuthStatus => "provider-field-auth-status",
+        ProviderStudioField::AuthLoginMethod => "provider-field-auth-login-method",
         ProviderStudioField::StartAuthAction => "provider-field-start-auth",
         ProviderStudioField::ContinueAuthAction => "provider-field-continue-auth",
         ProviderStudioField::EditAuthDetailsAction => "provider-field-auth-details",
+        ProviderStudioField::DeleteProviderAction => "provider-field-delete-provider",
         ProviderStudioField::BaseUrl => "provider-field-base-url",
         ProviderStudioField::InstanceUrl => "provider-field-instance-url",
         ProviderStudioField::ApiKeyEnv => "provider-field-api-key-env",
@@ -1026,10 +1499,14 @@ pub(super) fn provider_studio_field_prompt(i18n: &I18n, field: ProviderStudioFie
             i18n,
             "overlay-provider-studio-edit-credential-issuer-prompt",
         ),
-        ProviderStudioField::AuthStatus
-        | ProviderStudioField::StartAuthAction
+        ProviderStudioField::AuthLoginMethod => ui_text::t(
+            i18n,
+            "overlay-provider-studio-edit-auth-login-method-prompt",
+        ),
+        ProviderStudioField::StartAuthAction
         | ProviderStudioField::ContinueAuthAction
-        | ProviderStudioField::EditAuthDetailsAction => String::new(),
+        | ProviderStudioField::EditAuthDetailsAction
+        | ProviderStudioField::DeleteProviderAction => String::new(),
         _ => i18n.text_args(
             "overlay-provider-studio-edit-prompt",
             &crate::fl_args!("field" => provider_studio_field_label(i18n, field)),
@@ -1045,10 +1522,14 @@ pub(super) fn provider_studio_field_value(
         ProviderStudioField::ProviderId => draft.provider_id.clone(),
         ProviderStudioField::AuthMode => draft.auth_kind.mode_label().to_owned(),
         ProviderStudioField::CredentialIssuer => draft.auth.credential_issuer.clone(),
-        ProviderStudioField::AuthStatus => String::new(),
+        ProviderStudioField::AuthLoginMethod => draft
+            .interactive_login_kind()
+            .map(|kind| kind.token().to_owned())
+            .unwrap_or_default(),
         ProviderStudioField::StartAuthAction
         | ProviderStudioField::ContinueAuthAction
-        | ProviderStudioField::EditAuthDetailsAction => String::new(),
+        | ProviderStudioField::EditAuthDetailsAction
+        | ProviderStudioField::DeleteProviderAction => String::new(),
         ProviderStudioField::BaseUrl => draft.auth.base_url.clone(),
         ProviderStudioField::InstanceUrl => draft.auth.instance_url.clone(),
         ProviderStudioField::ApiKeyEnv => draft.auth.api_key_env.clone(),
@@ -1094,13 +1575,16 @@ pub(super) fn provider_studio_field_editable(
         ProviderStudioField::CredentialIssuer => {
             matches!(dialog.draft.auth_kind, ProviderDraftAuthKind::Credential(_))
         }
-        ProviderStudioField::AuthStatus => false,
+        ProviderStudioField::AuthLoginMethod => {
+            provider_studio_available_login_kinds(dialog).len() > 1
+        }
         ProviderStudioField::StartAuthAction | ProviderStudioField::ContinueAuthAction => {
             dialog.draft.supports_interactive_auth()
         }
         ProviderStudioField::EditAuthDetailsAction => {
             !provider_studio_detail_fields(dialog).is_empty()
         }
+        ProviderStudioField::DeleteProviderAction => dialog.draft.source_provider_id.is_some(),
         ProviderStudioField::BaseUrl => match dialog.draft.auth_kind {
             ProviderDraftAuthKind::Unset => false,
             ProviderDraftAuthKind::Api | ProviderDraftAuthKind::BedrockSigv4 => {
@@ -1120,18 +1604,26 @@ pub(super) fn provider_studio_field_editable(
                 ProviderDraftAuthKind::Api | ProviderDraftAuthKind::Gitlab
             )
         }
-        ProviderStudioField::RedirectUri => matches!(
-            dialog.draft.auth_kind,
-            ProviderDraftAuthKind::Credential(Some(
-                CredentialIssuer::OpenaiChatgpt | CredentialIssuer::Gitlab
-            ))
-        ),
-        ProviderStudioField::CallbackUrl => matches!(
-            dialog.draft.auth_kind,
-            ProviderDraftAuthKind::Credential(Some(
-                CredentialIssuer::OpenaiChatgpt | CredentialIssuer::Gitlab
-            ))
-        ),
+        ProviderStudioField::RedirectUri => {
+            matches!(
+                dialog.draft.auth_kind,
+                ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab))
+            ) || matches!(
+                dialog.draft.auth_kind,
+                ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt))
+            ) && provider_studio_auth_login_kind(dialog)
+                == Some(ProviderDraftInteractiveLoginKind::Browser)
+        }
+        ProviderStudioField::CallbackUrl => {
+            matches!(
+                dialog.draft.auth_kind,
+                ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab))
+            ) || matches!(
+                dialog.draft.auth_kind,
+                ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt))
+            ) && provider_studio_auth_login_kind(dialog)
+                == Some(ProviderDraftInteractiveLoginKind::Browser)
+        }
         ProviderStudioField::RefreshToken
         | ProviderStudioField::AccessToken
         | ProviderStudioField::ExpiresAtMs => matches!(
@@ -1198,6 +1690,41 @@ pub(super) fn remove_provider_studio_model_from_dialog(
     provider_studio_ensure_default_selection(dialog);
 }
 
+pub(super) fn remove_provider_studio_adapter_from_dialog(
+    dialog: &mut ProviderStudioOverlay,
+    adapter_id: &str,
+) {
+    dialog
+        .adapter_models
+        .retain(|adapter_models| adapter_models.adapter_id != adapter_id);
+    dialog.configured_adapter_ids.remove(adapter_id);
+    dialog.selected_adapter_ids.remove(adapter_id);
+    let prefix = format!("{adapter_id}\u{1f}");
+    dialog
+        .selected_model_keys
+        .retain(|key| !key.starts_with(prefix.as_str()));
+    dialog
+        .catalog_matches
+        .retain(|key, _| !key.starts_with(prefix.as_str()));
+    if dialog.draft.default_adapter == adapter_id {
+        dialog.draft.default_adapter.clear();
+        dialog.draft.default_model.clear();
+    }
+    if dialog
+        .model_page
+        .as_ref()
+        .is_some_and(|page| page.adapter_id == adapter_id)
+    {
+        dialog.model_page = None;
+    }
+    dialog.selection.clamp_right(
+        provider_studio_selected_adapter_models(dialog)
+            .map(|adapter| adapter.models.len())
+            .unwrap_or_default(),
+    );
+    provider_studio_ensure_default_selection(dialog);
+}
+
 const PROVIDER_MODEL_CONFIG_FIELDS: [ProviderModelConfigField; 12] = [
     ProviderModelConfigField::ModelId,
     ProviderModelConfigField::Enabled,
@@ -1224,6 +1751,22 @@ pub(super) fn provider_model_config_draft_from_value(
     let overlay = serde_json::from_value::<agena::config::ProviderModelOverlay>(value)
         .map_err(|error| error.to_string())?;
     Ok(provider_model_config_draft_from_overlay(model_id, overlay))
+}
+
+pub(super) fn apply_provider_model_config_native_tools_suggestion(
+    provider_draft: &ProviderConfigDraft,
+    adapter_id: &str,
+    native_tools_present: bool,
+    draft: &mut ProviderModelConfigDraft,
+) {
+    if native_tools_present || draft.native_tools_preset != ProviderNativeToolsPreset::Disabled {
+        return;
+    }
+    if let Some(preset) =
+        provider_native_tools_suggested_preset_for_draft(provider_draft, adapter_id)
+    {
+        draft.native_tools_preset = preset;
+    }
 }
 
 pub(super) fn provider_model_config_draft_from_overlay(

@@ -10,7 +10,7 @@ pub(super) fn build_or_reconfigure_session_manager(
     workspace_root: &Path,
     resolution: &ConfigResolution,
 ) -> Arc<SessionManager> {
-    let processor = build_session_processor(providers, Arc::clone(&plugins));
+    let processor = build_session_processor(providers, Arc::clone(&plugins), workspace_root);
     let config = session_manager_config(resolution);
 
     if let Some(manager) = existing {
@@ -53,9 +53,11 @@ pub(super) fn build_or_reconfigure_session_manager(
 pub(super) fn build_session_processor(
     providers: Arc<ProviderRegistry>,
     plugins: Arc<PluginHost>,
+    workspace_root: &Path,
 ) -> SessionProcessor {
     SessionProcessor::new(providers, ContextGovernor::new(ContextPolicy::default()))
         .with_plugin_host(plugins)
+        .with_workspace_root(workspace_root)
 }
 
 pub(super) fn build_tool_executor(

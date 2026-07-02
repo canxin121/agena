@@ -7,8 +7,9 @@ pub async fn list_auth_providers(
     let items = configured_ids
         .into_iter()
         .map(|provider_id| {
-            let auth = current_auth_provider_data(&state, provider_id.as_str())?;
-            auth_provider_resource(true, provider_id, auth.as_ref())
+            let resolved = auth_provider_config(&state, provider_id.as_str())?;
+            let auth = provider_auth_data(&resolved);
+            auth_provider_resource(true, provider_id, &resolved, auth.as_ref())
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(items))
@@ -264,26 +265,13 @@ fn auth_manager(state: &AppState) -> AuthManager<ProviderConfigCredentialStore> 
     ))
 }
 
-fn current_auth_provider_data(
-    state: &AppState,
-    provider_id: &str,
-) -> Result<Option<agena::provider::auth::AuthData>, ServerError> {
-    let snapshot = state.runtime().current_snapshot();
-    let resolved = snapshot
-        .config_resolution()
-        .config
-        .providers
-        .get(provider_id)
-        .ok_or_else(|| ServerError::NotFound(format!("auth provider not found: {provider_id}")))?;
-    Ok(provider_auth_data(resolved))
-}
-
 fn auth_provider_resource_from_state(
     state: &AppState,
     provider_id: &str,
 ) -> Result<AuthProviderResource, ServerError> {
-    let auth = current_auth_provider_data(state, provider_id)?;
-    auth_provider_resource(true, provider_id.to_owned(), auth.as_ref())
+    let resolved = auth_provider_config(state, provider_id)?;
+    let auth = provider_auth_data(&resolved);
+    auth_provider_resource(true, provider_id.to_owned(), &resolved, auth.as_ref())
 }
 
 fn auth_provider_json_from_state(
@@ -525,13 +513,18 @@ fn resolve_device_auth_target(
 fn auth_provider_resource(
     configured: bool,
     provider_id: String,
+    resolved: &ResolvedProviderConfig,
     auth: Option<&agena::provider::auth::AuthData>,
 ) -> Result<AuthProviderResource, ServerError> {
+    let (browser_login_kind, browser_login_instance_url) =
+        auth_provider_browser_login_details(resolved)?;
+    let device_login_kind = auth_provider_device_login_kind(resolved)?;
     let mut resource = AuthProviderResource {
         provider_id,
         configured,
         credential_present: auth.is_some(),
         credential_type: None,
+        credential_issuer: None,
         key_preview: None,
         expires_at: None,
         expired: None,
@@ -541,6 +534,11 @@ fn auth_provider_resource(
         display_name: None,
         email: None,
         avatar_url: None,
+        api_key_write_supported: provider_supports_api_key_write(resolved),
+        refresh_supported: browser_login_kind.is_some(),
+        browser_login_kind,
+        browser_login_instance_url,
+        device_login_kind,
     };
 
     match auth {
@@ -549,6 +547,7 @@ fn auth_provider_resource(
             resource.key_preview = secret_preview(key);
         }
         Some(agena::provider::auth::AuthData::OAuth {
+            issuer,
             expires_at_ms,
             account_id,
             enterprise_url,
@@ -556,6 +555,7 @@ fn auth_provider_resource(
             ..
         }) => {
             resource.credential_type = Some(AuthCredentialType::Oauth);
+            resource.credential_issuer = issuer.map(AuthCredentialIssuerResource::from);
             resource.expires_at = if *expires_at_ms > 0 {
                 Some(
                     chrono::DateTime::from_timestamp_millis(*expires_at_ms).ok_or_else(|| {
@@ -589,6 +589,39 @@ fn auth_provider_resource(
     }
 
     Ok(resource)
+}
+
+fn auth_provider_browser_login_details(
+    resolved: &ResolvedProviderConfig,
+) -> Result<(Option<AuthLoginKindResource>, Option<String>), ServerError> {
+    match resolve_provider_oauth_target(resolved) {
+        Ok(Some(ProviderOAuthTarget::OpenAi)) => {
+            Ok((Some(AuthLoginKindResource::OpenaiChatgpt), None))
+        }
+        Ok(Some(ProviderOAuthTarget::Gitlab { instance_url })) => {
+            Ok((Some(AuthLoginKindResource::Gitlab), Some(instance_url)))
+        }
+        Ok(None) => Ok((None, None)),
+        Err(ProviderAuthTargetError::AmbiguousProvider) => Ok((None, None)),
+        Err(ProviderAuthTargetError::AmbiguousGitlab) => {
+            Ok((None, provider_gitlab_instance_url(resolved)))
+        }
+    }
+}
+
+fn auth_provider_device_login_kind(
+    resolved: &ResolvedProviderConfig,
+) -> Result<Option<AuthLoginKindResource>, ServerError> {
+    match resolve_provider_device_auth_target(resolved) {
+        Ok(Some(ProviderDeviceAuthTarget::OpenAi)) => {
+            Ok(Some(AuthLoginKindResource::OpenaiChatgpt))
+        }
+        Ok(Some(ProviderDeviceAuthTarget::Copilot)) => {
+            Ok(Some(AuthLoginKindResource::GithubCopilot))
+        }
+        Ok(None) | Err(ProviderAuthTargetError::AmbiguousProvider) => Ok(None),
+        Err(ProviderAuthTargetError::AmbiguousGitlab) => Ok(None),
+    }
 }
 
 fn secret_preview(secret: &str) -> Option<String> {

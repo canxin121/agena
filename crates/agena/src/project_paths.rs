@@ -5,6 +5,7 @@ use std::{
 };
 
 const MAX_WORKSPACE_KEY_LEN: usize = 80;
+const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
 
 pub(crate) fn agena_home_dir() -> PathBuf {
     let home = std::env::var("HOME")
@@ -17,6 +18,20 @@ pub(crate) fn project_state_dir(workspace_root: &Path) -> PathBuf {
     agena_home_dir()
         .join("projects")
         .join(workspace_key(workspace_root))
+}
+
+pub(crate) fn generated_image_artifact_path(
+    workspace_root: &Path,
+    session_id: i64,
+    call_id: &str,
+    extension: &str,
+) -> PathBuf {
+    let stem = sanitize_component(call_id, "generated-image");
+    let extension = sanitize_extension(extension);
+    project_state_dir(workspace_root)
+        .join(GENERATED_IMAGE_ARTIFACTS_DIR)
+        .join(session_id.to_string())
+        .join(format!("{stem}.{extension}"))
 }
 
 fn workspace_key(workspace_root: &Path) -> String {
@@ -51,4 +66,41 @@ fn sanitize_path(value: &str) -> String {
     value.hash(&mut hasher);
     let hash = format!("{:x}", hasher.finish());
     format!("{}-{hash}", &sanitized[..MAX_WORKSPACE_KEY_LEN])
+}
+
+fn sanitize_component(value: &str, fallback: &str) -> String {
+    let sanitized = value
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    if sanitized.is_empty() {
+        fallback.to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn sanitize_extension(value: &str) -> String {
+    let sanitized = value
+        .trim()
+        .trim_start_matches('.')
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_ascii_lowercase();
+    if sanitized.is_empty() {
+        "png".to_string()
+    } else {
+        sanitized
+    }
 }

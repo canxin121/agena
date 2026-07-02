@@ -3,6 +3,10 @@ use serde::{Deserialize, Serialize};
 
 const OAUTH_EXPIRY_BUFFER_MS: i64 = 5 * 60 * 1_000;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialIssuer {
@@ -47,9 +51,13 @@ pub enum AuthData {
         issuer: Option<CredentialIssuer>,
         refresh: String,
         access: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id_token: Option<String>,
         expires_at_ms: i64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         account_id: Option<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        chatgpt_account_is_fedramp: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         enterprise_url: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -93,8 +101,10 @@ impl AuthData {
             Self::OAuth {
                 refresh,
                 access,
+                id_token,
                 expires_at_ms,
                 account_id,
+                chatgpt_account_is_fedramp,
                 enterprise_url,
                 user,
                 ..
@@ -102,8 +112,10 @@ impl AuthData {
                 issuer: Some(issuer),
                 refresh,
                 access,
+                id_token,
                 expires_at_ms,
                 account_id,
+                chatgpt_account_is_fedramp,
                 enterprise_url,
                 user,
             },
@@ -116,6 +128,16 @@ impl AuthData {
             Self::OAuth { enterprise_url, .. } => enterprise_url.as_deref(),
             _ => None,
         }
+    }
+
+    pub fn chatgpt_account_is_fedramp(&self) -> bool {
+        matches!(
+            self,
+            Self::OAuth {
+                chatgpt_account_is_fedramp: true,
+                ..
+            }
+        )
     }
 
     pub fn is_oauth_expired(&self, now: DateTime<Utc>) -> bool {
@@ -140,9 +162,13 @@ impl AuthData {
 pub struct OAuthTokenResponse {
     pub refresh: String,
     pub access: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id_token: Option<String>,
     pub expires_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub chatgpt_account_is_fedramp: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<OAuthUserInfo>,
 }

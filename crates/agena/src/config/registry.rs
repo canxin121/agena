@@ -430,11 +430,16 @@ fn build_provider(
                 .adapter
                 .clone()
                 .expect("resolved provider default adapter"),
-            resolved
-                .defaults
-                .model
-                .clone()
-                .expect("resolved provider default model"),
+            adapter_defaults
+                .get(
+                    resolved
+                        .defaults
+                        .adapter
+                        .as_deref()
+                        .expect("resolved provider default adapter"),
+                )
+                .cloned()
+                .unwrap_or_else(|| LIST_MODELS_DEFAULT_MODEL_ID.to_owned()),
             adapters,
             routes,
         )
@@ -579,6 +584,7 @@ fn build_adapter_provider(
                     ))
                     .with_api_mode(adapter.options.api_mode.into())
                     .with_stream_mode(adapter.options.stream_mode.into())
+                    .with_models_url(adapter.options.models_url.clone())
                     .with_realtime_ws_url(adapter.options.realtime_ws_url.clone());
 
                     if let Some(auth_data) = credential.auth_data {
@@ -1025,17 +1031,29 @@ fn resolve_adapter_default_models(
         .filter(|(_, adapter)| adapter.enabled)
         .map(|(adapter_id, _)| adapter_id)
     {
-        let default_model =
-            resolved
-                .defaults
-                .model
-                .clone()
-                .ok_or_else(|| ConfigError::InvalidProviderConfig {
-                    provider_id: provider_id.to_owned(),
-                    message: format!(
-                        "provider defaults.model is missing for adapter `{adapter_id}`"
-                    ),
-                })?;
+        let default_model = resolved
+            .defaults
+            .model
+            .clone()
+            .or_else(|| {
+                resolved
+                    .models
+                    .iter()
+                    .filter(|(route, config)| {
+                        config.enabled
+                            && parse_adapter_model_ref(provider_id, route)
+                                .ok()
+                                .is_some_and(|(route_adapter_id, _)| {
+                                    route_adapter_id == *adapter_id
+                                })
+                    })
+                    .find_map(|(route, _)| {
+                        parse_adapter_model_ref(provider_id, route)
+                            .ok()
+                            .map(|(_, model_id)| model_id)
+                    })
+            })
+            .unwrap_or_else(|| LIST_MODELS_DEFAULT_MODEL_ID.to_owned());
         defaults.insert(adapter_id.clone(), default_model);
     }
 

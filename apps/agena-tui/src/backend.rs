@@ -16,9 +16,10 @@ use agena::{
     config::{
         ConfigSettingsDeleteInput, ConfigSettingsEditOptions, ConfigSettingsEditResponse,
         ConfigSettingsGetInput, ConfigSettingsPatchInput, ConfigSettingsPathInput,
-        ConfigSettingsSetInput, ProcessEnvironment, ProviderAdapterOverlay, ProviderAuthConfig,
-        ProviderAuthMode, ProviderAuthOverlay, ProviderModelOverlay, ProviderNativeToolRoute,
-        ProviderNativeToolsConfig, ProviderOverlay, delete_file_setting,
+        ConfigSettingsSetInput, OpenAiApiModeConfig, OpenAiBackendConfig, ProcessEnvironment,
+        ProviderAdapterOverlay, ProviderAuthConfig, ProviderAuthMode, ProviderAuthOverlay,
+        ProviderCapabilityFamilyConfig, ProviderModelOverlay, ProviderNativeToolRoute,
+        ProviderNativeToolsConfig, ProviderOverlay, StreamTransportMode, delete_file_setting,
         draft_bedrock_sigv4_provider_adapter_models_target,
         draft_credential_provider_adapter_models_target,
         draft_gitlab_provider_adapter_models_target, draft_none_provider_adapter_models_target,
@@ -33,13 +34,17 @@ use agena::{
         ExitSnapshotToolInput, PartContent, ToolInvocation, UserInputReply,
     },
     model::ModelRef,
-    model_catalog::{CatalogModelDefinition, catalog_definition_from_model},
+    model_catalog::{
+        CatalogModelDefinition, ModelCatalogProviderRecord, catalog_definition_from_model,
+        decorate_provider_models,
+    },
     permission::PermissionReplyKind,
     provider::ProviderModel,
     provider::auth::{
         AuthData, CredentialIssuer, exchange_gitlab_oauth_code, exchange_openai_oauth_code,
-        parse_oauth_callback_url, poll_copilot_device_code, start_copilot_device_code,
-        start_gitlab_oauth, start_openai_browser_oauth,
+        parse_oauth_callback_url, poll_copilot_device_code, poll_openai_headless_device_code,
+        start_copilot_device_code, start_gitlab_oauth, start_openai_browser_oauth,
+        start_openai_headless_device_code,
     },
     runtime::AgenaRuntime,
     tool,
@@ -108,8 +113,7 @@ pub(crate) fn provider_native_tools_config_for_preset(
             enabled: true,
             routes: agena::config::ProviderNativeToolRoutesConfig {
                 web_search: Some(ProviderNativeToolRoute::ProviderHosted),
-                file_search: Some(ProviderNativeToolRoute::ProviderHosted),
-                code_execution: Some(ProviderNativeToolRoute::ProviderHosted),
+                image_generation: Some(ProviderNativeToolRoute::ProviderHosted),
                 ..Default::default()
             },
             ..Default::default()
@@ -144,6 +148,37 @@ pub(crate) fn provider_native_tools_preset_from_config(
             ProviderNativeToolsPreset::OpenAiHostedDefaults,
             &ProviderNativeToolsConfig::default(),
         )
+        || *config
+            == (ProviderNativeToolsConfig {
+                enabled: true,
+                routes: agena::config::ProviderNativeToolRoutesConfig {
+                    web_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                    image_generation: Some(ProviderNativeToolRoute::ProviderHosted),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+        || *config
+            == (ProviderNativeToolsConfig {
+                enabled: true,
+                routes: agena::config::ProviderNativeToolRoutesConfig {
+                    web_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                    code_execution: Some(ProviderNativeToolRoute::ProviderHosted),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+        || *config
+            == (ProviderNativeToolsConfig {
+                enabled: true,
+                routes: agena::config::ProviderNativeToolRoutesConfig {
+                    web_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                    file_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                    code_execution: Some(ProviderNativeToolRoute::ProviderHosted),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
     {
         ProviderNativeToolsPreset::OpenAiHostedDefaults
     } else if *config
@@ -165,6 +200,46 @@ pub(crate) fn provider_native_tools_preset_from_config(
     } else {
         ProviderNativeToolsPreset::Custom
     }
+}
+
+pub(crate) fn provider_native_tools_suggested_preset_for_draft(
+    draft: &ProviderConfigDraft,
+    adapter_id: &str,
+) -> Option<ProviderNativeToolsPreset> {
+    match (draft.auth_kind.credential_issuer(), adapter_id.trim()) {
+        (Some(CredentialIssuer::OpenaiChatgpt), "openai") => {
+            Some(ProviderNativeToolsPreset::OpenAiHostedDefaults)
+        }
+        (Some(CredentialIssuer::GoogleAdc), "openai") => {
+            Some(ProviderNativeToolsPreset::GeminiHostedDefaults)
+        }
+        _ => None,
+    }
+}
+
+fn apply_provider_native_tools_defaults_to_model_value(
+    draft: &ProviderConfigDraft,
+    adapter_id: &str,
+    model_value: &mut JsonValue,
+) -> std::result::Result<(), ProviderStudioSaveError> {
+    let Some(preset) = provider_native_tools_suggested_preset_for_draft(draft, adapter_id) else {
+        return Ok(());
+    };
+    let model_object = model_value
+        .as_object_mut()
+        .ok_or(ProviderStudioSaveError::ProviderModelConfigMustBeObject)?;
+    if model_object.contains_key("native_tools") {
+        return Ok(());
+    }
+    model_object.insert(
+        "native_tools".to_owned(),
+        serde_json::to_value(provider_native_tools_config_for_preset(
+            preset,
+            &ProviderNativeToolsConfig::default(),
+        ))
+        .map_err(ProviderStudioSaveError::other)?,
+    );
+    Ok(())
 }
 
 use agena_api::{
@@ -358,7 +433,11 @@ const BEDROCK_SIGV4_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraft
     supports_draft_model_listing: true,
 }];
 
-const DEFAULT_LOCAL_OAUTH_REDIRECT_URI: &str = "http://127.0.0.1:1455/callback";
+const DEFAULT_LOCAL_OAUTH_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
+const LEGACY_LOCAL_OAUTH_REDIRECT_URIS: &[&str] = &[
+    "http://127.0.0.1:1455/callback",
+    "http://127.0.0.1:1455/auth/callback",
+];
 const DEFAULT_GITLAB_INSTANCE_URL: &str = "https://gitlab.com";
 
 impl ProviderDraftAuthKind {
@@ -495,13 +574,52 @@ impl ProviderDeviceAuthSessionDraft {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderDraftInteractiveLoginKind {
+    Browser,
+    Device,
+}
+
+impl ProviderDraftInteractiveLoginKind {
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Browser => "browser",
+            Self::Device => "device",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "browser" => Some(Self::Browser),
+            "device" => Some(Self::Device),
+            _ => None,
+        }
+    }
+}
+
+impl Default for ProviderDraftInteractiveLoginKind {
+    fn default() -> Self {
+        Self::Device
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct OpenAiChatgptCredentialDraft {
+    pub login_kind: ProviderDraftInteractiveLoginKind,
     pub redirect_uri: String,
     pub callback_url: String,
     pub tokens: ProviderOAuthTokensDraft,
     pub account_id: String,
     pub browser: Option<ProviderBrowserAuthSessionDraft>,
+    pub device: Option<ProviderDeviceAuthSessionDraft>,
+}
+
+impl OpenAiChatgptCredentialDraft {
+    fn clear_pending(&mut self) {
+        self.callback_url.clear();
+        self.browser = None;
+        self.device = None;
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -528,7 +646,11 @@ pub struct ProviderCredentialDraftBundle {
 
 impl ProviderCredentialDraftBundle {
     fn normalize_shape(&mut self) {
-        if self.openai_chatgpt.redirect_uri.trim().is_empty() {
+        if self.openai_chatgpt.redirect_uri.trim().is_empty()
+            || LEGACY_LOCAL_OAUTH_REDIRECT_URIS
+                .iter()
+                .any(|legacy| self.openai_chatgpt.redirect_uri.trim() == *legacy)
+        {
             self.openai_chatgpt.redirect_uri = DEFAULT_LOCAL_OAUTH_REDIRECT_URI.to_owned();
         }
         if self.gitlab.redirect_uri.trim().is_empty() {
@@ -611,8 +733,10 @@ impl ProviderCredentialDraftBundle {
 #[derive(Debug, Clone)]
 pub enum ProviderDraftAuthMessage {
     OpenaiBrowserStarted,
+    OpenaiDeviceStarted { user_code: String },
     CopilotDeviceStarted { user_code: String },
     GitlabBrowserStarted,
+    OpenaiPending,
     OpenaiCredentialCaptured,
     CopilotPending,
     CopilotCredentialCaptured,
@@ -653,7 +777,7 @@ pub enum ProviderStudioSaveResult {
     ProviderDraftSaved {
         provider_id: String,
         default_adapter: String,
-        default_model: String,
+        default_model: Option<String>,
     },
     AdapterMatchesSaved {
         provider_id: String,
@@ -670,6 +794,14 @@ pub enum ProviderStudioSaveResult {
         provider_id: String,
         adapter_id: String,
         model_id: String,
+    },
+    ProviderDeleted {
+        provider_id: String,
+    },
+    AdapterDeleted {
+        provider_id: String,
+        adapter_id: String,
+        removed_model_count: usize,
     },
     ModelDeleted {
         provider_id: String,
@@ -710,7 +842,6 @@ pub enum ProviderStudioSaveValidationError {
         issuer: CredentialIssuer,
     },
     BedrockKeyPairRequired,
-    SelectAtLeastOneModel,
 }
 
 #[derive(Debug, Clone)]
@@ -1031,7 +1162,7 @@ impl ProviderConfigDraft {
     fn to_provider_overlay_for_save(
         &self,
         default_adapter: &str,
-        default_model: &str,
+        default_model: Option<&str>,
         adapters: std::collections::BTreeMap<String, ProviderAdapterOverlay>,
         include_defaults: bool,
     ) -> std::result::Result<ProviderOverlay, ProviderStudioSaveError> {
@@ -1039,7 +1170,7 @@ impl ProviderConfigDraft {
             enabled: Some(true),
             defaults: include_defaults.then(|| agena::config::ProviderDefaultsOverlay {
                 adapter: Some(default_adapter.to_owned()),
-                model: Some(default_model.to_owned()),
+                model: default_model.map(ToOwned::to_owned),
                 ..Default::default()
             }),
             auth: Some(self.to_auth_overlay_for_save()?),
@@ -1140,11 +1271,13 @@ impl ProviderConfigDraft {
                     issuer: Some(CredentialIssuer::OpenaiChatgpt),
                     refresh: tokens.refresh_token.clone(),
                     access: tokens.access_token.clone(),
+                    id_token: None,
                     expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
                     account_id: optional_non_empty(
                         self.credential_drafts.openai_chatgpt.account_id.as_str(),
                     )
                     .map(ToOwned::to_owned),
+                    chatgpt_account_is_fedramp: false,
                     enterprise_url: None,
                     user: None,
                 }))
@@ -1160,8 +1293,10 @@ impl ProviderConfigDraft {
                     issuer: Some(CredentialIssuer::GithubCopilot),
                     refresh: tokens.refresh_token.clone(),
                     access: tokens.access_token.clone(),
+                    id_token: None,
                     expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
                     account_id: None,
+                    chatgpt_account_is_fedramp: false,
                     enterprise_url: optional_non_empty(
                         self.credential_drafts
                             .github_copilot
@@ -1183,8 +1318,10 @@ impl ProviderConfigDraft {
                     issuer: Some(CredentialIssuer::Gitlab),
                     refresh: tokens.refresh_token.clone(),
                     access: tokens.access_token.clone(),
+                    id_token: None,
                     expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
                     account_id: None,
+                    chatgpt_account_is_fedramp: false,
                     enterprise_url: None,
                     user: None,
                 }))
@@ -1281,6 +1418,28 @@ impl ProviderConfigDraft {
     pub(crate) fn set_account_id(&mut self, value: String) {
         self.credential_drafts
             .set_account_id(self.active_credential_issuer(), value);
+    }
+
+    pub(crate) fn interactive_login_kind(&self) -> Option<ProviderDraftInteractiveLoginKind> {
+        match self.active_credential_issuer() {
+            Some(CredentialIssuer::OpenaiChatgpt) => {
+                Some(self.credential_drafts.openai_chatgpt.login_kind)
+            }
+            Some(CredentialIssuer::GithubCopilot) => {
+                Some(ProviderDraftInteractiveLoginKind::Device)
+            }
+            Some(CredentialIssuer::Gitlab) => Some(ProviderDraftInteractiveLoginKind::Browser),
+            Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => None,
+        }
+    }
+
+    pub(crate) fn set_interactive_login_kind(&mut self, kind: ProviderDraftInteractiveLoginKind) {
+        if self.active_credential_issuer() == Some(CredentialIssuer::OpenaiChatgpt)
+            && self.credential_drafts.openai_chatgpt.login_kind != kind
+        {
+            self.credential_drafts.openai_chatgpt.login_kind = kind;
+            self.credential_drafts.openai_chatgpt.clear_pending();
+        }
     }
 
     pub(crate) fn supports_interactive_auth(&self) -> bool {
@@ -1397,10 +1556,15 @@ impl ProviderConfigDraft {
         &self,
         adapter_ids: &std::collections::BTreeSet<String>,
     ) -> std::result::Result<(), ProviderStudioSaveValidationError> {
-        let default_adapter = required_provider_save_field(
-            self.default_adapter.as_str(),
-            ProviderStudioSaveField::DefaultAdapter,
-        )?;
+        let default_adapter = optional_non_empty(self.default_adapter.as_str())
+            .or_else(|| {
+                (adapter_ids.len() == 1)
+                    .then(|| adapter_ids.iter().next().map(String::as_str))
+                    .flatten()
+            })
+            .ok_or(ProviderStudioSaveValidationError::FieldRequired(
+                ProviderStudioSaveField::DefaultAdapter,
+            ))?;
         if !self.auth_kind.supports_adapter(default_adapter) {
             return Err(
                 ProviderStudioSaveValidationError::UnsupportedDefaultAdapter {
@@ -1601,6 +1765,11 @@ impl ProviderConfigDraft {
         self.auth.api_key_env.trim().hash(&mut hasher);
         self.auth.api_key.trim().hash(&mut hasher);
         self.auth.credential_issuer.trim().hash(&mut hasher);
+        self.credential_drafts
+            .openai_chatgpt
+            .login_kind
+            .token()
+            .hash(&mut hasher);
         self.credential_drafts
             .openai_chatgpt
             .redirect_uri
@@ -2436,6 +2605,112 @@ impl Backend {
             .context("failed to list provider models")
     }
 
+    pub fn list_local_provider_models(&self, provider_id: &str) -> Result<Vec<ProviderModel>> {
+        let provider_id = provider_id.trim();
+        if provider_id.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let snapshot = self.runtime.current_snapshot();
+        let Some(configured) = snapshot
+            .config_resolution()
+            .config
+            .providers
+            .get(provider_id)
+        else {
+            return Ok(Vec::new());
+        };
+
+        let mut enabled_adapter_ids = configured
+            .adapters
+            .iter()
+            .filter(|(_, adapter)| adapter.enabled)
+            .map(|(adapter_id, _)| adapter_id.clone())
+            .collect::<Vec<_>>();
+        enabled_adapter_ids.sort();
+
+        let default_adapter = configured
+            .defaults
+            .adapter
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .filter(|adapter_id| {
+                configured
+                    .adapters
+                    .get(*adapter_id)
+                    .map(|adapter| adapter.enabled)
+                    .unwrap_or(false)
+            })
+            .map(ToOwned::to_owned)
+            .or_else(|| (enabled_adapter_ids.len() == 1).then(|| enabled_adapter_ids[0].clone()));
+
+        let mut seen = std::collections::BTreeSet::new();
+        let mut models = Vec::new();
+
+        for route in configured.models.keys() {
+            let Some((adapter_id, model_id)) = route.split_once('/') else {
+                continue;
+            };
+            let adapter_id = adapter_id.trim();
+            let model_id = model_id.trim();
+            if adapter_id.is_empty()
+                || model_id.is_empty()
+                || !configured
+                    .adapters
+                    .get(adapter_id)
+                    .map(|adapter| adapter.enabled)
+                    .unwrap_or(false)
+            {
+                continue;
+            }
+            if seen.insert((adapter_id.to_owned(), model_id.to_owned())) {
+                models.push(ProviderModel::new(provider_id, model_id).with_adapter_id(adapter_id));
+            }
+        }
+
+        if let Some(default_model) = configured
+            .defaults
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let default_key = (
+                default_adapter.clone().unwrap_or_default(),
+                default_model.to_owned(),
+            );
+            if seen.insert(default_key) {
+                let model = default_adapter
+                    .as_deref()
+                    .map(|adapter_id| {
+                        ProviderModel::new(provider_id, default_model).with_adapter_id(adapter_id)
+                    })
+                    .unwrap_or_else(|| ProviderModel::new(provider_id, default_model));
+                models.push(model);
+            }
+        }
+
+        let provider = snapshot
+            .provider_registry()
+            .get(provider_id)
+            .ok_or_else(|| anyhow!("provider not found: {provider_id}"))?;
+        let provider_record = snapshot
+            .model_catalog()
+            .effective_provider_record(&enabled_adapter_ids)
+            .unwrap_or_default();
+        let local_provider_record = ModelCatalogProviderRecord {
+            models: provider_record.models,
+            appendable_model_ids: Default::default(),
+        };
+
+        Ok(decorate_provider_models(
+            provider.as_ref(),
+            &local_provider_record,
+            models,
+        ))
+    }
+
     pub fn list_model_catalog_models(
         &self,
         query: &str,
@@ -2666,6 +2941,11 @@ impl Backend {
             .remove("adapters")
             .and_then(|value| value.as_object().cloned())
             .unwrap_or_default();
+        for adapter_id in &effective_adapter_ids {
+            adapters
+                .entry(adapter_id.clone())
+                .or_insert_with(|| json!({ "enabled": true }));
+        }
 
         for adapter_models in adapter_model_lists {
             let adapter_id = adapter_models.adapter_id.as_str();
@@ -2692,20 +2972,25 @@ impl Backend {
                     )
                 })
                 .map(|model| {
-                    (
-                        model.id.to_string(),
-                        provider_model_json_for_model_id(
-                            &catalog_entries,
-                            model.id.as_str(),
-                            Some(model),
-                        ),
-                    )
+                    let mut model_value = provider_model_json_for_model_id(
+                        &catalog_entries,
+                        model.id.as_str(),
+                        Some(model),
+                    );
+                    apply_provider_native_tools_defaults_to_model_value(
+                        &draft,
+                        adapter_id,
+                        &mut model_value,
+                    )?;
+                    Ok((model.id.to_string(), model_value))
                 })
-                .collect::<JsonMap<_, _>>();
+                .collect::<std::result::Result<JsonMap<_, _>, ProviderStudioSaveError>>()?;
             adapter_object.insert("enabled".to_owned(), JsonValue::Bool(true));
             adapter_object.insert("models".to_owned(), JsonValue::Object(configured_models));
             adapters.insert(adapter_id.to_owned(), adapter_value);
         }
+
+        apply_provider_auth_required_adapter_defaults_to_json_adapters(&draft, &mut adapters)?;
 
         let (default_adapter, default_model) = resolve_provider_defaults_from_value_for_save(
             &adapters,
@@ -2713,41 +2998,51 @@ impl Backend {
             requested_default_model.as_deref(),
         )?;
 
-        let default_provider_model = adapter_model_lists
-            .iter()
-            .find(|adapter_models| adapter_models.adapter_id == default_adapter)
-            .and_then(|adapter_models| {
-                adapter_models
-                    .models
-                    .iter()
-                    .find(|model| model.id.as_str() == default_model)
-                    .cloned()
-            });
-        let default_model_value = provider_model_json_for_model_id(
-            &catalog_entries,
-            default_model.as_str(),
-            default_provider_model.as_ref(),
-        );
-        adapters
-            .entry(default_adapter.clone())
-            .or_insert_with(|| json!({ "enabled": true }));
-        ensure_provider_model_entry(
+        if let Some(default_model) = default_model.as_deref() {
+            let default_provider_model = adapter_model_lists
+                .iter()
+                .find(|adapter_models| adapter_models.adapter_id == default_adapter)
+                .and_then(|adapter_models| {
+                    adapter_models
+                        .models
+                        .iter()
+                        .find(|model| model.id.as_str() == default_model)
+                        .cloned()
+                });
+            let default_model_value = provider_model_json_for_model_id(
+                &catalog_entries,
+                default_model,
+                default_provider_model.as_ref(),
+            );
+            let mut default_model_value = default_model_value;
+            apply_provider_native_tools_defaults_to_model_value(
+                &draft,
+                default_adapter.as_str(),
+                &mut default_model_value,
+            )?;
             adapters
-                .get_mut(default_adapter.as_str())
-                .expect("default adapter must exist"),
-            default_model.as_str(),
-            default_model_value,
-        )
-        .map_err(ProviderStudioSaveError::other)?;
+                .entry(default_adapter.clone())
+                .or_insert_with(|| json!({ "enabled": true }));
+            ensure_provider_model_entry(
+                adapters
+                    .get_mut(default_adapter.as_str())
+                    .expect("default adapter must exist"),
+                default_model,
+                default_model_value,
+            )
+            .map_err(ProviderStudioSaveError::other)?;
+        }
 
         provider_object.insert("enabled".to_owned(), JsonValue::Bool(true));
-        provider_object.insert(
-            "defaults".to_owned(),
-            json!({
-                "adapter": default_adapter,
-                "model": default_model,
-            }),
+        let mut defaults = JsonMap::new();
+        defaults.insert(
+            "adapter".to_owned(),
+            JsonValue::String(default_adapter.clone()),
         );
+        if let Some(default_model) = default_model.as_ref() {
+            defaults.insert("model".to_owned(), JsonValue::String(default_model.clone()));
+        }
+        provider_object.insert("defaults".to_owned(), JsonValue::Object(defaults));
         provider_object.insert(
             "auth".to_owned(),
             JsonValue::Object(build_provider_auth_patch_value_for_save(&draft)?),
@@ -2796,16 +3091,19 @@ impl Backend {
             .models
             .iter()
             .map(|model| {
-                (
-                    model.id.to_string(),
-                    provider_model_json_for_model_id(
-                        &catalog_entries,
-                        model.id.as_str(),
-                        Some(model),
-                    ),
-                )
+                let mut model_value = provider_model_json_for_model_id(
+                    &catalog_entries,
+                    model.id.as_str(),
+                    Some(model),
+                );
+                apply_provider_native_tools_defaults_to_model_value(
+                    &draft,
+                    adapter_id,
+                    &mut model_value,
+                )?;
+                Ok((model.id.to_string(), model_value))
             })
-            .collect::<JsonMap<_, _>>();
+            .collect::<std::result::Result<JsonMap<_, _>, ProviderStudioSaveError>>()?;
         let matched_model_count = adapter_models
             .models
             .iter()
@@ -2816,7 +3114,7 @@ impl Backend {
         let provider_patch = build_provider_patch_value_for_save(
             &draft,
             optional_non_empty(draft.default_adapter.as_str()).unwrap_or(adapter_id),
-            optional_non_empty(draft.default_model.as_str()).unwrap_or("default"),
+            Some(optional_non_empty(draft.default_model.as_str()).unwrap_or("default")),
             json!({
                 adapter_id: {
                     "enabled": true,
@@ -2863,8 +3161,9 @@ impl Backend {
             .map_err(ProviderStudioSaveError::Validation)?;
         let catalog_entries =
             self.lookup_model_catalog_models(&[catalog_lookup_id_for_model_id(model_id)]);
-        let model_value =
+        let mut model_value =
             provider_model_json_for_model_id(&catalog_entries, model_id, provider_model.as_ref());
+        apply_provider_native_tools_defaults_to_model_value(&draft, adapter_id, &mut model_value)?;
         let default_adapter = if set_default {
             adapter_id
         } else {
@@ -2878,7 +3177,7 @@ impl Backend {
         let provider_patch = build_provider_patch_value_for_save(
             &draft,
             default_adapter,
-            default_model,
+            Some(default_model),
             json!({
                 adapter_id: {
                     "enabled": true,
@@ -3016,10 +3315,15 @@ impl Backend {
             .transpose()?;
         let model_overlay = serde_json::from_value::<ProviderModelOverlay>(model_value)
             .map_err(ProviderStudioSaveError::other)?;
-        let adapter_patch = merge_provider_model_adapter_patch_for_save(
+        let mut adapter_patch = merge_provider_model_adapter_patch_for_save(
             existing_adapter,
             model_id,
             provider_model_overlay_to_json(model_overlay),
+        )?;
+        apply_provider_auth_required_adapter_defaults_to_json_value(
+            &draft,
+            adapter_id,
+            &mut adapter_patch,
         )?;
         let mut provider_patch = JsonMap::new();
         provider_patch.insert("enabled".to_owned(), JsonValue::Bool(true));
@@ -3084,6 +3388,10 @@ impl Backend {
             .as_object_mut()
             .ok_or(ProviderStudioSaveError::ExistingProviderSettingsMustBeObject)?;
         let updates_default = provider_defaults_point_to(provider_object, adapter_id, model_id);
+        let current_default_adapter = provider_defaults_adapter(provider_object)
+            .map(ToOwned::to_owned)
+            .or_else(|| optional_non_empty(draft.default_adapter.as_str()).map(ToOwned::to_owned))
+            .unwrap_or_else(|| adapter_id.to_owned());
         let next_default = {
             let adapters = provider_object
                 .get_mut("adapters")
@@ -3102,10 +3410,10 @@ impl Backend {
             models.remove(model_id);
 
             if updates_default {
-                Some(first_provider_model_route_in_value(adapters).ok_or(
-                    ProviderStudioSaveError::Validation(
-                        ProviderStudioSaveValidationError::SelectAtLeastOneModel,
-                    ),
+                Some(resolve_provider_defaults_from_value_for_save(
+                    adapters,
+                    Some(current_default_adapter.as_str()),
+                    None,
                 )?)
             } else {
                 None
@@ -3113,13 +3421,12 @@ impl Backend {
         };
 
         if let Some((next_adapter, next_model)) = next_default {
-            provider_object.insert(
-                "defaults".to_owned(),
-                json!({
-                    "adapter": next_adapter,
-                    "model": next_model,
-                }),
-            );
+            let mut defaults = JsonMap::new();
+            defaults.insert("adapter".to_owned(), JsonValue::String(next_adapter));
+            if let Some(next_model) = next_model {
+                defaults.insert("model".to_owned(), JsonValue::String(next_model));
+            }
+            provider_object.insert("defaults".to_owned(), JsonValue::Object(defaults));
         }
 
         self.set_provider_settings(provider_id, provider_value)
@@ -3129,6 +3436,138 @@ impl Backend {
             provider_id: provider_id.to_owned(),
             adapter_id: adapter_id.to_owned(),
             model_id: model_id.to_owned(),
+        })
+    }
+
+    pub async fn delete_provider(
+        &self,
+        provider_id: &str,
+    ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
+        let provider_id =
+            required_provider_save_field(provider_id, ProviderStudioSaveField::ProviderId)
+                .map_err(ProviderStudioSaveError::Validation)?;
+        let provider_value = self
+            .read_file_provider_settings(provider_id)
+            .map_err(ProviderStudioSaveError::other)?
+            .ok_or(ProviderStudioSaveError::ExistingProviderSettingsMustBeObject)?;
+        if !provider_value.is_object() {
+            return Err(ProviderStudioSaveError::ExistingProviderSettingsMustBeObject);
+        }
+
+        let configured_default_provider = read_file_setting(
+            self.runtime.config_resolution().meta.config_path.clone(),
+            ConfigSettingsGetInput {
+                target: ConfigSettingsPathInput {
+                    path: Some("providers.default".to_owned()),
+                },
+                source: agena::config::ConfigSettingsSource::File,
+            },
+        )
+        .map_err(|error| anyhow!(error.to_string()))
+        .context("failed to read configured default provider")
+        .map_err(ProviderStudioSaveError::other)?
+        .value;
+        let clears_default_provider = configured_default_provider
+            .as_str()
+            .map(str::trim)
+            .is_some_and(|configured| configured == provider_id);
+        if clears_default_provider {
+            self.delete_config_setting("providers.default")
+                .await
+                .map_err(ProviderStudioSaveError::other)?;
+        }
+        self.delete_config_setting(provider_settings_path(provider_id).as_str())
+            .await
+            .map_err(ProviderStudioSaveError::other)?;
+        Ok(ProviderStudioSaveResult::ProviderDeleted {
+            provider_id: provider_id.to_owned(),
+        })
+    }
+
+    pub async fn delete_provider_adapter(
+        &self,
+        draft: ProviderConfigDraft,
+        adapter_id: &str,
+    ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
+        let mut draft = draft;
+        draft.normalize_shape();
+        let provider_id = required_provider_save_field(
+            draft.provider_id.as_str(),
+            ProviderStudioSaveField::ProviderId,
+        )
+        .map_err(ProviderStudioSaveError::Validation)?;
+        let adapter_id =
+            required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
+                .map_err(ProviderStudioSaveError::Validation)?;
+
+        let mut provider_value = self
+            .read_file_provider_settings(provider_id)
+            .map_err(ProviderStudioSaveError::other)?
+            .ok_or(ProviderStudioSaveError::ExistingProviderSettingsMustBeObject)?;
+        let provider_object = provider_value
+            .as_object_mut()
+            .ok_or(ProviderStudioSaveError::ExistingProviderSettingsMustBeObject)?;
+        let (removed_model_count, delete_provider_after) = {
+            let adapters = provider_object
+                .get_mut("adapters")
+                .and_then(JsonValue::as_object_mut)
+                .ok_or(ProviderStudioSaveError::ConfiguredProviderAdapterSettingsMustBeObject)?;
+            let removed_adapter_value = adapters.remove(adapter_id).ok_or_else(|| {
+                ProviderStudioSaveError::ProviderAdapterMustBeObject {
+                    adapter_id: adapter_id.to_owned(),
+                }
+            })?;
+            let removed_adapter = removed_adapter_value.as_object().ok_or_else(|| {
+                ProviderStudioSaveError::ProviderAdapterMustBeObject {
+                    adapter_id: adapter_id.to_owned(),
+                }
+            })?;
+            let removed_model_count = match removed_adapter.get("models") {
+                Some(JsonValue::Object(models)) => models.len(),
+                Some(JsonValue::Null) | None => 0,
+                Some(_) => {
+                    return Err(
+                        ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject,
+                    );
+                }
+            };
+            (removed_model_count, adapters.is_empty())
+        };
+        if delete_provider_after {
+            return self.delete_provider(provider_id).await;
+        }
+
+        let requested_default_adapter = provider_defaults_adapter(provider_object)
+            .filter(|candidate| *candidate != adapter_id)
+            .or_else(|| {
+                optional_non_empty(draft.default_adapter.as_str())
+                    .filter(|candidate| *candidate != adapter_id)
+            });
+        let (next_adapter, next_model) = {
+            let adapters = provider_object
+                .get("adapters")
+                .and_then(JsonValue::as_object)
+                .ok_or(ProviderStudioSaveError::ConfiguredProviderAdapterSettingsMustBeObject)?;
+            resolve_provider_defaults_from_value_for_save(
+                adapters,
+                requested_default_adapter,
+                optional_non_empty(draft.default_model.as_str()),
+            )?
+        };
+        let mut defaults = JsonMap::new();
+        defaults.insert("adapter".to_owned(), JsonValue::String(next_adapter));
+        if let Some(next_model) = next_model {
+            defaults.insert("model".to_owned(), JsonValue::String(next_model));
+        }
+        provider_object.insert("defaults".to_owned(), JsonValue::Object(defaults));
+
+        self.set_provider_settings(provider_id, provider_value)
+            .await
+            .map_err(ProviderStudioSaveError::other)?;
+        Ok(ProviderStudioSaveResult::AdapterDeleted {
+            provider_id: provider_id.to_owned(),
+            adapter_id: adapter_id.to_owned(),
+            removed_model_count,
         })
     }
 
@@ -4484,26 +4923,53 @@ async fn start_provider_draft_auth(
     draft.normalize_shape();
     match draft.auth_kind {
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => {
-            let redirect_uri = required_provider_auth_field(
-                draft.credential_drafts.openai_chatgpt.redirect_uri.as_str(),
-                ProviderDraftAuthField::RedirectUri,
-            )?;
-            let start =
-                start_openai_browser_oauth(redirect_uri).map_err(ProviderDraftAuthError::other)?;
-            let display_url = shorten_url_for_display(start.authorize_url.as_str()).await;
-            draft.credential_drafts.openai_chatgpt.callback_url.clear();
-            draft.credential_drafts.openai_chatgpt.browser =
-                Some(ProviderBrowserAuthSessionDraft {
-                    authorize_url: start.authorize_url.clone(),
-                    display_url,
-                    state: start.state.clone(),
-                    pkce_verifier: start.pkce_verifier,
-                });
-            Ok(ProviderDraftAuthActionResult {
-                draft,
-                message: ProviderDraftAuthMessage::OpenaiBrowserStarted,
-                clipboard_text: Some(start.authorize_url),
-            })
+            match draft.credential_drafts.openai_chatgpt.login_kind {
+                ProviderDraftInteractiveLoginKind::Browser => {
+                    let redirect_uri = required_provider_auth_field(
+                        draft.credential_drafts.openai_chatgpt.redirect_uri.as_str(),
+                        ProviderDraftAuthField::RedirectUri,
+                    )?;
+                    let start = start_openai_browser_oauth(redirect_uri)
+                        .map_err(ProviderDraftAuthError::other)?;
+                    let display_url = shorten_url_for_display(start.authorize_url.as_str()).await;
+                    draft.credential_drafts.openai_chatgpt.clear_pending();
+                    draft.credential_drafts.openai_chatgpt.browser =
+                        Some(ProviderBrowserAuthSessionDraft {
+                            authorize_url: start.authorize_url.clone(),
+                            display_url,
+                            state: start.state.clone(),
+                            pkce_verifier: start.pkce_verifier,
+                        });
+                    Ok(ProviderDraftAuthActionResult {
+                        draft,
+                        message: ProviderDraftAuthMessage::OpenaiBrowserStarted,
+                        clipboard_text: Some(start.authorize_url),
+                    })
+                }
+                ProviderDraftInteractiveLoginKind::Device => {
+                    let start = start_openai_headless_device_code()
+                        .await
+                        .map_err(ProviderDraftAuthError::other)?;
+                    let display_url =
+                        shorten_url_for_display(start.verification_url.as_str()).await;
+                    draft.credential_drafts.openai_chatgpt.clear_pending();
+                    draft.credential_drafts.openai_chatgpt.device =
+                        Some(ProviderDeviceAuthSessionDraft {
+                            verification_url: start.verification_url.clone(),
+                            display_url,
+                            user_code: start.user_code.clone(),
+                            device_code: start.device_code,
+                            interval_seconds: start.interval_seconds,
+                        });
+                    Ok(ProviderDraftAuthActionResult {
+                        draft,
+                        message: ProviderDraftAuthMessage::OpenaiDeviceStarted {
+                            user_code: start.user_code,
+                        },
+                        clipboard_text: Some(start.verification_url),
+                    })
+                }
+            }
         }
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot)) => {
             let domain = optional_non_empty(
@@ -4575,42 +5041,79 @@ async fn continue_provider_draft_auth(
     draft.normalize_shape();
     match draft.auth_kind {
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => {
-            let session = draft
-                .credential_drafts
-                .openai_chatgpt
-                .browser
-                .clone()
-                .ok_or(ProviderDraftAuthError::StartBrowserAuthFirst)?;
-            let redirect_uri = required_provider_auth_field(
-                draft.credential_drafts.openai_chatgpt.redirect_uri.as_str(),
-                ProviderDraftAuthField::RedirectUri,
-            )?;
-            let callback_url = required_provider_auth_field(
-                draft.credential_drafts.openai_chatgpt.callback_url.as_str(),
-                ProviderDraftAuthField::CallbackUrl,
-            )?;
-            let callback = parse_oauth_callback_url(callback_url, Some(session.state.as_str()))
-                .map_err(ProviderDraftAuthError::other)?;
-            let token = exchange_openai_oauth_code(
-                callback.code.as_str(),
-                session.pkce_verifier.as_str(),
-                redirect_uri,
-            )
-            .await
-            .map_err(ProviderDraftAuthError::other)?;
-            update_oauth_tokens_from_response(
-                &mut draft.credential_drafts.openai_chatgpt.tokens,
-                &token,
-            );
-            draft.credential_drafts.openai_chatgpt.account_id =
-                token.account_id.unwrap_or_default();
-            draft.credential_drafts.openai_chatgpt.callback_url.clear();
-            draft.credential_drafts.openai_chatgpt.browser = None;
-            Ok(ProviderDraftAuthActionResult {
-                draft,
-                message: ProviderDraftAuthMessage::OpenaiCredentialCaptured,
-                clipboard_text: None,
-            })
+            match draft.credential_drafts.openai_chatgpt.login_kind {
+                ProviderDraftInteractiveLoginKind::Browser => {
+                    let session = draft
+                        .credential_drafts
+                        .openai_chatgpt
+                        .browser
+                        .clone()
+                        .ok_or(ProviderDraftAuthError::StartBrowserAuthFirst)?;
+                    let redirect_uri = required_provider_auth_field(
+                        draft.credential_drafts.openai_chatgpt.redirect_uri.as_str(),
+                        ProviderDraftAuthField::RedirectUri,
+                    )?;
+                    let callback_url = required_provider_auth_field(
+                        draft.credential_drafts.openai_chatgpt.callback_url.as_str(),
+                        ProviderDraftAuthField::CallbackUrl,
+                    )?;
+                    let callback =
+                        parse_oauth_callback_url(callback_url, Some(session.state.as_str()))
+                            .map_err(ProviderDraftAuthError::other)?;
+                    let token = exchange_openai_oauth_code(
+                        callback.code.as_str(),
+                        session.pkce_verifier.as_str(),
+                        redirect_uri,
+                    )
+                    .await
+                    .map_err(ProviderDraftAuthError::other)?;
+                    update_oauth_tokens_from_response(
+                        &mut draft.credential_drafts.openai_chatgpt.tokens,
+                        &token,
+                    );
+                    draft.credential_drafts.openai_chatgpt.account_id =
+                        token.account_id.unwrap_or_default();
+                    draft.credential_drafts.openai_chatgpt.clear_pending();
+                    Ok(ProviderDraftAuthActionResult {
+                        draft,
+                        message: ProviderDraftAuthMessage::OpenaiCredentialCaptured,
+                        clipboard_text: None,
+                    })
+                }
+                ProviderDraftInteractiveLoginKind::Device => {
+                    let session = draft
+                        .credential_drafts
+                        .openai_chatgpt
+                        .device
+                        .clone()
+                        .ok_or(ProviderDraftAuthError::StartDeviceAuthFirst)?;
+                    let Some(token) = poll_openai_headless_device_code(
+                        session.device_code.as_str(),
+                        session.user_code.as_str(),
+                    )
+                    .await
+                    .map_err(ProviderDraftAuthError::other)?
+                    else {
+                        return Ok(ProviderDraftAuthActionResult {
+                            draft,
+                            message: ProviderDraftAuthMessage::OpenaiPending,
+                            clipboard_text: None,
+                        });
+                    };
+                    update_oauth_tokens_from_response(
+                        &mut draft.credential_drafts.openai_chatgpt.tokens,
+                        &token,
+                    );
+                    draft.credential_drafts.openai_chatgpt.account_id =
+                        token.account_id.unwrap_or_default();
+                    draft.credential_drafts.openai_chatgpt.clear_pending();
+                    Ok(ProviderDraftAuthActionResult {
+                        draft,
+                        message: ProviderDraftAuthMessage::OpenaiCredentialCaptured,
+                        clipboard_text: None,
+                    })
+                }
+            }
         }
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot)) => {
             let session = draft
@@ -5038,7 +5541,7 @@ fn parse_oauth_expires_at_ms(value: &str) -> Result<i64> {
 fn build_provider_patch_value_for_save(
     draft: &ProviderConfigDraft,
     default_adapter: &str,
-    default_model: &str,
+    default_model: Option<&str>,
     adapters: JsonValue,
     include_defaults: bool,
 ) -> std::result::Result<JsonValue, ProviderStudioSaveError> {
@@ -5046,6 +5549,8 @@ fn build_provider_patch_value_for_save(
         std::collections::BTreeMap<String, ProviderAdapterOverlay>,
     >(adapters)
     .map_err(ProviderStudioSaveError::other)?;
+    let mut adapters = adapters;
+    apply_provider_auth_required_adapter_defaults_to_overlay_adapters(draft, &mut adapters);
     let overlay = draft.to_provider_overlay_for_save(
         default_adapter,
         default_model,
@@ -5066,6 +5571,90 @@ fn build_provider_auth_patch_value_for_save(
                 "provider auth overlay must serialize as an object",
             )),
         })
+}
+
+fn apply_provider_auth_required_adapter_defaults_to_overlay_adapters(
+    draft: &ProviderConfigDraft,
+    adapters: &mut std::collections::BTreeMap<String, ProviderAdapterOverlay>,
+) {
+    if let Some(adapter) = adapters.get_mut("openai") {
+        apply_provider_auth_required_adapter_defaults_to_overlay(draft, "openai", adapter);
+    }
+}
+
+fn apply_provider_auth_required_adapter_defaults_to_overlay(
+    draft: &ProviderConfigDraft,
+    adapter_id: &str,
+    adapter: &mut ProviderAdapterOverlay,
+) {
+    match (draft.auth_kind.credential_issuer(), adapter_id) {
+        (Some(CredentialIssuer::OpenaiChatgpt), "openai") => {
+            adapter.backend = Some(OpenAiBackendConfig::ChatgptCodex);
+            adapter.api_mode = Some(OpenAiApiModeConfig::Responses);
+            adapter.stream_mode = Some(StreamTransportMode::Sse);
+            adapter.realtime_ws_url = None;
+        }
+        (Some(CredentialIssuer::GoogleAdc), "openai") => {
+            adapter.capability_family = Some(ProviderCapabilityFamilyConfig::Gemini);
+        }
+        _ => {}
+    }
+}
+
+fn apply_provider_auth_required_adapter_defaults_to_json_adapters(
+    draft: &ProviderConfigDraft,
+    adapters: &mut JsonMap<String, JsonValue>,
+) -> std::result::Result<(), ProviderStudioSaveError> {
+    if let Some(adapter_value) = adapters.get_mut("openai") {
+        apply_provider_auth_required_adapter_defaults_to_json_value(draft, "openai", adapter_value)
+    } else {
+        Ok(())
+    }
+}
+
+fn apply_provider_auth_required_adapter_defaults_to_json_value(
+    draft: &ProviderConfigDraft,
+    adapter_id: &str,
+    adapter_value: &mut JsonValue,
+) -> std::result::Result<(), ProviderStudioSaveError> {
+    let adapter_object = adapter_value.as_object_mut().ok_or_else(|| {
+        ProviderStudioSaveError::ProviderAdapterMustBeObject {
+            adapter_id: adapter_id.to_owned(),
+        }
+    })?;
+    apply_provider_auth_required_adapter_defaults_to_json_object(draft, adapter_id, adapter_object);
+    Ok(())
+}
+
+fn apply_provider_auth_required_adapter_defaults_to_json_object(
+    draft: &ProviderConfigDraft,
+    adapter_id: &str,
+    adapter: &mut JsonMap<String, JsonValue>,
+) {
+    match (draft.auth_kind.credential_issuer(), adapter_id) {
+        (Some(CredentialIssuer::OpenaiChatgpt), "openai") => {
+            adapter.insert(
+                "backend".to_owned(),
+                JsonValue::String("chatgpt_codex".to_owned()),
+            );
+            adapter.insert(
+                "api_mode".to_owned(),
+                JsonValue::String("responses".to_owned()),
+            );
+            adapter.insert(
+                "stream_mode".to_owned(),
+                JsonValue::String("sse".to_owned()),
+            );
+            adapter.remove("realtime_ws_url");
+        }
+        (Some(CredentialIssuer::GoogleAdc), "openai") => {
+            adapter.insert(
+                "capability_family".to_owned(),
+                JsonValue::String("gemini".to_owned()),
+            );
+        }
+        _ => {}
+    }
 }
 
 fn provider_model_settings_path(provider_id: &str, adapter_id: &str, model_id: &str) -> String {
@@ -5124,26 +5713,13 @@ fn provider_defaults_point_to(
         && defaults.get("model").and_then(JsonValue::as_str) == Some(model_id)
 }
 
-fn first_provider_model_route_in_value(
-    adapters: &JsonMap<String, JsonValue>,
-) -> Option<(String, String)> {
-    let mut adapter_ids = adapters.keys().cloned().collect::<Vec<_>>();
-    adapter_ids.sort();
-    for adapter_id in adapter_ids {
-        let Some(models) = adapters
-            .get(adapter_id.as_str())
-            .and_then(|adapter| adapter.get("models"))
-            .and_then(JsonValue::as_object)
-        else {
-            continue;
-        };
-        let mut model_ids = models.keys().cloned().collect::<Vec<_>>();
-        model_ids.sort();
-        if let Some(model_id) = model_ids.into_iter().next() {
-            return Some((adapter_id, model_id));
-        }
-    }
-    None
+fn provider_defaults_adapter(provider: &JsonMap<String, JsonValue>) -> Option<&str> {
+    provider
+        .get("defaults")
+        .and_then(JsonValue::as_object)
+        .and_then(|defaults| defaults.get("adapter"))
+        .and_then(JsonValue::as_str)
+        .filter(|value| !value.trim().is_empty())
 }
 
 fn provider_model_selection_contains(
@@ -5158,39 +5734,37 @@ fn resolve_provider_defaults_from_value_for_save(
     adapters: &JsonMap<String, JsonValue>,
     requested_default_adapter: Option<&str>,
     requested_default_model: Option<&str>,
-) -> std::result::Result<(String, String), ProviderStudioSaveError> {
-    if let (Some(default_adapter), Some(default_model)) =
-        (requested_default_adapter, requested_default_model)
-        && provider_value_contains_model(adapters, default_adapter, default_model)
+) -> std::result::Result<(String, Option<String>), ProviderStudioSaveError> {
+    let default_adapter = requested_default_adapter
+        .filter(|default_adapter| adapters.contains_key(*default_adapter))
+        .map(ToOwned::to_owned)
+        .or_else(|| adapters.keys().cloned().next())
+        .ok_or(ProviderStudioSaveError::Validation(
+            ProviderStudioSaveValidationError::FieldRequired(
+                ProviderStudioSaveField::DefaultAdapter,
+            ),
+        ))?;
+
+    if let Some(default_model) = requested_default_model
+        && provider_value_contains_model(adapters, default_adapter.as_str(), default_model)
     {
-        return Ok((default_adapter.to_owned(), default_model.to_owned()));
+        return Ok((default_adapter, Some(default_model.to_owned())));
     }
 
-    let mut adapter_ids = adapters.keys().cloned().collect::<Vec<_>>();
-    adapter_ids.sort();
-    for adapter_id in adapter_ids {
-        let Some(adapter_value) = adapters.get(adapter_id.as_str()) else {
-            continue;
-        };
-        let Some(model_ids) = adapter_value
-            .get("models")
-            .and_then(JsonValue::as_object)
-            .map(|models| {
-                let mut ids = models.keys().cloned().collect::<Vec<_>>();
-                ids.sort();
-                ids
-            })
-        else {
-            continue;
-        };
-        if let Some(model_id) = model_ids.into_iter().next() {
-            return Ok((adapter_id, model_id));
-        }
-    }
-
-    Err(ProviderStudioSaveError::Validation(
-        ProviderStudioSaveValidationError::SelectAtLeastOneModel,
-    ))
+    let default_model = adapters
+        .get(default_adapter.as_str())
+        .and_then(|adapter_value| {
+            adapter_value
+                .get("models")
+                .and_then(JsonValue::as_object)
+                .map(|models| {
+                    let mut ids = models.keys().cloned().collect::<Vec<_>>();
+                    ids.sort();
+                    ids
+                })
+        })
+        .and_then(|model_ids| model_ids.into_iter().next());
+    Ok((default_adapter, default_model))
 }
 
 fn required_provider_save_field<'a>(
@@ -5477,15 +6051,240 @@ mod tests {
             config.routes.web_search,
             Some(ProviderNativeToolRoute::ProviderHosted)
         );
+        assert_eq!(config.routes.file_search, None);
+        assert_eq!(config.routes.code_execution, None);
         assert_eq!(
-            config.routes.file_search,
+            config.routes.image_generation,
             Some(ProviderNativeToolRoute::ProviderHosted)
         );
+    }
+
+    #[test]
+    fn provider_native_tools_preset_accepts_legacy_openai_routes() {
+        let config = ProviderNativeToolsConfig {
+            enabled: true,
+            routes: agena::config::ProviderNativeToolRoutesConfig {
+                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                image_generation: Some(ProviderNativeToolRoute::ProviderHosted),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
         assert_eq!(
-            config.routes.code_execution,
-            Some(ProviderNativeToolRoute::ProviderHosted)
+            provider_native_tools_preset_from_config(&config),
+            ProviderNativeToolsPreset::OpenAiHostedDefaults
         );
-        assert_eq!(config.routes.image_generation, None);
+
+        let config = ProviderNativeToolsConfig {
+            enabled: true,
+            routes: agena::config::ProviderNativeToolRoutesConfig {
+                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                file_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                code_execution: Some(ProviderNativeToolRoute::ProviderHosted),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(
+            provider_native_tools_preset_from_config(&config),
+            ProviderNativeToolsPreset::OpenAiHostedDefaults
+        );
+
+        let config = ProviderNativeToolsConfig {
+            enabled: true,
+            routes: agena::config::ProviderNativeToolRoutesConfig {
+                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                code_execution: Some(ProviderNativeToolRoute::ProviderHosted),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(
+            provider_native_tools_preset_from_config(&config),
+            ProviderNativeToolsPreset::OpenAiHostedDefaults
+        );
+    }
+
+    #[test]
+    fn chatgpt_draft_suggests_openai_hosted_native_tools() {
+        let draft = ProviderConfigDraft {
+            source_provider_id: None,
+            provider_id: "oai".to_owned(),
+            auth_kind: ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)),
+            auth: Default::default(),
+            credential_drafts: Default::default(),
+            default_adapter: String::new(),
+            default_model: String::new(),
+        };
+
+        assert_eq!(
+            provider_native_tools_suggested_preset_for_draft(&draft, "openai"),
+            Some(ProviderNativeToolsPreset::OpenAiHostedDefaults)
+        );
+        assert_eq!(
+            provider_native_tools_suggested_preset_for_draft(&draft, "anthropic"),
+            None
+        );
+    }
+
+    #[test]
+    fn native_tools_defaults_are_injected_when_model_has_no_explicit_config() {
+        let draft = ProviderConfigDraft {
+            source_provider_id: None,
+            provider_id: "oai".to_owned(),
+            auth_kind: ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)),
+            auth: Default::default(),
+            credential_drafts: Default::default(),
+            default_adapter: String::new(),
+            default_model: String::new(),
+        };
+        let mut model_value = JsonValue::Object(JsonMap::new());
+
+        apply_provider_native_tools_defaults_to_model_value(&draft, "openai", &mut model_value)
+            .expect("native tools defaults should apply");
+
+        assert_eq!(
+            model_value,
+            json!({
+                "native_tools": {
+                    "enabled": true,
+                    "routes": {
+                        "web_search": "provider_hosted",
+                        "image_generation": "provider_hosted",
+                    }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn native_tools_defaults_do_not_override_explicit_model_config() {
+        let draft = ProviderConfigDraft {
+            source_provider_id: None,
+            provider_id: "oai".to_owned(),
+            auth_kind: ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)),
+            auth: Default::default(),
+            credential_drafts: Default::default(),
+            default_adapter: String::new(),
+            default_model: String::new(),
+        };
+        let mut model_value = json!({
+            "native_tools": {
+                "enabled": false
+            }
+        });
+
+        apply_provider_native_tools_defaults_to_model_value(&draft, "openai", &mut model_value)
+            .expect("explicit native tools config should be preserved");
+
+        assert_eq!(
+            model_value,
+            json!({
+                "native_tools": {
+                    "enabled": false
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn normalize_shape_migrates_legacy_openai_redirect_uri() {
+        let mut draft = ProviderConfigDraft {
+            source_provider_id: None,
+            provider_id: "demo".to_string(),
+            auth_kind: ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)),
+            auth: Default::default(),
+            credential_drafts: Default::default(),
+            default_adapter: String::new(),
+            default_model: String::new(),
+        };
+        draft.credential_drafts.openai_chatgpt.redirect_uri =
+            "http://127.0.0.1:1455/callback".to_string();
+
+        draft.normalize_shape();
+
+        assert_eq!(
+            draft.credential_drafts.openai_chatgpt.redirect_uri,
+            "http://localhost:1455/auth/callback"
+        );
+    }
+
+    #[test]
+    fn resolve_provider_defaults_for_save_allows_missing_model() {
+        let adapters = serde_json::from_value::<JsonMap<String, JsonValue>>(json!({
+            "openai": {
+                "enabled": true
+            }
+        }))
+        .expect("adapter map");
+
+        let (default_adapter, default_model) =
+            resolve_provider_defaults_from_value_for_save(&adapters, Some("openai"), None)
+                .expect("defaults");
+
+        assert_eq!(default_adapter, "openai");
+        assert_eq!(default_model, None);
+    }
+
+    #[test]
+    fn resolve_provider_defaults_for_save_picks_first_model_on_default_adapter() {
+        let adapters = serde_json::from_value::<JsonMap<String, JsonValue>>(json!({
+            "openai": {
+                "enabled": true,
+                "models": {
+                    "gpt-4.1": {},
+                    "gpt-5": {}
+                }
+            }
+        }))
+        .expect("adapter map");
+
+        let (default_adapter, default_model) =
+            resolve_provider_defaults_from_value_for_save(&adapters, Some("openai"), None)
+                .expect("defaults");
+
+        assert_eq!(default_adapter, "openai");
+        assert_eq!(default_model.as_deref(), Some("gpt-4.1"));
+    }
+
+    #[test]
+    fn chatgpt_save_patch_forces_codex_backend_defaults() {
+        let draft = ProviderConfigDraft {
+            source_provider_id: None,
+            provider_id: "oai".to_owned(),
+            auth_kind: ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)),
+            auth: ProviderDraftAuthDetails {
+                credential_issuer: "openai_chatgpt".to_owned(),
+                ..Default::default()
+            },
+            credential_drafts: Default::default(),
+            default_adapter: "openai".to_owned(),
+            default_model: String::new(),
+        };
+
+        let patch = build_provider_patch_value_for_save(
+            &draft,
+            "openai",
+            None,
+            json!({
+                "openai": {
+                    "enabled": true
+                }
+            }),
+            true,
+        )
+        .expect("provider patch should build");
+
+        assert_eq!(
+            patch["adapters"]["openai"]["backend"],
+            json!("chatgpt_codex")
+        );
+        assert_eq!(patch["adapters"]["openai"]["api_mode"], json!("responses"));
+        assert_eq!(patch["adapters"]["openai"]["stream_mode"], json!("sse"));
+        assert!(patch["adapters"]["openai"]["realtime_ws_url"].is_null());
     }
 
     #[tokio::test]

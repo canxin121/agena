@@ -5,16 +5,15 @@ import {
   deleteProviderCredential,
   finishGitLabBrowserAuth,
   finishOpenAiBrowserAuth,
-  pollAtomGitBrowserAuth,
   pollCopilotDeviceAuth,
   pollOpenAiDeviceAuth,
   refreshProviderCredential,
   setProviderApiKey,
-  startAtomGitBrowserAuth,
   startCopilotDeviceAuth,
   startGitLabBrowserAuth,
   startOpenAiBrowserAuth,
   startOpenAiDeviceAuth,
+  type AuthProvider,
   type AuthBrowserStartResponse,
   type AuthDeviceStartResponse,
 } from '../lib/agenaApi'
@@ -22,6 +21,7 @@ import {
 export type RuntimeProviderActionsInput = {
   actionError: Ref<string>
   actionMessage: Ref<string>
+  authProviders: Ref<AuthProvider[]>
   browserAuthCodeDrafts: Record<string, string>
   browserAuthInstanceDrafts: Record<string, string>
   browserAuthStartState: Record<string, AuthBrowserStartResponse | null>
@@ -37,12 +37,10 @@ export type RuntimeProviderActionsDeps = {
   deleteProviderCredential: typeof deleteProviderCredential
   finishGitLabBrowserAuth: typeof finishGitLabBrowserAuth
   finishOpenAiBrowserAuth: typeof finishOpenAiBrowserAuth
-  pollAtomGitBrowserAuth: typeof pollAtomGitBrowserAuth
   pollCopilotDeviceAuth: typeof pollCopilotDeviceAuth
   pollOpenAiDeviceAuth: typeof pollOpenAiDeviceAuth
   refreshProviderCredential: typeof refreshProviderCredential
   setProviderApiKey: typeof setProviderApiKey
-  startAtomGitBrowserAuth: typeof startAtomGitBrowserAuth
   startCopilotDeviceAuth: typeof startCopilotDeviceAuth
   startGitLabBrowserAuth: typeof startGitLabBrowserAuth
   startOpenAiBrowserAuth: typeof startOpenAiBrowserAuth
@@ -53,12 +51,10 @@ const defaultDeps: RuntimeProviderActionsDeps = {
   deleteProviderCredential,
   finishGitLabBrowserAuth,
   finishOpenAiBrowserAuth,
-  pollAtomGitBrowserAuth,
   pollCopilotDeviceAuth,
   pollOpenAiDeviceAuth,
   refreshProviderCredential,
   setProviderApiKey,
-  startAtomGitBrowserAuth,
   startCopilotDeviceAuth,
   startGitLabBrowserAuth,
   startOpenAiBrowserAuth,
@@ -69,9 +65,16 @@ export function useRuntimeProviderActions(
   input: RuntimeProviderActionsInput,
   deps: RuntimeProviderActionsDeps = defaultDeps,
 ) {
-  function isAtomGitProvider(providerId: string) {
-    const normalized = providerId.toLowerCase()
-    return normalized === 'atomgit' || normalized.startsWith('atomgit-')
+  function findProvider(providerId: string) {
+    return input.authProviders.value.find((provider) => provider.provider_id === providerId) || null
+  }
+
+  function readBrowserLoginKind(providerId: string) {
+    return findProvider(providerId)?.browser_login_kind || null
+  }
+
+  function readDeviceLoginKind(providerId: string) {
+    return findProvider(providerId)?.device_login_kind || null
   }
 
   function readProviderIdFromBrowserState(stateValue: string): string | null {
@@ -81,6 +84,48 @@ export function useRuntimeProviderActions(
       if (start?.state === state) return providerId
     }
     return null
+  }
+
+  function parseBrowserCallbackInput(inputValue: string, expectedState: string): { code: string } {
+    const trimmed = String(inputValue || '').trim()
+    if (!trimmed) {
+      throw new Error('Paste the callback URL or authorization code first.')
+    }
+
+    const directCode = !trimmed.includes('://') && !trimmed.includes('?') && !trimmed.includes('code=')
+    if (directCode) {
+      return { code: trimmed }
+    }
+
+    const rawUrl = trimmed.startsWith('?')
+      ? `/auth/callback${trimmed}`
+      : trimmed.startsWith('code=')
+        ? `/auth/callback?${trimmed}`
+        : trimmed
+    const baseUrl =
+      typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'http://localhost'
+    let parsed: URL
+    try {
+      parsed = new URL(rawUrl, baseUrl)
+    } catch {
+      throw new Error('Callback input must be a full callback URL, query string, or raw authorization code.')
+    }
+
+    const error = parsed.searchParams.get('error')?.trim()
+    if (error) {
+      const detail = parsed.searchParams.get('error_description')?.trim()
+      throw new Error(detail || error)
+    }
+
+    const code = parsed.searchParams.get('code')?.trim()
+    const state = parsed.searchParams.get('state')?.trim()
+    if (!code) {
+      throw new Error('OAuth callback is missing the code parameter.')
+    }
+    if (state && state !== expectedState) {
+      throw new Error('OAuth callback state does not match the pending login session.')
+    }
+    return { code }
   }
 
   async function saveApiKey(providerId: string) {
@@ -126,25 +171,26 @@ export function useRuntimeProviderActions(
     input.actionMessage.value = ''
     input.actionError.value = ''
     try {
-      if (providerId === 'openai') {
-        const start = await deps.startOpenAiBrowserAuth(input.readRedirectUri())
-        input.browserAuthStartState[providerId] = start
-        input.openUrl(start.authorize_url)
-        input.actionMessage.value = `Opened browser login for ${providerId}.`
-      } else if (providerId === 'gitlab') {
-        const instanceUrl = String(input.browserAuthInstanceDrafts[providerId] || '').trim() || 'https://gitlab.com'
-        const start = await deps.startGitLabBrowserAuth({
-          instanceUrl,
+      const browserLoginKind = readBrowserLoginKind(providerId)
+      if (browserLoginKind === 'openai_chatgpt') {
+        const start = await deps.startOpenAiBrowserAuth({
+          providerId,
           redirectUri: input.readRedirectUri(),
         })
         input.browserAuthStartState[providerId] = start
         input.openUrl(start.authorize_url)
         input.actionMessage.value = `Opened browser login for ${providerId}.`
-      } else if (isAtomGitProvider(providerId)) {
-        const start = await deps.startAtomGitBrowserAuth(providerId)
+      } else if (browserLoginKind === 'gitlab') {
+        const start = await deps.startGitLabBrowserAuth({
+          providerId,
+          redirectUri: input.readRedirectUri(),
+        })
+        input.browserAuthInstanceDrafts[providerId] = start.instance_url || ''
         input.browserAuthStartState[providerId] = start
         input.openUrl(start.authorize_url)
         input.actionMessage.value = `Opened browser login for ${providerId}.`
+      } else {
+        throw new Error(`${providerId} does not support browser login.`)
       }
     } catch (err) {
       input.actionError.value = err instanceof Error ? err.message : String(err)
@@ -153,37 +199,28 @@ export function useRuntimeProviderActions(
 
   async function finishBrowserAuth(providerId: string) {
     const start = input.browserAuthStartState[providerId]
-    const code = String(input.browserAuthCodeDrafts[providerId] || '').trim()
     if (!start) return
-    if (!isAtomGitProvider(providerId) && !code) return
     input.actionMessage.value = ''
     input.actionError.value = ''
     try {
-      if (providerId === 'openai') {
+      const browserLoginKind = readBrowserLoginKind(providerId)
+      const { code } = parseBrowserCallbackInput(input.browserAuthCodeDrafts[providerId], start.state)
+      if (browserLoginKind === 'openai_chatgpt') {
         await deps.finishOpenAiBrowserAuth({
-          code,
-          pkceVerifier: start.pkce_verifier,
-          redirectUri: input.readRedirectUri(),
-        })
-      } else if (isAtomGitProvider(providerId)) {
-        const result = await deps.pollAtomGitBrowserAuth({
           providerId,
-          state: start.state,
-        })
-        if (!result.completed) {
-          input.actionMessage.value = `Browser login for ${providerId} is still pending.`
-          return
-        }
-      } else if (providerId === 'gitlab') {
-        await deps.finishGitLabBrowserAuth({
-          instanceUrl:
-            start.instance_url ||
-            String(input.browserAuthInstanceDrafts[providerId] || '').trim() ||
-            'https://gitlab.com',
           code,
           pkceVerifier: start.pkce_verifier,
           redirectUri: input.readRedirectUri(),
         })
+      } else if (browserLoginKind === 'gitlab') {
+        await deps.finishGitLabBrowserAuth({
+          providerId,
+          code,
+          pkceVerifier: start.pkce_verifier,
+          redirectUri: input.readRedirectUri(),
+        })
+      } else {
+        throw new Error(`${providerId} does not support browser login.`)
       }
       input.browserAuthCodeDrafts[providerId] = ''
       input.browserAuthStartState[providerId] = null
@@ -216,12 +253,16 @@ export function useRuntimeProviderActions(
     input.actionMessage.value = ''
     input.actionError.value = ''
     try {
-      if (providerId === 'openai') {
-        input.deviceAuthStartState[providerId] = await deps.startOpenAiDeviceAuth()
-      } else if (providerId === 'github-copilot') {
-        input.deviceAuthStartState[providerId] = await deps.startCopilotDeviceAuth(
-          input.deviceAuthEnterpriseDrafts[providerId],
-        )
+      const deviceLoginKind = readDeviceLoginKind(providerId)
+      if (deviceLoginKind === 'openai_chatgpt') {
+        input.deviceAuthStartState[providerId] = await deps.startOpenAiDeviceAuth({ providerId })
+      } else if (deviceLoginKind === 'github_copilot') {
+        input.deviceAuthStartState[providerId] = await deps.startCopilotDeviceAuth({
+          providerId,
+          enterpriseDomain: input.deviceAuthEnterpriseDrafts[providerId],
+        })
+      } else {
+        throw new Error(`${providerId} does not support device login.`)
       }
       input.actionMessage.value = `Started device login for ${providerId}.`
     } catch (err) {
@@ -235,16 +276,23 @@ export function useRuntimeProviderActions(
     input.actionMessage.value = ''
     input.actionError.value = ''
     try {
+      const deviceLoginKind = readDeviceLoginKind(providerId)
       const result =
-        providerId === 'openai'
+        deviceLoginKind === 'openai_chatgpt'
           ? await deps.pollOpenAiDeviceAuth({
+              providerId,
               deviceCode: start.device_code,
               userCode: start.user_code,
             })
-          : await deps.pollCopilotDeviceAuth({
-              deviceCode: start.device_code,
-              enterpriseDomain: input.deviceAuthEnterpriseDrafts[providerId],
-            })
+          : deviceLoginKind === 'github_copilot'
+            ? await deps.pollCopilotDeviceAuth({
+                providerId,
+                deviceCode: start.device_code,
+                enterpriseDomain: input.deviceAuthEnterpriseDrafts[providerId],
+              })
+            : (() => {
+                throw new Error(`${providerId} does not support device login.`)
+              })()
       if (result.completed) {
         input.deviceAuthStartState[providerId] = null
         input.actionMessage.value = `Completed device login for ${providerId}.`

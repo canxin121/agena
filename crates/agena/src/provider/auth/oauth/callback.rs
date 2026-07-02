@@ -19,10 +19,23 @@ pub fn parse_oauth_callback_url(
     let parsed = url::Url::parse(callback_url.trim())
         .map_err(|error| AppError::Config(format!("invalid oauth callback url: {error}")))?;
 
-    if let Some(error) = parsed.query_pairs().find(|(key, _)| key == "error") {
-        return Err(AppError::Provider(format!(
-            "oauth callback failed: {}",
-            error.1
+    if let Some(error_code) = parsed
+        .query_pairs()
+        .find(|(key, _)| key == "error")
+        .map(|(_, value)| value.to_string())
+    {
+        let error_description = parsed
+            .query_pairs()
+            .find(|(key, _)| key == "error_description")
+            .map(|(_, value)| value.to_string());
+        let request_id = parsed
+            .query_pairs()
+            .find(|(key, _)| key == "request_id")
+            .map(|(_, value)| value.to_string());
+        return Err(AppError::Provider(oauth_callback_error_message(
+            error_code.as_str(),
+            error_description.as_deref(),
+            request_id.as_deref(),
         )));
     }
 
@@ -135,6 +148,91 @@ fn oauth_html_success() -> &'static str {
 fn oauth_html_error(error: &str) -> String {
     format!(
         "<!doctype html><html><body><h1>Authorization Failed</h1><p>{}</p></body></html>",
-        error
+        escape_html(error)
     )
+}
+
+fn oauth_callback_error_message(
+    error_code: &str,
+    error_description: Option<&str>,
+    request_id: Option<&str>,
+) -> String {
+    let description = error_description
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let request_id = request_id.map(str::trim).filter(|value| !value.is_empty());
+
+    let mut message = match description {
+        Some(description) => format!("oauth callback failed: {description}"),
+        None => format!("oauth callback failed: {error_code}"),
+    };
+
+    let mut details = Vec::new();
+    if !error_code.trim().is_empty() {
+        details.push(format!("error_code: {}", error_code.trim()));
+    }
+    if let Some(request_id) = request_id {
+        details.push(format!("request_id: {request_id}"));
+    }
+    if !details.is_empty() {
+        message.push_str(" (");
+        message.push_str(details.join(", ").as_str());
+        message.push(')');
+    }
+    message
+}
+
+fn escape_html(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_oauth_callback_url;
+    use crate::error::AppError;
+
+    #[test]
+    fn oauth_callback_error_preserves_description_and_request_id() {
+        let err = parse_oauth_callback_url(
+            "http://localhost:1455/auth/callback?error=access_denied&error_description=missing_codex_entitlement&request_id=req-123",
+            None,
+        )
+        .expect_err("callback should fail");
+
+        match err {
+            AppError::Provider(message) => {
+                assert!(message.contains("missing_codex_entitlement"));
+                assert!(message.contains("error_code: access_denied"));
+                assert!(message.contains("request_id: req-123"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[test]
+    fn oauth_callback_error_falls_back_to_error_code() {
+        let err = parse_oauth_callback_url(
+            "http://localhost:1455/auth/callback?error=authorize_hydra_invalid_request",
+            None,
+        )
+        .expect_err("callback should fail");
+
+        match err {
+            AppError::Provider(message) => {
+                assert!(message.contains("authorize_hydra_invalid_request"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
 }

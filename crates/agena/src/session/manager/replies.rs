@@ -993,24 +993,38 @@ impl SessionManager {
                 .await?;
 
             let processor_ids = self.store.reserve_processor_ids().await?;
+            let run_id = crate::session::RunId::new();
+            let turn_started_at_unix_ms = Utc::now().timestamp_millis();
             let native_tools = state
                 .processor
                 .provider_registry()
                 .native_tools_config(&options.model)?;
+            let mut completion = options.completion_request(
+                prepared.system.clone(),
+                prepared.messages.clone(),
+                tools,
+                native_tools,
+                Some(prepared.prompt_cache_key.clone()),
+                prepared.previous_response_id.clone(),
+                Some(prepared.prompt_window_generation),
+            );
+            completion.responses_api_metadata = Some(
+                responses_api_request_metadata(
+                    &session,
+                    prepared.prompt_cache_key.as_str(),
+                    prepared.prompt_window_generation,
+                    run_id,
+                    turn_started_at_unix_ms,
+                )
+                .await,
+            );
             let run = SessionRunRequest {
+                run_id,
                 session_id: session.id,
                 model: options.model.clone(),
                 model_thinking_mode: options.thinking_mode.clone(),
                 model_speed_mode: options.speed_mode.clone(),
-                completion: options.completion_request(
-                    prepared.system.clone(),
-                    prepared.messages.clone(),
-                    tools,
-                    native_tools,
-                    Some(prepared.prompt_cache_key.clone()),
-                    prepared.previous_response_id.clone(),
-                    Some(prepared.prompt_window_generation),
-                ),
+                completion,
                 next_message_id: processor_ids.message_id,
                 part_ids: processor_ids.part_ids,
                 next_call_id: session.next_call_id(),
@@ -1023,7 +1037,7 @@ impl SessionManager {
                     session.id,
                     vec![EventKind::ExecutionStarted(ExecutionStartedEvent {
                         session_id: session.id,
-                        ts_ms: Utc::now().timestamp_millis(),
+                        ts_ms: turn_started_at_unix_ms,
                     })],
                 )
                 .await?;
@@ -3040,6 +3054,32 @@ impl SessionManager {
 
     pub(super) fn execution_state(&self) -> Arc<SessionManagerState> {
         self.execution.load_full()
+    }
+}
+
+async fn responses_api_request_metadata(
+    session: &Session,
+    prompt_cache_key: &str,
+    prompt_window_generation: u64,
+    run_id: crate::session::RunId,
+    turn_started_at_unix_ms: i64,
+) -> crate::provider::ResponsesApiRequestMetadata {
+    let installation_id = crate::installation_id::resolve_installation_id()
+        .await
+        .unwrap_or_else(|_| format!("workspace-{}", session.workspace_id));
+
+    crate::provider::ResponsesApiRequestMetadata {
+        installation_id,
+        session_id: session.id.to_string(),
+        thread_id: session.id.to_string(),
+        turn_id: run_id.to_string(),
+        window_id: format!("{prompt_cache_key}:{prompt_window_generation}"),
+        parent_thread_id: session.parent_id.map(|value| value.to_string()),
+        subagent_header: session.is_subagent.then_some("collab_spawn".to_owned()),
+        subagent_kind: session.is_subagent.then_some("thread_spawn".to_owned()),
+        request_kind: Some("turn".to_owned()),
+        turn_started_at_unix_ms: Some(turn_started_at_unix_ms),
+        extra: Default::default(),
     }
 }
 

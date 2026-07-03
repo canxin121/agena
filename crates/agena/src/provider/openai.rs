@@ -1864,6 +1864,7 @@ impl OpenAiAdapter {
             .then_some(OpenAiResponsesTextConfig { verbosity, format })
     }
 
+    #[cfg(test)]
     fn to_responses_input(
         request: &CompletionRequest,
     ) -> Result<Vec<OpenAiResponsesInputItem>, AppError> {

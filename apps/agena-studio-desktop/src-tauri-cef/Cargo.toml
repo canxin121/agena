@@ -7,12 +7,12 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 [lib]
-name = "agena_studio_desktop"
+name = "agena_studio_desktop_cef"
 path = "../src-tauri/src/lib.rs"
 
 [[bin]]
 name = "agena-studio-desktop-cef"
-path = "../src-tauri/src/main.rs"
+path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { workspace = true, features = [] }

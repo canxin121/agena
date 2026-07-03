@@ -1,9 +1,11 @@
 use std::{
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use tempfile::Builder;
+
+#[cfg(target_os = "linux")]
+use std::process::Command;
 
 #[derive(Debug, Clone)]
 pub enum PasteImageError {

@@ -2562,6 +2562,24 @@ impl OpenAiAdapter {
                     None => provider_model,
                 })
             }
+            OpenAiListedModel::Recommended(model) => {
+                let metadata = model.metadata();
+                let display_name = model
+                    .display_name
+                    .or(model.name)
+                    .and_then(|value| utils::normalize_optional_text(Some(value)));
+                let model_id = utils::normalize_optional_text(Some(model.id))?;
+                let capabilities = self.model_capabilities(&ModelId::new(model_id.clone()));
+                let mut provider_model =
+                    ProviderModel::new(self.id.as_str(), model_id).with_capabilities(capabilities);
+                if !metadata.is_empty() {
+                    provider_model = provider_model.with_metadata(metadata);
+                }
+                Some(match display_name {
+                    Some(display_name) => provider_model.with_display_name(display_name),
+                    None => provider_model,
+                })
+            }
             OpenAiListedModel::Codex(model) => {
                 let metadata = model.metadata();
                 let capabilities = model.capabilities();
@@ -2781,7 +2799,7 @@ impl ModelRuntime for OpenAiAdapter {
         )
         .await?;
         Ok(payload
-            .into_items()
+            .into_items(self.id.as_str())
             .into_iter()
             .filter_map(|model| self.provider_model_from_listed_model(model))
             .collect())
@@ -4406,13 +4424,25 @@ enum DashscopeReasoningProfile {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum OpenAiModelListResponse {
-    CodexWrapped { models: Vec<OpenAiCodexModel> },
-    Wrapped { data: Vec<OpenAiCompatibleModel> },
+    CodexWrapped {
+        models: Vec<OpenAiCodexModel>,
+    },
+    Wrapped {
+        data: Vec<OpenAiCompatibleModel>,
+    },
+    ClineRecommended {
+        #[serde(default)]
+        recommended: Vec<OpenAiRecommendedModel>,
+        #[serde(default)]
+        free: Vec<OpenAiRecommendedModel>,
+        #[serde(rename = "clinePass", default)]
+        cline_pass: Vec<OpenAiRecommendedModel>,
+    },
     Bare(Vec<OpenAiCompatibleModel>),
 }
 
 impl OpenAiModelListResponse {
-    fn into_items(self) -> Vec<OpenAiListedModel> {
+    fn into_items(self, provider_id: &str) -> Vec<OpenAiListedModel> {
         match self {
             Self::CodexWrapped { models } => {
                 models.into_iter().map(OpenAiListedModel::Codex).collect()
@@ -4420,6 +4450,14 @@ impl OpenAiModelListResponse {
             Self::Wrapped { data } => data
                 .into_iter()
                 .map(OpenAiListedModel::Compatible)
+                .collect(),
+            Self::ClineRecommended {
+                recommended,
+                free,
+                cline_pass,
+            } => cline_recommended_models_for_provider(provider_id, recommended, free, cline_pass)
+                .into_iter()
+                .map(OpenAiListedModel::Recommended)
                 .collect(),
             Self::Bare(data) => data
                 .into_iter()
@@ -4432,6 +4470,7 @@ impl OpenAiModelListResponse {
 #[derive(Debug)]
 enum OpenAiListedModel {
     Compatible(OpenAiCompatibleModel),
+    Recommended(OpenAiRecommendedModel),
     Codex(OpenAiCodexModel),
 }
 
@@ -4468,6 +4507,61 @@ impl OpenAiCompatibleModel {
 
         metadata.with_fallbacks_from(&self.copilot.metadata(self.id.as_str()))
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiRecommendedModel {
+    id: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+impl OpenAiRecommendedModel {
+    fn metadata(&self) -> ModelMetadata {
+        let mut metadata = ModelMetadata::default();
+        if let Some(description) = self
+            .description
+            .clone()
+            .and_then(|value| utils::normalize_optional_text(Some(value)))
+        {
+            metadata = metadata.with_description(description);
+        }
+        metadata
+    }
+}
+
+fn cline_recommended_models_for_provider(
+    provider_id: &str,
+    recommended: Vec<OpenAiRecommendedModel>,
+    free: Vec<OpenAiRecommendedModel>,
+    cline_pass: Vec<OpenAiRecommendedModel>,
+) -> Vec<OpenAiRecommendedModel> {
+    let provider_key = provider_id.trim().to_ascii_lowercase();
+    let mut selected = if provider_key.contains("cline-pass") || provider_key.contains("cline_pass")
+    {
+        cline_pass
+    } else {
+        let mut combined = recommended;
+        combined.extend(free);
+        if combined.is_empty() {
+            cline_pass
+        } else {
+            combined
+        }
+    };
+
+    let mut seen = BTreeSet::new();
+    selected.retain(|model| {
+        let Some(id) = utils::normalize_optional_text(Some(model.id.clone())) else {
+            return false;
+        };
+        seen.insert(id)
+    });
+    selected
 }
 
 #[derive(Debug, Deserialize)]
@@ -5144,7 +5238,7 @@ mod tests {
 
         let parsed: OpenAiModelListResponse =
             serde_json::from_str(payload).expect("parse openai model list");
-        let models = parsed.into_items();
+        let models = parsed.into_items("openai");
         assert_eq!(models.len(), 1);
 
         let OpenAiListedModel::Compatible(model) = &models[0] else {
@@ -5180,7 +5274,7 @@ mod tests {
 
         let parsed: OpenAiModelListResponse =
             serde_json::from_str(payload).expect("parse codex model list");
-        let models = parsed.into_items();
+        let models = parsed.into_items("openai");
         assert_eq!(models.len(), 1);
 
         let OpenAiListedModel::Codex(model) = &models[0] else {
@@ -5203,6 +5297,46 @@ mod tests {
         assert!(capabilities.reasoning.is_supported());
         assert!(capabilities.tool_calling.is_supported());
         assert!(capabilities.image_input.is_supported());
+    }
+
+    #[test]
+    fn openai_model_parses_cline_pass_recommended_models_response() {
+        let payload = r#"{
+            "recommended": [
+                {
+                    "id": "openai/gpt-5.5",
+                    "name": "gpt-5.5",
+                    "description": "Top model"
+                }
+            ],
+            "free": [
+                {
+                    "id": "poolside/laguna-m.1:free",
+                    "name": "laguna-m.1:free"
+                }
+            ],
+            "clinePass": [
+                {
+                    "id": "cline-pass/qwen3.7-max",
+                    "name": "cline-pass/qwen3.7-max"
+                },
+                {
+                    "id": "cline-pass/glm-5.2",
+                    "name": "cline-pass/glm-5.2"
+                }
+            ]
+        }"#;
+
+        let parsed: OpenAiModelListResponse =
+            serde_json::from_str(payload).expect("parse cline recommended model list");
+        let models = parsed.into_items("cline-pass::openai");
+        assert_eq!(models.len(), 2);
+
+        let OpenAiListedModel::Recommended(model) = &models[0] else {
+            panic!("expected recommended model variant");
+        };
+        assert_eq!(model.id, "cline-pass/qwen3.7-max");
+        assert_eq!(model.name.as_deref(), Some("cline-pass/qwen3.7-max"));
     }
 
     #[test]

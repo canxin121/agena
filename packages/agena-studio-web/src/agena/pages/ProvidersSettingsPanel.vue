@@ -67,6 +67,11 @@ function summarizeCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogSumm
 
 const ADAPTER_OPTIONS = ['openai', 'anthropic', 'gemini', 'ollama', 'gitlab', 'amazon_bedrock'] as const
 const SHARED_GATEWAY_MODEL_LIST_ADAPTERS = ['openai', 'anthropic', 'gemini'] as const
+const CLINE_PASS_PROVIDER_ID = 'cline-pass'
+const CLINE_PASS_DEFAULT_MODEL_ID = 'cline-pass/qwen3.7-max'
+const CLINE_PASS_BASE_URL = 'https://api.cline.bot'
+const CLINE_PASS_OPENAI_PROTOCOL_PATH = '/api/v1'
+const CLINE_PASS_MODELS_URL = 'https://api.cline.bot/api/v1/ai/cline/recommended-models'
 const submittingConfig = ref(false)
 const catalogCopyProviderId = ref('')
 const catalogCopyAdapterId = ref('openai')
@@ -117,6 +122,9 @@ const expiredCount = computed(() => props.authProviders.filter((provider) => pro
 const browserFlowCount = computed(() => props.authProviders.filter((provider) => supportsBrowserLogin(provider)).length)
 const deviceFlowCount = computed(() => props.authProviders.filter((provider) => supportsDeviceLogin(provider)).length)
 const providerConfigCount = computed(() => props.providers.length)
+const hasClinePassProvider = computed(() =>
+  props.providers.some((provider) => provider.provider_id === CLINE_PASS_PROVIDER_ID),
+)
 function mergeCatalogEntries(existing: ModelCatalogEntry[], incoming: ModelCatalogEntry[]) {
   const merged = new Map<string, ModelCatalogEntry>()
   for (const entry of existing) {
@@ -794,6 +802,54 @@ async function createProvider() {
   }
 }
 
+async function installClinePassPreset() {
+  submittingConfig.value = true
+  try {
+    await patchSettings({
+      path: 'providers',
+      changes: {
+        [CLINE_PASS_PROVIDER_ID]: {
+          enabled: true,
+          defaults: {
+            adapter: 'openai',
+            model: CLINE_PASS_DEFAULT_MODEL_ID,
+          },
+          auth: {
+            mode: 'api',
+            base_url: CLINE_PASS_BASE_URL,
+            protocol_paths: {
+              openai: CLINE_PASS_OPENAI_PROTOCOL_PATH,
+            },
+          },
+          adapters: {
+            openai: {
+              enabled: true,
+              api_mode: 'chat',
+              models_url: CLINE_PASS_MODELS_URL,
+              models: {
+                [CLINE_PASS_DEFAULT_MODEL_ID]: {},
+              },
+            },
+          },
+        },
+      },
+      validate: true,
+      reload: true,
+    })
+    savedProviderSelectedAdapterIds[CLINE_PASS_PROVIDER_ID] = ['openai']
+    setConfigMessage(
+      `${
+        hasClinePassProvider.value ? 'Updated' : 'Installed'
+      } ClinePass preset. Enter your API key in the credential panel, then list adapter models to sync the current subscription catalog.`,
+    )
+    await props.load()
+  } catch (err) {
+    setConfigError(err instanceof Error ? err.message : String(err))
+  } finally {
+    submittingConfig.value = false
+  }
+}
+
 function loadCatalogEntryIntoProviderDraft(entry: ModelCatalogEntry) {
   providerModelDraft.value = createModelCatalogDraftFromEntry(entry)
   providerModelDraft.value.adapter_id = catalogCopyAdapterId.value || providerModelDraft.value.adapter_id
@@ -861,8 +917,14 @@ onMounted(() => {
         <div>
           <p class="settings-panel-kicker">Create Provider</p>
           <h3 class="settings-panel-title">New Runtime Provider</h3>
+          <p class="muted" style="margin-top: 8px">
+            For ClinePass, install the preset once and then save only the API key in the credential panel.
+          </p>
         </div>
         <div class="button-row">
+          <button class="button" :disabled="submittingConfig" @click="installClinePassPreset">
+            {{ hasClinePassProvider ? 'Refresh ClinePass Preset' : 'Add ClinePass Preset' }}
+          </button>
           <button
             class="button"
             :disabled="submittingConfig || listingDraftAdapters || !draftSelectedAdapterIds.length"

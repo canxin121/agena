@@ -732,6 +732,46 @@ AtomGit 的默认模型列表流程会对齐 AtomCode：先按 `Max -> Pro -> Li
 }
 ```
 
+### ClinePass Subscription
+
+```json
+{
+  "providers": {
+    "cline-pass": {
+      "defaults": {
+        "adapter": "openai",
+        "model": "cline-pass/qwen3.7-max"
+      },
+      "auth": {
+        "mode": "api",
+        "base_url": "https://api.cline.bot",
+        "api_key_env": "CLINE_API_KEY",
+        "protocol_paths": {
+          "openai": "/api/v1"
+        }
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "api_mode": "chat",
+          "models_url": "https://api.cline.bot/api/v1/ai/cline/recommended-models",
+          "models": {
+            "cline-pass/qwen3.7-max": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+这里有两个和普通 OpenAI-compatible gateway 不一样的点：
+
+- 聊天请求走 `https://api.cline.bot/api/v1/chat/completions`，所以 `base_url` 是根 `https://api.cline.bot`，`protocol_paths.openai` 显式写 `/api/v1`
+- 订阅模型列表不依赖标准 `/models`，而是把 `models_url` 指到 `https://api.cline.bot/api/v1/ai/cline/recommended-models`
+
 ## 迁移后的结论
 
 现在 provider 相关配置应理解为：

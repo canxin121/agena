@@ -160,7 +160,7 @@ pub(crate) struct PlanGetInput {
 #[tool_input(trim("summary", "step_id", "check_id", "note"))]
 #[serde(default, deny_unknown_fields)]
 #[schemars(
-    description = "Update the current plan. Use `phase` / `autorun` for plan-level state changes, `step_id` + `status` to update a step, or `step_id` + `check_id` + `status` to update a check. Canonical phase values are `planning`, `active`, `blocked`, `completed`, and `cancelled`."
+    description = "Update the current plan. Use `phase` / `autorun` for plan-level state changes, `step_id` + `status` to update a step, or `step_id` + `check_id` + `status` to update a check. Do not combine plan-level fields (`phase`, `autorun`, `summary`) with step/check fields. To complete a plan with steps, first mark the relevant steps or checks `completed`, then make a separate plan-level update with `phase: completed`. Canonical phase values are `planning`, `active`, `blocked`, `completed`, and `cancelled`."
 )]
 pub(crate) struct PlanUpdateInput {
     #[schemars(
@@ -194,7 +194,7 @@ pub(crate) struct PlanUpdateInput {
     description = "Plan command backed by shared plugin storage. Use it to set the current plan, inspect its current state, or update plan, step, and check status.",
     summary = "Set, get, update, or clear the current plan.",
     handler_receiver = WorkflowPlugin,
-    help = "Use action `set` to create or replace the current plan and return it to planning. Use action `get` to inspect the current plan with `view = current|summary|full`. Use action `update` to change the plan phase / autorun flag, a step's status, or a check's status. Use action `clear` to remove the current plan. If workflow plan config disables direct approval, `plan.update` automatically requests review before moving a planning or cancelled plan into active, blocked, or completed.",
+    help = "Use action `set` to create or replace the current plan and return it to planning. Use action `get` to inspect the current plan with `view = current|summary|full`. Use action `update` to change the plan phase / autorun flag, a step's status, or a check's status. Keep plan-level updates separate from step/check updates: do not send `phase` together with `step_id`, `check_id`, `status`, `wait_until_ms`, or `note`. To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`. Use action `clear` to remove the current plan. If workflow plan config disables direct approval, `plan.update` automatically requests review before moving a planning or cancelled plan into active, blocked, or completed.",
     display = brief,
     tags(ToolTag::Planning, ToolTag::Mutating),
     host_capabilities(

@@ -2651,8 +2651,12 @@ impl AgenaCli {
         };
         let database_url = storage.resolve_url()?;
         StorageConfig::ensure_parent(database_url.as_str())?;
+        let mut load_request = self.load_request();
+        if let Some(workspace) = workspace {
+            load_request.workspace_root = Some(workspace.clone());
+        }
         let mut builder = AgenaRuntime::builder()
-            .with_load_request(self.load_request())
+            .with_load_request(load_request)
             .with_database_url(database_url);
         if let Some(workspace) = workspace {
             builder = builder.with_workspace_root(workspace.clone());
@@ -2793,14 +2797,20 @@ impl AgenaCli {
             .await?;
         let snapshot = runtime.current_snapshot();
         let plugins = snapshot.plugin_manager();
-        let agent = Agent::new("mcp-server", PermissionPolicy::allow_all())
-            .with_tool_policy(ToolPermissionPolicy::allow_all());
-        let executor = ToolExecutor::new(runtime.workspace_root().to_path_buf(), agent)
-            .with_plugin_manager(Arc::clone(&plugins));
+        let session_manager = runtime.session_manager();
+        let executor = session_manager.as_ref().map_or_else(
+            || {
+                let agent = Agent::new("mcp-server", PermissionPolicy::allow_all())
+                    .with_tool_policy(ToolPermissionPolicy::allow_all());
+                ToolExecutor::new(runtime.workspace_root().to_path_buf(), agent)
+                    .with_plugin_manager(Arc::clone(&plugins))
+            },
+            |manager| manager.tool_executor(),
+        );
         Ok(AgenaMcpBackend {
             executor,
             plugins,
-            session_manager: runtime.session_manager(),
+            session_manager,
             workspace_root: runtime.workspace_root().to_path_buf(),
             next_call_id: Arc::new(AtomicI64::new(1)),
         })
@@ -2940,13 +2950,7 @@ impl McpServerBackend for AgenaMcpBackend {
             .plugins
             .registered_tools()
             .into_iter()
-            .filter(|entry| {
-                matches!(entry.plugin_name.as_str(), "agena.skills")
-                    && entry.decl.input_schema
-                        == crate::tool::definition::json_schema_for::<
-                            crate::message::WorkflowPromptToolInput,
-                        >()
-            })
+            .filter(|entry| matches!(entry.plugin_name.as_str(), "agena.skills"))
             .map(|entry| PromptDescriptor {
                 name: entry.exposed_name,
                 description: entry.decl.description,
@@ -2962,11 +2966,7 @@ impl McpServerBackend for AgenaMcpBackend {
             .plugins
             .lookup_tool(params.name.as_str())
             .ok_or_else(|| McpServerError::NotFound(params.name.clone()))?;
-        if !matches!(entry.plugin_name.as_str(), "agena.skills")
-            || entry.decl.input_schema
-                != crate::tool::definition::json_schema_for::<crate::message::WorkflowPromptToolInput>(
-                )
-        {
+        if !matches!(entry.plugin_name.as_str(), "agena.skills") {
             return Err(McpServerError::NotFound(params.name));
         }
 

@@ -66,7 +66,8 @@ async fn async_main() -> Result<(), agena::AppError> {
         .with(
             tracing_subscriber::fmt::layer()
                 .with_target(false)
-                .compact(),
+                .compact()
+                .with_writer(std::io::stderr),
         )
         .init();
 
@@ -105,8 +106,12 @@ async fn session_runtime_with_workspace(
     };
     let database_url = storage.resolve_url()?;
     StorageConfig::ensure_parent(database_url.as_str())?;
+    let mut load_request = cli.load_request();
+    if let Some(workspace) = workspace {
+        load_request.workspace_root = Some(workspace.clone());
+    }
     let mut builder = AgenaRuntime::builder()
-        .with_load_request(cli.load_request())
+        .with_load_request(load_request)
         .with_database_url(database_url);
     if let Some(workspace) = workspace {
         builder = builder.with_workspace_root(workspace.clone());

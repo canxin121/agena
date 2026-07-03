@@ -30,6 +30,7 @@ pub(crate) enum AgentToolInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
 #[tool_input(trim("title"), non_empty("title"))]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SessionRenameToolInput {
     pub title: String,
 }
@@ -83,7 +84,11 @@ pub(crate) enum UserToolInput {
         distinct_trimmed("questions[].id"),
         distinct_trimmed_within("questions[].options[].label", "questions[]")
     )]
-    RequestInput(AskUserToolInput),
+    RequestInput {
+        #[tool(flatten_shape)]
+        #[serde(flatten)]
+        args: AskUserToolInput,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

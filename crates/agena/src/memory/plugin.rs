@@ -352,8 +352,11 @@ impl MemoryPlugin {
                 memory.description
             ));
         }
-        let payload =
-            serde_json::to_value(&results).map_err(|err| PluginError::new(err.to_string()))?;
+        let payload = serde_json::json!({
+            "query": query,
+            "limit": limit,
+            "results": results,
+        });
         Ok(ToolInvokeOutput::text(lines.join("\n"))
             .with_title("memory search")
             .with_payload(payload))
@@ -380,9 +383,11 @@ impl MemoryPlugin {
             .into_iter()
             .take(limit)
             .collect::<Vec<_>>();
-        let payload =
-            serde_json::to_value(entries.iter().map(memory_record_output).collect::<Vec<_>>())
-                .map_err(|err| PluginError::new(err.to_string()))?;
+        let memories = entries.iter().map(memory_record_output).collect::<Vec<_>>();
+        let payload = serde_json::json!({
+            "limit": limit,
+            "memories": memories,
+        });
         let text = if entries.is_empty() {
             "No memory records found.".to_string()
         } else {
@@ -782,6 +787,24 @@ mod tests {
             MemoryToolInput::Get { args } => assert_eq!(args.name, "user_style"),
             other => panic!("expected get variant, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn memory_collection_payloads_are_tool_output_objects() {
+        let list_payload = serde_json::json!({
+            "limit": 10,
+            "memories": []
+        });
+        crate::message::ToolOutput::from_json_payload(Some(&list_payload))
+            .expect("list payload should be a structured object");
+
+        let search_payload = serde_json::json!({
+            "query": "smoke",
+            "limit": 5,
+            "results": []
+        });
+        crate::message::ToolOutput::from_json_payload(Some(&search_payload))
+            .expect("search payload should be a structured object");
     }
 
     #[test]

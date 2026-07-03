@@ -175,6 +175,9 @@ impl RuntimeHostClient {
         else {
             return Ok(None);
         };
+        if session_id < 0 {
+            return Ok(None);
+        }
         let Some(manager) = self.optional_session_manager() else {
             return Ok(None);
         };

@@ -542,6 +542,30 @@
         }
       }
     },
+    "cline-pass": {
+      "defaults": {
+        "adapter": "openai",
+        "model": "cline-pass/qwen3.7-max"
+      },
+      "auth": {
+        "mode": "api",
+        "base_url": "https://api.cline.bot",
+        "api_key_env": "CLINE_API_KEY",
+        "protocol_paths": {
+          "openai": "/api/v1"
+        }
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "api_mode": "chat",
+          "models_url": "https://api.cline.bot/api/v1/ai/cline/recommended-models",
+          "models": {
+            "cline-pass/qwen3.7-max": {}
+          }
+        }
+      }
+    },
     "google-vertex": {
       "defaults": {
         "adapter": "openai",

@@ -15,7 +15,9 @@ pub(super) fn provider_priority(provider_id: &str, resolution: Option<&ConfigRes
             ProviderAdapterDefinition::Anthropic(_) => 500,
             ProviderAdapterDefinition::Gemini(_) => 500,
             ProviderAdapterDefinition::OpenAi(config) => match config.options.capability_family {
-                Some(ProviderCapabilityFamilyConfig::OpenAi) | None => 450,
+                Some(ProviderCapabilityFamilyConfig::OpenAi)
+                | Some(ProviderCapabilityFamilyConfig::OpenAiCompatible)
+                | None => 450,
                 Some(ProviderCapabilityFamilyConfig::Anthropic)
                 | Some(ProviderCapabilityFamilyConfig::Gemini) => 350,
                 Some(ProviderCapabilityFamilyConfig::Bedrock)

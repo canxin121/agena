@@ -541,8 +541,10 @@ fn build_adapter_provider(
                 .with_realtime_ws_url(adapter.options.realtime_ws_url.clone())
                 .with_models_url(adapter.options.models_url.clone());
 
-                if let Some(family) = adapter.options.capability_family {
-                    provider = provider.with_capability_family(family.into());
+                if let Some(family) =
+                    openai_adapter_capability_family(provider_id, auth, &adapter.options)
+                {
+                    provider = provider.with_capability_family(family);
                 }
 
                 if let Some(auth_data) = credential.auth_data {
@@ -668,8 +670,10 @@ fn build_adapter_provider(
                     .with_realtime_ws_url(adapter.options.realtime_ws_url.clone())
                     .with_models_url(adapter.options.models_url.clone());
 
-                    if let Some(family) = adapter.options.capability_family {
-                        provider = provider.with_capability_family(family.into());
+                    if let Some(family) =
+                        openai_adapter_capability_family(provider_id, auth, &adapter.options)
+                    {
+                        provider = provider.with_capability_family(family);
                     }
 
                     if let Some(auth_data) = credential.auth_data {
@@ -1240,6 +1244,52 @@ fn http_adapter_protocol_path(
         HttpAdapterKind::Anthropic => protocol_paths.anthropic.as_str(),
         HttpAdapterKind::Gemini => protocol_paths.gemini.as_str(),
     }
+}
+
+fn looks_like_cline_models_url(models_url: Option<&str>) -> bool {
+    models_url.is_some_and(|value| {
+        value
+            .trim()
+            .to_ascii_lowercase()
+            .contains("/ai/cline/recommended-models")
+    })
+}
+
+fn looks_like_cline_provider_id(provider_id: &str) -> bool {
+    let normalized = provider_id.trim().to_ascii_lowercase();
+    normalized == "cline"
+        || normalized.contains("cline_api")
+        || normalized.contains("clineapi")
+        || normalized.contains("cline-pass")
+        || normalized.contains("cline_pass")
+}
+
+fn openai_adapter_capability_family(
+    provider_id: &str,
+    auth: &ProviderAuthConfig,
+    options: &crate::config::OpenAiProviderOptions,
+) -> Option<crate::provider::CapabilityFamily> {
+    if let Some(family) = options.capability_family {
+        return Some(family.into());
+    }
+
+    if looks_like_cline_provider_id(provider_id)
+        || looks_like_cline_models_url(options.models_url.as_deref())
+    {
+        return Some(crate::provider::CapabilityFamily::OpenAiCompatible);
+    }
+
+    let ProviderAuthConfig::Api(config) = auth else {
+        return None;
+    };
+    config
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+        .filter(|value| value.starts_with("https://api.cline.bot"))
+        .map(|_| crate::provider::CapabilityFamily::OpenAiCompatible)
 }
 
 fn openai_adapter_api_credential(
@@ -1827,4 +1877,89 @@ where
     map.iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn openai_options() -> crate::config::OpenAiProviderOptions {
+        crate::config::OpenAiProviderOptions {
+            backend: crate::config::OpenAiBackendConfig::Api,
+            api_mode: crate::config::OpenAiApiModeConfig::Chat,
+            api_mode_explicit: true,
+            stream_mode: crate::config::StreamTransportMode::Sse,
+            realtime_ws_url: None,
+            models_url: None,
+            auth_header: "authorization".to_owned(),
+            auth_scheme: Some("Bearer".to_owned()),
+            capability_family: None,
+        }
+    }
+
+    #[test]
+    fn openai_adapter_capability_family_prefers_explicit_value() {
+        let mut options = openai_options();
+        options.capability_family = Some(ProviderCapabilityFamilyConfig::OpenAiCompatible);
+
+        let family = openai_adapter_capability_family(
+            "custom",
+            &ProviderAuthConfig::Api(ProviderApiAuthConfig::default()),
+            &options,
+        );
+
+        assert_eq!(
+            family,
+            Some(crate::provider::CapabilityFamily::OpenAiCompatible)
+        );
+    }
+
+    #[test]
+    fn openai_adapter_capability_family_infers_cline_from_models_url() {
+        let mut options = openai_options();
+        options.models_url =
+            Some("https://api.cline.bot/api/v1/ai/cline/recommended-models".to_owned());
+
+        let family = openai_adapter_capability_family(
+            "custom",
+            &ProviderAuthConfig::Api(ProviderApiAuthConfig::default()),
+            &options,
+        );
+
+        assert_eq!(
+            family,
+            Some(crate::provider::CapabilityFamily::OpenAiCompatible)
+        );
+    }
+
+    #[test]
+    fn openai_adapter_capability_family_infers_cline_from_provider_id() {
+        let family = openai_adapter_capability_family(
+            "cline_api",
+            &ProviderAuthConfig::Api(ProviderApiAuthConfig::default()),
+            &openai_options(),
+        );
+
+        assert_eq!(
+            family,
+            Some(crate::provider::CapabilityFamily::OpenAiCompatible)
+        );
+    }
+
+    #[test]
+    fn openai_adapter_capability_family_infers_cline_from_base_url() {
+        let family = openai_adapter_capability_family(
+            "custom",
+            &ProviderAuthConfig::Api(ProviderApiAuthConfig {
+                base_url: Some("https://api.cline.bot".to_owned()),
+                ..ProviderApiAuthConfig::default()
+            }),
+            &openai_options(),
+        );
+
+        assert_eq!(
+            family,
+            Some(crate::provider::CapabilityFamily::OpenAiCompatible)
+        );
+    }
 }

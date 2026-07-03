@@ -846,6 +846,7 @@ async function installClinePassPreset() {
             openai: {
               enabled: true,
               api_mode: 'chat',
+              capability_family: 'openai_compatible',
               models_url: CLINE_PASS_MODELS_URL,
               models: {
                 [CLINE_PASS_DEFAULT_MODEL_ID]: {},
@@ -901,6 +902,7 @@ async function bootstrapClinePassCredential() {
               openai: {
                 enabled: true,
                 api_mode: 'chat',
+                capability_family: 'openai_compatible',
                 models_url: CLINE_PASS_MODELS_URL,
                 models: {
                   [CLINE_PASS_DEFAULT_MODEL_ID]: {},

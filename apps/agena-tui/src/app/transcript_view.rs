@@ -588,11 +588,7 @@ fn render_tool_execution(
     i18n: &I18n,
     expanded: bool,
 ) {
-    let label = if tool.title.trim().is_empty() {
-        tool_invocation_label(&tool.invocation)
-    } else {
-        tool.title.clone()
-    };
+    let label = tool_display_label(tool);
     let (message_key, color) = tool_status_key_and_color(part.status);
     if !expanded {
         push_single_line(
@@ -1219,11 +1215,7 @@ fn push_limited_markdown(
 }
 
 fn tool_output_copy_text(part: &MessagePart, tool: &OperationPart, i18n: &I18n) -> String {
-    let label = if tool.title.trim().is_empty() {
-        tool_invocation_label(&tool.invocation)
-    } else {
-        tool.title.clone()
-    };
+    let label = tool_display_label(tool);
     let mut sections = vec![tool_execution_preview(part, tool, i18n), label];
     if should_render_tool_model_output(tool, tool.error_message()) {
         sections.push(tool.model_output.text.trim().to_string());
@@ -1263,11 +1255,7 @@ fn tool_execution_collapsed_summary(
     tool: &OperationPart,
     i18n: &I18n,
 ) -> String {
-    let base_label = if tool.title.trim().is_empty() {
-        tool_invocation_label(&tool.invocation)
-    } else {
-        tool.title.clone()
-    };
+    let base_label = tool_display_label(tool);
     let label = apply_patch_details(&tool.details)
         .filter(|payload| !payload.changes.is_empty())
         .map(|payload| {
@@ -1402,9 +1390,35 @@ fn media_artifact_label(artifact: &agena::message::ArtifactRef) -> String {
         .unwrap_or_else(|| artifact.uri.clone())
 }
 
+fn tool_display_label(tool: &OperationPart) -> String {
+    if tool.title.trim().is_empty() {
+        tool_invocation_label(&tool.invocation)
+    } else {
+        tool.title.clone()
+    }
+}
+
 fn should_render_tool_model_output(tool: &OperationPart, skipped_text: Option<&str>) -> bool {
     let model_output = normalized_tool_text(tool.model_output.text.as_str());
     if model_output.is_empty() {
+        return false;
+    }
+    if tool.invocation.name == "agena_web__search"
+        && tool
+            .blocks
+            .iter()
+            .any(|block| matches!(block, OperationBlock::SearchResults { .. }))
+    {
+        return false;
+    }
+    let tool_label = normalized_tool_text(tool_display_label(tool).as_str());
+    if tool_label == model_output {
+        return false;
+    }
+    if let Some(prefix) = tool_label.strip_suffix(model_output.as_str())
+        && prefix.chars().last().is_some_and(|ch| ch.is_whitespace())
+        && !prefix.trim().is_empty()
+    {
         return false;
     }
     if skipped_text.is_some_and(|candidate| normalized_tool_text(candidate) == model_output) {
@@ -3021,6 +3035,120 @@ mod tests {
             &I18n::english(),
         );
         assert_eq!(copied.matches("Saved the plan.").count(), 1);
+    }
+
+    #[test]
+    fn render_tool_execution_deduplicates_model_output_matching_title() {
+        let prompt = "一只可爱的小猫，圆圆的大眼睛";
+        let tool = OperationPart::completed(
+            13,
+            ToolInvocation::new(
+                "image_generation",
+                serde_json::from_value(json!({ "description": prompt }))
+                    .expect("valid structured input"),
+            ),
+            prompt,
+            vec![OperationBlock::Media {
+                mime_type: "image/png".to_string(),
+                artifact: agena::message::ArtifactRef {
+                    uri: "/tmp/cat.png".to_string(),
+                    mime: "image/png".to_string(),
+                    name: Some("cat.png".to_string()),
+                    size_bytes: Some(42),
+                    sha256: None,
+                },
+            }],
+            Vec::new(),
+            agena::message::ToolOutput::default(),
+            agena::message::TimeRange::default(),
+        )
+        .with_title(format!("image generation {prompt}"));
+        let part = MessagePart::with_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(tool.clone()),
+        );
+
+        let mut out = Vec::new();
+        render_tool_execution(&part, &tool, &mut out, 120, &I18n::english(), true);
+
+        let rendered = out
+            .into_iter()
+            .map(|line| sanitize_terminal_text(line.text.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(rendered.matches(prompt).count(), 1);
+    }
+
+    #[test]
+    fn should_skip_model_output_when_it_matches_tool_title() {
+        let prompt = "一只可爱的小猫，圆圆的大眼睛";
+        let tool = OperationPart::completed(
+            14,
+            ToolInvocation::new(
+                "image_generation",
+                serde_json::from_value(json!({ "description": prompt }))
+                    .expect("valid structured input"),
+            ),
+            prompt,
+            vec![OperationBlock::Media {
+                mime_type: "image/png".to_string(),
+                artifact: agena::message::ArtifactRef {
+                    uri: "/tmp/cat.png".to_string(),
+                    mime: "image/png".to_string(),
+                    name: Some("cat.png".to_string()),
+                    size_bytes: Some(42),
+                    sha256: None,
+                },
+            }],
+            Vec::new(),
+            agena::message::ToolOutput::default(),
+            agena::message::TimeRange::default(),
+        )
+        .with_title(format!("image generation {prompt}"));
+        let part = MessagePart::with_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(tool),
+        );
+
+        let tool = match transcript_part_content(&part) {
+            PartContent::Operation(tool) => tool,
+            _ => panic!("expected operation part"),
+        };
+        assert!(!should_render_tool_model_output(tool, None));
+    }
+
+    #[test]
+    fn should_skip_local_web_search_model_output_when_structured_results_exist() {
+        let tool = OperationPart::completed(
+            15,
+            ToolInvocation::new(
+                "agena_web__search",
+                serde_json::from_value(json!({ "query": "OpenAI Responses API" }))
+                    .expect("valid structured input"),
+            ),
+            "Found 1 web search result(s) for 'OpenAI Responses API' via bing.",
+            vec![OperationBlock::SearchResults {
+                query: Some("OpenAI Responses API".to_string()),
+                results: vec![agena::message::SearchResultItem {
+                    title: "OpenAI Responses API".to_string(),
+                    uri: "https://platform.openai.com/docs/api-reference/responses".to_string(),
+                    snippet: Some("API reference for the Responses API.".to_string()),
+                    score: None,
+                }],
+            }],
+            Vec::new(),
+            agena::message::ToolOutput::default(),
+            agena::message::TimeRange::default(),
+        )
+        .with_title("web search OpenAI Responses API");
+
+        assert!(!should_render_tool_model_output(&tool, None));
     }
 
     #[test]

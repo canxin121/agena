@@ -65,6 +65,7 @@ pub use runtime::{
 };
 pub(crate) use wire_message::{
     WirePart as ProjectedSessionPart, project as project_session_parts,
+    project_operation_output as project_session_tool_result_output,
     project_text_lossy as project_session_text_lossy,
 };
 pub type ProviderModel = Model;

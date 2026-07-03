@@ -771,7 +771,7 @@ impl WebPlugin {
             serde_json::to_value(&page).map_err(|err| PluginError::new(err.to_string()))?;
         let text = format_fetched_page(&page, input.prompt.as_deref());
         Ok(ToolInvokeOutput::text(text)
-            .with_title("web fetch")
+            .with_title(format!("web fetch {}", url))
             .with_payload(payload))
     }
 
@@ -812,7 +812,7 @@ impl WebPlugin {
         let payload =
             serde_json::to_value(report).map_err(|err| PluginError::new(err.to_string()))?;
         Ok(ToolInvokeOutput::text(text)
-            .with_title("web crawl")
+            .with_title(format!("web crawl {}", start_url))
             .with_payload(payload))
     }
 
@@ -866,7 +866,7 @@ impl WebPlugin {
         let payload =
             serde_json::to_value(output).map_err(|err| PluginError::new(err.to_string()))?;
         Ok(ToolInvokeOutput::text(text)
-            .with_title("web search")
+            .with_title(format!("web search {query}"))
             .with_payload(payload))
     }
 

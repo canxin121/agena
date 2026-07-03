@@ -867,6 +867,13 @@ fn operation_blocks_from_tool_output(
         _ => {}
     }
 
+    if let Some(block) = structured_web_search_results_block(payload_tool_name.as_str(), details) {
+        blocks.push(block);
+    }
+    if let Some(block) = structured_web_crawl_results_block(payload_tool_name.as_str(), details) {
+        blocks.push(block);
+    }
+
     for block in details.content_blocks() {
         blocks.push(block);
     }
@@ -905,6 +912,109 @@ fn answers_from_tool_output(
 
 fn custom_payload_value(details: &ToolOutput) -> Option<serde_json::Value> {
     details.to_json_payload()
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct StructuredWebSearchPayload {
+    query: String,
+    #[serde(default)]
+    results: Vec<StructuredWebSearchResult>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct StructuredWebSearchResult {
+    title: String,
+    url: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    snippet: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct StructuredWebCrawlPayload {
+    #[serde(default)]
+    documents: Vec<StructuredWebCrawlDocument>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct StructuredWebCrawlDocument {
+    title: String,
+    url: String,
+    #[serde(default)]
+    depth: u32,
+    #[serde(default)]
+    chunk_count: usize,
+}
+
+fn structured_web_search_results_block(
+    payload_tool_name: &str,
+    details: &ToolOutput,
+) -> Option<OperationBlock> {
+    if payload_tool_name != "web_search" {
+        return None;
+    }
+
+    let payload: StructuredWebSearchPayload =
+        serde_json::from_value(custom_payload_value(details)?).ok()?;
+    if payload.results.is_empty() {
+        return None;
+    }
+
+    Some(OperationBlock::SearchResults {
+        query: Some(payload.query),
+        results: payload
+            .results
+            .into_iter()
+            .map(|result| {
+                let snippet = result
+                    .snippet
+                    .filter(|value| !value.trim().is_empty())
+                    .or_else(|| {
+                        let description = result.description.trim();
+                        (!description.is_empty()).then(|| description.to_string())
+                    });
+                crate::message::SearchResultItem {
+                    title: result.title,
+                    uri: result.url,
+                    snippet,
+                    score: None,
+                }
+            })
+            .collect(),
+    })
+}
+
+fn structured_web_crawl_results_block(
+    payload_tool_name: &str,
+    details: &ToolOutput,
+) -> Option<OperationBlock> {
+    if payload_tool_name != "agena_web__crawl" && payload_tool_name != "crawl" {
+        return None;
+    }
+
+    let payload: StructuredWebCrawlPayload =
+        serde_json::from_value(custom_payload_value(details)?).ok()?;
+    if payload.documents.is_empty() {
+        return None;
+    }
+
+    Some(OperationBlock::SearchResults {
+        query: None,
+        results: payload
+            .documents
+            .into_iter()
+            .map(|document| crate::message::SearchResultItem {
+                title: document.title,
+                uri: document.url,
+                snippet: Some(format!(
+                    "depth {} · {} chunk(s)",
+                    document.depth, document.chunk_count
+                )),
+                score: None,
+            })
+            .collect(),
+    })
 }
 
 fn attachment_source_uri(source: &crate::message::AttachmentSource) -> String {

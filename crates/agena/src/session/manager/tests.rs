@@ -1684,6 +1684,101 @@ fn operation_snapshot(
         .unwrap_or_else(|| panic!("operation {operation_id} should exist"))
 }
 
+#[test]
+fn operation_blocks_from_web_search_output_include_structured_search_results() {
+    let invocation = ToolInvocation::new(
+        "agena_web__search",
+        StructuredObject::try_from(serde_json::json!({
+            "query": "OpenAI Responses API"
+        }))
+        .expect("web search input"),
+    );
+    let details = ToolOutput::from_json_payload(Some(&serde_json::json!({
+        "query": "OpenAI Responses API",
+        "engine": "bing",
+        "attempted_engines": ["bing"],
+        "results": [
+            {
+                "title": "OpenAI Responses API",
+                "url": "https://platform.openai.com/docs/api-reference/responses",
+                "description": "API reference for the Responses API.",
+                "source": "platform.openai.com",
+                "engine": "bing"
+            }
+        ]
+    })))
+    .expect("web search output payload");
+
+    let blocks = operation_blocks_from_tool_output(
+        &invocation,
+        &details,
+        &[],
+        "Found 1 web search result(s) for 'OpenAI Responses API' via bing.",
+    );
+
+    assert!(matches!(
+        blocks.iter().find(|block| matches!(block, OperationBlock::SearchResults { .. })),
+        Some(OperationBlock::SearchResults { query, results })
+            if query.as_deref() == Some("OpenAI Responses API")
+                && results.len() == 1
+                && results[0].title == "OpenAI Responses API"
+                && results[0].uri == "https://platform.openai.com/docs/api-reference/responses"
+                && results[0].snippet.as_deref() == Some("API reference for the Responses API.")
+    ));
+}
+
+#[test]
+fn operation_blocks_from_web_crawl_output_include_document_titles() {
+    let invocation = ToolInvocation::new(
+        "agena_web__crawl",
+        StructuredObject::try_from(serde_json::json!({
+            "start_url": "https://example.com/docs"
+        }))
+        .expect("web crawl input"),
+    );
+    let details = ToolOutput::from_json_payload(Some(&serde_json::json!({
+        "start_url": "https://example.com/docs",
+        "engine": "http",
+        "rendered": false,
+        "stored_count": 1,
+        "cached_count": 0,
+        "duplicate_count": 0,
+        "near_duplicate_count": 0,
+        "pruned_document_count": 0,
+        "pruned_document_bytes": 0,
+        "failure_count": 0,
+        "total_documents": 1,
+        "documents": [
+            {
+                "id": "doc_1",
+                "url": "https://example.com/docs",
+                "title": "Example Docs",
+                "depth": 0,
+                "fetched_at": "2026-07-03T00:00:00Z",
+                "chunk_count": 2
+            }
+        ]
+    })))
+    .expect("web crawl output payload");
+
+    let blocks = operation_blocks_from_tool_output(
+        &invocation,
+        &details,
+        &[],
+        "Crawled from https://example.com/docs via http.",
+    );
+
+    assert!(matches!(
+        blocks.iter().find(|block| matches!(block, OperationBlock::SearchResults { .. })),
+        Some(OperationBlock::SearchResults { query, results })
+            if query.is_none()
+                && results.len() == 1
+                && results[0].title == "Example Docs"
+                && results[0].uri == "https://example.com/docs"
+                && results[0].snippet.as_deref() == Some("depth 0 · 2 chunk(s)")
+    ));
+}
+
 #[tokio::test]
 async fn provider_native_web_search_events_become_completed_operation_parts() {
     let workspace = TempWorkspace::new();

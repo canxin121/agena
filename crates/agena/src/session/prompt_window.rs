@@ -14,7 +14,7 @@ use crate::{
     plugin::registry::RegisteredTool,
     provider::{
         ProjectedSessionPart, PromptCacheShape, PromptCacheShapeDiff, project_session_parts,
-        project_session_text_lossy,
+        project_session_text_lossy, project_session_tool_result_output,
     },
     role::Role,
 };
@@ -928,12 +928,9 @@ fn tool_execution_invocation(exec: &OperationPart) -> &ToolInvocation {
 
 fn tool_result_output_text(part: &MessagePart, exec: &OperationPart) -> String {
     match part.status {
-        ExecutionStatus::Failed => exec
-            .output_text()
-            .or_else(|| exec.error_message())
-            .unwrap_or_default()
-            .to_string(),
-        ExecutionStatus::Completed => exec.output_text().unwrap_or_default().to_string(),
+        ExecutionStatus::Failed | ExecutionStatus::Completed => {
+            project_session_tool_result_output(part.status, exec)
+        }
         _ => String::new(),
     }
 }

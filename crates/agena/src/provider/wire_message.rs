@@ -11,6 +11,7 @@
 ///   - carrying operation outputs through one provider-neutral projection path
 ///   - emitting an empty output for still-pending / in-progress tool executions
 use base64::Engine as _;
+use serde::Deserialize;
 
 use crate::message::{
     AttachmentItem, AttachmentKind, AttachmentSource, ExecutionStatus, Message, OperationPart,
@@ -302,18 +303,149 @@ fn invocation_name_and_args(invocation: &ToolInvocation) -> (String, String) {
     )
 }
 
-fn project_operation_output(status: ExecutionStatus, exec: &OperationPart) -> String {
+pub(crate) fn project_operation_output(status: ExecutionStatus, exec: &OperationPart) -> String {
     match status {
         ExecutionStatus::Pending | ExecutionStatus::InProgress | ExecutionStatus::Cancelled => {
             String::new()
         }
-        ExecutionStatus::Completed => exec.model_output.text.clone(),
+        ExecutionStatus::Completed => structured_operation_output(exec)
+            .unwrap_or_else(|| exec.model_output.text.clone()),
         ExecutionStatus::Failed => exec
             .output_text()
             .or_else(|| exec.error_message())
             .unwrap_or_default()
             .to_string(),
     }
+}
+
+const MAX_MODEL_WEB_RESULT_SNIPPET_CHARS: usize = 400;
+const MAX_MODEL_WEB_CRAWL_DOCUMENTS: usize = 20;
+const MAX_MODEL_WEB_CRAWL_FAILURES: usize = 5;
+
+fn structured_operation_output(exec: &OperationPart) -> Option<String> {
+    structured_web_search_output(exec).or_else(|| structured_web_crawl_output(exec))
+}
+
+fn structured_web_search_output(exec: &OperationPart) -> Option<String> {
+    let crate::tool::ToolPayloadOutput::WebSearch {
+        query,
+        backend,
+        results,
+    } = crate::tool::ToolPayloadOutput::from_tool_output(exec.invocation.name.as_str(), &exec.details)?
+    else {
+        return None;
+    };
+
+    let results = results
+        .into_iter()
+        .map(|result| {
+            let snippet = compact_optional_text(result.snippet, MAX_MODEL_WEB_RESULT_SNIPPET_CHARS);
+            serde_json::json!({
+                "title": result.title,
+                "url": result.url,
+                "snippet": snippet,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    serde_json::to_string(&serde_json::json!({
+        "query": query,
+        "backend": backend,
+        "results": results,
+    }))
+    .ok()
+}
+
+fn structured_web_crawl_output(exec: &OperationPart) -> Option<String> {
+    if !matches!(exec.invocation.name.as_str(), "agena_web__crawl" | "crawl") {
+        return None;
+    }
+
+    let payload = exec.details.to_json_payload()?;
+    let report: ModelWebCrawlReport = serde_json::from_value(payload).ok()?;
+    let document_count = report.documents.len();
+    let failure_count = report.failures.len();
+    let documents = report
+        .documents
+        .into_iter()
+        .take(MAX_MODEL_WEB_CRAWL_DOCUMENTS)
+        .map(|document| {
+            serde_json::json!({
+                "title": document.title,
+                "url": document.url,
+                "depth": document.depth,
+                "chunk_count": document.chunk_count,
+            })
+        })
+        .collect::<Vec<_>>();
+    let failures = report
+        .failures
+        .into_iter()
+        .take(MAX_MODEL_WEB_CRAWL_FAILURES)
+        .map(|failure| truncate_text(failure.as_str(), MAX_MODEL_WEB_RESULT_SNIPPET_CHARS))
+        .collect::<Vec<_>>();
+
+    serde_json::to_string(&serde_json::json!({
+        "start_url": report.start_url,
+        "engine": report.engine,
+        "rendered": report.rendered,
+        "stored_count": report.stored_count,
+        "cached_count": report.cached_count,
+        "duplicate_count": report.duplicate_count,
+        "near_duplicate_count": report.near_duplicate_count,
+        "failure_count": report.failure_count,
+        "total_documents": report.total_documents,
+        "documents_truncated": document_count > MAX_MODEL_WEB_CRAWL_DOCUMENTS,
+        "documents": documents,
+        "failures_truncated": failure_count > MAX_MODEL_WEB_CRAWL_FAILURES,
+        "failures": failures,
+    }))
+    .ok()
+}
+
+fn compact_optional_text(value: Option<String>, max_chars: usize) -> Option<String> {
+    value
+        .map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty())
+        .map(|text| truncate_text(text.as_str(), max_chars))
+}
+
+fn truncate_text(text: &str, max_chars: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_owned();
+    }
+
+    let mut end = trimmed.len();
+    if let Some((idx, _)) = trimmed.char_indices().nth(max_chars) {
+        end = idx;
+    }
+    format!("{}…", trimmed[..end].trim_end())
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelWebCrawlReport {
+    start_url: String,
+    engine: String,
+    rendered: bool,
+    stored_count: usize,
+    cached_count: usize,
+    duplicate_count: usize,
+    near_duplicate_count: usize,
+    failure_count: usize,
+    total_documents: usize,
+    #[serde(default)]
+    documents: Vec<ModelWebCrawlDocument>,
+    #[serde(default)]
+    failures: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelWebCrawlDocument {
+    title: String,
+    url: String,
+    depth: u32,
+    chunk_count: usize,
 }
 
 fn attachment_file_content_value(item: &AttachmentItem) -> Option<serde_json::Value> {
@@ -366,3 +498,193 @@ fn parse_data_url(url: &str) -> Option<(String, String)> {
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use serde_json::json;
+
+    use super::{WirePart, project};
+    use crate::message::{
+        ExecutionStatus, Message, MessagePart, OperationPart, PartContent, StructuredObject,
+        TimeRange, ToolInvocation,
+    };
+    use crate::role::Role;
+    use crate::tool::{ToolPayloadOutput, WebSearchHit};
+
+    #[test]
+    fn project_structures_local_web_search_results_for_model() {
+        let created_at = Utc::now();
+        let invocation = ToolInvocation::new(
+            "agena_web__search",
+            StructuredObject::try_from(json!({ "query": "OpenAI Responses API" }))
+                .expect("tool input"),
+        );
+        let details = ToolPayloadOutput::WebSearch {
+            query: "OpenAI Responses API".to_string(),
+            backend: "bing".to_string(),
+            results: vec![WebSearchHit {
+                title: "Responses API reference".to_string(),
+                url: "https://platform.openai.com/docs/api-reference/responses".to_string(),
+                snippet: Some(
+                    "Build stateful interactions with text, image, and tool outputs."
+                        .to_string(),
+                ),
+            }],
+        }
+        .into_tool_output();
+        let mut tool_part = MessagePart::with_content(
+            1,
+            0,
+            created_at,
+            ExecutionStatus::Completed,
+            PartContent::Operation(OperationPart::completed(
+                1,
+                invocation,
+                "Found 1 web search result. These are candidate links, not final evidence."
+                    .to_string(),
+                Vec::new(),
+                Vec::new(),
+                details,
+                TimeRange::default(),
+            )),
+        );
+        tool_part.operation_id = Some("call_1".to_string());
+
+        let assistant = Message {
+            id: 2,
+            role: Role::Assistant,
+            state: ExecutionStatus::Completed,
+            parts: vec![tool_part],
+            created_at,
+            metadata: Default::default(),
+            provider_state: None,
+            usage: None,
+        };
+
+        let projected = project(&assistant);
+        let Some(WirePart::ToolResult { output_json, .. }) = projected
+            .iter()
+            .find(|part| matches!(part, WirePart::ToolResult { .. }))
+        else {
+            panic!("expected projected tool result");
+        };
+
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(output_json).expect("valid json"),
+            json!({
+                "query": "OpenAI Responses API",
+                "backend": "bing",
+                "results": [{
+                    "title": "Responses API reference",
+                    "url": "https://platform.openai.com/docs/api-reference/responses",
+                    "snippet": "Build stateful interactions with text, image, and tool outputs."
+                }]
+            })
+        );
+        assert!(!output_json.contains("candidate links"));
+    }
+
+    #[test]
+    fn project_structures_local_web_crawl_results_for_model() {
+        let created_at = Utc::now();
+        let invocation = ToolInvocation::new(
+            "agena_web__crawl",
+            StructuredObject::try_from(json!({ "start_url": "https://example.com/docs" }))
+                .expect("tool input"),
+        );
+        let details = crate::message::ToolOutput::from_json_payload(Some(&json!({
+            "start_url": "https://example.com/docs",
+            "engine": "spider",
+            "rendered": false,
+            "stored_count": 2,
+            "cached_count": 1,
+            "duplicate_count": 0,
+            "near_duplicate_count": 0,
+            "failure_count": 1,
+            "total_documents": 3,
+            "documents": [
+                {
+                    "title": "Docs Home",
+                    "url": "https://example.com/docs",
+                    "depth": 0,
+                    "chunk_count": 2
+                },
+                {
+                    "title": "Install",
+                    "url": "https://example.com/docs/install",
+                    "depth": 1,
+                    "chunk_count": 1
+                }
+            ],
+            "failures": ["https://example.com/docs/broken: http 500"]
+        })))
+        .expect("tool output");
+        let mut tool_part = MessagePart::with_content(
+            1,
+            0,
+            created_at,
+            ExecutionStatus::Completed,
+            PartContent::Operation(OperationPart::completed(
+                1,
+                invocation,
+                "Crawled and indexed 2 pages.".to_string(),
+                Vec::new(),
+                Vec::new(),
+                details,
+                TimeRange::default(),
+            )),
+        );
+        tool_part.operation_id = Some("call_2".to_string());
+
+        let assistant = Message {
+            id: 2,
+            role: Role::Assistant,
+            state: ExecutionStatus::Completed,
+            parts: vec![tool_part],
+            created_at,
+            metadata: Default::default(),
+            provider_state: None,
+            usage: None,
+        };
+
+        let projected = project(&assistant);
+        let Some(WirePart::ToolResult { output_json, .. }) = projected
+            .iter()
+            .find(|part| matches!(part, WirePart::ToolResult { .. }))
+        else {
+            panic!("expected projected tool result");
+        };
+
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(output_json).expect("valid json"),
+            json!({
+                "start_url": "https://example.com/docs",
+                "engine": "spider",
+                "rendered": false,
+                "stored_count": 2,
+                "cached_count": 1,
+                "duplicate_count": 0,
+                "near_duplicate_count": 0,
+                "failure_count": 1,
+                "total_documents": 3,
+                "documents_truncated": false,
+                "documents": [
+                    {
+                        "title": "Docs Home",
+                        "url": "https://example.com/docs",
+                        "depth": 0,
+                        "chunk_count": 2
+                    },
+                    {
+                        "title": "Install",
+                        "url": "https://example.com/docs/install",
+                        "depth": 1,
+                        "chunk_count": 1
+                    }
+                ],
+                "failures_truncated": false,
+                "failures": ["https://example.com/docs/broken: http 500"]
+            })
+        );
+    }
+}

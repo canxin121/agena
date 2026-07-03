@@ -10,8 +10,8 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionToolCall, CompletionUsage, ModelRuntime, ProviderModel, StreamResumePolicy, sse,
-        utils, wire_message,
+        CompletionToolCall, CompletionUsage, ModelRuntime, ProviderModel, StreamResumePolicy,
+        prompt_tools, sse, utils, wire_message,
     },
     role::Role,
 };
@@ -50,10 +50,19 @@ impl OllamaAdapter {
     }
 
     fn to_chat_request(&self, request: &CompletionRequest, stream: bool) -> OllamaChatRequest {
+        let prompt_tool_protocol = uses_prompt_tool_protocol(request);
         OllamaChatRequest {
             model: request.model.to_string(),
-            messages: to_ollama_messages(request),
-            tools: (!request.tools.is_empty()).then(|| tools_to_ollama_definitions(&request.tools)),
+            messages: if prompt_tool_protocol {
+                to_ollama_prompt_tool_messages(request)
+            } else {
+                to_ollama_messages(request)
+            },
+            tools: if prompt_tool_protocol {
+                None
+            } else {
+                (!request.tools.is_empty()).then(|| tools_to_ollama_definitions(&request.tools))
+            },
             stream,
             options: OllamaOptions {
                 temperature: request.temperature,
@@ -92,12 +101,22 @@ impl OllamaAdapter {
         &self,
         fallback_model: &ModelId,
         response: OllamaChatResponse,
+        prompt_tool_protocol: bool,
     ) -> Result<CompletionResponse, AppError> {
         let usage = usage_from_response(&response);
         let message = response.message.unwrap_or_default();
-        let text = message.content.unwrap_or_default();
-        let tool_calls = parse_tool_calls(self.id.as_str(), message.tool_calls)?;
-        let finish_reason = CompletionFinishReason::from_provider(response.done_reason.as_deref());
+        let mut text = message.content.unwrap_or_default();
+        let mut tool_calls = parse_tool_calls(self.id.as_str(), message.tool_calls)?;
+        if prompt_tool_protocol {
+            let (clean_text, prompt_calls) = prompt_tools::parse_tool_calls(text.as_str());
+            text = clean_text;
+            tool_calls.extend(prompt_calls);
+        }
+        let finish_reason = if prompt_tool_protocol && !tool_calls.is_empty() {
+            Some(CompletionFinishReason::ToolCalls)
+        } else {
+            CompletionFinishReason::from_provider(response.done_reason.as_deref())
+        };
 
         if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() && !response.done {
             return Err(AppError::Provider(format!(
@@ -116,6 +135,53 @@ impl OllamaAdapter {
             usage,
             provider_metadata: None,
         })
+    }
+
+    fn completion_response_stream(
+        response: CompletionResponse,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>> {
+        let provider_id = response.provider_id.clone();
+        let model = response.model.clone();
+        let mut events = Vec::new();
+        if !response.text.is_empty() {
+            events.push(Ok(CompletionStreamEvent::TextDelta {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                delta: response.text,
+            }));
+        }
+        if let Some(reasoning) = response.reasoning_text
+            && !reasoning.is_empty()
+        {
+            events.push(Ok(CompletionStreamEvent::ThinkingDelta {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                delta: reasoning,
+            }));
+        }
+        for call in response.tool_calls {
+            let CompletionToolCall::Function {
+                id,
+                name,
+                arguments_json,
+            } = call;
+            events.push(Ok(CompletionStreamEvent::ToolCallSnapshot {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                stream_key: id.clone(),
+                id: Some(id),
+                name: Some(name),
+                arguments_json,
+            }));
+        }
+        events.push(Ok(CompletionStreamEvent::Completed {
+            provider_id,
+            model,
+            finish_reason: response.finish_reason,
+            usage: response.usage,
+            provider_metadata: response.provider_metadata,
+        }));
+        Box::pin(futures_util::stream::iter(events))
     }
 }
 
@@ -161,6 +227,7 @@ impl ModelRuntime for OllamaAdapter {
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let fallback_model = request.model.clone();
+        let prompt_tool_protocol = uses_prompt_tool_protocol(&request);
         let body = self.to_chat_request(&request, false);
         let endpoint = self.chat_endpoint();
         let body_json = serde_json::to_value(&body).map_err(AppError::from)?;
@@ -187,7 +254,7 @@ impl ModelRuntime for OllamaAdapter {
             response,
         )
         .await?;
-        self.completion_from_response(&fallback_model, payload)
+        self.completion_from_response(&fallback_model, payload, prompt_tool_protocol)
     }
 
     async fn complete_stream(
@@ -197,6 +264,10 @@ impl ModelRuntime for OllamaAdapter {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
+        if uses_prompt_tool_protocol(&request) {
+            let response = self.complete(request).await?;
+            return Ok(Self::completion_response_stream(response));
+        }
         let body = self.to_chat_request(&request, true);
         let endpoint = self.chat_endpoint();
         let body_json = serde_json::to_value(&body).map_err(AppError::from)?;
@@ -436,6 +507,10 @@ struct ParsedToolCall {
     arguments_json: String,
 }
 
+fn uses_prompt_tool_protocol(request: &CompletionRequest) -> bool {
+    prompt_tools::request_needs_text_protocol(request)
+}
+
 fn to_ollama_messages(request: &CompletionRequest) -> Vec<OllamaChatMessage> {
     let mut messages = Vec::new();
     if let Some(system) = request
@@ -457,6 +532,36 @@ fn to_ollama_messages(request: &CompletionRequest) -> Vec<OllamaChatMessage> {
             });
         }
     }
+    messages
+}
+
+fn to_ollama_prompt_tool_messages(request: &CompletionRequest) -> Vec<OllamaChatMessage> {
+    let mut messages = Vec::new();
+    let mut system_chunks = Vec::new();
+    if let Some(system) = request
+        .system
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        system_chunks.push(system.clone());
+    }
+    system_chunks.push(prompt_tools::system_prompt(request.tools.as_slice()));
+    messages.push(OllamaChatMessage {
+        role: "system".to_owned(),
+        content: system_chunks.join("\n\n"),
+    });
+
+    for message in &request.messages {
+        let text = prompt_tools::message_text(message);
+        if text.trim().is_empty() {
+            continue;
+        }
+        messages.push(OllamaChatMessage {
+            role: role_name(message.role).to_owned(),
+            content: text,
+        });
+    }
+
     messages
 }
 
@@ -482,7 +587,7 @@ fn tools_to_ollama_definitions(
         .map(|tool| OllamaToolDefinition {
             kind: "function",
             function: OllamaFunctionDefinition {
-                name: crate::tool::model_safe_tool_name(tool.exposed_name.as_str()),
+                name: tool.exposed_name.clone(),
                 description: tool.description_text().to_string(),
                 parameters: crate::tool::model_safe_tool_schema(&tool.sanitized_input_schema()),
             },
@@ -559,4 +664,106 @@ fn usage_from_response(response: &OllamaChatResponse) -> Option<CompletionUsage>
         cache_read_tokens: 0,
         total_cost: 0.0,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_completion_request(messages: Vec<Message>) -> CompletionRequest {
+        CompletionRequest {
+            model: ModelId::new("llama3.1"),
+            system: None,
+            messages,
+            tools: Vec::new(),
+            native_tools: crate::config::ProviderNativeToolsConfig::default(),
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            verbosity: None,
+            response_format: None,
+            responses_api_metadata: None,
+            request_override: crate::model::ModelSpeedModeRequestOverride::default(),
+        }
+    }
+
+    #[test]
+    fn ollama_prompt_tool_protocol_exposes_dotted_names_without_native_tools() {
+        let adapter = OllamaAdapter::new(
+            "ollama",
+            reqwest::Client::new(),
+            "http://localhost:11434",
+            "llama3.1",
+        );
+        let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
+        request.tools = vec![crate::plugin::registry::RegisteredTool::new(
+            "streaming-fixture",
+            crate::plugin::sdk::PluginToolDecl::new(
+                "stream_fixture.count",
+                serde_json::json!({ "type": "object" }),
+            )
+            .description("Count rows."),
+        )];
+
+        let body = adapter.to_chat_request(&request, false);
+        let system = body
+            .messages
+            .first()
+            .map(|message| message.content.as_str())
+            .expect("prompt-tool system message should be present");
+
+        assert!(body.tools.is_none());
+        assert!(system.contains("`streaming-fixture.stream_fixture.count`"));
+        assert!(system.contains("Tool names are exact and may contain dots"));
+        assert!(!system.contains("streaming-fixture_stream_fixture_count"));
+    }
+
+    #[test]
+    fn ollama_prompt_tool_protocol_parses_exact_dotted_calls() {
+        let adapter = OllamaAdapter::new(
+            "ollama",
+            reqwest::Client::new(),
+            "http://localhost:11434",
+            "llama3.1",
+        );
+        let response = OllamaChatResponse {
+            model: Some("llama3.1".to_owned()),
+            message: Some(OllamaChatMessageResponse {
+                content: Some(
+                    "<agena_tool_call>{\"id\":\"call_1\",\"name\":\"a.b.c\",\"arguments\":{\"x\":1}}</agena_tool_call>"
+                        .to_owned(),
+                ),
+                tool_calls: Vec::new(),
+            }),
+            done: true,
+            done_reason: Some("stop".to_owned()),
+            prompt_eval_count: None,
+            eval_count: None,
+        };
+
+        let parsed = adapter
+            .completion_from_response(&ModelId::new("llama3.1"), response, true)
+            .expect("prompt-tool response should parse");
+
+        assert_eq!(parsed.text, "");
+        assert_eq!(
+            parsed.tool_calls,
+            vec![CompletionToolCall::Function {
+                id: "call_1".to_owned(),
+                name: "a.b.c".to_owned(),
+                arguments_json: "{\"x\":1}".to_owned(),
+            }]
+        );
+        assert_eq!(
+            parsed.finish_reason,
+            Some(CompletionFinishReason::ToolCalls)
+        );
+    }
 }

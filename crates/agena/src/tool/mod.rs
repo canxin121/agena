@@ -99,6 +99,44 @@ pub(crate) fn model_safe_tool_name(name: &str) -> String {
     crate::plugin::registry::exposed_tool_name_segment(trimmed)
 }
 
+fn legacy_exposed_tool_name(plugin_name: &str, tool_name: &str) -> String {
+    format!(
+        "{}__{}",
+        legacy_exposed_tool_name_segment(plugin_name),
+        legacy_exposed_tool_name_segment(tool_name)
+    )
+}
+
+fn legacy_exposed_tool_name_segment(value: &str) -> String {
+    let trimmed = value.trim();
+    let mut out = String::with_capacity(trimmed.len());
+    let mut previous_was_separator = false;
+
+    for ch in trimmed.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            previous_was_separator = false;
+        } else if !previous_was_separator {
+            out.push('_');
+            previous_was_separator = true;
+        }
+    }
+
+    while out.ends_with('_') {
+        out.pop();
+    }
+    while out.starts_with('_') {
+        out.remove(0);
+    }
+    if out.is_empty() {
+        out.push_str("tool");
+    }
+    if out.bytes().next().is_some_and(|byte| byte.is_ascii_digit()) {
+        out.insert(0, '_');
+    }
+    out
+}
+
 pub(crate) fn suggest_tool_names<I, T>(requested: &str, candidates: I, limit: usize) -> Vec<String>
 where
     I: IntoIterator<Item = T>,
@@ -188,12 +226,23 @@ fn normalized_tool_name_distance(left: &str, right: &str) -> usize {
 
 pub(crate) fn tool_matches_model_name(registered_tool: &RegisteredTool, name: &str) -> bool {
     let trimmed = name.trim();
+    let legacy_name = legacy_exposed_tool_name(
+        registered_tool.plugin_name.as_str(),
+        registered_tool.decl.name.as_str(),
+    );
     registered_tool.exposed_name == trimmed
         || model_safe_tool_name(registered_tool.exposed_name.as_str()) == trimmed
+        || legacy_name == trimmed
+        || model_safe_tool_name(legacy_name.as_str()) == trimmed
         || registered_tool
             .alias_exposed_names()
             .iter()
             .any(|alias| alias == trimmed || model_safe_tool_name(alias) == trimmed)
+        || registered_tool.alias_names().any(|alias| {
+            let legacy_alias =
+                legacy_exposed_tool_name(registered_tool.plugin_name.as_str(), alias);
+            legacy_alias == trimmed || model_safe_tool_name(legacy_alias.as_str()) == trimmed
+        })
 }
 
 pub(crate) fn model_safe_tool_schema(schema: &serde_json::Value) -> serde_json::Value {
@@ -2626,40 +2675,35 @@ fn invocation_effective_tags(
     };
 
     match (definition.behavior_exposed_name(), command) {
-        ("agena_fs__fs", "read" | "glob" | "grep") => {
+        ("fs" | "agena_fs__fs", "read" | "glob" | "grep") => {
             set_invocation_access_tags(&mut tags, true, false, true, false)
         }
-        ("agena_fs__fs", "apply_patch") => {
+        ("fs" | "agena_fs__fs", "apply_patch") => {
             set_invocation_access_tags(&mut tags, false, true, false, true)
         }
-        ("agena_settings__settings", "get" | "list" | "validate") => {
+        ("settings", "get" | "list" | "validate") => {
             set_invocation_access_tags(&mut tags, true, false, false, false)
         }
-        ("agena_settings__settings", "set" | "delete" | "patch") => {
+        ("settings", "set" | "delete" | "patch") => {
             set_invocation_access_tags(&mut tags, false, true, false, true)
         }
-        ("agena_cron__schedule", "list") => {
-            set_invocation_access_tags(&mut tags, true, false, false, false)
-        }
-        ("agena_cron__schedule", "create" | "delete" | "wakeup") => {
+        ("schedule", "list") => set_invocation_access_tags(&mut tags, true, false, false, false),
+        ("schedule", "create" | "delete" | "wakeup") => {
             set_invocation_access_tags(&mut tags, false, true, false, false)
         }
-        ("agena_process__process", "list" | "logs") => {
+        ("process", "list" | "logs") => {
             set_invocation_access_tags(&mut tags, true, false, false, false)
         }
-        ("agena_process__process", "run" | "stop") => {
+        ("process", "run" | "stop") => {
             set_invocation_access_tags(&mut tags, false, true, false, false)
         }
-        ("agena_runtime__session", "get") => {
-            set_invocation_access_tags(&mut tags, true, false, false, false)
-        }
-        ("agena_runtime__session", "rename") => {
-            set_invocation_access_tags(&mut tags, false, true, false, false)
-        }
-        ("agena_mcp__mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => {
-            set_invocation_access_tags(&mut tags, true, false, false, false)
-        }
-        ("agena_mcp__mcp", "call") => {
+        ("session", "get") => set_invocation_access_tags(&mut tags, true, false, false, false),
+        ("session", "rename") => set_invocation_access_tags(&mut tags, false, true, false, false),
+        (
+            "resources.list" | "resources.read" | "prompts.list" | "prompts.get" | "agena_mcp__mcp",
+            "list_resources" | "read_resource" | "list_prompts" | "get_prompt",
+        ) => set_invocation_access_tags(&mut tags, true, false, false, false),
+        ("tools.call" | "agena_mcp__mcp", "call") => {
             set_invocation_access_tags(&mut tags, false, true, false, false)
         }
         _ => {}
@@ -2708,20 +2752,21 @@ fn is_concurrency_safe_tool_invocation(
     };
 
     match (registered_tool.behavior_exposed_name(), command) {
-        ("agena_fs__fs", "read" | "glob" | "grep") => true,
-        ("agena_fs__fs", "apply_patch") => false,
-        ("agena_process__process", "list" | "logs") => true,
-        ("agena_process__process", "run" | "stop") => false,
-        ("agena_settings__settings", "get" | "list" | "validate") => true,
-        ("agena_settings__settings", "set" | "delete" | "patch") => false,
-        ("agena_cron__schedule", "list") => true,
-        ("agena_cron__schedule", "create" | "delete" | "wakeup") => false,
-        ("agena_runtime__session", "get") => true,
-        ("agena_runtime__session", "rename") => false,
-        ("agena_mcp__mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => {
-            true
-        }
-        ("agena_mcp__mcp", "call") => false,
+        ("fs" | "agena_fs__fs", "read" | "glob" | "grep") => true,
+        ("fs" | "agena_fs__fs", "apply_patch") => false,
+        ("process", "list" | "logs") => true,
+        ("process", "run" | "stop") => false,
+        ("settings", "get" | "list" | "validate") => true,
+        ("settings", "set" | "delete" | "patch") => false,
+        ("schedule", "list") => true,
+        ("schedule", "create" | "delete" | "wakeup") => false,
+        ("session", "get") => true,
+        ("session", "rename") => false,
+        (
+            "resources.list" | "resources.read" | "prompts.list" | "prompts.get" | "agena_mcp__mcp",
+            "list_resources" | "read_resource" | "list_prompts" | "get_prompt",
+        ) => true,
+        ("tools.call" | "agena_mcp__mcp", "call") => false,
         _ => registered_tool.decl.concurrency_safe,
     }
 }
@@ -3008,16 +3053,16 @@ mod tests {
         orchestrator,
     };
 
-    const FS_TOOL: &str = "agena_fs__fs";
-    const GENERATED_HELP_TOOL: &str = "fixture__generated_help";
-    const MERGED_HELP_TOOL: &str = "fixture__merged_help";
-    const PROCESS_TOOL: &str = "agena_process__process";
-    const TOOLS_TOOL: &str = "agena_catalog__tools";
-    const TASK_TOOL: &str = "agena_tasks__task";
-    const FIXTURE_ECHO_TOOL: &str = "fixture__plugin_echo";
-    const WEB_CRAWL_TOOL: &str = "agena_web__crawl";
-    const WEB_FETCH_TOOL: &str = "agena_web__fetch";
-    const WEB_SEARCH_TOOL: &str = "agena_web__search";
+    const FS_TOOL: &str = "fs";
+    const GENERATED_HELP_TOOL: &str = "fixture.generated_help";
+    const MERGED_HELP_TOOL: &str = "fixture.merged_help";
+    const PROCESS_TOOL: &str = "process";
+    const TOOLS_TOOL: &str = "tools";
+    const TASK_TOOL: &str = "task";
+    const FIXTURE_ECHO_TOOL: &str = "fixture.plugin_echo";
+    const WEB_CRAWL_TOOL: &str = "web.crawl";
+    const WEB_FETCH_TOOL: &str = "web.fetch";
+    const WEB_SEARCH_TOOL: &str = "web.search";
 
     fn bash_process_input(command: ShellCommandInput) -> ToolPayloadInput {
         ToolPayloadInput::Process(ProcessToolInput::Run {
@@ -3917,7 +3962,7 @@ mod tests {
 
     #[test]
     fn model_safe_tool_name_uses_readable_underscore_separators() {
-        assert_eq!(super::model_safe_tool_name("agena_fs__fs"), "agena_fs__fs");
+        assert_eq!(super::model_safe_tool_name("fs"), "fs");
         assert_eq!(
             super::model_safe_tool_name("mcp:docs:search"),
             "mcp_docs_search"
@@ -4782,13 +4827,13 @@ mod tests {
         }
 
         let help = CatalogToolInput::parse_input(json!({
-            "tool": "agena_web__search",
+            "tool": "web.search",
             "include_schema": true
         }))
         .expect("tool payload should infer help");
         match help {
             CatalogToolInput::Help { args } => {
-                assert_eq!(args.tool, "agena_web__search");
+                assert_eq!(args.tool, "web.search");
                 assert_eq!(args.include_schema, Some(true));
             }
             other => panic!("expected help variant, got {other:?}"),
@@ -4796,14 +4841,14 @@ mod tests {
 
         let help_with_noise = CatalogToolInput::parse_input(json!({
             "action": "help",
-            "tool": "agena_web__search",
+            "tool": "web.search",
             "include_schema": true,
             "query": "noise"
         }))
         .expect("explicit help action should ignore search-only noise");
         match help_with_noise {
             CatalogToolInput::Help { args } => {
-                assert_eq!(args.tool, "agena_web__search");
+                assert_eq!(args.tool, "web.search");
                 assert_eq!(args.include_schema, Some(true));
             }
             other => panic!("expected help variant, got {other:?}"),
@@ -5177,7 +5222,7 @@ mod tests {
 
         let help = NormalizedVariantShapeInput::parse_input(json!({
             "action": "describe",
-            "tool": "  agena_web__search  "
+            "tool": "  web.search  "
         }))
         .expect("action alias should normalize to help");
         match help {
@@ -5185,7 +5230,7 @@ mod tests {
                 tool,
                 include_schema,
             } => {
-                assert_eq!(tool, "agena_web__search");
+                assert_eq!(tool, "web.search");
                 assert_eq!(include_schema, None);
             }
             other => panic!("expected help variant, got {other:?}"),
@@ -5193,7 +5238,7 @@ mod tests {
 
         let quick_help = NormalizedVariantShapeInput::parse_input(json!({
             "action": "quick_help",
-            "tool": "agena_web__search"
+            "tool": "web.search"
         }))
         .expect("action alias default should inject include_schema");
         match quick_help {
@@ -5201,7 +5246,7 @@ mod tests {
                 tool,
                 include_schema,
             } => {
-                assert_eq!(tool, "agena_web__search");
+                assert_eq!(tool, "web.search");
                 assert_eq!(include_schema, Some(false));
             }
             other => panic!("expected help variant, got {other:?}"),
@@ -6363,7 +6408,7 @@ mod tests {
             .find("Description:")
             .expect("description section should be present");
 
-        assert!(result.view.output_text.contains("Tool: agena_fs__fs"));
+        assert!(result.view.output_text.contains("Tool: fs"));
         assert!(result.view.output_text.contains("Description:"));
         assert!(result.view.output_text.contains("Actions:"));
         assert!(result.view.output_text.contains("Arguments for `read`:"));
@@ -6437,12 +6482,8 @@ mod tests {
             .execute_invocation_detailed(&invocation, 7, 9)
             .expect("tools help should succeed");
 
-        assert!(
-            result
-                .view
-                .output_text
-                .contains("Aliases: agena_catalog__tool_catalog, agena_catalog__tool_help")
-        );
+        assert!(result.view.output_text.contains("tool.help"));
+        assert!(result.view.output_text.contains("tool_catalog"));
     }
 
     #[test]
@@ -6454,7 +6495,7 @@ mod tests {
             TOOLS_TOOL,
             StructuredObject::try_from(serde_json::json!({
                 "action": "help",
-                "tool": "agena_catalog__tool_catalog",
+                "tool": "tool_catalog",
                 "include_schema": false
             }))
             .expect("tools help input should serialize"),
@@ -6463,18 +6504,9 @@ mod tests {
             .execute_invocation_detailed(&invocation, 7, 9)
             .expect("tools help should resolve alias");
 
-        assert!(
-            result
-                .view
-                .output_text
-                .contains("Tool: agena_catalog__tools")
-        );
-        assert!(
-            result
-                .view
-                .output_text
-                .contains("Aliases: agena_catalog__tool_catalog, agena_catalog__tool_help")
-        );
+        assert!(result.view.output_text.contains("Tool: tools"));
+        assert!(result.view.output_text.contains("tool.help"));
+        assert!(result.view.output_text.contains("tool_catalog"));
     }
 
     #[test]
@@ -6483,7 +6515,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let invocation = ToolInvocation::new(
-            "agena_catalog__tool_catalog",
+            "tool_catalog",
             StructuredObject::try_from(serde_json::json!({
                 "action": "usage"
             }))
@@ -6505,17 +6537,13 @@ mod tests {
         let tools = executor.available_model_tools();
         let alias = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_catalog__tool_catalog")
+            .find(|tool| tool.exposed_name == "tool_catalog")
             .expect("declared tool alias should be model-visible");
 
         assert_eq!(alias.base_exposed_name.as_deref(), Some(TOOLS_TOOL));
         assert_eq!(alias.original_name, "tools");
         assert!(alias.fixed_input.is_none());
-        assert!(
-            alias
-                .description_text()
-                .contains("Alias for `agena_catalog__tools`.")
-        );
+        assert!(alias.description_text().contains("Alias for `tools`."));
     }
 
     #[test]
@@ -6580,7 +6608,7 @@ mod tests {
             TOOLS_TOOL,
             StructuredObject::try_from(serde_json::json!({
                 "action": "help",
-                "tool": "agena_fs__fss",
+                "tool": "fs.fss",
                 "include_schema": false
             }))
             .expect("tools help input should serialize"),
@@ -6591,9 +6619,9 @@ mod tests {
         let ToolError::Plugin(message) = err else {
             panic!("expected plugin error, got {err:?}");
         };
-        assert!(message.contains("unknown tool 'agena_fs__fss'"));
+        assert!(message.contains("unknown tool 'fs.fss'"));
         assert!(message.contains("Did you mean"));
-        assert!(message.contains("agena_fs__fs"));
+        assert!(message.contains("fs"));
     }
 
     #[test]
@@ -6645,7 +6673,7 @@ mod tests {
             result
                 .view
                 .output_text
-                .contains(r#"- Help: {"action":"help","tool":"agena_web__search"}"#)
+                .contains(r#"- Help: {"action":"help","tool":"web.search"}"#)
         );
     }
 
@@ -6783,52 +6811,28 @@ mod tests {
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
 
         let tools = executor.available_model_tools();
-        assert!(
-            !tools
-                .iter()
-                .any(|tool| tool.exposed_name == "agena_plan__plan")
-        );
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.exposed_name == "agena_plan__plan_get")
-        );
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.exposed_name == "agena_plan__plan_set")
-        );
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.exposed_name == "agena_plan__plan_update")
-        );
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.exposed_name == "agena_plan__plan_clear")
-        );
-        assert!(
-            !tools
-                .iter()
-                .any(|tool| tool.exposed_name == "agena_snapshot__snapshot")
-        );
+        assert!(!tools.iter().any(|tool| tool.exposed_name == "plan"));
+        assert!(tools.iter().any(|tool| tool.exposed_name == "plan.get"));
+        assert!(tools.iter().any(|tool| tool.exposed_name == "plan.set"));
+        assert!(tools.iter().any(|tool| tool.exposed_name == "plan.update"));
+        assert!(tools.iter().any(|tool| tool.exposed_name == "plan.clear"));
+        assert!(!tools.iter().any(|tool| tool.exposed_name == "snapshot"));
 
         let plan_update = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_plan__plan_update")
+            .find(|tool| tool.exposed_name == "plan.update")
             .expect("plan.update alias should be model-visible");
         let plan_get = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_plan__plan_get")
+            .find(|tool| tool.exposed_name == "plan.get")
             .expect("plan.get alias should be model-visible");
         let plan_set = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_plan__plan_set")
+            .find(|tool| tool.exposed_name == "plan.set")
             .expect("plan.set alias should be model-visible");
         let snapshot_existing = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_snapshot__snapshot_enter_existing")
+            .find(|tool| tool.exposed_name == "snapshot.enter.existing")
             .expect("nested snapshot.enter.existing tool should be model-visible");
 
         let plan_update_schema =
@@ -6887,11 +6891,11 @@ mod tests {
         let tools = executor.available_model_tools();
         let plan_set = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_plan__plan_set")
+            .find(|tool| tool.exposed_name == "plan.set")
             .expect("plan.set alias should be model-visible");
         let plan_update = tools
             .iter()
-            .find(|tool| tool.exposed_name == "agena_plan__plan_update")
+            .find(|tool| tool.exposed_name == "plan.update")
             .expect("plan.update alias should be model-visible");
 
         assert!(
@@ -6925,17 +6929,17 @@ mod tests {
             .map(|tool| tool.exposed_name)
             .collect::<std::collections::BTreeSet<_>>();
 
-        assert!(names.contains("agena_settings__settings_get"));
-        assert!(names.contains("agena_settings__settings_list"));
-        assert!(names.contains("agena_settings__settings_validate"));
-        assert!(!names.contains("agena_settings__settings_set"));
-        assert!(!names.contains("agena_settings__settings_delete"));
-        assert!(!names.contains("agena_settings__settings_patch"));
+        assert!(names.contains("settings.get"));
+        assert!(names.contains("settings.list"));
+        assert!(names.contains("settings.validate"));
+        assert!(!names.contains("settings.set"));
+        assert!(!names.contains("settings.delete"));
+        assert!(!names.contains("settings.patch"));
 
-        assert!(names.contains("agena_fs__fs_read"));
-        assert!(names.contains("agena_fs__fs_glob"));
-        assert!(names.contains("agena_fs__fs_grep"));
-        assert!(!names.contains("agena_fs__fs_apply_patch"));
+        assert!(names.contains("fs.read"));
+        assert!(names.contains("fs.glob"));
+        assert!(names.contains("fs.grep"));
+        assert!(!names.contains("fs.apply_patch"));
     }
 
     #[test]
@@ -6947,7 +6951,7 @@ mod tests {
             .expect("test source should be written");
 
         let invocation = ToolInvocation::new(
-            "agena_code__code_syntax_tree",
+            "code.syntax_tree",
             StructuredObject::try_from(json!({
                 "path": "main.rs"
             }))
@@ -6971,7 +6975,7 @@ mod tests {
 
         let tools = executor.available_model_tools();
         let invocation = crate::session::parse_tool_invocation(
-            "agena_code__code_syntax_tree",
+            "code.syntax_tree",
             r#"{"path":"main.rs"}"#,
             tools.as_slice(),
         )
@@ -6981,7 +6985,7 @@ mod tests {
             .execute_invocation_detailed(&invocation, 7, 9)
             .expect("parsed alias invocation should execute successfully");
 
-        assert_eq!(invocation.name, "agena_code__code_syntax_tree");
+        assert_eq!(invocation.name, "code.syntax_tree");
         assert!(!result.view.output_text.trim().is_empty());
     }
 
@@ -6998,12 +7002,12 @@ mod tests {
         let alias = executor
             .available_model_tools()
             .into_iter()
-            .find(|tool| tool.exposed_name == "agena_settings__settings_get")
+            .find(|tool| tool.exposed_name == "settings.get")
             .expect("settings.get alias should be model-visible");
         assert!(
             alias
                 .description_text()
-                .contains("`tools.help` for `agena_settings__settings`")
+                .contains("`tools.help` for `settings`")
         );
         assert!(
             alias
@@ -7029,7 +7033,7 @@ mod tests {
             .expect("plugin_echo should be model-visible");
         assert_eq!(
             visible.description_text(),
-            "Echo a plugin message. See `tools.help` for `fixture__plugin_echo`."
+            "Echo a plugin message. See `tools.help` for `fixture.plugin_echo`."
         );
         assert!(
             visible.decl.help.is_none(),
@@ -7056,17 +7060,17 @@ mod tests {
         let visible = executor
             .available_tools()
             .into_iter()
-            .find(|tool| tool.exposed_name == "fixture__plugin_paths")
+            .find(|tool| tool.exposed_name == "fixture.plugin_paths")
             .expect("plugin_paths should be model-visible");
         assert_eq!(
             visible.description_text(),
-            "Expose declared and dynamic permission paths. See `tools.help` for `fixture__plugin_paths`."
+            "Expose declared and dynamic permission paths. See `tools.help` for `fixture.plugin_paths`."
         );
 
         let detailed = executor
             .detailed_tools()
             .into_iter()
-            .find(|tool| tool.exposed_name == "fixture__plugin_paths")
+            .find(|tool| tool.exposed_name == "fixture.plugin_paths")
             .expect("plugin_paths should have a detailed definition");
         assert_eq!(
             detailed.description_text(),
@@ -7089,7 +7093,7 @@ mod tests {
             .expect("web crawl should be model-visible");
         assert_eq!(
             web_crawl.description_text(),
-            "Crawl a site and cache indexed pages locally. See `tools.help` for `agena_web__crawl`."
+            "Crawl a site and cache indexed pages locally. See `tools.help` for `web.crawl`."
         );
 
         let workflow_tools = tools
@@ -7098,7 +7102,7 @@ mod tests {
             .expect("tools catalog should be model-visible");
         assert_eq!(
             workflow_tools.description_text(),
-            "Show usage examples, search tools, or fetch detailed tool help. See `tools.help` for `agena_catalog__tools`."
+            "Show usage examples, search tools, or fetch detailed tool help. See `tools.help` for `tools`."
         );
 
         let web_search = tools
@@ -7592,7 +7596,7 @@ mod tests {
         let executor = ToolExecutor::new(&workspace.root, agent)
             .with_plugin_manager(build_default_plugin_manager_without_host(&workspace.root));
         let invocation = ToolInvocation {
-            name: "agena_fs__fss".to_string(),
+            name: "fs.fss".to_string(),
             plugin_name: None,
             input: StructuredObject::default(),
         };
@@ -7601,7 +7605,7 @@ mod tests {
             .prepare_invocation(&invocation, 7, 9)
             .expect("unknown tools should not trigger plugin before hooks");
 
-        assert_eq!(prepared.invocation.name, "agena_fs__fss");
+        assert_eq!(prepared.invocation.name, "fs.fss");
         assert_eq!(prepared.invocation.plugin_name.as_deref(), Some("custom"));
         assert!(prepared.title_override.is_none());
         assert!(prepared.metadata.is_empty());
@@ -7612,9 +7616,9 @@ mod tests {
         assert!(matches!(
             err,
             ToolError::UnknownToolHint { tool, suggestions, suggestion_text }
-                if tool == "agena_fs__fss"
-                    && suggestions == vec!["agena_fs__fs".to_string()]
-                    && suggestion_text == "unknown tool 'agena_fs__fss'. Did you mean `agena_fs__fs`?"
+                if tool == "fs.fss"
+                    && suggestions == vec!["fs".to_string()]
+                    && suggestion_text == "unknown tool 'fs.fss'. Did you mean `fs`?"
         ));
     }
 
@@ -7647,7 +7651,7 @@ mod tests {
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_plugin_manager(&workspace.root));
         let invocation = ToolInvocation {
-            name: "fixture__plugin_paths".to_string(),
+            name: "fixture.plugin_paths".to_string(),
             plugin_name: None,
             input: StructuredObject::try_from(json!({
                 "file_path": "docs/spec.md",
@@ -8163,7 +8167,7 @@ mod tests {
         let executor = ToolExecutor::new(workspace.root.clone(), agent)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
         let invocation = ToolInvocation::new(
-            "agena_plan__plan_get",
+            "plan.get",
             StructuredObject::try_from(json!({})).expect("plan invocation input should be valid"),
         );
 

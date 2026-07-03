@@ -390,9 +390,7 @@ mod tests {
 
         let call_id = ToolCallId::new("call_1");
         buffer.start_tool_call(call_id.clone()).unwrap();
-        buffer
-            .name_tool_call(&call_id, "agena_catalog__tools")
-            .unwrap();
+        buffer.name_tool_call(&call_id, "tools").unwrap();
         buffer
             .append_tool_arguments(
                 &call_id,

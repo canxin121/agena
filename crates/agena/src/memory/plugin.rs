@@ -88,7 +88,7 @@ fn memory_config_schema() -> serde_json::Value {
         (
             "/properties/retrieval",
             "Retrieval",
-            "Defaults for agena_memory__memory search behavior.",
+            "Defaults for memory search behavior.",
         ),
         (
             "/properties/retrieval/properties/enabled",

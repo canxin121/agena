@@ -35,32 +35,32 @@ use crate::session::{ContextGovernor, ContextPolicy};
 use super::*;
 use crate::session::cache::SessionCachePolicy;
 
-const FS_TOOL: &str = "agena_fs__fs";
-const PROCESS_TOOL: &str = "agena_process__process";
-const PROCESS_RUN_TOOL: &str = "agena_process__process_run";
-const WEB_CRAWL_TOOL: &str = "agena_web__crawl";
-const WEB_FETCH_TOOL: &str = "agena_web__fetch";
-const TOOLS_TOOL: &str = "agena_catalog__tools";
+const FS_TOOL: &str = "fs";
+const PROCESS_TOOL: &str = "process";
+const PROCESS_RUN_TOOL: &str = "process.run";
+const WEB_CRAWL_TOOL: &str = "web.crawl";
+const WEB_FETCH_TOOL: &str = "web.fetch";
+const TOOLS_TOOL: &str = "tools";
 const PERMISSION_TOOL: &str = FS_TOOL;
-const USER_TOOL: &str = "agena_runtime__user";
-const PLAN_TOOL: &str = "agena_plan__plan";
-const PLAN_SET_TOOL: &str = "agena_plan__plan_set";
-const PLAN_UPDATE_TOOL: &str = "agena_plan__plan_update";
-const SNAPSHOT_ENTER_NEW_TOOL: &str = "agena_snapshot__snapshot_enter_new";
-const SNAPSHOT_EXIT_TOOL: &str = "agena_snapshot__snapshot_exit";
-const TASK_TOOL: &str = "agena_tasks__task";
-const LSP_TOOL: &str = "agena_lsp__lsp";
-const INIT_SKILL_TOOL: &str = "agena_skills__init";
-const REVIEW_SKILL_TOOL: &str = "agena_skills__review";
-const SECURITY_REVIEW_SKILL_TOOL: &str = "agena_skills__security_review";
-const AGENT_TOOL: &str = "agena_runtime__agent";
-const SESSION_TOOL: &str = "agena_runtime__session";
-const SETTINGS_TOOL: &str = "agena_settings__settings";
-const SETTINGS_GET_TOOL: &str = "agena_settings__settings_get";
-const SETTINGS_VALIDATE_TOOL: &str = "agena_settings__settings_validate";
-const SCHEDULE_LIST_TOOL: &str = "agena_cron__schedule_list";
+const USER_TOOL: &str = "user";
+const PLAN_TOOL: &str = "plan";
+const PLAN_SET_TOOL: &str = "plan.set";
+const PLAN_UPDATE_TOOL: &str = "plan.update";
+const SNAPSHOT_ENTER_NEW_TOOL: &str = "snapshot.enter.new";
+const SNAPSHOT_EXIT_TOOL: &str = "snapshot.exit";
+const TASK_TOOL: &str = "task";
+const LSP_TOOL: &str = "lsp";
+const INIT_SKILL_TOOL: &str = "skills.init";
+const REVIEW_SKILL_TOOL: &str = "skills.review";
+const SECURITY_REVIEW_SKILL_TOOL: &str = "skills.security_review";
+const AGENT_TOOL: &str = "agent";
+const SESSION_TOOL: &str = "session";
+const SETTINGS_TOOL: &str = "settings";
+const SETTINGS_GET_TOOL: &str = "settings.get";
+const SETTINGS_VALIDATE_TOOL: &str = "settings.validate";
+const SCHEDULE_LIST_TOOL: &str = "schedule.list";
 const STREAM_FIXTURE_PLUGIN: &str = "streaming-fixture";
-const STREAM_FIXTURE_TOOL: &str = "streaming_fixture__stream_fixture_count";
+const STREAM_FIXTURE_TOOL: &str = "streaming-fixture.stream_fixture.count";
 
 fn bash_process_input(
     command: crate::message::ShellCommandInput,
@@ -187,7 +187,7 @@ impl crate::plugin::sdk::Plugin for StreamingFixturePlugin {
             .hooks(crate::plugin::sdk::HookSubscription::TOOL_INVOKE_STREAM)
             .tool(
                 crate::plugin::sdk::PluginToolDecl::new(
-                    "stream_fixture_count",
+                    "stream_fixture.count",
                     serde_json::json!({
                         "type": "object",
                         "properties": { "n": { "type": "integer" } }
@@ -493,7 +493,7 @@ impl ModelRuntime for ScriptedProvider {
                     model: scripted_model_id(),
                     stream_key: "call_web_1".to_string(),
                     id: Some("call_web_1".to_string()),
-                    name: Some("agena_web__unsupported".to_string()),
+                    name: Some("web.unsupported".to_string()),
                     arguments_delta: serde_json::json!({}).to_string(),
                 }),
                 Ok(CompletionStreamEvent::Completed {
@@ -1643,10 +1643,10 @@ fn unsupported_tool_call_is_returned_to_model() {
         assert!(
             error
                 .as_deref()
-                .is_some_and(|value| value.contains("agena_web__unsupported")),
+                .is_some_and(|value| value.contains("web.unsupported")),
             "unexpected unsupported-tool error: error={error:?} output={output:?}"
         );
-        assert!(output.contains("agena_web__unsupported"));
+        assert!(output.contains("web.unsupported"));
         assert!(
             completed.messages.iter().any(|message| {
                 message.role == Role::Assistant
@@ -1687,7 +1687,7 @@ fn operation_snapshot(
 #[test]
 fn operation_blocks_from_web_search_output_include_structured_search_results() {
     let invocation = ToolInvocation::new(
-        "agena_web__search",
+        "web.search",
         StructuredObject::try_from(serde_json::json!({
             "query": "OpenAI Responses API"
         }))
@@ -1730,7 +1730,7 @@ fn operation_blocks_from_web_search_output_include_structured_search_results() {
 #[test]
 fn operation_blocks_from_web_crawl_output_include_document_titles() {
     let invocation = ToolInvocation::new(
-        "agena_web__crawl",
+        "web.crawl",
         StructuredObject::try_from(serde_json::json!({
             "start_url": "https://example.com/docs"
         }))
@@ -7086,7 +7086,7 @@ while True:
                 })
                 .expect("tools help output should exist");
             assert!(
-                tools_help_text.contains("Tool: agena_settings__settings"),
+                tools_help_text.contains("Tool: settings"),
                 "tools help should describe the settings tool"
             );
             assert!(

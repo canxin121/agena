@@ -145,6 +145,7 @@ pub(super) fn provider_studio_base_url_visible(dialog: &ProviderStudioOverlay) -
                     .any(|rule| rule.requires_base_url)
             }
         }
+        ProviderDraftAuthKind::ClineApi => false,
         ProviderDraftAuthKind::Gitlab => false,
         ProviderDraftAuthKind::Credential(Some(issuer)) => issuer.uses_http_endpoint(),
         ProviderDraftAuthKind::Credential(None) => false,
@@ -949,6 +950,16 @@ pub(super) fn provider_studio_auth_details_hint(
             28,
         )
         .or_else(|| provider_studio_summary_value(draft.auth.base_url.as_str(), 48)),
+        ProviderDraftAuthKind::ClineApi => provider_studio_labeled_summary(
+            i18n,
+            ProviderStudioSummaryLabel::Env,
+            draft.auth.api_key_env.as_str(),
+            28,
+        )
+        .or_else(|| {
+            (!draft.auth.api_key.trim().is_empty())
+                .then(|| ui_text::t(i18n, "provider-studio-summary-keys-set"))
+        }),
         ProviderDraftAuthKind::Gitlab => {
             provider_studio_summary_value(draft.auth.instance_url.as_str(), 48).or_else(|| {
                 provider_studio_labeled_summary(
@@ -1263,6 +1274,7 @@ pub(super) fn provider_studio_auth_status(
             ProviderDraftAuthKind::None => ProviderStudioAuthStatus::None,
             ProviderDraftAuthKind::Credential(None) => ProviderStudioAuthStatus::SelectIssuer,
             ProviderDraftAuthKind::Api
+            | ProviderDraftAuthKind::ClineApi
             | ProviderDraftAuthKind::Gitlab
             | ProviderDraftAuthKind::Credential(Some(_))
             | ProviderDraftAuthKind::BedrockSigv4 => ProviderStudioAuthStatus::Unset,
@@ -1289,6 +1301,9 @@ pub(super) fn provider_studio_detail_fields(
             }
             fields.extend([ProviderStudioField::ApiKeyEnv, ProviderStudioField::ApiKey]);
             fields
+        }
+        ProviderDraftAuthKind::ClineApi => {
+            vec![ProviderStudioField::ApiKeyEnv, ProviderStudioField::ApiKey]
         }
         ProviderDraftAuthKind::Gitlab => vec![
             ProviderStudioField::InstanceUrl,
@@ -1372,6 +1387,10 @@ pub(super) fn provider_studio_auth_is_configured(dialog: &ProviderStudioOverlay)
                 && (!dialog.draft.auth.api_key.trim().is_empty()
                     || !dialog.draft.auth.api_key_env.trim().is_empty())
         }
+        ProviderDraftAuthKind::ClineApi => {
+            !dialog.draft.auth.api_key.trim().is_empty()
+                || !dialog.draft.auth.api_key_env.trim().is_empty()
+        }
         ProviderDraftAuthKind::Gitlab => {
             !dialog.draft.auth.instance_url.trim().is_empty()
                 && (!dialog.draft.auth.api_key.trim().is_empty()
@@ -1429,6 +1448,7 @@ pub(super) fn provider_studio_visible_fields(
     if matches!(
         dialog.draft.auth_kind,
         ProviderDraftAuthKind::Api
+            | ProviderDraftAuthKind::ClineApi
             | ProviderDraftAuthKind::Gitlab
             | ProviderDraftAuthKind::BedrockSigv4
             | ProviderDraftAuthKind::Credential(_)
@@ -1580,6 +1600,7 @@ pub(super) fn provider_studio_field_editable(
         ProviderStudioField::AuthSubtype => matches!(
             dialog.draft.auth_kind,
             ProviderDraftAuthKind::Api
+                | ProviderDraftAuthKind::ClineApi
                 | ProviderDraftAuthKind::Gitlab
                 | ProviderDraftAuthKind::BedrockSigv4
                 | ProviderDraftAuthKind::Credential(_)
@@ -1599,6 +1620,7 @@ pub(super) fn provider_studio_field_editable(
             ProviderDraftAuthKind::Api | ProviderDraftAuthKind::BedrockSigv4 => {
                 provider_studio_base_url_visible(dialog)
             }
+            ProviderDraftAuthKind::ClineApi => false,
             ProviderDraftAuthKind::Credential(_) => provider_studio_base_url_visible(dialog),
             ProviderDraftAuthKind::Gitlab | ProviderDraftAuthKind::None => false,
         },
@@ -1610,7 +1632,9 @@ pub(super) fn provider_studio_field_editable(
         ProviderStudioField::ApiKeyEnv | ProviderStudioField::ApiKey => {
             matches!(
                 dialog.draft.auth_kind,
-                ProviderDraftAuthKind::Api | ProviderDraftAuthKind::Gitlab
+                ProviderDraftAuthKind::Api
+                    | ProviderDraftAuthKind::ClineApi
+                    | ProviderDraftAuthKind::Gitlab
             )
         }
         ProviderStudioField::RedirectUri => {

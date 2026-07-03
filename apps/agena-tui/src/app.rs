@@ -11551,11 +11551,16 @@ impl App {
             ]),
             ProviderStudioField::AuthSubtype => match dialog.draft.auth_kind {
                 ProviderDraftAuthKind::Api
+                | ProviderDraftAuthKind::ClineApi
                 | ProviderDraftAuthKind::Gitlab
                 | ProviderDraftAuthKind::BedrockSigv4 => Some(vec![
                     choice_item(
-                        "standard",
-                        ui_text::t(&self.i18n, "provider-auth-subtype-standard-detail"),
+                        "custom",
+                        ui_text::t(&self.i18n, "provider-auth-subtype-custom-detail"),
+                    ),
+                    choice_item(
+                        "cline_api",
+                        ui_text::t(&self.i18n, "provider-auth-subtype-cline-api-detail"),
                     ),
                     choice_item(
                         "gitlab_api",
@@ -13500,12 +13505,18 @@ impl App {
             | ProviderStudioField::EditAuthDetailsAction
             | ProviderStudioField::DeleteProviderAction => {}
             ProviderStudioField::AuthMode => {
+                let previous_auth_kind = dialog.draft.auth_kind.clone();
                 match ProviderDraftAuthKind::parse_category(
                     value.as_str(),
-                    dialog.draft.auth_kind.clone(),
+                    previous_auth_kind.clone(),
                 ) {
                     Ok(auth_kind) => {
                         dialog.draft.auth_kind = auth_kind;
+                        if matches!(previous_auth_kind, ProviderDraftAuthKind::ClineApi)
+                            && !matches!(dialog.draft.auth_kind, ProviderDraftAuthKind::ClineApi)
+                        {
+                            dialog.draft.clear_cline_api_preset_values();
+                        }
                         dialog.draft.normalize_shape();
                         self.refresh_provider_studio_adapter_state(dialog);
                     }
@@ -13513,12 +13524,18 @@ impl App {
                 }
             }
             ProviderStudioField::AuthSubtype => {
+                let previous_auth_kind = dialog.draft.auth_kind.clone();
                 match ProviderDraftAuthKind::parse_subtype(
                     value.as_str(),
-                    dialog.draft.auth_kind.clone(),
+                    previous_auth_kind.clone(),
                 ) {
                     Ok(auth_kind) => {
                         dialog.draft.auth_kind = auth_kind;
+                        if matches!(previous_auth_kind, ProviderDraftAuthKind::ClineApi)
+                            && !matches!(dialog.draft.auth_kind, ProviderDraftAuthKind::ClineApi)
+                        {
+                            dialog.draft.clear_cline_api_preset_values();
+                        }
                         dialog.draft.normalize_shape();
                         self.refresh_provider_studio_adapter_state(dialog);
                     }
@@ -16482,6 +16499,7 @@ fn provider_draft_auth_kind_label(i18n: &I18n, auth_kind: &ProviderDraftAuthKind
         ProviderDraftAuthKind::Unset => ui_text::t(i18n, "provider-auth-kind-unset"),
         ProviderDraftAuthKind::None => ui_text::t(i18n, "provider-auth-kind-none"),
         ProviderDraftAuthKind::Api => ui_text::t(i18n, "provider-auth-kind-api"),
+        ProviderDraftAuthKind::ClineApi => ui_text::t(i18n, "provider-auth-kind-cline"),
         ProviderDraftAuthKind::Gitlab => ui_text::t(i18n, "provider-auth-kind-gitlab"),
         ProviderDraftAuthKind::Credential(Some(issuer)) => i18n.text_args(
             "provider-auth-kind-credential-with-issuer",
@@ -16501,6 +16519,7 @@ fn provider_draft_auth_mode_label(i18n: &I18n, auth_kind: &ProviderDraftAuthKind
         ProviderDraftAuthKind::Unset => ui_text::t(i18n, "provider-auth-kind-unset"),
         ProviderDraftAuthKind::None => ui_text::t(i18n, "provider-auth-kind-none"),
         ProviderDraftAuthKind::Api
+        | ProviderDraftAuthKind::ClineApi
         | ProviderDraftAuthKind::Gitlab
         | ProviderDraftAuthKind::BedrockSigv4 => ui_text::t(i18n, "provider-auth-kind-api"),
         ProviderDraftAuthKind::Credential(_) => ui_text::t(i18n, "provider-auth-kind-credential"),
@@ -16512,7 +16531,8 @@ fn provider_draft_auth_subtype_label(i18n: &I18n, auth_kind: &ProviderDraftAuthK
         ProviderDraftAuthKind::Unset
         | ProviderDraftAuthKind::None
         | ProviderDraftAuthKind::Credential(None) => String::new(),
-        ProviderDraftAuthKind::Api => ui_text::t(i18n, "provider-auth-subtype-standard-label"),
+        ProviderDraftAuthKind::Api => ui_text::t(i18n, "provider-auth-subtype-custom-label"),
+        ProviderDraftAuthKind::ClineApi => ui_text::t(i18n, "provider-auth-kind-cline"),
         ProviderDraftAuthKind::Gitlab => ui_text::t(i18n, "provider-auth-kind-gitlab"),
         ProviderDraftAuthKind::Credential(Some(issuer)) => {
             provider_credential_issuer_label_localized(i18n, *issuer)
@@ -25974,7 +25994,7 @@ mod tests {
         );
         assert_eq!(
             provider_studio_field_prompt(&i18n, ProviderStudioField::AuthSubtype),
-            "更新 auth subtype（api：standard | gitlab_api | bedrock_sigv4；credential：openai_chatgpt | github_copilot | gitlab | google_adc | sap_ai_core）"
+            "更新 auth subtype（api：custom | cline_api | gitlab_api | bedrock_sigv4；credential：openai_chatgpt | github_copilot | gitlab | google_adc | sap_ai_core）"
         );
         assert_eq!(
             provider_studio_field_prompt(&i18n, ProviderStudioField::AuthLoginMethod),
@@ -26269,6 +26289,43 @@ mod tests {
                 ProviderStudioField::AuthSubtype,
             ]
         );
+    }
+
+    #[test]
+    fn provider_studio_cline_api_hides_base_url_and_stays_api_key_only() {
+        let mut draft = ProviderConfigDraft {
+            source_provider_id: None,
+            provider_id: "cline".to_string(),
+            auth_kind: ProviderDraftAuthKind::Unset,
+            auth: Default::default(),
+            credential_drafts: Default::default(),
+            default_adapter: String::new(),
+            default_model: String::new(),
+        };
+        draft.normalize_shape();
+        draft.auth.api_key = "sk-test".to_string();
+        let dialog = provider_studio_test_overlay(draft);
+
+        assert_eq!(
+            provider_studio_visible_fields(&dialog),
+            vec![
+                ProviderStudioField::ProviderId,
+                ProviderStudioField::AuthMode,
+                ProviderStudioField::AuthSubtype,
+                ProviderStudioField::EditAuthDetailsAction,
+                ProviderStudioField::DefaultAdapter,
+                ProviderStudioField::DefaultModel,
+            ]
+        );
+        assert_eq!(
+            provider_studio_detail_fields(&dialog),
+            vec![ProviderStudioField::ApiKeyEnv, ProviderStudioField::ApiKey]
+        );
+        assert!(provider_studio_auth_is_configured(&dialog));
+        assert!(!provider_studio_field_editable(
+            &dialog,
+            ProviderStudioField::BaseUrl
+        ));
     }
 
     #[test]

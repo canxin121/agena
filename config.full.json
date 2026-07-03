@@ -542,7 +542,7 @@
         }
       }
     },
-    "cline-pass": {
+    "cline_api": {
       "defaults": {
         "adapter": "openai",
         "model": "cline-pass/qwen3.7-max"

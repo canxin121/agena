@@ -23,10 +23,22 @@ pub fn thinking_mode_display_value(value: &str) -> String {
     if trimmed.eq_ignore_ascii_case("no-thinking") {
         return "off".to_owned();
     }
-    trimmed
-        .strip_prefix("thinking-")
-        .or_else(|| trimmed.strip_prefix("think-"))
-        .unwrap_or(trimmed)
+    prefixed_mode_display_value(trimmed, &["thinking-", "think-"])
+}
+
+pub fn speed_mode_display_value(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.eq_ignore_ascii_case("no-speed") {
+        return "off".to_owned();
+    }
+    prefixed_mode_display_value(trimmed, &["speed-"])
+}
+
+fn prefixed_mode_display_value(value: &str, prefixes: &[&str]) -> String {
+    prefixes
+        .iter()
+        .find_map(|prefix| value.strip_prefix(prefix))
+        .unwrap_or(value)
         .to_owned()
 }
 
@@ -789,6 +801,13 @@ mod tests {
         assert_eq!(thinking_mode_display_value("think-high"), "high");
         assert_eq!(thinking_mode_display_value("no-thinking"), "off");
         assert_eq!(thinking_mode_display_value("medium"), "medium");
+    }
+
+    #[test]
+    fn speed_mode_display_value_is_compact() {
+        assert_eq!(speed_mode_display_value("speed-fast"), "fast");
+        assert_eq!(speed_mode_display_value("no-speed"), "off");
+        assert_eq!(speed_mode_display_value("priority"), "priority");
     }
 
     #[test]

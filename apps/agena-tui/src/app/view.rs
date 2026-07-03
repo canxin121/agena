@@ -3051,11 +3051,15 @@ fn model_catalog_thinking_mode_names(entry: &CatalogModelResource) -> String {
         .iter()
         .filter(|(_, mode)| !mode.disabled)
         .map(|(name, mode)| {
-            mode.display_name
+            if let Some(display_name) = mode
+                .display_name
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
-                .unwrap_or(name.as_str())
-                .to_owned()
+            {
+                display_name.to_owned()
+            } else {
+                ui_text::thinking_mode_display_value(name)
+            }
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -3067,11 +3071,15 @@ fn model_catalog_speed_mode_names(entry: &CatalogModelResource) -> String {
         .iter()
         .filter(|(_, mode)| !mode.disabled)
         .map(|(name, mode)| {
-            mode.display_name
+            if let Some(display_name) = mode
+                .display_name
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
-                .unwrap_or(name.as_str())
-                .to_owned()
+            {
+                display_name.to_owned()
+            } else {
+                ui_text::speed_mode_display_value(name)
+            }
         })
         .collect::<Vec<_>>()
         .join(", ")

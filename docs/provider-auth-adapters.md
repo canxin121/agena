@@ -732,12 +732,12 @@ AtomGit 的默认模型列表流程会对齐 AtomCode：先按 `Max -> Pro -> Li
 }
 ```
 
-### ClinePass Subscription
+### Cline API Subscription
 
 ```json
 {
   "providers": {
-    "cline-pass": {
+    "cline_api": {
       "defaults": {
         "adapter": "openai",
         "model": "cline-pass/qwen3.7-max"
@@ -771,6 +771,8 @@ AtomGit 的默认模型列表流程会对齐 AtomCode：先按 `Max -> Pro -> Li
 
 - 聊天请求走 `https://api.cline.bot/api/v1/chat/completions`，所以 `base_url` 是根 `https://api.cline.bot`，`protocol_paths.openai` 显式写 `/api/v1`
 - 订阅模型列表不依赖标准 `/models`，而是把 `models_url` 指到 `https://api.cline.bot/api/v1/ai/cline/recommended-models`
+
+Web 设置页里可以直接在 `Provider Auth` 区输入 API key；它会自动创建 `cline_api` provider preset，不需要手填 `base_url`。
 
 ## 迁移后的结论
 

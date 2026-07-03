@@ -2799,7 +2799,7 @@ impl ModelRuntime for OpenAiAdapter {
         )
         .await?;
         Ok(payload
-            .into_items(self.id.as_str())
+            .into_items(self.id.as_str(), self.models_url.as_deref())
             .into_iter()
             .filter_map(|model| self.provider_model_from_listed_model(model))
             .collect())
@@ -4442,7 +4442,7 @@ enum OpenAiModelListResponse {
 }
 
 impl OpenAiModelListResponse {
-    fn into_items(self, provider_id: &str) -> Vec<OpenAiListedModel> {
+    fn into_items(self, provider_id: &str, models_url: Option<&str>) -> Vec<OpenAiListedModel> {
         match self {
             Self::CodexWrapped { models } => {
                 models.into_iter().map(OpenAiListedModel::Codex).collect()
@@ -4455,10 +4455,16 @@ impl OpenAiModelListResponse {
                 recommended,
                 free,
                 cline_pass,
-            } => cline_recommended_models_for_provider(provider_id, recommended, free, cline_pass)
-                .into_iter()
-                .map(OpenAiListedModel::Recommended)
-                .collect(),
+            } => cline_recommended_models_for_provider(
+                provider_id,
+                models_url,
+                recommended,
+                free,
+                cline_pass,
+            )
+            .into_iter()
+            .map(OpenAiListedModel::Recommended)
+            .collect(),
             Self::Bare(data) => data
                 .into_iter()
                 .map(OpenAiListedModel::Compatible)
@@ -4536,13 +4542,19 @@ impl OpenAiRecommendedModel {
 
 fn cline_recommended_models_for_provider(
     provider_id: &str,
+    models_url: Option<&str>,
     recommended: Vec<OpenAiRecommendedModel>,
     free: Vec<OpenAiRecommendedModel>,
     cline_pass: Vec<OpenAiRecommendedModel>,
 ) -> Vec<OpenAiRecommendedModel> {
     let provider_key = provider_id.trim().to_ascii_lowercase();
-    let mut selected = if provider_key.contains("cline-pass") || provider_key.contains("cline_pass")
-    {
+    let models_url_key = models_url.unwrap_or_default().trim().to_ascii_lowercase();
+    let is_cline_pass_provider = provider_key.contains("cline-pass")
+        || provider_key.contains("cline_pass")
+        || provider_key.contains("cline_api")
+        || provider_key.contains("clineapi")
+        || models_url_key.contains("/ai/cline/recommended-models");
+    let mut selected = if is_cline_pass_provider {
         cline_pass
     } else {
         let mut combined = recommended;
@@ -5238,7 +5250,7 @@ mod tests {
 
         let parsed: OpenAiModelListResponse =
             serde_json::from_str(payload).expect("parse openai model list");
-        let models = parsed.into_items("openai");
+        let models = parsed.into_items("openai", None);
         assert_eq!(models.len(), 1);
 
         let OpenAiListedModel::Compatible(model) = &models[0] else {
@@ -5274,7 +5286,7 @@ mod tests {
 
         let parsed: OpenAiModelListResponse =
             serde_json::from_str(payload).expect("parse codex model list");
-        let models = parsed.into_items("openai");
+        let models = parsed.into_items("openai", None);
         assert_eq!(models.len(), 1);
 
         let OpenAiListedModel::Codex(model) = &models[0] else {
@@ -5329,7 +5341,10 @@ mod tests {
 
         let parsed: OpenAiModelListResponse =
             serde_json::from_str(payload).expect("parse cline recommended model list");
-        let models = parsed.into_items("cline-pass::openai");
+        let models = parsed.into_items(
+            "cline_api::openai",
+            Some("https://api.cline.bot/api/v1/ai/cline/recommended-models"),
+        );
         assert_eq!(models.len(), 2);
 
         let OpenAiListedModel::Recommended(model) = &models[0] else {

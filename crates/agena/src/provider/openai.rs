@@ -444,7 +444,7 @@ impl OpenAiAdapter {
                 modes.insert(
                     "no-thinking".to_owned(),
                     ModelThinkingMode::new()
-                        .with_display_name("No Thinking")
+                        .with_display_name("Off")
                         .with_thinking(crate::provider::ThinkingRequest::Disabled)
                         .with_request_override(disabled_override),
                 );
@@ -456,7 +456,7 @@ impl OpenAiAdapter {
                 modes.insert(
                     "thinking-enabled".to_owned(),
                     ModelThinkingMode::new()
-                        .with_display_name("Thinking")
+                        .with_display_name("Think")
                         .with_description("Enable DashScope reasoning output")
                         .with_request_override(enabled_override),
                 );
@@ -469,7 +469,7 @@ impl OpenAiAdapter {
                 modes.insert(
                     "thinking-enabled".to_owned(),
                     ModelThinkingMode::new()
-                        .with_display_name("Thinking")
+                        .with_display_name("Think")
                         .with_description("Use the model's built-in reasoning output")
                         .with_request_override(enabled_override),
                 );

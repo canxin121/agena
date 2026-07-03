@@ -414,7 +414,7 @@ fn adaptive_modes_with_display(
         modes.insert(
             format!("thinking-{}", effort.as_str()),
             ModelThinkingMode::new()
-                .with_display_name(format!("Thinking {}", title_case(effort.as_str())))
+                .with_display_name(format!("Think {}", title_case(effort.as_str())))
                 .with_thinking(ThinkingRequest::Adaptive {
                     effort: Some(*effort),
                     display,
@@ -464,7 +464,7 @@ fn effort_modes(
         modes.insert(
             "no-thinking".to_owned(),
             ModelThinkingMode::new()
-                .with_display_name("No Thinking")
+                .with_display_name("Off")
                 .with_thinking(ThinkingRequest::Disabled),
         );
     }
@@ -472,7 +472,7 @@ fn effort_modes(
         modes.insert(
             format!("thinking-{}", effort.as_str()),
             ModelThinkingMode::new()
-                .with_display_name(format!("Thinking {}", title_case(effort.as_str())))
+                .with_display_name(format!("Think {}", title_case(effort.as_str())))
                 .with_thinking(ThinkingRequest::Effort { effort: *effort }),
         );
     }

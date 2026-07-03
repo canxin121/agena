@@ -2677,7 +2677,7 @@ fn validate_configured_models(
         }
         validate_configured_modes(
             provider_id,
-            format!("{scope} model `{model_id}` thinking modes").as_str(),
+            format!("{scope} model `{model_id}` think modes").as_str(),
             &configured.definition.thinking_modes,
             format!("{scope} model `{model_id}` speed modes").as_str(),
             &configured.definition.speed_modes,

@@ -4196,8 +4196,8 @@ mod tests {
         assert!(plain.contains("-=audio"));
         assert!(plain.contains("+=tools, reasoning"));
         assert!(plain.contains("-=temperature"));
-        assert!(plain.contains("thinking=medium"));
-        assert!(plain.contains("thinking modes=Medium"));
+        assert!(plain.contains("think=medium"));
+        assert!(plain.contains("think modes=Medium"));
         assert!(plain.contains("speed modes=Fast"));
         assert!(plain.contains("verbosity=medium"));
         assert!(plain.contains("parallel tools=yes"));

@@ -11123,7 +11123,15 @@ impl App {
             PROVIDER_DEFAULT_WIZARD_INHERIT,
             ui_text::t(&self.i18n, "settings-provider-default-mode-inherit-detail"),
         )];
-        items.extend(inspector_rows_to_choice_items(rows));
+        items.extend(match step {
+            ProviderDefaultWizardStep::ThinkingMode => {
+                inspector_rows_to_mode_choice_items(rows, ui_text::thinking_mode_display_value)
+            }
+            ProviderDefaultWizardStep::SpeedMode => {
+                inspector_rows_to_mode_choice_items(rows, ui_text::speed_mode_display_value)
+            }
+            _ => inspector_rows_to_choice_items(rows),
+        });
         Ok(items)
     }
 
@@ -11246,15 +11254,17 @@ impl App {
         field: RuntimeSettingSpec,
     ) -> UiResult<Vec<ChoiceItem>> {
         let mut items = match field.id {
-            RuntimeSettingId::ThinkingMode => inspector_rows_to_choice_items(
+            RuntimeSettingId::ThinkingMode => inspector_rows_to_mode_choice_items(
                 self.backend
                     .runtime_thinking_mode_rows(&self.run_options.to_request())
                     .map_err(|error| error.to_string())?,
+                ui_text::thinking_mode_display_value,
             ),
-            RuntimeSettingId::SpeedMode => inspector_rows_to_choice_items(
+            RuntimeSettingId::SpeedMode => inspector_rows_to_mode_choice_items(
                 self.backend
                     .runtime_speed_mode_rows(&self.run_options.to_request())
                     .map_err(|error| error.to_string())?,
+                ui_text::speed_mode_display_value,
             ),
             RuntimeSettingId::Verbosity => self
                 .backend
@@ -11456,7 +11466,10 @@ impl App {
                 .backend
                 .runtime_thinking_mode_rows(&self.run_options.to_request())
             {
-                Ok(rows) => Some(inspector_rows_to_choice_items(rows)),
+                Ok(rows) => Some(inspector_rows_to_mode_choice_items(
+                    rows,
+                    ui_text::thinking_mode_display_value,
+                )),
                 Err(error) => {
                     self.flash_warning(error.to_string());
                     Some(Vec::new())
@@ -11466,7 +11479,10 @@ impl App {
                 .backend
                 .runtime_speed_mode_rows(&self.run_options.to_request())
             {
-                Ok(rows) => Some(inspector_rows_to_choice_items(rows)),
+                Ok(rows) => Some(inspector_rows_to_mode_choice_items(
+                    rows,
+                    ui_text::speed_mode_display_value,
+                )),
                 Err(error) => {
                     self.flash_warning(error.to_string());
                     Some(Vec::new())
@@ -14979,10 +14995,10 @@ impl App {
         if let Some(speed_mode) = execution.execution.model_speed_mode.as_deref()
             && !speed_mode.trim().is_empty()
         {
-            parts.push(
-                self.i18n
-                    .text_args("status-part-speed", &crate::fl_args!("value" => speed_mode)),
-            );
+            parts.push(self.i18n.text_args(
+                "status-part-speed",
+                &crate::fl_args!("value" => ui_text::speed_mode_display_value(speed_mode)),
+            ));
         }
         if let Some(verbosity) = execution.execution.model_verbosity.as_deref()
             && !verbosity.trim().is_empty()
@@ -15087,7 +15103,7 @@ impl App {
             {
                 parts.push(self.i18n.text_args(
                     "session-status-speed",
-                    &crate::fl_args!("value" => speed_mode),
+                    &crate::fl_args!("value" => ui_text::speed_mode_display_value(speed_mode)),
                 ));
             }
             if !parts.is_empty() {
@@ -15120,7 +15136,7 @@ impl App {
         {
             parts.push(self.i18n.text_args(
                 "session-status-speed",
-                &crate::fl_args!("value" => speed_mode),
+                &crate::fl_args!("value" => ui_text::speed_mode_display_value(speed_mode)),
             ));
         }
         parts
@@ -16883,7 +16899,7 @@ fn provider_default_route_summary(i18n: &I18n, provider: &ProviderSummaryResourc
     {
         parts.push(i18n.text_args(
             "run-options-summary-speed",
-            &crate::fl_args!("value" => speed_mode.to_string()),
+            &crate::fl_args!("value" => ui_text::speed_mode_display_value(speed_mode)),
         ));
     }
     if let Some(verbosity) = provider
@@ -16957,7 +16973,7 @@ fn provider_default_model_detail(i18n: &I18n, model: &ProviderModel) -> String {
                 "value" => model
                     .speed_modes
                     .keys()
-                    .cloned()
+                    .map(|name| ui_text::speed_mode_display_value(name))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
@@ -17196,7 +17212,7 @@ fn agent_default_summary(i18n: &I18n, default: &agena::agents::AgentSelectionCon
     {
         parts.push(format_key_value_segment(
             ui_text::t(i18n, "inline-fact-speed").as_str(),
-            speed_mode,
+            ui_text::speed_mode_display_value(speed_mode).as_str(),
         ));
     }
     if let Some(verbosity) = default
@@ -20052,6 +20068,25 @@ fn dedupe_choice_items(items: Vec<ChoiceItem>) -> Vec<ChoiceItem> {
 fn inspector_rows_to_choice_items(rows: Vec<InspectorRow>) -> Vec<ChoiceItem> {
     rows.into_iter()
         .map(|row| choice_item(row.label, row.detail))
+        .collect()
+}
+
+fn inspector_rows_to_mode_choice_items(
+    rows: Vec<InspectorRow>,
+    display_value: fn(&str) -> String,
+) -> Vec<ChoiceItem> {
+    rows.into_iter()
+        .map(|row| {
+            let label = display_value(row.label.as_str());
+            let detail = if label == row.label {
+                row.detail
+            } else if row.detail.trim().is_empty() {
+                row.label.clone()
+            } else {
+                format!("{} · {}", row.label, row.detail)
+            };
+            choice_item_with_value(label, row.label, detail)
+        })
         .collect()
 }
 
@@ -23454,7 +23489,12 @@ impl RunOptionsState {
             RuntimeSettingId::SpeedMode => self
                 .speed_mode
                 .as_deref()
-                .map(|value| runtime_setting_override_summary(i18n, value))
+                .map(|value| {
+                    runtime_setting_override_summary(
+                        i18n,
+                        ui_text::speed_mode_display_value(value).as_str(),
+                    )
+                })
                 .unwrap_or_else(|| ui_text::t(i18n, "value-default")),
             RuntimeSettingId::Verbosity => self
                 .verbosity
@@ -23627,7 +23667,7 @@ impl RunOptionsState {
         if let Some(speed_mode) = self.speed_mode.as_ref() {
             parts.push(i18n.text_args(
                 "run-options-summary-speed",
-                &crate::fl_args!("value" => speed_mode),
+                &crate::fl_args!("value" => ui_text::speed_mode_display_value(speed_mode)),
             ));
         }
         if let Some(verbosity) = self.verbosity.as_ref() {
@@ -26762,8 +26802,8 @@ mod tests {
             defaults: agena_api::resource::ProviderDefaultsResource {
                 adapter: Some("responses".to_string()),
                 model: "gpt-5".to_string(),
-                thinking_mode: Some("high".to_string()),
-                speed_mode: Some("fast".to_string()),
+                thinking_mode: Some("thinking-high".to_string()),
+                speed_mode: Some("speed-fast".to_string()),
                 verbosity: None,
                 parallel_tool_calls: None,
             },

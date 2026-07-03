@@ -1438,7 +1438,7 @@ enum ProviderStudioFocus {
 enum ProviderStudioField {
     ProviderId,
     AuthMode,
-    CredentialIssuer,
+    AuthSubtype,
     AuthLoginMethod,
     StartAuthAction,
     ContinueAuthAction,
@@ -11545,40 +11545,51 @@ impl App {
                     ui_text::t(&self.i18n, "provider-auth-mode-api-detail"),
                 ),
                 choice_item(
-                    "gitlab_api",
-                    ui_text::t(&self.i18n, "provider-auth-mode-gitlab-api-detail"),
-                ),
-                choice_item(
                     "credential",
                     ui_text::t(&self.i18n, "provider-auth-mode-credential-detail"),
                 ),
-                choice_item(
-                    "bedrock_sigv4",
-                    ui_text::t(&self.i18n, "provider-auth-mode-bedrock-detail"),
-                ),
             ]),
-            ProviderStudioField::CredentialIssuer => Some(vec![
-                choice_item(
-                    "openai_chatgpt",
-                    ui_text::t(&self.i18n, "provider-issuer-openai-chatgpt-detail"),
-                ),
-                choice_item(
-                    "github_copilot",
-                    ui_text::t(&self.i18n, "provider-issuer-github-copilot-detail"),
-                ),
-                choice_item(
-                    "gitlab",
-                    ui_text::t(&self.i18n, "provider-issuer-gitlab-detail"),
-                ),
-                choice_item(
-                    "google_adc",
-                    ui_text::t(&self.i18n, "provider-issuer-google-adc-detail"),
-                ),
-                choice_item(
-                    "sap_ai_core",
-                    ui_text::t(&self.i18n, "provider-issuer-sap-ai-core-detail"),
-                ),
-            ]),
+            ProviderStudioField::AuthSubtype => match dialog.draft.auth_kind {
+                ProviderDraftAuthKind::Api
+                | ProviderDraftAuthKind::Gitlab
+                | ProviderDraftAuthKind::BedrockSigv4 => Some(vec![
+                    choice_item(
+                        "standard",
+                        ui_text::t(&self.i18n, "provider-auth-subtype-standard-detail"),
+                    ),
+                    choice_item(
+                        "gitlab_api",
+                        ui_text::t(&self.i18n, "provider-auth-subtype-gitlab-api-detail"),
+                    ),
+                    choice_item(
+                        "bedrock_sigv4",
+                        ui_text::t(&self.i18n, "provider-auth-subtype-bedrock-detail"),
+                    ),
+                ]),
+                ProviderDraftAuthKind::Credential(_) => Some(vec![
+                    choice_item(
+                        "openai_chatgpt",
+                        ui_text::t(&self.i18n, "provider-issuer-openai-chatgpt-detail"),
+                    ),
+                    choice_item(
+                        "github_copilot",
+                        ui_text::t(&self.i18n, "provider-issuer-github-copilot-detail"),
+                    ),
+                    choice_item(
+                        "gitlab",
+                        ui_text::t(&self.i18n, "provider-issuer-gitlab-detail"),
+                    ),
+                    choice_item(
+                        "google_adc",
+                        ui_text::t(&self.i18n, "provider-issuer-google-adc-detail"),
+                    ),
+                    choice_item(
+                        "sap_ai_core",
+                        ui_text::t(&self.i18n, "provider-issuer-sap-ai-core-detail"),
+                    ),
+                ]),
+                ProviderDraftAuthKind::Unset | ProviderDraftAuthKind::None => None,
+            },
             ProviderStudioField::AuthLoginMethod => {
                 let items = match dialog.draft.auth_kind.credential_issuer() {
                     Some(CredentialIssuer::OpenaiChatgpt) => vec![
@@ -11678,7 +11689,7 @@ impl App {
     ) -> ChoiceOverlayStyle {
         match field {
             ProviderStudioField::AuthMode
-            | ProviderStudioField::CredentialIssuer
+            | ProviderStudioField::AuthSubtype
             | ProviderStudioField::AuthLoginMethod
             | ProviderStudioField::InstanceUrl
             | ProviderStudioField::RedirectUri
@@ -12381,6 +12392,7 @@ impl App {
                     && let Some(prefill) = prefill_new_id
                 {
                     draft.provider_id = prefill;
+                    draft.normalize_shape();
                 }
                 dialog.draft = draft;
                 dialog.selection.set_top_selected(0);
@@ -13480,15 +13492,17 @@ impl App {
         match field {
             ProviderStudioField::ProviderId => {
                 dialog.draft.provider_id = value;
+                dialog.draft.normalize_shape();
+                self.refresh_provider_studio_adapter_state(dialog);
             }
             ProviderStudioField::StartAuthAction
             | ProviderStudioField::ContinueAuthAction
             | ProviderStudioField::EditAuthDetailsAction
             | ProviderStudioField::DeleteProviderAction => {}
             ProviderStudioField::AuthMode => {
-                match ProviderDraftAuthKind::parse_mode(
+                match ProviderDraftAuthKind::parse_category(
                     value.as_str(),
-                    dialog.draft.auth_kind.credential_issuer(),
+                    dialog.draft.auth_kind.clone(),
                 ) {
                     Ok(auth_kind) => {
                         dialog.draft.auth_kind = auth_kind;
@@ -13498,19 +13512,13 @@ impl App {
                     Err(error) => return Err(error.to_string()),
                 }
             }
-            ProviderStudioField::CredentialIssuer => {
-                let mode_value = if value.trim().is_empty() {
-                    "credential".to_owned()
-                } else {
-                    format!("credential:{value}")
-                };
-                match ProviderDraftAuthKind::parse_mode(
-                    mode_value.as_str(),
-                    dialog.draft.auth_kind.credential_issuer(),
+            ProviderStudioField::AuthSubtype => {
+                match ProviderDraftAuthKind::parse_subtype(
+                    value.as_str(),
+                    dialog.draft.auth_kind.clone(),
                 ) {
                     Ok(auth_kind) => {
                         dialog.draft.auth_kind = auth_kind;
-                        dialog.draft.auth.credential_issuer = value.trim().to_owned();
                         dialog.draft.normalize_shape();
                         self.refresh_provider_studio_adapter_state(dialog);
                     }
@@ -16450,7 +16458,7 @@ fn provider_studio_save_field_label(
             crate::backend::ProviderStudioSaveField::ModelId => "provider-field-model-id",
             crate::backend::ProviderStudioSaveField::AuthMode => "provider-field-auth-mode",
             crate::backend::ProviderStudioSaveField::CredentialIssuer => {
-                "provider-field-credential-issuer"
+                "provider-field-auth-subtype"
             }
         },
     )
@@ -16492,9 +16500,23 @@ fn provider_draft_auth_mode_label(i18n: &I18n, auth_kind: &ProviderDraftAuthKind
     match auth_kind {
         ProviderDraftAuthKind::Unset => ui_text::t(i18n, "provider-auth-kind-unset"),
         ProviderDraftAuthKind::None => ui_text::t(i18n, "provider-auth-kind-none"),
-        ProviderDraftAuthKind::Api => ui_text::t(i18n, "provider-auth-kind-api"),
-        ProviderDraftAuthKind::Gitlab => ui_text::t(i18n, "provider-auth-kind-gitlab"),
+        ProviderDraftAuthKind::Api
+        | ProviderDraftAuthKind::Gitlab
+        | ProviderDraftAuthKind::BedrockSigv4 => ui_text::t(i18n, "provider-auth-kind-api"),
         ProviderDraftAuthKind::Credential(_) => ui_text::t(i18n, "provider-auth-kind-credential"),
+    }
+}
+
+fn provider_draft_auth_subtype_label(i18n: &I18n, auth_kind: &ProviderDraftAuthKind) -> String {
+    match auth_kind {
+        ProviderDraftAuthKind::Unset
+        | ProviderDraftAuthKind::None
+        | ProviderDraftAuthKind::Credential(None) => String::new(),
+        ProviderDraftAuthKind::Api => ui_text::t(i18n, "provider-auth-subtype-standard-label"),
+        ProviderDraftAuthKind::Gitlab => ui_text::t(i18n, "provider-auth-kind-gitlab"),
+        ProviderDraftAuthKind::Credential(Some(issuer)) => {
+            provider_credential_issuer_label_localized(i18n, *issuer)
+        }
         ProviderDraftAuthKind::BedrockSigv4 => ui_text::t(i18n, "provider-auth-kind-bedrock"),
     }
 }
@@ -20203,7 +20225,7 @@ fn provider_studio_field_allows_clear(field: ProviderStudioField) -> bool {
     matches!(
         field,
         ProviderStudioField::AuthMode
-            | ProviderStudioField::CredentialIssuer
+            | ProviderStudioField::AuthSubtype
             | ProviderStudioField::BaseUrl
             | ProviderStudioField::InstanceUrl
             | ProviderStudioField::ApiKeyEnv
@@ -25948,7 +25970,11 @@ mod tests {
         );
         assert_eq!(
             provider_studio_field_prompt(&i18n, ProviderStudioField::AuthMode),
-            "更新 auth mode（none | api | gitlab_api | credential | bedrock_sigv4）"
+            "更新 auth mode（none | api | credential）"
+        );
+        assert_eq!(
+            provider_studio_field_prompt(&i18n, ProviderStudioField::AuthSubtype),
+            "更新 auth subtype（api：standard | gitlab_api | bedrock_sigv4；credential：openai_chatgpt | github_copilot | gitlab | google_adc | sap_ai_core）"
         );
         assert_eq!(
             provider_studio_field_prompt(&i18n, ProviderStudioField::AuthLoginMethod),
@@ -26240,7 +26266,7 @@ mod tests {
             vec![
                 ProviderStudioField::ProviderId,
                 ProviderStudioField::AuthMode,
-                ProviderStudioField::CredentialIssuer,
+                ProviderStudioField::AuthSubtype,
             ]
         );
     }

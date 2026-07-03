@@ -1426,8 +1426,14 @@ pub(super) fn provider_studio_visible_fields(
         ProviderStudioField::ProviderId,
         ProviderStudioField::AuthMode,
     ];
-    if matches!(dialog.draft.auth_kind, ProviderDraftAuthKind::Credential(_)) {
-        fields.push(ProviderStudioField::CredentialIssuer);
+    if matches!(
+        dialog.draft.auth_kind,
+        ProviderDraftAuthKind::Api
+            | ProviderDraftAuthKind::Gitlab
+            | ProviderDraftAuthKind::BedrockSigv4
+            | ProviderDraftAuthKind::Credential(_)
+    ) {
+        fields.push(ProviderStudioField::AuthSubtype);
     }
     if !provider_studio_available_login_kinds(dialog).is_empty() {
         fields.push(ProviderStudioField::AuthLoginMethod);
@@ -1458,7 +1464,7 @@ fn provider_studio_field_label_key(field: ProviderStudioField) -> &'static str {
     match field {
         ProviderStudioField::ProviderId => "provider-field-provider-id",
         ProviderStudioField::AuthMode => "provider-field-auth-mode",
-        ProviderStudioField::CredentialIssuer => "provider-field-credential-issuer",
+        ProviderStudioField::AuthSubtype => "provider-field-auth-subtype",
         ProviderStudioField::AuthLoginMethod => "provider-field-auth-login-method",
         ProviderStudioField::StartAuthAction => "provider-field-start-auth",
         ProviderStudioField::ContinueAuthAction => "provider-field-continue-auth",
@@ -1495,10 +1501,9 @@ pub(super) fn provider_studio_field_prompt(i18n: &I18n, field: ProviderStudioFie
         ProviderStudioField::AuthMode => {
             ui_text::t(i18n, "overlay-provider-studio-edit-auth-mode-prompt")
         }
-        ProviderStudioField::CredentialIssuer => ui_text::t(
-            i18n,
-            "overlay-provider-studio-edit-credential-issuer-prompt",
-        ),
+        ProviderStudioField::AuthSubtype => {
+            ui_text::t(i18n, "overlay-provider-studio-edit-auth-subtype-prompt")
+        }
         ProviderStudioField::AuthLoginMethod => ui_text::t(
             i18n,
             "overlay-provider-studio-edit-auth-login-method-prompt",
@@ -1521,7 +1526,7 @@ pub(super) fn provider_studio_field_value(
     match field {
         ProviderStudioField::ProviderId => draft.provider_id.clone(),
         ProviderStudioField::AuthMode => draft.auth_kind.mode_label().to_owned(),
-        ProviderStudioField::CredentialIssuer => draft.auth.credential_issuer.clone(),
+        ProviderStudioField::AuthSubtype => draft.auth_kind.subtype_label().to_owned(),
         ProviderStudioField::AuthLoginMethod => draft
             .interactive_login_kind()
             .map(|kind| kind.token().to_owned())
@@ -1572,9 +1577,13 @@ pub(super) fn provider_studio_field_editable(
     match field {
         ProviderStudioField::ProviderId => dialog.draft.source_provider_id.is_none(),
         ProviderStudioField::AuthMode => true,
-        ProviderStudioField::CredentialIssuer => {
-            matches!(dialog.draft.auth_kind, ProviderDraftAuthKind::Credential(_))
-        }
+        ProviderStudioField::AuthSubtype => matches!(
+            dialog.draft.auth_kind,
+            ProviderDraftAuthKind::Api
+                | ProviderDraftAuthKind::Gitlab
+                | ProviderDraftAuthKind::BedrockSigv4
+                | ProviderDraftAuthKind::Credential(_)
+        ),
         ProviderStudioField::AuthLoginMethod => {
             provider_studio_available_login_kinds(dialog).len() > 1
         }

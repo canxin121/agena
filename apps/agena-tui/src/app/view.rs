@@ -3858,12 +3858,9 @@ fn provider_studio_main_field_display(
             .interactive_login_kind()
             .map(|kind| provider_studio_auth_login_kind_label(i18n, kind))
             .unwrap_or_else(|| provider_studio_main_field_value(i18n, dialog, field)),
-        ProviderStudioField::CredentialIssuer => dialog
-            .draft
-            .auth_kind
-            .credential_issuer()
-            .map(|issuer| provider_credential_issuer_label_localized(i18n, issuer))
-            .unwrap_or_else(|| provider_studio_main_field_value(i18n, dialog, field)),
+        ProviderStudioField::AuthSubtype => {
+            provider_draft_auth_subtype_label(i18n, &dialog.draft.auth_kind)
+        }
         _ => provider_studio_main_field_value(i18n, dialog, field),
     };
     match field {

@@ -1290,6 +1290,8 @@ pub struct AmazonBedrockProviderOptions;
 pub enum ProviderCapabilityFamilyConfig {
     #[serde(rename = "openai")]
     OpenAi,
+    #[serde(rename = "openai_compatible")]
+    OpenAiCompatible,
     Anthropic,
     Gemini,
     #[serde(rename = "bedrock")]
@@ -1301,6 +1303,7 @@ impl From<ProviderCapabilityFamilyConfig> for CapabilityFamily {
     fn from(value: ProviderCapabilityFamilyConfig) -> Self {
         match value {
             ProviderCapabilityFamilyConfig::OpenAi => CapabilityFamily::OpenAi,
+            ProviderCapabilityFamilyConfig::OpenAiCompatible => CapabilityFamily::OpenAiCompatible,
             ProviderCapabilityFamilyConfig::Anthropic => CapabilityFamily::Anthropic,
             ProviderCapabilityFamilyConfig::Gemini => CapabilityFamily::Gemini,
             ProviderCapabilityFamilyConfig::Bedrock => CapabilityFamily::Bedrock,

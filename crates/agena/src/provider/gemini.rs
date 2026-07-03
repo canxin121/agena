@@ -12,7 +12,7 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         ManagedCredential, ModelRuntime, ProviderModel, ReasoningEffort, ResponseFormat,
-        ThinkingRequest, should_retry_credential, sse, utils, wire_message,
+        ThinkingRequest, prompt_tools, should_retry_credential, sse, utils, wire_message,
     },
     role::Role,
 };
@@ -221,6 +221,45 @@ impl GeminiAdapter {
         (system_chunks, contents)
     }
 
+    fn uses_prompt_tool_protocol(request: &CompletionRequest) -> bool {
+        prompt_tools::request_has_tool_history(request)
+            || request
+                .tools
+                .iter()
+                .any(|tool| !gemini_native_tool_name_is_exact(tool.exposed_name.as_str()))
+    }
+
+    fn request_prompt_tool_system_and_contents(
+        request: &CompletionRequest,
+    ) -> (Vec<String>, Vec<GeminiContent>) {
+        let mut system_chunks = Vec::new();
+        if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
+            system_chunks.push(system.clone());
+        }
+        system_chunks.push(prompt_tools::system_prompt(request.tools.as_slice()));
+
+        let mut contents = Vec::new();
+        for msg in &request.messages {
+            let text = prompt_tools::message_text(msg);
+            if text.trim().is_empty() {
+                continue;
+            }
+            match msg.role {
+                Role::System => system_chunks.push(text),
+                Role::Assistant => contents.push(GeminiContent {
+                    role: Some("model".to_owned()),
+                    parts: vec![GeminiPart::text(text)],
+                }),
+                Role::User => contents.push(GeminiContent {
+                    role: Some("user".to_owned()),
+                    parts: vec![GeminiPart::text(text)],
+                }),
+            }
+        }
+
+        (system_chunks, contents)
+    }
+
     fn generation_config(
         model: &str,
         request: &CompletionRequest,
@@ -246,7 +285,12 @@ impl GeminiAdapter {
         request: &CompletionRequest,
         stream: Option<bool>,
     ) -> Result<GeminiGenerateRequest, AppError> {
-        let (system_chunks, contents) = Self::request_system_and_contents(request);
+        let prompt_tool_protocol = Self::uses_prompt_tool_protocol(request);
+        let (system_chunks, contents) = if prompt_tool_protocol {
+            Self::request_prompt_tool_system_and_contents(request)
+        } else {
+            Self::request_system_and_contents(request)
+        };
         Ok(GeminiGenerateRequest {
             system_instruction: (!system_chunks.is_empty()).then(|| GeminiInstruction {
                 parts: vec![GeminiPart::text(system_chunks.join("\n\n"))],
@@ -254,7 +298,11 @@ impl GeminiAdapter {
             contents,
             generation_config: Self::generation_config(request.model.as_str(), request, None),
             stream,
-            tools: build_gemini_tools(request)?,
+            tools: if prompt_tool_protocol {
+                build_gemini_native_tools_only(request)?
+            } else {
+                build_gemini_tools(request)?
+            },
             tool_config: None,
         })
     }
@@ -423,10 +471,7 @@ impl GeminiAdapter {
                 name,
                 arguments_json,
                 ..
-            } => GeminiPart::function_call(
-                crate::tool::model_safe_tool_name(name),
-                parse_json_or_object(arguments_json),
-            ),
+            } => GeminiPart::function_call(name.clone(), parse_json_or_object(arguments_json)),
             wire_message::WirePart::ToolResult {
                 tool_name,
                 output_json,
@@ -838,6 +883,53 @@ impl GeminiAdapter {
         let stream = ModelRuntime::complete_stream(self, request).await?;
         utils::aggregate_stream(PROVIDER_ID, fallback_model, stream).await
     }
+
+    fn completion_response_stream(
+        response: CompletionResponse,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>> {
+        let provider_id = response.provider_id.clone();
+        let model = response.model.clone();
+        let mut events = Vec::new();
+        if !response.text.is_empty() {
+            events.push(Ok(CompletionStreamEvent::TextDelta {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                delta: response.text,
+            }));
+        }
+        if let Some(reasoning) = response.reasoning_text
+            && !reasoning.is_empty()
+        {
+            events.push(Ok(CompletionStreamEvent::ThinkingDelta {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                delta: reasoning,
+            }));
+        }
+        for call in response.tool_calls {
+            let crate::provider::CompletionToolCall::Function {
+                id,
+                name,
+                arguments_json,
+            } = call;
+            events.push(Ok(CompletionStreamEvent::ToolCallSnapshot {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                stream_key: id.clone(),
+                id: Some(id),
+                name: Some(name),
+                arguments_json,
+            }));
+        }
+        events.push(Ok(CompletionStreamEvent::Completed {
+            provider_id,
+            model,
+            finish_reason: response.finish_reason,
+            usage: response.usage,
+            provider_metadata: response.provider_metadata,
+        }));
+        Box::pin(futures_util::stream::iter(events))
+    }
 }
 
 #[async_trait]
@@ -859,7 +951,11 @@ impl ModelRuntime for GeminiAdapter {
         _adapter_id: Option<&crate::model::AdapterId>,
         request: &CompletionRequest,
     ) -> Result<(), AppError> {
-        build_gemini_tools(request).map(|_| ())
+        if GeminiAdapter::uses_prompt_tool_protocol(request) {
+            build_gemini_native_tools_only(request).map(|_| ())
+        } else {
+            build_gemini_tools(request).map(|_| ())
+        }
     }
 
     fn prompt_cache_shape(&self, _model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
@@ -949,6 +1045,7 @@ impl ModelRuntime for GeminiAdapter {
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let model = request.model.clone();
         let stream_fallback_request = request.clone();
+        let prompt_tool_protocol = Self::uses_prompt_tool_protocol(&request);
         let body = self.generate_request(&request, None)?;
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -992,16 +1089,31 @@ impl ModelRuntime for GeminiAdapter {
         )
         .await?;
         let candidate = payload.candidates.first();
-        let text = candidate.map(GeminiCandidate::text).unwrap_or_default();
+        let mut text = candidate.map(GeminiCandidate::text).unwrap_or_default();
         let reasoning_text = candidate.and_then(GeminiCandidate::reasoning_text);
-        let tool_calls = candidate
+        let mut tool_calls = candidate
             .map(GeminiCandidate::function_calls)
             .unwrap_or_default();
+        if prompt_tool_protocol {
+            let (clean_text, prompt_calls) = prompt_tools::parse_tool_calls(text.as_str());
+            text = clean_text;
+            tool_calls.extend(prompt_calls);
+        }
 
-        let finish_reason = candidate.and_then(|c| c.finish_reason.clone());
+        let finish_reason = if prompt_tool_protocol && !tool_calls.is_empty() {
+            Some(CompletionFinishReason::ToolCalls)
+        } else {
+            CompletionFinishReason::from_provider(
+                candidate.and_then(|c| c.finish_reason.as_deref()),
+            )
+        };
         let usage = payload.usage_metadata.map(map_gemini_usage);
 
-        if text.is_empty() && tool_calls.is_empty() && reasoning_text.is_none() {
+        if text.is_empty()
+            && tool_calls.is_empty()
+            && reasoning_text.is_none()
+            && !prompt_tool_protocol
+        {
             return self
                 .complete_by_aggregating_stream(stream_fallback_request)
                 .await;
@@ -1012,7 +1124,7 @@ impl ModelRuntime for GeminiAdapter {
             model,
             text,
             reasoning_text,
-            finish_reason: CompletionFinishReason::from_provider(finish_reason.as_deref()),
+            finish_reason,
             tool_calls,
             usage,
             provider_metadata: payload
@@ -1031,6 +1143,11 @@ impl ModelRuntime for GeminiAdapter {
         AppError,
     > {
         let model = request.model.clone();
+
+        if Self::uses_prompt_tool_protocol(&request) {
+            let response = self.complete(request).await?;
+            return Ok(Self::completion_response_stream(response));
+        }
 
         if matches!(self.stream_mode, GeminiStreamMode::RealtimeWebSocket)
             && !Self::request_contains_tool_results(&request)
@@ -1220,8 +1337,21 @@ fn gemini_tool_response_name(tool_name: &str) -> String {
     if trimmed.is_empty() {
         "tool_result".to_owned()
     } else {
-        crate::tool::model_safe_tool_name(trimmed)
+        trimmed.to_owned()
     }
+}
+
+fn gemini_native_tool_name_is_exact(name: &str) -> bool {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.len() > 64 {
+        return false;
+    }
+    let mut bytes = trimmed.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
 
 fn gemini_thinking_config(
@@ -1754,14 +1884,22 @@ fn build_gemini_tools(
         let function_declarations = request
             .tools
             .iter()
-            .map(|tool| GeminiFunctionDeclaration {
-                name: crate::tool::model_safe_tool_name(tool.exposed_name.as_str()),
-                description: tool.description_text().to_string(),
-                parameters: sanitize_function_parameters(&crate::tool::model_safe_tool_schema(
-                    &tool.sanitized_input_schema(),
-                )),
+            .map(|tool| {
+                if !gemini_native_tool_name_is_exact(tool.exposed_name.as_str()) {
+                    return Err(AppError::Config(format!(
+                        "gemini function tool name `{}` cannot be represented natively; prompt-tool protocol should handle it instead",
+                        tool.exposed_name
+                    )));
+                }
+                Ok(GeminiFunctionDeclaration {
+                    name: tool.exposed_name.clone(),
+                    description: tool.description_text().to_string(),
+                    parameters: sanitize_function_parameters(&crate::tool::model_safe_tool_schema(
+                        &tool.sanitized_input_schema(),
+                    )),
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, AppError>>()?;
         let mut map = serde_json::Map::new();
         map.insert(
             "functionDeclarations".to_owned(),
@@ -1851,6 +1989,14 @@ fn build_gemini_tools(
     }
 
     Ok(Some(tools))
+}
+
+fn build_gemini_native_tools_only(
+    request: &CompletionRequest,
+) -> Result<Option<Vec<serde_json::Value>>, AppError> {
+    let mut native_only = request.clone();
+    native_only.tools.clear();
+    build_gemini_tools(&native_only)
 }
 
 fn map_gemini_usage(u: GeminiUsageMetadata) -> crate::provider::CompletionUsage {
@@ -2002,6 +2148,45 @@ fn clamp_u64_to_u32(value: u64) -> u32 {
 mod tests {
     use super::*;
 
+    fn test_completion_request(messages: Vec<Message>) -> CompletionRequest {
+        CompletionRequest {
+            model: ModelId::new("gemini-2.5-pro"),
+            system: None,
+            messages,
+            tools: Vec::new(),
+            native_tools: crate::config::ProviderNativeToolsConfig::default(),
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            verbosity: None,
+            response_format: None,
+            responses_api_metadata: None,
+            request_override: crate::model::ModelSpeedModeRequestOverride::default(),
+        }
+    }
+
+    fn test_tool(plugin_name: &str, tool_name: &str) -> crate::plugin::registry::RegisteredTool {
+        crate::plugin::registry::RegisteredTool::new(
+            plugin_name,
+            crate::plugin::sdk::PluginToolDecl::new(
+                tool_name,
+                serde_json::json!({
+                    "type": "object",
+                    "properties": { "query": { "type": "string" } },
+                    "required": ["query"]
+                }),
+            )
+            .description("Run the test tool."),
+        )
+    }
+
     #[test]
     fn gemini_model_parses_token_limits_from_list_models() {
         let payload = r#"{
@@ -2086,5 +2271,106 @@ mod tests {
             request.headers().get("x-goog-api-key").is_none(),
             "official realtime websocket should not send x-goog-api-key header"
         );
+    }
+
+    #[test]
+    fn gemini_native_tool_name_rules_accept_dotted_subcommands() {
+        assert!(gemini_native_tool_name_is_exact("web.run"));
+        assert!(gemini_native_tool_name_is_exact(
+            "streaming-fixture.stream_fixture.count"
+        ));
+        assert!(!gemini_native_tool_name_is_exact("mcp:docs.search"));
+
+        assert!(!gemini_native_tool_name_is_exact("1bad.run"));
+        assert!(!gemini_native_tool_name_is_exact(".bad"));
+        assert!(!gemini_native_tool_name_is_exact("bad/slash"));
+        assert!(!gemini_native_tool_name_is_exact(&format!(
+            "tool.{}",
+            "x".repeat(65)
+        )));
+    }
+
+    #[test]
+    fn gemini_native_tools_keep_multi_dot_names_when_provider_valid() {
+        let adapter = GeminiAdapter::new(
+            reqwest::Client::new(),
+            "test-token",
+            "https://generativelanguage.googleapis.com/v1beta",
+            "gemini-2.5-pro",
+        );
+        let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
+        request.tools = vec![test_tool("streaming-fixture", "stream_fixture.count")];
+
+        let body = adapter
+            .generate_request(&request, None)
+            .expect("gemini request should build");
+        let tools = body.tools.expect("native Gemini tools should be present");
+
+        assert_eq!(
+            tools[0]["functionDeclarations"][0]["name"],
+            serde_json::json!("streaming-fixture.stream_fixture.count")
+        );
+        assert!(body.system_instruction.is_none());
+    }
+
+    #[test]
+    fn gemini_prompt_tool_protocol_exposes_exact_invalid_native_names() {
+        let adapter = GeminiAdapter::new(
+            reqwest::Client::new(),
+            "test-token",
+            "https://generativelanguage.googleapis.com/v1beta",
+            "gemini-2.5-pro",
+        );
+        let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
+        request.tools = vec![test_tool(
+            "fixture",
+            "tool_name_that_is_long_enough_to_exceed_the_gemini_native_limit",
+        )];
+        let exposed_name = request.tools[0].exposed_name.clone();
+
+        let body = adapter
+            .generate_request(&request, None)
+            .expect("gemini prompt-tool request should build");
+        let system = body
+            .system_instruction
+            .as_ref()
+            .and_then(|instruction| instruction.parts.first())
+            .and_then(|part| part.text.as_deref())
+            .expect("prompt-tool system prompt should be present");
+        let body_json =
+            serde_json::to_value(&body).expect("gemini prompt-tool body should serialize");
+
+        assert_eq!(body.tools, None);
+        assert!(exposed_name.len() > 64);
+        assert!(system.contains(format!("`{exposed_name}`").as_str()));
+        assert!(system.contains("Tool names are exact and may contain dots"));
+        assert!(!body_json.to_string().contains("functionDeclarations"));
+    }
+
+    #[test]
+    fn gemini_prompt_tool_protocol_handles_exact_names_with_colons() {
+        let adapter = GeminiAdapter::new(
+            reqwest::Client::new(),
+            "test-token",
+            "https://generativelanguage.googleapis.com/v1beta",
+            "gemini-2.5-pro",
+        );
+        let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
+        let mut tool = test_tool("fixture", "search");
+        tool.exposed_name = "mcp:docs.search".to_owned();
+        request.tools = vec![tool];
+
+        let body = adapter
+            .generate_request(&request, None)
+            .expect("gemini prompt-tool request should build");
+        let system = body
+            .system_instruction
+            .as_ref()
+            .and_then(|instruction| instruction.parts.first())
+            .and_then(|part| part.text.as_deref())
+            .expect("prompt-tool system prompt should be present");
+
+        assert_eq!(body.tools, None);
+        assert!(system.contains("`mcp:docs.search`"));
     }
 }

@@ -355,7 +355,14 @@ mod tests {
             },
         );
 
-        assert_eq!(decl.aliases, vec!["sec-review".to_string()]);
+        assert_eq!(
+            decl.aliases,
+            vec![
+                "security-review".to_string(),
+                "sec-review".to_string(),
+                "sec review".to_string()
+            ]
+        );
     }
 
     #[test]

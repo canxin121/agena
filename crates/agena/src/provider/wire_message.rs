@@ -361,7 +361,10 @@ fn structured_web_search_output(exec: &OperationPart) -> Option<String> {
 }
 
 fn structured_web_crawl_output(exec: &OperationPart) -> Option<String> {
-    if !matches!(exec.invocation.name.as_str(), "agena_web__crawl" | "crawl") {
+    if !matches!(
+        exec.invocation.name.as_str(),
+        "web.crawl" | "agena_web__crawl" | "crawl"
+    ) {
         return None;
     }
 
@@ -519,7 +522,7 @@ mod tests {
     fn project_structures_local_web_search_results_for_model() {
         let created_at = Utc::now();
         let invocation = ToolInvocation::new(
-            "agena_web__search",
+            "web.search",
             StructuredObject::try_from(json!({ "query": "OpenAI Responses API" }))
                 .expect("tool input"),
         );
@@ -591,7 +594,7 @@ mod tests {
     fn project_structures_local_web_crawl_results_for_model() {
         let created_at = Utc::now();
         let invocation = ToolInvocation::new(
-            "agena_web__crawl",
+            "web.crawl",
             StructuredObject::try_from(json!({ "start_url": "https://example.com/docs" }))
                 .expect("tool input"),
         );

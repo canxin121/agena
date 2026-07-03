@@ -4746,7 +4746,7 @@ mod tests {
                 .event
                 .as_ref()
                 .map(|event| event.exposed_name.as_str()),
-            Some("fixture_plugin__echo")
+            Some("fixture_plugin.echo")
         );
 
         let updated = handle

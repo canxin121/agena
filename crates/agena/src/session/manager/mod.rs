@@ -989,7 +989,10 @@ fn structured_web_crawl_results_block(
     payload_tool_name: &str,
     details: &ToolOutput,
 ) -> Option<OperationBlock> {
-    if payload_tool_name != "agena_web__crawl" && payload_tool_name != "crawl" {
+    if payload_tool_name != "web.crawl"
+        && payload_tool_name != "agena_web__crawl"
+        && payload_tool_name != "crawl"
+    {
         return None;
     }
 

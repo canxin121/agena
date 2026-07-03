@@ -111,7 +111,7 @@ pub(crate) fn tool_catalog_plugin_config_schema() -> serde_json::Value {
         (
             "/properties/search",
             "Search",
-            "Default search behavior for agena_catalog__tools with action=search.",
+            "Default search behavior for tools with action=search.",
         ),
         (
             "/properties/search/properties/default_limit",
@@ -126,7 +126,7 @@ pub(crate) fn tool_catalog_plugin_config_schema() -> serde_json::Value {
         (
             "/properties/help",
             "Help",
-            "Defaults for agena_catalog__tools with action=help.",
+            "Defaults for tools with action=help.",
         ),
         (
             "/properties/help/properties/include_schema_by_default",
@@ -2136,7 +2136,7 @@ impl WorkflowPlugin {
                 r#"- {"action":"usage"} or {}"#,
                 "Examples:",
                 r#"- Search: {"action":"search","query":"web","limit":8}"#,
-                r#"- Help: {"action":"help","tool":"agena_web__search"}"#,
+                r#"- Help: {"action":"help","tool":"web.search"}"#,
                 "Notes:",
                 "This command only inspects tool help; call the target tool directly to execute it.",
             ]
@@ -2601,14 +2601,14 @@ mod tests {
     #[test]
     fn tools_help_accepts_tool_without_action() {
         let (action, action_input) = resolve_tools_tool_input(json!({
-            "tool": "  agena_web__search  ",
+            "tool": "  web.search  ",
             "include_schema": false
         }))
         .expect("tool-only tools input should infer help");
 
         assert_eq!(action, "help");
         let parsed: ToolsHelpInput = serde_json::from_value(action_input).expect("help input");
-        assert_eq!(parsed.tool, "agena_web__search");
+        assert_eq!(parsed.tool, "web.search");
         assert_eq!(parsed.include_schema, Some(false));
     }
 
@@ -2733,7 +2733,7 @@ mod tests {
     fn tools_help_ignores_search_only_noise_fields() {
         let (action, action_input) = resolve_tools_tool_input(json!({
             "action": "help",
-            "tool": "agena_web__search",
+            "tool": "web.search",
             "query": "web",
             "limit": 10,
             "include_schema": true
@@ -2742,7 +2742,7 @@ mod tests {
 
         assert_eq!(action, "help");
         let parsed: ToolsHelpInput = serde_json::from_value(action_input).expect("help input");
-        assert_eq!(parsed.tool, "agena_web__search");
+        assert_eq!(parsed.tool, "web.search");
         assert_eq!(parsed.include_schema, Some(true));
     }
 

@@ -3540,7 +3540,7 @@ fn validate_plugin_manifest_value(
         push_error(
             output,
             "manifest.name.invalid",
-            "manifest name must not contain `/`; exposed tool names use plugin__tool",
+            "manifest name must not contain `/`; exposed tool names use dotted segments",
             Some(format!("{path}.name")),
         );
     }
@@ -3686,12 +3686,12 @@ fn validate_tool_segment(
         push_error(
             output,
             "tool.name.invalid",
-            "tool name must not contain `/`; exposed tool names use plugin__tool",
+            "tool name must not contain `/`; exposed tool names use dotted segments",
             Some(path),
         );
     }
     let exposed = safe_exposed_tool_name(plugin_name, tool_name);
-    if exposed == "tool__tool" {
+    if exposed == "tool" || exposed.ends_with(".tool") {
         push_warning(
             output,
             "tool.name.normalized_empty",
@@ -3771,11 +3771,11 @@ fn validate_ui_action_tool(
             push_error(
                 output,
                 "ui.action.tool.invalid",
-                "UI action tool must use the local tool name or exposed plugin__tool name, not plugin/tool",
+                "UI action tool must use the local tool name or exposed dotted tool name, not plugin/tool",
                 Some(format!("{path}.tool")),
             );
         }
-        if !known_tools.contains(tool.as_str()) && !tool.contains("__") {
+        if !known_tools.contains(tool.as_str()) && !tool.contains("__") && !tool.contains('.') {
             push_warning(
                 output,
                 "ui.action.tool.unknown",
@@ -4284,11 +4284,13 @@ fn warn_marketplace_fields(
 }
 
 fn safe_exposed_tool_name(plugin_name: &str, tool_name: &str) -> String {
-    format!(
-        "{}__{}",
-        crate::plugin::registry::exposed_tool_name_segment(plugin_name),
-        crate::plugin::registry::exposed_tool_name_segment(tool_name),
-    )
+    if plugin_name.trim().is_empty() || tool_name.trim().is_empty() {
+        return "tool".to_string();
+    }
+    if plugin_name.contains('/') || tool_name.contains('/') {
+        return "tool".to_string();
+    }
+    crate::plugin::registry::exposed_tool_name(plugin_name, tool_name)
 }
 
 fn push_error(
@@ -5040,7 +5042,7 @@ mod tests {
                 "hooks": ["tool.invoke"],
                 "tools": [
                     {
-                        "name": "plan.get",
+                        "name": "plan@get",
                         "input_schema": { "type": "object" },
                         "concurrency_safe": false
                     },

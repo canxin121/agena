@@ -1,5 +1,6 @@
-//! Plugin tool name registry. Model-visible tool names are always
-//! `plugin__tool`, with each segment normalized to ASCII words joined by `_`.
+//! Plugin tool name registry. Model-visible tool names use dotted names such as
+//! `fs.read` and `plan.update`, with each dotted segment normalized to a
+//! provider-friendly ASCII identifier.
 
 use std::collections::BTreeMap;
 
@@ -10,8 +11,7 @@ use crate::sdk::{HostCapability, PluginToolDecl, ToolDescriptionMode};
 
 #[derive(Debug, Clone)]
 pub struct PluginToolRegistry {
-    /// `exposed_name -> tool`. `exposed_name` is the name shown
-    /// to the model and is always `plugin__tool`.
+    /// `exposed_name -> tool`. `exposed_name` is the name shown to the model.
     by_exposed: BTreeMap<String, RegisteredTool>,
     /// `alias_exposed_name -> canonical_exposed_name`.
     aliases_by_exposed: BTreeMap<String, String>,
@@ -333,11 +333,21 @@ impl PluginToolRegistry {
 pub fn exposed_tool_name(plugin_name: &str, tool_name: &str) -> String {
     assert_valid_tool_namespace(plugin_name, "plugin name");
     assert_valid_tool_namespace(tool_name, "tool name");
-    format!(
-        "{}__{}",
-        exposed_tool_name_segment(plugin_name),
-        exposed_tool_name_segment(tool_name)
-    )
+    let dotted_tool_name = exposed_dotted_tool_name(tool_name);
+    let plugin_prefix = exposed_plugin_prefix(plugin_name);
+    if dotted_tool_name == plugin_prefix {
+        return dotted_tool_name;
+    }
+    if builtin_tool_name_can_stand_alone(plugin_prefix.as_str(), dotted_tool_name.as_str()) {
+        return dotted_tool_name;
+    }
+    if let Some(tail) = dotted_tool_name
+        .strip_prefix(plugin_prefix.as_str())
+        .and_then(|tail| tail.strip_prefix('.'))
+    {
+        return format!("{plugin_prefix}.{tail}");
+    }
+    format!("{plugin_prefix}.{dotted_tool_name}")
 }
 
 pub fn exposed_tool_name_segment(value: &str) -> String {
@@ -346,7 +356,7 @@ pub fn exposed_tool_name_segment(value: &str) -> String {
     let mut previous_was_separator = false;
 
     for ch in trimmed.chars() {
-        if ch.is_ascii_alphanumeric() {
+        if ch.is_ascii_alphanumeric() || ch == '-' {
             out.push(ch);
             previous_was_separator = false;
         } else if !previous_was_separator {
@@ -364,10 +374,73 @@ pub fn exposed_tool_name_segment(value: &str) -> String {
     if out.is_empty() {
         out.push_str("tool");
     }
-    if out.bytes().next().is_some_and(|byte| byte.is_ascii_digit()) {
+    if out
+        .bytes()
+        .next()
+        .is_some_and(|byte| !byte.is_ascii_alphabetic() && byte != b'_')
+    {
         out.insert(0, '_');
     }
     out
+}
+
+fn exposed_plugin_prefix(plugin_name: &str) -> String {
+    let trimmed = plugin_name.trim();
+    let trimmed = trimmed.strip_prefix("agena.").unwrap_or(trimmed);
+    exposed_flat_tool_name(trimmed)
+}
+
+fn exposed_dotted_tool_name(value: &str) -> String {
+    let parts = value
+        .trim()
+        .split('.')
+        .map(exposed_tool_name_segment)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        "tool".to_owned()
+    } else {
+        parts.join(".")
+    }
+}
+
+fn exposed_flat_tool_name(value: &str) -> String {
+    let parts = value
+        .trim()
+        .split('.')
+        .map(exposed_tool_name_segment)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        "tool".to_owned()
+    } else {
+        parts.join("_")
+    }
+}
+
+fn builtin_tool_name_can_stand_alone(plugin_prefix: &str, tool_name: &str) -> bool {
+    match plugin_prefix {
+        "catalog" => {
+            tool_name == "tools"
+                || tool_name == "tool.help"
+                || tool_name == "tool_catalog"
+                || tool_name.starts_with("tools.")
+        }
+        "runtime" => {
+            matches!(tool_name, "agent" | "session" | "user")
+                || tool_name.starts_with("agent.")
+                || tool_name.starts_with("session.")
+                || tool_name.starts_with("user.")
+        }
+        "tasks" => tool_name == "task" || tool_name.starts_with("task."),
+        "cron" => tool_name == "schedule" || tool_name.starts_with("schedule."),
+        "mcp" => {
+            tool_name.starts_with("resources.")
+                || tool_name.starts_with("prompts.")
+                || tool_name.starts_with("tools.")
+        }
+        _ => false,
+    }
 }
 
 fn assert_valid_tool_namespace(value: &str, label: &str) {
@@ -377,7 +450,7 @@ fn assert_valid_tool_namespace(value: &str, label: &str) {
     );
     assert!(
         !value.contains('/'),
-        "{label} `{value}` must not contain `/`; model-visible tool names use `plugin__tool`"
+        "{label} `{value}` must not contain `/`; model-visible tool names use dotted segments"
     );
 }
 
@@ -421,7 +494,7 @@ mod tests {
         );
 
         let tool = registry
-            .lookup_tool("fixture__inspect")
+            .lookup_tool("fixture.inspect")
             .expect("tool should be registered");
         assert_eq!(tool.decl.description_mode, Some(ToolDescriptionMode::Brief));
         assert_eq!(tool.decl.ui_display_mode, Some(UiTextDisplayMode::Summary));
@@ -443,7 +516,7 @@ mod tests {
         );
 
         let tool = registry
-            .lookup_tool("fixture__inspect")
+            .lookup_tool("fixture.inspect")
             .expect("tool should be registered");
         assert_eq!(
             tool.decl.description_mode,
@@ -468,37 +541,34 @@ mod tests {
         );
 
         let canonical = registry
-            .lookup_tool("fixture__inspect")
+            .lookup_tool("fixture.inspect")
             .expect("canonical tool should be registered");
-        assert_eq!(canonical.exposed_name, "fixture__inspect");
+        assert_eq!(canonical.exposed_name, "fixture.inspect");
         assert_eq!(
             canonical.alias_exposed_names(),
-            vec!["fixture__i".to_string(), "fixture__show".to_string()]
+            vec!["fixture.i".to_string(), "fixture.show".to_string()]
         );
 
         let alias = registry
-            .lookup_tool("fixture__i")
+            .lookup_tool("fixture.i")
             .expect("alias should resolve to canonical tool");
-        assert_eq!(alias.exposed_name, "fixture__inspect");
+        assert_eq!(alias.exposed_name, "fixture.inspect");
         assert_eq!(alias.original_name, "inspect");
 
         let removed = registry
-            .remove_exposed_from_plugin("plugin-id", "fixture__show")
+            .remove_exposed_from_plugin("plugin-id", "fixture.show")
             .expect("alias removal should remove canonical tool");
-        assert_eq!(removed.exposed_name, "fixture__inspect");
-        assert!(registry.lookup_tool("fixture__inspect").is_none());
-        assert!(registry.lookup_tool("fixture__i").is_none());
+        assert_eq!(removed.exposed_name, "fixture.inspect");
+        assert!(registry.lookup_tool("fixture.inspect").is_none());
+        assert!(registry.lookup_tool("fixture.i").is_none());
     }
 
     #[test]
-    fn exposed_tool_names_use_double_underscore_between_normalized_segments() {
-        assert_eq!(
-            exposed_tool_name("agena.plan", "plan.set"),
-            "agena_plan__plan_set"
-        );
+    fn exposed_tool_names_use_dotted_normalized_segments() {
+        assert_eq!(exposed_tool_name("agena.plan", "plan.set"), "plan.set");
         assert_eq!(
             exposed_tool_name("streaming-fixture", "stream_fixture.count"),
-            "streaming_fixture__stream_fixture_count"
+            "streaming-fixture.stream_fixture.count"
         );
     }
 }

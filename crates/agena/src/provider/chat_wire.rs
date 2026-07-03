@@ -168,23 +168,6 @@ pub(crate) struct ChatFunctionDefinition {
     pub strict: bool,
 }
 
-pub(crate) fn tools_to_chat_definitions(
-    tools: &[crate::plugin::registry::RegisteredTool],
-) -> Vec<ChatToolDefinition> {
-    tools
-        .iter()
-        .map(|tool| ChatToolDefinition {
-            kind: "function".to_owned(),
-            function: ChatFunctionDefinition {
-                name: crate::tool::model_safe_tool_name(tool.exposed_name.as_str()),
-                description: tool.description_text().to_string(),
-                parameters: crate::tool::model_safe_tool_schema(&tool.sanitized_input_schema()),
-                strict: tool.decl.strict,
-            },
-        })
-        .collect()
-}
-
 // ─── Response format ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -836,7 +819,7 @@ fn assistant_content_and_tool_calls(
                     kind: "function".to_owned(),
                     id: id.clone(),
                     function: ChatFunctionCallRequest {
-                        name: crate::tool::model_safe_tool_name(name),
+                        name: name.clone(),
                         arguments: arguments_json.clone(),
                     },
                 });

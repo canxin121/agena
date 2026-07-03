@@ -907,6 +907,7 @@ pub struct ResponsesToolEvent {
     pub item_id: Option<String>,
     pub call_id: Option<String>,
     pub id: Option<String>,
+    pub namespace: Option<String>,
     pub name: Option<String>,
     pub arguments: Option<String>,
 }
@@ -999,6 +1000,7 @@ pub fn responses_tool_event(
             item_id: item_id.clone(),
             call_id: call_id.clone(),
             id,
+            namespace: normalize_optional_text(parsed.namespace),
             name: normalize_optional_text(parsed.name),
             arguments: optional_non_empty(Some(parsed.delta)),
         }));
@@ -1020,6 +1022,7 @@ pub fn responses_tool_event(
             item_id: item_id.clone(),
             call_id: call_id.clone(),
             id,
+            namespace: normalize_optional_text(parsed.namespace),
             name: normalize_optional_text(parsed.name),
             arguments: optional_non_empty(Some(parsed.arguments)),
         }));
@@ -1045,6 +1048,7 @@ pub fn responses_tool_event(
             item_id: item_id.clone(),
             call_id: call_id.clone(),
             id,
+            namespace: normalize_optional_text(parsed.item.namespace),
             name: normalize_optional_text(parsed.item.name),
             arguments: optional_non_empty(parsed.item.arguments),
         }));
@@ -1285,6 +1289,8 @@ struct ResponsesFunctionArgumentsDeltaPayload {
     #[serde(default)]
     item_id: Option<String>,
     #[serde(default)]
+    namespace: Option<String>,
+    #[serde(default)]
     name: Option<String>,
 }
 
@@ -1297,6 +1303,8 @@ struct ResponsesFunctionArgumentsDonePayload {
     call_id: Option<String>,
     #[serde(default)]
     item_id: Option<String>,
+    #[serde(default)]
+    namespace: Option<String>,
     #[serde(default)]
     name: Option<String>,
 }
@@ -1316,6 +1324,8 @@ struct ResponsesOutputItem {
     id: Option<String>,
     #[serde(default)]
     call_id: Option<String>,
+    #[serde(default)]
+    namespace: Option<String>,
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]

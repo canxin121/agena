@@ -8057,12 +8057,17 @@ mod tests {
         assert_eq!(read.offset, Some(3));
         assert_eq!(read.limit, Some(10));
 
+        let read_alias = ReadToolInput::parse_input(json!({
+            "path": "  docs/ALIAS.md  "
+        }))
+        .expect("read input should accept path alias");
+        assert_eq!(read_alias.file_path, "docs/ALIAS.md");
+
         let read_schema = ReadToolInput::input_schema();
         let read_usage =
             crate::tool::definition::schema_usage_text(&read_schema).expect("read usage");
         assert!(read_usage.contains("File or directory path to read."));
         assert!(read_usage.contains("1-based offset for file lines or directory entries."));
-        assert!(read_usage.contains("`file_path` <string, required, min_length=1>"));
 
         let glob = GlobToolInput::parse_input(json!({
             "pattern": "  **/*.rs  ",

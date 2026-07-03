@@ -106,6 +106,7 @@ pub fn merge_flattened_schema_at_pointer(schema: &mut Value, pointer: &str, over
         }
     };
     merge_schema_overlay(target, &overlay_without_root_meta);
+    promote_nested_composite_properties(target);
 }
 
 pub fn set_schema_string_list_metadata(
@@ -696,6 +697,71 @@ fn merge_schema_overlay(target: &mut Value, overlay: &Value) {
             *target_slot = overlay_value.clone();
         }
     }
+}
+
+fn promote_nested_composite_properties(target: &mut Value) {
+    let Some(object) = target.as_object_mut() else {
+        return;
+    };
+    let mut collected = Map::new();
+    for key in ["oneOf", "anyOf", "allOf"] {
+        let Some(Value::Array(items)) = object.get(key) else {
+            continue;
+        };
+        for item in items {
+            collect_nested_object_properties(item, &mut collected);
+        }
+    }
+    if collected.is_empty() {
+        return;
+    }
+    let properties = object
+        .entry("properties".to_string())
+        .or_insert_with(|| Value::Object(Default::default()));
+    let Some(properties) = properties.as_object_mut() else {
+        return;
+    };
+    for (name, property) in collected {
+        properties
+            .entry(name)
+            .and_modify(|existing| *existing = merge_property_schema(existing, &property))
+            .or_insert(property);
+    }
+}
+
+fn collect_nested_object_properties(value: &Value, collected: &mut Map<String, Value>) {
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+        for (name, property) in properties {
+            collected
+                .entry(name.clone())
+                .and_modify(|existing| *existing = merge_property_schema(existing, property))
+                .or_insert_with(|| property.clone());
+        }
+    }
+    for key in ["oneOf", "anyOf", "allOf"] {
+        if let Some(Value::Array(items)) = object.get(key) {
+            for item in items {
+                collect_nested_object_properties(item, collected);
+            }
+        }
+    }
+}
+
+fn merge_property_schema(existing: &Value, next: &Value) -> Value {
+    let Some(mut literals) = string_literals(existing) else {
+        return existing.clone();
+    };
+    let Some(next_literals) = string_literals(next) else {
+        return existing.clone();
+    };
+    literals.extend(next_literals);
+    serde_json::json!({
+        "type": "string",
+        "enum": literals.into_iter().collect::<Vec<_>>()
+    })
 }
 
 fn schema_map_is_object_like(map: &serde_json::Map<String, Value>) -> bool {

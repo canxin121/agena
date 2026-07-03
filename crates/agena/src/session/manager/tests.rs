@@ -1813,7 +1813,10 @@ async fn provider_native_web_search_events_become_completed_operation_parts() {
     let (status, error, output) = operation_snapshot(&completed, "ws_native_1");
     assert_eq!(status, ExecutionStatus::Completed);
     assert!(error.is_none(), "unexpected native-tool error: {error:?}");
-    assert!(output.is_empty(), "native web search should not invent tool output text");
+    assert!(
+        output.is_empty(),
+        "native web search should not invent tool output text"
+    );
 
     let operation = completed
         .messages
@@ -1940,21 +1943,24 @@ async fn provider_native_image_generation_events_persist_local_artifact_paths() 
         .await
         .expect("session should reload with persisted native image artifact");
     assert!(
-        reloaded.messages.iter().flat_map(|message| message.parts.iter()).any(
-            |part| match part.content.as_ref() {
+        reloaded
+            .messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .any(|part| match part.content.as_ref() {
                 Some(PartContent::Operation(operation))
                     if part.operation_id.as_deref() == Some("ig_native_1") =>
                 {
                     operation.blocks.iter().any(|block| match block {
                         OperationBlock::Media { artifact, .. } => {
-                            artifact.uri == artifact_path && std::path::Path::new(&artifact.uri).is_file()
+                            artifact.uri == artifact_path
+                                && std::path::Path::new(&artifact.uri).is_file()
                         }
                         _ => false,
                     })
                 }
                 _ => false,
-            }
-        ),
+            }),
         "reloaded session should keep the persisted native image artifact path"
     );
 }

@@ -1689,7 +1689,8 @@ impl OpenAiAdapter {
                         "code_execution",
                     )?;
                     plan.tools.push(serde_json::Value::Object(map));
-                    plan.include.push("code_interpreter_call.outputs".to_owned());
+                    plan.include
+                        .push("code_interpreter_call.outputs".to_owned());
                 }
                 ProviderNativeToolKind::ImageGeneration => {
                     let config = &request.native_tools.hosted.image_generation;
@@ -1803,6 +1804,14 @@ impl OpenAiAdapter {
             .request_override
             .parallel_tool_calls()
             .unwrap_or(false)
+    }
+
+    fn responses_request_max_output_tokens(&self, request: &CompletionRequest) -> Option<u32> {
+        if matches!(self.backend, OpenAiBackend::ChatgptCodex) {
+            None
+        } else {
+            request.max_output_tokens
+        }
     }
 
     fn responses_service_tier(request: &CompletionRequest) -> Option<String> {
@@ -2645,7 +2654,7 @@ impl ModelRuntime for OpenAiAdapter {
             tool_choice: "auto".to_owned(),
             parallel_tool_calls: Self::responses_parallel_tool_calls(&request),
             include: Self::responses_include(tool_plan.include, reasoning.as_ref()),
-            max_output_tokens: request.max_output_tokens,
+            max_output_tokens: self.responses_request_max_output_tokens(&request),
             temperature: request.temperature,
             prompt_cache_key: request.prompt_cache_key.clone(),
             previous_response_id: request.previous_response_id.clone(),
@@ -2810,7 +2819,7 @@ impl ModelRuntime for OpenAiAdapter {
             tool_choice: "auto".to_owned(),
             parallel_tool_calls: Self::responses_parallel_tool_calls(&request),
             include: Self::responses_include(tool_plan.include, reasoning.as_ref()),
-            max_output_tokens: request.max_output_tokens,
+            max_output_tokens: self.responses_request_max_output_tokens(&request),
             temperature: request.temperature,
             prompt_cache_key: request.prompt_cache_key.clone(),
             previous_response_id: request.previous_response_id.clone(),
@@ -3872,9 +3881,7 @@ fn openai_file_search_result(source: &serde_json::Value) -> Option<SearchResultI
     })
 }
 
-fn openai_code_interpreter_invocation(
-    code: Option<&str>,
-) -> Result<ToolInvocation, AppError> {
+fn openai_code_interpreter_invocation(code: Option<&str>) -> Result<ToolInvocation, AppError> {
     let input = match code {
         Some(code) => StructuredObject::try_from(serde_json::json!({ "code": code }))
             .map_err(AppError::Provider)?,
@@ -3977,10 +3984,8 @@ fn openai_image_generation_invocation(
     revised_prompt: Option<&str>,
 ) -> Result<ToolInvocation, AppError> {
     let input = match revised_prompt {
-        Some(prompt) => {
-            StructuredObject::try_from(serde_json::json!({ "description": prompt }))
-                .map_err(AppError::Provider)?
-        }
+        Some(prompt) => StructuredObject::try_from(serde_json::json!({ "description": prompt }))
+            .map_err(AppError::Provider)?,
         None => StructuredObject::default(),
     };
     Ok(ToolInvocation::new("image_generation", input))
@@ -4526,8 +4531,8 @@ fn clamp_u64_to_u32(value: u64) -> u32 {
 mod tests {
     use super::*;
     use crate::message::{
-        ExecutionStatus, MessagePart, OperationBlock, OperationPart, PartContent,
-        StructuredObject, TimeRange, ToolInvocation, ToolOutput,
+        ExecutionStatus, MessagePart, OperationBlock, OperationPart, PartContent, StructuredObject,
+        TimeRange, ToolInvocation, ToolOutput,
     };
     use mockito::Matcher;
 
@@ -4553,6 +4558,36 @@ mod tests {
             responses_api_metadata: None,
             request_override: crate::model::ModelSpeedModeRequestOverride::default(),
         }
+    }
+
+    #[test]
+    fn chatgpt_codex_responses_omits_max_output_tokens_parameter() {
+        let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
+        request.max_output_tokens = Some(1_200);
+
+        let chatgpt_adapter = OpenAiAdapter::new_managed_with_id(
+            "openai",
+            reqwest::Client::new(),
+            ManagedCredential::static_value("openai api key", "test-token".to_owned()),
+            "https://chatgpt.com/backend-api/codex",
+            "gpt-5.4-mini",
+        )
+        .with_backend(OpenAiBackend::ChatgptCodex);
+        assert_eq!(
+            chatgpt_adapter.responses_request_max_output_tokens(&request),
+            None
+        );
+
+        let api_adapter = OpenAiAdapter::new(
+            reqwest::Client::new(),
+            "test-token",
+            "https://api.openai.com/v1",
+            "gpt-5.4-mini",
+        );
+        assert_eq!(
+            api_adapter.responses_request_max_output_tokens(&request),
+            Some(1_200)
+        );
     }
 
     #[test]
@@ -5125,7 +5160,10 @@ mod tests {
                 assert_eq!(id.as_deref(), Some("ws_1"));
                 assert_eq!(invocation.name, "web.run");
                 assert_eq!(
-                    invocation.input.get("query").and_then(|value| value.as_text()),
+                    invocation
+                        .input
+                        .get("query")
+                        .and_then(|value| value.as_text()),
                     Some("weather seattle")
                 );
                 assert_eq!(blocks.len(), 1);
@@ -5138,7 +5176,10 @@ mod tests {
                             && results[0].uri == "https://example.com/weather"
                 ));
                 assert_eq!(
-                    details.payload.get("status").and_then(|value| value.as_text()),
+                    details
+                        .payload
+                        .get("status")
+                        .and_then(|value| value.as_text()),
                     Some("completed")
                 );
             }
@@ -5186,7 +5227,10 @@ mod tests {
                 assert_eq!(id.as_deref(), Some("fs_1"));
                 assert_eq!(invocation.name, "file_search");
                 assert_eq!(
-                    invocation.input.get("query").and_then(|value| value.as_text()),
+                    invocation
+                        .input
+                        .get("query")
+                        .and_then(|value| value.as_text()),
                     Some("rust traits")
                 );
                 assert!(matches!(
@@ -5199,7 +5243,10 @@ mod tests {
                             && results[0].snippet.as_deref() == Some("Traits define shared behavior.")
                 ));
                 assert_eq!(
-                    details.payload.get("status").and_then(|value| value.as_text()),
+                    details
+                        .payload
+                        .get("status")
+                        .and_then(|value| value.as_text()),
                     Some("completed")
                 );
             }
@@ -5255,7 +5302,10 @@ mod tests {
                 assert_eq!(id.as_deref(), Some("ci_1"));
                 assert_eq!(invocation.name, "code_execution");
                 assert_eq!(
-                    invocation.input.get("code").and_then(|value| value.as_text()),
+                    invocation
+                        .input
+                        .get("code")
+                        .and_then(|value| value.as_text()),
                     Some("print('hi')")
                 );
                 assert_eq!(output_text, "hi");
@@ -5270,7 +5320,10 @@ mod tests {
                             && artifact.name.as_deref() == Some("file_img_1")
                 ));
                 assert_eq!(
-                    details.payload.get("status").and_then(|value| value.as_text()),
+                    details
+                        .payload
+                        .get("status")
+                        .and_then(|value| value.as_text()),
                     Some("completed")
                 );
             }
@@ -5326,7 +5379,10 @@ mod tests {
                             && artifact.name.as_deref() == Some("generated-image.png")
                 ));
                 assert_eq!(
-                    details.payload.get("status").and_then(|value| value.as_text()),
+                    details
+                        .payload
+                        .get("status")
+                        .and_then(|value| value.as_text()),
                     Some("completed")
                 );
             }

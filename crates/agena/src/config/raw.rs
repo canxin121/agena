@@ -1429,7 +1429,10 @@ fn normalize_provider_model_native_tools(
         let ProviderAdapterDefinition::OpenAi(config) = &adapter.definition else {
             continue;
         };
-        if !matches!(config.options.backend, super::OpenAiBackendConfig::ChatgptCodex) {
+        if !matches!(
+            config.options.backend,
+            super::OpenAiBackendConfig::ChatgptCodex
+        ) {
             continue;
         }
         normalize_openai_chatgpt_native_tools(&mut model.native_tools);

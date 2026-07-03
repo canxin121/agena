@@ -80,6 +80,7 @@ pub struct ShellCommandInput {
 pub struct ReadToolInput {
     /// File or directory path to read. Relative paths are resolved from the
     /// workspace root.
+    #[serde(alias = "path")]
     pub file_path: String,
     /// 1-based offset for file lines or directory entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -18,10 +18,9 @@
 //! # Concurrency model
 //!
 //! Tool execution is synchronous (`ToolExecutor::execute_tool_payload_*`) but the
-//! runner is async. The registry caches a `tokio::runtime::Handle` at
-//! construction time and uses `block_in_place` + `Handle::block_on` when a
-//! sync caller needs to wait for new events. This requires the multi-thread
-//! tokio runtime that `agena` already mandates.
+//! runner is async. The registry caches a `tokio::runtime::Handle` for process
+//! startup. Synchronous log reads wait with a short polling loop so they work
+//! from regular threads, tokio workers, and single-thread runtimes.
 
 use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
@@ -29,7 +28,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use regex::Regex;
@@ -38,7 +37,6 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::runtime::Handle;
 use tokio::sync::Notify;
-use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::message::{ProcessEvent, ProcessStatus, ProcessStream, ProcessSummary};
@@ -312,50 +310,22 @@ impl MonitorService for MonitorRegistry {
                 .unwrap_or_else(|| empty_read(&state, params.since_seq)));
         }
 
-        let handle = self.require_handle()?;
-        let state_for_wait = Arc::clone(&state);
-        let since_seq = params.since_seq;
-
-        // We bridge async → sync with a one-shot channel: the wait runs as a
-        // spawned tokio task and the calling thread blocks on `recv`. This
-        // works regardless of whether the caller is on a tokio worker thread,
-        // the blocking pool (`spawn_blocking`), or a plain OS thread, and it
-        // never deadlocks on a single-thread runtime.
-        let (tx, rx) = std::sync::mpsc::channel::<MonitorRead>();
-        handle.spawn(async move {
-            let deadline = Instant::now() + Duration::from_millis(wait_ms);
-            loop {
-                // Register the waiter BEFORE re-checking the condition.
-                // Otherwise a `notify_waiters()` that fires between the
-                // condition check and the `.await` below would be lost —
-                // `Notify` only delivers wakeups to already-registered
-                // waiters.
-                let notified = state_for_wait.notify.notified();
-                tokio::pin!(notified);
-                notified.as_mut().enable();
-
-                if state_for_wait.last_seq.load(Ordering::Acquire) > since_seq
-                    || state_for_wait.inner.lock().unwrap().status != ProcessStatus::Running
-                {
-                    break;
-                }
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    break;
-                }
-                if tokio::time::timeout(remaining, notified).await.is_err() {
-                    break;
-                }
+        let deadline = Instant::now() + Duration::from_millis(wait_ms);
+        loop {
+            if let Some(read) = collect_events(&state, params.since_seq, limit)
+                && (!read.events.is_empty() || read.status != ProcessStatus::Running)
+            {
+                return Ok(read);
             }
-            let read = collect_events(&state_for_wait, since_seq, limit)
-                .unwrap_or_else(|| empty_read(&state_for_wait, since_seq));
-            let _ = tx.send(read);
-        });
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            std::thread::sleep(remaining.min(Duration::from_millis(20)));
+        }
 
-        let read = rx
-            .recv()
-            .map_err(|_| MonitorError::Invalid("monitor read task dropped".into()))?;
-        Ok(read)
+        Ok(collect_events(&state, params.since_seq, limit)
+            .unwrap_or_else(|| empty_read(&state, params.since_seq)))
     }
 
     fn stop(&self, monitor_id: &str) -> Result<MonitorStopOutcome, MonitorError> {

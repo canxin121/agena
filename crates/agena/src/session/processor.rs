@@ -15,8 +15,8 @@ use crate::event::{
 };
 use crate::message::{
     AssistantReasoningField, ExecutionStatus, Message, MessageMetadata, MessagePart,
-    MessageProviderState, MessageSource, MessageStatus, OperationBlock, OperationPart,
-    PartContent, ReasoningPart, StructuredObject, TimeRange, ToolInvocation,
+    MessageProviderState, MessageSource, MessageStatus, OperationBlock, OperationPart, PartContent,
+    ReasoningPart, StructuredObject, TimeRange, ToolInvocation,
 };
 use crate::model::ModelRef;
 use crate::plugin::registry::RegisteredTool;
@@ -986,7 +986,9 @@ impl SessionProcessor {
                         "native tool part missing from assistant snapshot: {part_id}"
                     ))
                 })?;
-            let started_at_ms = pending.started_at_ms.unwrap_or_else(|| now.timestamp_millis());
+            let started_at_ms = pending
+                .started_at_ms
+                .unwrap_or_else(|| now.timestamp_millis());
             let mut operation = OperationPart::pending(
                 pending.call_id.unwrap_or_default(),
                 invocation,
@@ -1068,7 +1070,9 @@ impl SessionProcessor {
             Vec::new(),
             details,
             TimeRange {
-                start_ms: pending.started_at_ms.unwrap_or_else(|| Utc::now().timestamp_millis()),
+                start_ms: pending
+                    .started_at_ms
+                    .unwrap_or_else(|| Utc::now().timestamp_millis()),
                 end_ms: Some(Utc::now().timestamp_millis()),
             },
         );
@@ -1435,11 +1439,7 @@ fn tool_execution_title(name: Option<&str>) -> String {
     format!("Tool {}", name.unwrap_or("unknown").trim())
 }
 
-fn native_tool_execution_title(
-    title: &str,
-    tool_name: &str,
-    input: &StructuredObject,
-) -> String {
+fn native_tool_execution_title(title: &str, tool_name: &str, input: &StructuredObject) -> String {
     let trimmed = title.trim();
     if !trimmed.is_empty() {
         return trimmed.to_owned();

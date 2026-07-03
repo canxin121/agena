@@ -85,6 +85,7 @@ impl Default for WorkflowToolCatalogHelpConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct WorkflowPlanConfig {
+    #[serde(alias = "default_auto_continue")]
     pub(crate) default_autorun: bool,
     pub(crate) allow_direct_approval: bool,
 }
@@ -2655,6 +2656,27 @@ mod tests {
     }
 
     #[test]
+    fn session_rename_schema_includes_title_parameter() {
+        let shape_schema = SessionRenameToolInput::input_schema();
+        assert!(
+            shape_schema.pointer("/properties/title").is_some(),
+            "{shape_schema:#}"
+        );
+
+        let tool_schema = SessionToolInput::input_schema();
+        assert!(
+            tool_schema.pointer("/oneOf/1/properties/title").is_some(),
+            "{tool_schema:#}"
+        );
+
+        let sanitized = SessionToolInput::tool_decl().sanitized_input_schema();
+        assert!(
+            sanitized.pointer("/oneOf/1/properties/title").is_some(),
+            "{sanitized:#}"
+        );
+    }
+
+    #[test]
     fn agent_inputs_trim_flattened_shape_fields_at_parse_time() {
         let parsed = AgentToolInput::parse_input(json!({
             "action": "switch",
@@ -2784,6 +2806,16 @@ mod tests {
 
         assert!(!config.plan.default_autorun);
         assert!(!config.plan.allow_direct_approval);
+    }
+
+    #[test]
+    fn workflow_plan_config_accepts_legacy_auto_continue_name() {
+        let config: WorkflowPlanConfig = serde_json::from_value(json!({
+            "default_auto_continue": false
+        }))
+        .expect("legacy workflow plan config should parse");
+
+        assert!(!config.default_autorun);
     }
 
     #[test]
@@ -2935,6 +2967,23 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_enter_schema_exposes_target_variants() {
+        let schema = SnapshotToolInput::tool_decl().sanitized_input_schema();
+        assert!(
+            schema.pointer("/oneOf/0/properties/target").is_some(),
+            "{schema:#}"
+        );
+        assert!(
+            schema.pointer("/oneOf/0/properties/name").is_some(),
+            "{schema:#}"
+        );
+        assert!(
+            schema.pointer("/oneOf/0/properties/path").is_some(),
+            "{schema:#}"
+        );
+    }
+
+    #[test]
     fn plan_create_accepts_model_payload_when_step_title_falls_back_to_description() {
         let plugin = WorkflowPlugin::new();
         let (action, action_input) = resolve_plan_tool_input(json!({
@@ -3081,6 +3130,21 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("field `questions` requires at least 1 item")
+        );
+    }
+
+    #[test]
+    fn user_request_input_schema_includes_question_parameters() {
+        let schema = UserToolInput::tool_decl().sanitized_input_schema();
+        assert!(
+            schema.pointer("/oneOf/0/properties/questions").is_some(),
+            "{schema:#}"
+        );
+
+        let model_schema = crate::tool::model_safe_tool_schema(&schema);
+        assert!(
+            model_schema.pointer("/properties/questions").is_some(),
+            "{model_schema:#}"
         );
     }
 

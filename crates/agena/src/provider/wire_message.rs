@@ -308,8 +308,9 @@ pub(crate) fn project_operation_output(status: ExecutionStatus, exec: &Operation
         ExecutionStatus::Pending | ExecutionStatus::InProgress | ExecutionStatus::Cancelled => {
             String::new()
         }
-        ExecutionStatus::Completed => structured_operation_output(exec)
-            .unwrap_or_else(|| exec.model_output.text.clone()),
+        ExecutionStatus::Completed => {
+            structured_operation_output(exec).unwrap_or_else(|| exec.model_output.text.clone())
+        }
         ExecutionStatus::Failed => exec
             .output_text()
             .or_else(|| exec.error_message())
@@ -331,7 +332,10 @@ fn structured_web_search_output(exec: &OperationPart) -> Option<String> {
         query,
         backend,
         results,
-    } = crate::tool::ToolPayloadOutput::from_tool_output(exec.invocation.name.as_str(), &exec.details)?
+    } = crate::tool::ToolPayloadOutput::from_tool_output(
+        exec.invocation.name.as_str(),
+        &exec.details,
+    )?
     else {
         return None;
     };
@@ -526,8 +530,7 @@ mod tests {
                 title: "Responses API reference".to_string(),
                 url: "https://platform.openai.com/docs/api-reference/responses".to_string(),
                 snippet: Some(
-                    "Build stateful interactions with text, image, and tool outputs."
-                        .to_string(),
+                    "Build stateful interactions with text, image, and tool outputs.".to_string(),
                 ),
             }],
         }

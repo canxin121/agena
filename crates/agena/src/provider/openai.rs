@@ -487,6 +487,15 @@ impl OpenAiAdapter {
         matches!(self.backend, OpenAiBackend::Api)
     }
 
+    fn unwrap_chat_completion_response(
+        payload: OpenAiChatCompletionResponse,
+    ) -> ChatCompletionResponse {
+        match payload {
+            OpenAiChatCompletionResponse::Bare(response) => response,
+            OpenAiChatCompletionResponse::Wrapped { data, .. } => data,
+        }
+    }
+
     fn chatgpt_account_id(&self) -> Option<String> {
         self.auth_data
             .as_ref()
@@ -763,13 +772,14 @@ impl OpenAiAdapter {
         })
         .await?;
 
-        let payload: ChatCompletionResponse = utils::parse_json_response_logged(
+        let payload: OpenAiChatCompletionResponse = utils::parse_json_response_logged(
             self.id.as_str(),
             ADAPTER_KIND,
             "complete.chat",
             response,
         )
         .await?;
+        let payload = Self::unwrap_chat_completion_response(payload);
         let response_reasoning_field = payload
             .choices
             .first()
@@ -4441,6 +4451,17 @@ enum OpenAiModelListResponse {
     Bare(Vec<OpenAiCompatibleModel>),
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum OpenAiChatCompletionResponse {
+    Wrapped {
+        data: ChatCompletionResponse,
+        #[serde(default, rename = "success")]
+        _success: Option<bool>,
+    },
+    Bare(ChatCompletionResponse),
+}
+
 impl OpenAiModelListResponse {
     fn into_items(self, provider_id: &str, models_url: Option<&str>) -> Vec<OpenAiListedModel> {
         match self {
@@ -5263,6 +5284,49 @@ mod tests {
     }
 
     #[test]
+    fn openai_chat_completion_response_parses_cline_wrapped_payload() {
+        let payload = r#"{
+            "success": true,
+            "data": {
+                "id": "gen_123",
+                "model": "deepseek/deepseek-v4-flash",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": "hello from cline",
+                            "reasoning": "hidden",
+                            "reasoning_details": [
+                                { "type": "reasoning.text", "text": "hidden", "index": 0 }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }"#;
+
+        let parsed: OpenAiChatCompletionResponse =
+            serde_json::from_str(payload).expect("parse wrapped chat completion");
+        let response = OpenAiAdapter::unwrap_chat_completion_response(parsed);
+
+        assert_eq!(response.id.as_deref(), Some("gen_123"));
+        assert_eq!(
+            response.model.as_deref(),
+            Some("deepseek/deepseek-v4-flash")
+        );
+        assert_eq!(response.choices.len(), 1);
+        assert_eq!(
+            response.choices[0]
+                .message
+                .as_ref()
+                .and_then(|message| message.content.as_ref())
+                .and_then(serde_json::Value::as_str),
+            Some("hello from cline")
+        );
+    }
+
+    #[test]
     fn openai_model_parses_codex_models_response() {
         let payload = r#"{
             "models": [
@@ -5421,6 +5485,79 @@ mod tests {
         );
         assert_eq!(models[0].metadata.supports_verbosity, Some(true));
         assert!(models[0].capabilities.reasoning.is_supported());
+    }
+
+    #[tokio::test]
+    async fn complete_chat_accepts_cline_wrapped_completion_shape() {
+        let mut server = mockito::Server::new_async().await;
+        let response = serde_json::json!({
+            "success": true,
+            "data": {
+                "id": "gen_123",
+                "model": "deepseek/deepseek-v4-flash",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": "hello from cline",
+                            "reasoning_details": [
+                                { "type": "reasoning.text", "text": "thinking", "index": 0 }
+                            ]
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 7,
+                    "completion_tokens_details": {
+                        "reasoning_tokens": 3
+                    }
+                }
+            }
+        });
+        let mock = server
+            .mock("POST", "/chat/completions")
+            .match_header("authorization", "Bearer test-token")
+            .match_header("content-type", "application/json")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(response.to_string())
+            .create_async()
+            .await;
+
+        let adapter = OpenAiAdapter::new_managed_with_id(
+            "cline::openai",
+            reqwest::Client::new(),
+            ManagedCredential::static_value("cline api key", "test-token".to_owned()),
+            server.url(),
+            "cline-pass/deepseek-v4-flash",
+        )
+        .with_api_mode(OpenAiApiMode::Chat)
+        .with_capability_family(CapabilityFamily::OpenAiCompatible);
+
+        let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
+        request.model = ModelId::new("cline-pass/deepseek-v4-flash");
+        request.tools = vec![crate::plugin::registry::RegisteredTool::new(
+            "web",
+            crate::plugin::sdk::PluginToolDecl::new(
+                "search",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": { "query": { "type": "string" } },
+                    "required": ["query"]
+                }),
+            )
+            .description("Search the web."),
+        )];
+
+        let completion = ModelRuntime::complete(&adapter, request)
+            .await
+            .expect("cline wrapped completion should parse");
+        mock.assert_async().await;
+
+        assert_eq!(completion.text, "hello from cline");
+        assert_eq!(completion.reasoning_text.as_deref(), Some("thinking"));
+        assert_eq!(completion.finish_reason, Some(CompletionFinishReason::Stop));
     }
 
     #[tokio::test]

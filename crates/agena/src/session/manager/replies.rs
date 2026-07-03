@@ -2490,7 +2490,7 @@ impl SessionManager {
             let thinking_modes = provider_registry.model_thinking_modes(&options.model)?;
             let thinking_mode = thinking_modes.get(thinking_mode_name).ok_or_else(|| {
                 AppError::Config(format!(
-                    "model `{}` has no thinking mode `{thinking_mode_name}`",
+                    "model `{}` has no think mode `{thinking_mode_name}`",
                     options.model
                 ))
             })?;

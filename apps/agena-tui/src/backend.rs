@@ -2801,7 +2801,7 @@ impl Backend {
         let model = self.resolved_model_for_run_options(request)?;
         let mut rows = registry
             .model_thinking_modes(&model)
-            .context("failed to resolve thinking modes for current model")?
+            .context("failed to resolve think modes for current model")?
             .into_iter()
             .map(|(name, mode)| InspectorRow {
                 label: name,

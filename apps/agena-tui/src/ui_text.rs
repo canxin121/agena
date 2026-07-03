@@ -18,6 +18,18 @@ pub fn t(i18n: &I18n, key: &str) -> String {
     i18n.text(key)
 }
 
+pub fn thinking_mode_display_value(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.eq_ignore_ascii_case("no-thinking") {
+        return "off".to_owned();
+    }
+    trimmed
+        .strip_prefix("thinking-")
+        .or_else(|| trimmed.strip_prefix("think-"))
+        .unwrap_or(trimmed)
+        .to_owned()
+}
+
 pub fn transcript_header_title(
     i18n: &I18n,
     session_id: Option<i64>,
@@ -769,6 +781,14 @@ mod tests {
 
     fn normalize_fluent_markup(text: String) -> String {
         text.replace(['\u{2068}', '\u{2069}'], "")
+    }
+
+    #[test]
+    fn thinking_mode_display_value_is_compact() {
+        assert_eq!(thinking_mode_display_value("thinking-xhigh"), "xhigh");
+        assert_eq!(thinking_mode_display_value("think-high"), "high");
+        assert_eq!(thinking_mode_display_value("no-thinking"), "off");
+        assert_eq!(thinking_mode_display_value("medium"), "medium");
     }
 
     #[test]

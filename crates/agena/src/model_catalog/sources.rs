@@ -1725,7 +1725,7 @@ fn router_thinking_modes(
         modes.insert(
             "no-thinking".to_owned(),
             ConfiguredModelThinkingMode {
-                display_name: Some("No Thinking".to_owned()),
+                display_name: Some("Off".to_owned()),
                 description: None,
                 thinking: Some(ThinkingRequest::Disabled),
                 request_override: Default::default(),
@@ -1746,7 +1746,7 @@ fn router_thinking_modes(
             modes
                 .entry(variant_name)
                 .or_insert_with(|| ConfiguredModelThinkingMode {
-                    display_name: Some(format!("Thinking {}", title_case_tokenized(level))),
+                    display_name: Some(format!("Think {}", title_case_tokenized(level))),
                     description: None,
                     thinking: Some(ThinkingRequest::Effort { effort }),
                     request_override: Default::default(),
@@ -1761,7 +1761,7 @@ fn router_thinking_modes(
             modes.insert(
                 "thinking-high".to_owned(),
                 ConfiguredModelThinkingMode {
-                    display_name: Some("Thinking High".to_owned()),
+                    display_name: Some("Think High".to_owned()),
                     description: None,
                     thinking: Some(ThinkingRequest::Budget {
                         budget_tokens: high_budget,
@@ -1777,7 +1777,7 @@ fn router_thinking_modes(
             modes.insert(
                 "thinking-max".to_owned(),
                 ConfiguredModelThinkingMode {
-                    display_name: Some("Thinking Max".to_owned()),
+                    display_name: Some("Think Max".to_owned()),
                     description: None,
                     thinking: Some(ThinkingRequest::Budget {
                         budget_tokens: max_budget,
@@ -1809,7 +1809,7 @@ fn codex_thinking_modes(
         modes.insert(
             format!("thinking-{effort_name}"),
             ConfiguredModelThinkingMode {
-                display_name: Some(format!("Thinking {}", title_case_tokenized(effort_name))),
+                display_name: Some(format!("Think {}", title_case_tokenized(effort_name))),
                 description: normalize_optional_string(level.description.clone()),
                 thinking: Some(ThinkingRequest::Effort { effort }),
                 request_override: Default::default(),
@@ -2413,7 +2413,7 @@ fn insert_effort_mode(
     modes
         .entry(format!("thinking-{effort_name}"))
         .or_insert_with(|| ConfiguredModelThinkingMode {
-            display_name: Some(format!("Thinking {}", title_case_tokenized(effort_name))),
+            display_name: Some(format!("Think {}", title_case_tokenized(effort_name))),
             description: None,
             thinking: Some(ThinkingRequest::Effort { effort }),
             request_override: Default::default(),

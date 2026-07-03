@@ -73,7 +73,7 @@ runtime-status-statusline-default = 默认
 runtime-status-statusline-plugin = 插件
 runtime-status-tui-blocks = tui_blocks {$count}
 runtime-status-theme = 主题 {$value}
-run-options-summary-thinking = thinking {$value}
+run-options-summary-thinking = think {$value}
 run-options-summary-speed = speed {$value}
 run-options-summary-verbosity = verbosity {$value}
 run-options-summary-parallel-tools = parallel-tools {$value}
@@ -430,9 +430,9 @@ settings-runtime-provider-override-detail = 用 provider 选择器选择当前�
 settings-runtime-model-override-label = Model 覆盖
 settings-runtime-model-override-detail = 用 model 选择器选择当前会话的 model 覆盖值。
 settings-runtime-clear-stack-label = 清空运行时栈
-settings-runtime-clear-stack-detail = 清空 provider/model 以及 thinking、speed、verbosity 和 parallel-tool-call 覆盖值。
-settings-runtime-thinking-label = Thinking 模式
-settings-runtime-thinking-description = 当前会话 thinking 模式覆盖
+settings-runtime-clear-stack-detail = 清空 provider/model 以及 think、speed、verbosity 和 parallel-tool-call 覆盖值。
+settings-runtime-thinking-label = Think 模式
+settings-runtime-thinking-description = 当前会话 think 模式覆盖
 settings-runtime-speed-label = Speed 模式
 settings-runtime-speed-description = 当前会话 speed 模式覆盖
 settings-runtime-verbosity-label = Verbosity
@@ -756,7 +756,7 @@ status-part-agent = agent={$value}
 status-part-skill = skill={$value}
 status-part-task = task={$value}
 status-part-model = model={$value}
-status-part-thinking = thinking={$value}
+status-part-thinking = think={$value}
 status-part-speed = speed={$value}
 status-part-verbosity = verbosity={$value}
 status-part-parallel-tools = parallel_tools={$value}
@@ -767,11 +767,15 @@ status-part-permissions = 权限={$count}
 status-part-user-input = 输入={$count}
 session-status-plan = 计划 {$slug}
 session-status-plan-with-steps = 计划 {$slug} · {$steps} 步
-session-status-thinking = thinking {$value}
+session-status-thinking = think {$value}
 session-status-speed = speed {$value}
 inline-fact-provider = provider
 inline-fact-adapter = adapter
 inline-fact-model = model
+inline-fact-thinking = think
+inline-fact-speed = speed
+inline-fact-verbosity = verbosity
+inline-fact-parallel-tools = parallel_tools
 inline-fact-source = source
 inline-fact-scope = scope
 inline-fact-operator = operator
@@ -847,8 +851,8 @@ overlay-provider-default-adapter-title = 默认 · Adapter
 overlay-provider-default-adapter-prompt = 选择这个 provider 默认使用的 adapter。
 overlay-provider-default-model-title = 默认 · Model
 overlay-provider-default-model-prompt = 选择这个 provider 默认使用的 model。
-overlay-provider-default-thinking-title = 默认 · Thinking
-overlay-provider-default-thinking-prompt = 选择 thinking mode，或选择默认来继承 model 默认值。
+overlay-provider-default-thinking-title = 默认 · Think
+overlay-provider-default-thinking-prompt = 选择 think mode，或选择默认来继承 model 默认值。
 overlay-provider-default-speed-title = 默认 · Speed
 overlay-provider-default-speed-prompt = 选择 speed mode，或选择默认来继承 model 默认值。
 overlay-agent-list-title = Agent 列表
@@ -1486,9 +1490,9 @@ flash-provider-save-error-adapter-object = provider adapter `{$adapter}` 必须�
 flash-provider-save-error-model-object = provider model config 必须是一个 JSON object
 flash-provider-save-error-configured-adapter-object = 已配置的 provider adapter settings 必须是一个 JSON object
 flash-provider-save-error-configured-models-object = 已配置的 provider adapter models 必须是一个 JSON object
-flash-thinking-mode-set = 已设置 thinking mode：{$mode}
-flash-thinking-mode-cleared = 已清除 thinking mode 覆盖
-flash-thinking-mode-required = 需要提供 thinking mode 名称
+flash-thinking-mode-set = 已设置 think mode：{$mode}
+flash-thinking-mode-cleared = 已清除 think mode 覆盖
+flash-thinking-mode-required = 需要提供 think mode 名称
 flash-speed-mode-set = 已设置 speed mode：{$mode}
 flash-speed-mode-cleared = 已清除 speed mode 覆盖
 flash-speed-mode-required = 需要提供 speed mode 名称
@@ -1669,7 +1673,7 @@ command-provider-summary = 选择 provider，或清除当前 provider/模型覆�
 command-provider-config-summary = 打开 provider 配置，管理 auth、adapter 模型列表、catalog 搜索和模型保存
 command-models-summary = 列出某个 provider 的模型
 command-model-summary = 打开当前会话的 provider / adapter / model 三级选择器
-command-thinking-mode-summary = 设置或清除模型 thinking mode 覆盖
+command-thinking-mode-summary = 设置或清除模型 think mode 覆盖
 command-speed-mode-summary = 设置或清除模型 speed mode 覆盖
 command-verbosity-summary = 设置或清除文本 verbosity 覆盖
 command-parallel-tool-calls-summary = 设置或清除 parallel tool call 覆盖

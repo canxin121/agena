@@ -14973,7 +14973,7 @@ impl App {
         {
             parts.push(self.i18n.text_args(
                 "status-part-thinking",
-                &crate::fl_args!("value" => thinking_mode),
+                &crate::fl_args!("value" => ui_text::thinking_mode_display_value(thinking_mode)),
             ));
         }
         if let Some(speed_mode) = execution.execution.model_speed_mode.as_deref()
@@ -15079,7 +15079,7 @@ impl App {
             {
                 parts.push(self.i18n.text_args(
                     "session-status-thinking",
-                    &crate::fl_args!("value" => thinking_mode),
+                    &crate::fl_args!("value" => ui_text::thinking_mode_display_value(thinking_mode)),
                 ));
             }
             if let Some(speed_mode) = execution.execution.model_speed_mode.as_deref()
@@ -15112,7 +15112,7 @@ impl App {
         {
             parts.push(self.i18n.text_args(
                 "session-status-thinking",
-                &crate::fl_args!("value" => thinking_mode),
+                &crate::fl_args!("value" => ui_text::thinking_mode_display_value(thinking_mode)),
             ));
         }
         if let Some(speed_mode) = self.run_options.speed_mode.as_deref()
@@ -16872,7 +16872,7 @@ fn provider_default_route_summary(i18n: &I18n, provider: &ProviderSummaryResourc
     {
         parts.push(i18n.text_args(
             "run-options-summary-thinking",
-            &crate::fl_args!("value" => thinking_mode.to_string()),
+            &crate::fl_args!("value" => ui_text::thinking_mode_display_value(thinking_mode)),
         ));
     }
     if let Some(speed_mode) = provider
@@ -16944,7 +16944,7 @@ fn provider_default_model_detail(i18n: &I18n, model: &ProviderModel) -> String {
                 "value" => model
                     .thinking_modes
                     .keys()
-                    .cloned()
+                    .map(|name| ui_text::thinking_mode_display_value(name))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
@@ -17186,7 +17186,7 @@ fn agent_default_summary(i18n: &I18n, default: &agena::agents::AgentSelectionCon
     {
         parts.push(format_key_value_segment(
             ui_text::t(i18n, "inline-fact-thinking").as_str(),
-            thinking_mode,
+            ui_text::thinking_mode_display_value(thinking_mode).as_str(),
         ));
     }
     if let Some(speed_mode) = default
@@ -23444,7 +23444,12 @@ impl RunOptionsState {
             RuntimeSettingId::ThinkingMode => self
                 .thinking_mode
                 .as_deref()
-                .map(|value| runtime_setting_override_summary(i18n, value))
+                .map(|value| {
+                    runtime_setting_override_summary(
+                        i18n,
+                        ui_text::thinking_mode_display_value(value).as_str(),
+                    )
+                })
                 .unwrap_or_else(|| ui_text::t(i18n, "value-default")),
             RuntimeSettingId::SpeedMode => self
                 .speed_mode
@@ -23616,7 +23621,7 @@ impl RunOptionsState {
         if let Some(thinking_mode) = self.thinking_mode.as_ref() {
             parts.push(i18n.text_args(
                 "run-options-summary-thinking",
-                &crate::fl_args!("value" => thinking_mode),
+                &crate::fl_args!("value" => ui_text::thinking_mode_display_value(thinking_mode)),
             ));
         }
         if let Some(speed_mode) = self.speed_mode.as_ref() {
@@ -26779,7 +26784,7 @@ mod tests {
         ));
         assert_eq!(
             sanitize_terminal_text(provider_items[0].value.as_str()),
-            "openai / responses / gpt-5 · thinking high · speed fast"
+            "openai / responses / gpt-5 · think high · speed fast"
         );
         assert!(matches!(
             &provider_items[1].action,

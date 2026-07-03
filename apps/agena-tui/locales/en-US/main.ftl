@@ -73,7 +73,7 @@ runtime-status-statusline-default = default
 runtime-status-statusline-plugin = plugin
 runtime-status-tui-blocks = tui_blocks {$count}
 runtime-status-theme = theme {$value}
-run-options-summary-thinking = thinking {$value}
+run-options-summary-thinking = think {$value}
 run-options-summary-speed = speed {$value}
 run-options-summary-verbosity = verbosity {$value}
 run-options-summary-parallel-tools = parallel-tools {$value}
@@ -430,9 +430,9 @@ settings-runtime-provider-override-detail = Choose the current session provider 
 settings-runtime-model-override-label = Model Override
 settings-runtime-model-override-detail = Choose the current session model override with the model picker.
 settings-runtime-clear-stack-label = Clear Runtime Stack
-settings-runtime-clear-stack-detail = Clear provider/model plus thinking, speed, verbosity, and parallel-tool-call overrides.
-settings-runtime-thinking-label = Thinking Mode
-settings-runtime-thinking-description = current-session thinking mode override
+settings-runtime-clear-stack-detail = Clear provider/model plus think, speed, verbosity, and parallel-tool-call overrides.
+settings-runtime-thinking-label = Think Mode
+settings-runtime-thinking-description = current-session think mode override
 settings-runtime-speed-label = Speed Mode
 settings-runtime-speed-description = current-session speed mode override
 settings-runtime-verbosity-label = Verbosity
@@ -821,8 +821,8 @@ overlay-provider-default-adapter-title = Default · Adapter
 overlay-provider-default-adapter-prompt = Choose the adapter for this provider default.
 overlay-provider-default-model-title = Default · Model
 overlay-provider-default-model-prompt = Choose the model for this provider default.
-overlay-provider-default-thinking-title = Default · Thinking
-overlay-provider-default-thinking-prompt = Choose the thinking mode, or Default to inherit the model default.
+overlay-provider-default-thinking-title = Default · Think
+overlay-provider-default-thinking-prompt = Choose the think mode, or Default to inherit the model default.
 overlay-provider-default-speed-title = Default · Speed
 overlay-provider-default-speed-prompt = Choose the speed mode, or Default to inherit the model default.
 overlay-agent-list-title = Agent List
@@ -1088,8 +1088,8 @@ overlay-model-catalog-lifecycle-deprecated = deprecated
 overlay-model-catalog-date-release = release {$value}
 overlay-model-catalog-date-updated = updated {$value}
 overlay-model-catalog-date-cutoff = cutoff {$value}
-overlay-model-catalog-default-thinking = thinking
-overlay-model-catalog-thinking-modes = thinking modes
+overlay-model-catalog-default-thinking = think
+overlay-model-catalog-thinking-modes = think modes
 overlay-model-catalog-speed-modes = speed modes
 overlay-model-catalog-default-verbosity = verbosity
 overlay-model-catalog-default-temperature = temp
@@ -1287,7 +1287,7 @@ status-part-agent = agent={$value}
 status-part-skill = skill={$value}
 status-part-task = task={$value}
 status-part-model = model={$value}
-status-part-thinking = thinking={$value}
+status-part-thinking = think={$value}
 status-part-speed = speed={$value}
 status-part-verbosity = verbosity={$value}
 status-part-parallel-tools = parallel_tools={$value}
@@ -1298,11 +1298,15 @@ status-part-permissions = perm={$count}
 status-part-user-input = input={$count}
 session-status-plan = plan {$slug}
 session-status-plan-with-steps = plan {$slug} · {$steps} steps
-session-status-thinking = thinking {$value}
+session-status-thinking = think {$value}
 session-status-speed = speed {$value}
 inline-fact-provider = provider
 inline-fact-adapter = adapter
 inline-fact-model = model
+inline-fact-thinking = think
+inline-fact-speed = speed
+inline-fact-verbosity = verbosity
+inline-fact-parallel-tools = parallel_tools
 inline-fact-source = source
 inline-fact-scope = scope
 inline-fact-operator = operator
@@ -1486,9 +1490,9 @@ flash-provider-save-error-adapter-object = provider adapter `{$adapter}` must be
 flash-provider-save-error-model-object = provider model config must be a JSON object
 flash-provider-save-error-configured-adapter-object = configured provider adapter settings must be a JSON object
 flash-provider-save-error-configured-models-object = configured provider adapter models must be a JSON object
-flash-thinking-mode-set = thinking mode set to {$mode}
-flash-thinking-mode-cleared = thinking mode override cleared
-flash-thinking-mode-required = thinking mode name is required
+flash-thinking-mode-set = think mode set to {$mode}
+flash-thinking-mode-cleared = think mode override cleared
+flash-thinking-mode-required = think mode name is required
 flash-speed-mode-set = speed mode set to {$mode}
 flash-speed-mode-cleared = speed mode override cleared
 flash-speed-mode-required = speed mode name is required
@@ -1670,7 +1674,7 @@ command-provider-summary = Select a provider or clear the current provider/model
 command-provider-config-summary = Open provider config for auth, adapter model listing, catalog search, and model saves
 command-models-summary = List models for a provider
 command-model-summary = Open the session model chooser for provider/adapter/model selection
-command-thinking-mode-summary = Set or clear the model thinking mode override
+command-thinking-mode-summary = Set or clear the model think mode override
 command-speed-mode-summary = Set or clear the model speed mode override
 command-verbosity-summary = Set or clear the text verbosity override
 command-parallel-tool-calls-summary = Set or clear the parallel tool call override

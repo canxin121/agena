@@ -31,7 +31,7 @@ use crate::{
         ModelRuntime, ProviderModel, StreamResumePolicy,
         auth::AuthData,
         chat_wire::{self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions},
-        prompt_cache, prompt_tools, sse, utils, wire_message,
+        prompt_cache, sse, utils, wire_message,
     },
     role::Role,
 };
@@ -717,15 +717,10 @@ impl OpenAiAdapter {
             &mut request_override,
         );
 
-        let prompt_tool_protocol = prompt_tools::request_needs_text_protocol(request);
         let body = ChatCompletionRequest {
             model: model.clone(),
-            messages: if prompt_tool_protocol {
-                Self::chat_prompt_tool_messages_for_request(request)
-            } else {
-                self.chat_messages_for_request(request, assistant_reasoning_field)
-            },
-            tools: None,
+            messages: self.chat_messages_for_request(request, assistant_reasoning_field),
+            tools: self.chat_tools_for_request(request),
             temperature: request.temperature,
             max_tokens: request.max_output_tokens,
             cache_control: self
@@ -795,9 +790,6 @@ impl OpenAiAdapter {
             .or(assistant_reasoning_field);
         let mut parsed =
             chat_wire::parse_completion_response(self.id.as_str(), model.as_str(), payload)?;
-        if prompt_tool_protocol {
-            Self::apply_prompt_tool_protocol_to_response(&mut parsed);
-        }
         parsed.provider_metadata = utils::provider_metadata_with_assistant_reasoning_field(
             parsed.provider_metadata.take(),
             response_reasoning_field,
@@ -832,15 +824,10 @@ impl OpenAiAdapter {
             &mut request_override,
         );
 
-        if prompt_tools::request_needs_text_protocol(request) {
-            let response = self.complete_with_chat_api(request, model).await?;
-            return Ok(Self::completion_response_stream(response));
-        }
-
         let body = ChatCompletionRequest {
             model: model.clone(),
             messages: self.chat_messages_for_request(request, assistant_reasoning_field),
-            tools: None,
+            tools: self.chat_tools_for_request(request),
             temperature: request.temperature,
             max_tokens: request.max_output_tokens,
             cache_control: self
@@ -1463,13 +1450,7 @@ impl OpenAiAdapter {
         let mut plan = OpenAiResponsesToolPlan::default();
         let mut namespace_tools: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
         for tool in &request.tools {
-            let wire_name =
-                responses_native_tool_name(tool.exposed_name.as_str()).ok_or_else(|| {
-                    AppError::Config(format!(
-                        "openai responses function tool name `{}` cannot be represented natively; prompt-tool protocol should handle it instead",
-                        tool.exposed_name
-                    ))
-                })?;
+            let wire_name = responses_wire_tool_name(tool.exposed_name.as_str());
             let mut map = serde_json::Map::new();
             map.insert(
                 "type".to_owned(),
@@ -1810,52 +1791,44 @@ impl OpenAiAdapter {
             request,
             assistant_reasoning_field,
         );
+        for message in &mut messages {
+            if let Some(tool_calls) = message.tool_calls.as_mut() {
+                for tool_call in tool_calls {
+                    tool_call.function.name =
+                        openai_chat_tool_name(tool_call.function.name.as_str());
+                }
+            }
+        }
         if matches!(self.profile, OpenAiProfile::GithubCopilot) {
             apply_chat_prompt_cache_hints(messages.as_mut_slice());
         }
         messages
     }
 
-    fn chat_prompt_tool_messages_for_request(
+    fn chat_tools_for_request(
+        &self,
         request: &CompletionRequest,
-    ) -> Vec<chat_wire::ChatMessage> {
-        let mut messages = Vec::new();
-        let mut system_chunks = Vec::new();
-        if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
-            system_chunks.push(system.clone());
-        }
-        system_chunks.push(prompt_tools::system_prompt(request.tools.as_slice()));
-        messages.push(chat_wire::ChatMessage::system(system_chunks.join("\n\n")));
-
-        for message in &request.messages {
-            let text = prompt_tools::message_text(message);
-            if text.trim().is_empty() {
-                continue;
-            }
-            match message.role {
-                Role::System => messages.push(chat_wire::ChatMessage::system(text)),
-                Role::User => messages.push(chat_wire::ChatMessage::user(
-                    serde_json::Value::String(text),
-                )),
-                Role::Assistant => messages.push(chat_wire::ChatMessage::assistant(
-                    Some(serde_json::Value::String(text)),
-                    None,
-                )),
-            }
-        }
-
-        messages
+    ) -> Option<Vec<chat_wire::ChatToolDefinition>> {
+        (!request.tools.is_empty()).then(|| {
+            request
+                .tools
+                .iter()
+                .map(|tool| chat_wire::ChatToolDefinition {
+                    kind: "function".to_owned(),
+                    function: chat_wire::ChatFunctionDefinition {
+                        name: openai_chat_tool_name(tool.exposed_name.as_str()),
+                        description: tool.description_text().to_string(),
+                        parameters: crate::tool::model_safe_tool_schema(
+                            &tool.sanitized_input_schema(),
+                        ),
+                        strict: tool.decl.strict,
+                    },
+                })
+                .collect()
+        })
     }
 
-    fn apply_prompt_tool_protocol_to_response(response: &mut CompletionResponse) {
-        let (clean_text, tool_calls) = prompt_tools::parse_tool_calls(response.text.as_str());
-        response.text = clean_text;
-        if !tool_calls.is_empty() {
-            response.tool_calls.extend(tool_calls);
-            response.finish_reason = Some(CompletionFinishReason::ToolCalls);
-        }
-    }
-
+    #[allow(dead_code)]
     fn completion_response_stream(
         response: CompletionResponse,
     ) -> std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>> {
@@ -1907,19 +1880,12 @@ impl OpenAiAdapter {
         &self,
         request: &CompletionRequest,
     ) -> Result<Vec<OpenAiResponsesInputItem>, AppError> {
-        let mut input = if Self::uses_responses_prompt_tool_protocol(request) {
-            Self::prompt_tool_responses_input_for_request(request)?
-        } else {
-            Self::to_responses_input_with_system(request, false)?
-        };
+        let mut input = Self::to_responses_input_with_system(request, false)?;
         clear_responses_prompt_cache_hints(input.as_mut_slice());
         Ok(input)
     }
 
     fn responses_instructions(request: &CompletionRequest) -> Option<String> {
-        if Self::uses_responses_prompt_tool_protocol(request) {
-            return Self::prompt_tool_responses_instructions(request);
-        }
         request
             .system
             .as_deref()
@@ -2002,49 +1968,11 @@ impl OpenAiAdapter {
             .then_some(OpenAiResponsesTextConfig { verbosity, format })
     }
 
-    fn uses_responses_prompt_tool_protocol(request: &CompletionRequest) -> bool {
-        prompt_tools::request_needs_text_protocol(request)
-    }
-
-    fn prompt_tool_responses_instructions(request: &CompletionRequest) -> Option<String> {
-        let mut chunks = Vec::new();
-        if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
-            chunks.push(system.clone());
-        }
-        chunks.push(prompt_tools::system_prompt(request.tools.as_slice()));
-        Some(chunks.join("\n\n"))
-    }
-
-    fn prompt_tool_responses_input_for_request(
-        request: &CompletionRequest,
-    ) -> Result<Vec<OpenAiResponsesInputItem>, AppError> {
-        let mut input = Vec::new();
-        for message in &request.messages {
-            let text = prompt_tools::message_text(message);
-            if text.trim().is_empty() {
-                continue;
-            }
-            let role = match message.role {
-                Role::System => "system",
-                Role::User => "user",
-                Role::Assistant => "assistant",
-            };
-            Self::push_responses_text_message(&mut input, role, text);
-        }
-        validate_responses_input(input.as_slice())?;
-        Ok(input)
-    }
-
     fn responses_tool_plan_for_request(
         &self,
         request: &CompletionRequest,
     ) -> Result<OpenAiResponsesToolPlan, AppError> {
-        if !Self::uses_responses_prompt_tool_protocol(request) {
-            return self.responses_tool_plan(request);
-        }
-        let mut native_only = request.clone();
-        native_only.tools.clear();
-        self.responses_tool_plan(&native_only)
+        self.responses_tool_plan(request)
     }
 
     #[cfg(test)]
@@ -2894,21 +2822,12 @@ impl ModelRuntime for OpenAiAdapter {
             ModelId::new(response.model.clone().unwrap_or_else(|| model.to_string()));
         let reasoning_text = Self::extract_reasoning_text(&response);
         let finish_reason = CompletionFinishReason::from_provider(response.stop_reason.as_deref());
-        let mut text = Self::extract_text(&response);
-        let mut tool_calls = Self::parse_responses_tool_calls(response.output.as_ref())?;
-        if Self::uses_responses_prompt_tool_protocol(&request) {
-            let (clean_text, prompt_calls) = prompt_tools::parse_tool_calls(text.as_str());
-            text = clean_text;
-            tool_calls.extend(prompt_calls);
-        }
+        let text = Self::extract_text(&response);
+        let tool_calls = Self::parse_responses_tool_calls(response.output.as_ref())?;
         let finish_reason =
             responses_finish_reason_with_tool_calls(finish_reason, !tool_calls.is_empty());
 
-        if text.is_empty()
-            && tool_calls.is_empty()
-            && finish_reason.is_none()
-            && !Self::uses_responses_prompt_tool_protocol(&request)
-        {
+        if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
             return self.complete_by_aggregating_stream(request).await;
         }
 
@@ -2988,10 +2907,6 @@ impl ModelRuntime for OpenAiAdapter {
             Self::native_tools_request_requires_responses(&request);
 
         if matches!(self.stream_mode, OpenAiStreamMode::RealtimeWebSocket) {
-            if Self::uses_responses_prompt_tool_protocol(&request) {
-                let response = self.complete(request).await?;
-                return Ok(Self::completion_response_stream(response));
-            }
             if native_tools_require_responses {
                 return Err(AppError::Config(format!(
                     "provider `{}` model `{}` configures native hosted tools, but OpenAI realtime websocket mode does not support them; use SSE Responses streaming instead",
@@ -3013,11 +2928,6 @@ impl ModelRuntime for OpenAiAdapter {
             return self
                 .complete_stream_with_chat_api(&request, model.to_string())
                 .await;
-        }
-
-        if Self::uses_responses_prompt_tool_protocol(&request) {
-            let response = self.complete(request).await?;
-            return Ok(Self::completion_response_stream(response));
         }
 
         let input = self.responses_input_for_request(&request)?;
@@ -3519,8 +3429,12 @@ struct OpenAiResponsesWireToolName {
 fn responses_wire_tool_name(name: &str) -> OpenAiResponsesWireToolName {
     responses_native_tool_name(name).unwrap_or_else(|| OpenAiResponsesWireToolName {
         namespace: None,
-        name: name.trim().to_owned(),
+        name: crate::tool::model_safe_tool_name(name),
     })
+}
+
+fn openai_chat_tool_name(name: &str) -> String {
+    crate::tool::model_safe_tool_name(name)
 }
 
 fn responses_native_tool_name(name: &str) -> Option<OpenAiResponsesWireToolName> {
@@ -5045,7 +4959,7 @@ mod tests {
     }
 
     #[test]
-    fn responses_prompt_tool_protocol_exposes_exact_multi_dot_names() {
+    fn responses_tool_plan_aliases_multi_dot_names_natively() {
         let adapter = OpenAiAdapter::new(
             reqwest::Client::new(),
             "test-token",
@@ -5066,23 +4980,24 @@ mod tests {
             .description("Count stream fixture rows."),
         )];
 
-        assert!(OpenAiAdapter::uses_responses_prompt_tool_protocol(&request));
         assert!(responses_native_tool_name("streaming-fixture.stream_fixture.count").is_none());
 
         let plan = adapter
             .responses_tool_plan_for_request(&request)
-            .expect("prompt-tool responses plan should build");
-        let instructions = OpenAiAdapter::responses_instructions(&request)
-            .expect("instructions should be present");
+            .expect("responses tool plan should build");
 
-        assert!(plan.tools.is_empty());
-        assert!(instructions.contains("`streaming-fixture.stream_fixture.count`"));
-        assert!(instructions.contains("Tool names are exact and may contain dots"));
-        assert!(!instructions.contains("streaming-fixture_stream_fixture_count"));
+        assert_eq!(OpenAiAdapter::responses_instructions(&request), None);
+        assert_eq!(plan.tools.len(), 1);
+        assert_eq!(
+            plan.tools[0]["name"],
+            serde_json::json!(crate::tool::model_safe_tool_name(
+                "streaming-fixture.stream_fixture.count"
+            ))
+        );
     }
 
     #[test]
-    fn responses_prompt_tool_protocol_exposes_exact_single_dot_names() {
+    fn responses_tool_plan_keeps_single_dot_namespace_shape() {
         let adapter = OpenAiAdapter::new(
             reqwest::Client::new(),
             "test-token",
@@ -5103,18 +5018,15 @@ mod tests {
             .description("Search the web."),
         )];
 
-        assert!(OpenAiAdapter::uses_responses_prompt_tool_protocol(&request));
-
         let plan = adapter
             .responses_tool_plan_for_request(&request)
-            .expect("prompt-tool responses plan should build");
-        let instructions = OpenAiAdapter::responses_instructions(&request)
-            .expect("instructions should be present");
+            .expect("responses tool plan should build");
 
-        assert!(plan.tools.is_empty());
-        assert!(instructions.contains("`web.search`"));
-        assert!(instructions.contains("Tool names are exact and may contain dots"));
-        assert!(!instructions.contains("web_search"));
+        assert_eq!(OpenAiAdapter::responses_instructions(&request), None);
+        assert_eq!(plan.tools.len(), 1);
+        assert_eq!(plan.tools[0]["type"], serde_json::json!("namespace"));
+        assert_eq!(plan.tools[0]["name"], serde_json::json!("web"));
+        assert_eq!(plan.tools[0]["tools"][0]["name"], serde_json::json!("search"));
     }
 
     #[test]
@@ -5142,7 +5054,13 @@ mod tests {
     }
 
     #[test]
-    fn chat_prompt_tool_protocol_exposes_dotted_tool_names() {
+    fn chat_tools_alias_dotted_tool_names_natively() {
+        let adapter = OpenAiAdapter::new(
+            reqwest::Client::new(),
+            "test-token",
+            "https://api.openai.com/v1",
+            "gpt-5.5",
+        );
         let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
         request.tools = vec![crate::plugin::registry::RegisteredTool::new(
             "agena.web",
@@ -5157,44 +5075,23 @@ mod tests {
             .description("Search the web."),
         )];
 
-        let messages = OpenAiAdapter::chat_prompt_tool_messages_for_request(&request);
-        let system = messages
-            .first()
-            .and_then(|message| message.content.as_ref())
-            .and_then(serde_json::Value::as_str)
-            .expect("system prompt should be plain text");
+        let tools = adapter
+            .chat_tools_for_request(&request)
+            .expect("chat tools should be present");
 
-        assert!(system.contains("`web.search`"));
-        assert!(!system.contains("web_search"));
+        assert_eq!(
+            tools[0].function.name,
+            crate::tool::model_safe_tool_name("web.search")
+        );
     }
 
     #[test]
-    fn chat_prompt_tool_protocol_parses_dotted_tool_calls() {
-        let mut response = CompletionResponse {
-            provider_id: ProviderId::new("openai"),
-            model: ModelId::new("gpt-5.4-mini"),
-            text: "<agena_tool_call>{\"id\":\"call_1\",\"name\":\"web.search\",\"arguments\":{\"query\":\"weather\"}}</agena_tool_call>".to_owned(),
-            reasoning_text: None,
-            finish_reason: Some(CompletionFinishReason::Stop),
-            tool_calls: Vec::new(),
-            usage: None,
-            provider_metadata: None,
-        };
-
-        OpenAiAdapter::apply_prompt_tool_protocol_to_response(&mut response);
-
-        assert_eq!(response.text, "");
+    fn responses_wire_tool_name_falls_back_to_model_safe_alias() {
+        let wire_name = responses_wire_tool_name("web.search.deep");
+        assert_eq!(wire_name.namespace, None);
         assert_eq!(
-            response.finish_reason,
-            Some(CompletionFinishReason::ToolCalls)
-        );
-        assert_eq!(
-            response.tool_calls,
-            vec![CompletionToolCall::Function {
-                id: "call_1".to_owned(),
-                name: "web.search".to_owned(),
-                arguments_json: "{\"query\":\"weather\"}".to_owned(),
-            }]
+            wire_name.name,
+            crate::tool::model_safe_tool_name("web.search.deep")
         );
     }
 

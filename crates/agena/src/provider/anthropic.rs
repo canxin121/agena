@@ -20,7 +20,7 @@ use crate::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ManagedCredential, ModelRuntime, ProviderModel,
         StreamResumePolicy, ThinkingDisplay, ThinkingRequest, auth::AuthData, prompt_cache,
-        prompt_tools, sse, utils, wire_message,
+        sse, utils, wire_message,
     },
     role::Role,
 };
@@ -264,15 +264,6 @@ impl AnthropicAdapter {
         Self::blocks_from_projected_parts(message, projected.as_slice())
     }
 
-    fn prompt_tool_content_to_blocks(message: &Message) -> Vec<AnthropicTextBlock> {
-        let text = prompt_tools::message_text(message);
-        if text.trim().is_empty() {
-            Vec::new()
-        } else {
-            vec![AnthropicTextBlock::text(text)]
-        }
-    }
-
     fn blocks_from_projected_parts(
         message: &Message,
         projected: &[wire_message::WirePart],
@@ -301,7 +292,7 @@ impl AnthropicAdapter {
                     arguments_json,
                 } => blocks.push(AnthropicTextBlock::tool_use(
                     id.clone(),
-                    name.clone(),
+                    anthropic_wire_tool_name(name),
                     arguments_json.clone(),
                 )),
                 wire_message::WirePart::ToolResult {
@@ -459,10 +450,6 @@ impl AnthropicAdapter {
         }
     }
 
-    fn uses_prompt_tool_protocol(request: &CompletionRequest) -> bool {
-        prompt_tools::request_needs_text_protocol(request)
-    }
-
     fn merge_tool_provider_options(
         map: &mut serde_json::Map<String, Value>,
         extra: Option<&Value>,
@@ -492,7 +479,10 @@ impl AnthropicAdapter {
         let mut tools = Vec::new();
         for tool in &request.tools {
             let mut map = serde_json::Map::new();
-            map.insert("name".to_owned(), Value::String(tool.exposed_name.clone()));
+            map.insert(
+                "name".to_owned(),
+                Value::String(anthropic_wire_tool_name(tool.exposed_name.as_str())),
+            );
             map.insert(
                 "description".to_owned(),
                 Value::String(tool.description_text().to_string()),
@@ -725,6 +715,7 @@ impl AnthropicAdapter {
         utils::resolved_request_headers(self.id.as_str(), &headers)
     }
 
+    #[allow(dead_code)]
     fn completion_response_stream(
         response: CompletionResponse,
     ) -> std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>> {
@@ -896,52 +887,28 @@ impl ModelRuntime for AnthropicAdapter {
 
         let thinking_parts = anthropic_thinking_parts(model.as_str(), request.thinking.as_ref());
         let include_thinking = thinking_parts.include_thinking();
-        let prompt_tool_protocol = Self::uses_prompt_tool_protocol(&request);
 
         let mut system_chunks = Vec::new();
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
             system_chunks.push(AnthropicTextBlock::text(system.clone()));
         }
-        if prompt_tool_protocol {
-            system_chunks.push(AnthropicTextBlock::text(prompt_tools::system_prompt(
-                request.tools.as_slice(),
-            )));
-        }
-        let mut tools = if prompt_tool_protocol {
-            (!request.native_tools.bindings().is_empty())
-                .then(|| self.native_tools(&request))
-                .transpose()?
-        } else {
-            (!request.tools.is_empty() || !request.native_tools.bindings().is_empty())
-                .then(|| self.tools(&request))
-                .transpose()?
-        };
+        let mut tools = (!request.tools.is_empty() || !request.native_tools.bindings().is_empty())
+            .then(|| self.tools(&request))
+            .transpose()?;
 
         let mut messages = Vec::new();
         for msg in &request.messages {
             match msg.role {
                 Role::System => {
-                    let text = if prompt_tool_protocol {
-                        prompt_tools::message_text(msg)
-                    } else {
-                        msg.as_text_lossy()
-                    };
+                    let text = msg.as_text_lossy();
                     if !text.trim().is_empty() {
                         system_chunks.push(AnthropicTextBlock::text(text));
                     }
                 }
-                Role::Assistant if prompt_tool_protocol => messages.push(AnthropicMessage {
-                    role: "assistant".to_owned(),
-                    content: Self::prompt_tool_content_to_blocks(msg),
-                }),
                 Role::Assistant => messages.extend(Self::assistant_messages_from_parts(msg)),
                 Role::User => messages.push(AnthropicMessage {
                     role: "user".to_owned(),
-                    content: if prompt_tool_protocol {
-                        Self::prompt_tool_content_to_blocks(msg)
-                    } else {
-                        Self::content_to_blocks(msg)
-                    },
+                    content: Self::content_to_blocks(msg),
                 }),
             }
         }
@@ -977,7 +944,7 @@ impl ModelRuntime for AnthropicAdapter {
             )
             .await?;
 
-        let mut text = response
+        let text = response
             .content
             .iter()
             .filter(|c| c.kind == "text")
@@ -1002,7 +969,7 @@ impl ModelRuntime for AnthropicAdapter {
             None
         };
 
-        let mut tool_calls = response
+        let tool_calls = response
             .content
             .iter()
             .filter(|c| c.kind == "tool_use")
@@ -1026,19 +993,9 @@ impl ModelRuntime for AnthropicAdapter {
                 })
             })
             .collect::<Result<Vec<_>, AppError>>()?;
-        if prompt_tool_protocol {
-            let (clean_text, prompt_calls) = prompt_tools::parse_tool_calls(text.as_str());
-            text = clean_text;
-            tool_calls.extend(prompt_calls);
-        }
+        let finish_reason = CompletionFinishReason::from_provider(response.stop_reason.as_deref());
 
-        let finish_reason = if prompt_tool_protocol && !tool_calls.is_empty() {
-            Some(CompletionFinishReason::ToolCalls)
-        } else {
-            CompletionFinishReason::from_provider(response.stop_reason.as_deref())
-        };
-
-        if !prompt_tool_protocol && text.is_empty() && tool_calls.is_empty() {
+        if text.is_empty() && tool_calls.is_empty() {
             return self
                 .complete_by_aggregating_stream(stream_fallback_request)
                 .await;
@@ -1065,10 +1022,6 @@ impl ModelRuntime for AnthropicAdapter {
         AppError,
     > {
         tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
-        if Self::uses_prompt_tool_protocol(&request) {
-            let response = self.complete(request).await?;
-            return Ok(Self::completion_response_stream(response));
-        }
         let model = request.model.clone();
 
         let mut system_chunks = Vec::new();
@@ -1718,6 +1671,10 @@ fn json_value_to_string(value: &Value) -> String {
         Value::String(text) => text.clone(),
         other => other.to_string(),
     }
+}
+
+fn anthropic_wire_tool_name(name: &str) -> String {
+    crate::tool::model_safe_tool_name(name)
 }
 
 #[derive(Debug, Deserialize)]

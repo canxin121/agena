@@ -1304,19 +1304,40 @@ fn map_finish_reason(reason: &CompletionFinishReason) -> FinishReason {
 fn message_provider_state_from_provider_metadata(
     provider_metadata: &serde_json::Value,
 ) -> Option<MessageProviderState> {
-    let assistant_reasoning_field = provider_metadata
-        .as_object()
-        .and_then(|metadata| metadata.get("assistant_reasoning_field"))
+    let assistant_reasoning_field = provider_metadata_string_field(
+        provider_metadata,
+        "assistant_reasoning_field",
+    )
         .and_then(|value| value.as_str())
         .and_then(|value| match value {
             "reasoning_content" => Some(AssistantReasoningField::ReasoningContent),
             "reasoning_details" => Some(AssistantReasoningField::ReasoningDetails),
             _ => None,
         });
+    let response_id = provider_metadata_string_field(provider_metadata, "response_id")
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned);
     let state = MessageProviderState {
         assistant_reasoning_field,
+        response_id,
     };
     (!state.is_empty()).then_some(state)
+}
+
+fn provider_metadata_string_field<'a>(
+    provider_metadata: &'a serde_json::Value,
+    field: &str,
+) -> Option<&'a serde_json::Value> {
+    provider_metadata
+        .as_object()
+        .and_then(|metadata| metadata.get(field))
+        .or_else(|| {
+            provider_metadata
+                .as_object()
+                .and_then(|metadata| metadata.get("provider_metadata"))
+                .and_then(serde_json::Value::as_object)
+                .and_then(|metadata| metadata.get(field))
+        })
 }
 
 #[derive(Debug, Default, Clone)]

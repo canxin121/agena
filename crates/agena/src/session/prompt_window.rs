@@ -726,9 +726,25 @@ pub(crate) fn fingerprint_optional_text(value: Option<&str>) -> String {
 
 pub(crate) fn extract_response_id(provider_metadata: Option<&serde_json::Value>) -> Option<String> {
     provider_metadata
-        .and_then(|metadata| metadata.get("response_id"))
+        .and_then(|metadata| provider_metadata_field(metadata, "response_id"))
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned)
+}
+
+fn provider_metadata_field<'a>(
+    metadata: &'a serde_json::Value,
+    field: &str,
+) -> Option<&'a serde_json::Value> {
+    metadata
+        .as_object()
+        .and_then(|object| object.get(field))
+        .or_else(|| {
+            metadata
+                .as_object()
+                .and_then(|object| object.get("provider_metadata"))
+                .and_then(serde_json::Value::as_object)
+                .and_then(|object| object.get(field))
+        })
 }
 
 fn approximate_message_payload_chars(message: &Message) -> usize {

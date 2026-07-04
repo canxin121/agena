@@ -894,6 +894,13 @@ where
         let mut authoritative_part = part.clone();
         authoritative_part.message_id = payload.message_id.raw();
         upsert_part_projection(db, session_id, &authoritative_part).await?;
+        delete_duplicate_operation_parts(
+            db,
+            payload.message_id.raw(),
+            payload.call_id.as_str(),
+            authoritative_part.id,
+        )
+        .await?;
         touch_message_projection(
             db,
             payload.message_id.raw(),
@@ -1004,6 +1011,35 @@ where
         payload.completed_at.timestamp_millis(),
     )
     .await
+}
+
+async fn delete_duplicate_operation_parts<C>(
+    db: &C,
+    message_id: i64,
+    operation_id: &str,
+    keep_part_id: i64,
+) -> Result<(), DbErr>
+where
+    C: ConnectionTrait,
+{
+    let duplicates = activity_part::Entity::find()
+        .filter(activity_part::Column::MessageId.eq(message_id))
+        .filter(activity_part::Column::OperationId.eq(operation_id))
+        .all(db)
+        .await?;
+
+    for duplicate in duplicates {
+        if duplicate.part_id == keep_part_id
+            || duplicate.kind != crate::message::PartKind::Operation
+        {
+            continue;
+        }
+        activity_part::Entity::delete_by_id(duplicate.part_id)
+            .exec(db)
+            .await?;
+    }
+
+    Ok(())
 }
 
 fn synthetic_tool_call_part_id(message_id: i64, call_id: &str) -> i64 {

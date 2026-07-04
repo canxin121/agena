@@ -1584,6 +1584,7 @@ message-tool-pending = pending: {$label}
 message-tool-running = running: {$label}
 message-tool-done = done: {$label}
 message-tool-failed = failed: {$label}
+message-tool-cancelled = cancelled: {$label}
 message-tool-summary = [tool] {$status} | {$label}
 message-tool-result-blocks = {$count} result blocks
 message-tool-output-collapsed =     … {$lines} more

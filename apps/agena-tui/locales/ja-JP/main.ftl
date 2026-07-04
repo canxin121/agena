@@ -135,6 +135,7 @@ message-tool-pending = 保留: {$label}
 message-tool-running = 実行中: {$label}
 message-tool-done = 完了: {$label}
 message-tool-failed = 失敗: {$label}
+message-tool-cancelled = 中止: {$label}
 message-tool-result-blocks = {$count} 個の結果ブロック
 
 todo-status-pending = pending

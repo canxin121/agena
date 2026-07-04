@@ -203,11 +203,7 @@ pub(crate) fn normalize_prompt_messages(messages: &[Message]) -> Vec<Message> {
 
         if let Some(stripped) = assistant_prompt_message_without_local_tool_results(message) {
             normalized.push(stripped);
-            extend_completed_tool_outputs(
-                &mut normalized,
-                message,
-                &mut next_synthetic_message_id,
-            );
+            extend_completed_tool_outputs(&mut normalized, message, &mut next_synthetic_message_id);
             continue;
         }
 
@@ -807,7 +803,10 @@ fn assistant_prompt_message_without_local_tool_results(message: &Message) -> Opt
         if exec.is_provider_native_only() {
             continue;
         }
-        if matches!(part.status, ExecutionStatus::Completed | ExecutionStatus::Failed) {
+        if matches!(
+            part.status,
+            ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Cancelled
+        ) {
             part.status = ExecutionStatus::Pending;
             changed = true;
         }
@@ -823,7 +822,10 @@ fn extend_completed_tool_outputs(
 ) {
     let mut seen = HashSet::new();
     for part in &assistant.parts {
-        if !matches!(part.status, ExecutionStatus::Completed | ExecutionStatus::Failed) {
+        if !matches!(
+            part.status,
+            ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Cancelled
+        ) {
             continue;
         }
         let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
@@ -928,6 +930,7 @@ fn tool_result_output_text(part: &MessagePart, exec: &OperationPart) -> String {
         ExecutionStatus::Failed | ExecutionStatus::Completed => {
             project_session_tool_result_output(part.status, exec)
         }
+        ExecutionStatus::Cancelled => fallback_tool_result_output(part, exec),
         _ => String::new(),
     }
 }
@@ -1057,7 +1060,11 @@ mod tests {
         let now = Utc::now();
         let mut session = Session::new(1, 1, "prompt", now).with_messages(vec![
             user_message(1, "run date"),
-            assistant_tool_message(2, ExecutionStatus::Completed, "Sat Jul  4 16:50:20 CST 2026"),
+            assistant_tool_message(
+                2,
+                ExecutionStatus::Completed,
+                "Sat Jul  4 16:50:20 CST 2026",
+            ),
         ]);
         session.runtime.set_provider_anchor(ProviderPromptAnchor {
             provider_id: "recording".to_string(),
@@ -1089,6 +1096,64 @@ mod tests {
                 output_json,
                 ..
             }] if tool_call_id == "call_date_1" && output_json == "Sat Jul  4 16:50:20 CST 2026"
+        ));
+    }
+
+    #[test]
+    fn prepared_prompt_reuses_response_id_with_cancelled_tool_result_delta() {
+        let options = PromptRequestOptions {
+            provider_id: "recording",
+            model_id: "recording-model",
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+            tools: &[],
+            provider_request_shape: None,
+            continuation_supported: true,
+        };
+        let fingerprints = prompt_request_fingerprints(&options);
+        let initial_messages = vec![
+            user_message(1, "run date"),
+            assistant_tool_message(2, ExecutionStatus::Pending, ""),
+        ];
+        let transcript_digest = prompt_transcript_digest(initial_messages.as_slice());
+
+        let now = Utc::now();
+        let mut session = Session::new(1, 1, "prompt", now).with_messages(vec![
+            user_message(1, "run date"),
+            assistant_tool_message(2, ExecutionStatus::Cancelled, ""),
+        ]);
+        session.runtime.set_provider_anchor(ProviderPromptAnchor {
+            provider_id: "recording".to_string(),
+            model_id: "recording-model".to_string(),
+            previous_response_id: "resp_1".to_string(),
+            assistant_message_id: 2,
+            prompt_window_generation: session.runtime.prompt_window.generation,
+            system_fingerprint: fingerprints.system_fingerprint,
+            request_options_fingerprint: fingerprints.request_options_fingerprint,
+            provider_request_shape: None,
+            transcript_digest,
+        });
+
+        let prepared = build_prepared_prompt(&session, options);
+
+        assert_eq!(prepared.previous_response_id.as_deref(), Some("resp_1"));
+        assert_eq!(
+            prepared.continuation_reason,
+            PromptContinuationReason::ProviderContinuation
+        );
+        assert_eq!(prepared.messages.len(), 1);
+        assert_eq!(prepared.messages[0].role, Role::Tool);
+
+        let projected = project_session_parts(&prepared.messages[0]);
+        assert!(matches!(
+            projected.as_slice(),
+            [ProjectedSessionPart::ToolResult {
+                tool_call_id,
+                output_json,
+                ..
+            }] if tool_call_id == "call_date_1"
+                && output_json == SYNTHETIC_TOOL_INTERRUPTED_PLACEHOLDER
         ));
     }
 }

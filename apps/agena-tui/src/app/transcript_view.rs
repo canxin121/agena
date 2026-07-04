@@ -1246,7 +1246,7 @@ fn tool_status_key_and_color(status: ExecutionStatus) -> (&'static str, Color) {
         ExecutionStatus::InProgress => ("message-tool-running", Color::Magenta),
         ExecutionStatus::Completed => ("message-tool-done", Color::Green),
         ExecutionStatus::Failed => ("message-tool-failed", Color::Red),
-        ExecutionStatus::Cancelled => ("message-tool-failed", Color::DarkGray),
+        ExecutionStatus::Cancelled => ("message-tool-cancelled", Color::DarkGray),
     }
 }
 

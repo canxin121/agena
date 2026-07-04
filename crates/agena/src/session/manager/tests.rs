@@ -11,7 +11,7 @@ use sea_orm::{
 use uuid::Uuid;
 
 use crate::agent::Agent;
-use crate::db::entities::activity_message;
+use crate::db::entities::{activity_message, activity_part};
 use crate::db::init_schema;
 use crate::event::EventKind;
 use crate::message::{
@@ -29,7 +29,9 @@ use crate::provider::{
     CompletionUsage, ModelRuntime, ProviderModel, ProviderRegistry,
 };
 use crate::role::Role;
-use crate::session::history::TranscriptContent;
+use crate::session::history::{
+    AssistantMessageCompleted, ToolCallCompleted, ToolCallIssued, TranscriptContent,
+};
 use crate::session::{ContextGovernor, ContextPolicy};
 
 use super::*;
@@ -2079,6 +2081,160 @@ async fn load_session_rebuilds_projection_when_history_is_published_directly() {
         .await
         .expect("count projected messages after rebuild");
     assert_eq!(projected_after, 1);
+}
+
+#[tokio::test]
+async fn tool_call_completion_projection_replaces_synthetic_pending_part() {
+    let workspace = TempWorkspace::new();
+    let service = build_manager(
+        &workspace.root,
+        PermissionPolicy::allow_all(),
+        SessionManagerConfig::default(),
+    )
+    .await;
+
+    let created = service
+        .create_session(SessionCreateRequest {
+            title: "tool-history-projection".to_string(),
+            parent_session_id: None,
+        })
+        .await
+        .expect("create session");
+
+    let run_id = HistoryRunId::new();
+    let message_id = 91_001;
+    let created_at = chrono::Utc::now();
+    let call_id = HistoryToolCallId::new("call_task_1");
+    let mut failed_part = MessagePart::with_content(
+        91_101,
+        message_id,
+        created_at,
+        ExecutionStatus::Failed,
+        PartContent::Operation(crate::message::OperationPart::failed(
+            7,
+            ToolInvocation::new("task", StructuredObject::default()),
+            "plugin error: invalid JSON value at `.`: missing field `action`",
+            "plugin error: invalid JSON value at `.`: missing field `action`",
+            Vec::new(),
+            Vec::new(),
+            ToolOutput::default(),
+            crate::message::TimeRange::default(),
+        )),
+    );
+    failed_part.part_index = 0;
+    failed_part.operation_id = Some(call_id.as_str().to_string());
+
+    service
+        .event_publisher()
+        .publish(
+            crate::event::PublishContext::for_session(created.id),
+            EventKind::RunStarted(RunStarted {
+                run_id,
+                source: RunSource::User,
+                model_id: "direct-model".into(),
+                provider_id: "direct-provider".into(),
+                request_digest: None,
+            }),
+        )
+        .await
+        .expect("publish run start");
+    service
+        .event_publisher()
+        .publish(
+            crate::event::PublishContext::for_session(created.id),
+            EventKind::AssistantMessageCompleted(AssistantMessageCompleted {
+                message_id: HistoryMessageId(message_id),
+                run_id,
+                created_at,
+                content: TranscriptContent::from_text(""),
+                parts: Vec::new(),
+                usage: None,
+                finish_reason: FinishReason::ToolCalls,
+                metadata: MessageMetadata::default(),
+                provider_state: None,
+            }),
+        )
+        .await
+        .expect("publish assistant message");
+    service
+        .event_publisher()
+        .publish(
+            crate::event::PublishContext::for_session(created.id),
+            EventKind::ToolCallIssued(ToolCallIssued {
+                message_id: HistoryMessageId(message_id),
+                run_id,
+                call_id: call_id.clone(),
+                name: "task".into(),
+                arguments: serde_json::json!({
+                    "description": "probe task",
+                    "prompt": "probe prompt"
+                }),
+                created_at,
+            }),
+        )
+        .await
+        .expect("publish tool issued");
+    service
+        .event_publisher()
+        .publish(
+            crate::event::PublishContext::for_session(created.id),
+            EventKind::ToolCallCompleted(ToolCallCompleted {
+                message_id: HistoryMessageId(message_id),
+                call_id: call_id.clone(),
+                run_id,
+                tool_name: "task".into(),
+                part: Some(failed_part.clone()),
+                output: crate::session::history::TranscriptToolOutput::Error {
+                    message: "plugin error: invalid JSON value at `.`: missing field `action`"
+                        .to_string(),
+                },
+                completed_at: chrono::Utc::now(),
+            }),
+        )
+        .await
+        .expect("publish tool completed");
+
+    service.store.prune_cache(SessionCachePolicy {
+        max_sessions: 0,
+        ttl: std::time::Duration::from_secs(0),
+        max_bytes: 0,
+    });
+    let reloaded = service
+        .store
+        .load_session(
+            created.id,
+            SessionCachePolicy {
+                max_sessions: 8,
+                ttl: std::time::Duration::from_secs(60),
+                max_bytes: usize::MAX,
+            },
+        )
+        .await
+        .expect("session should rebuild projection");
+
+    let operation_parts = reloaded
+        .messages
+        .iter()
+        .flat_map(|message| message.parts.iter())
+        .filter(|part| {
+            part.operation_id.as_deref() == Some(call_id.as_str())
+                && part.kind == crate::message::PartKind::Operation
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        operation_parts.len(),
+        1,
+        "projection should keep only one operation part for a completed tool call"
+    );
+    assert_eq!(operation_parts[0].status, ExecutionStatus::Failed);
+
+    let projected_parts = activity_part::Entity::find()
+        .filter(activity_part::Column::SessionId.eq(created.id))
+        .filter(activity_part::Column::OperationId.eq(call_id.as_str()))
+        .count(service.store.db())
+        .await
+        .expect("count projected parts");
+    assert_eq!(projected_parts, 1);
 }
 
 #[tokio::test]
@@ -6835,6 +6991,51 @@ while True:
                 ),
                 crate::permission::PermissionDecision::Allow,
                 "managed project state writes should bypass agent external-path asks"
+            );
+        });
+    }
+
+    #[test]
+    fn explicit_allowed_tools_do_not_get_overridden_by_default_agent() {
+        run_async_with_large_stack(async move {
+            let workspace = TempWorkspace::new();
+            let manager = build_manager(
+                &workspace.root,
+                PermissionPolicy::allow_all(),
+                SessionManagerConfig::default(),
+            )
+            .await;
+
+            let mut session = manager
+                .create_session(SessionCreateRequest {
+                    title: "manual-tool-restriction".to_string(),
+                    parent_session_id: None,
+                })
+                .await
+                .expect("session should be created");
+            session
+                .runtime
+                .set_allowed_tools(vec!["skills.bootstrap".to_string()]);
+
+            let state = manager.execution_state();
+            let mut options = SessionRunOptions::new(scripted_model_ref());
+            let updated = manager
+                .apply_requested_agent_profile(session, &mut options, state)
+                .await
+                .expect("manual allowed tools should stay intact");
+
+            assert_eq!(
+                updated.runtime.execution.selection.agent, None,
+                "default agent should not be applied when the session already has explicit tool restrictions"
+            );
+            assert_eq!(
+                updated.runtime.allowed_tools(),
+                ["skills.bootstrap"],
+                "manual tool restrictions should survive run setup"
+            );
+            assert!(
+                options.agent_profile.is_none(),
+                "run options should not be backfilled with the default agent"
             );
         });
     }

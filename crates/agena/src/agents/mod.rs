@@ -483,7 +483,9 @@ fn default_profile(
             permission,
             defaults: AgentSelectionConfig::default(),
         },
-        prompt: prompt.to_string(),
+        prompt: format!(
+            "{prompt} When the user asks what tools are available, whether a tool exists, or how to inspect tool usage, do not answer from memory. Inspect the live tool catalog first with `tools.list`, `tools.search`, or `tools.help` when those tools are available."
+        ),
         source_path: None,
         scope: AgentScope::Default,
     }

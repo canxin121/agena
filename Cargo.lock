@@ -242,9 +242,11 @@ version = "0.1.0"
 dependencies = [
  "agena",
  "agena-api-server",
+ "agena-plugin-sdk",
  "agena-tui",
  "async-trait",
  "clap",
+ "serde_json",
  "tokio",
  "tracing-subscriber",
 ]

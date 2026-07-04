@@ -93,7 +93,9 @@ pub fn project(message: &Message) -> Vec<WirePart> {
                 if matches!(message.role, Role::Tool) {
                     if matches!(
                         part.status,
-                        ExecutionStatus::Completed | ExecutionStatus::Failed
+                        ExecutionStatus::Completed
+                            | ExecutionStatus::Failed
+                            | ExecutionStatus::Cancelled
                     ) {
                         parts.push(WirePart::ToolResult {
                             tool_call_id: call_id,
@@ -111,7 +113,9 @@ pub fn project(message: &Message) -> Vec<WirePart> {
 
                 if matches!(
                     part.status,
-                    ExecutionStatus::Completed | ExecutionStatus::Failed
+                    ExecutionStatus::Completed
+                        | ExecutionStatus::Failed
+                        | ExecutionStatus::Cancelled
                 ) {
                     parts.push(WirePart::ToolResult {
                         tool_call_id: call_id,
@@ -706,5 +710,58 @@ mod tests {
                 "failures": ["https://example.com/docs/broken: http 500"]
             })
         );
+    }
+
+    #[test]
+    fn project_emits_cancelled_tool_result_for_model() {
+        let created_at = Utc::now();
+        let invocation = ToolInvocation::new(
+            "process.run",
+            StructuredObject::try_from(json!({ "command": "date" })).expect("tool input"),
+        );
+        let mut tool_part = MessagePart::with_content(
+            1,
+            0,
+            created_at,
+            ExecutionStatus::Cancelled,
+            PartContent::Operation(OperationPart::completed(
+                1,
+                invocation,
+                String::new(),
+                Vec::new(),
+                Vec::new(),
+                crate::message::ToolOutput::default(),
+                TimeRange::default(),
+            )),
+        );
+        tool_part.operation_id = Some("call_cancelled".to_string());
+
+        let assistant = Message {
+            id: 2,
+            role: Role::Assistant,
+            state: ExecutionStatus::Completed,
+            parts: vec![tool_part],
+            created_at,
+            metadata: Default::default(),
+            provider_state: None,
+            usage: None,
+        };
+
+        let projected = project(&assistant);
+        assert!(matches!(
+            projected.as_slice(),
+            [
+                WirePart::ToolCall { id, name, .. },
+                WirePart::ToolResult {
+                    tool_call_id,
+                    tool_name,
+                    output_json,
+                }
+            ] if id == "call_cancelled"
+                && name == "process.run"
+                && tool_call_id == "call_cancelled"
+                && tool_name == "process.run"
+                && output_json.is_empty()
+        ));
     }
 }

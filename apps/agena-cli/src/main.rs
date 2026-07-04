@@ -245,7 +245,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
                     message_id: message.id,
                     role: message.role.to_string(),
                     status: message.state.to_string(),
-                    text: message.as_text_lossy(),
+                    text: message.visible_text_lossy(),
                     created_at: message.created_at,
                 })
                 .collect(),
@@ -325,7 +325,7 @@ fn last_assistant_text(session: &Session) -> Option<String> {
         .iter()
         .rev()
         .find(|message| message.role == Role::Assistant)
-        .map(|message| message.as_text_lossy())
+        .map(|message| message.visible_text_lossy())
 }
 
 fn session_storage_error() -> AppError {

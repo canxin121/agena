@@ -5062,7 +5062,10 @@ mod tests {
         assert_eq!(plan.tools.len(), 1);
         assert_eq!(plan.tools[0]["type"], serde_json::json!("namespace"));
         assert_eq!(plan.tools[0]["name"], serde_json::json!("web"));
-        assert_eq!(plan.tools[0]["tools"][0]["name"], serde_json::json!("search"));
+        assert_eq!(
+            plan.tools[0]["tools"][0]["name"],
+            serde_json::json!("search")
+        );
     }
 
     #[test]

@@ -755,7 +755,8 @@ fn assistant_messages_from_parts(
 }
 
 fn tool_messages_from_parts(parts: &[wire_message::WirePart]) -> Vec<ChatMessage> {
-    parts.iter()
+    parts
+        .iter()
         .filter_map(|part| match part {
             wire_message::WirePart::ToolResult {
                 tool_call_id,

@@ -108,6 +108,21 @@ impl SessionManager {
             .await
     }
 
+    pub async fn set_session_allowed_tools(
+        &self,
+        session_id: i64,
+        allowed_tools: Vec<String>,
+    ) -> Result<Session, AppError> {
+        let state = self.execution_state();
+        let mut session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        session.runtime.set_allowed_tools(allowed_tools);
+        self.persist_session_changes(session, Vec::new(), Vec::new(), None, state)
+            .await
+    }
+
     pub fn session_usage(&self, session: &Session) -> Result<SessionUsage, AppError> {
         let state = self.execution_state();
         let options = self.run_options_from_session(session, state.clone()).ok();

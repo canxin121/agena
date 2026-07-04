@@ -772,7 +772,8 @@ impl AmazonBedrockAdapter {
         for message in &mut messages {
             if let Some(tool_calls) = message.tool_calls.as_mut() {
                 for tool_call in tool_calls {
-                    tool_call.function.name = bedrock_wire_tool_name(tool_call.function.name.as_str());
+                    tool_call.function.name =
+                        bedrock_wire_tool_name(tool_call.function.name.as_str());
                 }
             }
         }
@@ -2455,7 +2456,10 @@ mod tests {
         };
 
         let parsed = adapter
-            .parse_anthropic_completion(payload, &ModelId::new("anthropic.claude-3-5-sonnet-20241022-v2:0"))
+            .parse_anthropic_completion(
+                payload,
+                &ModelId::new("anthropic.claude-3-5-sonnet-20241022-v2:0"),
+            )
             .expect("structured response should parse");
 
         assert_eq!(parsed.text, "");
@@ -2467,9 +2471,6 @@ mod tests {
                 arguments_json: "{\"x\":1}".to_owned(),
             }]
         );
-        assert_eq!(
-            parsed.finish_reason,
-            Some(CompletionFinishReason::Stop)
-        );
+        assert_eq!(parsed.finish_reason, Some(CompletionFinishReason::Stop));
     }
 }

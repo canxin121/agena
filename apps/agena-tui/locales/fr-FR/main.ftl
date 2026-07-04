@@ -135,6 +135,7 @@ message-tool-pending = attente : {$label}
 message-tool-running = en cours : {$label}
 message-tool-done = termine : {$label}
 message-tool-failed = echec : {$label}
+message-tool-cancelled = annule : {$label}
 message-tool-result-blocks = {$count} blocs de resultat
 
 todo-status-pending = pending

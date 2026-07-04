@@ -2473,7 +2473,7 @@ impl AgenaCli {
                     id: message.id,
                     role: message.role,
                     state: message.state,
-                    text: message.as_text_lossy(),
+                    text: message.visible_text_lossy(),
                 })
                 .collect(),
         };
@@ -4826,7 +4826,7 @@ fn last_assistant_text(session: &Session) -> Option<String> {
         .iter()
         .rev()
         .find(|message| message.role == Role::Assistant)
-        .map(|message| message.as_text_lossy())
+        .map(|message| message.visible_text_lossy())
 }
 
 fn title_from_prompt(prompt: &str) -> String {

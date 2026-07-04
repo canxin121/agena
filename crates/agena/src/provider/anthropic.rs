@@ -19,8 +19,8 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ManagedCredential, ModelRuntime, ProviderModel,
-        StreamResumePolicy, ThinkingDisplay, ThinkingRequest, auth::AuthData, prompt_cache,
-        sse, utils, wire_message,
+        StreamResumePolicy, ThinkingDisplay, ThinkingRequest, auth::AuthData, prompt_cache, sse,
+        utils, wire_message,
     },
     role::Role,
 };

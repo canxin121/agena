@@ -57,11 +57,13 @@ pub enum AssistantReasoningField {
 pub struct MessageProviderState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_field: Option<AssistantReasoningField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_id: Option<String>,
 }
 
 impl MessageProviderState {
     pub const fn is_empty(&self) -> bool {
-        self.assistant_reasoning_field.is_none()
+        self.assistant_reasoning_field.is_none() && self.response_id.is_none()
     }
 }
 

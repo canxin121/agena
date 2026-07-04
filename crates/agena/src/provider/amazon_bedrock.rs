@@ -37,7 +37,7 @@ use crate::{
             ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatStreamOptions,
             ChatToolCallWire, ChatUsage,
         },
-        prompt_cache, prompt_tools, sse, utils, wire_message,
+        prompt_cache, sse, utils, wire_message,
     },
     role::Role,
 };
@@ -407,27 +407,20 @@ impl AmazonBedrockAdapter {
     fn parse_completion(
         &self,
         payload: ChatCompletionResponse,
-        prompt_tool_protocol: bool,
     ) -> Result<CompletionResponse, AppError> {
-        let mut response =
-            crate::provider::chat_wire::parse_completion_response_with_required_tool_calls(
-                PROVIDER_ID,
-                self.default_model.as_str(),
-                payload,
-            )?;
-        if prompt_tool_protocol {
-            Self::apply_prompt_tool_protocol_to_response(&mut response);
-        }
-        Ok(response)
+        crate::provider::chat_wire::parse_completion_response_with_required_tool_calls(
+            PROVIDER_ID,
+            self.default_model.as_str(),
+            payload,
+        )
     }
 
     fn parse_anthropic_completion(
         &self,
         payload: BedrockAnthropicMessagesResponse,
         fallback_model: &ModelId,
-        prompt_tool_protocol: bool,
     ) -> Result<CompletionResponse, AppError> {
-        let mut text = payload
+        let text = payload
             .content
             .iter()
             .filter(|block| block.kind == "text")
@@ -435,7 +428,7 @@ impl AmazonBedrockAdapter {
             .collect::<Vec<_>>()
             .join("");
 
-        let mut tool_calls = payload
+        let tool_calls = payload
             .content
             .iter()
             .filter(|block| block.kind == "tool_use")
@@ -464,17 +457,7 @@ impl AmazonBedrockAdapter {
                 })
             })
             .collect::<Result<Vec<_>, AppError>>()?;
-        if prompt_tool_protocol {
-            let (clean_text, prompt_calls) = prompt_tools::parse_tool_calls(text.as_str());
-            text = clean_text;
-            tool_calls.extend(prompt_calls);
-        }
-
-        let finish_reason = if prompt_tool_protocol && !tool_calls.is_empty() {
-            Some(CompletionFinishReason::ToolCalls)
-        } else {
-            CompletionFinishReason::from_provider(payload.stop_reason.as_deref())
-        };
+        let finish_reason = CompletionFinishReason::from_provider(payload.stop_reason.as_deref());
 
         if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
             return Err(AppError::Provider(
@@ -500,17 +483,13 @@ impl AmazonBedrockAdapter {
         normalized.starts_with("anthropic.") || normalized.contains("claude")
     }
 
-    fn uses_prompt_tool_protocol(request: &CompletionRequest) -> bool {
-        prompt_tools::request_needs_text_protocol(request)
-    }
-
     fn anthropic_tools(
         tools: &[crate::plugin::registry::RegisteredTool],
     ) -> Vec<BedrockAnthropicToolDefinition> {
         tools
             .iter()
             .map(|tool| BedrockAnthropicToolDefinition {
-                name: tool.exposed_name.clone(),
+                name: bedrock_wire_tool_name(tool.exposed_name.as_str()),
                 description: tool.description_text().to_string(),
                 input_schema: crate::tool::model_safe_tool_schema(&tool.sanitized_input_schema()),
                 cache_control: None,
@@ -522,15 +501,6 @@ impl AmazonBedrockAdapter {
     fn anthropic_content_to_blocks(message: &Message) -> Vec<BedrockAnthropicTextBlock> {
         let projected = wire_message::project(message);
         Self::anthropic_blocks_from_projected_parts(message, projected.as_slice())
-    }
-
-    fn prompt_tool_content_to_blocks(message: &Message) -> Vec<BedrockAnthropicTextBlock> {
-        let text = prompt_tools::message_text(message);
-        if text.trim().is_empty() {
-            Vec::new()
-        } else {
-            vec![BedrockAnthropicTextBlock::text(text)]
-        }
     }
 
     fn anthropic_blocks_from_projected_parts(
@@ -561,7 +531,7 @@ impl AmazonBedrockAdapter {
                     arguments_json,
                 } => blocks.push(BedrockAnthropicTextBlock::tool_use(
                     id.clone(),
-                    name.clone(),
+                    bedrock_wire_tool_name(name),
                     arguments_json.clone(),
                 )),
                 wire_message::WirePart::ToolResult {
@@ -718,50 +688,29 @@ impl AmazonBedrockAdapter {
         request: CompletionRequest,
     ) -> (ModelId, BedrockAnthropicMessagesRequest) {
         let model = request.model.clone();
-        let prompt_tool_protocol = Self::uses_prompt_tool_protocol(&request);
 
         let mut system_chunks = Vec::new();
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
             system_chunks.push(BedrockAnthropicTextBlock::text(system.clone()));
         }
-        if prompt_tool_protocol {
-            system_chunks.push(BedrockAnthropicTextBlock::text(
-                prompt_tools::system_prompt(request.tools.as_slice()),
-            ));
-        }
-        let mut tools = if prompt_tool_protocol {
-            None
-        } else {
-            (!request.tools.is_empty()).then(|| Self::anthropic_tools(request.tools.as_slice()))
-        };
+        let mut tools =
+            (!request.tools.is_empty()).then(|| Self::anthropic_tools(request.tools.as_slice()));
 
         let mut messages = Vec::new();
         for msg in request.messages {
             match msg.role {
                 Role::System => {
-                    let text = if prompt_tool_protocol {
-                        prompt_tools::message_text(&msg)
-                    } else {
-                        msg.as_text_lossy()
-                    };
+                    let text = msg.as_text_lossy();
                     if !text.trim().is_empty() {
                         system_chunks.push(BedrockAnthropicTextBlock::text(text));
                     }
                 }
-                Role::Assistant if prompt_tool_protocol => messages.push(BedrockAnthropicMessage {
-                    role: "assistant".to_owned(),
-                    content: Self::prompt_tool_content_to_blocks(&msg),
-                }),
                 Role::Assistant => {
                     messages.extend(Self::anthropic_assistant_messages_from_parts(&msg))
                 }
                 Role::User => messages.push(BedrockAnthropicMessage {
                     role: "user".to_owned(),
-                    content: if prompt_tool_protocol {
-                        Self::prompt_tool_content_to_blocks(&msg)
-                    } else {
-                        Self::anthropic_content_to_blocks(&msg)
-                    },
+                    content: Self::anthropic_content_to_blocks(&msg),
                 }),
             }
         }
@@ -795,49 +744,21 @@ impl AmazonBedrockAdapter {
     }
 
     fn chat_messages_for_request(request: &CompletionRequest) -> Vec<ChatMessage> {
-        if Self::uses_prompt_tool_protocol(request) {
-            return Self::prompt_tool_chat_messages_for_request(request);
-        }
-        crate::provider::chat_wire::request_to_chat_messages_with_assistant_reasoning_field(
-            request, None,
-        )
-    }
-
-    fn prompt_tool_chat_messages_for_request(request: &CompletionRequest) -> Vec<ChatMessage> {
-        let mut messages = Vec::new();
-        let mut system_chunks = Vec::new();
-        if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
-            system_chunks.push(system.clone());
-        }
-        system_chunks.push(prompt_tools::system_prompt(request.tools.as_slice()));
-        messages.push(ChatMessage::system(system_chunks.join("\n\n")));
-
-        for message in &request.messages {
-            let text = prompt_tools::message_text(message);
-            if text.trim().is_empty() {
-                continue;
-            }
-            match message.role {
-                Role::System => messages.push(ChatMessage::system(text)),
-                Role::User => messages.push(ChatMessage::user(Value::String(text))),
-                Role::Assistant => {
-                    messages.push(ChatMessage::assistant(Some(Value::String(text)), None))
+        let mut messages =
+            crate::provider::chat_wire::request_to_chat_messages_with_assistant_reasoning_field(
+                request, None,
+            );
+        for message in &mut messages {
+            if let Some(tool_calls) = message.tool_calls.as_mut() {
+                for tool_call in tool_calls {
+                    tool_call.function.name = bedrock_wire_tool_name(tool_call.function.name.as_str());
                 }
             }
         }
-
         messages
     }
 
-    fn apply_prompt_tool_protocol_to_response(response: &mut CompletionResponse) {
-        let (clean_text, tool_calls) = prompt_tools::parse_tool_calls(response.text.as_str());
-        response.text = clean_text;
-        if !tool_calls.is_empty() {
-            response.tool_calls.extend(tool_calls);
-            response.finish_reason = Some(CompletionFinishReason::ToolCalls);
-        }
-    }
-
+    #[allow(dead_code)]
     fn completion_response_stream(
         response: CompletionResponse,
     ) -> std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>> {
@@ -932,7 +853,6 @@ impl AmazonBedrockAdapter {
         static_credentials: Option<&Credentials>,
         request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
-        let prompt_tool_protocol = Self::uses_prompt_tool_protocol(&request);
         let request_override = request.request_override.clone();
         let (model, body) = Self::build_anthropic_request(request);
         let body_json =
@@ -967,7 +887,7 @@ impl AmazonBedrockAdapter {
             response,
         )
         .await?;
-        self.parse_anthropic_completion(payload, &model, prompt_tool_protocol)
+        self.parse_anthropic_completion(payload, &model)
     }
 
     async fn complete_stream_sigv4_anthropic(
@@ -979,12 +899,6 @@ impl AmazonBedrockAdapter {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        if Self::uses_prompt_tool_protocol(&request) {
-            let response = self
-                .complete_sigv4_anthropic(profile, static_credentials, request)
-                .await?;
-            return Ok(Self::completion_response_stream(response));
-        }
         let request_override = request.request_override.clone();
         let (model, body) = Self::build_anthropic_request(request);
         let body_json =
@@ -1281,12 +1195,27 @@ impl AmazonBedrockAdapter {
 
         let prompt_cache_key = request.prompt_cache_key.clone();
         let model = self.resolve_model(request.model.as_str());
-        let prompt_tool_protocol = Self::uses_prompt_tool_protocol(&request);
         let messages = Self::chat_messages_for_request(&request);
         let body = ChatCompletionRequest {
             model,
             messages,
-            tools: None,
+            tools: (!request.tools.is_empty()).then(|| {
+                request
+                    .tools
+                    .iter()
+                    .map(|tool| crate::provider::chat_wire::ChatToolDefinition {
+                        kind: "function".to_owned(),
+                        function: crate::provider::chat_wire::ChatFunctionDefinition {
+                            name: bedrock_wire_tool_name(tool.exposed_name.as_str()),
+                            description: tool.description_text().to_string(),
+                            parameters: crate::tool::model_safe_tool_schema(
+                                &tool.sanitized_input_schema(),
+                            ),
+                            strict: tool.decl.strict,
+                        },
+                    })
+                    .collect()
+            }),
             temperature: request.temperature,
             max_tokens: request.max_output_tokens,
             cache_control: None,
@@ -1336,7 +1265,7 @@ impl AmazonBedrockAdapter {
         let payload: ChatCompletionResponse =
             utils::parse_json_response_logged(PROVIDER_ID, ADAPTER_KIND, "complete.chat", response)
                 .await?;
-        self.parse_completion(payload, prompt_tool_protocol)
+        self.parse_completion(payload)
     }
 
     async fn complete_stream_sigv4(
@@ -1353,12 +1282,6 @@ impl AmazonBedrockAdapter {
                 .complete_stream_sigv4_anthropic(profile, static_credentials, request)
                 .await;
         }
-        if Self::uses_prompt_tool_protocol(&request) {
-            let response = self
-                .complete_sigv4(profile, static_credentials, request)
-                .await?;
-            return Ok(Self::completion_response_stream(response));
-        }
 
         let prompt_cache_key = request.prompt_cache_key.clone();
         let model = self.resolve_model(request.model.as_str());
@@ -1367,7 +1290,23 @@ impl AmazonBedrockAdapter {
         let body = ChatCompletionRequest {
             model: model.clone(),
             messages,
-            tools: None,
+            tools: (!request.tools.is_empty()).then(|| {
+                request
+                    .tools
+                    .iter()
+                    .map(|tool| crate::provider::chat_wire::ChatToolDefinition {
+                        kind: "function".to_owned(),
+                        function: crate::provider::chat_wire::ChatFunctionDefinition {
+                            name: bedrock_wire_tool_name(tool.exposed_name.as_str()),
+                            description: tool.description_text().to_string(),
+                            parameters: crate::tool::model_safe_tool_schema(
+                                &tool.sanitized_input_schema(),
+                            ),
+                            strict: tool.decl.strict,
+                        },
+                    })
+                    .collect()
+            }),
             temperature: request.temperature,
             max_tokens: request.max_output_tokens,
             cache_control: None,
@@ -1767,6 +1706,10 @@ fn json_value_to_string(value: &Value) -> String {
         Value::String(text) => text.clone(),
         other => other.to_string(),
     }
+}
+
+fn bedrock_wire_tool_name(name: &str) -> String {
+    crate::tool::model_safe_tool_name(name)
 }
 
 fn map_bedrock_anthropic_usage(usage: BedrockAnthropicUsage) -> CompletionUsage {
@@ -2448,44 +2391,28 @@ mod tests {
     }
 
     #[test]
-    fn bedrock_anthropic_prompt_tool_protocol_exposes_dotted_names_without_native_tools() {
+    fn bedrock_anthropic_request_uses_structured_tools() {
         let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
         request.tools = vec![test_tool()];
 
         let (_model, body) = AmazonBedrockAdapter::build_anthropic_request(request);
-        let system = body
-            .system
-            .as_ref()
-            .and_then(|blocks| blocks.first())
-            .and_then(|block| block.text.as_deref())
-            .expect("prompt-tool system block should be present");
-
-        assert!(body.tools.is_none());
-        assert!(system.contains("`streaming-fixture.stream_fixture.count`"));
-        assert!(system.contains("Tool names are exact and may contain dots"));
-        assert!(!system.contains("streaming-fixture_stream_fixture_count"));
+        assert!(body.system.is_none());
+        assert_eq!(
+            body.tools.expect("tools should be present")[0].name,
+            crate::tool::model_safe_tool_name("streaming-fixture.stream_fixture.count")
+        );
     }
 
     #[test]
-    fn bedrock_chat_prompt_tool_protocol_exposes_dotted_names() {
-        let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
-        request.model = ModelId::new("meta.llama3-1-70b-instruct-v1:0");
-        request.tools = vec![test_tool()];
-
-        let messages = AmazonBedrockAdapter::chat_messages_for_request(&request);
-        let system = messages
-            .first()
-            .and_then(|message| message.content.as_ref())
-            .and_then(Value::as_str)
-            .expect("prompt-tool system message should be present");
-
-        assert!(system.contains("`streaming-fixture.stream_fixture.count`"));
-        assert!(system.contains("Tool names are exact and may contain dots"));
-        assert!(!system.contains("streaming-fixture_stream_fixture_count"));
+    fn bedrock_wire_tool_name_aliases_dotted_names() {
+        assert_eq!(
+            bedrock_wire_tool_name("streaming-fixture.stream_fixture.count"),
+            crate::tool::model_safe_tool_name("streaming-fixture.stream_fixture.count")
+        );
     }
 
     #[test]
-    fn bedrock_anthropic_prompt_tool_protocol_parses_exact_dotted_calls() {
+    fn bedrock_anthropic_completion_parses_structured_tool_calls() {
         let adapter = AmazonBedrockAdapter::new_sigv4(
             reqwest::Client::new(),
             "https://bedrock-runtime.us-east-1.amazonaws.com",
@@ -2498,32 +2425,30 @@ mod tests {
             id: Some("msg_1".to_owned()),
             model: Some("anthropic.claude-3-5-sonnet-20241022-v2:0".to_owned()),
             stop_reason: Some("end_turn".to_owned()),
-            content: vec![BedrockAnthropicTextBlock::text(
-                "<agena_tool_call>{\"id\":\"call_1\",\"name\":\"a.b.c\",\"arguments\":{\"x\":1}}</agena_tool_call>",
+            content: vec![BedrockAnthropicTextBlock::tool_use(
+                "call_1".to_owned(),
+                crate::tool::model_safe_tool_name("a.b.c"),
+                "{\"x\":1}".to_owned(),
             )],
             usage: None,
         };
 
         let parsed = adapter
-            .parse_anthropic_completion(
-                payload,
-                &ModelId::new("anthropic.claude-3-5-sonnet-20241022-v2:0"),
-                true,
-            )
-            .expect("prompt-tool response should parse");
+            .parse_anthropic_completion(payload, &ModelId::new("anthropic.claude-3-5-sonnet-20241022-v2:0"))
+            .expect("structured response should parse");
 
         assert_eq!(parsed.text, "");
         assert_eq!(
             parsed.tool_calls,
             vec![CompletionToolCall::Function {
                 id: "call_1".to_owned(),
-                name: "a.b.c".to_owned(),
+                name: crate::tool::model_safe_tool_name("a.b.c"),
                 arguments_json: "{\"x\":1}".to_owned(),
             }]
         );
         assert_eq!(
             parsed.finish_reason,
-            Some(CompletionFinishReason::ToolCalls)
+            Some(CompletionFinishReason::Stop)
         );
     }
 }

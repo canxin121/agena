@@ -108,6 +108,26 @@ impl Message {
             .join("\n")
     }
 
+    pub fn visible_text_lossy(&self) -> String {
+        self.parts
+            .iter()
+            .filter_map(|part| {
+                if let Some(content) = part.content.as_ref() {
+                    match content {
+                        PartContent::Text(text) => Some(text.text.clone()),
+                        PartContent::Operation(tool) => tool_text_lossy(tool),
+                        PartContent::Reasoning(_) => None,
+                        _ => part.summary.clone(),
+                    }
+                } else {
+                    part.summary.clone()
+                }
+            })
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     pub fn push_part(&mut self, mut part: MessagePart) {
         part.message_id = self.id;
         part.part_index = self.parts.len() as i32;
@@ -140,4 +160,29 @@ fn tool_text_lossy(tool: &OperationPart) -> Option<String> {
         .flatten()
         .find(|s| !s.trim().is_empty())
         .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Message;
+    use crate::message::{PartContent, ReasoningPart};
+    use crate::role::Role;
+
+    #[test]
+    fn visible_text_lossy_excludes_reasoning_blocks() {
+        let message = Message::prompt_parts(
+            Role::Assistant,
+            vec![
+                PartContent::Reasoning(ReasoningPart {
+                    summary: vec!["hidden".to_string()],
+                    raw_content: Vec::new(),
+                    encrypted_content: None,
+                }),
+                PartContent::text("shown"),
+            ],
+        );
+
+        assert_eq!(message.as_text_lossy(), "hidden\nshown");
+        assert_eq!(message.visible_text_lossy(), "shown");
+    }
 }

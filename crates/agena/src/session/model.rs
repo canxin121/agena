@@ -1237,7 +1237,9 @@ impl Session {
             .filter(|part| {
                 matches!(
                     part.status,
-                    ExecutionStatus::Completed | ExecutionStatus::Failed
+                    ExecutionStatus::Completed
+                        | ExecutionStatus::Failed
+                        | ExecutionStatus::Cancelled
                 )
             })
             .filter_map(|part| part.operation_id.as_deref())
@@ -1249,7 +1251,7 @@ fn message_has_completed_operation(message: &Message) -> bool {
     message.parts.iter().any(|part| {
         matches!(
             part.status,
-            ExecutionStatus::Completed | ExecutionStatus::Failed
+            ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Cancelled
         ) && matches!(
             part.content.as_ref(),
             Some(PartContent::Operation(operation)) if !operation.is_provider_native_only()
@@ -1267,6 +1269,90 @@ fn extract_call_id(part: &MessagePart) -> Option<i64> {
         PartContent::Operation(tool) => Some(tool.call_id),
         _ => None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use serde_json::json;
+
+    use super::*;
+    use crate::message::{OperationPart, StructuredObject, TimeRange, ToolOutput};
+
+    fn user_message(id: i64, text: &str) -> Message {
+        let mut message = Message::prompt_text(Role::User, text);
+        message.id = id;
+        if let Some(part) = message.parts.first_mut() {
+            part.id = id * 100 + 1;
+            part.message_id = id;
+        }
+        message
+    }
+
+    fn assistant_tool_message(
+        id: i64,
+        status: ExecutionStatus,
+        operation_id: &str,
+        part_id: i64,
+    ) -> Message {
+        let invocation = ToolInvocation::new(
+            "process.run",
+            StructuredObject::try_from(json!({ "command": "date" })).expect("tool input"),
+        );
+        let mut message = Message::prompt_parts(
+            Role::Assistant,
+            vec![PartContent::Operation(OperationPart::completed(
+                7,
+                invocation,
+                String::new(),
+                Vec::new(),
+                Vec::new(),
+                ToolOutput::default(),
+                TimeRange::default(),
+            ))],
+        );
+        message.id = id;
+        if let Some(part) = message.parts.first_mut() {
+            part.id = part_id;
+            part.message_id = id;
+            part.operation_id = Some(operation_id.to_string());
+            part.status = status;
+        }
+        message
+    }
+
+    #[test]
+    fn cancelled_operation_suppresses_stale_pending_tool() {
+        let now = Utc::now();
+        let session = Session::new(1, 1, "session", now).with_messages(vec![
+            user_message(1, "run date"),
+            assistant_tool_message(2, ExecutionStatus::Pending, "call_date_1", 201),
+            assistant_tool_message(3, ExecutionStatus::Cancelled, "call_date_1", 301),
+        ]);
+
+        assert!(
+            session.pending_tools().is_empty(),
+            "cancelled tool operations should not leave a stale pending tool"
+        );
+        assert!(
+            !session.blocked(),
+            "cancelled tool operations should not surface as blocked"
+        );
+    }
+
+    #[test]
+    fn cancelled_operation_keeps_model_continuation_eligible() {
+        let now = Utc::now();
+        let session = Session::new(1, 1, "session", now).with_messages(vec![
+            user_message(1, "run date"),
+            assistant_tool_message(2, ExecutionStatus::Cancelled, "call_date_1", 201),
+        ]);
+
+        assert!(
+            session.should_run_model(),
+            "cancelled tool operations should still count as terminal tool results"
+        );
+    }
 }
 
 // NOTE: `SessionEventType` and `SessionEventRecord` have been removed. The

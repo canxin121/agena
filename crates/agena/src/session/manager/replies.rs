@@ -2633,9 +2633,12 @@ impl SessionManager {
             .map(ToOwned::to_owned);
         let requested_explicitly = requested.is_some();
         let persisted_explicitly = persisted.is_some();
-        let effective = requested
-            .or(persisted)
-            .or_else(|| state.config.default_agent.clone());
+        let has_explicit_tool_restrictions = !session.runtime.allowed_tools().is_empty();
+        let effective = requested.or(persisted).or_else(|| {
+            (!has_explicit_tool_restrictions)
+                .then(|| state.config.default_agent.clone())
+                .flatten()
+        });
         let Some(agent_name) = effective else {
             let mut session = session;
             session.runtime.execution.effective_permission =

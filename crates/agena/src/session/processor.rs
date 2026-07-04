@@ -857,26 +857,12 @@ impl SessionProcessor {
                 .await?;
 
             let tool_name = pending.name.unwrap_or_else(|| "unknown".to_string());
-            let invocation = if tool_for_model_name(&tool_name, run.completion.tools.as_slice())
-                .is_some()
-            {
-                parse_tool_invocation(
-                    tool_name.as_str(),
-                    pending.arguments_json.as_str(),
-                    run.completion.tools.as_slice(),
-                )?
-            } else {
-                tracing::debug!(
-                    target: "agena::session::processor",
-                    session_id = run.session_id,
-                    tool = %tool_name,
-                    "model requested unsupported tool; preserving call for tool-failure handling"
-                );
-                placeholder_tool_invocation(
-                    Some(tool_name.as_str()),
-                    run.completion.tools.as_slice(),
-                )
-            };
+            let invocation = parse_tool_invocation_lossy(
+                run.session_id,
+                tool_name.as_str(),
+                pending.arguments_json.as_str(),
+                run.completion.tools.as_slice(),
+            );
             let Some(part_id) = pending.part_id else {
                 continue;
             };
@@ -1304,16 +1290,14 @@ fn map_finish_reason(reason: &CompletionFinishReason) -> FinishReason {
 fn message_provider_state_from_provider_metadata(
     provider_metadata: &serde_json::Value,
 ) -> Option<MessageProviderState> {
-    let assistant_reasoning_field = provider_metadata_string_field(
-        provider_metadata,
-        "assistant_reasoning_field",
-    )
-        .and_then(|value| value.as_str())
-        .and_then(|value| match value {
-            "reasoning_content" => Some(AssistantReasoningField::ReasoningContent),
-            "reasoning_details" => Some(AssistantReasoningField::ReasoningDetails),
-            _ => None,
-        });
+    let assistant_reasoning_field =
+        provider_metadata_string_field(provider_metadata, "assistant_reasoning_field")
+            .and_then(|value| value.as_str())
+            .and_then(|value| match value {
+                "reasoning_content" => Some(AssistantReasoningField::ReasoningContent),
+                "reasoning_details" => Some(AssistantReasoningField::ReasoningDetails),
+                _ => None,
+            });
     let response_id = provider_metadata_string_field(provider_metadata, "response_id")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned);
@@ -1506,6 +1490,39 @@ pub(crate) fn parse_tool_invocation(
     Ok(tool_invocation_for_definition(tool, parsed))
 }
 
+fn parse_tool_invocation_lossy(
+    session_id: i64,
+    name: &str,
+    arguments_json: &str,
+    available_tools: &[RegisteredTool],
+) -> ToolInvocation {
+    let trimmed_name = name.trim();
+    if tool_for_model_name(trimmed_name, available_tools).is_none() {
+        tracing::debug!(
+            target: "agena::session::processor",
+            session_id,
+            tool = %trimmed_name,
+            "model requested unsupported tool; preserving call for tool-failure handling"
+        );
+        return placeholder_tool_invocation(Some(trimmed_name), available_tools);
+    }
+
+    match parse_tool_invocation(trimmed_name, arguments_json, available_tools) {
+        Ok(invocation) => invocation,
+        Err(err) => {
+            tracing::warn!(
+                target: "agena::session::processor",
+                session_id,
+                tool = %trimmed_name,
+                error = %err,
+                arguments_len = arguments_json.len(),
+                "tool arguments could not be parsed; falling back to empty input for tool-failure handling"
+            );
+            placeholder_tool_invocation(Some(trimmed_name), available_tools)
+        }
+    }
+}
+
 fn tool_for_model_name<'a>(
     name: &str,
     available_tools: &'a [RegisteredTool],
@@ -1585,4 +1602,33 @@ where
     }
 
     Ok(parsed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_tool_invocation_lossy_preserves_tool_name_for_malformed_json() {
+        let tools = vec![RegisteredTool::new(
+            "fs",
+            crate::plugin::sdk::PluginToolDecl::new(
+                "read",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    }
+                }),
+            ),
+        )];
+
+        let invocation =
+            parse_tool_invocation_lossy(1, "fs.read", r#"{"path":"src/main.rs"#, tools.as_slice());
+
+        assert_eq!(invocation.name, "fs.read");
+        assert_eq!(invocation.plugin_name.as_deref(), Some("fs"));
+        assert_eq!(serde_json::Value::from(invocation.input), json!({}));
+    }
 }

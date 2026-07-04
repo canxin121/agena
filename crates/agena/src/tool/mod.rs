@@ -421,7 +421,7 @@ fn top_level_discriminated_variants(
     let variants = ["oneOf", "anyOf", "allOf"]
         .into_iter()
         .find_map(|key| object.get(key).and_then(serde_json::Value::as_array))?;
-    if variants.len() <= 1 {
+    if variants.is_empty() {
         return None;
     }
 
@@ -1207,6 +1207,7 @@ impl ToolExecutor {
         self.registered_tools_with_definition_overrides()
             .into_iter()
             .filter(|entry| catalog.is_tool_enabled(entry))
+            .filter(|entry| self.is_tool_visible_to_agent(entry))
             .collect()
     }
 
@@ -1223,12 +1224,27 @@ impl ToolExecutor {
         }
         let catalog = self.tool_catalog();
         expanded.retain(|entry| catalog.is_tool_enabled(entry));
+        expanded.retain(|entry| self.is_tool_visible_to_agent(entry));
         expanded.sort_by(|left, right| {
             left.exposed_name
                 .cmp(&right.exposed_name)
                 .then_with(|| left.description_text().cmp(right.description_text()))
         });
         expanded
+    }
+
+    fn is_tool_visible_to_agent(&self, entry: &RegisteredTool) -> bool {
+        let mut tool_name_aliases = vec![entry.exposed_name.as_str()];
+        if entry.original_name != entry.exposed_name
+            && self.original_tool_name_is_unambiguous(entry.original_name.as_str())
+        {
+            tool_name_aliases.push(entry.original_name.as_str());
+        }
+        !matches!(
+            self.agent
+                .authorize_tool_aliases(&tool_name_aliases, None, &entry.effective_tags()),
+            PermissionDecision::Deny { .. }
+        )
     }
 
     fn catalogued_tools(&self) -> Vec<RegisteredTool> {
@@ -1247,6 +1263,10 @@ impl ToolExecutor {
 
     pub fn detailed_tools(&self) -> Vec<RegisteredTool> {
         self.catalogued_tools_raw()
+    }
+
+    pub fn detailed_model_tools(&self) -> Vec<RegisteredTool> {
+        self.catalogued_model_tools_raw()
     }
 
     pub fn searchable_tools(&self) -> Vec<RegisteredTool> {
@@ -6667,6 +6687,12 @@ mod tests {
             result
                 .view
                 .output_text
+                .contains(r#"- List: {"action":"list"}"#)
+        );
+        assert!(
+            result
+                .view
+                .output_text
                 .contains(r#"- Search: {"action":"search","query":"web","limit":8}"#)
         );
         assert!(
@@ -6674,6 +6700,64 @@ mod tests {
                 .view
                 .output_text
                 .contains(r#"- Help: {"action":"help","tool":"web.search"}"#)
+        );
+    }
+
+    #[test]
+    fn tools_list_returns_current_model_visible_tool_names() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+
+        let invocation = ToolInvocation::new(
+            TOOLS_TOOL,
+            StructuredObject::try_from(serde_json::json!({
+                "action": "list",
+                "limit": 5
+            }))
+            .expect("tools list input should serialize"),
+        );
+        let result = executor
+            .execute_invocation_detailed(&invocation, 7, 9)
+            .expect("tools list should succeed");
+
+        assert!(
+            result.view.output_text.contains("Available tool(s):"),
+            "{}",
+            result.view.output_text
+        );
+        assert!(
+            result.view.output_text.contains("- fs"),
+            "{}",
+            result.view.output_text
+        );
+        assert!(
+            result.view.output_text.contains("- tools"),
+            "{}",
+            result.view.output_text
+        );
+        assert!(
+            result.view.output_text.contains("- fixture.generated_help"),
+            "{}",
+            result.view.output_text
+        );
+
+        let payload = result
+            .output
+            .payload
+            .get("returned")
+            .and_then(|value| match value {
+                crate::message::StructuredValue::Integer { value } => Some(*value),
+                _ => None,
+            });
+        assert_eq!(payload, Some(4));
+        assert!(
+            result
+                .output
+                .payload
+                .get("tools")
+                .and_then(crate::message::StructuredValue::as_array)
+                .is_some_and(|tools| tools.iter().any(|tool| tool.as_text() == Some("tools")))
         );
     }
 
@@ -6812,10 +6896,19 @@ mod tests {
 
         let tools = executor.available_model_tools();
         assert!(!tools.iter().any(|tool| tool.exposed_name == "plan"));
+        assert!(tools.iter().any(|tool| tool.exposed_name == "tools.list"));
         assert!(tools.iter().any(|tool| tool.exposed_name == "plan.get"));
         assert!(tools.iter().any(|tool| tool.exposed_name == "plan.set"));
         assert!(tools.iter().any(|tool| tool.exposed_name == "plan.update"));
         assert!(tools.iter().any(|tool| tool.exposed_name == "plan.clear"));
+        assert!(!tools.iter().any(|tool| tool.exposed_name == "task"));
+        assert!(tools.iter().any(|tool| tool.exposed_name == "task.run"));
+        assert!(!tools.iter().any(|tool| tool.exposed_name == "user"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.exposed_name == "user.request_input")
+        );
         assert!(!tools.iter().any(|tool| tool.exposed_name == "snapshot"));
 
         let plan_update = tools
@@ -6834,12 +6927,23 @@ mod tests {
             .iter()
             .find(|tool| tool.exposed_name == "snapshot.enter.existing")
             .expect("nested snapshot.enter.existing tool should be model-visible");
+        let task_run = tools
+            .iter()
+            .find(|tool| tool.exposed_name == "task.run")
+            .expect("task.run alias should be model-visible");
+        let user_request_input = tools
+            .iter()
+            .find(|tool| tool.exposed_name == "user.request_input")
+            .expect("user.request_input alias should be model-visible");
 
         let plan_update_schema =
             super::model_safe_tool_schema(&plan_update.sanitized_input_schema());
         let plan_set_schema = super::model_safe_tool_schema(&plan_set.sanitized_input_schema());
         let snapshot_schema =
             super::model_safe_tool_schema(&snapshot_existing.sanitized_input_schema());
+        let task_run_schema = super::model_safe_tool_schema(&task_run.sanitized_input_schema());
+        let user_request_input_schema =
+            super::model_safe_tool_schema(&user_request_input.sanitized_input_schema());
 
         let plan_update_properties = plan_update_schema
             .get("properties")
@@ -6853,6 +6957,14 @@ mod tests {
             .get("properties")
             .and_then(serde_json::Value::as_object)
             .expect("snapshot.enter.existing schema should expose properties");
+        let task_run_properties = task_run_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("task.run schema should expose properties");
+        let user_request_input_properties = user_request_input_schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("user.request_input schema should expose properties");
 
         assert!(
             plan_update_properties.contains_key("phase")
@@ -6880,6 +6992,73 @@ mod tests {
             Some("string")
         );
         assert!(!snapshot_properties.contains_key("target"));
+        assert!(task_run_properties.contains_key("description"));
+        assert!(task_run_properties.contains_key("prompt"));
+        assert!(!task_run_properties.contains_key("action"));
+        assert!(user_request_input_properties.contains_key("questions"));
+        assert!(!user_request_input_properties.contains_key("action"));
+    }
+
+    #[test]
+    fn ask_gated_tools_stay_model_visible_in_tool_catalog() {
+        let workspace = TempWorkspace::new();
+        let agent = crate::agent::Agent::new("build", PermissionPolicy::allow_all())
+            .try_with_permission_config(&crate::agent::PermissionConfig {
+                tools: Some(crate::agent::ToolPermissionConfig {
+                    default: Some(crate::permission::PermissionMode::Ask),
+                    names: std::collections::BTreeMap::from([
+                        (
+                            "agent".to_string(),
+                            crate::permission::PermissionMode::Allow,
+                        ),
+                        ("plan".to_string(), crate::permission::PermissionMode::Allow),
+                        (
+                            "session".to_string(),
+                            crate::permission::PermissionMode::Allow,
+                        ),
+                        ("task".to_string(), crate::permission::PermissionMode::Allow),
+                        (
+                            "tools".to_string(),
+                            crate::permission::PermissionMode::Allow,
+                        ),
+                        ("user".to_string(), crate::permission::PermissionMode::Allow),
+                    ]),
+                    tags: std::collections::BTreeMap::from([(
+                        "filesystem_read".to_string(),
+                        crate::permission::PermissionMode::Allow,
+                    )]),
+                    ..Default::default()
+                }),
+                network: Some(crate::agent::NetworkPermissionConfig {
+                    internet: Some(crate::permission::PermissionMode::Ask),
+                    private: Some(crate::permission::PermissionMode::Ask),
+                    loopback: Some(crate::permission::PermissionMode::Ask),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .expect("permission config should compile");
+        let executor = ToolExecutor::new(workspace.root.clone(), agent)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+
+        let names = executor
+            .available_model_tools()
+            .into_iter()
+            .map(|tool| tool.exposed_name)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert!(names.contains("tools.list"));
+        assert!(names.contains("fs.read"));
+        assert!(names.contains("task.run"));
+        assert!(names.contains("user.request_input"));
+        assert!(
+            names.contains("web.search"),
+            "ask-gated web tools must remain visible so the model can request permission"
+        );
+        assert!(
+            names.contains("web.fetch"),
+            "ask-gated web tools must remain visible so the model can request permission"
+        );
     }
 
     #[test]
@@ -6940,6 +7119,28 @@ mod tests {
         assert!(names.contains("fs.glob"));
         assert!(names.contains("fs.grep"));
         assert!(!names.contains("fs.apply_patch"));
+    }
+
+    #[test]
+    fn session_allowed_tools_filter_model_visible_tool_list() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+        let scoped = executor.for_session_context(&crate::session::SessionExecutionContext {
+            allowed_tools: vec!["skills.review".to_string()],
+            ..Default::default()
+        });
+
+        let names = scoped
+            .available_model_tools()
+            .into_iter()
+            .map(|tool| tool.exposed_name)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert!(names.contains("skills.review"));
+        assert!(!names.contains("tools.search"));
+        assert!(!names.contains("tool_catalog"));
+        assert!(!names.contains("tools.help"));
     }
 
     #[test]
@@ -7102,7 +7303,7 @@ mod tests {
             .expect("tools catalog should be model-visible");
         assert_eq!(
             workflow_tools.description_text(),
-            "Show usage examples, search tools, or fetch detailed tool help. See `tools.help` for `tools`."
+            "Show usage examples, list tools, search tools, or fetch detailed tool help. See `tools.help` for `tools`."
         );
 
         let web_search = tools
@@ -7116,11 +7317,11 @@ mod tests {
 
         let task = tools
             .iter()
-            .find(|tool| tool.exposed_name == TASK_TOOL)
-            .expect("task tool should be model-visible");
+            .find(|tool| tool.exposed_name == "task.run")
+            .expect("task.run should be model-visible");
         assert!(
             !task.description_text().contains("See `tools.help`"),
-            "task should stay detailed by default"
+            "task.run should stay detailed by default"
         );
     }
 

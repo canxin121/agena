@@ -594,9 +594,9 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, PluginError> {
-        let executor = self.tool_executor()?;
+        let (executor, _) = self.callback_scoped_tool_executor().await?;
         Ok(executor
-            .detailed_tools()
+            .detailed_model_tools()
             .into_iter()
             .map(render_tool_descriptor)
             .collect())

@@ -180,7 +180,7 @@ mod repo_tools;
 mod runtime_tools;
 mod task_tools;
 
-pub(crate) use catalog_tools::{ToolsHelpInput, ToolsToolInput};
+pub(crate) use catalog_tools::{ToolListInput, ToolsHelpInput, ToolsToolInput};
 pub(crate) use planning_tools::{
     PlanGetInput, PlanGetView, PlanSetInput, PlanToolInput, PlanUpdateInput, WorkflowPlan,
     WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase, WorkflowPlanStep,
@@ -1956,6 +1956,46 @@ impl WorkflowPlugin {
             .with_metadata("matched_tools", results.len().to_string()))
     }
 
+    async fn invoke_tool_list(&self, input: &ToolListInput) -> SdkResult<ToolInvokeOutput> {
+        let mut tools = self.host()?.list_tools().await?;
+        tools.sort_by(|left, right| left.name.cmp(&right.name));
+        let total = tools.len();
+        if let Some(limit) = input.limit {
+            tools.truncate(limit.max(1) as usize);
+        }
+        let verbose = input.verbose.unwrap_or(false);
+
+        let mut lines = vec![format!("Available tool(s): {}/{}.", tools.len(), total)];
+        for tool in &tools {
+            if verbose {
+                let summary = tool
+                    .summary
+                    .as_deref()
+                    .or(tool.description.as_deref())
+                    .unwrap_or_default()
+                    .trim();
+                if summary.is_empty() {
+                    lines.push(format!("- {}", tool.name));
+                } else {
+                    lines.push(format!("- {}: {}", tool.name, summary));
+                }
+            } else {
+                lines.push(format!("- {}", tool.name));
+            }
+        }
+
+        let payload = serde_json::json!({
+            "tools": tools.iter().map(|tool| tool.name.clone()).collect::<Vec<_>>(),
+            "total": total,
+            "returned": tools.len(),
+        });
+        Ok(ToolInvokeOutput::text(lines.join("\n"))
+            .with_title("Tool list")
+            .with_payload(payload)
+            .with_metadata("total_tools", total.to_string())
+            .with_metadata("returned_tools", tools.len().to_string()))
+    }
+
     async fn invoke_tool_help(&self, input: &ToolsHelpInput) -> SdkResult<ToolInvokeOutput> {
         let requested = input.tool.as_str();
         let config = self.config()?;
@@ -2135,6 +2175,7 @@ impl WorkflowPlugin {
                 "Usage:",
                 r#"- {"action":"usage"} or {}"#,
                 "Examples:",
+                r#"- List: {"action":"list"}"#,
                 r#"- Search: {"action":"search","query":"web","limit":8}"#,
                 r#"- Help: {"action":"help","tool":"web.search"}"#,
                 "Notes:",
@@ -2581,6 +2622,21 @@ mod tests {
     }
 
     #[test]
+    fn tools_list_accepts_explicit_action() {
+        let (action, action_input) = resolve_tools_tool_input(json!({
+            "action": "list",
+            "limit": 5,
+            "verbose": true
+        }))
+        .expect("list action should resolve");
+
+        assert_eq!(action, "list");
+        let parsed: ToolListInput = serde_json::from_value(action_input).expect("list input");
+        assert_eq!(parsed.limit, Some(5));
+        assert_eq!(parsed.verbose, Some(true));
+    }
+
+    #[test]
     fn tools_search_ignores_help_only_noise_fields() {
         let (action, action_input) = resolve_tools_tool_input(json!({
             "action": "search",
@@ -2770,6 +2826,7 @@ mod tests {
 
         let schema = ToolsToolInput::tool_decl().sanitized_input_schema();
         let literals = schema_string_literals(&schema, &schema);
+        assert!(literals.contains("list"));
         assert!(literals.contains("usage"));
     }
 

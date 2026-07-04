@@ -10,8 +10,8 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionToolCall, CompletionUsage, ModelRuntime, ProviderModel, StreamResumePolicy,
-        sse, utils, wire_message,
+        CompletionToolCall, CompletionUsage, ModelRuntime, ProviderModel, StreamResumePolicy, sse,
+        utils, wire_message,
     },
     role::Role,
 };
@@ -659,7 +659,9 @@ mod tests {
         let body = adapter.to_chat_request(&request, false);
         assert_eq!(body.messages.len(), 1);
         assert_eq!(
-            body.tools.expect("tools should be present")[0].function.name,
+            body.tools.expect("tools should be present")[0]
+                .function
+                .name,
             crate::tool::model_safe_tool_name("streaming-fixture.stream_fixture.count")
         );
     }
@@ -702,9 +704,6 @@ mod tests {
                 arguments_json: "{\"x\":1}".to_owned(),
             }]
         );
-        assert_eq!(
-            parsed.finish_reason,
-            Some(CompletionFinishReason::Stop)
-        );
+        assert_eq!(parsed.finish_reason, Some(CompletionFinishReason::Stop));
     }
 }

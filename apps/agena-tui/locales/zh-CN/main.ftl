@@ -1584,6 +1584,7 @@ message-tool-pending = 待执行：{$label}
 message-tool-running = 运行中：{$label}
 message-tool-done = 完成：{$label}
 message-tool-failed = 失败：{$label}
+message-tool-cancelled = 已取消：{$label}
 message-tool-summary = [工具] {$status} | {$label}
 message-tool-result-blocks = {$count} 个结果块
 message-tool-output-collapsed =     … 还有 {$lines} 行

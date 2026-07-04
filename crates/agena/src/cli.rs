@@ -1541,10 +1541,7 @@ impl AgenaCli {
         }
 
         if let Some(api_key) = args.api_key {
-            if !matches!(
-                resolved.auth,
-                ProviderAuthConfig::Api(_) | ProviderAuthConfig::Gitlab(_)
-            ) {
+            if !matches!(resolved.auth, ProviderAuthConfig::Api(_)) {
                 return Err(AppError::Config(format!(
                     "{provider_id} does not support api key login"
                 )));

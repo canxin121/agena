@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use agena::{
     agent::PermissionConfig,
     agents::AgentScope,
-    config::ProviderProtocolPathsConfig,
+    config::{ProviderProtocolPathsConfig, ProviderSecretSourceConfig},
     message::{Message, MessageMetadata, MessagePart, MessageStatus, MessageUsage},
     model::ModelRef,
     model_catalog::ModelCatalogSnapshotSourceKind,
@@ -754,9 +754,7 @@ pub struct ProviderAdapterModelsRequest {
     #[serde(default)]
     pub protocol_paths: ProviderProtocolPathsConfig,
     #[serde(default)]
-    pub api_key: Option<String>,
-    #[serde(default)]
-    pub api_key_env: Option<String>,
+    pub api_key: Option<ProviderSecretSourceConfig>,
     #[serde(default)]
     pub adapter_ids: Vec<String>,
 }

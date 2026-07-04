@@ -3,9 +3,9 @@
 OpenCode 目前有两类值得单独配置的入口：
 
 - OpenCode Go：订阅式低价模型网关，共享根路径是 `https://opencode.ai/zen/go`
-- OpenCode Zen：OpenCode 内置模型网关，共享根路径是 `https://opencode.ai/zen`，没有 key 时可用 `api_key = "public"` 调免费模型
+- OpenCode Zen：OpenCode 内置模型网关，共享根路径是 `https://opencode.ai/zen`，没有 key 时可用 inline `api_key.value = "public"` 调免费模型
 
-这两类入口都不需要新增 Agena credential issuer。运行时请求只需要 `provider.auth.mode = "api"`、`base_url` 和 `api_key` / `api_key_env`。以后如果要做 OpenCode 登录、keyring 自动同步或账户状态展示，可以再加 `credential` issuer；模型调用本身不依赖它。
+这两类入口都不需要新增 Agena credential issuer。运行时请求只需要 `provider.auth.mode = "api"`、`auth.subtype = "custom"`、`base_url` 和 `api_key`。以后如果要做 OpenCode 登录、keyring 自动同步或账户状态展示，可以再加 `credential` issuer；模型调用本身不依赖它。
 
 OpenCode 的 `/models` endpoint 不按 Agena 的 adapter 维度拆分模型，所以这类 provider 推荐显式声明模型路由。免费公共入口还应该使用 `model_discovery = "configured_only"`，避免把付费模型列进可选模型。
 
@@ -30,9 +30,9 @@ OpenCode Go 当前主要用 OpenAI-compatible 和 Anthropic Messages。OpenCode 
 export OPENCODE_API_KEY=...
 ```
 
-也可以把 `api_key_env = "OPENCODE_API_KEY"` 改成 `api_key = "..."`，但本地配置里不建议直接写密钥。
+也可以把 `api_key.kind = "env"` / `api_key.value = "OPENCODE_API_KEY"` 改成 inline `api_key`，但本地配置里不建议直接写密钥。
 
-免费公共模型不需要真实 key，配置里使用 `api_key = "public"`。
+免费公共模型不需要真实 key，配置里使用 inline `api_key.value = "public"`。
 
 ## OpenCode Go
 
@@ -49,8 +49,12 @@ export OPENCODE_API_KEY=...
       },
       "auth": {
         "mode": "api",
+        "subtype": "custom",
         "base_url": "https://opencode.ai/zen/go",
-        "api_key_env": "OPENCODE_API_KEY"
+        "api_key": {
+          "kind": "env",
+          "value": "OPENCODE_API_KEY"
+        }
       },
       "adapters": {
         "openai": {
@@ -167,8 +171,12 @@ cargo run -p agena-cli -- exec --model opencode-go/kimi-k2.6 "用一句话回答
       },
       "auth": {
         "mode": "api",
+        "subtype": "custom",
         "base_url": "https://opencode.ai/zen",
-        "api_key": "public",
+        "api_key": {
+          "kind": "inline",
+          "value": "public"
+        },
         "protocol_paths": {
           "gemini": "/v1"
         }
@@ -278,8 +286,12 @@ cargo run -p agena-cli -- \
       },
       "auth": {
         "mode": "api",
+        "subtype": "custom",
         "base_url": "https://opencode.ai/zen",
-        "api_key_env": "OPENCODE_API_KEY",
+        "api_key": {
+          "kind": "env",
+          "value": "OPENCODE_API_KEY"
+        },
         "protocol_paths": {
           "gemini": "/v1"
         }

@@ -242,12 +242,12 @@ fn configured_provider_auth_id(
     resolved: &ResolvedProviderConfig,
 ) -> Option<String> {
     match &resolved.auth {
-        ProviderAuthConfig::None | ProviderAuthConfig::BedrockSigv4(_) => None,
+        ProviderAuthConfig::None => None,
+        ProviderAuthConfig::Api(api) if api.bedrock_sigv4().is_some() => None,
         ProviderAuthConfig::Api(_) => Some(provider_id.to_owned()),
-        ProviderAuthConfig::Gitlab(_) => Some(provider_id.to_owned()),
         ProviderAuthConfig::Credential(config)
             if matches!(
-                config.issuer,
+                config.issuer(),
                 agena::provider::auth::CredentialIssuer::GoogleAdc
                     | agena::provider::auth::CredentialIssuer::SapAiCore
             ) =>

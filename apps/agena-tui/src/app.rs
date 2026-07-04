@@ -62,8 +62,9 @@ use unicode_width::UnicodeWidthChar;
 use crate::backend::{
     Backend, ConfigJsonSources, InspectorRow, LiveEvent, ProviderConfigDraft,
     ProviderDraftAdapterRule, ProviderDraftAuthKind, ProviderDraftInteractiveLoginKind,
-    ProviderNativeToolsPreset, SessionPermissionStudioState, SessionRefresh,
-    provider_native_tools_config_for_preset, provider_native_tools_preset_from_config,
+    ProviderDraftSecretSourceKind, ProviderNativeToolsPreset, SessionPermissionStudioState,
+    SessionRefresh, provider_native_tools_config_for_preset,
+    provider_native_tools_preset_from_config,
 };
 use crate::clipboard::{
     normalize_pasted_path, paste_image_to_temp_png, pasted_image_format, set_clipboard_text,
@@ -1446,8 +1447,8 @@ enum ProviderStudioField {
     DeleteProviderAction,
     BaseUrl,
     InstanceUrl,
-    ApiKeyEnv,
-    ApiKey,
+    ApiKeySource,
+    ApiKeyValue,
     RedirectUri,
     CallbackUrl,
     RefreshToken,
@@ -11550,7 +11551,8 @@ impl App {
                 ),
             ]),
             ProviderStudioField::AuthSubtype => match dialog.draft.auth_kind {
-                ProviderDraftAuthKind::Api
+                ProviderDraftAuthKind::ApiPending
+                | ProviderDraftAuthKind::Api
                 | ProviderDraftAuthKind::ClineApi
                 | ProviderDraftAuthKind::Gitlab
                 | ProviderDraftAuthKind::BedrockSigv4 => Some(vec![
@@ -11644,9 +11646,25 @@ impl App {
                 &self.i18n,
                 &self.backend,
             )),
-            ProviderStudioField::ApiKeyEnv => {
+            ProviderStudioField::ApiKeySource => Some(vec![
+                choice_item(
+                    "inline",
+                    ui_text::t(&self.i18n, "provider-api-key-source-inline-detail"),
+                ),
+                choice_item(
+                    "env",
+                    ui_text::t(&self.i18n, "provider-api-key-source-env-detail"),
+                ),
+            ]),
+            ProviderStudioField::ApiKeyValue
+                if matches!(
+                    dialog.draft.auth.secret_source_kind,
+                    ProviderDraftSecretSourceKind::Env
+                ) =>
+            {
                 Some(provider_studio_api_key_env_choice_items(&self.i18n))
             }
+            ProviderStudioField::ApiKeyValue => None,
             ProviderStudioField::ServiceKeyEnv => Some(vec![choice_item(
                 "AICORE_SERVICE_KEY",
                 ui_text::t(&self.i18n, "provider-service-key-env-detail"),
@@ -11698,7 +11716,7 @@ impl App {
             | ProviderStudioField::AuthLoginMethod
             | ProviderStudioField::InstanceUrl
             | ProviderStudioField::RedirectUri
-            | ProviderStudioField::ApiKeyEnv
+            | ProviderStudioField::ApiKeySource
             | ProviderStudioField::ServiceKeyEnv => ChoiceOverlayStyle::SelectOnly,
             ProviderStudioField::Region
             | ProviderStudioField::Profile
@@ -13505,18 +13523,12 @@ impl App {
             | ProviderStudioField::EditAuthDetailsAction
             | ProviderStudioField::DeleteProviderAction => {}
             ProviderStudioField::AuthMode => {
-                let previous_auth_kind = dialog.draft.auth_kind.clone();
                 match ProviderDraftAuthKind::parse_category(
                     value.as_str(),
-                    previous_auth_kind.clone(),
+                    dialog.draft.auth_kind.clone(),
                 ) {
                     Ok(auth_kind) => {
                         dialog.draft.auth_kind = auth_kind;
-                        if matches!(previous_auth_kind, ProviderDraftAuthKind::ClineApi)
-                            && !matches!(dialog.draft.auth_kind, ProviderDraftAuthKind::ClineApi)
-                        {
-                            dialog.draft.clear_cline_api_preset_values();
-                        }
                         dialog.draft.normalize_shape();
                         self.refresh_provider_studio_adapter_state(dialog);
                     }
@@ -13524,18 +13536,12 @@ impl App {
                 }
             }
             ProviderStudioField::AuthSubtype => {
-                let previous_auth_kind = dialog.draft.auth_kind.clone();
                 match ProviderDraftAuthKind::parse_subtype(
                     value.as_str(),
-                    previous_auth_kind.clone(),
+                    dialog.draft.auth_kind.clone(),
                 ) {
                     Ok(auth_kind) => {
                         dialog.draft.auth_kind = auth_kind;
-                        if matches!(previous_auth_kind, ProviderDraftAuthKind::ClineApi)
-                            && !matches!(dialog.draft.auth_kind, ProviderDraftAuthKind::ClineApi)
-                        {
-                            dialog.draft.clear_cline_api_preset_values();
-                        }
                         dialog.draft.normalize_shape();
                         self.refresh_provider_studio_adapter_state(dialog);
                     }
@@ -13557,11 +13563,13 @@ impl App {
             ProviderStudioField::InstanceUrl => {
                 dialog.draft.auth.instance_url = value;
             }
-            ProviderStudioField::ApiKeyEnv => {
-                dialog.draft.auth.api_key_env = value;
+            ProviderStudioField::ApiKeySource => {
+                dialog.draft.auth.secret_source_kind =
+                    ProviderDraftSecretSourceKind::parse(value.as_str())
+                        .map_err(|error| error.to_string())?;
             }
-            ProviderStudioField::ApiKey => {
-                dialog.draft.auth.api_key = value;
+            ProviderStudioField::ApiKeyValue => {
+                dialog.draft.auth.secret_source_value = value;
             }
             ProviderStudioField::RedirectUri => {
                 dialog.draft.set_redirect_uri(value);
@@ -16474,6 +16482,7 @@ fn provider_studio_save_field_label(
             crate::backend::ProviderStudioSaveField::AdapterId => "provider-field-adapter-id",
             crate::backend::ProviderStudioSaveField::ModelId => "provider-field-model-id",
             crate::backend::ProviderStudioSaveField::AuthMode => "provider-field-auth-mode",
+            crate::backend::ProviderStudioSaveField::AuthSubtype => "provider-field-auth-subtype",
             crate::backend::ProviderStudioSaveField::CredentialIssuer => {
                 "provider-field-auth-subtype"
             }
@@ -16498,6 +16507,7 @@ fn provider_draft_auth_kind_label(i18n: &I18n, auth_kind: &ProviderDraftAuthKind
     match auth_kind {
         ProviderDraftAuthKind::Unset => ui_text::t(i18n, "provider-auth-kind-unset"),
         ProviderDraftAuthKind::None => ui_text::t(i18n, "provider-auth-kind-none"),
+        ProviderDraftAuthKind::ApiPending => ui_text::t(i18n, "provider-auth-kind-api"),
         ProviderDraftAuthKind::Api => ui_text::t(i18n, "provider-auth-kind-api"),
         ProviderDraftAuthKind::ClineApi => ui_text::t(i18n, "provider-auth-kind-cline"),
         ProviderDraftAuthKind::Gitlab => ui_text::t(i18n, "provider-auth-kind-gitlab"),
@@ -16518,7 +16528,8 @@ fn provider_draft_auth_mode_label(i18n: &I18n, auth_kind: &ProviderDraftAuthKind
     match auth_kind {
         ProviderDraftAuthKind::Unset => ui_text::t(i18n, "provider-auth-kind-unset"),
         ProviderDraftAuthKind::None => ui_text::t(i18n, "provider-auth-kind-none"),
-        ProviderDraftAuthKind::Api
+        ProviderDraftAuthKind::ApiPending
+        | ProviderDraftAuthKind::Api
         | ProviderDraftAuthKind::ClineApi
         | ProviderDraftAuthKind::Gitlab
         | ProviderDraftAuthKind::BedrockSigv4 => ui_text::t(i18n, "provider-auth-kind-api"),
@@ -16530,6 +16541,7 @@ fn provider_draft_auth_subtype_label(i18n: &I18n, auth_kind: &ProviderDraftAuthK
     match auth_kind {
         ProviderDraftAuthKind::Unset
         | ProviderDraftAuthKind::None
+        | ProviderDraftAuthKind::ApiPending
         | ProviderDraftAuthKind::Credential(None) => String::new(),
         ProviderDraftAuthKind::Api => ui_text::t(i18n, "provider-auth-subtype-custom-label"),
         ProviderDraftAuthKind::ClineApi => ui_text::t(i18n, "provider-auth-kind-cline"),
@@ -20248,8 +20260,8 @@ fn provider_studio_field_allows_clear(field: ProviderStudioField) -> bool {
             | ProviderStudioField::AuthSubtype
             | ProviderStudioField::BaseUrl
             | ProviderStudioField::InstanceUrl
-            | ProviderStudioField::ApiKeyEnv
-            | ProviderStudioField::ApiKey
+            | ProviderStudioField::ApiKeySource
+            | ProviderStudioField::ApiKeyValue
             | ProviderStudioField::RedirectUri
             | ProviderStudioField::CallbackUrl
             | ProviderStudioField::RefreshToken
@@ -26296,14 +26308,15 @@ mod tests {
         let mut draft = ProviderConfigDraft {
             source_provider_id: None,
             provider_id: "cline".to_string(),
-            auth_kind: ProviderDraftAuthKind::Unset,
+            auth_kind: ProviderDraftAuthKind::ClineApi,
             auth: Default::default(),
             credential_drafts: Default::default(),
             default_adapter: String::new(),
             default_model: String::new(),
         };
         draft.normalize_shape();
-        draft.auth.api_key = "sk-test".to_string();
+        draft.auth.secret_source_kind = ProviderDraftSecretSourceKind::Inline;
+        draft.auth.secret_source_value = "sk-test".to_string();
         let dialog = provider_studio_test_overlay(draft);
 
         assert_eq!(
@@ -26319,7 +26332,10 @@ mod tests {
         );
         assert_eq!(
             provider_studio_detail_fields(&dialog),
-            vec![ProviderStudioField::ApiKeyEnv, ProviderStudioField::ApiKey]
+            vec![
+                ProviderStudioField::ApiKeySource,
+                ProviderStudioField::ApiKeyValue
+            ]
         );
         assert!(provider_studio_auth_is_configured(&dialog));
         assert!(!provider_studio_field_editable(
@@ -26329,7 +26345,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_studio_single_adapter_is_auto_selected_without_models() {
+    fn provider_studio_single_adapter_does_not_set_defaults_without_user_choice() {
         let mut draft = ProviderConfigDraft {
             source_provider_id: None,
             provider_id: "demo".to_string(),
@@ -26350,7 +26366,7 @@ mod tests {
             dialog.selected_adapter_ids,
             BTreeSet::from(["openai".to_string()])
         );
-        assert_eq!(dialog.draft.default_adapter, "openai");
+        assert!(dialog.draft.default_adapter.is_empty());
         assert!(dialog.draft.default_model.is_empty());
     }
 

@@ -42,7 +42,6 @@ pub async fn list_provider_adapter_models(
             base_url: request.base_url,
             protocol_paths: request.protocol_paths,
             api_key: request.api_key,
-            api_key_env: request.api_key_env,
             adapter_ids: request.adapter_ids,
         }),
         |result| match result {

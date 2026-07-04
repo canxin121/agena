@@ -961,15 +961,22 @@ impl HarnessesConfig {
 
 pub type ProviderDefaultsConfig = crate::agents::AgentSelectionConfig;
 
+pub const CLINE_API_BASE_URL: &str = "https://api.cline.bot";
+pub const CLINE_API_OPENAI_PROTOCOL_PATH: &str = "/api/v1";
+
+pub fn cline_api_protocol_paths() -> ProviderProtocolPathsConfig {
+    ProviderProtocolPathsConfig {
+        openai: CLINE_API_OPENAI_PROTOCOL_PATH.to_owned(),
+        ..ProviderProtocolPathsConfig::default()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum ProviderAuthConfig {
     None,
     Api(ProviderApiAuthConfig),
-    #[serde(rename = "gitlab_api")]
-    Gitlab(ProviderGitlabAuthConfig),
     Credential(ProviderCredentialAuthConfig),
-    BedrockSigv4(BedrockSigv4AuthConfig),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -998,33 +1005,273 @@ pub enum ProviderModelDiscoveryConfig {
     ConfiguredOnly,
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Default)]
-pub struct ProviderApiAuthConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub base_url: Option<String>,
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub protocol_paths: ProviderProtocolPathsConfig,
-    pub api_key: Option<String>,
-    pub api_key_env: Option<String>,
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum ProviderSecretSourceConfig {
+    Inline(String),
+    Env(String),
+}
+
+impl ProviderSecretSourceConfig {
+    pub fn inline(&self) -> Option<&str> {
+        match self {
+            Self::Inline(value) => Some(value.as_str()),
+            Self::Env(_) => None,
+        }
+    }
+
+    pub fn env(&self) -> Option<&str> {
+        match self {
+            Self::Inline(_) => None,
+            Self::Env(value) => Some(value.as_str()),
+        }
+    }
+}
+
+impl fmt::Debug for ProviderSecretSourceConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Inline(value) => f
+                .debug_tuple("ProviderSecretSourceConfig::Inline")
+                .field(&redacted(Some(value.as_str())))
+                .finish(),
+            Self::Env(value) => f
+                .debug_tuple("ProviderSecretSourceConfig::Env")
+                .field(value)
+                .finish(),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProviderGitlabApiAccessConfig {
+    ApiKey { source: ProviderSecretSourceConfig },
+    Credential { credential: AuthData },
+}
+
+impl ProviderGitlabApiAccessConfig {
+    pub fn api_key_source(&self) -> Option<&ProviderSecretSourceConfig> {
+        match self {
+            Self::ApiKey { source } => Some(source),
+            Self::Credential { .. } => None,
+        }
+    }
+
+    pub fn credential(&self) -> Option<&AuthData> {
+        match self {
+            Self::ApiKey { .. } => None,
+            Self::Credential { credential } => Some(credential),
+        }
+    }
+}
+
+impl fmt::Debug for ProviderGitlabApiAccessConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ApiKey { source } => f
+                .debug_struct("ProviderGitlabApiAccessConfig::ApiKey")
+                .field("source", source)
+                .finish(),
+            Self::Credential { credential } => f
+                .debug_struct("ProviderGitlabApiAccessConfig::Credential")
+                .field("credential", &credential_debug_kind(credential))
+                .finish(),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "subtype", rename_all = "snake_case")]
+pub enum ProviderApiAuthConfig {
+    Custom {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        base_url: Option<String>,
+        #[serde(default, skip_serializing_if = "is_default")]
+        protocol_paths: ProviderProtocolPathsConfig,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        api_key: Option<ProviderSecretSourceConfig>,
+    },
+    #[serde(rename = "cline_api")]
+    ClineApi {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        api_key: Option<ProviderSecretSourceConfig>,
+    },
+    Gitlab {
+        access: ProviderGitlabApiAccessConfig,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        instance_url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ai_gateway_url: Option<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        ai_gateway_headers: BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        feature_flags: BTreeMap<String, bool>,
+    },
+    BedrockSigv4 {
+        base_url: String,
+        region: String,
+        profile: Option<String>,
+        access_key_id: Option<String>,
+        secret_access_key: Option<String>,
+        session_token: Option<String>,
+    },
+}
+
+impl ProviderApiAuthConfig {
+    pub fn custom(
+        base_url: Option<String>,
+        protocol_paths: ProviderProtocolPathsConfig,
+        api_key: Option<ProviderSecretSourceConfig>,
+    ) -> Self {
+        Self::Custom {
+            base_url,
+            protocol_paths,
+            api_key,
+        }
+    }
+
+    pub fn api_key_source(&self) -> Option<&ProviderSecretSourceConfig> {
+        match self {
+            Self::Custom { api_key, .. } | Self::ClineApi { api_key } => api_key.as_ref(),
+            Self::Gitlab { access, .. } => access.api_key_source(),
+            Self::BedrockSigv4 { .. } => None,
+        }
+    }
+
+    pub fn api_key(&self) -> Option<&str> {
+        self.api_key_source()
+            .and_then(ProviderSecretSourceConfig::inline)
+    }
+
+    pub fn api_key_env(&self) -> Option<&str> {
+        self.api_key_source()
+            .and_then(ProviderSecretSourceConfig::env)
+    }
+
+    pub fn custom_base_url(&self) -> Option<&str> {
+        match self {
+            Self::Custom { base_url, .. } => base_url.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn custom_protocol_paths(&self) -> Option<&ProviderProtocolPathsConfig> {
+        match self {
+            Self::Custom { protocol_paths, .. } => Some(protocol_paths),
+            _ => None,
+        }
+    }
+
+    pub fn is_cline_api(&self) -> bool {
+        matches!(self, Self::ClineApi { .. })
+    }
+
+    pub fn gitlab(&self) -> Option<ProviderGitlabAuthConfig> {
+        match self {
+            Self::Gitlab {
+                access,
+                instance_url,
+                ai_gateway_url,
+                ai_gateway_headers,
+                feature_flags,
+            } => Some(ProviderGitlabAuthConfig {
+                access: access.clone(),
+                instance_url: instance_url.clone(),
+                ai_gateway_url: ai_gateway_url.clone(),
+                ai_gateway_headers: ai_gateway_headers.clone(),
+                feature_flags: feature_flags.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn bedrock_sigv4(&self) -> Option<BedrockSigv4AuthConfig> {
+        match self {
+            Self::BedrockSigv4 {
+                base_url,
+                region,
+                profile,
+                access_key_id,
+                secret_access_key,
+                session_token,
+            } => Some(BedrockSigv4AuthConfig {
+                base_url: base_url.clone(),
+                region: region.clone(),
+                profile: profile.clone(),
+                access_key_id: access_key_id.clone(),
+                secret_access_key: secret_access_key.clone(),
+                session_token: session_token.clone(),
+            }),
+            _ => None,
+        }
+    }
+}
+
+impl Default for ProviderApiAuthConfig {
+    fn default() -> Self {
+        Self::Custom {
+            base_url: None,
+            protocol_paths: ProviderProtocolPathsConfig::default(),
+            api_key: None,
+        }
+    }
 }
 
 impl fmt::Debug for ProviderApiAuthConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ProviderApiAuthConfig")
-            .field("base_url", &self.base_url)
-            .field("protocol_paths", &self.protocol_paths)
-            .field("api_key", &redacted(self.api_key.as_deref()))
-            .field("api_key_env", &self.api_key_env)
-            .finish()
+        match self {
+            Self::Custom {
+                base_url,
+                protocol_paths,
+                api_key,
+            } => f
+                .debug_struct("ProviderApiAuthConfig::Custom")
+                .field("base_url", base_url)
+                .field("protocol_paths", protocol_paths)
+                .field("api_key", api_key)
+                .finish(),
+            Self::ClineApi { api_key } => f
+                .debug_struct("ProviderApiAuthConfig::ClineApi")
+                .field("api_key", api_key)
+                .finish(),
+            Self::Gitlab {
+                access,
+                instance_url,
+                ai_gateway_url,
+                ai_gateway_headers,
+                feature_flags,
+            } => f
+                .debug_struct("ProviderApiAuthConfig::Gitlab")
+                .field("access", access)
+                .field("instance_url", instance_url)
+                .field("ai_gateway_url", ai_gateway_url)
+                .field("ai_gateway_headers", ai_gateway_headers)
+                .field("feature_flags", feature_flags)
+                .finish(),
+            Self::BedrockSigv4 {
+                base_url,
+                region,
+                profile,
+                access_key_id,
+                secret_access_key,
+                session_token,
+            } => f
+                .debug_struct("ProviderApiAuthConfig::BedrockSigv4")
+                .field("base_url", base_url)
+                .field("region", region)
+                .field("profile", profile)
+                .field("access_key_id", &redacted(access_key_id.as_deref()))
+                .field("secret_access_key", &redacted(secret_access_key.as_deref()))
+                .field("session_token", &redacted(session_token.as_deref()))
+                .finish(),
+        }
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Default)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct ProviderGitlabAuthConfig {
-    pub api_key: Option<String>,
-    pub api_key_env: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub credential: Option<AuthData>,
+    pub access: ProviderGitlabApiAccessConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1038,15 +1285,7 @@ pub struct ProviderGitlabAuthConfig {
 impl fmt::Debug for ProviderGitlabAuthConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProviderGitlabAuthConfig")
-            .field("api_key", &redacted(self.api_key.as_deref()))
-            .field("api_key_env", &self.api_key_env)
-            .field(
-                "credential",
-                &self
-                    .credential
-                    .as_ref()
-                    .map(|credential| credential_debug_kind(credential)),
-            )
+            .field("access", &self.access)
             .field("instance_url", &self.instance_url)
             .field("ai_gateway_url", &self.ai_gateway_url)
             .field("ai_gateway_headers", &self.ai_gateway_headers)
@@ -1055,17 +1294,31 @@ impl fmt::Debug for ProviderGitlabAuthConfig {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize)]
-pub struct ProviderCredentialAuthConfig {
-    pub issuer: CredentialIssuer,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct ProviderInlineCredentialAuthConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential: Option<AuthData>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProviderHttpCredentialAuthConfig {
+    pub base_url: String,
     #[serde(default, skip_serializing_if = "is_default")]
     pub protocol_paths: ProviderProtocolPathsConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProviderSapAiCoreCredentialAuthConfig {
+    pub base_url: String,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub protocol_paths: ProviderProtocolPathsConfig,
+    pub service_key_env: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct ProviderGitlabCredentialAuthConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub service_key_env: Option<String>,
+    pub credential: Option<AuthData>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1076,25 +1329,117 @@ pub struct ProviderCredentialAuthConfig {
     pub feature_flags: BTreeMap<String, bool>,
 }
 
+#[derive(Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "issuer", rename_all = "snake_case")]
+pub enum ProviderCredentialAuthConfig {
+    OpenaiChatgpt {
+        #[serde(flatten)]
+        config: ProviderInlineCredentialAuthConfig,
+    },
+    GithubCopilot {
+        #[serde(flatten)]
+        config: ProviderInlineCredentialAuthConfig,
+    },
+    Gitlab {
+        #[serde(flatten)]
+        config: ProviderGitlabCredentialAuthConfig,
+    },
+    GoogleAdc {
+        #[serde(flatten)]
+        config: ProviderHttpCredentialAuthConfig,
+    },
+    SapAiCore {
+        #[serde(flatten)]
+        config: ProviderSapAiCoreCredentialAuthConfig,
+    },
+}
+
+impl ProviderCredentialAuthConfig {
+    pub fn issuer(&self) -> CredentialIssuer {
+        match self {
+            Self::OpenaiChatgpt { .. } => CredentialIssuer::OpenaiChatgpt,
+            Self::GithubCopilot { .. } => CredentialIssuer::GithubCopilot,
+            Self::Gitlab { .. } => CredentialIssuer::Gitlab,
+            Self::GoogleAdc { .. } => CredentialIssuer::GoogleAdc,
+            Self::SapAiCore { .. } => CredentialIssuer::SapAiCore,
+        }
+    }
+
+    pub fn credential(&self) -> Option<&AuthData> {
+        match self {
+            Self::OpenaiChatgpt { config } | Self::GithubCopilot { config } => {
+                config.credential.as_ref()
+            }
+            Self::Gitlab { config } => config.credential.as_ref(),
+            Self::GoogleAdc { .. } | Self::SapAiCore { .. } => None,
+        }
+    }
+
+    pub fn base_url(&self) -> Option<&str> {
+        match self {
+            Self::GoogleAdc { config } => Some(config.base_url.as_str()),
+            Self::SapAiCore { config } => Some(config.base_url.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn protocol_paths(&self) -> Option<&ProviderProtocolPathsConfig> {
+        match self {
+            Self::GoogleAdc { config } => Some(&config.protocol_paths),
+            Self::SapAiCore { config } => Some(&config.protocol_paths),
+            _ => None,
+        }
+    }
+
+    pub fn service_key_env(&self) -> Option<&str> {
+        match self {
+            Self::SapAiCore { config } => Some(config.service_key_env.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn gitlab(&self) -> Option<&ProviderGitlabCredentialAuthConfig> {
+        match self {
+            Self::Gitlab { config } => Some(config),
+            _ => None,
+        }
+    }
+
+    pub fn inline(&self) -> Option<&ProviderInlineCredentialAuthConfig> {
+        match self {
+            Self::OpenaiChatgpt { config } | Self::GithubCopilot { config } => Some(config),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Debug for ProviderCredentialAuthConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ProviderCredentialAuthConfig")
-            .field("issuer", &self.issuer)
-            .field(
-                "credential",
-                &self
-                    .credential
-                    .as_ref()
-                    .map(|credential| credential_debug_kind(credential)),
-            )
-            .field("base_url", &self.base_url)
-            .field("protocol_paths", &self.protocol_paths)
-            .field("service_key_env", &self.service_key_env)
-            .field("instance_url", &self.instance_url)
-            .field("ai_gateway_url", &self.ai_gateway_url)
-            .field("ai_gateway_headers", &self.ai_gateway_headers)
-            .field("feature_flags", &self.feature_flags)
-            .finish()
+        let mut debug = f.debug_struct("ProviderCredentialAuthConfig");
+        debug.field("issuer", &self.issuer());
+        debug.field(
+            "credential",
+            &self
+                .credential()
+                .map(|credential| credential_debug_kind(credential)),
+        );
+        if let Some(base_url) = self.base_url() {
+            debug.field("base_url", &base_url);
+        }
+        if let Some(protocol_paths) = self.protocol_paths() {
+            debug.field("protocol_paths", protocol_paths);
+        }
+        if let Some(service_key_env) = self.service_key_env() {
+            debug.field("service_key_env", &service_key_env);
+        }
+        if let Some(gitlab) = self.gitlab() {
+            debug
+                .field("instance_url", &gitlab.instance_url)
+                .field("ai_gateway_url", &gitlab.ai_gateway_url)
+                .field("ai_gateway_headers", &gitlab.ai_gateway_headers)
+                .field("feature_flags", &gitlab.feature_flags);
+        }
+        debug.finish()
     }
 }
 

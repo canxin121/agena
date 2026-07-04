@@ -49,8 +49,12 @@ provider
       "enabled": true,
       "auth": {
         "mode": "api",
+        "subtype": "custom",
         "base_url": "https://api.openai.com",
-        "api_key_env": "OPENAI_API_KEY"
+        "api_key": {
+          "kind": "env",
+          "value": "OPENAI_API_KEY"
+        }
       },
       "adapters": {
         "openai": {
@@ -255,8 +259,12 @@ sap_ai_core
     "openai": {
       "auth": {
         "mode": "api",
+        "subtype": "custom",
         "base_url": "https://api.openai.com",
-        "api_key_env": "OPENAI_API_KEY"
+        "api_key": {
+          "kind": "env",
+          "value": "OPENAI_API_KEY"
+        }
       }
     }
   }
@@ -268,7 +276,11 @@ sap_ai_core
 - `base_url`
 - `protocol_paths`
 - `api_key`
-- `api_key_env`
+
+`api_key` 是一个二选一的对象：
+
+- `{"kind":"inline","value":"..."}`
+- `{"kind":"env","value":"OPENAI_API_KEY"}`
 
 `protocol_paths` 是 auth 级的协议前缀表，默认值是：
 
@@ -323,7 +335,7 @@ sap_ai_core
 - `issuer`
 - `credential`
 
-注意：credential 模式下不接受 `base_url`、`protocol_paths`、`api_key`、`api_key_env`。
+注意：credential 模式下不接受 `base_url`、`protocol_paths`、`api_key`。
 
 `credential` 必须带 issuer 信息，这样运行时才能知道这份 credential 是谁的，例如：
 
@@ -332,7 +344,7 @@ sap_ai_core
 - `gitlab`
 - `atomgit`
 
-### `bedrock_sigv4`
+### `api` + `bedrock_sigv4`
 
 用于 AWS 原生签名：
 
@@ -341,7 +353,8 @@ sap_ai_core
   "providers": {
     "bedrock": {
       "auth": {
-        "mode": "bedrock_sigv4",
+        "mode": "api",
+        "subtype": "bedrock_sigv4",
         "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
         "region": "us-east-1",
         "profile": "prod"
@@ -351,7 +364,7 @@ sap_ai_core
 }
 ```
 
-### `google_adc`
+### `credential` + `google_adc`
 
 用于 Vertex / Google ADC。和 `api` 一样，它也需要一个共享入口的 `base_url`；区别只是凭证来源来自 Google ADC，而不是 API key。
 
@@ -360,7 +373,8 @@ sap_ai_core
   "providers": {
     "vertex": {
       "auth": {
-        "mode": "google_adc",
+        "mode": "credential",
+        "issuer": "google_adc",
         "base_url": "https://us-central1-aiplatform.googleapis.com",
         "protocol_paths": {
           "openai": "/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
@@ -371,7 +385,7 @@ sap_ai_core
 }
 ```
 
-### `sap_ai_core`
+### `credential` + `sap_ai_core`
 
 用于 SAP AI Core。
 
@@ -387,7 +401,7 @@ auth 决定身份来源；adapter 决定协议。
 - `github_copilot` credential 也可以配 `anthropic` adapter
 - `atomgit` credential 可以配 `openai` adapter，运行时使用 AtomGit 的 OpenAI-compatible gateway
 - `openai_chatgpt` credential 只适合 `openai` adapter 且 `backend = "chatgpt_codex"`
-- `bedrock_sigv4` 只适合 `amazon_bedrock`
+- `api` subtype `bedrock_sigv4` 只适合 `amazon_bedrock`
 - `sap_ai_core` 只适合 `openai`
 
 如果配置了错误组合，运行时报配置错误即可，不再为旧结构做兼容转换。
@@ -412,8 +426,12 @@ auth 决定身份来源；adapter 决定协议。
       },
       "auth": {
         "mode": "api",
+        "subtype": "custom",
         "base_url": "https://api.openai.com",
-        "api_key_env": "OPENAI_API_KEY"
+        "api_key": {
+          "kind": "env",
+          "value": "OPENAI_API_KEY"
+        }
       },
       "adapters": {
         "openai": {
@@ -599,8 +617,12 @@ AtomGit 的默认模型列表流程会对齐 AtomCode：先按 `Max -> Pro -> Li
       },
       "auth": {
         "mode": "api",
+        "subtype": "custom",
         "base_url": "https://gateway.example.com",
-        "api_key_env": "SHARED_GATEWAY_API_KEY",
+        "api_key": {
+          "kind": "env",
+          "value": "SHARED_GATEWAY_API_KEY"
+        },
         "protocol_paths": {
           "openai": "/v1",
           "anthropic": "/v1",
@@ -656,8 +678,12 @@ AtomGit 的默认模型列表流程会对齐 AtomCode：先按 `Max -> Pro -> Li
       },
       "auth": {
         "mode": "api",
+        "subtype": "custom",
         "base_url": "https://api.cxits.cn",
-        "api_key_env": "CX_API_KEY",
+        "api_key": {
+          "kind": "env",
+          "value": "CX_API_KEY"
+        },
         "protocol_paths": {
           "openai": "/api/provider/openai/v1",
           "anthropic": "/api/provider/anthropic/v1",
@@ -712,7 +738,8 @@ AtomGit 的默认模型列表流程会对齐 AtomCode：先按 `Max -> Pro -> Li
         "model": "anthropic.claude-3-7-sonnet-20250219-v1:0"
       },
       "auth": {
-        "mode": "bedrock_sigv4",
+        "mode": "api",
+        "subtype": "bedrock_sigv4",
         "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
         "region": "us-east-1",
         "profile": "prod"
@@ -744,10 +771,10 @@ AtomGit 的默认模型列表流程会对齐 AtomCode：先按 `Max -> Pro -> Li
       },
       "auth": {
         "mode": "api",
-        "base_url": "https://api.cline.bot",
-        "api_key_env": "CLINE_API_KEY",
-        "protocol_paths": {
-          "openai": "/api/v1"
+        "subtype": "cline_api",
+        "api_key": {
+          "kind": "env",
+          "value": "CLINE_API_KEY"
         }
       },
       "adapters": {
@@ -769,7 +796,7 @@ AtomGit 的默认模型列表流程会对齐 AtomCode：先按 `Max -> Pro -> Li
 
 这里有两个和普通 OpenAI-compatible gateway 不一样的点：
 
-- 聊天请求走 `https://api.cline.bot/api/v1/chat/completions`，所以 `base_url` 是根 `https://api.cline.bot`，`protocol_paths.openai` 显式写 `/api/v1`
+- `auth.subtype = "cline_api"` 直接选择 Cline 的固定 API 端点，不再把它存成一个带隐藏默认值的 custom API 结构
 - 订阅模型列表不依赖标准 `/models`，而是把 `models_url` 指到 `https://api.cline.bot/api/v1/ai/cline/recommended-models`
 
 Web 设置页里可以直接在 `Provider Auth` 区输入 API key；它会自动创建 `cline_api` provider preset，不需要手填 `base_url`。

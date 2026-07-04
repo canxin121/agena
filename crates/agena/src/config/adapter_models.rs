@@ -4,13 +4,15 @@ use crate::error::AppError;
 use crate::provider::auth::{AuthData, CredentialIssuer};
 
 use super::{
-    AmazonBedrockProviderOptions, AnthropicProviderOptions, BedrockSigv4AuthConfig,
-    ConfigEnvironment, ConfigError, GeminiProviderOptions, HttpProviderAdapterConfig,
-    OllamaProviderOptions, OpenAiApiModeConfig, OpenAiBackendConfig, OpenAiProviderOptions,
-    ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
-    ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig, ProviderGitlabAuthConfig,
-    ProviderProtocolPathsConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
-    ResolvedProviderConfig, StreamTransportMode, list_provider_adapter_models,
+    AmazonBedrockProviderOptions, AnthropicProviderOptions, ConfigEnvironment, ConfigError,
+    GeminiProviderOptions, HttpProviderAdapterConfig, OllamaProviderOptions, OpenAiApiModeConfig,
+    OpenAiBackendConfig, OpenAiProviderOptions, ProviderAdapterDefinition, ProviderApiAuthConfig,
+    ProviderAuthConfig, ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig,
+    ProviderGitlabApiAccessConfig, ProviderGitlabCredentialAuthConfig,
+    ProviderHttpCredentialAuthConfig, ProviderInlineCredentialAuthConfig,
+    ProviderProtocolPathsConfig, ProviderSapAiCoreCredentialAuthConfig, ProviderSecretSourceConfig,
+    ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig, StreamTransportMode,
+    list_provider_adapter_models,
 };
 pub const HTTP_ADAPTER_MODEL_LIST_ADAPTER_IDS: [&str; 3] = ["openai", "anthropic", "gemini"];
 
@@ -45,12 +47,11 @@ pub fn draft_provider_adapter_models_target(
     )?;
     Ok(ProviderAdapterModelsTarget {
         provider_id: optional_trimmed(provider_id).unwrap_or("draft").to_owned(),
-        auth: ProviderAuthConfig::Api(ProviderApiAuthConfig {
-            base_url: Some(base_url.to_owned()),
+        auth: ProviderAuthConfig::Api(ProviderApiAuthConfig::custom(
+            Some(base_url.to_owned()),
             protocol_paths,
-            api_key: optional_trimmed(api_key).map(ToOwned::to_owned),
-            api_key_env: optional_trimmed(api_key_env).map(ToOwned::to_owned),
-        }),
+            draft_secret_source(api_key, api_key_env),
+        )),
         adapters: default_http_adapter_model_list_adapters(adapter_ids.as_slice())?,
     })
 }
@@ -67,14 +68,37 @@ pub fn draft_gitlab_provider_adapter_models_target(
     )?;
     Ok(ProviderAdapterModelsTarget {
         provider_id: optional_trimmed(provider_id).unwrap_or("draft").to_owned(),
-        auth: ProviderAuthConfig::Gitlab(ProviderGitlabAuthConfig {
-            api_key: optional_trimmed(api_key).map(ToOwned::to_owned),
-            api_key_env: optional_trimmed(api_key_env).map(ToOwned::to_owned),
-            credential: None,
+        auth: ProviderAuthConfig::Api(ProviderApiAuthConfig::Gitlab {
+            access: ProviderGitlabApiAccessConfig::ApiKey {
+                source: draft_secret_source(api_key, api_key_env).ok_or_else(|| {
+                    ConfigError::Validation(
+                        "gitlab draft adapter model listing requires an api key source".to_owned(),
+                    )
+                })?,
+            },
             instance_url: None,
             ai_gateway_url: None,
             ai_gateway_headers: BTreeMap::new(),
             feature_flags: BTreeMap::new(),
+        }),
+        adapters: default_http_adapter_model_list_adapters(adapter_ids.as_slice())?,
+    })
+}
+
+pub fn draft_cline_api_provider_adapter_models_target(
+    provider_id: Option<&str>,
+    api_key: Option<&str>,
+    api_key_env: Option<&str>,
+    adapter_ids: &[String],
+) -> Result<ProviderAdapterModelsTarget, ConfigError> {
+    let adapter_ids = required_adapter_ids(
+        adapter_ids,
+        "draft adapter model listing requires explicit adapter_ids",
+    )?;
+    Ok(ProviderAdapterModelsTarget {
+        provider_id: optional_trimmed(provider_id).unwrap_or("draft").to_owned(),
+        auth: ProviderAuthConfig::Api(ProviderApiAuthConfig::ClineApi {
+            api_key: draft_secret_source(api_key, api_key_env),
         }),
         adapters: default_http_adapter_model_list_adapters(adapter_ids.as_slice())?,
     })
@@ -115,16 +139,47 @@ pub fn draft_credential_provider_adapter_models_target(
     )?;
     Ok(ProviderAdapterModelsTarget {
         provider_id: optional_trimmed(provider_id).unwrap_or("draft").to_owned(),
-        auth: ProviderAuthConfig::Credential(ProviderCredentialAuthConfig {
-            issuer,
-            credential,
-            base_url: optional_trimmed(base_url).map(ToOwned::to_owned),
-            protocol_paths,
-            service_key_env: optional_trimmed(service_key_env).map(ToOwned::to_owned),
-            instance_url: optional_trimmed(instance_url).map(ToOwned::to_owned),
-            ai_gateway_url: None,
-            ai_gateway_headers: BTreeMap::new(),
-            feature_flags: BTreeMap::new(),
+        auth: ProviderAuthConfig::Credential(match issuer {
+            CredentialIssuer::OpenaiChatgpt => ProviderCredentialAuthConfig::OpenaiChatgpt {
+                config: ProviderInlineCredentialAuthConfig { credential },
+            },
+            CredentialIssuer::GithubCopilot => ProviderCredentialAuthConfig::GithubCopilot {
+                config: ProviderInlineCredentialAuthConfig { credential },
+            },
+            CredentialIssuer::Gitlab => ProviderCredentialAuthConfig::Gitlab {
+                config: ProviderGitlabCredentialAuthConfig {
+                    credential,
+                    instance_url: optional_trimmed(instance_url).map(ToOwned::to_owned),
+                    ai_gateway_url: None,
+                    ai_gateway_headers: BTreeMap::new(),
+                    feature_flags: BTreeMap::new(),
+                },
+            },
+            CredentialIssuer::GoogleAdc => ProviderCredentialAuthConfig::GoogleAdc {
+                config: ProviderHttpCredentialAuthConfig {
+                    base_url: required_trimmed(
+                        base_url.unwrap_or_default(),
+                        "google_adc adapter model listing requires base_url",
+                    )?
+                    .to_owned(),
+                    protocol_paths,
+                },
+            },
+            CredentialIssuer::SapAiCore => ProviderCredentialAuthConfig::SapAiCore {
+                config: ProviderSapAiCoreCredentialAuthConfig {
+                    base_url: required_trimmed(
+                        base_url.unwrap_or_default(),
+                        "sap_ai_core adapter model listing requires base_url",
+                    )?
+                    .to_owned(),
+                    protocol_paths,
+                    service_key_env: required_trimmed(
+                        service_key_env.unwrap_or_default(),
+                        "sap_ai_core adapter model listing requires service_key_env",
+                    )?
+                    .to_owned(),
+                },
+            },
         }),
         adapters: default_adapter_model_list_adapters(
             adapter_ids.as_slice(),
@@ -150,7 +205,7 @@ pub fn draft_bedrock_sigv4_provider_adapter_models_target(
     )?;
     Ok(ProviderAdapterModelsTarget {
         provider_id: optional_trimmed(provider_id).unwrap_or("draft").to_owned(),
-        auth: ProviderAuthConfig::BedrockSigv4(BedrockSigv4AuthConfig {
+        auth: ProviderAuthConfig::Api(ProviderApiAuthConfig::BedrockSigv4 {
             base_url: optional_trimmed(base_url)
                 .unwrap_or(DEFAULT_BEDROCK_BASE_URL)
                 .to_owned(),
@@ -248,10 +303,14 @@ fn adapter_model_list_defaults_for_auth(auth: &ProviderAuthConfig) -> AdapterMod
     match auth {
         ProviderAuthConfig::None => AdapterModelListDefaults::None,
         ProviderAuthConfig::Credential(config) => {
-            AdapterModelListDefaults::Credential(config.issuer)
+            AdapterModelListDefaults::Credential(config.issuer())
         }
-        ProviderAuthConfig::BedrockSigv4(_) => AdapterModelListDefaults::BedrockSigv4,
-        ProviderAuthConfig::Api(_) | ProviderAuthConfig::Gitlab(_) => AdapterModelListDefaults::Api,
+        ProviderAuthConfig::Api(api)
+            if matches!(api, ProviderApiAuthConfig::BedrockSigv4 { .. }) =>
+        {
+            AdapterModelListDefaults::BedrockSigv4
+        }
+        ProviderAuthConfig::Api(_) => AdapterModelListDefaults::Api,
     }
 }
 
@@ -418,6 +477,18 @@ fn optional_trimmed(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
+fn draft_secret_source(
+    api_key: Option<&str>,
+    api_key_env: Option<&str>,
+) -> Option<ProviderSecretSourceConfig> {
+    optional_trimmed(api_key)
+        .map(|value| ProviderSecretSourceConfig::Inline(value.to_owned()))
+        .or_else(|| {
+            optional_trimmed(api_key_env)
+                .map(|value| ProviderSecretSourceConfig::Env(value.to_owned()))
+        })
+}
+
 fn required_trimmed<'a>(value: &'a str, message: &str) -> Result<&'a str, ConfigError> {
     optional_trimmed(Some(value))
         .ok_or_else(|| ConfigError::App(AppError::Config(message.to_owned())))
@@ -454,16 +525,8 @@ mod tests {
         let resolved = ResolvedProviderConfig {
             enabled: true,
             defaults: Default::default(),
-            auth: ProviderAuthConfig::Credential(ProviderCredentialAuthConfig {
-                issuer: CredentialIssuer::GithubCopilot,
-                credential: None,
-                base_url: None,
-                protocol_paths: ProviderProtocolPathsConfig::default(),
-                service_key_env: None,
-                instance_url: None,
-                ai_gateway_url: None,
-                ai_gateway_headers: BTreeMap::new(),
-                feature_flags: BTreeMap::new(),
+            auth: ProviderAuthConfig::Credential(ProviderCredentialAuthConfig::GithubCopilot {
+                config: ProviderInlineCredentialAuthConfig { credential: None },
             }),
             adapters: BTreeMap::new(),
             models: BTreeMap::new(),

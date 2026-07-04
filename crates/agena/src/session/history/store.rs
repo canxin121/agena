@@ -718,6 +718,7 @@ fn role_db_value(role: Role) -> i8 {
         Role::User => 1,
         Role::Assistant => 2,
         Role::System => 3,
+        Role::Tool => 4,
     }
 }
 
@@ -1380,6 +1381,7 @@ fn role_default_source(role: Role) -> MessageSource {
         Role::User => MessageSource::User,
         Role::Assistant => MessageSource::Assistant,
         Role::System => MessageSource::System,
+        Role::Tool => MessageSource::Assistant,
     }
 }
 

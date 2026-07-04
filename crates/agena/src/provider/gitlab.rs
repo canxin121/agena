@@ -632,8 +632,8 @@ impl ModelRuntime for GitlabProvider {
     }
 
     fn supports_prompt_continuation(&self, model: &ModelId) -> bool {
-        let mapped = Self::mapped_model(model.as_str());
-        Self::use_openai_backend(mapped.as_str()) && Self::use_responses_api(mapped.as_str())
+        let _ = model;
+        false
     }
 
     fn prompt_cache_shape(&self, model: &ModelId) -> Option<crate::provider::PromptCacheShape> {

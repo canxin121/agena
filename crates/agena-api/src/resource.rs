@@ -553,6 +553,7 @@ pub enum MessageRole {
     User,
     Assistant,
     System,
+    Tool,
 }
 
 impl From<agena::role::Role> for MessageRole {
@@ -561,6 +562,7 @@ impl From<agena::role::Role> for MessageRole {
             agena::role::Role::User => Self::User,
             agena::role::Role::Assistant => Self::Assistant,
             agena::role::Role::System => Self::System,
+            agena::role::Role::Tool => Self::Tool,
         }
     }
 }

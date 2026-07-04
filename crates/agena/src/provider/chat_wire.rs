@@ -626,6 +626,7 @@ pub(crate) fn request_to_chat_messages_with_assistant_reasoning_field(
                     assistant_reasoning_field,
                 ));
             }
+            Role::Tool => messages.extend(tool_messages_from_parts(&parts)),
         }
     }
 
@@ -753,6 +754,22 @@ fn assistant_messages_from_parts(
     messages
 }
 
+fn tool_messages_from_parts(parts: &[wire_message::WirePart]) -> Vec<ChatMessage> {
+    parts.iter()
+        .filter_map(|part| match part {
+            wire_message::WirePart::ToolResult {
+                tool_call_id,
+                output_json,
+                ..
+            } if !tool_call_id.trim().is_empty() => Some(ChatMessage::tool_result(
+                tool_call_id.clone(),
+                Value::String(output_json.clone()),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
 fn assistant_reasoning_text(message: &Message) -> String {
     let mut chunks = Vec::new();
     for part in &message.parts {
@@ -791,7 +808,16 @@ fn apply_assistant_reasoning_field(
             message.reasoning_content = Some(Value::String(reasoning_text.to_owned()));
         }
         Some("reasoning_details") => {
-            message.reasoning_details = Some(Value::String(reasoning_text.to_owned()));
+            let details = if reasoning_text.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec![serde_json::json!({
+                    "type": "reasoning.text",
+                    "text": reasoning_text,
+                    "index": 0
+                })]
+            };
+            message.reasoning_details = Some(Value::Array(details));
         }
         _ => {}
     }

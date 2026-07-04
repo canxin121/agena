@@ -650,6 +650,10 @@ impl OpenAiAdapter {
             return true;
         }
 
+        if !self.api_mode_explicit && !self.base_url_supports_responses_by_default() {
+            return false;
+        }
+
         match self.api_mode {
             OpenAiApiMode::Responses => true,
             OpenAiApiMode::Chat => false,
@@ -657,6 +661,13 @@ impl OpenAiAdapter {
                 model.starts_with("gpt-5") || model.starts_with("o3") || model.starts_with("o4")
             }
         }
+    }
+
+    fn base_url_supports_responses_by_default(&self) -> bool {
+        url::Url::parse(self.base_url.as_str())
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+            .is_some_and(|host| host == "api.openai.com" || host.ends_with(".openai.com"))
     }
 
     fn copilot_should_use_responses(model: &str) -> bool {
@@ -2204,6 +2215,29 @@ impl OpenAiAdapter {
                     Self::flush_assistant_responses_text(input, &mut text_chunks);
                 }
             }
+            Role::Tool => {
+                for part in projected_parts {
+                    if let wire_message::WirePart::ToolResult {
+                        tool_call_id,
+                        output_json,
+                        ..
+                    } = part
+                        && let Some(call_id) = responses_input_call_id(tool_call_id.as_str())
+                    {
+                        input.push(OpenAiResponsesInputItem::FunctionCallOutput(
+                            OpenAiFunctionCallOutputItem {
+                                kind: "function_call_output",
+                                call_id,
+                                output: Self::multimodal_function_output_value(
+                                    output_json.as_str(),
+                                    &[],
+                                ),
+                                copilot_cache_control: None,
+                            },
+                        ));
+                    }
+                }
+            }
         }
     }
 
@@ -2665,8 +2699,10 @@ impl ModelRuntime for OpenAiAdapter {
     }
 
     fn supports_prompt_continuation(&self, model: &ModelId) -> bool {
-        matches!(self.stream_mode, OpenAiStreamMode::Sse)
-            && self.should_use_responses(model.as_str())
+        let _ = model;
+        // OpenAI-compatible backends frequently diverge on `previous_response_id`
+        // semantics. Replaying the normalized transcript is slower but reliable.
+        false
     }
 
     fn prompt_cache_shape(&self, model: &ModelId) -> Option<crate::provider::PromptCacheShape> {

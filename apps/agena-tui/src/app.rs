@@ -22023,6 +22023,7 @@ fn style_for_role(role: MessageRole) -> Style {
         MessageRole::User => Style::default().fg(Color::Green),
         MessageRole::Assistant => Style::default().fg(Color::Cyan),
         MessageRole::System => Style::default().fg(Color::Magenta),
+        MessageRole::Tool => Style::default().fg(Color::Yellow),
     }
 }
 

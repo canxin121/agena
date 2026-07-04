@@ -17,6 +17,7 @@ use crate::message::{
     AttachmentItem, AttachmentKind, AttachmentSource, ExecutionStatus, Message, OperationPart,
     PartContent, ToolInvocation,
 };
+use crate::role::Role;
 
 // ─── Core type ────────────────────────────────────────────────────────────────
 
@@ -89,6 +90,19 @@ pub fn project(message: &Message) -> Vec<WirePart> {
                     .unwrap_or_else(|| exec.call_id().to_string());
 
                 let (name, arguments_json) = project_tool_invocation(exec, message);
+                if matches!(message.role, Role::Tool) {
+                    if matches!(
+                        part.status,
+                        ExecutionStatus::Completed | ExecutionStatus::Failed
+                    ) {
+                        parts.push(WirePart::ToolResult {
+                            tool_call_id: call_id,
+                            tool_name: name,
+                            output_json: project_operation_output(part.status, exec),
+                        });
+                    }
+                    continue;
+                }
                 parts.push(WirePart::ToolCall {
                     id: call_id.clone(),
                     name: name.clone(),

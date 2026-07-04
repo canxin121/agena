@@ -352,6 +352,23 @@ impl AnthropicAdapter {
         messages
     }
 
+    fn tool_messages_from_parts(message: &Message) -> Vec<AnthropicMessage> {
+        wire_message::project(message)
+            .into_iter()
+            .filter_map(|part| match part {
+                wire_message::WirePart::ToolResult {
+                    tool_call_id,
+                    output_json,
+                    ..
+                } if !tool_call_id.trim().is_empty() => Some(AnthropicMessage {
+                    role: "user".to_owned(),
+                    content: vec![AnthropicTextBlock::tool_result(tool_call_id, output_json)],
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn flush_assistant_blocks(
         message: &Message,
         messages: &mut Vec<AnthropicMessage>,
@@ -910,6 +927,7 @@ impl ModelRuntime for AnthropicAdapter {
                     role: "user".to_owned(),
                     content: Self::content_to_blocks(msg),
                 }),
+                Role::Tool => messages.extend(Self::tool_messages_from_parts(msg)),
             }
         }
         Self::apply_prompt_cache_hints(
@@ -1046,6 +1064,7 @@ impl ModelRuntime for AnthropicAdapter {
                     role: "user".to_owned(),
                     content: Self::content_to_blocks(msg),
                 }),
+                Role::Tool => messages.extend(Self::tool_messages_from_parts(msg)),
             }
         }
         Self::apply_prompt_cache_hints(

@@ -215,6 +215,7 @@ impl GeminiAdapter {
                     role: Some("user".to_owned()),
                     parts: Self::message_parts(msg),
                 }),
+                Role::Tool => contents.extend(Self::tool_contents(msg)),
             }
         }
 
@@ -474,6 +475,26 @@ impl GeminiAdapter {
         Self::flush_model_content(message, &mut contents, &mut buffered);
 
         contents
+    }
+
+    fn tool_contents(message: &Message) -> Vec<GeminiContent> {
+        wire_message::project(message)
+            .into_iter()
+            .filter_map(|part| match part {
+                wire_message::WirePart::ToolResult {
+                    tool_name,
+                    output_json,
+                    ..
+                } => Some(GeminiContent {
+                    role: Some("user".to_owned()),
+                    parts: vec![GeminiPart::function_response(
+                        gemini_tool_response_name(tool_name.as_str()),
+                        parse_json_or_string_object(output_json.as_str()),
+                    )],
+                }),
+                _ => None,
+            })
+            .collect()
     }
 
     fn flush_model_content(

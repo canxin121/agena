@@ -107,6 +107,7 @@ pub fn role_label(i18n: &I18n, role: MessageRole) -> String {
         MessageRole::User => t(i18n, "message-role-user"),
         MessageRole::Assistant => t(i18n, "message-role-assistant"),
         MessageRole::System => t(i18n, "message-role-system"),
+        MessageRole::Tool => "tool".to_string(),
     }
 }
 

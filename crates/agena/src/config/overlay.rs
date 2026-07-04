@@ -22,12 +22,18 @@ pub type ProviderModelOverlay = ResolvedProviderModelConfig;
 pub enum ProviderAuthMode {
     None,
     Api,
+    Credential,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderApiSubtype {
+    Custom,
+    #[serde(rename = "cline_api")]
+    ClineApi,
     #[serde(rename = "gitlab_api")]
     Gitlab,
-    Credential,
     BedrockSigv4,
-    GoogleAdc,
-    SapAiCore,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
@@ -42,6 +48,20 @@ pub struct ProviderProtocolPathsOverlay {
     pub gemini: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum ProviderSecretSourceOverlay {
+    Inline(String),
+    Env(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProviderGitlabApiAccessOverlay {
+    ApiKey { source: ProviderSecretSourceOverlay },
+    Credential { credential: AuthData },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
@@ -49,13 +69,15 @@ pub struct ProviderAuthOverlay {
     #[merge(strategy = option_override)]
     pub mode: Option<ProviderAuthMode>,
     #[merge(strategy = option_override)]
+    pub subtype: Option<ProviderApiSubtype>,
+    #[merge(strategy = option_override)]
     pub base_url: Option<String>,
     #[merge(strategy = option_struct_merge)]
     pub protocol_paths: Option<ProviderProtocolPathsOverlay>,
     #[merge(strategy = option_override)]
-    pub api_key: Option<String>,
+    pub api_key: Option<ProviderSecretSourceOverlay>,
     #[merge(strategy = option_override)]
-    pub api_key_env: Option<String>,
+    pub access: Option<ProviderGitlabApiAccessOverlay>,
     #[merge(strategy = option_override)]
     pub instance_url: Option<String>,
     #[merge(strategy = option_override)]

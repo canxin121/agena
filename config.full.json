@@ -288,8 +288,12 @@
       },
       "auth": {
         "mode": "api",
+        "subtype": "custom",
         "base_url": "https://api.openai.com",
-        "api_key_env": "OPENAI_API_KEY"
+        "api_key": {
+          "kind": "env",
+          "value": "OPENAI_API_KEY"
+        }
       },
       "adapters": {
         "openai": {
@@ -343,8 +347,12 @@
       },
       "auth": {
         "mode": "api",
+        "subtype": "custom",
         "base_url": "https://api.anthropic.com",
-        "api_key_env": "ANTHROPIC_API_KEY"
+        "api_key": {
+          "kind": "env",
+          "value": "ANTHROPIC_API_KEY"
+        }
       },
       "adapters": {
         "anthropic": {
@@ -513,8 +521,12 @@
       },
       "auth": {
         "mode": "api",
+        "subtype": "custom",
         "base_url": "https://api.cxits.cn/",
-        "api_key_env": "CX_API_KEY",
+        "api_key": {
+          "kind": "env",
+          "value": "CX_API_KEY"
+        },
         "protocol_paths": {
           "openai": "/v1",
           "anthropic": "/v1",
@@ -549,10 +561,10 @@
       },
       "auth": {
         "mode": "api",
-        "base_url": "https://api.cline.bot",
-        "api_key_env": "CLINE_API_KEY",
-        "protocol_paths": {
-          "openai": "/api/v1"
+        "subtype": "cline_api",
+        "api_key": {
+          "kind": "env",
+          "value": "CLINE_API_KEY"
         }
       },
       "adapters": {
@@ -573,8 +585,12 @@
       },
       "auth": {
         "mode": "api",
+        "subtype": "custom",
         "base_url": "https://us-central1-aiplatform.googleapis.com",
-        "api_key_env": "GOOGLE_VERTEX_ACCESS_TOKEN",
+        "api_key": {
+          "kind": "env",
+          "value": "GOOGLE_VERTEX_ACCESS_TOKEN"
+        },
         "protocol_paths": {
           "openai": "/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
         }
@@ -593,8 +609,12 @@
       },
       "auth": {
         "mode": "api",
+        "subtype": "custom",
         "base_url": "https://generativelanguage.googleapis.com",
-        "api_key_env": "GOOGLE_API_KEY"
+        "api_key": {
+          "kind": "env",
+          "value": "GOOGLE_API_KEY"
+        }
       },
       "adapters": {
         "gemini": {

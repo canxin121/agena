@@ -1,5 +1,7 @@
 use super::*;
-use crate::backend::provider_native_tools_suggested_preset_for_draft;
+use crate::backend::{
+    ProviderDraftSecretSourceKind, provider_native_tools_suggested_preset_for_draft,
+};
 
 pub(super) fn provider_studio_request_key(
     draft: &ProviderConfigDraft,
@@ -127,6 +129,7 @@ pub(super) fn provider_studio_base_url_visible(dialog: &ProviderStudioOverlay) -
     }
     match dialog.draft.auth_kind {
         ProviderDraftAuthKind::Unset => false,
+        ProviderDraftAuthKind::ApiPending => false,
         ProviderDraftAuthKind::Api => {
             let effective = provider_studio_effective_adapter_ids(dialog);
             if effective.is_empty() {
@@ -287,26 +290,17 @@ pub(super) fn provider_studio_ensure_default_selection(dialog: &mut ProviderStud
         .selected_adapter_ids
         .contains(dialog.draft.default_adapter.as_str())
         && provider_studio_adapter_selectable(dialog, dialog.draft.default_adapter.as_str());
-    if !default_adapter_valid
-        && let Some(adapter_id) = dialog
-            .adapter_candidate_ids
-            .iter()
-            .find(|adapter_id| dialog.selected_adapter_ids.contains(adapter_id.as_str()))
-    {
-        dialog.draft.default_adapter = adapter_id.clone();
+    if !default_adapter_valid {
+        dialog.draft.default_adapter.clear();
+        dialog.draft.default_model.clear();
+        return;
     }
 
     let default_model_valid =
         provider_studio_first_selected_model(dialog, dialog.draft.default_adapter.as_str())
             .is_some_and(|model| model.id.as_str() == dialog.draft.default_model.as_str());
     if !default_model_valid {
-        if let Some(model) =
-            provider_studio_first_selected_model(dialog, dialog.draft.default_adapter.as_str())
-        {
-            dialog.draft.default_model = model.id.to_string();
-        } else {
-            dialog.draft.default_model.clear();
-        }
+        dialog.draft.default_model.clear();
     }
 }
 
@@ -332,6 +326,7 @@ pub(super) enum ProviderStudioAuthStatus {
     Pending,
     Unset,
     None,
+    SelectSubtype,
     SelectIssuer,
     Configured,
     Partial,
@@ -942,33 +937,14 @@ pub(super) fn provider_studio_auth_details_hint(
     match draft.auth_kind {
         ProviderDraftAuthKind::Unset
         | ProviderDraftAuthKind::None
+        | ProviderDraftAuthKind::ApiPending
         | ProviderDraftAuthKind::Credential(None) => None,
-        ProviderDraftAuthKind::Api => provider_studio_labeled_summary(
-            i18n,
-            ProviderStudioSummaryLabel::Env,
-            draft.auth.api_key_env.as_str(),
-            28,
-        )
-        .or_else(|| provider_studio_summary_value(draft.auth.base_url.as_str(), 48)),
-        ProviderDraftAuthKind::ClineApi => provider_studio_labeled_summary(
-            i18n,
-            ProviderStudioSummaryLabel::Env,
-            draft.auth.api_key_env.as_str(),
-            28,
-        )
-        .or_else(|| {
-            (!draft.auth.api_key.trim().is_empty())
-                .then(|| ui_text::t(i18n, "provider-studio-summary-keys-set"))
-        }),
+        ProviderDraftAuthKind::Api => provider_studio_secret_source_hint(i18n, draft)
+            .or_else(|| provider_studio_summary_value(draft.auth.base_url.as_str(), 48)),
+        ProviderDraftAuthKind::ClineApi => provider_studio_secret_source_hint(i18n, draft),
         ProviderDraftAuthKind::Gitlab => {
-            provider_studio_summary_value(draft.auth.instance_url.as_str(), 48).or_else(|| {
-                provider_studio_labeled_summary(
-                    i18n,
-                    ProviderStudioSummaryLabel::Env,
-                    draft.auth.api_key_env.as_str(),
-                    28,
-                )
-            })
+            provider_studio_summary_value(draft.auth.instance_url.as_str(), 48)
+                .or_else(|| provider_studio_secret_source_hint(i18n, draft))
         }
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => {
             provider_studio_labeled_summary(
@@ -1078,6 +1054,22 @@ pub(super) fn provider_studio_auth_details_hint(
                 && !draft.auth.secret_access_key.trim().is_empty())
             .then(|| ui_text::t(i18n, "provider-studio-summary-keys-set"))
         }),
+    }
+}
+
+fn provider_studio_secret_source_hint(i18n: &I18n, draft: &ProviderConfigDraft) -> Option<String> {
+    match draft.auth.secret_source_kind {
+        ProviderDraftSecretSourceKind::Unset => None,
+        ProviderDraftSecretSourceKind::Inline => {
+            (!draft.auth.secret_source_value.trim().is_empty())
+                .then(|| ui_text::t(i18n, "provider-studio-summary-keys-set"))
+        }
+        ProviderDraftSecretSourceKind::Env => provider_studio_labeled_summary(
+            i18n,
+            ProviderStudioSummaryLabel::Env,
+            draft.auth.secret_source_value.as_str(),
+            28,
+        ),
     }
 }
 
@@ -1272,6 +1264,7 @@ pub(super) fn provider_studio_auth_status(
         return match dialog.draft.auth_kind {
             ProviderDraftAuthKind::Unset => ProviderStudioAuthStatus::Unset,
             ProviderDraftAuthKind::None => ProviderStudioAuthStatus::None,
+            ProviderDraftAuthKind::ApiPending => ProviderStudioAuthStatus::SelectSubtype,
             ProviderDraftAuthKind::Credential(None) => ProviderStudioAuthStatus::SelectIssuer,
             ProviderDraftAuthKind::Api
             | ProviderDraftAuthKind::ClineApi
@@ -1293,22 +1286,30 @@ pub(super) fn provider_studio_detail_fields(
     dialog: &ProviderStudioOverlay,
 ) -> Vec<ProviderStudioField> {
     match dialog.draft.auth_kind {
-        ProviderDraftAuthKind::Unset | ProviderDraftAuthKind::None => Vec::new(),
+        ProviderDraftAuthKind::Unset
+        | ProviderDraftAuthKind::None
+        | ProviderDraftAuthKind::ApiPending => Vec::new(),
         ProviderDraftAuthKind::Api => {
             let mut fields = Vec::new();
             if provider_studio_base_url_visible(dialog) {
                 fields.push(ProviderStudioField::BaseUrl);
             }
-            fields.extend([ProviderStudioField::ApiKeyEnv, ProviderStudioField::ApiKey]);
+            fields.extend([
+                ProviderStudioField::ApiKeySource,
+                ProviderStudioField::ApiKeyValue,
+            ]);
             fields
         }
         ProviderDraftAuthKind::ClineApi => {
-            vec![ProviderStudioField::ApiKeyEnv, ProviderStudioField::ApiKey]
+            vec![
+                ProviderStudioField::ApiKeySource,
+                ProviderStudioField::ApiKeyValue,
+            ]
         }
         ProviderDraftAuthKind::Gitlab => vec![
             ProviderStudioField::InstanceUrl,
-            ProviderStudioField::ApiKeyEnv,
-            ProviderStudioField::ApiKey,
+            ProviderStudioField::ApiKeySource,
+            ProviderStudioField::ApiKeyValue,
         ],
         ProviderDraftAuthKind::Credential(issuer) => match issuer {
             Some(CredentialIssuer::OpenaiChatgpt) => {
@@ -1382,19 +1383,20 @@ pub(super) fn provider_studio_auth_is_configured(dialog: &ProviderStudioOverlay)
     match dialog.draft.auth_kind {
         ProviderDraftAuthKind::Unset => false,
         ProviderDraftAuthKind::None => true,
+        ProviderDraftAuthKind::ApiPending => false,
         ProviderDraftAuthKind::Api => {
             !dialog.draft.auth.base_url.trim().is_empty()
-                && (!dialog.draft.auth.api_key.trim().is_empty()
-                    || !dialog.draft.auth.api_key_env.trim().is_empty())
+                && dialog.draft.auth.secret_source_kind != ProviderDraftSecretSourceKind::Unset
+                && !dialog.draft.auth.secret_source_value.trim().is_empty()
         }
         ProviderDraftAuthKind::ClineApi => {
-            !dialog.draft.auth.api_key.trim().is_empty()
-                || !dialog.draft.auth.api_key_env.trim().is_empty()
+            dialog.draft.auth.secret_source_kind != ProviderDraftSecretSourceKind::Unset
+                && !dialog.draft.auth.secret_source_value.trim().is_empty()
         }
         ProviderDraftAuthKind::Gitlab => {
             !dialog.draft.auth.instance_url.trim().is_empty()
-                && (!dialog.draft.auth.api_key.trim().is_empty()
-                    || !dialog.draft.auth.api_key_env.trim().is_empty())
+                && dialog.draft.auth.secret_source_kind != ProviderDraftSecretSourceKind::Unset
+                && !dialog.draft.auth.secret_source_value.trim().is_empty()
         }
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt))
         | ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot))
@@ -1431,6 +1433,7 @@ pub(super) fn provider_studio_auth_status_summary(
             ProviderStudioAuthStatus::Pending => "provider-studio-auth-status-pending",
             ProviderStudioAuthStatus::Unset => "provider-studio-auth-status-unset",
             ProviderStudioAuthStatus::None => "provider-studio-auth-status-none",
+            ProviderStudioAuthStatus::SelectSubtype => "provider-studio-auth-status-select-subtype",
             ProviderStudioAuthStatus::SelectIssuer => "provider-studio-auth-status-select-issuer",
             ProviderStudioAuthStatus::Configured => "provider-studio-auth-status-configured",
             ProviderStudioAuthStatus::Partial => "provider-studio-auth-status-partial",
@@ -1447,7 +1450,8 @@ pub(super) fn provider_studio_visible_fields(
     ];
     if matches!(
         dialog.draft.auth_kind,
-        ProviderDraftAuthKind::Api
+        ProviderDraftAuthKind::ApiPending
+            | ProviderDraftAuthKind::Api
             | ProviderDraftAuthKind::ClineApi
             | ProviderDraftAuthKind::Gitlab
             | ProviderDraftAuthKind::BedrockSigv4
@@ -1467,7 +1471,9 @@ pub(super) fn provider_studio_visible_fields(
     }
     if !matches!(
         dialog.draft.auth_kind,
-        ProviderDraftAuthKind::Unset | ProviderDraftAuthKind::Credential(None)
+        ProviderDraftAuthKind::Unset
+            | ProviderDraftAuthKind::ApiPending
+            | ProviderDraftAuthKind::Credential(None)
     ) {
         fields.extend([
             ProviderStudioField::DefaultAdapter,
@@ -1492,8 +1498,8 @@ fn provider_studio_field_label_key(field: ProviderStudioField) -> &'static str {
         ProviderStudioField::DeleteProviderAction => "provider-field-delete-provider",
         ProviderStudioField::BaseUrl => "provider-field-base-url",
         ProviderStudioField::InstanceUrl => "provider-field-instance-url",
-        ProviderStudioField::ApiKeyEnv => "provider-field-api-key-env",
-        ProviderStudioField::ApiKey => "provider-field-api-key",
+        ProviderStudioField::ApiKeySource => "provider-field-api-key-source",
+        ProviderStudioField::ApiKeyValue => "provider-field-api-key-value",
         ProviderStudioField::RedirectUri => "provider-field-redirect-uri",
         ProviderStudioField::CallbackUrl => "provider-field-callback-url",
         ProviderStudioField::RefreshToken => "provider-field-refresh-token",
@@ -1557,8 +1563,8 @@ pub(super) fn provider_studio_field_value(
         | ProviderStudioField::DeleteProviderAction => String::new(),
         ProviderStudioField::BaseUrl => draft.auth.base_url.clone(),
         ProviderStudioField::InstanceUrl => draft.auth.instance_url.clone(),
-        ProviderStudioField::ApiKeyEnv => draft.auth.api_key_env.clone(),
-        ProviderStudioField::ApiKey => draft.auth.api_key.clone(),
+        ProviderStudioField::ApiKeySource => draft.auth.secret_source_kind.token().to_owned(),
+        ProviderStudioField::ApiKeyValue => draft.auth.secret_source_value.clone(),
         ProviderStudioField::RedirectUri => draft.redirect_uri().unwrap_or_default().to_owned(),
         ProviderStudioField::CallbackUrl => draft.callback_url().unwrap_or_default().to_owned(),
         ProviderStudioField::RefreshToken => draft
@@ -1599,7 +1605,8 @@ pub(super) fn provider_studio_field_editable(
         ProviderStudioField::AuthMode => true,
         ProviderStudioField::AuthSubtype => matches!(
             dialog.draft.auth_kind,
-            ProviderDraftAuthKind::Api
+            ProviderDraftAuthKind::ApiPending
+                | ProviderDraftAuthKind::Api
                 | ProviderDraftAuthKind::ClineApi
                 | ProviderDraftAuthKind::Gitlab
                 | ProviderDraftAuthKind::BedrockSigv4
@@ -1617,6 +1624,7 @@ pub(super) fn provider_studio_field_editable(
         ProviderStudioField::DeleteProviderAction => dialog.draft.source_provider_id.is_some(),
         ProviderStudioField::BaseUrl => match dialog.draft.auth_kind {
             ProviderDraftAuthKind::Unset => false,
+            ProviderDraftAuthKind::ApiPending => false,
             ProviderDraftAuthKind::Api | ProviderDraftAuthKind::BedrockSigv4 => {
                 provider_studio_base_url_visible(dialog)
             }
@@ -1629,7 +1637,7 @@ pub(super) fn provider_studio_field_editable(
             ProviderDraftAuthKind::Gitlab
                 | ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab))
         ),
-        ProviderStudioField::ApiKeyEnv | ProviderStudioField::ApiKey => {
+        ProviderStudioField::ApiKeySource | ProviderStudioField::ApiKeyValue => {
             matches!(
                 dialog.draft.auth_kind,
                 ProviderDraftAuthKind::Api

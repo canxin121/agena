@@ -95,11 +95,7 @@ pub enum ConfigOverride {
     },
     ProviderAuthApiKey {
         provider_id: String,
-        value: String,
-    },
-    ProviderAuthApiKeyEnv {
-        provider_id: String,
-        value: String,
+        value: super::overlay::ProviderSecretSourceOverlay,
     },
     ProviderEnabled {
         provider_id: String,
@@ -502,16 +498,6 @@ impl ConfigOverride {
                     .get_or_insert_with(Default::default)
                     .api_key = Some(value.clone());
             }
-            Self::ProviderAuthApiKeyEnv { provider_id, value } => {
-                config
-                    .providers
-                    .providers
-                    .entry(provider_id.clone())
-                    .or_default()
-                    .auth
-                    .get_or_insert_with(Default::default)
-                    .api_key_env = Some(value.clone());
-            }
             Self::ProviderEnabled { provider_id, value } => {
                 config
                     .providers
@@ -559,7 +545,7 @@ fn parse_provider_override(key: &str, raw_value: &str) -> Result<ConfigOverride,
                 _ => Err(ConfigError::InvalidOverride(key.to_owned())),
             }
         }
-        "base_url" | "api_key" | "api_key_env" => Err(ConfigError::InvalidOverride(format!(
+        "base_url" | "api_key" => Err(ConfigError::InvalidOverride(format!(
             "{key} is no longer supported; use providers.{provider_id}.auth.{field}"
         ))),
         _ => {
@@ -568,8 +554,10 @@ fn parse_provider_override(key: &str, raw_value: &str) -> Result<ConfigOverride,
             };
             match auth_field {
                 "base_url" => Ok(ConfigOverride::ProviderAuthBaseUrl { provider_id, value }),
-                "api_key" => Ok(ConfigOverride::ProviderAuthApiKey { provider_id, value }),
-                "api_key_env" => Ok(ConfigOverride::ProviderAuthApiKeyEnv { provider_id, value }),
+                "api_key" => Ok(ConfigOverride::ProviderAuthApiKey {
+                    provider_id,
+                    value: parse_provider_secret_source_override(raw_value),
+                }),
                 _ if auth_field.starts_with("protocol_paths.") => {
                     let protocol = auth_field
                         .trim_start_matches("protocol_paths.")
@@ -590,6 +578,18 @@ fn parse_provider_override(key: &str, raw_value: &str) -> Result<ConfigOverride,
             }
         }
     }
+}
+
+fn parse_provider_secret_source_override(
+    raw_value: &str,
+) -> super::overlay::ProviderSecretSourceOverlay {
+    if let Some(value) = raw_value.strip_prefix("env:") {
+        return super::overlay::ProviderSecretSourceOverlay::Env(value.to_owned());
+    }
+    if let Some(value) = raw_value.strip_prefix("inline:") {
+        return super::overlay::ProviderSecretSourceOverlay::Inline(value.to_owned());
+    }
+    super::overlay::ProviderSecretSourceOverlay::Inline(raw_value.to_owned())
 }
 
 fn parse_agent_override(key: &str, raw_value: &str) -> Result<ConfigOverride, ConfigError> {

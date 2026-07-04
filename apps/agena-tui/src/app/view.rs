@@ -3864,7 +3864,15 @@ fn provider_studio_main_field_display(
         _ => provider_studio_main_field_value(i18n, dialog, field),
     };
     match field {
-        ProviderStudioField::ApiKey
+        ProviderStudioField::ApiKeyValue
+            if matches!(
+                dialog.draft.auth.secret_source_kind,
+                ProviderDraftSecretSourceKind::Inline
+            ) && !value.trim().is_empty() =>
+        {
+            "********".to_owned()
+        }
+        ProviderStudioField::ApiKeyValue
         | ProviderStudioField::RefreshToken
         | ProviderStudioField::AccessToken
         | ProviderStudioField::AccessKeyId

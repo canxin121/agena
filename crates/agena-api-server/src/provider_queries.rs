@@ -143,8 +143,8 @@ pub async fn list_provider_adapter_models_response(
         params.provider_id.as_deref(),
         params.base_url.as_str(),
         params.protocol_paths,
-        params.api_key.as_deref(),
-        params.api_key_env.as_deref(),
+        params.api_key.as_ref().and_then(|source| source.inline()),
+        params.api_key.as_ref().and_then(|source| source.env()),
         &params.adapter_ids,
     )
     .map_err(map_provider_adapter_models_config_error)?;

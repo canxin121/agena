@@ -17,10 +17,12 @@ use agena::{
         ConfigSettingsDeleteInput, ConfigSettingsEditOptions, ConfigSettingsEditResponse,
         ConfigSettingsGetInput, ConfigSettingsPatchInput, ConfigSettingsPathInput,
         ConfigSettingsSetInput, OpenAiApiModeConfig, OpenAiBackendConfig, ProcessEnvironment,
-        ProviderAdapterDefinition, ProviderAdapterOverlay, ProviderAuthConfig, ProviderAuthMode,
-        ProviderAuthOverlay, ProviderCapabilityFamilyConfig, ProviderModelOverlay,
-        ProviderNativeToolRoute, ProviderNativeToolsConfig, ProviderOverlay, StreamTransportMode,
+        ProviderAdapterDefinition, ProviderAdapterOverlay, ProviderApiSubtype, ProviderAuthConfig,
+        ProviderAuthMode, ProviderAuthOverlay, ProviderCapabilityFamilyConfig,
+        ProviderModelOverlay, ProviderNativeToolRoute, ProviderNativeToolsConfig, ProviderOverlay,
+        ProviderSecretSourceConfig, ProviderSecretSourceOverlay, StreamTransportMode,
         delete_file_setting, draft_bedrock_sigv4_provider_adapter_models_target,
+        draft_cline_api_provider_adapter_models_target,
         draft_credential_provider_adapter_models_target,
         draft_gitlab_provider_adapter_models_target, draft_none_provider_adapter_models_target,
         draft_provider_adapter_models_target, list_provider_adapter_models_with_config,
@@ -318,6 +320,7 @@ pub struct SessionPermissionStudioState {
 pub enum ProviderDraftAuthKind {
     Unset,
     None,
+    ApiPending,
     Api,
     ClineApi,
     Gitlab,
@@ -447,18 +450,8 @@ const LEGACY_LOCAL_OAUTH_REDIRECT_URIS: &[&str] = &[
     "http://127.0.0.1:1455/auth/callback",
 ];
 const DEFAULT_GITLAB_INSTANCE_URL: &str = "https://gitlab.com";
-const CLINE_API_BASE_URL: &str = "https://api.cline.bot";
 const CLINE_API_OPENAI_PROTOCOL_PATH: &str = "/api/v1";
 const CLINE_API_MODELS_URL: &str = "https://api.cline.bot/api/v1/ai/cline/recommended-models";
-const CLINE_API_DEFAULT_MODEL: &str = "cline-pass/qwen3.7-max";
-const CLINE_API_DEFAULT_ADAPTER: &str = "openai";
-
-fn is_cline_api_provider_id(provider_id: &str) -> bool {
-    matches!(
-        provider_id.trim().to_ascii_lowercase().as_str(),
-        "cline" | "cline_api" | "cline-pass" | "cline_pass"
-    )
-}
 
 fn cline_api_protocol_paths() -> agena::config::ProviderProtocolPathsConfig {
     agena::config::ProviderProtocolPathsConfig {
@@ -467,9 +460,12 @@ fn cline_api_protocol_paths() -> agena::config::ProviderProtocolPathsConfig {
     }
 }
 
-fn is_cline_api_auth_config(api: &agena::config::ProviderApiAuthConfig) -> bool {
-    api.base_url.as_deref() == Some(CLINE_API_BASE_URL)
-        && api.protocol_paths.openai == CLINE_API_OPENAI_PROTOCOL_PATH
+fn draft_secret_source_value(source: Option<&ProviderSecretSourceConfig>) -> String {
+    match source {
+        Some(ProviderSecretSourceConfig::Inline(value))
+        | Some(ProviderSecretSourceConfig::Env(value)) => value.clone(),
+        None => String::new(),
+    }
 }
 
 impl ProviderDraftAuthKind {
@@ -477,6 +473,7 @@ impl ProviderDraftAuthKind {
         match self {
             Self::Unset => "unset".to_owned(),
             Self::None => "none".to_owned(),
+            Self::ApiPending => "api".to_owned(),
             Self::Api => "api".to_owned(),
             Self::ClineApi => "cline_api".to_owned(),
             Self::Gitlab => "gitlab_api".to_owned(),
@@ -498,14 +495,16 @@ impl ProviderDraftAuthKind {
         match self {
             Self::Unset => "",
             Self::None => "none",
-            Self::Api | Self::ClineApi | Self::Gitlab | Self::BedrockSigv4 => "api",
+            Self::ApiPending | Self::Api | Self::ClineApi | Self::Gitlab | Self::BedrockSigv4 => {
+                "api"
+            }
             Self::Credential(_) => "credential",
         }
     }
 
     pub fn subtype_label(&self) -> &'static str {
         match self {
-            Self::Unset | Self::None | Self::Credential(None) => "",
+            Self::Unset | Self::None | Self::ApiPending | Self::Credential(None) => "",
             Self::Api => "custom",
             Self::ClineApi => "cline_api",
             Self::Gitlab => "gitlab_api",
@@ -525,6 +524,7 @@ impl ProviderDraftAuthKind {
         match self {
             Self::Unset => &[],
             Self::None => NONE_ADAPTER_RULES,
+            Self::ApiPending => &[],
             Self::Api => API_ADAPTER_RULES,
             Self::ClineApi => CLINE_API_ADAPTER_RULES,
             Self::Gitlab => GITLAB_AUTH_ADAPTER_RULES,
@@ -558,13 +558,17 @@ impl ProviderDraftAuthKind {
                 Self::ClineApi => Self::ClineApi,
                 Self::Gitlab => Self::Gitlab,
                 Self::BedrockSigv4 => Self::BedrockSigv4,
-                Self::Api | Self::Unset | Self::None | Self::Credential(_) => Self::Api,
+                Self::Api => Self::Api,
+                Self::ApiPending | Self::Unset | Self::None | Self::Credential(_) => {
+                    Self::ApiPending
+                }
             }),
             "credential" => Ok(match current {
                 Self::Credential(Some(issuer)) => Self::Credential(Some(issuer)),
                 Self::Credential(None)
                 | Self::Unset
                 | Self::None
+                | Self::ApiPending
                 | Self::Api
                 | Self::ClineApi
                 | Self::Gitlab
@@ -580,9 +584,10 @@ impl ProviderDraftAuthKind {
     pub fn parse_subtype(value: &str, current: Self) -> Result<Self> {
         let normalized = value.trim().to_ascii_lowercase();
         match current {
-            Self::Api | Self::ClineApi | Self::Gitlab | Self::BedrockSigv4 => {
+            Self::ApiPending | Self::Api | Self::ClineApi | Self::Gitlab | Self::BedrockSigv4 => {
                 match normalized.as_str() {
-                    "" | "custom" => Ok(Self::Api),
+                    "" => Ok(Self::ApiPending),
+                    "custom" => Ok(Self::Api),
                     "cline_api" => Ok(Self::ClineApi),
                     "gitlab_api" => Ok(Self::Gitlab),
                     "bedrock_sigv4" => Ok(Self::BedrockSigv4),
@@ -603,6 +608,43 @@ impl ProviderDraftAuthKind {
             Self::Unset | Self::None => Err(anyhow!(
                 "auth subtype is only available after selecting api or credential auth"
             )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProviderDraftSecretSourceKind {
+    #[default]
+    Unset,
+    Inline,
+    Env,
+}
+
+impl ProviderDraftSecretSourceKind {
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Unset => "",
+            Self::Inline => "inline",
+            Self::Env => "env",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" => Ok(Self::Unset),
+            "inline" => Ok(Self::Inline),
+            "env" => Ok(Self::Env),
+            other => Err(anyhow!(
+                "unsupported secret source `{other}`; expected inline or env"
+            )),
+        }
+    }
+
+    pub fn from_secret_source(source: Option<&ProviderSecretSourceConfig>) -> Self {
+        match source {
+            Some(ProviderSecretSourceConfig::Inline(_)) => Self::Inline,
+            Some(ProviderSecretSourceConfig::Env(_)) => Self::Env,
+            None => Self::Unset,
         }
     }
 }
@@ -890,6 +932,7 @@ pub enum ProviderStudioSaveField {
     AdapterId,
     ModelId,
     AuthMode,
+    AuthSubtype,
     CredentialIssuer,
 }
 
@@ -938,8 +981,8 @@ impl ProviderStudioSaveError {
 pub struct ProviderDraftAuthDetails {
     pub base_url: String,
     pub instance_url: String,
-    pub api_key_env: String,
-    pub api_key: String,
+    pub secret_source_kind: ProviderDraftSecretSourceKind,
+    pub secret_source_value: String,
     pub credential_issuer: String,
     pub region: String,
     pub profile: String,
@@ -1017,8 +1060,8 @@ impl ProviderConfigDraft {
         match self.auth_kind {
             ProviderDraftAuthKind::Unset => {
                 self.auth.base_url.clear();
-                self.auth.api_key_env.clear();
-                self.auth.api_key.clear();
+                self.auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
+                self.auth.secret_source_value.clear();
                 self.auth.region.clear();
                 self.auth.profile.clear();
                 self.auth.access_key_id.clear();
@@ -1028,8 +1071,16 @@ impl ProviderConfigDraft {
             }
             ProviderDraftAuthKind::None => {
                 self.auth.base_url.clear();
-                self.auth.api_key_env.clear();
-                self.auth.api_key.clear();
+                self.auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
+                self.auth.secret_source_value.clear();
+                self.auth.region.clear();
+                self.auth.profile.clear();
+                self.auth.access_key_id.clear();
+                self.auth.secret_access_key.clear();
+                self.auth.session_token.clear();
+                self.auth.service_key_env.clear();
+            }
+            ProviderDraftAuthKind::ApiPending => {
                 self.auth.region.clear();
                 self.auth.profile.clear();
                 self.auth.access_key_id.clear();
@@ -1068,8 +1119,8 @@ impl ProviderConfigDraft {
             }
             ProviderDraftAuthKind::Credential(None) => {
                 self.auth.base_url.clear();
-                self.auth.api_key_env.clear();
-                self.auth.api_key.clear();
+                self.auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
+                self.auth.secret_source_value.clear();
                 self.auth.region.clear();
                 self.auth.profile.clear();
                 self.auth.access_key_id.clear();
@@ -1078,8 +1129,8 @@ impl ProviderConfigDraft {
                 self.auth.service_key_env.clear();
             }
             ProviderDraftAuthKind::Credential(Some(issuer)) => {
-                self.auth.api_key_env.clear();
-                self.auth.api_key.clear();
+                self.auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
+                self.auth.secret_source_value.clear();
                 self.auth.region.clear();
                 self.auth.profile.clear();
                 self.auth.access_key_id.clear();
@@ -1100,8 +1151,8 @@ impl ProviderConfigDraft {
                 }
             }
             ProviderDraftAuthKind::BedrockSigv4 => {
-                self.auth.api_key_env.clear();
-                self.auth.api_key.clear();
+                self.auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
+                self.auth.secret_source_value.clear();
                 self.auth.service_key_env.clear();
             }
         }
@@ -1116,32 +1167,6 @@ impl ProviderConfigDraft {
         if self.default_adapter.trim().is_empty() {
             self.default_model.clear();
         }
-
-        self.apply_known_provider_presets();
-    }
-
-    fn apply_known_provider_presets(&mut self) {
-        if !is_cline_api_provider_id(self.provider_id.as_str()) {
-            if !matches!(self.auth_kind, ProviderDraftAuthKind::ClineApi) {
-                return;
-            }
-        } else if matches!(
-            self.auth_kind,
-            ProviderDraftAuthKind::Unset | ProviderDraftAuthKind::Credential(None)
-        ) {
-            self.auth_kind = ProviderDraftAuthKind::ClineApi;
-        }
-
-        if !matches!(self.auth_kind, ProviderDraftAuthKind::ClineApi) {
-            return;
-        }
-
-        if self.default_adapter.trim().is_empty() {
-            self.default_adapter = CLINE_API_DEFAULT_ADAPTER.to_owned();
-        }
-        if self.default_model.trim().is_empty() {
-            self.default_model = CLINE_API_DEFAULT_MODEL.to_owned();
-        }
     }
 
     pub fn from_resolved(
@@ -1153,8 +1178,8 @@ impl ProviderConfigDraft {
             auth_kind,
             base_url,
             instance_url,
-            api_key_env,
-            api_key,
+            secret_source_kind,
+            secret_source_value,
             credential_issuer,
             region,
             profile,
@@ -1163,43 +1188,80 @@ impl ProviderConfigDraft {
             session_token,
             service_key_env,
         ) = match &provider.auth {
-            ProviderAuthConfig::Api(api) => (
-                if is_cline_api_auth_config(api) {
-                    ProviderDraftAuthKind::ClineApi
-                } else {
-                    ProviderDraftAuthKind::Api
-                },
-                api.base_url.clone().unwrap_or_default(),
-                String::new(),
-                api.api_key_env.clone().unwrap_or_default(),
-                api.api_key.clone().unwrap_or_default(),
-                credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-            ),
-            ProviderAuthConfig::Gitlab(config) => (
-                ProviderDraftAuthKind::Gitlab,
-                String::new(),
-                config.instance_url.clone().unwrap_or_default(),
-                config.api_key_env.clone().unwrap_or_default(),
-                config.api_key.clone().unwrap_or_default(),
-                credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-            ),
+            ProviderAuthConfig::Api(api) => match api {
+                agena::config::ProviderApiAuthConfig::Custom { .. } => (
+                    ProviderDraftAuthKind::Api,
+                    api.custom_base_url().unwrap_or_default().to_owned(),
+                    String::new(),
+                    ProviderDraftSecretSourceKind::from_secret_source(api.api_key_source()),
+                    draft_secret_source_value(api.api_key_source()),
+                    credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ),
+                agena::config::ProviderApiAuthConfig::ClineApi { api_key } => (
+                    ProviderDraftAuthKind::ClineApi,
+                    String::new(),
+                    String::new(),
+                    ProviderDraftSecretSourceKind::from_secret_source(api_key.as_ref()),
+                    draft_secret_source_value(api_key.as_ref()),
+                    credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ),
+                agena::config::ProviderApiAuthConfig::Gitlab {
+                    access,
+                    instance_url,
+                    ..
+                } => (
+                    ProviderDraftAuthKind::Gitlab,
+                    String::new(),
+                    instance_url.clone().unwrap_or_default(),
+                    ProviderDraftSecretSourceKind::from_secret_source(access.api_key_source()),
+                    draft_secret_source_value(access.api_key_source()),
+                    credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ),
+                agena::config::ProviderApiAuthConfig::BedrockSigv4 {
+                    base_url,
+                    region,
+                    profile,
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                } => (
+                    ProviderDraftAuthKind::BedrockSigv4,
+                    base_url.clone(),
+                    String::new(),
+                    ProviderDraftSecretSourceKind::Unset,
+                    String::new(),
+                    credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                    region.clone(),
+                    profile.clone().unwrap_or_default(),
+                    access_key_id.clone().unwrap_or_default(),
+                    secret_access_key.clone().unwrap_or_default(),
+                    session_token.clone().unwrap_or_default(),
+                    String::new(),
+                ),
+            },
             ProviderAuthConfig::None => (
                 ProviderDraftAuthKind::None,
                 String::new(),
                 String::new(),
-                String::new(),
+                ProviderDraftSecretSourceKind::Unset,
                 String::new(),
                 credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
                 String::new(),
@@ -1210,40 +1272,31 @@ impl ProviderConfigDraft {
                 String::new(),
             ),
             ProviderAuthConfig::Credential(config) => {
+                let issuer = config.issuer();
                 populate_provider_credential_drafts(
                     &mut credential_drafts,
-                    config.issuer,
-                    config.credential.as_ref(),
+                    issuer,
+                    config.credential(),
                 );
+                let instance_url = config
+                    .gitlab()
+                    .and_then(|gitlab| gitlab.instance_url.clone())
+                    .unwrap_or_default();
                 (
-                    ProviderDraftAuthKind::Credential(Some(config.issuer)),
-                    config.base_url.clone().unwrap_or_default(),
-                    config.instance_url.clone().unwrap_or_default(),
+                    ProviderDraftAuthKind::Credential(Some(issuer)),
+                    config.base_url().unwrap_or_default().to_owned(),
+                    instance_url,
+                    ProviderDraftSecretSourceKind::Unset,
+                    String::new(),
+                    credential_issuer_label(issuer).to_owned(),
                     String::new(),
                     String::new(),
-                    credential_issuer_label(config.issuer).to_owned(),
                     String::new(),
                     String::new(),
                     String::new(),
-                    String::new(),
-                    String::new(),
-                    config.service_key_env.clone().unwrap_or_default(),
+                    config.service_key_env().unwrap_or_default().to_owned(),
                 )
             }
-            ProviderAuthConfig::BedrockSigv4(sigv4) => (
-                ProviderDraftAuthKind::BedrockSigv4,
-                sigv4.base_url.clone(),
-                String::new(),
-                String::new(),
-                String::new(),
-                credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
-                sigv4.region.clone(),
-                sigv4.profile.clone().unwrap_or_default(),
-                sigv4.access_key_id.clone().unwrap_or_default(),
-                sigv4.secret_access_key.clone().unwrap_or_default(),
-                sigv4.session_token.clone().unwrap_or_default(),
-                String::new(),
-            ),
         };
 
         let mut draft = Self {
@@ -1253,8 +1306,8 @@ impl ProviderConfigDraft {
             auth: ProviderDraftAuthDetails {
                 base_url,
                 instance_url,
-                api_key_env,
-                api_key,
+                secret_source_kind,
+                secret_source_value,
                 credential_issuer,
                 region,
                 profile,
@@ -1310,19 +1363,28 @@ impl ProviderConfigDraft {
                 ));
             }
             ProviderDraftAuthKind::None => {}
+            ProviderDraftAuthKind::ApiPending => {
+                return Err(ProviderStudioSaveError::Validation(
+                    ProviderStudioSaveValidationError::FieldRequired(
+                        ProviderStudioSaveField::AuthSubtype,
+                    ),
+                ));
+            }
             ProviderDraftAuthKind::Api => {
+                overlay.subtype = Some(ProviderApiSubtype::Custom);
                 overlay.base_url = trimmed_owned(self.auth.base_url.as_str());
-                overlay.api_key_env = trimmed_owned(self.auth.api_key_env.as_str());
-                overlay.api_key = trimmed_owned(self.auth.api_key.as_str());
+                overlay.api_key = self.secret_source_overlay();
             }
             ProviderDraftAuthKind::ClineApi => {
-                overlay.api_key_env = trimmed_owned(self.auth.api_key_env.as_str());
-                overlay.api_key = trimmed_owned(self.auth.api_key.as_str());
+                overlay.subtype = Some(ProviderApiSubtype::ClineApi);
+                overlay.api_key = self.secret_source_overlay();
             }
             ProviderDraftAuthKind::Gitlab => {
+                overlay.subtype = Some(ProviderApiSubtype::Gitlab);
                 overlay.instance_url = trimmed_owned(self.auth.instance_url.as_str());
-                overlay.api_key_env = trimmed_owned(self.auth.api_key_env.as_str());
-                overlay.api_key = trimmed_owned(self.auth.api_key.as_str());
+                overlay.access = self
+                    .secret_source_overlay()
+                    .map(|source| agena::config::ProviderGitlabApiAccessOverlay::ApiKey { source });
             }
             ProviderDraftAuthKind::Credential(None) => {
                 return Err(ProviderStudioSaveError::Validation(
@@ -1347,6 +1409,7 @@ impl ProviderConfigDraft {
                 overlay.credential = credential;
             }
             ProviderDraftAuthKind::BedrockSigv4 => {
+                overlay.subtype = Some(ProviderApiSubtype::BedrockSigv4);
                 overlay.base_url = trimmed_owned(self.auth.base_url.as_str());
                 overlay.region = trimmed_owned(self.auth.region.as_str());
                 overlay.profile = trimmed_owned(self.auth.profile.as_str());
@@ -1355,8 +1418,6 @@ impl ProviderConfigDraft {
                 overlay.session_token = trimmed_owned(self.auth.session_token.as_str());
             }
         }
-
-        apply_known_provider_auth_overlay_defaults(self, &mut overlay);
 
         Ok(overlay)
     }
@@ -1369,13 +1430,40 @@ impl ProviderConfigDraft {
                 ProviderStudioSaveValidationError::FieldRequired(ProviderStudioSaveField::AuthMode),
             )),
             ProviderDraftAuthKind::None => Ok(ProviderAuthMode::None),
-            ProviderDraftAuthKind::Api | ProviderDraftAuthKind::ClineApi => {
-                Ok(ProviderAuthMode::Api)
-            }
-            ProviderDraftAuthKind::Gitlab => Ok(ProviderAuthMode::Gitlab),
+            ProviderDraftAuthKind::ApiPending
+            | ProviderDraftAuthKind::Api
+            | ProviderDraftAuthKind::ClineApi => Ok(ProviderAuthMode::Api),
+            ProviderDraftAuthKind::Gitlab => Ok(ProviderAuthMode::Api),
             ProviderDraftAuthKind::Credential(_) => Ok(ProviderAuthMode::Credential),
-            ProviderDraftAuthKind::BedrockSigv4 => Ok(ProviderAuthMode::BedrockSigv4),
+            ProviderDraftAuthKind::BedrockSigv4 => Ok(ProviderAuthMode::Api),
         }
+    }
+
+    fn secret_source_overlay(&self) -> Option<ProviderSecretSourceOverlay> {
+        let value = optional_non_empty(self.auth.secret_source_value.as_str())?.to_owned();
+        match self.auth.secret_source_kind {
+            ProviderDraftSecretSourceKind::Unset => None,
+            ProviderDraftSecretSourceKind::Inline => {
+                Some(ProviderSecretSourceOverlay::Inline(value))
+            }
+            ProviderDraftSecretSourceKind::Env => Some(ProviderSecretSourceOverlay::Env(value)),
+        }
+    }
+
+    fn secret_source_inline_value(&self) -> Option<&str> {
+        matches!(
+            self.auth.secret_source_kind,
+            ProviderDraftSecretSourceKind::Inline
+        )
+        .then_some(self.auth.secret_source_value.as_str())
+    }
+
+    fn secret_source_env_value(&self) -> Option<&str> {
+        matches!(
+            self.auth.secret_source_kind,
+            ProviderDraftSecretSourceKind::Env
+        )
+        .then_some(self.auth.secret_source_value.as_str())
     }
 
     fn oauth_auth_data(&self) -> Result<Option<AuthData>> {
@@ -1451,6 +1539,7 @@ impl ProviderConfigDraft {
             ))
             | ProviderDraftAuthKind::Unset
             | ProviderDraftAuthKind::None
+            | ProviderDraftAuthKind::ApiPending
             | ProviderDraftAuthKind::Api
             | ProviderDraftAuthKind::ClineApi
             | ProviderDraftAuthKind::Gitlab
@@ -1584,20 +1673,6 @@ impl ProviderConfigDraft {
         })
     }
 
-    pub(crate) fn clear_cline_api_preset_values(&mut self) {
-        if self.auth.base_url.trim() == CLINE_API_BASE_URL {
-            self.auth.base_url.clear();
-        }
-        if self.default_model.trim() == CLINE_API_DEFAULT_MODEL {
-            self.default_model.clear();
-        }
-        if self.default_adapter.trim() == CLINE_API_DEFAULT_ADAPTER
-            && self.default_model.trim().is_empty()
-        {
-            self.default_adapter.clear();
-        }
-    }
-
     fn validate_for_adapters(
         &self,
         adapter_ids: &std::collections::BTreeSet<String>,
@@ -1630,6 +1705,9 @@ impl ProviderConfigDraft {
                 return Err(anyhow!("provider auth_mode is required"));
             }
             ProviderDraftAuthKind::None => {}
+            ProviderDraftAuthKind::ApiPending => {
+                return Err(anyhow!("api auth requires auth_subtype"));
+            }
             ProviderDraftAuthKind::Api => {
                 let requires_base_url = adapter_ids.iter().any(|adapter_id| {
                     self.auth_kind
@@ -1645,10 +1723,8 @@ impl ProviderConfigDraft {
             }
             ProviderDraftAuthKind::ClineApi => {}
             ProviderDraftAuthKind::Gitlab => {
-                if optional_non_empty(self.auth.api_key.as_str()).is_none()
-                    && optional_non_empty(self.auth.api_key_env.as_str()).is_none()
-                {
-                    return Err(anyhow!("gitlab_api auth requires api_key or api_key_env"));
+                if self.secret_source_overlay().is_none() {
+                    return Err(anyhow!("gitlab_api auth requires an api key source"));
                 }
             }
             ProviderDraftAuthKind::Credential(None) => {
@@ -1692,15 +1768,11 @@ impl ProviderConfigDraft {
         &self,
         adapter_ids: &std::collections::BTreeSet<String>,
     ) -> std::result::Result<(), ProviderStudioSaveValidationError> {
-        let default_adapter = optional_non_empty(self.default_adapter.as_str())
-            .or_else(|| {
-                (adapter_ids.len() == 1)
-                    .then(|| adapter_ids.iter().next().map(String::as_str))
-                    .flatten()
-            })
-            .ok_or(ProviderStudioSaveValidationError::FieldRequired(
+        let default_adapter = optional_non_empty(self.default_adapter.as_str()).ok_or(
+            ProviderStudioSaveValidationError::FieldRequired(
                 ProviderStudioSaveField::DefaultAdapter,
-            ))?;
+            ),
+        )?;
         if !self.auth_kind.supports_adapter(default_adapter) {
             return Err(
                 ProviderStudioSaveValidationError::UnsupportedDefaultAdapter {
@@ -1731,6 +1803,11 @@ impl ProviderConfigDraft {
                 ));
             }
             ProviderDraftAuthKind::None => {}
+            ProviderDraftAuthKind::ApiPending => {
+                return Err(ProviderStudioSaveValidationError::FieldRequired(
+                    ProviderStudioSaveField::AuthSubtype,
+                ));
+            }
             ProviderDraftAuthKind::Api => {
                 let requires_base_url = adapter_ids.iter().any(|adapter_id| {
                     self.auth_kind
@@ -1744,9 +1821,7 @@ impl ProviderConfigDraft {
             }
             ProviderDraftAuthKind::ClineApi => {}
             ProviderDraftAuthKind::Gitlab => {
-                if optional_non_empty(self.auth.api_key.as_str()).is_none()
-                    && optional_non_empty(self.auth.api_key_env.as_str()).is_none()
-                {
+                if self.secret_source_overlay().is_none() {
                     return Err(ProviderStudioSaveValidationError::GitlabApiKeyOrEnvRequired);
                 }
             }
@@ -1839,28 +1914,27 @@ impl ProviderConfigDraft {
                 adapter_ids,
             )
             .map_err(map_provider_adapter_models_config_error),
+            ProviderDraftAuthKind::ApiPending => unreachable!("validated auth subtype first"),
             ProviderDraftAuthKind::Api => draft_provider_adapter_models_target(
                 Some(self.provider_id.as_str()),
                 self.auth.base_url.as_str(),
                 provider_draft_protocol_paths_for_listing(self),
-                Some(self.auth.api_key.as_str()),
-                Some(self.auth.api_key_env.as_str()),
+                self.secret_source_inline_value(),
+                self.secret_source_env_value(),
                 adapter_ids,
             )
             .map_err(map_provider_adapter_models_config_error),
-            ProviderDraftAuthKind::ClineApi => draft_provider_adapter_models_target(
+            ProviderDraftAuthKind::ClineApi => draft_cline_api_provider_adapter_models_target(
                 Some(self.provider_id.as_str()),
-                CLINE_API_BASE_URL,
-                provider_draft_protocol_paths_for_listing(self),
-                Some(self.auth.api_key.as_str()),
-                Some(self.auth.api_key_env.as_str()),
+                self.secret_source_inline_value(),
+                self.secret_source_env_value(),
                 adapter_ids,
             )
             .map_err(map_provider_adapter_models_config_error),
             ProviderDraftAuthKind::Gitlab => draft_gitlab_provider_adapter_models_target(
                 Some(self.provider_id.as_str()),
-                Some(self.auth.api_key.as_str()),
-                Some(self.auth.api_key_env.as_str()),
+                self.secret_source_inline_value(),
+                self.secret_source_env_value(),
                 adapter_ids,
             )
             .map_err(map_provider_adapter_models_config_error),
@@ -1910,8 +1984,8 @@ impl ProviderConfigDraft {
         self.auth_kind.label().hash(&mut hasher);
         self.auth.base_url.trim().hash(&mut hasher);
         self.auth.instance_url.trim().hash(&mut hasher);
-        self.auth.api_key_env.trim().hash(&mut hasher);
-        self.auth.api_key.trim().hash(&mut hasher);
+        self.auth.secret_source_kind.token().hash(&mut hasher);
+        self.auth.secret_source_value.trim().hash(&mut hasher);
         self.auth.credential_issuer.trim().hash(&mut hasher);
         self.credential_drafts
             .openai_chatgpt
@@ -5721,21 +5795,6 @@ fn build_provider_auth_patch_value_for_save(
         })
 }
 
-fn apply_known_provider_auth_overlay_defaults(
-    draft: &ProviderConfigDraft,
-    overlay: &mut ProviderAuthOverlay,
-) {
-    if !matches!(draft.auth_kind, ProviderDraftAuthKind::ClineApi) {
-        return;
-    }
-
-    overlay.base_url = Some(CLINE_API_BASE_URL.to_owned());
-    overlay.protocol_paths = Some(agena::config::ProviderProtocolPathsOverlay {
-        openai: Some(CLINE_API_OPENAI_PROTOCOL_PATH.to_owned()),
-        ..Default::default()
-    });
-}
-
 fn provider_draft_protocol_paths_for_listing(
     draft: &ProviderConfigDraft,
 ) -> agena::config::ProviderProtocolPathsConfig {
@@ -5752,11 +5811,6 @@ fn apply_known_provider_listing_defaults(
 ) {
     if !matches!(draft.auth_kind, ProviderDraftAuthKind::ClineApi) {
         return;
-    }
-
-    if let ProviderAuthConfig::Api(config) = &mut target.auth {
-        config.base_url = Some(CLINE_API_BASE_URL.to_owned());
-        config.protocol_paths = cline_api_protocol_paths();
     }
 
     if let Some(adapter) = target.adapters.get_mut("openai")
@@ -5946,7 +6000,6 @@ fn resolve_provider_defaults_from_value_for_save(
     let default_adapter = requested_default_adapter
         .filter(|default_adapter| adapters.contains_key(*default_adapter))
         .map(ToOwned::to_owned)
-        .or_else(|| adapters.keys().cloned().next())
         .ok_or(ProviderStudioSaveError::Validation(
             ProviderStudioSaveValidationError::FieldRequired(
                 ProviderStudioSaveField::DefaultAdapter,
@@ -5958,21 +6011,7 @@ fn resolve_provider_defaults_from_value_for_save(
     {
         return Ok((default_adapter, Some(default_model.to_owned())));
     }
-
-    let default_model = adapters
-        .get(default_adapter.as_str())
-        .and_then(|adapter_value| {
-            adapter_value
-                .get("models")
-                .and_then(JsonValue::as_object)
-                .map(|models| {
-                    let mut ids = models.keys().cloned().collect::<Vec<_>>();
-                    ids.sort();
-                    ids
-                })
-        })
-        .and_then(|model_ids| model_ids.into_iter().next());
-    Ok((default_adapter, default_model))
+    Ok((default_adapter, None))
 }
 
 fn required_provider_save_field<'a>(
@@ -6438,7 +6477,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_provider_defaults_for_save_picks_first_model_on_default_adapter() {
+    fn resolve_provider_defaults_for_save_keeps_model_unset_without_user_choice() {
         let adapters = serde_json::from_value::<JsonMap<String, JsonValue>>(json!({
             "openai": {
                 "enabled": true,
@@ -6455,7 +6494,7 @@ mod tests {
                 .expect("defaults");
 
         assert_eq!(default_adapter, "openai");
-        assert_eq!(default_model.as_deref(), Some("gpt-4.1"));
+        assert_eq!(default_model, None);
     }
 
     #[test]
@@ -6496,7 +6535,7 @@ mod tests {
     }
 
     #[test]
-    fn normalize_shape_applies_cline_api_preset() {
+    fn normalize_shape_does_not_apply_cline_api_preset() {
         let mut draft = ProviderConfigDraft {
             source_provider_id: None,
             provider_id: "cline".to_owned(),
@@ -6509,10 +6548,10 @@ mod tests {
 
         draft.normalize_shape();
 
-        assert!(matches!(draft.auth_kind, ProviderDraftAuthKind::ClineApi));
+        assert!(matches!(draft.auth_kind, ProviderDraftAuthKind::Unset));
         assert!(draft.auth.base_url.is_empty());
-        assert_eq!(draft.default_adapter, CLINE_API_DEFAULT_ADAPTER);
-        assert_eq!(draft.default_model, CLINE_API_DEFAULT_MODEL);
+        assert!(draft.default_adapter.is_empty());
+        assert!(draft.default_model.is_empty());
     }
 
     #[test]
@@ -6531,7 +6570,7 @@ mod tests {
         let patch = build_provider_patch_value_for_save(
             &draft,
             "openai",
-            Some(CLINE_API_DEFAULT_MODEL),
+            Some("cline-pass/qwen3.7-max"),
             json!({
                 "openai": {
                     "enabled": true
@@ -6541,11 +6580,9 @@ mod tests {
         )
         .expect("provider patch should build");
 
-        assert_eq!(patch["auth"]["base_url"], json!(CLINE_API_BASE_URL));
-        assert_eq!(
-            patch["auth"]["protocol_paths"]["openai"],
-            json!(CLINE_API_OPENAI_PROTOCOL_PATH)
-        );
+        assert_eq!(patch["auth"]["subtype"], json!("cline_api"));
+        assert!(patch["auth"]["base_url"].is_null());
+        assert!(patch["auth"]["protocol_paths"].is_null());
         assert_eq!(patch["adapters"]["openai"]["api_mode"], json!("chat"));
         assert_eq!(
             patch["adapters"]["openai"]["models_url"],
@@ -6560,11 +6597,12 @@ mod tests {
             provider_id: "cline".to_owned(),
             auth_kind: ProviderDraftAuthKind::ClineApi,
             auth: ProviderDraftAuthDetails {
-                api_key: "sk-test".to_owned(),
+                secret_source_kind: ProviderDraftSecretSourceKind::Inline,
+                secret_source_value: "sk-test".to_owned(),
                 ..Default::default()
             },
             credential_drafts: Default::default(),
-            default_adapter: String::new(),
+            default_adapter: "openai".to_owned(),
             default_model: String::new(),
         };
         draft.normalize_shape();
@@ -6573,11 +6611,12 @@ mod tests {
             .build_listing_target(&["openai".to_owned()])
             .expect("listing target should build");
 
-        let ProviderAuthConfig::Api(auth) = &target.auth else {
-            panic!("expected api auth");
-        };
-        assert_eq!(auth.base_url.as_deref(), Some(CLINE_API_BASE_URL));
-        assert_eq!(auth.protocol_paths.openai, CLINE_API_OPENAI_PROTOCOL_PATH);
+        assert!(matches!(
+            &target.auth,
+            ProviderAuthConfig::Api(agena::config::ProviderApiAuthConfig::ClineApi {
+                api_key: Some(agena::config::ProviderSecretSourceConfig::Inline(api_key))
+            }) if api_key == "sk-test"
+        ));
 
         let adapter = target.adapters.get("openai").expect("openai adapter");
         let ProviderAdapterDefinition::OpenAi(config) = &adapter.definition else {
@@ -6642,28 +6681,6 @@ mod tests {
             .expect("credential subtype should parse"),
             ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GoogleAdc))
         ));
-    }
-
-    #[test]
-    fn clear_cline_api_preset_values_resets_hidden_cline_defaults_for_custom_api() {
-        let mut draft = ProviderConfigDraft {
-            source_provider_id: None,
-            provider_id: "cline".to_owned(),
-            auth_kind: ProviderDraftAuthKind::ClineApi,
-            auth: ProviderDraftAuthDetails {
-                base_url: CLINE_API_BASE_URL.to_owned(),
-                ..Default::default()
-            },
-            credential_drafts: Default::default(),
-            default_adapter: CLINE_API_DEFAULT_ADAPTER.to_owned(),
-            default_model: CLINE_API_DEFAULT_MODEL.to_owned(),
-        };
-
-        draft.clear_cline_api_preset_values();
-
-        assert!(draft.auth.base_url.is_empty());
-        assert!(draft.default_adapter.is_empty());
-        assert!(draft.default_model.is_empty());
     }
 
     #[tokio::test]

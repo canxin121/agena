@@ -762,7 +762,6 @@ impl AgenaClient {
                 base_url,
                 protocol_paths,
                 api_key,
-                api_key_env,
                 adapter_ids,
             }) => Ok(QueryResult::ProviderAdapterModels(
                 self.list_provider_adapter_models(ProviderAdapterModelsRequest {
@@ -770,7 +769,6 @@ impl AgenaClient {
                     base_url,
                     protocol_paths,
                     api_key,
-                    api_key_env,
                     adapter_ids,
                 })
                 .await?,

@@ -139,7 +139,6 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
             base_url,
             protocol_paths,
             api_key,
-            api_key_env,
             adapter_ids,
         }) => Ok(QueryResult::ProviderAdapterModels(
             crate::provider_queries::list_provider_adapter_models_response(
@@ -149,7 +148,6 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                     base_url,
                     protocol_paths,
                     api_key,
-                    api_key_env,
                     adapter_ids,
                 },
             )

@@ -627,8 +627,12 @@ fn cxits_provider_patch() -> JsonValue {
         },
         "auth": {
             "mode": "api",
+            "subtype": "custom",
             "base_url": "https://api.cxits.cn",
-            "api_key_env": "CX_API_KEY",
+            "api_key": {
+              "kind": "env",
+              "value": "CX_API_KEY"
+            },
             "protocol_paths": {
                 "openai": "/api/provider/openai/v1",
                 "anthropic": "/api/provider/anthropic/v1",
@@ -657,8 +661,12 @@ fn opencode_public_provider_patch() -> JsonValue {
         },
         "auth": {
             "mode": "api",
+            "subtype": "custom",
             "base_url": "https://opencode.ai/zen",
-            "api_key": "public",
+            "api_key": {
+              "kind": "inline",
+              "value": "public"
+            },
             "protocol_paths": {
                 "gemini": "/v1"
             }

@@ -109,8 +109,8 @@ const providerCreateDraft = reactive({
   provider_id: '',
   auth_mode: 'api' as 'api' | 'none',
   base_url: '',
-  api_key_env: '',
-  api_key: '',
+  api_key_source_kind: '' as '' | 'inline' | 'env',
+  api_key_value: '',
   adapter_id: 'openai',
   model_id: '',
   catalog_model_id: '',
@@ -138,6 +138,13 @@ const hasClinePassProvider = computed(() =>
       provider.provider_id === CLINE_API_PROVIDER_ID || provider.provider_id === CLINE_PASS_LEGACY_PROVIDER_ID,
   ),
 )
+
+function providerCreateApiKeySource() {
+  const kind = providerCreateDraft.api_key_source_kind
+  const value = providerCreateDraft.api_key_value.trim()
+  if (!kind || !value) return undefined
+  return { kind, value }
+}
 const hasClinePassAuthProvider = computed(() =>
   props.authProviders.some(
     (provider) =>
@@ -591,8 +598,7 @@ async function listCreateProviderAdapterModels() {
     draftAdapterModelLists.value = await listDraftProviderAdapterModels({
       providerId: providerCreateDraft.provider_id,
       baseUrl: providerCreateDraft.base_url,
-      apiKey: providerCreateDraft.api_key,
-      apiKeyEnv: providerCreateDraft.api_key_env,
+      apiKey: providerCreateApiKeySource(),
       adapterIds,
     })
     await ensureCatalogEntriesForModelIds(
@@ -767,11 +773,9 @@ async function createProvider() {
       ? { mode: 'none' }
       : {
           mode: 'api',
+          subtype: 'custom',
           base_url: providerCreateDraft.base_url.trim(),
-          ...(optionalText(providerCreateDraft.api_key_env)
-            ? { api_key_env: optionalText(providerCreateDraft.api_key_env) }
-            : {}),
-          ...(optionalText(providerCreateDraft.api_key) ? { api_key: optionalText(providerCreateDraft.api_key) } : {}),
+          ...(providerCreateApiKeySource() ? { api_key: providerCreateApiKeySource() } : {}),
         }
   const nativeTools = buildProviderCreateNativeToolsPatch(providerCreateDraft.native_tools_profile)
 
@@ -1043,13 +1047,12 @@ onMounted(() => {
           />
         </div>
         <div class="field">
-          <label class="label" for="provider-create-key-env">API Key Env</label>
-          <input
-            id="provider-create-key-env"
-            v-model="providerCreateDraft.api_key_env"
-            class="input mono"
-            placeholder="OPENAI_API_KEY"
-          />
+          <label class="label" for="provider-create-key-source">API Key Source</label>
+          <select id="provider-create-key-source" v-model="providerCreateDraft.api_key_source_kind" class="select">
+            <option value="">Select source</option>
+            <option value="env">Environment Variable</option>
+            <option value="inline">Inline Key</option>
+          </select>
         </div>
         <div class="field">
           <label class="label" for="provider-create-adapter">Adapter</label>
@@ -1081,13 +1084,15 @@ onMounted(() => {
           </select>
         </div>
         <div class="field full">
-          <label class="label" for="provider-create-key">Inline API Key</label>
+          <label class="label" for="provider-create-key">
+            {{ providerCreateDraft.api_key_source_kind === 'env' ? 'API Key Env' : 'API Key Value' }}
+          </label>
           <input
             id="provider-create-key"
-            v-model="providerCreateDraft.api_key"
+            v-model="providerCreateDraft.api_key_value"
             class="input mono"
-            type="password"
-            placeholder="optional"
+            :type="providerCreateDraft.api_key_source_kind === 'inline' ? 'password' : 'text'"
+            :placeholder="providerCreateDraft.api_key_source_kind === 'env' ? 'OPENAI_API_KEY' : 'optional'"
           />
         </div>
       </div>
@@ -1586,9 +1591,7 @@ onMounted(() => {
           <button class="button primary" :disabled="submittingConfig" @click="bootstrapClinePassCredential">
             Save Cline API Key
           </button>
-          <button class="button" :disabled="submittingConfig" @click="installClinePassPreset">
-            Add Preset Only
-          </button>
+          <button class="button" :disabled="submittingConfig" @click="installClinePassPreset">Add Preset Only</button>
         </div>
       </div>
     </section>

@@ -150,12 +150,16 @@ export type ProviderAdapterModelsResponse = {
 
 export type ProviderAdapterModels = ProviderAdapterModelsResource
 
+export type ProviderSecretSource = {
+  kind: 'inline' | 'env'
+  value: string
+}
+
 export type ProviderAdapterModelsRequest = {
   provider_id?: string | null
   base_url: string
   protocol_paths?: ProviderProtocolPaths
-  api_key?: string | null
-  api_key_env?: string | null
+  api_key?: ProviderSecretSource | null
   adapter_ids: string[]
 }
 
@@ -183,8 +187,14 @@ export async function listProviderAdapterModels(
       ...(String(request.provider_id || '').trim() ? { provider_id: String(request.provider_id).trim() } : {}),
       base_url: String(request.base_url || '').trim(),
       ...(request.protocol_paths ? { protocol_paths: request.protocol_paths } : {}),
-      ...(String(request.api_key || '').trim() ? { api_key: String(request.api_key).trim() } : {}),
-      ...(String(request.api_key_env || '').trim() ? { api_key_env: String(request.api_key_env).trim() } : {}),
+      ...(request.api_key?.value?.trim()
+        ? {
+            api_key: {
+              kind: request.api_key.kind,
+              value: request.api_key.value.trim(),
+            },
+          }
+        : {}),
       adapter_ids: adapterIds,
     }),
   })
@@ -208,16 +218,19 @@ export async function listDraftProviderAdapterModels(input: {
   providerId?: string
   baseUrl: string
   protocolPaths?: ProviderProtocolPaths
-  apiKey?: string
-  apiKeyEnv?: string
+  apiKey?: ProviderSecretSource
   adapterIds: string[]
 }): Promise<ProviderAdapterModels[]> {
   const response = await listProviderAdapterModels({
     provider_id: input.providerId?.trim() || undefined,
     base_url: input.baseUrl.trim(),
     protocol_paths: input.protocolPaths,
-    api_key: input.apiKey?.trim() || undefined,
-    api_key_env: input.apiKeyEnv?.trim() || undefined,
+    api_key: input.apiKey?.value?.trim()
+      ? {
+          kind: input.apiKey.kind,
+          value: input.apiKey.value.trim(),
+        }
+      : undefined,
     adapter_ids: input.adapterIds,
   })
   return response.adapters ?? []

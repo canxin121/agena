@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, LazyLock},
 };
 
 use aws_credential_types::Credentials;
@@ -24,13 +24,15 @@ use crate::{
 
 use super::raw::parse_adapter_model_ref;
 use super::{
-    ConfigEnvironment, ConfigError, HttpProviderAdapterConfig, ProcessEnvironment,
-    ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
+    CLINE_API_BASE_URL, ConfigEnvironment, ConfigError, HttpProviderAdapterConfig,
+    ProcessEnvironment, ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
     ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig, ProviderModelDiscoveryConfig,
     ProviderProtocolPathsConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
-    ResolvedProviderConfig,
+    ResolvedProviderConfig, cline_api_protocol_paths,
 };
 const LIST_MODELS_DEFAULT_MODEL_ID: &str = "__list_models__";
+static CLINE_API_PROTOCOL_PATHS: LazyLock<ProviderProtocolPathsConfig> =
+    LazyLock::new(cline_api_protocol_paths);
 
 #[derive(Debug, Clone)]
 pub struct ProviderAdapterModelsResult {
@@ -475,17 +477,8 @@ fn build_adapter_provider(
             adapter_default_model.to_owned(),
         )),
         ProviderAdapterDefinition::OpenAi(adapter) => match auth {
-            ProviderAuthConfig::Gitlab(config) => Arc::new(GitlabRoutedAdapter {
-                inner: Arc::new(GitlabProvider::from_managed_token_with_config(
-                    client,
-                    gitlab_auth_managed_credential(provider_id, auth, env, config_path)?.credential,
-                    gitlab_runtime_config(config, adapter_default_model),
-                )?),
-                backend: GitlabRoutedBackend::OpenAi,
-                default_model: ModelId::new(adapter_default_model),
-            }),
             ProviderAuthConfig::Credential(credential_auth)
-                if credential_auth.issuer == crate::provider::auth::CredentialIssuer::Gitlab =>
+                if credential_auth.gitlab().is_some() =>
             {
                 Arc::new(GitlabRoutedAdapter {
                     inner: Arc::new(GitlabProvider::from_managed_token_with_config(
@@ -503,6 +496,19 @@ fn build_adapter_provider(
                         )?
                         .credential,
                         gitlab_credential_runtime_config(credential_auth, adapter_default_model),
+                    )?),
+                    backend: GitlabRoutedBackend::OpenAi,
+                    default_model: ModelId::new(adapter_default_model),
+                })
+            }
+            ProviderAuthConfig::Api(api) if api.gitlab().is_some() => {
+                let gitlab = api.gitlab().expect("guard ensures gitlab api auth");
+                Arc::new(GitlabRoutedAdapter {
+                    inner: Arc::new(GitlabProvider::from_managed_token_with_config(
+                        client,
+                        gitlab_auth_managed_credential(provider_id, auth, env, config_path)?
+                            .credential,
+                        gitlab_runtime_config(&gitlab, adapter_default_model),
                     )?),
                     backend: GitlabRoutedBackend::OpenAi,
                     default_model: ModelId::new(adapter_default_model),
@@ -553,7 +559,7 @@ fn build_adapter_provider(
 
                 Arc::new(provider)
             }
-            ProviderAuthConfig::Credential(credential_auth) => match credential_auth.issuer {
+            ProviderAuthConfig::Credential(credential_auth) => match credential_auth.issuer() {
                 crate::provider::auth::CredentialIssuer::OpenaiChatgpt => {
                     let credential = require_provider_auth_credential(
                         provider_id,
@@ -697,17 +703,8 @@ fn build_adapter_provider(
             }
         },
         ProviderAdapterDefinition::Anthropic(adapter) => match auth {
-            ProviderAuthConfig::Gitlab(config) => Arc::new(GitlabRoutedAdapter {
-                inner: Arc::new(GitlabProvider::from_managed_token_with_config(
-                    client,
-                    gitlab_auth_managed_credential(provider_id, auth, env, config_path)?.credential,
-                    gitlab_runtime_config(config, adapter_default_model),
-                )?),
-                backend: GitlabRoutedBackend::Anthropic,
-                default_model: ModelId::new(adapter_default_model),
-            }),
             ProviderAuthConfig::Credential(credential_auth)
-                if credential_auth.issuer == crate::provider::auth::CredentialIssuer::Gitlab =>
+                if credential_auth.gitlab().is_some() =>
             {
                 Arc::new(GitlabRoutedAdapter {
                     inner: Arc::new(GitlabProvider::from_managed_token_with_config(
@@ -730,9 +727,22 @@ fn build_adapter_provider(
                     default_model: ModelId::new(adapter_default_model),
                 })
             }
+            ProviderAuthConfig::Api(api) if api.gitlab().is_some() => {
+                let gitlab = api.gitlab().expect("guard ensures gitlab api auth");
+                Arc::new(GitlabRoutedAdapter {
+                    inner: Arc::new(GitlabProvider::from_managed_token_with_config(
+                        client,
+                        gitlab_auth_managed_credential(provider_id, auth, env, config_path)?
+                            .credential,
+                        gitlab_runtime_config(&gitlab, adapter_default_model),
+                    )?),
+                    backend: GitlabRoutedBackend::Anthropic,
+                    default_model: ModelId::new(adapter_default_model),
+                })
+            }
             ProviderAuthConfig::Credential(credential_auth)
                 if matches!(
-                    credential_auth.issuer,
+                    credential_auth.issuer(),
                     crate::provider::auth::CredentialIssuer::GithubCopilot
                 ) =>
             {
@@ -860,11 +870,11 @@ fn build_adapter_provider(
                 feature_flags: to_hash_map(&adapter.feature_flags),
             };
             let credential = match auth {
-                ProviderAuthConfig::Gitlab(_) => {
-                    gitlab_auth_managed_credential(provider_id, auth, env, config_path)?.credential
-                }
                 ProviderAuthConfig::Api(api) => {
-                    if api_auth_has_direct_source(api, env) {
+                    if api.gitlab().is_some() {
+                        gitlab_auth_managed_credential(provider_id, auth, env, config_path)?
+                            .credential
+                    } else if api_auth_has_direct_source(api, env) {
                         required_api_auth_credential(provider_id, "api_key", api, env)?
                     } else {
                         return Err(ConfigError::MissingProviderField {
@@ -904,23 +914,29 @@ fn build_adapter_provider(
             )?)
         }
         ProviderAdapterDefinition::AmazonBedrock(_) => Arc::new(match auth {
-            ProviderAuthConfig::BedrockSigv4(sigv4) => AmazonBedrockAdapter::new_sigv4(
-                client,
-                sigv4.base_url.clone(),
-                adapter_default_model.to_owned(),
-                sigv4.region.clone(),
-                sigv4.profile.clone(),
-                static_bedrock_credentials(
-                    sigv4.access_key_id.clone(),
-                    sigv4.secret_access_key.clone(),
-                    sigv4.session_token.clone(),
-                    provider_id,
-                )?,
-            ),
+            ProviderAuthConfig::Api(api) if api.bedrock_sigv4().is_some() => {
+                let sigv4 = api
+                    .bedrock_sigv4()
+                    .expect("guard ensures bedrock sigv4 api auth");
+                AmazonBedrockAdapter::new_sigv4(
+                    client,
+                    sigv4.base_url.clone(),
+                    adapter_default_model.to_owned(),
+                    sigv4.region.clone(),
+                    sigv4.profile.clone(),
+                    static_bedrock_credentials(
+                        sigv4.access_key_id.clone(),
+                        sigv4.secret_access_key.clone(),
+                        sigv4.session_token.clone(),
+                        provider_id,
+                    )?,
+                )
+            }
             _ => {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
-                    message: "amazon_bedrock adapter requires bedrock_sigv4 auth".to_owned(),
+                    message: "amazon_bedrock adapter requires api subtype `bedrock_sigv4`"
+                        .to_owned(),
                 });
             }
         }),
@@ -1071,18 +1087,15 @@ fn resolved_adapter_models_base_url(
 ) -> Result<Option<String>, ConfigError> {
     match definition {
         ProviderAdapterDefinition::OpenAi(_) => match auth {
-            ProviderAuthConfig::Gitlab(config) => Ok(Some(gitlab_proxy_base_url(
-                config,
-                GitlabRoutedBackend::OpenAi,
-            ))),
-            ProviderAuthConfig::Credential(config)
-                if config.issuer == crate::provider::auth::CredentialIssuer::Gitlab =>
-            {
-                Ok(Some(gitlab_credential_proxy_base_url(
-                    config,
+            ProviderAuthConfig::Api(api) if api.gitlab().is_some() => {
+                Ok(Some(gitlab_proxy_base_url(
+                    &api.gitlab().expect("guard ensures gitlab api auth"),
                     GitlabRoutedBackend::OpenAi,
                 )))
             }
+            ProviderAuthConfig::Credential(config) if config.gitlab().is_some() => Ok(Some(
+                gitlab_credential_proxy_base_url(config, GitlabRoutedBackend::OpenAi),
+            )),
             _ => Ok(Some(resolve_http_adapter_base_url(
                 provider_id,
                 auth,
@@ -1090,18 +1103,15 @@ fn resolved_adapter_models_base_url(
             )?)),
         },
         ProviderAdapterDefinition::Anthropic(_) => match auth {
-            ProviderAuthConfig::Gitlab(config) => Ok(Some(gitlab_proxy_base_url(
-                config,
-                GitlabRoutedBackend::Anthropic,
-            ))),
-            ProviderAuthConfig::Credential(config)
-                if config.issuer == crate::provider::auth::CredentialIssuer::Gitlab =>
-            {
-                Ok(Some(gitlab_credential_proxy_base_url(
-                    config,
+            ProviderAuthConfig::Api(api) if api.gitlab().is_some() => {
+                Ok(Some(gitlab_proxy_base_url(
+                    &api.gitlab().expect("guard ensures gitlab api auth"),
                     GitlabRoutedBackend::Anthropic,
                 )))
             }
+            ProviderAuthConfig::Credential(config) if config.gitlab().is_some() => Ok(Some(
+                gitlab_credential_proxy_base_url(config, GitlabRoutedBackend::Anthropic),
+            )),
             _ => Ok(Some(resolve_http_adapter_base_url(
                 provider_id,
                 auth,
@@ -1125,9 +1135,16 @@ fn resolved_adapter_models_base_url(
                 .clone()
                 .unwrap_or_else(|| "https://cloud.gitlab.com".to_owned()),
         )),
-        ProviderAdapterDefinition::AmazonBedrock(_) => Ok(Some(
-            provider_endpoint_root(auth, provider_id)?.0.to_owned(),
-        )),
+        ProviderAdapterDefinition::AmazonBedrock(_) => match auth {
+            ProviderAuthConfig::Api(api) if api.bedrock_sigv4().is_some() => Ok(Some(
+                api.bedrock_sigv4()
+                    .expect("guard ensures bedrock sigv4 api auth")
+                    .base_url,
+            )),
+            _ => Ok(Some(
+                provider_endpoint_root(auth, provider_id)?.0.to_owned(),
+            )),
+        },
     }
 }
 
@@ -1168,7 +1185,7 @@ fn credential_user_agent(auth: &ProviderAuthConfig, default_model: &str) -> Opti
         return None;
     };
 
-    match config.issuer {
+    match config.issuer() {
         crate::provider::auth::CredentialIssuer::OpenaiChatgpt => {
             Some(crate::provider::codex_user_agent())
         }
@@ -1199,22 +1216,27 @@ fn provider_endpoint_root<'a>(
     provider_id: &str,
 ) -> Result<(&'a str, &'a ProviderProtocolPathsConfig), ConfigError> {
     match auth {
-        ProviderAuthConfig::Api(config) if config.base_url.is_some() => Ok((
+        ProviderAuthConfig::Api(config) if config.custom_base_url().is_some() => Ok((
             config
-                .base_url
-                .as_deref()
+                .custom_base_url()
                 .expect("guard ensures api base_url exists"),
-            &config.protocol_paths,
+            config
+                .custom_protocol_paths()
+                .expect("custom api auth always has protocol_paths"),
         )),
+        ProviderAuthConfig::Api(config) if config.is_cline_api() => {
+            Ok((CLINE_API_BASE_URL, &CLINE_API_PROTOCOL_PATHS))
+        }
         ProviderAuthConfig::Credential(config)
-            if config.issuer.uses_http_endpoint() && config.base_url.is_some() =>
+            if config.issuer().uses_http_endpoint() && config.base_url().is_some() =>
         {
             Ok((
                 config
-                    .base_url
-                    .as_deref()
+                    .base_url()
                     .expect("guard ensures credential base_url exists"),
-                &config.protocol_paths,
+                config
+                    .protocol_paths()
+                    .expect("guard ensures credential protocol paths exist"),
             ))
         }
         _ => Err(ConfigError::InvalidProviderConfig {
@@ -1282,9 +1304,11 @@ fn openai_adapter_capability_family(
     let ProviderAuthConfig::Api(config) = auth else {
         return None;
     };
+    if config.is_cline_api() {
+        return Some(crate::provider::CapabilityFamily::OpenAiCompatible);
+    }
     config
-        .base_url
-        .as_deref()
+        .custom_base_url()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_ascii_lowercase())
@@ -1310,7 +1334,7 @@ fn openai_adapter_api_credential(
             true,
         ),
         ProviderAuthConfig::Credential(config)
-            if config.issuer == crate::provider::auth::CredentialIssuer::GoogleAdc =>
+            if config.issuer() == crate::provider::auth::CredentialIssuer::GoogleAdc =>
         {
             if !matches!(
                 capability_family,
@@ -1332,7 +1356,7 @@ fn openai_adapter_api_credential(
             })
         }
         ProviderAuthConfig::Credential(config)
-            if config.issuer == crate::provider::auth::CredentialIssuer::SapAiCore =>
+            if config.issuer() == crate::provider::auth::CredentialIssuer::SapAiCore =>
         {
             Ok(ResolvedManagedCredential {
                 credential: sap_ai_core_managed_credential(provider_id, client, config, env)?,
@@ -1349,19 +1373,6 @@ fn openai_adapter_api_credential(
 struct ResolvedManagedCredential {
     credential: ManagedCredential,
     auth_data: Option<Arc<Mutex<AuthData>>>,
-}
-
-fn gitlab_auth<'a>(
-    auth: &'a ProviderAuthConfig,
-    provider_id: &str,
-) -> Result<&'a super::ProviderGitlabAuthConfig, ConfigError> {
-    match auth {
-        ProviderAuthConfig::Gitlab(config) => Ok(config),
-        _ => Err(ConfigError::InvalidProviderConfig {
-            provider_id: provider_id.to_owned(),
-            message: "adapter requires gitlab auth".to_owned(),
-        }),
-    }
 }
 
 fn gitlab_instance_url(config: &super::ProviderGitlabAuthConfig) -> String {
@@ -1417,12 +1428,20 @@ fn gitlab_auth_managed_credential(
     env: &dyn ConfigEnvironment,
     config_path: Option<&Path>,
 ) -> Result<ResolvedManagedCredential, ConfigError> {
-    let config = gitlab_auth(auth, provider_id)?;
+    let config = match auth {
+        ProviderAuthConfig::Api(api) => api.gitlab(),
+        _ => None,
+    }
+    .ok_or_else(|| ConfigError::InvalidProviderConfig {
+        provider_id: provider_id.to_owned(),
+        message: "adapter requires gitlab api auth".to_owned(),
+    })?;
 
     if let Some(value) = config
-        .api_key
-        .as_ref()
-        .and_then(|value| normalize_text(value.as_str()))
+        .access
+        .api_key_source()
+        .and_then(|source| source.inline())
+        .and_then(normalize_text)
     {
         return Ok(ResolvedManagedCredential {
             credential: ManagedCredential::static_value(format!("{provider_id} api_key"), value),
@@ -1431,9 +1450,10 @@ fn gitlab_auth_managed_credential(
     }
 
     if let Some(env_key) = config
-        .api_key_env
-        .as_ref()
-        .and_then(|value| normalize_text(value.as_str()))
+        .access
+        .api_key_source()
+        .and_then(|source| source.env())
+        .and_then(normalize_text)
     {
         if env
             .var(env_key.as_str())
@@ -1462,7 +1482,7 @@ fn gitlab_auth_managed_credential(
         });
     }
 
-    if let Some(auth_data) = config.credential.clone() {
+    if let Some(auth_data) = config.access.credential().cloned() {
         let auth_data = Arc::new(Mutex::new(auth_data));
         let credential = match config_path {
             Some(config_path) => ManagedCredential::auth_data_shared_with_store(
@@ -1471,7 +1491,7 @@ fn gitlab_auth_managed_credential(
                 auth_data.clone(),
                 AuthSecretSelector::AccessOrApiKey,
                 AuthRefreshStrategy::GitlabOAuth {
-                    instance_url: gitlab_instance_url(config),
+                    instance_url: gitlab_instance_url(&config),
                 },
                 config_path.to_path_buf(),
             ),
@@ -1481,7 +1501,7 @@ fn gitlab_auth_managed_credential(
                 auth_data.clone(),
                 AuthSecretSelector::AccessOrApiKey,
                 AuthRefreshStrategy::GitlabOAuth {
-                    instance_url: gitlab_instance_url(config),
+                    instance_url: gitlab_instance_url(&config),
                 },
             ),
         };
@@ -1499,15 +1519,15 @@ fn gitlab_auth_managed_credential(
 
 fn gitlab_credential_instance_url(config: &ProviderCredentialAuthConfig) -> String {
     config
-        .instance_url
-        .clone()
+        .gitlab()
+        .and_then(|gitlab| gitlab.instance_url.clone())
         .unwrap_or_else(|| "https://gitlab.com".to_owned())
 }
 
 fn gitlab_credential_ai_gateway_url(config: &ProviderCredentialAuthConfig) -> String {
     config
-        .ai_gateway_url
-        .clone()
+        .gitlab()
+        .and_then(|gitlab| gitlab.ai_gateway_url.clone())
         .unwrap_or_else(|| "https://cloud.gitlab.com".to_owned())
 }
 
@@ -1527,31 +1547,30 @@ fn gitlab_credential_runtime_config(
     default_model: &str,
 ) -> GitlabProviderConfig {
     let defaults = GitlabProviderConfig::default();
+    let gitlab = config
+        .gitlab()
+        .expect("gitlab credential runtime config requires gitlab credential auth");
     GitlabProviderConfig {
         instance_url: gitlab_credential_instance_url(config),
         ai_gateway_url: gitlab_credential_ai_gateway_url(config),
         default_model: default_model.to_owned(),
-        ai_gateway_headers: if config.ai_gateway_headers.is_empty() {
+        ai_gateway_headers: if gitlab.ai_gateway_headers.is_empty() {
             defaults.ai_gateway_headers
         } else {
-            to_hash_map(&config.ai_gateway_headers)
+            to_hash_map(&gitlab.ai_gateway_headers)
         },
-        feature_flags: if config.feature_flags.is_empty() {
+        feature_flags: if gitlab.feature_flags.is_empty() {
             defaults.feature_flags
         } else {
-            to_hash_map(&config.feature_flags)
+            to_hash_map(&gitlab.feature_flags)
         },
     }
 }
 
 fn api_auth_has_direct_source(api: &ProviderApiAuthConfig, env: &dyn ConfigEnvironment) -> bool {
     match (
-        api.api_key
-            .as_ref()
-            .and_then(|value| normalize_text(value.as_str())),
-        api.api_key_env
-            .as_ref()
-            .and_then(|value| normalize_text(value.as_str())),
+        api.api_key().and_then(normalize_text),
+        api.api_key_env().and_then(normalize_text),
     ) {
         (Some(_), _) => true,
         (None, Some(env_key)) => env
@@ -1568,22 +1587,14 @@ fn required_api_auth_credential(
     api: &ProviderApiAuthConfig,
     env: &dyn ConfigEnvironment,
 ) -> Result<ManagedCredential, ConfigError> {
-    if let Some(value) = api
-        .api_key
-        .as_ref()
-        .and_then(|value| normalize_text(value.as_str()))
-    {
+    if let Some(value) = api.api_key().and_then(normalize_text) {
         return Ok(ManagedCredential::static_value(
             format!("{provider_id} {field}"),
             value,
         ));
     }
 
-    let Some(env_key) = api
-        .api_key_env
-        .as_ref()
-        .and_then(|value| normalize_text(value.as_str()))
-    else {
+    let Some(env_key) = api.api_key_env().and_then(normalize_text) else {
         return Err(ConfigError::MissingProviderField {
             provider_id: provider_id.to_owned(),
             field,
@@ -1620,21 +1631,14 @@ fn api_auth_managed_credential(
     allow_deferred_env: bool,
 ) -> Result<ResolvedManagedCredential, ConfigError> {
     let api = api_auth(auth, provider_id)?;
-    if let Some(value) = api
-        .api_key
-        .as_ref()
-        .and_then(|value| normalize_text(value.as_str()))
-    {
+    if let Some(value) = api.api_key().and_then(normalize_text) {
         return Ok(ResolvedManagedCredential {
             credential: ManagedCredential::static_value(format!("{provider_id} {field}"), value),
             auth_data: None,
         });
     }
 
-    let env_key = api
-        .api_key_env
-        .as_ref()
-        .and_then(|value| normalize_text(value.as_str()));
+    let env_key = api.api_key_env().and_then(normalize_text);
 
     if let Some(env_key) = env_key.as_ref()
         && env
@@ -1686,7 +1690,7 @@ fn require_provider_auth_credential(
             message: format!("{field} must come from provider credential auth"),
         });
     };
-    if let Some(auth_data) = config.credential.clone() {
+    if let Some(auth_data) = config.credential().cloned() {
         if !auth_supports_selector(&auth_data, selector) {
             return Err(ConfigError::InvalidProviderConfig {
                 provider_id: provider_id.to_owned(),
@@ -1734,8 +1738,7 @@ fn sap_ai_core_managed_credential(
 ) -> Result<ManagedCredential, ConfigError> {
     let service_key_env =
         config
-            .service_key_env
-            .as_deref()
+            .service_key_env()
             .ok_or_else(|| ConfigError::InvalidProviderConfig {
                 provider_id: provider_id.to_owned(),
                 message: "credential issuer `sap_ai_core` requires `service_key_env`".to_owned(),
@@ -1950,10 +1953,11 @@ mod tests {
     fn openai_adapter_capability_family_infers_cline_from_base_url() {
         let family = openai_adapter_capability_family(
             "custom",
-            &ProviderAuthConfig::Api(ProviderApiAuthConfig {
-                base_url: Some("https://api.cline.bot".to_owned()),
-                ..ProviderApiAuthConfig::default()
-            }),
+            &ProviderAuthConfig::Api(ProviderApiAuthConfig::custom(
+                Some("https://api.cline.bot".to_owned()),
+                ProviderProtocolPathsConfig::default(),
+                None,
+            )),
             &openai_options(),
         );
 

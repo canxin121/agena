@@ -115,11 +115,18 @@ impl AuthStore for ProviderConfigCredentialStore {
         auth_table.remove("mode");
         auth_table.remove("credential");
         auth_table.remove("issuer");
+        auth_table.remove("access");
 
         match auth {
             AuthData::Api { key } => {
                 auth_table.insert("mode".to_owned(), JsonValue::String("api".to_owned()));
-                auth_table.insert("api_key".to_owned(), JsonValue::String(key));
+                auth_table.insert(
+                    "api_key".to_owned(),
+                    serde_json::json!({
+                        "kind": "inline",
+                        "value": key,
+                    }),
+                );
             }
             AuthData::OAuth { .. } => {
                 let issuer = auth.issuer().ok_or_else(|| {
@@ -174,6 +181,7 @@ impl AuthStore for ProviderConfigCredentialStore {
         auth.remove("credential");
         auth.remove("issuer");
         auth.remove("api_key");
+        auth.remove("access");
 
         if auth_table_has_no_sources(auth) {
             auth.remove("mode");
@@ -189,10 +197,9 @@ impl AuthStore for ProviderConfigCredentialStore {
 
 pub fn provider_auth_data(resolved: &ResolvedProviderConfig) -> Option<AuthData> {
     match &resolved.auth {
-        ProviderAuthConfig::None | ProviderAuthConfig::BedrockSigv4(_) => None,
+        ProviderAuthConfig::None => None,
         ProviderAuthConfig::Api(api) => secret_auth_data(api),
-        ProviderAuthConfig::Gitlab(config) => gitlab_auth_data(config),
-        ProviderAuthConfig::Credential(config) => config.credential.clone(),
+        ProviderAuthConfig::Credential(config) => config.credential().cloned(),
     }
 }
 
@@ -217,10 +224,7 @@ pub enum ProviderAuthTargetError {
 pub fn provider_supports_openai_oauth(resolved: &ResolvedProviderConfig) -> bool {
     matches!(
         resolved.auth,
-        ProviderAuthConfig::Credential(super::ProviderCredentialAuthConfig {
-            issuer: crate::provider::auth::CredentialIssuer::OpenaiChatgpt,
-            ..
-        })
+        ProviderAuthConfig::Credential(super::ProviderCredentialAuthConfig::OpenaiChatgpt { .. })
     ) && resolved.adapters.values().any(|adapter| {
         matches!(
             &adapter.definition,
@@ -233,21 +237,23 @@ pub fn provider_supports_openai_oauth(resolved: &ResolvedProviderConfig) -> bool
 pub fn provider_has_gitlab_adapter(resolved: &ResolvedProviderConfig) -> bool {
     matches!(
         resolved.auth,
-        ProviderAuthConfig::Gitlab(_)
-            | ProviderAuthConfig::Credential(super::ProviderCredentialAuthConfig {
-                issuer: crate::provider::auth::CredentialIssuer::Gitlab,
-                ..
-            })
+        ProviderAuthConfig::Api(ref api)
+            if api.gitlab().is_some()
     ) || resolved.adapters.values().any(|adapter| {
         matches!(
             adapter.definition,
             super::ProviderAdapterDefinition::Gitlab(_)
         )
-    })
+    }) || matches!(
+        resolved.auth,
+        ProviderAuthConfig::Credential(super::ProviderCredentialAuthConfig::Gitlab { .. })
+    )
 }
 
 pub fn provider_gitlab_instance_url(resolved: &ResolvedProviderConfig) -> Option<String> {
-    if let ProviderAuthConfig::Gitlab(config) = &resolved.auth {
+    if let ProviderAuthConfig::Api(api) = &resolved.auth
+        && let Some(config) = api.gitlab()
+    {
         return Some(
             config
                 .instance_url
@@ -256,10 +262,10 @@ pub fn provider_gitlab_instance_url(resolved: &ResolvedProviderConfig) -> Option
         );
     }
     if let ProviderAuthConfig::Credential(config) = &resolved.auth
-        && config.issuer == crate::provider::auth::CredentialIssuer::Gitlab
+        && let Some(gitlab) = config.gitlab()
     {
         return Some(
-            config
+            gitlab
                 .instance_url
                 .clone()
                 .unwrap_or_else(|| "https://gitlab.com".to_owned()),
@@ -289,10 +295,7 @@ pub fn provider_gitlab_instance_url(resolved: &ResolvedProviderConfig) -> Option
 pub fn provider_supports_copilot_device(resolved: &ResolvedProviderConfig) -> bool {
     matches!(
         resolved.auth,
-        ProviderAuthConfig::Credential(super::ProviderCredentialAuthConfig {
-            issuer: crate::provider::auth::CredentialIssuer::GithubCopilot,
-            ..
-        })
+        ProviderAuthConfig::Credential(super::ProviderCredentialAuthConfig::GithubCopilot { .. })
     ) && resolved.adapters.values().any(|adapter| {
         matches!(
             &adapter.definition,
@@ -307,9 +310,8 @@ pub fn provider_supports_api_key_write(resolved: &ResolvedProviderConfig) -> boo
         ProviderAuthConfig::Api(_) => {
             !provider_supports_openai_oauth(resolved) && !provider_supports_copilot_device(resolved)
         }
-        ProviderAuthConfig::Gitlab(_) => true,
         ProviderAuthConfig::Credential(_) => false,
-        ProviderAuthConfig::None | ProviderAuthConfig::BedrockSigv4(_) => false,
+        ProviderAuthConfig::None => false,
     }
 }
 
@@ -363,17 +365,24 @@ fn load_provider_configs(path: &Path) -> Result<HashMap<String, ResolvedProvider
 }
 
 fn secret_auth_data(secret: &ProviderApiAuthConfig) -> Option<AuthData> {
-    if let Some(key) = normalize_text(secret.api_key.as_deref()) {
+    if let Some(key) = normalize_text(secret.api_key()) {
         return Some(AuthData::Api { key });
+    }
+    if let Some(gitlab) = secret.gitlab() {
+        return gitlab_auth_data(&gitlab);
     }
     None
 }
 
 fn gitlab_auth_data(secret: &ProviderGitlabAuthConfig) -> Option<AuthData> {
-    if let Some(credential) = secret.credential.clone() {
+    if let Some(credential) = secret.access.credential().cloned() {
         return Some(credential);
     }
-    if let Some(key) = normalize_text(secret.api_key.as_deref()) {
+    if let Some(key) = secret
+        .access
+        .api_key_source()
+        .and_then(|source| normalize_text(source.inline()))
+    {
         return Some(AuthData::Api { key });
     }
     None
@@ -390,7 +399,7 @@ fn auth_table_has_no_sources(table: &JsonMap<String, JsonValue>) -> bool {
     let source_keys = [
         "credential",
         "api_key",
-        "api_key_env",
+        "access",
         "service_key_env",
         "profile",
         "access_key_id",
@@ -490,5 +499,126 @@ fn normalize_root_object(value: JsonValue) -> JsonValue {
         JsonValue::Null => JsonValue::Object(JsonMap::new()),
         JsonValue::Object(_) => value,
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use crate::provider::auth::CredentialIssuer;
+
+    use super::*;
+    use crate::config::{
+        HttpProviderAdapterConfig, OpenAiBackendConfig, OpenAiProviderOptions,
+        ProviderAdapterDefinition, ProviderCredentialAuthConfig,
+        ProviderGitlabCredentialAuthConfig, ProviderInlineCredentialAuthConfig,
+        ResolvedProviderAdapterConfig,
+    };
+
+    fn resolved_with_auth(auth: ProviderAuthConfig) -> ResolvedProviderConfig {
+        ResolvedProviderConfig {
+            enabled: true,
+            defaults: Default::default(),
+            auth,
+            adapters: BTreeMap::new(),
+            models: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn detects_openai_chatgpt_oauth_support() {
+        let mut resolved = resolved_with_auth(ProviderAuthConfig::Credential(
+            ProviderCredentialAuthConfig::OpenaiChatgpt {
+                config: ProviderInlineCredentialAuthConfig { credential: None },
+            },
+        ));
+        resolved.adapters.insert(
+            "openai".to_owned(),
+            ResolvedProviderAdapterConfig {
+                enabled: true,
+                model_discovery: Default::default(),
+                definition: ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
+                    user_agent: None,
+                    extra_headers: BTreeMap::new(),
+                    options: OpenAiProviderOptions {
+                        backend: OpenAiBackendConfig::ChatgptCodex,
+                        api_mode: crate::config::OpenAiApiModeConfig::Responses,
+                        api_mode_explicit: true,
+                        stream_mode: crate::config::StreamTransportMode::Sse,
+                        realtime_ws_url: None,
+                        models_url: None,
+                        auth_header: "authorization".to_owned(),
+                        auth_scheme: Some("Bearer".to_owned()),
+                        capability_family: None,
+                    },
+                }),
+            },
+        );
+
+        assert!(provider_supports_openai_oauth(&resolved));
+    }
+
+    #[test]
+    fn resolves_gitlab_instance_url_from_credential_variant() {
+        let resolved = resolved_with_auth(ProviderAuthConfig::Credential(
+            ProviderCredentialAuthConfig::Gitlab {
+                config: ProviderGitlabCredentialAuthConfig {
+                    credential: Some(AuthData::OAuth {
+                        issuer: Some(CredentialIssuer::Gitlab),
+                        refresh: "refresh".to_owned(),
+                        access: "access".to_owned(),
+                        id_token: None,
+                        expires_at_ms: 4102444800000,
+                        account_id: None,
+                        chatgpt_account_is_fedramp: false,
+                        enterprise_url: None,
+                        user: None,
+                    }),
+                    instance_url: Some("https://gitlab.example.com".to_owned()),
+                    ai_gateway_url: None,
+                    ai_gateway_headers: BTreeMap::new(),
+                    feature_flags: BTreeMap::new(),
+                },
+            },
+        ));
+
+        assert_eq!(
+            provider_gitlab_instance_url(&resolved).as_deref(),
+            Some("https://gitlab.example.com")
+        );
+    }
+
+    #[test]
+    fn detects_copilot_device_support() {
+        let mut resolved = resolved_with_auth(ProviderAuthConfig::Credential(
+            ProviderCredentialAuthConfig::GithubCopilot {
+                config: ProviderInlineCredentialAuthConfig { credential: None },
+            },
+        ));
+        resolved.adapters.insert(
+            "openai".to_owned(),
+            ResolvedProviderAdapterConfig {
+                enabled: true,
+                model_discovery: Default::default(),
+                definition: ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
+                    user_agent: None,
+                    extra_headers: BTreeMap::new(),
+                    options: OpenAiProviderOptions {
+                        backend: OpenAiBackendConfig::Api,
+                        api_mode: crate::config::OpenAiApiModeConfig::Auto,
+                        api_mode_explicit: false,
+                        stream_mode: crate::config::StreamTransportMode::Sse,
+                        realtime_ws_url: None,
+                        models_url: None,
+                        auth_header: "authorization".to_owned(),
+                        auth_scheme: Some("Bearer".to_owned()),
+                        capability_family: None,
+                    },
+                }),
+            },
+        );
+
+        assert!(provider_supports_copilot_device(&resolved));
     }
 }

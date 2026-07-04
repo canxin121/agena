@@ -10,18 +10,21 @@ use crate::provider::{
 };
 
 use super::{
-    AgentConfig, BedrockSigv4AuthConfig, ConfigEnvironment, ConfigError, HarnessViewportConfig,
-    HarnessesConfig, HttpProviderAdapterConfig, OpenAiApiModeConfig, PluginConfig,
-    ProviderAdapterDefinition, ProviderAdapterOverlay, ProviderApiAuthConfig, ProviderAuthConfig,
+    AgentConfig, ConfigEnvironment, ConfigError, HarnessViewportConfig, HarnessesConfig,
+    HttpProviderAdapterConfig, OpenAiApiModeConfig, PluginConfig, ProviderAdapterDefinition,
+    ProviderAdapterOverlay, ProviderApiAuthConfig, ProviderApiSubtype, ProviderAuthConfig,
     ProviderAuthMode, ProviderAuthOverlay, ProviderCapabilityFamilyConfig,
-    ProviderCredentialAuthConfig, ProviderDefaultsConfig, ProviderGitlabAuthConfig,
-    ProviderHostedToolConfigs, ProviderModelDiscoveryConfig, ProviderModelOverlay,
-    ProviderNativeToolKind, ProviderNativeToolRoute, ProviderNativeToolsConfig, ProviderOverlay,
-    ProviderProtocolPathsConfig, ProviderProtocolPathsOverlay, ResolvedConfig,
-    ResolvedProviderAdapterConfig, ResolvedProviderConfig, ResolvedProviderModelConfig,
-    RuntimeConfig, RuntimeGcConfig, RuntimeModelCatalogConfig, RuntimeProvidersConfig,
-    RuntimeSessionConfig, SessionCacheConfig, SessionCompactionConfig, SessionConfig,
-    StreamTransportMode, TracingConfig, UiConfig,
+    ProviderCredentialAuthConfig, ProviderDefaultsConfig, ProviderGitlabApiAccessConfig,
+    ProviderGitlabApiAccessOverlay, ProviderGitlabCredentialAuthConfig, ProviderHostedToolConfigs,
+    ProviderHttpCredentialAuthConfig, ProviderInlineCredentialAuthConfig,
+    ProviderModelDiscoveryConfig, ProviderModelOverlay, ProviderNativeToolKind,
+    ProviderNativeToolRoute, ProviderNativeToolsConfig, ProviderOverlay,
+    ProviderProtocolPathsConfig, ProviderProtocolPathsOverlay,
+    ProviderSapAiCoreCredentialAuthConfig, ProviderSecretSourceConfig, ProviderSecretSourceOverlay,
+    ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
+    ResolvedProviderModelConfig, RuntimeConfig, RuntimeGcConfig, RuntimeModelCatalogConfig,
+    RuntimeProvidersConfig, RuntimeSessionConfig, SessionCacheConfig, SessionCompactionConfig,
+    SessionConfig, StreamTransportMode, TracingConfig, UiConfig,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -1413,7 +1416,8 @@ fn normalize_provider_model_native_tools(
 ) {
     let uses_openai_chatgpt = matches!(
         auth,
-        ProviderAuthConfig::Credential(config) if config.issuer == CredentialIssuer::OpenaiChatgpt
+        ProviderAuthConfig::Credential(config)
+            if config.issuer() == CredentialIssuer::OpenaiChatgpt
     );
     if !uses_openai_chatgpt {
         return;
@@ -1908,30 +1912,7 @@ fn resolve_provider_auth<'a>(
         .unwrap_or_else(|| infer_provider_auth_mode(&raw_auth, &adapters));
     match mode {
         ProviderAuthMode::None => Ok(ProviderAuthConfig::None),
-        ProviderAuthMode::Api => {
-            let has_explicit_protocol_paths = raw_auth.protocol_paths.is_some();
-            if raw_auth.credential.is_some() {
-                return Err(ConfigError::InvalidProviderConfig {
-                    provider_id: provider_id.to_owned(),
-                    message: "auth mode `api` does not accept `credential`".to_owned(),
-                });
-            }
-            let protocol_paths =
-                resolve_protocol_paths(provider_id, raw_auth.protocol_paths, "protocol_paths")?;
-            Ok(ProviderAuthConfig::Api(ProviderApiAuthConfig {
-                base_url: normalize_optional(raw_auth.base_url).map(|base_url| {
-                    if has_explicit_protocol_paths {
-                        base_url
-                    } else {
-                        strip_default_protocol_path_from_base_url(base_url)
-                    }
-                }),
-                protocol_paths,
-                api_key: normalize_optional(raw_auth.api_key),
-                api_key_env: normalize_optional(raw_auth.api_key_env),
-            }))
-        }
-        ProviderAuthMode::Gitlab => resolve_gitlab_auth(provider_id, raw_auth),
+        ProviderAuthMode::Api => resolve_api_auth(provider_id, raw_auth, &adapters),
         ProviderAuthMode::Credential => {
             let issuer = raw_auth
                 .issuer
@@ -1941,7 +1922,128 @@ fn resolve_provider_auth<'a>(
                 })?;
             resolve_credential_auth(provider_id, raw_auth, issuer)
         }
-        ProviderAuthMode::BedrockSigv4 => {
+    }
+}
+
+fn resolve_api_auth(
+    provider_id: &str,
+    raw_auth: ProviderAuthOverlay,
+    _adapters: &[&ResolvedProviderAdapterConfig],
+) -> Result<ProviderAuthConfig, ConfigError> {
+    if raw_auth.issuer.is_some() {
+        return Err(ConfigError::InvalidProviderConfig {
+            provider_id: provider_id.to_owned(),
+            message: "auth mode `api` does not accept `issuer`; use auth mode `credential`"
+                .to_owned(),
+        });
+    }
+
+    let Some(subtype) = raw_auth.subtype else {
+        return Err(ConfigError::MissingProviderField {
+            provider_id: provider_id.to_owned(),
+            field: "subtype",
+        });
+    };
+    match subtype {
+        ProviderApiSubtype::Custom => {
+            if raw_auth.service_key_env.is_some()
+                || raw_auth.credential.is_some()
+                || raw_auth.access.is_some()
+                || raw_auth.instance_url.is_some()
+                || raw_auth.ai_gateway_url.is_some()
+                || !raw_auth.ai_gateway_headers.is_empty()
+                || !raw_auth.feature_flags.is_empty()
+                || raw_auth.profile.is_some()
+                || raw_auth.access_key_id.is_some()
+                || raw_auth.secret_access_key.is_some()
+                || raw_auth.session_token.is_some()
+                || raw_auth.region.is_some()
+            {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message:
+                        "api subtype `custom` only accepts `base_url`, `protocol_paths`, and `api_key`"
+                            .to_owned(),
+                });
+            }
+            let has_explicit_protocol_paths = raw_auth.protocol_paths.is_some();
+            let protocol_paths =
+                resolve_protocol_paths(provider_id, raw_auth.protocol_paths, "protocol_paths")?;
+            Ok(ProviderAuthConfig::Api(ProviderApiAuthConfig::custom(
+                normalize_optional(raw_auth.base_url).map(|base_url| {
+                    if has_explicit_protocol_paths {
+                        base_url
+                    } else {
+                        strip_default_protocol_path_from_base_url(base_url)
+                    }
+                }),
+                protocol_paths,
+                raw_auth.api_key.map(resolve_secret_source),
+            )))
+        }
+        ProviderApiSubtype::ClineApi => {
+            if raw_auth.base_url.is_some()
+                || raw_auth.protocol_paths.is_some()
+                || raw_auth.service_key_env.is_some()
+                || raw_auth.credential.is_some()
+                || raw_auth.access.is_some()
+                || raw_auth.instance_url.is_some()
+                || raw_auth.ai_gateway_url.is_some()
+                || !raw_auth.ai_gateway_headers.is_empty()
+                || !raw_auth.feature_flags.is_empty()
+                || raw_auth.profile.is_some()
+                || raw_auth.access_key_id.is_some()
+                || raw_auth.secret_access_key.is_some()
+                || raw_auth.session_token.is_some()
+                || raw_auth.region.is_some()
+            {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: "api subtype `cline_api` only accepts `api_key`".to_owned(),
+                });
+            }
+            Ok(ProviderAuthConfig::Api(ProviderApiAuthConfig::ClineApi {
+                api_key: raw_auth.api_key.map(resolve_secret_source),
+            }))
+        }
+        ProviderApiSubtype::Gitlab => {
+            if raw_auth.base_url.is_some()
+                || raw_auth.protocol_paths.is_some()
+                || raw_auth.service_key_env.is_some()
+                || raw_auth.profile.is_some()
+                || raw_auth.access_key_id.is_some()
+                || raw_auth.secret_access_key.is_some()
+                || raw_auth.session_token.is_some()
+                || raw_auth.region.is_some()
+            {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: "api subtype `gitlab_api` does not accept `base_url`, `protocol_paths`, `service_key_env`, `profile`, `access_key_id`, `secret_access_key`, `session_token`, or `region`".to_owned(),
+                });
+            }
+            if raw_auth.api_key.is_some() || raw_auth.credential.is_some() {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message:
+                        "api subtype `gitlab_api` uses `access`; it does not accept top-level `api_key` or `credential`"
+                            .to_owned(),
+                });
+            }
+            let Some(access) = raw_auth.access.map(resolve_gitlab_api_access) else {
+                return Err(ConfigError::MissingProviderField {
+                    provider_id: provider_id.to_owned(),
+                    field: "access",
+                });
+            };
+            Ok(ProviderAuthConfig::Api(ProviderApiAuthConfig::Gitlab {
+                access,
+                instance_url: normalize_optional(raw_auth.instance_url),
+                ai_gateway_url: normalize_optional(raw_auth.ai_gateway_url),
+                ai_gateway_headers: raw_auth.ai_gateway_headers,
+                feature_flags: raw_auth.feature_flags,
+            }))
+        }
+        ProviderApiSubtype::BedrockSigv4 => {
             let access_key_id = normalize_optional(raw_auth.access_key_id);
             let secret_access_key = normalize_optional(raw_auth.secret_access_key);
             if access_key_id.is_some() ^ secret_access_key.is_some() {
@@ -1950,45 +2052,60 @@ fn resolve_provider_auth<'a>(
                     message: "access_key_id and secret_access_key must be set together".to_owned(),
                 });
             }
-            Ok(ProviderAuthConfig::BedrockSigv4(BedrockSigv4AuthConfig {
-                base_url: normalize_optional(raw_auth.base_url).unwrap_or_else(|| {
-                    "https://bedrock-runtime.us-east-1.amazonaws.com".to_owned()
-                }),
-                region: normalize_optional(raw_auth.region)
-                    .unwrap_or_else(|| "us-east-1".to_owned()),
-                profile: normalize_optional(raw_auth.profile),
-                access_key_id,
-                secret_access_key,
-                session_token: normalize_optional(raw_auth.session_token),
-            }))
-        }
-        ProviderAuthMode::GoogleAdc => {
-            resolve_credential_auth(provider_id, raw_auth, CredentialIssuer::GoogleAdc)
-        }
-        ProviderAuthMode::SapAiCore => {
-            if normalize_optional(raw_auth.api_key.clone()).is_some()
-                || normalize_optional(raw_auth.api_key_env.clone()).is_some()
+            if raw_auth.protocol_paths.is_some()
+                || raw_auth.api_key.is_some()
+                || raw_auth.access.is_some()
+                || raw_auth.service_key_env.is_some()
+                || raw_auth.credential.is_some()
+                || raw_auth.instance_url.is_some()
+                || raw_auth.ai_gateway_url.is_some()
+                || !raw_auth.ai_gateway_headers.is_empty()
+                || !raw_auth.feature_flags.is_empty()
             {
-                let has_explicit_protocol_paths = raw_auth.protocol_paths.is_some();
-                return Ok(ProviderAuthConfig::Api(ProviderApiAuthConfig {
-                    base_url: normalize_optional(raw_auth.base_url).map(|base_url| {
-                        if has_explicit_protocol_paths {
-                            base_url
-                        } else {
-                            strip_default_protocol_path_from_base_url(base_url)
-                        }
-                    }),
-                    protocol_paths: resolve_protocol_paths(
-                        provider_id,
-                        raw_auth.protocol_paths,
-                        "protocol_paths",
-                    )?,
-                    api_key: normalize_optional(raw_auth.api_key),
-                    api_key_env: normalize_optional(raw_auth.api_key_env),
-                }));
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: "api subtype `bedrock_sigv4` does not accept `protocol_paths`, `api_key`, `access`, `service_key_env`, `credential`, `instance_url`, `ai_gateway_url`, `ai_gateway_headers`, or `feature_flags`".to_owned(),
+                });
             }
+            Ok(ProviderAuthConfig::Api(
+                ProviderApiAuthConfig::BedrockSigv4 {
+                    base_url: normalize_optional(raw_auth.base_url).unwrap_or_else(|| {
+                        "https://bedrock-runtime.us-east-1.amazonaws.com".to_owned()
+                    }),
+                    region: normalize_optional(raw_auth.region)
+                        .unwrap_or_else(|| "us-east-1".to_owned()),
+                    profile: normalize_optional(raw_auth.profile),
+                    access_key_id,
+                    secret_access_key,
+                    session_token: normalize_optional(raw_auth.session_token),
+                },
+            ))
+        }
+    }
+}
 
-            resolve_credential_auth(provider_id, raw_auth, CredentialIssuer::SapAiCore)
+fn resolve_secret_source(raw: ProviderSecretSourceOverlay) -> ProviderSecretSourceConfig {
+    match raw {
+        ProviderSecretSourceOverlay::Inline(value) => {
+            ProviderSecretSourceConfig::Inline(value.trim().to_owned())
+        }
+        ProviderSecretSourceOverlay::Env(value) => {
+            ProviderSecretSourceConfig::Env(value.trim().to_owned())
+        }
+    }
+}
+
+fn resolve_gitlab_api_access(raw: ProviderGitlabApiAccessOverlay) -> ProviderGitlabApiAccessConfig {
+    match raw {
+        ProviderGitlabApiAccessOverlay::ApiKey { source } => {
+            ProviderGitlabApiAccessConfig::ApiKey {
+                source: resolve_secret_source(source),
+            }
+        }
+        ProviderGitlabApiAccessOverlay::Credential { credential } => {
+            ProviderGitlabApiAccessConfig::Credential {
+                credential: credential.with_issuer(CredentialIssuer::Gitlab),
+            }
         }
     }
 }
@@ -2003,8 +2120,16 @@ fn resolve_credential_auth(
         .clone()
         .map(|credential| credential.with_issuer(issuer));
     let base_url = normalize_optional(raw_auth.base_url.clone());
-    let api_key = normalize_optional(raw_auth.api_key.clone());
-    let api_key_env = normalize_optional(raw_auth.api_key_env.clone());
+    let api_key = raw_auth.api_key.as_ref().and_then(|value| {
+        resolve_secret_source(value.clone())
+            .inline()
+            .map(ToOwned::to_owned)
+    });
+    let api_key_env = raw_auth.api_key.as_ref().and_then(|value| {
+        resolve_secret_source(value.clone())
+            .env()
+            .map(ToOwned::to_owned)
+    });
     let service_key_env = normalize_optional(raw_auth.service_key_env.clone());
     let instance_url = normalize_optional(raw_auth.instance_url.clone());
     let ai_gateway_url = normalize_optional(raw_auth.ai_gateway_url.clone());
@@ -2014,7 +2139,7 @@ fn resolve_credential_auth(
             return Err(ConfigError::InvalidProviderConfig {
                 provider_id: provider_id.to_owned(),
                 message: format!(
-                    "credential issuer `{}` does not accept `api_key` or `api_key_env`; use auth mode `api` for direct tokens",
+                    "credential issuer `{}` does not accept `api_key`; use auth mode `api` for direct tokens",
                     issuer_label(issuer)
                 ),
             });
@@ -2031,35 +2156,51 @@ fn resolve_credential_auth(
         let base_url = required_string(provider_id, "base_url", raw_auth.base_url)?;
         let protocol_paths =
             resolve_protocol_paths(provider_id, raw_auth.protocol_paths, "protocol_paths")?;
-        return Ok(ProviderAuthConfig::Credential(
-            ProviderCredentialAuthConfig {
-                issuer,
-                credential: None,
-                base_url: Some(base_url),
-                protocol_paths,
-                service_key_env: if issuer.requires_service_key_env() {
-                    Some(
-                        service_key_env
-                            .unwrap_or_else(|| DEFAULT_SAP_AI_CORE_SERVICE_KEY_ENV.to_owned()),
-                    )
-                } else {
-                    if service_key_env.is_some() {
-                        return Err(ConfigError::InvalidProviderConfig {
-                            provider_id: provider_id.to_owned(),
-                            message: format!(
-                                "credential issuer `{}` does not accept `service_key_env`",
-                                issuer_label(issuer)
-                            ),
-                        });
-                    }
-                    None
+        return Ok(ProviderAuthConfig::Credential(match issuer {
+            CredentialIssuer::GoogleAdc => {
+                if service_key_env.is_some() {
+                    return Err(ConfigError::InvalidProviderConfig {
+                        provider_id: provider_id.to_owned(),
+                        message: format!(
+                            "credential issuer `{}` does not accept `service_key_env`",
+                            issuer_label(issuer)
+                        ),
+                    });
+                }
+                ProviderCredentialAuthConfig::GoogleAdc {
+                    config: ProviderHttpCredentialAuthConfig {
+                        base_url,
+                        protocol_paths,
+                    },
+                }
+            }
+            CredentialIssuer::SapAiCore => ProviderCredentialAuthConfig::SapAiCore {
+                config: ProviderSapAiCoreCredentialAuthConfig {
+                    base_url,
+                    protocol_paths,
+                    service_key_env: service_key_env
+                        .unwrap_or_else(|| DEFAULT_SAP_AI_CORE_SERVICE_KEY_ENV.to_owned()),
                 },
-                instance_url: None,
-                ai_gateway_url: None,
-                ai_gateway_headers: BTreeMap::new(),
-                feature_flags: BTreeMap::new(),
             },
-        ));
+            _ => {
+                if service_key_env.is_some() {
+                    return Err(ConfigError::InvalidProviderConfig {
+                        provider_id: provider_id.to_owned(),
+                        message: format!(
+                            "credential issuer `{}` does not accept `service_key_env`",
+                            issuer_label(issuer)
+                        ),
+                    });
+                }
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: format!(
+                        "credential issuer `{}` does not support endpoint auth",
+                        issuer_label(issuer)
+                    ),
+                });
+            }
+        }));
     }
 
     if issuer == CredentialIssuer::Gitlab {
@@ -2067,27 +2208,26 @@ fn resolve_credential_auth(
             || raw_auth.protocol_paths.is_some()
             || api_key.is_some()
             || api_key_env.is_some()
+            || raw_auth.access.is_some()
             || service_key_env.is_some()
         {
             return Err(ConfigError::InvalidProviderConfig {
                 provider_id: provider_id.to_owned(),
                 message:
-                    "credential issuer `gitlab` does not accept `base_url`, `protocol_paths`, `api_key`, `api_key_env`, or `service_key_env`"
+                    "credential issuer `gitlab` does not accept `base_url`, `protocol_paths`, `api_key`, `access`, or `service_key_env`"
                         .to_owned(),
             });
         }
 
         return Ok(ProviderAuthConfig::Credential(
-            ProviderCredentialAuthConfig {
-                issuer,
-                credential,
-                base_url: None,
-                protocol_paths: ProviderProtocolPathsConfig::default(),
-                service_key_env: None,
-                instance_url,
-                ai_gateway_url,
-                ai_gateway_headers: raw_auth.ai_gateway_headers,
-                feature_flags: raw_auth.feature_flags,
+            ProviderCredentialAuthConfig::Gitlab {
+                config: ProviderGitlabCredentialAuthConfig {
+                    credential,
+                    instance_url,
+                    ai_gateway_url,
+                    ai_gateway_headers: raw_auth.ai_gateway_headers,
+                    feature_flags: raw_auth.feature_flags,
+                },
             },
         ));
     }
@@ -2096,6 +2236,7 @@ fn resolve_credential_auth(
         || raw_auth.protocol_paths.is_some()
         || api_key.is_some()
         || api_key_env.is_some()
+        || raw_auth.access.is_some()
         || instance_url.is_some()
         || ai_gateway_url.is_some()
         || !raw_auth.ai_gateway_headers.is_empty()
@@ -2105,66 +2246,27 @@ fn resolve_credential_auth(
         return Err(ConfigError::InvalidProviderConfig {
             provider_id: provider_id.to_owned(),
             message:
-                "auth mode `credential` does not accept `base_url`, `protocol_paths`, `api_key`, `api_key_env`, `instance_url`, `ai_gateway_url`, `ai_gateway_headers`, `feature_flags`, or `service_key_env` for this issuer"
+                "auth mode `credential` does not accept `base_url`, `protocol_paths`, `api_key`, `access`, `instance_url`, `ai_gateway_url`, `ai_gateway_headers`, `feature_flags`, or `service_key_env` for this issuer"
                     .to_owned(),
         });
     }
 
-    Ok(ProviderAuthConfig::Credential(
-        ProviderCredentialAuthConfig {
-            issuer,
-            credential,
-            base_url: None,
-            protocol_paths: ProviderProtocolPathsConfig::default(),
-            service_key_env: None,
-            instance_url: None,
-            ai_gateway_url: None,
-            ai_gateway_headers: BTreeMap::new(),
-            feature_flags: BTreeMap::new(),
+    Ok(ProviderAuthConfig::Credential(match issuer {
+        CredentialIssuer::OpenaiChatgpt => ProviderCredentialAuthConfig::OpenaiChatgpt {
+            config: ProviderInlineCredentialAuthConfig { credential },
         },
-    ))
-}
-
-fn resolve_gitlab_auth(
-    provider_id: &str,
-    raw_auth: ProviderAuthOverlay,
-) -> Result<ProviderAuthConfig, ConfigError> {
-    if raw_auth.base_url.is_some()
-        || raw_auth.protocol_paths.is_some()
-        || raw_auth.profile.is_some()
-        || raw_auth.access_key_id.is_some()
-        || raw_auth.secret_access_key.is_some()
-        || raw_auth.session_token.is_some()
-        || raw_auth.region.is_some()
-        || raw_auth.service_key_env.is_some()
-    {
-        return Err(ConfigError::InvalidProviderConfig {
-            provider_id: provider_id.to_owned(),
-            message: "auth mode `gitlab_api` does not accept `base_url`, `protocol_paths`, `profile`, `access_key_id`, `secret_access_key`, `session_token`, `region`, or `service_key_env`".to_owned(),
-        });
-    }
-
-    let api_key = normalize_optional(raw_auth.api_key);
-    let api_key_env = normalize_optional(raw_auth.api_key_env);
-    let credential = raw_auth
-        .credential
-        .map(|credential| credential.with_issuer(CredentialIssuer::Gitlab));
-
-    if api_key.is_none() && api_key_env.is_none() && credential.is_none() {
-        return Err(ConfigError::MissingProviderField {
-            provider_id: provider_id.to_owned(),
-            field: "api_key",
-        });
-    }
-
-    Ok(ProviderAuthConfig::Gitlab(ProviderGitlabAuthConfig {
-        api_key,
-        api_key_env,
-        credential,
-        instance_url: normalize_optional(raw_auth.instance_url),
-        ai_gateway_url: normalize_optional(raw_auth.ai_gateway_url),
-        ai_gateway_headers: raw_auth.ai_gateway_headers,
-        feature_flags: raw_auth.feature_flags,
+        CredentialIssuer::GithubCopilot => ProviderCredentialAuthConfig::GithubCopilot {
+            config: ProviderInlineCredentialAuthConfig { credential },
+        },
+        CredentialIssuer::Gitlab | CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore => {
+            return Err(ConfigError::InvalidProviderConfig {
+                provider_id: provider_id.to_owned(),
+                message: format!(
+                    "credential issuer `{}` requires issuer-specific auth fields",
+                    issuer_label(issuer)
+                ),
+            });
+        }
     }))
 }
 
@@ -2218,57 +2320,11 @@ fn infer_provider_auth_mode(
     if raw_auth.credential.is_some() || raw_auth.issuer.is_some() {
         return ProviderAuthMode::Credential;
     }
-    if raw_auth.instance_url.is_some()
-        || raw_auth.ai_gateway_url.is_some()
-        || !raw_auth.ai_gateway_headers.is_empty()
-        || !raw_auth.feature_flags.is_empty()
-    {
-        return ProviderAuthMode::Gitlab;
-    }
-    if raw_auth.access_key_id.is_some()
-        || raw_auth.secret_access_key.is_some()
-        || raw_auth.profile.is_some()
-        || raw_auth.session_token.is_some()
-    {
-        return ProviderAuthMode::BedrockSigv4;
-    }
-    if raw_auth.service_key_env.is_some() {
-        return ProviderAuthMode::SapAiCore;
-    }
     if adapters
         .iter()
         .all(|adapter| matches!(adapter.definition, ProviderAdapterDefinition::Ollama(_)))
     {
         return ProviderAuthMode::None;
-    }
-    if adapters.iter().all(|adapter| {
-        matches!(
-            &adapter.definition,
-            ProviderAdapterDefinition::OpenAi(config)
-                if matches!(
-                    config.options.capability_family,
-                    Some(ProviderCapabilityFamilyConfig::Gemini)
-                )
-        )
-    }) && raw_auth.api_key.is_none()
-        && raw_auth.api_key_env.is_none()
-    {
-        return ProviderAuthMode::GoogleAdc;
-    }
-    if raw_auth.base_url.is_some()
-        || raw_auth.protocol_paths.is_some()
-        || raw_auth.api_key.is_some()
-        || raw_auth.api_key_env.is_some()
-    {
-        return ProviderAuthMode::Api;
-    }
-    if adapters.iter().all(|adapter| {
-        matches!(
-            adapter.definition,
-            ProviderAdapterDefinition::AmazonBedrock(_)
-        )
-    }) {
-        return ProviderAuthMode::BedrockSigv4;
     }
     ProviderAuthMode::Api
 }
@@ -2287,24 +2343,10 @@ fn validate_provider_auth<'a>(
                     message: "auth mode `none` only supports `ollama` adapters".to_owned(),
                 });
             }
-            (ProviderAuthConfig::BedrockSigv4(_), ProviderAdapterDefinition::AmazonBedrock(_)) => {}
-            (ProviderAuthConfig::BedrockSigv4(_), _) => {
-                return Err(ConfigError::InvalidProviderConfig {
-                    provider_id: provider_id.to_owned(),
-                    message: "auth mode `bedrock_sigv4` only supports `amazon_bedrock` adapters"
-                        .to_owned(),
-                });
-            }
             (ProviderAuthConfig::Api(_), ProviderAdapterDefinition::Ollama(_)) => {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
                     message: "api auth is not supported by `ollama` adapters".to_owned(),
-                });
-            }
-            (ProviderAuthConfig::Api(_), ProviderAdapterDefinition::AmazonBedrock(_)) => {
-                return Err(ConfigError::InvalidProviderConfig {
-                    provider_id: provider_id.to_owned(),
-                    message: "api auth is not supported by `amazon_bedrock` adapters".to_owned(),
                 });
             }
             (ProviderAuthConfig::Api(_), ProviderAdapterDefinition::OpenAi(config))
@@ -2320,7 +2362,63 @@ fn validate_provider_auth<'a>(
                 });
             }
             (ProviderAuthConfig::Api(api), definition) => {
-                if api_auth_requires_base_url(definition) && api.base_url.is_none() {
+                if matches!(api, ProviderApiAuthConfig::BedrockSigv4 { .. }) {
+                    if !matches!(definition, ProviderAdapterDefinition::AmazonBedrock(_)) {
+                        return Err(ConfigError::InvalidProviderConfig {
+                            provider_id: provider_id.to_owned(),
+                            message: "api subtype `bedrock_sigv4` only supports `amazon_bedrock` adapters".to_owned(),
+                        });
+                    }
+                    continue;
+                }
+                if matches!(api, ProviderApiAuthConfig::Gitlab { .. }) {
+                    match definition {
+                        ProviderAdapterDefinition::OpenAi(config)
+                            if matches!(
+                                config.options.backend,
+                                super::OpenAiBackendConfig::Api
+                            ) => {}
+                        ProviderAdapterDefinition::Anthropic(_)
+                        | ProviderAdapterDefinition::Gitlab(_) => {}
+                        ProviderAdapterDefinition::OpenAi(_) => {
+                            return Err(ConfigError::InvalidProviderConfig {
+                                provider_id: provider_id.to_owned(),
+                                message: "api subtype `gitlab` only supports `openai` adapters with backend `api`".to_owned(),
+                            });
+                        }
+                        _ => {
+                            return Err(ConfigError::InvalidProviderConfig {
+                                provider_id: provider_id.to_owned(),
+                                message: "api subtype `gitlab` only supports `openai`, `anthropic`, or `gitlab` adapters".to_owned(),
+                            });
+                        }
+                    }
+                    continue;
+                }
+                if matches!(api, ProviderApiAuthConfig::ClineApi { .. }) {
+                    match definition {
+                        ProviderAdapterDefinition::OpenAi(config)
+                            if matches!(
+                                config.options.backend,
+                                super::OpenAiBackendConfig::Api
+                            ) => {}
+                        ProviderAdapterDefinition::OpenAi(_) => {
+                            return Err(ConfigError::InvalidProviderConfig {
+                                provider_id: provider_id.to_owned(),
+                                message: "api subtype `cline_api` only supports `openai` adapters with backend `api`".to_owned(),
+                            });
+                        }
+                        _ => {
+                            return Err(ConfigError::InvalidProviderConfig {
+                                provider_id: provider_id.to_owned(),
+                                message: "api subtype `cline_api` only supports `openai` adapters"
+                                    .to_owned(),
+                            });
+                        }
+                    }
+                    continue;
+                }
+                if api_auth_requires_base_url(definition) && api.custom_base_url().is_none() {
                     let adapter_label = match definition {
                         ProviderAdapterDefinition::OpenAi(_) => "openai",
                         ProviderAdapterDefinition::Anthropic(_) => "anthropic",
@@ -2337,30 +2435,10 @@ fn validate_provider_auth<'a>(
                     });
                 }
             }
-            (ProviderAuthConfig::Gitlab(_), ProviderAdapterDefinition::OpenAi(config))
-                if matches!(config.options.backend, super::OpenAiBackendConfig::Api) => {}
-            (ProviderAuthConfig::Gitlab(_), ProviderAdapterDefinition::OpenAi(_)) => {
-                return Err(ConfigError::InvalidProviderConfig {
-                    provider_id: provider_id.to_owned(),
-                    message:
-                        "auth mode `gitlab_api` only supports `openai` adapters with backend `api`"
-                            .to_owned(),
-                });
-            }
-            (ProviderAuthConfig::Gitlab(_), ProviderAdapterDefinition::Anthropic(_))
-            | (ProviderAuthConfig::Gitlab(_), ProviderAdapterDefinition::Gitlab(_)) => {}
-            (ProviderAuthConfig::Gitlab(_), _) => {
-                return Err(ConfigError::InvalidProviderConfig {
-                    provider_id: provider_id.to_owned(),
-                    message:
-                        "auth mode `gitlab_api` only supports `openai` or `anthropic` adapters"
-                            .to_owned(),
-                });
-            }
             (
                 ProviderAuthConfig::Credential(config),
                 ProviderAdapterDefinition::OpenAi(options),
-            ) => match (config.issuer, options.options.backend) {
+            ) => match (config.issuer(), options.options.backend) {
                 (CredentialIssuer::OpenaiChatgpt, super::OpenAiBackendConfig::ChatgptCodex) => {}
                 (CredentialIssuer::GithubCopilot, super::OpenAiBackendConfig::Api) => {}
                 (CredentialIssuer::Gitlab, super::OpenAiBackendConfig::Api) => {}
@@ -2380,7 +2458,7 @@ fn validate_provider_auth<'a>(
             },
             (ProviderAuthConfig::Credential(config), ProviderAdapterDefinition::Anthropic(_)) => {
                 if !matches!(
-                    config.issuer,
+                    config.issuer(),
                     CredentialIssuer::GithubCopilot | CredentialIssuer::Gitlab
                 ) {
                     return Err(ConfigError::InvalidProviderConfig {
@@ -2391,7 +2469,7 @@ fn validate_provider_auth<'a>(
                 }
             }
             (ProviderAuthConfig::Credential(config), ProviderAdapterDefinition::Gemini(_))
-                if config.issuer == CredentialIssuer::GithubCopilot =>
+                if config.issuer() == CredentialIssuer::GithubCopilot =>
             {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
@@ -2400,9 +2478,9 @@ fn validate_provider_auth<'a>(
                 });
             }
             (ProviderAuthConfig::Credential(config), ProviderAdapterDefinition::Gitlab(_))
-                if config.issuer == CredentialIssuer::Gitlab => {}
+                if config.issuer() == CredentialIssuer::Gitlab => {}
             (ProviderAuthConfig::Credential(config), _)
-                if config.issuer == CredentialIssuer::GoogleAdc =>
+                if config.issuer() == CredentialIssuer::GoogleAdc =>
             {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
@@ -2412,7 +2490,7 @@ fn validate_provider_auth<'a>(
                 });
             }
             (ProviderAuthConfig::Credential(config), _)
-                if config.issuer == CredentialIssuer::SapAiCore =>
+                if config.issuer() == CredentialIssuer::SapAiCore =>
             {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
@@ -2872,8 +2950,12 @@ mod tests {
                     },
                     "auth": {
                         "mode": "api",
+                        "subtype": "custom",
                         "base_url": "https://api.openai.com",
-                        "api_key": "test"
+                        "api_key": {
+                          "kind": "inline",
+                          "value": "test"
+                        }
                     },
                     "adapters": {
                         "openai": {
@@ -3548,8 +3630,12 @@ mod tests {
                     },
                     "auth": {
                         "mode": "api",
+                        "subtype": "custom",
                         "base_url": "https://api.openai.com",
-                        "api_key": "test"
+                        "api_key": {
+                          "kind": "inline",
+                          "value": "test"
+                        }
                     },
                     "adapters": {
                         "openai": {
@@ -3622,8 +3708,12 @@ mod tests {
                     },
                     "auth": {
                         "mode": "api",
+                        "subtype": "custom",
                         "base_url": "https://api.openai.com",
-                        "api_key": "test"
+                        "api_key": {
+                          "kind": "inline",
+                          "value": "test"
+                        }
                     },
                     "adapters": {
                         "openai": {
@@ -3760,8 +3850,12 @@ mod tests {
                     },
                     "auth": {
                         "mode": "api",
+                        "subtype": "custom",
                         "base_url": "https://api.openai.com",
-                        "api_key": "test"
+                        "api_key": {
+                          "kind": "inline",
+                          "value": "test"
+                        }
                     },
                     "adapters": {
                         "openai": {
@@ -3801,8 +3895,12 @@ mod tests {
                     },
                     "auth": {
                         "mode": "api",
+                        "subtype": "custom",
                         "base_url": "https://api.anthropic.com",
-                        "api_key": "test"
+                        "api_key": {
+                          "kind": "inline",
+                          "value": "test"
+                        }
                     },
                     "adapters": {
                         "anthropic": {
@@ -3848,8 +3946,12 @@ mod tests {
                     },
                     "auth": {
                         "mode": "api",
+                        "subtype": "custom",
                         "base_url": "https://api.openai.com",
-                        "api_key": "test"
+                        "api_key": {
+                          "kind": "inline",
+                          "value": "test"
+                        }
                     },
                     "adapters": {
                         "openai": {
@@ -3894,8 +3996,12 @@ mod tests {
                     },
                     "auth": {
                         "mode": "api",
+                        "subtype": "custom",
                         "base_url": "https://api.openai.com",
-                        "api_key": "test"
+                        "api_key": {
+                          "kind": "inline",
+                          "value": "test"
+                        }
                     },
                     "adapters": {
                         "openai": {
@@ -3935,8 +4041,12 @@ mod tests {
                     },
                     "auth": {
                         "mode": "api",
+                        "subtype": "custom",
                         "base_url": "https://api.anthropic.com",
-                        "api_key": "test"
+                        "api_key": {
+                          "kind": "inline",
+                          "value": "test"
+                        }
                     },
                     "adapters": {
                         "anthropic": {
@@ -3977,8 +4087,12 @@ mod tests {
                     },
                     "auth": {
                         "mode": "api",
+                        "subtype": "custom",
                         "base_url": "https://generativelanguage.googleapis.com",
-                        "api_key": "test"
+                        "api_key": {
+                          "kind": "inline",
+                          "value": "test"
+                        }
                     },
                     "adapters": {
                         "gemini": {

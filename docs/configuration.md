@@ -141,7 +141,8 @@ providers.<id>.defaults.parallel_tool_calls
 providers.<id>.auth.base_url
 providers.<id>.auth.protocol_paths.<adapter>
 providers.<id>.auth.api_key
-providers.<id>.auth.api_key_env
+providers.<id>.auth.api_key.kind
+providers.<id>.auth.api_key.value
 providers.<id>.enabled
 providers.<id>.adapters.<adapter>.models.<model>.native_tools.enabled
 providers.<id>.adapters.<adapter>.models.<model>.native_tools.routes.web_search
@@ -213,7 +214,7 @@ no
 现在只支持两种方式：
 
 - 在配置文件里显式写 canonical 结构。
-- 通过 `--set providers.default=...`、`--set agents.default=...`、`--set providers.<id>.defaults.model=...` 或 `--set providers.<id>.auth.api_key_env=...` 这类 canonical override 设置。
+- 通过 `--set providers.default=...`、`--set agents.default=...`、`--set providers.<id>.defaults.model=...` 或 `--set providers.<id>.auth.api_key=env:OPENAI_API_KEY` 这类 canonical override 设置。
 
 ### 数据库、Studio、TUI
 
@@ -297,7 +298,6 @@ trace
 provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有：
 
 - `api_key`
-- `api_key_env`
 - `credential`
 
 其中 `credential` 主要用于 provider-local OAuth token。CLI 登录、REST 登录、token refresh 都会直接回写当前 provider 的 `auth`，不会再经过独立的全局 auth store，也不会跨 provider 共享认证状态。
@@ -381,8 +381,12 @@ Provider 定义在 `[providers.<id>]`。当前 canonical 结构是：
       },
       "auth": {
         "mode": "api",
+        "subtype": "custom",
         "base_url": "https://api.openai.com",
-        "api_key_env": "OPENAI_API_KEY"
+        "api_key": {
+          "kind": "env",
+          "value": "OPENAI_API_KEY"
+        }
       },
       "adapters": {
         "openai": {
@@ -422,18 +426,20 @@ Provider 定义在 `[providers.<id>]`。当前 canonical 结构是：
 none
 api
 credential
-bedrock_sigv4
-google_adc
-sap_ai_core
 ```
 
 常用字段：
 
-- `api`：`base_url`、`protocol_paths`、`api_key`、`api_key_env`
-- `credential`：`issuer`、`credential`
-- `google_adc`：`base_url`、`protocol_paths`
-- `bedrock_sigv4`：`base_url`、`region`、`profile`、`access_key_id`、`secret_access_key`、`session_token`
-- `sap_ai_core`：`base_url`、`api_key`、`api_key_env`、`service_key_env`
+- `api`：
+  - custom subtype：`base_url`、`protocol_paths`、`api_key`
+  - gitlab subtype：`access`、`instance_url`、`ai_gateway_url`、`ai_gateway_headers`、`feature_flags`
+  - bedrock_sigv4 subtype：`base_url`、`region`、`profile`、`access_key_id`、`secret_access_key`、`session_token`
+- `credential`：
+  - 通用：`issuer`
+  - `openai_chatgpt` / `github_copilot`：`credential`
+  - `gitlab`：`credential`、`instance_url`、`ai_gateway_url`、`ai_gateway_headers`、`feature_flags`
+  - `google_adc`：`base_url`、`protocol_paths`
+  - `sap_ai_core`：`base_url`、`protocol_paths`、`service_key_env`
 
 adapter 常见额外字段：
 
@@ -764,8 +770,12 @@ provider 侧只保存引用：
       },
       "auth": {
         "mode": "api",
+        "subtype": "custom",
         "base_url": "https://gateway.example.com",
-        "api_key_env": "SHARED_GATEWAY_API_KEY",
+        "api_key": {
+          "kind": "env",
+          "value": "SHARED_GATEWAY_API_KEY"
+        },
         "protocol_paths": {
           "openai": "/v1",
           "anthropic": "/v1",

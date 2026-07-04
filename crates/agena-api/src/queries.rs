@@ -74,9 +74,7 @@ pub struct ListProviderAdapterModelsParams {
     #[serde(default)]
     pub protocol_paths: agena::config::ProviderProtocolPathsConfig,
     #[serde(default)]
-    pub api_key: Option<String>,
-    #[serde(default)]
-    pub api_key_env: Option<String>,
+    pub api_key: Option<agena::config::ProviderSecretSourceConfig>,
     #[serde(default)]
     pub adapter_ids: Vec<String>,
 }

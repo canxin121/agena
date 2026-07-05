@@ -102,6 +102,48 @@ pub(crate) fn model_safe_tool_name(name: &str) -> String {
     crate::plugin::registry::exposed_tool_name_segment(trimmed)
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelToolSpec {
+    pub canonical_name: String,
+    pub model_name: String,
+    pub provider_safe_name: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
+    pub output_schema: serde_json::Value,
+    pub strict: bool,
+    pub execution: ModelToolExecution,
+    pub definition_identity: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelToolExecution {
+    Local,
+}
+
+impl ModelToolSpec {
+    pub fn from_registered_tool(tool: &RegisteredTool) -> Self {
+        let model_name = tool.exposed_name.clone();
+        Self {
+            canonical_name: tool.exposed_name.clone(),
+            provider_safe_name: model_safe_tool_name(model_name.as_str()),
+            model_name,
+            description: tool.description_text().to_string(),
+            input_schema: model_safe_tool_schema(&tool.sanitized_input_schema()),
+            output_schema: tool.sanitized_output_schema(),
+            strict: tool.decl.strict,
+            execution: ModelToolExecution::Local,
+            definition_identity: tool.definition_identity(),
+        }
+    }
+}
+
+pub fn model_tool_specs(tools: &[RegisteredTool]) -> Vec<ModelToolSpec> {
+    tools
+        .iter()
+        .map(ModelToolSpec::from_registered_tool)
+        .collect()
+}
+
 fn legacy_exposed_tool_name(plugin_name: &str, tool_name: &str) -> String {
     format!(
         "{}__{}",
@@ -8983,9 +9025,9 @@ mod tests {
             .expect("large output should be bounded");
 
         assert!(execution.output.is_model_truncated());
-        assert_eq!(execution.output.managed_output_paths.len(), 1);
+        assert_eq!(execution.output.managed_outputs.len(), 1);
         assert!(execution.view.output_text.contains("output truncated"));
-        let persisted = fs::read_to_string(&execution.output.managed_output_paths[0])
+        let persisted = fs::read_to_string(&execution.output.managed_outputs[0].path)
             .expect("persisted output");
         assert_eq!(persisted, large_output);
     }

@@ -858,6 +858,10 @@ fn synthetic_tool_result_message(
     invocation: ToolInvocation,
     output_text: String,
 ) -> Message {
+    let details = serde_json::from_str::<serde_json::Value>(output_text.as_str())
+        .ok()
+        .and_then(|value| crate::message::ToolOutput::from_json_payload(Some(&value)).ok())
+        .unwrap_or_default();
     let mut message = Message::prompt_parts(
         Role::Tool,
         vec![PartContent::Operation(OperationPart::completed(
@@ -866,7 +870,7 @@ fn synthetic_tool_result_message(
             output_text,
             Vec::new(),
             Vec::new(),
-            crate::message::ToolOutput::default(),
+            details,
             crate::message::TimeRange::default(),
         ))],
     );

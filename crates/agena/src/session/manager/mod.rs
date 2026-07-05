@@ -820,43 +820,23 @@ fn resolve_pending_tool(
     let normalized_pending = SessionPendingTool {
         part: normalized_part,
     };
-    let part = session.part(&normalized_pending.part).ok_or_else(|| {
-        AppError::Internal(format!(
-            "pending tool part not found: message={}, part={}",
-            pending_tool.part.message_id, pending_tool.part.part_id
-        ))
-    })?;
-    let operation_id = part.operation_id.clone().ok_or_else(|| {
-        AppError::Internal(format!(
-            "pending tool operation id missing: message={}, part={}",
-            pending_tool.part.message_id, pending_tool.part.part_id
-        ))
-    })?;
-    let (call_id, invocation, lifecycle) = session
-        .pending_tool_execution(&normalized_pending)
+    let record = session
+        .pending_tool_record(&normalized_pending)
         .ok_or_else(|| {
             AppError::Internal(format!(
                 "pending tool payload missing: message={}, part={}",
                 pending_tool.part.message_id, pending_tool.part.part_id
             ))
         })?;
-    let advertised_tool_identity = part.content.as_ref().and_then(|content| match content {
-        PartContent::Operation(operation) => operation
-            .metadata
-            .get("advertised_tool_identity")
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned),
-        _ => None,
-    });
 
     Ok(ResolvedPendingTool {
         pending: normalized_pending,
-        operation_id,
-        call_id,
-        invocation: invocation.clone(),
-        advertised_tool_identity,
+        operation_id: record.operation_id,
+        call_id: record.call_id,
+        invocation: record.invocation,
+        advertised_tool_identity: record.advertised_tool_identity,
         prepared_shell_command: None,
-        lifecycle: lifecycle.clone(),
+        lifecycle: record.lifecycle,
         session_runtime: session.runtime.clone(),
     })
 }

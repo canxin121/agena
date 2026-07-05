@@ -324,7 +324,7 @@ impl ToolPayloadOutput {
             StructuredObject::try_from(serde_json::Value::Object(object)).unwrap_or_default();
         ToolOutput {
             payload,
-            managed_output_paths: Vec::new(),
+            managed_outputs: Vec::new(),
             truncated: None,
         }
     }

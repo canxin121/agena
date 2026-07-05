@@ -488,10 +488,11 @@ impl AmazonBedrockAdapter {
     ) -> Vec<BedrockAnthropicToolDefinition> {
         tools
             .iter()
+            .map(crate::tool::ModelToolSpec::from_registered_tool)
             .map(|tool| BedrockAnthropicToolDefinition {
-                name: bedrock_wire_tool_name(tool.exposed_name.as_str()),
-                description: tool.description_text().to_string(),
-                input_schema: crate::tool::model_safe_tool_schema(&tool.sanitized_input_schema()),
+                name: bedrock_wire_tool_name(tool.model_name.as_str()),
+                description: tool.description,
+                input_schema: tool.input_schema,
                 cache_control: None,
                 eager_input_streaming: None,
             })
@@ -1225,15 +1226,14 @@ impl AmazonBedrockAdapter {
                 request
                     .tools
                     .iter()
+                    .map(crate::tool::ModelToolSpec::from_registered_tool)
                     .map(|tool| crate::provider::chat_wire::ChatToolDefinition {
                         kind: "function".to_owned(),
                         function: crate::provider::chat_wire::ChatFunctionDefinition {
-                            name: bedrock_wire_tool_name(tool.exposed_name.as_str()),
-                            description: tool.description_text().to_string(),
-                            parameters: crate::tool::model_safe_tool_schema(
-                                &tool.sanitized_input_schema(),
-                            ),
-                            strict: tool.decl.strict,
+                            name: bedrock_wire_tool_name(tool.model_name.as_str()),
+                            description: tool.description,
+                            parameters: tool.input_schema,
+                            strict: tool.strict,
                         },
                     })
                     .collect()
@@ -1316,15 +1316,14 @@ impl AmazonBedrockAdapter {
                 request
                     .tools
                     .iter()
+                    .map(crate::tool::ModelToolSpec::from_registered_tool)
                     .map(|tool| crate::provider::chat_wire::ChatToolDefinition {
                         kind: "function".to_owned(),
                         function: crate::provider::chat_wire::ChatFunctionDefinition {
-                            name: bedrock_wire_tool_name(tool.exposed_name.as_str()),
-                            description: tool.description_text().to_string(),
-                            parameters: crate::tool::model_safe_tool_schema(
-                                &tool.sanitized_input_schema(),
-                            ),
-                            strict: tool.decl.strict,
+                            name: bedrock_wire_tool_name(tool.model_name.as_str()),
+                            description: tool.description,
+                            parameters: tool.input_schema,
+                            strict: tool.strict,
                         },
                     })
                     .collect()

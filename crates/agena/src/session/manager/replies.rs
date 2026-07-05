@@ -86,10 +86,7 @@ fn pending_operation_for_resolved(
 ) -> OperationPart {
     let mut operation = OperationPart::pending(resolved.call_id, invocation, title, lifecycle);
     if let Some(identity) = resolved.advertised_tool_identity.as_deref() {
-        operation.metadata.insert(
-            "advertised_tool_identity".to_string(),
-            serde_json::Value::String(identity.to_string()),
-        );
+        operation.set_advertised_tool_identity(identity.to_string());
     }
     operation
 }
@@ -2277,18 +2274,22 @@ impl SessionManager {
 
         let assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                tool_part.set_content(PartContent::Operation(
-                    OperationPart::completed(
-                        resolved.call_id,
-                        resolved.invocation.clone(),
-                        output_text.clone(),
-                        blocks.clone(),
-                        execution.view.attachments.clone(),
-                        tool_output.clone(),
-                        lifecycle.clone(),
-                    )
-                    .with_title(completion_title.clone()),
-                ));
+                let mut operation = OperationPart::completed(
+                    resolved.call_id,
+                    resolved.invocation.clone(),
+                    output_text.clone(),
+                    blocks.clone(),
+                    execution.view.attachments.clone(),
+                    tool_output.clone(),
+                    lifecycle.clone(),
+                )
+                .with_title(completion_title.clone());
+                operation.result.metadata.extend(
+                    execution.view.metadata.iter().map(|(key, value)| {
+                        (key.clone(), serde_json::Value::String(value.clone()))
+                    }),
+                );
+                tool_part.set_content(PartContent::Operation(operation));
                 tool_part.status = ExecutionStatus::Completed;
             })?;
 

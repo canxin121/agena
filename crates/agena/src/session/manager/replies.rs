@@ -78,6 +78,22 @@ fn update_resolved_tool_message(
     assistant_message_for_part(session, &resolved.pending.part)
 }
 
+fn pending_operation_for_resolved(
+    resolved: &ResolvedPendingTool,
+    invocation: ToolInvocation,
+    title: impl Into<String>,
+    lifecycle: TimeRange,
+) -> OperationPart {
+    let mut operation = OperationPart::pending(resolved.call_id, invocation, title, lifecycle);
+    if let Some(identity) = resolved.advertised_tool_identity.as_deref() {
+        operation.metadata.insert(
+            "advertised_tool_identity".to_string(),
+            serde_json::Value::String(identity.to_string()),
+        );
+    }
+    operation
+}
+
 fn append_resolved_message_part(
     session: &mut Session,
     resolved: &ResolvedPendingTool,
@@ -1313,6 +1329,20 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
+        if let Err(err) = scoped_executor.validate_advertised_tool_identity(
+            &resolved.invocation,
+            resolved.advertised_tool_identity.as_deref(),
+        ) {
+            *session = before_prepare;
+            tracing::debug!(
+                target: "agena::session::tools",
+                session_id = session.id,
+                call_id = resolved.call_id,
+                error = %err,
+                "deferring stale tool call to sequential failure handling"
+            );
+            return Ok(None);
+        }
         let prepared = match scoped_executor.prepare_invocation(
             &resolved.invocation,
             session.id,
@@ -1365,8 +1395,8 @@ impl SessionManager {
                     resolved.pending.part.message_id, resolved.pending.part.part_id
                 ))
             })?;
-            tool_part.set_content(PartContent::Operation(OperationPart::pending(
-                resolved.call_id,
+            tool_part.set_content(PartContent::Operation(pending_operation_for_resolved(
+                &resolved,
                 prepared.invocation,
                 prepared.title_override.unwrap_or(current_title),
                 resolved.lifecycle.clone(),
@@ -1439,6 +1469,10 @@ impl SessionManager {
                 .map_err(|err| AppError::Internal(format!("tool semaphore closed: {err}")))?;
             handles.push(tokio::task::spawn_blocking(move || {
                 let _permit = permit;
+                scoped_executor.validate_advertised_tool_identity(
+                    &pending_tool.invocation,
+                    pending_tool.advertised_tool_identity.as_deref(),
+                )?;
                 scoped_executor.execute_invocation_detailed(
                     &pending_tool.invocation,
                     session_id,
@@ -1466,6 +1500,19 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
+        if let Err(err) = scoped_executor.validate_advertised_tool_identity(
+            &resolved.invocation,
+            resolved.advertised_tool_identity.as_deref(),
+        ) {
+            return Box::pin(self.apply_tool_failure(
+                session,
+                &resolved.pending,
+                err.to_string(),
+                None,
+                state,
+            ))
+            .await;
+        }
         let prepared = match scoped_executor.prepare_invocation(
             &resolved.invocation,
             session.id,
@@ -1517,8 +1564,8 @@ impl SessionManager {
                     resolved.pending.part.message_id, resolved.pending.part.part_id
                 ))
             })?;
-            tool_part.set_content(PartContent::Operation(OperationPart::pending(
-                resolved.call_id,
+            tool_part.set_content(PartContent::Operation(pending_operation_for_resolved(
+                &resolved,
                 prepared.invocation,
                 prepared.title_override.unwrap_or(current_title),
                 resolved.lifecycle.clone(),
@@ -1943,8 +1990,8 @@ impl SessionManager {
 
         let _assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                tool_part.set_content(PartContent::Operation(OperationPart::pending(
-                    resolved.call_id,
+                tool_part.set_content(PartContent::Operation(pending_operation_for_resolved(
+                    &resolved,
                     resolved.invocation.clone(),
                     format!("Awaiting permission: {reason}"),
                     resolved.lifecycle.clone(),
@@ -2037,8 +2084,8 @@ impl SessionManager {
 
         let _assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                tool_part.set_content(PartContent::Operation(OperationPart::pending(
-                    resolved.call_id,
+                tool_part.set_content(PartContent::Operation(pending_operation_for_resolved(
+                    &resolved,
                     resolved.invocation.clone(),
                     ask_user_title(&request),
                     resolved.lifecycle.clone(),

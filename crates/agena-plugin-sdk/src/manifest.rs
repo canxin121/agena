@@ -236,6 +236,11 @@ pub struct PluginToolDecl {
     pub ui_display_mode: Option<UiTextDisplayMode>,
     #[serde(default)]
     pub input_schema: serde_json::Value,
+    /// Optional schema for the tool's successful structured output. Providers
+    /// usually do not accept this in function definitions, but hosts use it to
+    /// document and validate the local tool/result contract.
+    #[serde(default, skip_serializing_if = "serde_json_value_is_empty_schema")]
+    pub output_schema: serde_json::Value,
     /// Declarative path-permission specs. The host extracts paths from the
     /// tool input via JSONPath before invocation and audits them as
     /// [`PathKind`]. Use [`Plugin::permission_paths`] for paths that can only
@@ -384,6 +389,10 @@ impl PluginToolDecl {
 
     pub fn sanitized_input_schema(&self) -> serde_json::Value {
         sanitize_schema_json(self.input_schema.clone())
+    }
+
+    pub fn sanitized_output_schema(&self) -> serde_json::Value {
+        sanitize_schema_json(self.output_schema.clone())
     }
 
     pub fn effective_tags(&self) -> Vec<ToolTag> {
@@ -767,6 +776,11 @@ pub struct NetworkAccessSpec {
 
 fn sanitize_schema_json(value: serde_json::Value) -> serde_json::Value {
     sanitize_schema_json_value(value, true)
+}
+
+fn serde_json_value_is_empty_schema(value: &serde_json::Value) -> bool {
+    matches!(value, serde_json::Value::Null)
+        || value.as_object().is_some_and(|object| object.is_empty())
 }
 
 fn sanitize_schema_json_value(
@@ -1258,6 +1272,7 @@ impl PluginToolDecl {
             description_mode: None,
             ui_display_mode: None,
             input_schema: schema,
+            output_schema: serde_json::Value::Null,
             input_paths: Vec::new(),
             input_networks: Vec::new(),
             path_access: Vec::new(),
@@ -1400,6 +1415,11 @@ impl PluginToolDecl {
 
     pub fn input_path(mut self, spec: InputPathSpec) -> Self {
         self.input_paths.push(spec);
+        self
+    }
+
+    pub fn output_schema(mut self, schema: serde_json::Value) -> Self {
+        self.output_schema = schema;
         self
     }
 
@@ -1738,6 +1758,36 @@ mod tests {
         assert_eq!(value["result_policy"]["preview_lines"], 8);
         assert_eq!(value["result_policy"]["persist_large_output"], true);
         assert_eq!(value["result_policy"]["ui_render_kind"], "markdown");
+    }
+
+    #[test]
+    fn plugin_tool_decl_supports_output_schema() {
+        let decl = PluginToolDecl::new("dummy", serde_json::json!({"type":"object"}))
+            .output_schema(serde_json::json!({
+                "type": "object",
+                "title": "DummyOutput",
+                "properties": {
+                    "count": { "type": "integer" }
+                },
+                "required": ["count"]
+            }));
+
+        assert_eq!(
+            decl.sanitized_output_schema(),
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "count": { "type": "integer" }
+                },
+                "required": ["count"]
+            })
+        );
+
+        let value = serde_json::to_value(&decl).expect("tool decl serializes");
+        assert_eq!(
+            value["output_schema"]["properties"]["count"]["type"],
+            "integer"
+        );
     }
 
     #[test]

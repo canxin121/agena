@@ -61,6 +61,9 @@ use crate::plugins::provided::{
     tasks as provided_tasks,
 };
 
+const TOOL_MODEL_OUTPUT_MAX_LINES: usize = 2_000;
+const TOOL_MODEL_OUTPUT_MAX_BYTES: usize = 50 * 1024;
+
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
 pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
 pub use monitor::{
@@ -932,6 +935,8 @@ pub enum ToolError {
         suggestions: Vec<String>,
         suggestion_text: String,
     },
+    #[error("stale tool call: {tool}")]
+    StaleToolCall { tool: String },
     #[error("unsupported tool invocation in executor: {0}")]
     UnsupportedInvocation(String),
 }
@@ -1333,6 +1338,28 @@ impl ToolExecutor {
 
     fn invocation_definition(&self, invocation: &ToolInvocation) -> Option<RegisteredTool> {
         self.plugin_invocation_definition(&PluginInvocation::from_tool_invocation(invocation))
+    }
+
+    pub fn validate_advertised_tool_identity(
+        &self,
+        invocation: &ToolInvocation,
+        advertised_identity: Option<&str>,
+    ) -> Result<(), ToolError> {
+        let Some(advertised_identity) = advertised_identity
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(());
+        };
+        let current = self
+            .invocation_definition(invocation)
+            .map(|definition| definition.definition_identity());
+        if current.as_deref() == Some(advertised_identity) {
+            return Ok(());
+        }
+        Err(ToolError::StaleToolCall {
+            tool: invocation_name(invocation).to_string(),
+        })
     }
 
     fn plugin_invocation_definition(
@@ -1995,6 +2022,11 @@ impl ToolExecutor {
                         call_id,
                         &mut execution,
                     )?;
+                    executor.apply_model_output_boundary(
+                        exposed_tool_name.as_str(),
+                        call_id,
+                        &mut execution,
+                    )?;
                     Ok(execution)
                 })(),
                 Ok(Err(err)) => Err(ToolError::Plugin(err.message)),
@@ -2088,6 +2120,11 @@ impl ToolExecutor {
         self.apply_result_policy(
             resolution.exposed_name.as_str(),
             &resolution.decl.result_policy,
+            call_id,
+            &mut execution,
+        )?;
+        self.apply_model_output_boundary(
+            resolution.exposed_name.as_str(),
             call_id,
             &mut execution,
         )?;
@@ -2277,6 +2314,71 @@ impl ToolExecutor {
         }
 
         execution.view.output_text = preview;
+        Ok(())
+    }
+
+    fn apply_model_output_boundary(
+        &self,
+        exposed_tool_name: &str,
+        call_id: i64,
+        execution: &mut ToolInvocationExecution,
+    ) -> Result<(), ToolError> {
+        let contextual = model_output_boundary_context(execution);
+        if contextual.trim().is_empty()
+            || !model_output_exceeds_boundary(
+                contextual.as_str(),
+                TOOL_MODEL_OUTPUT_MAX_LINES,
+                TOOL_MODEL_OUTPUT_MAX_BYTES,
+            )
+        {
+            return Ok(());
+        }
+
+        let Some(path) = persist_tool_result_output(
+            self.workspace_root(),
+            exposed_tool_name,
+            call_id,
+            contextual.as_str(),
+        )?
+        else {
+            return Ok(());
+        };
+
+        let path_text = path.display().to_string();
+        let marker = format!("... output truncated; full content saved to {path_text} ...");
+        let preview = bounded_model_output_preview(
+            contextual.as_str(),
+            marker.as_str(),
+            TOOL_MODEL_OUTPUT_MAX_LINES,
+            TOOL_MODEL_OUTPUT_MAX_BYTES,
+        );
+
+        if execution.view.output_text.trim().is_empty()
+            || model_output_exceeds_boundary(
+                execution.view.output_text.as_str(),
+                TOOL_MODEL_OUTPUT_MAX_LINES,
+                TOOL_MODEL_OUTPUT_MAX_BYTES,
+            )
+        {
+            execution.view.output_text = preview;
+        } else if !execution.view.output_text.contains(marker.as_str()) {
+            execution.view.output_text.push_str("\n\n");
+            execution.view.output_text.push_str(marker.as_str());
+        }
+
+        execution.output.mark_truncated(path_text.clone());
+        execution
+            .view
+            .metadata
+            .insert("model_output_truncated".to_string(), "true".to_string());
+        execution
+            .view
+            .metadata
+            .insert("model_output_full_path".to_string(), path_text);
+        execution.view.metadata.insert(
+            "model_output_original_bytes".to_string(),
+            contextual.len().to_string(),
+        );
         Ok(())
     }
 
@@ -2555,6 +2657,65 @@ fn truncate_to_char_count(value: &str, max_chars: usize) -> String {
         return value.to_string();
     };
     value[..idx].to_string()
+}
+
+fn model_output_boundary_context(execution: &ToolInvocationExecution) -> String {
+    let output_text = execution.view.output_text.as_str();
+    let payload_text = execution
+        .output
+        .to_json_payload()
+        .and_then(|payload| serde_json::to_string_pretty(&payload).ok())
+        .unwrap_or_default();
+
+    if payload_text.len() > output_text.len() {
+        payload_text
+    } else {
+        output_text.to_string()
+    }
+}
+
+fn model_output_exceeds_boundary(value: &str, max_lines: usize, max_bytes: usize) -> bool {
+    line_count(value) > max_lines || value.len() > max_bytes
+}
+
+fn line_count(value: &str) -> usize {
+    value.bytes().filter(|byte| *byte == b'\n').count() + usize::from(!value.is_empty())
+}
+
+fn bounded_model_output_preview(
+    value: &str,
+    marker: &str,
+    max_lines: usize,
+    max_bytes: usize,
+) -> String {
+    let mut selected = value
+        .lines()
+        .take(max_lines.saturating_sub(1))
+        .collect::<Vec<_>>()
+        .join("\n");
+    selected = truncate_to_utf8_bytes(
+        selected.as_str(),
+        max_bytes.saturating_sub(marker.len() + 2),
+    );
+    if selected.trim().is_empty() {
+        marker.to_string()
+    } else {
+        format!("{selected}\n{marker}")
+    }
+}
+
+fn truncate_to_utf8_bytes(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    if max_bytes == 0 {
+        return String::new();
+    }
+    let mut end = max_bytes.min(value.len());
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_string()
 }
 
 fn persist_tool_result_output(
@@ -3069,8 +3230,8 @@ mod tests {
     use crate::role::Role;
 
     use super::{
-        ToolError, ToolExecutor, ToolPayloadInput, ToolPayloadOutput, ToolRuntimeContext,
-        orchestrator,
+        ToolError, ToolExecutionView, ToolExecutor, ToolInvocationExecution, ToolPayloadInput,
+        ToolPayloadOutput, ToolRuntimeContext, orchestrator,
     };
 
     const FS_TOOL: &str = "fs";
@@ -7127,7 +7288,7 @@ mod tests {
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
         let scoped = executor.for_session_context(&crate::session::SessionExecutionContext {
-            allowed_tools: vec!["skills.review".to_string()],
+            allowed_tools: vec!["skills.review.run".to_string()],
             ..Default::default()
         });
 
@@ -7137,7 +7298,7 @@ mod tests {
             .map(|tool| tool.exposed_name)
             .collect::<std::collections::BTreeSet<_>>();
 
-        assert!(names.contains("skills.review"));
+        assert!(names.contains("skills.review.run"));
         assert!(!names.contains("tools.search"));
         assert!(!names.contains("tool_catalog"));
         assert!(!names.contains("tools.help"));
@@ -7315,7 +7476,7 @@ mod tests {
             "Search the public web for candidate pages. Search results are discovery-only; for factual answers, continue by fetching the most relevant result URLs."
         );
 
-        let task = tools
+        let task = model_tools
             .iter()
             .find(|tool| tool.exposed_name == "task.run")
             .expect("task.run should be model-visible");
@@ -8805,5 +8966,27 @@ mod tests {
             }
             other => panic!("expected bash output, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn model_output_boundary_persists_large_output_and_marks_execution() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root);
+        let large_output = "alpha\n".repeat(super::TOOL_MODEL_OUTPUT_MAX_LINES + 5);
+        let mut execution = ToolInvocationExecution::new(
+            crate::message::ToolOutput::default(),
+            ToolExecutionView::simple("Large output", large_output.clone()),
+        );
+
+        executor
+            .apply_model_output_boundary("fixture.large", 42, &mut execution)
+            .expect("large output should be bounded");
+
+        assert!(execution.output.is_model_truncated());
+        assert_eq!(execution.output.managed_output_paths.len(), 1);
+        assert!(execution.view.output_text.contains("output truncated"));
+        let persisted = fs::read_to_string(&execution.output.managed_output_paths[0])
+            .expect("persisted output");
+        assert_eq!(persisted, large_output);
     }
 }

@@ -382,6 +382,7 @@ struct ResolvedPendingTool {
     operation_id: String,
     call_id: i64,
     invocation: ToolInvocation,
+    advertised_tool_identity: Option<String>,
     prepared_shell_command: Option<PreparedShellCommand>,
     lifecycle: TimeRange,
     session_runtime: crate::session::SessionRuntimeState,
@@ -839,12 +840,21 @@ fn resolve_pending_tool(
                 pending_tool.part.message_id, pending_tool.part.part_id
             ))
         })?;
+    let advertised_tool_identity = part.content.as_ref().and_then(|content| match content {
+        PartContent::Operation(operation) => operation
+            .metadata
+            .get("advertised_tool_identity")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+        _ => None,
+    });
 
     Ok(ResolvedPendingTool {
         pending: normalized_pending,
         operation_id,
         call_id,
         invocation: invocation.clone(),
+        advertised_tool_identity,
         prepared_shell_command: None,
         lifecycle: lifecycle.clone(),
         session_runtime: session.runtime.clone(),

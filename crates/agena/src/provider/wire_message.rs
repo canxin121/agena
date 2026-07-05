@@ -327,6 +327,10 @@ pub(crate) fn project_operation_output(status: ExecutionStatus, exec: &Operation
             String::new()
         }
         ExecutionStatus::Completed => {
+            if exec.details.is_model_truncated() {
+                return managed_operation_output(exec)
+                    .unwrap_or_else(|| exec.model_output.text.clone());
+            }
             structured_operation_output(exec).unwrap_or_else(|| exec.model_output.text.clone())
         }
         ExecutionStatus::Failed => exec
@@ -343,6 +347,34 @@ const MAX_MODEL_WEB_CRAWL_FAILURES: usize = 5;
 
 fn structured_operation_output(exec: &OperationPart) -> Option<String> {
     structured_web_search_output(exec).or_else(|| structured_web_crawl_output(exec))
+}
+
+fn managed_operation_output(exec: &OperationPart) -> Option<String> {
+    let mut object = serde_json::Map::new();
+    if !exec.model_output.text.trim().is_empty() {
+        object.insert(
+            "text".to_string(),
+            serde_json::Value::String(exec.model_output.text.clone()),
+        );
+    }
+    if let Some(payload) = exec.details.to_json_payload() {
+        object.insert("structured".to_string(), payload);
+    }
+    if !exec.details.managed_output_paths.is_empty() {
+        object.insert(
+            "output_paths".to_string(),
+            serde_json::Value::Array(
+                exec.details
+                    .managed_output_paths
+                    .iter()
+                    .cloned()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            ),
+        );
+    }
+    object.insert("truncated".to_string(), serde_json::Value::Bool(true));
+    serde_json::to_string(&serde_json::Value::Object(object)).ok()
 }
 
 fn structured_web_search_output(exec: &OperationPart) -> Option<String> {
@@ -763,5 +795,63 @@ mod tests {
                 && tool_name == "process.run"
                 && output_json.is_empty()
         ));
+    }
+
+    #[test]
+    fn project_managed_tool_output_as_bounded_result_object() {
+        let created_at = Utc::now();
+        let invocation = ToolInvocation::new(
+            "fixture.large",
+            StructuredObject::try_from(json!({ "query": "large" })).expect("tool input"),
+        );
+        let details = crate::message::ToolOutput::from_json_payload(Some(&json!({
+            "full": "payload"
+        })))
+        .expect("tool output")
+        .with_managed_output_path("/tmp/agena/tool-results/full.txt");
+        let mut tool_part = MessagePart::with_content(
+            1,
+            0,
+            created_at,
+            ExecutionStatus::Completed,
+            PartContent::Operation(OperationPart::completed(
+                1,
+                invocation,
+                "preview only".to_string(),
+                Vec::new(),
+                Vec::new(),
+                details,
+                TimeRange::default(),
+            )),
+        );
+        tool_part.operation_id = Some("call_large".to_string());
+
+        let assistant = Message {
+            id: 2,
+            role: Role::Assistant,
+            state: ExecutionStatus::Completed,
+            parts: vec![tool_part],
+            created_at,
+            metadata: Default::default(),
+            provider_state: None,
+            usage: None,
+        };
+
+        let projected = project(&assistant);
+        let Some(WirePart::ToolResult { output_json, .. }) = projected
+            .iter()
+            .find(|part| matches!(part, WirePart::ToolResult { .. }))
+        else {
+            panic!("expected projected tool result");
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(output_json).expect("valid json"),
+            json!({
+                "text": "preview only",
+                "structured": { "full": "payload" },
+                "output_paths": ["/tmp/agena/tool-results/full.txt"],
+                "truncated": true
+            })
+        );
     }
 }

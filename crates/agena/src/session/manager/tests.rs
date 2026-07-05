@@ -5045,7 +5045,11 @@ mod runtime_builtin_tool_tests {
                             ExecutionStatus::Completed | ExecutionStatus::Failed
                         ) =>
                     {
-                        operation.details.to_json_payload()
+                        operation
+                            .result
+                            .structured
+                            .clone()
+                            .or_else(|| operation.details.to_json_payload())
                     }
                     _ => None,
                 }
@@ -5066,7 +5070,11 @@ mod runtime_builtin_tool_tests {
                     Some(PartContent::Operation(operation))
                         if part.status == ExecutionStatus::Completed =>
                     {
-                        operation.details.to_json_payload()
+                        operation
+                            .result
+                            .structured
+                            .clone()
+                            .or_else(|| operation.details.to_json_payload())
                     }
                     _ => None,
                 }

@@ -1460,8 +1460,8 @@ impl OpenAiAdapter {
     ) -> Result<OpenAiResponsesToolPlan, AppError> {
         let mut plan = OpenAiResponsesToolPlan::default();
         let mut namespace_tools: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
-        for tool in &request.tools {
-            let wire_name = responses_wire_tool_name(tool.exposed_name.as_str());
+        for tool in crate::tool::model_tool_specs(request.tools.as_slice()) {
+            let wire_name = responses_wire_tool_name(tool.model_name.as_str());
             let mut map = serde_json::Map::new();
             map.insert(
                 "type".to_owned(),
@@ -1470,13 +1470,10 @@ impl OpenAiAdapter {
             map.insert("name".to_owned(), serde_json::Value::String(wire_name.name));
             map.insert(
                 "description".to_owned(),
-                serde_json::Value::String(tool.description_text().to_string()),
+                serde_json::Value::String(tool.description),
             );
-            map.insert(
-                "parameters".to_owned(),
-                crate::tool::model_safe_tool_schema(&tool.sanitized_input_schema()),
-            );
-            if tool.decl.strict {
+            map.insert("parameters".to_owned(), tool.input_schema);
+            if tool.strict {
                 map.insert("strict".to_owned(), serde_json::Value::Bool(true));
             }
             if let Some(namespace) = wire_name.namespace {
@@ -1824,15 +1821,14 @@ impl OpenAiAdapter {
             request
                 .tools
                 .iter()
+                .map(crate::tool::ModelToolSpec::from_registered_tool)
                 .map(|tool| chat_wire::ChatToolDefinition {
                     kind: "function".to_owned(),
                     function: chat_wire::ChatFunctionDefinition {
-                        name: openai_chat_tool_name(tool.exposed_name.as_str()),
-                        description: tool.description_text().to_string(),
-                        parameters: crate::tool::model_safe_tool_schema(
-                            &tool.sanitized_input_schema(),
-                        ),
-                        strict: tool.decl.strict,
+                        name: openai_chat_tool_name(tool.model_name.as_str()),
+                        description: tool.description,
+                        parameters: tool.input_schema,
+                        strict: tool.strict,
                     },
                 })
                 .collect()

@@ -848,18 +848,38 @@ impl OperationBlock {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
+pub struct ToolManagedOutput {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+}
+
+impl ToolManagedOutput {
+    pub fn new(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            size_bytes: None,
+            media_type: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ToolOutput {
     #[serde(default, skip_serializing_if = "StructuredObject::is_empty")]
     pub payload: StructuredObject,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub managed_output_paths: Vec<String>,
+    pub managed_outputs: Vec<ToolManagedOutput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub truncated: Option<bool>,
 }
 
 impl ToolOutput {
     pub fn is_empty(&self) -> bool {
-        self.payload.is_empty() && self.managed_output_paths.is_empty() && self.truncated.is_none()
+        self.payload.is_empty() && self.managed_outputs.is_empty() && self.truncated.is_none()
     }
 
     pub fn from_json_payload(payload: Option<&serde_json::Value>) -> Result<Self, String> {
@@ -867,7 +887,7 @@ impl ToolOutput {
             None | Some(serde_json::Value::Null) => Ok(Self::default()),
             Some(value) => Ok(Self {
                 payload: StructuredObject::try_from(value.clone())?,
-                managed_output_paths: Vec::new(),
+                managed_outputs: Vec::new(),
                 truncated: None,
             }),
         }
@@ -878,18 +898,18 @@ impl ToolOutput {
     }
 
     pub fn with_managed_output_path(mut self, path: impl Into<String>) -> Self {
-        self.managed_output_paths.push(path.into());
+        self.managed_outputs.push(ToolManagedOutput::new(path));
         self.truncated = Some(true);
         self
     }
 
     pub fn mark_truncated(&mut self, path: impl Into<String>) {
-        self.managed_output_paths.push(path.into());
+        self.managed_outputs.push(ToolManagedOutput::new(path));
         self.truncated = Some(true);
     }
 
     pub fn is_model_truncated(&self) -> bool {
-        self.truncated.unwrap_or(false) || !self.managed_output_paths.is_empty()
+        self.truncated.unwrap_or(false) || !self.managed_outputs.is_empty()
     }
 
     pub fn content_blocks(&self) -> Vec<OperationBlock> {
@@ -936,6 +956,146 @@ impl ModelVisibleOutput {
             truncated: None,
         }
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty() && self.attachments.is_empty() && self.truncated.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolResultState {
+    #[default]
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl ToolResultState {
+    fn is_pending(value: &Self) -> bool {
+        matches!(value, Self::Pending)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ToolResultDisplay {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
+}
+
+impl ToolResultDisplay {
+    pub fn is_empty(&self) -> bool {
+        self.title.is_empty() && self.summary.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ToolResultEnvelope {
+    #[serde(default, skip_serializing_if = "ToolResultState::is_pending")]
+    pub state: ToolResultState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content: Vec<OperationBlock>,
+    #[serde(default, skip_serializing_if = "ModelVisibleOutput::is_empty")]
+    pub model_preview: ModelVisibleOutput,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub managed_outputs: Vec<ToolManagedOutput>,
+    #[serde(default, skip_serializing_if = "ToolResultDisplay::is_empty")]
+    pub display: ToolResultDisplay,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<AttachmentItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<OperationError>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw: Option<serde_json::Value>,
+}
+
+impl ToolResultEnvelope {
+    pub fn is_empty(&self) -> bool {
+        ToolResultState::is_pending(&self.state)
+            && self.structured.is_none()
+            && self.content.is_empty()
+            && self.model_preview.is_empty()
+            && self.managed_outputs.is_empty()
+            && self.display.is_empty()
+            && self.attachments.is_empty()
+            && self.error.is_none()
+            && self.metadata.is_empty()
+            && self.raw.is_none()
+    }
+
+    pub fn completed(
+        output_text: String,
+        blocks: Vec<OperationBlock>,
+        attachments: Vec<AttachmentItem>,
+        details: &ToolOutput,
+    ) -> Self {
+        let truncated = details.is_model_truncated().then_some(true);
+        Self {
+            state: ToolResultState::Completed,
+            structured: details.to_json_payload(),
+            content: blocks,
+            model_preview: ModelVisibleOutput {
+                text: output_text.clone(),
+                attachments: attachments.clone(),
+                truncated,
+            },
+            managed_outputs: details.managed_outputs.clone(),
+            display: ToolResultDisplay {
+                title: String::new(),
+                summary: output_text,
+            },
+            attachments,
+            error: None,
+            metadata: BTreeMap::new(),
+            raw: None,
+        }
+    }
+
+    pub fn failed(
+        error_message: String,
+        output_text: String,
+        blocks: Vec<OperationBlock>,
+        attachments: Vec<AttachmentItem>,
+        details: &ToolOutput,
+    ) -> Self {
+        let truncated = details.is_model_truncated().then_some(true);
+        Self {
+            state: ToolResultState::Failed,
+            structured: details.to_json_payload(),
+            content: blocks,
+            model_preview: ModelVisibleOutput {
+                text: output_text.clone(),
+                attachments: attachments.clone(),
+                truncated,
+            },
+            managed_outputs: details.managed_outputs.clone(),
+            display: ToolResultDisplay {
+                title: String::new(),
+                summary: if error_message.trim().is_empty() {
+                    output_text
+                } else {
+                    error_message.clone()
+                },
+            },
+            attachments,
+            error: Some(OperationError {
+                message: error_message,
+                code: None,
+            }),
+            metadata: BTreeMap::new(),
+            raw: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -956,6 +1116,8 @@ pub struct OperationPart {
     pub attachments: Vec<AttachmentItem>,
     #[serde(default, skip_serializing_if = "ToolOutput::is_empty")]
     pub details: ToolOutput,
+    #[serde(default, skip_serializing_if = "ToolResultEnvelope::is_empty")]
+    pub result: ToolResultEnvelope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -969,6 +1131,7 @@ pub struct OperationPart {
 }
 
 const PROVIDER_NATIVE_ONLY_METADATA_KEY: &str = "provider_native_only";
+const ADVERTISED_TOOL_IDENTITY_METADATA_KEY: &str = "advertised_tool_identity";
 
 impl OperationPart {
     pub fn pending(
@@ -987,6 +1150,7 @@ impl OperationPart {
             artifacts: Vec::new(),
             attachments: Vec::new(),
             details: ToolOutput::default(),
+            result: ToolResultEnvelope::default(),
             structured: None,
             metadata: BTreeMap::new(),
             error: None,
@@ -1007,6 +1171,12 @@ impl OperationPart {
         let output_text = output_text.into();
         let structured = details.to_json_payload();
         let truncated = details.is_model_truncated().then_some(true);
+        let result = ToolResultEnvelope::completed(
+            output_text.clone(),
+            blocks.clone(),
+            attachments.clone(),
+            &details,
+        );
         Self {
             call_id,
             invocation,
@@ -1021,6 +1191,7 @@ impl OperationPart {
             artifacts: Vec::new(),
             attachments,
             details,
+            result,
             structured,
             metadata: BTreeMap::new(),
             error: None,
@@ -1043,6 +1214,13 @@ impl OperationPart {
         let output_text = output_text.into();
         let structured = details.to_json_payload();
         let truncated = details.is_model_truncated().then_some(true);
+        let result = ToolResultEnvelope::failed(
+            error_message.clone(),
+            output_text.clone(),
+            blocks.clone(),
+            attachments.clone(),
+            &details,
+        );
         Self {
             call_id,
             invocation,
@@ -1061,6 +1239,7 @@ impl OperationPart {
             artifacts: Vec::new(),
             attachments,
             details,
+            result,
             structured,
             metadata: BTreeMap::new(),
             error: Some(OperationError {
@@ -1074,6 +1253,7 @@ impl OperationPart {
 
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
+        self.result.display.title = self.title.clone();
         self
     }
 
@@ -1095,6 +1275,19 @@ impl OperationPart {
             .unwrap_or(false)
     }
 
+    pub fn set_advertised_tool_identity(&mut self, identity: impl Into<String>) {
+        self.metadata.insert(
+            ADVERTISED_TOOL_IDENTITY_METADATA_KEY.to_string(),
+            serde_json::Value::String(identity.into()),
+        );
+    }
+
+    pub fn advertised_tool_identity(&self) -> Option<&str> {
+        self.metadata
+            .get(ADVERTISED_TOOL_IDENTITY_METADATA_KEY)
+            .and_then(serde_json::Value::as_str)
+    }
+
     pub fn call_id(&self) -> i64 {
         self.call_id
     }
@@ -1112,7 +1305,11 @@ impl OperationPart {
     }
 
     pub fn output_text(&self) -> Option<&str> {
-        (!self.model_output.text.is_empty()).then_some(self.model_output.text.as_str())
+        if !self.result.model_preview.text.is_empty() {
+            Some(self.result.model_preview.text.as_str())
+        } else {
+            (!self.model_output.text.is_empty()).then_some(self.model_output.text.as_str())
+        }
     }
 
     pub fn title(&self) -> Option<&str> {
@@ -1120,7 +1317,11 @@ impl OperationPart {
     }
 
     pub fn error_message(&self) -> Option<&str> {
-        self.error.as_ref().map(|error| error.message.as_str())
+        self.result
+            .error
+            .as_ref()
+            .or(self.error.as_ref())
+            .map(|error| error.message.as_str())
     }
 
     pub fn status(&self) -> ExecutionStatus {
@@ -1137,13 +1338,25 @@ impl OperationPart {
 
     pub fn append_output_delta(&mut self, delta: &str) -> bool {
         self.model_output.text.push_str(delta);
+        self.result.state = ToolResultState::Running;
+        self.result.model_preview.text.push_str(delta);
         if self.summary.is_empty() {
             self.summary.push_str(delta);
+        }
+        if self.result.display.summary.is_empty() {
+            self.result.display.summary.push_str(delta);
         }
         if let Some(OperationBlock::Text { text }) = self.blocks.last_mut() {
             text.push_str(delta);
         } else {
             self.blocks.push(OperationBlock::Text {
+                text: delta.to_string(),
+            });
+        }
+        if let Some(OperationBlock::Text { text }) = self.result.content.last_mut() {
+            text.push_str(delta);
+        } else {
+            self.result.content.push(OperationBlock::Text {
                 text: delta.to_string(),
             });
         }

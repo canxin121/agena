@@ -752,10 +752,7 @@ impl SessionProcessor {
             if let Some(identity) = pending.name.as_deref().and_then(|name| {
                 tool_definition_identity_from_model_name(name, run.completion.tools.as_slice())
             }) {
-                operation.metadata.insert(
-                    "advertised_tool_identity".to_string(),
-                    serde_json::Value::String(identity),
-                );
+                operation.set_advertised_tool_identity(identity);
             }
 
             let mut part = MessagePart::with_content(
@@ -900,10 +897,7 @@ impl SessionProcessor {
                 tool_name.as_str(),
                 run.completion.tools.as_slice(),
             ) {
-                operation.metadata.insert(
-                    "advertised_tool_identity".to_string(),
-                    serde_json::Value::String(identity),
-                );
+                operation.set_advertised_tool_identity(identity);
             }
             part.set_content(PartContent::Operation(operation));
 
@@ -962,7 +956,8 @@ impl SessionProcessor {
                 },
             );
             operation.set_provider_native_only(true);
-            operation.raw = raw;
+            operation.raw = raw.clone();
+            operation.result.raw = raw;
 
             let mut part = MessagePart::with_content(
                 part_id,
@@ -1005,7 +1000,8 @@ impl SessionProcessor {
                 },
             );
             operation.set_provider_native_only(true);
-            operation.raw = raw;
+            operation.raw = raw.clone();
+            operation.result.raw = raw;
             part.set_content(PartContent::Operation(operation));
             if part.status == ExecutionStatus::Pending {
                 part.transition_status(ExecutionStatus::InProgress)
@@ -1086,7 +1082,8 @@ impl SessionProcessor {
             operation = operation.with_title(title);
         }
         operation.set_provider_native_only(true);
-        operation.raw = raw;
+        operation.raw = raw.clone();
+        operation.result.raw = raw;
         part.set_content(PartContent::Operation(operation));
         if part.status != ExecutionStatus::Completed {
             part.transition_status(ExecutionStatus::Completed)

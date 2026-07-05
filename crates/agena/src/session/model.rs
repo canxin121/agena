@@ -43,6 +43,32 @@ pub(crate) struct SessionPendingTool {
     pub part: SessionPartRef,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolCallRecordState {
+    Queued,
+    Running,
+}
+
+impl ToolCallRecordState {
+    fn from_execution_status(status: ExecutionStatus) -> Option<Self> {
+        match status {
+            ExecutionStatus::Pending => Some(Self::Queued),
+            ExecutionStatus::InProgress => Some(Self::Running),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolCallRecord {
+    pub operation_id: String,
+    pub call_id: i64,
+    pub invocation: ToolInvocation,
+    pub advertised_tool_identity: Option<String>,
+    pub lifecycle: TimeRange,
+    pub state: ToolCallRecordState,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SessionPendingInteractiveRequest {
     pub request: SessionPartRef,
@@ -1208,6 +1234,28 @@ impl Session {
             &operation.invocation,
             &operation.lifecycle,
         ))
+    }
+
+    pub(crate) fn pending_tool_record(
+        &self,
+        pending: &SessionPendingTool,
+    ) -> Option<ToolCallRecord> {
+        let part = self.part(&pending.part)?;
+        let state = ToolCallRecordState::from_execution_status(part.status)?;
+        let operation_id = part.operation_id.clone()?;
+        let operation = match part.content.as_ref()? {
+            PartContent::Operation(operation) => operation,
+            _ => return None,
+        };
+
+        Some(ToolCallRecord {
+            operation_id,
+            call_id: operation.call_id,
+            invocation: operation.invocation.clone(),
+            advertised_tool_identity: operation.advertised_tool_identity().map(ToOwned::to_owned),
+            lifecycle: operation.lifecycle.clone(),
+            state,
+        })
     }
 
     pub(crate) fn pending_permission_request(

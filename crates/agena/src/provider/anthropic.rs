@@ -494,20 +494,14 @@ impl AnthropicAdapter {
 
     fn model_tools(&self, request: &CompletionRequest) -> Vec<Value> {
         let mut tools = Vec::new();
-        for tool in &request.tools {
+        for tool in crate::tool::model_tool_specs(request.tools.as_slice()) {
             let mut map = serde_json::Map::new();
             map.insert(
                 "name".to_owned(),
-                Value::String(anthropic_wire_tool_name(tool.exposed_name.as_str())),
+                Value::String(anthropic_wire_tool_name(tool.model_name.as_str())),
             );
-            map.insert(
-                "description".to_owned(),
-                Value::String(tool.description_text().to_string()),
-            );
-            map.insert(
-                "input_schema".to_owned(),
-                crate::tool::model_safe_tool_schema(&tool.sanitized_input_schema()),
-            );
+            map.insert("description".to_owned(), Value::String(tool.description));
+            map.insert("input_schema".to_owned(), tool.input_schema);
             if self.supports_eager_input_streaming() {
                 map.insert("eager_input_streaming".to_owned(), Value::Bool(true));
             }

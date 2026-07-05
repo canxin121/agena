@@ -327,11 +327,16 @@ pub(crate) fn project_operation_output(status: ExecutionStatus, exec: &Operation
             String::new()
         }
         ExecutionStatus::Completed => {
-            if exec.details.is_model_truncated() {
-                return managed_operation_output(exec)
-                    .unwrap_or_else(|| exec.model_output.text.clone());
+            if exec.result.managed_outputs.is_empty() && !exec.details.is_model_truncated() {
+                return structured_operation_output(exec)
+                    .or_else(|| generic_structured_operation_output(exec))
+                    .unwrap_or_else(|| exec.output_text().unwrap_or_default().to_string());
             }
-            structured_operation_output(exec).unwrap_or_else(|| exec.model_output.text.clone())
+            managed_operation_output(exec).unwrap_or_else(|| {
+                structured_operation_output(exec)
+                    .or_else(|| generic_structured_operation_output(exec))
+                    .unwrap_or_else(|| exec.output_text().unwrap_or_default().to_string())
+            })
         }
         ExecutionStatus::Failed => exec
             .output_text()
@@ -349,26 +354,45 @@ fn structured_operation_output(exec: &OperationPart) -> Option<String> {
     structured_web_search_output(exec).or_else(|| structured_web_crawl_output(exec))
 }
 
+fn generic_structured_operation_output(exec: &OperationPart) -> Option<String> {
+    let payload = exec
+        .result
+        .structured
+        .clone()
+        .or_else(|| exec.details.to_json_payload())?;
+    serde_json::to_string(&payload).ok()
+}
+
 fn managed_operation_output(exec: &OperationPart) -> Option<String> {
     let mut object = serde_json::Map::new();
-    if !exec.model_output.text.trim().is_empty() {
+    let text = exec.output_text().unwrap_or_default();
+    if !text.trim().is_empty() {
         object.insert(
             "text".to_string(),
-            serde_json::Value::String(exec.model_output.text.clone()),
+            serde_json::Value::String(text.to_string()),
         );
     }
-    if let Some(payload) = exec.details.to_json_payload() {
+    if let Some(payload) = exec
+        .result
+        .structured
+        .clone()
+        .or_else(|| exec.details.to_json_payload())
+    {
         object.insert("structured".to_string(), payload);
     }
-    if !exec.details.managed_output_paths.is_empty() {
+    let managed_outputs = if exec.result.managed_outputs.is_empty() {
+        exec.details.managed_outputs.as_slice()
+    } else {
+        exec.result.managed_outputs.as_slice()
+    };
+    if !managed_outputs.is_empty() {
         object.insert(
-            "output_paths".to_string(),
+            "managed_outputs".to_string(),
             serde_json::Value::Array(
-                exec.details
-                    .managed_output_paths
+                managed_outputs
                     .iter()
                     .cloned()
-                    .map(serde_json::Value::String)
+                    .filter_map(|output| serde_json::to_value(output).ok())
                     .collect(),
             ),
         );
@@ -849,7 +873,7 @@ mod tests {
             json!({
                 "text": "preview only",
                 "structured": { "full": "payload" },
-                "output_paths": ["/tmp/agena/tool-results/full.txt"],
+                "managed_outputs": [{ "path": "/tmp/agena/tool-results/full.txt" }],
                 "truncated": true
             })
         );

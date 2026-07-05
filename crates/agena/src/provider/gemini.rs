@@ -1845,13 +1845,12 @@ fn build_gemini_tools(
         let function_declarations = request
             .tools
             .iter()
+            .map(crate::tool::ModelToolSpec::from_registered_tool)
             .map(|tool| {
                 Ok(GeminiFunctionDeclaration {
-                    name: gemini_wire_tool_name(tool.exposed_name.as_str()),
-                    description: tool.description_text().to_string(),
-                    parameters: sanitize_function_parameters(&crate::tool::model_safe_tool_schema(
-                        &tool.sanitized_input_schema(),
-                    )),
+                    name: gemini_wire_tool_name(tool.model_name.as_str()),
+                    description: tool.description,
+                    parameters: sanitize_function_parameters(&tool.input_schema),
                 })
             })
             .collect::<Result<Vec<_>, AppError>>()?;

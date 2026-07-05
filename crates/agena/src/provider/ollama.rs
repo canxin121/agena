@@ -528,12 +528,13 @@ fn tools_to_ollama_definitions(
 ) -> Vec<OllamaToolDefinition> {
     tools
         .iter()
+        .map(crate::tool::ModelToolSpec::from_registered_tool)
         .map(|tool| OllamaToolDefinition {
             kind: "function",
             function: OllamaFunctionDefinition {
-                name: crate::tool::model_safe_tool_name(tool.exposed_name.as_str()),
-                description: tool.description_text().to_string(),
-                parameters: crate::tool::model_safe_tool_schema(&tool.sanitized_input_schema()),
+                name: tool.provider_safe_name,
+                description: tool.description,
+                parameters: tool.input_schema,
             },
         })
         .collect()

@@ -851,11 +851,15 @@ impl OperationBlock {
 pub struct ToolOutput {
     #[serde(default, skip_serializing_if = "StructuredObject::is_empty")]
     pub payload: StructuredObject,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub managed_output_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<bool>,
 }
 
 impl ToolOutput {
     pub fn is_empty(&self) -> bool {
-        self.payload.is_empty()
+        self.payload.is_empty() && self.managed_output_paths.is_empty() && self.truncated.is_none()
     }
 
     pub fn from_json_payload(payload: Option<&serde_json::Value>) -> Result<Self, String> {
@@ -863,12 +867,29 @@ impl ToolOutput {
             None | Some(serde_json::Value::Null) => Ok(Self::default()),
             Some(value) => Ok(Self {
                 payload: StructuredObject::try_from(value.clone())?,
+                managed_output_paths: Vec::new(),
+                truncated: None,
             }),
         }
     }
 
     pub fn to_json_payload(&self) -> Option<serde_json::Value> {
         (!self.payload.is_empty()).then(|| serde_json::Value::from(self.payload.clone()))
+    }
+
+    pub fn with_managed_output_path(mut self, path: impl Into<String>) -> Self {
+        self.managed_output_paths.push(path.into());
+        self.truncated = Some(true);
+        self
+    }
+
+    pub fn mark_truncated(&mut self, path: impl Into<String>) {
+        self.managed_output_paths.push(path.into());
+        self.truncated = Some(true);
+    }
+
+    pub fn is_model_truncated(&self) -> bool {
+        self.truncated.unwrap_or(false) || !self.managed_output_paths.is_empty()
     }
 
     pub fn content_blocks(&self) -> Vec<OperationBlock> {
@@ -985,6 +1006,7 @@ impl OperationPart {
     ) -> Self {
         let output_text = output_text.into();
         let structured = details.to_json_payload();
+        let truncated = details.is_model_truncated().then_some(true);
         Self {
             call_id,
             invocation,
@@ -993,7 +1015,7 @@ impl OperationPart {
             model_output: ModelVisibleOutput {
                 text: output_text,
                 attachments: attachments.clone(),
-                truncated: None,
+                truncated,
             },
             blocks,
             artifacts: Vec::new(),
@@ -1020,6 +1042,7 @@ impl OperationPart {
         let error_message = error_message.into();
         let output_text = output_text.into();
         let structured = details.to_json_payload();
+        let truncated = details.is_model_truncated().then_some(true);
         Self {
             call_id,
             invocation,
@@ -1032,7 +1055,7 @@ impl OperationPart {
             model_output: ModelVisibleOutput {
                 text: output_text,
                 attachments: attachments.clone(),
-                truncated: None,
+                truncated,
             },
             blocks,
             artifacts: Vec::new(),

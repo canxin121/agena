@@ -1,6 +1,6 @@
 use super::{ToolPayloadOutput, result::ToolPayloadExecution};
 
-const DEFAULT_OUTPUT_LIMIT: usize = 16 * 1024;
+const DEFAULT_OUTPUT_LIMIT: usize = usize::MAX;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolOutputTruncationPolicy {
@@ -32,6 +32,10 @@ impl ToolOutputTruncator {
     }
 
     pub fn apply(&self, mut execution: ToolPayloadExecution) -> ToolPayloadExecution {
+        if self.policy.max_chars == usize::MAX {
+            return execution;
+        }
+
         execution.view.output_text =
             truncate_text(&execution.view.output_text, self.policy.max_chars);
 

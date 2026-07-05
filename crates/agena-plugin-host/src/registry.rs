@@ -141,6 +141,30 @@ impl RegisteredTool {
         self.decl.sanitized_input_schema()
     }
 
+    pub fn sanitized_output_schema(&self) -> serde_json::Value {
+        self.decl.sanitized_output_schema()
+    }
+
+    pub fn definition_identity(&self) -> String {
+        let value = serde_json::json!({
+            "plugin_id": self.plugin_id,
+            "plugin_name": self.plugin_name,
+            "original_name": self.original_name,
+            "exposed_name": self.exposed_name,
+            "base_exposed_name": self.base_exposed_name,
+            "fixed_input": self.fixed_input,
+            "description": self.description_text(),
+            "summary": self.summary_text(),
+            "input_schema": self.sanitized_input_schema(),
+            "output_schema": self.sanitized_output_schema(),
+            "strict": self.decl.strict,
+            "streaming": self.decl.streaming,
+            "tags": self.effective_tags(),
+        });
+        let bytes = serde_json::to_vec(&value).unwrap_or_default();
+        blake3::hash(bytes.as_slice()).to_hex().to_string()
+    }
+
     pub fn effective_tags(&self) -> Vec<crate::sdk::ToolTag> {
         self.decl.effective_tags()
     }
@@ -523,6 +547,48 @@ mod tests {
             Some(ToolDescriptionMode::Detailed)
         );
         assert_eq!(tool.decl.ui_display_mode, Some(UiTextDisplayMode::Detailed));
+    }
+
+    #[test]
+    fn tool_definition_identity_changes_when_contract_changes() {
+        let mut registry = PluginToolRegistry::new();
+        registry.extend_from_plugin(
+            "plugin-id",
+            "fixture",
+            &[
+                PluginToolDecl::new("inspect", serde_json::json!({ "type": "object" }))
+                    .output_schema(serde_json::json!({
+                        "type": "object",
+                        "properties": { "count": { "type": "integer" } }
+                    })),
+            ],
+            None,
+            None,
+        );
+        let first = registry
+            .lookup_tool("fixture.inspect")
+            .expect("tool should be registered")
+            .definition_identity();
+
+        registry.extend_from_plugin(
+            "plugin-id",
+            "fixture",
+            &[
+                PluginToolDecl::new("inspect", serde_json::json!({ "type": "object" }))
+                    .output_schema(serde_json::json!({
+                        "type": "object",
+                        "properties": { "count": { "type": "string" } }
+                    })),
+            ],
+            None,
+            None,
+        );
+        let second = registry
+            .lookup_tool("fixture.inspect")
+            .expect("tool should be registered")
+            .definition_identity();
+
+        assert_ne!(first, second);
     }
 
     #[test]

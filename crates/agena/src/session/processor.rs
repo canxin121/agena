@@ -740,20 +740,30 @@ impl SessionProcessor {
                 pending.name.as_deref(),
                 run.completion.tools.as_slice(),
             );
+            let mut operation = OperationPart::pending(
+                call_id,
+                invocation,
+                tool_execution_title(pending.name.as_deref()),
+                TimeRange {
+                    start_ms: start.timestamp_millis(),
+                    end_ms: None,
+                },
+            );
+            if let Some(identity) = pending.name.as_deref().and_then(|name| {
+                tool_definition_identity_from_model_name(name, run.completion.tools.as_slice())
+            }) {
+                operation.metadata.insert(
+                    "advertised_tool_identity".to_string(),
+                    serde_json::Value::String(identity),
+                );
+            }
+
             let mut part = MessagePart::with_content(
                 part_id,
                 assistant.id,
                 start,
                 ExecutionStatus::Pending,
-                PartContent::Operation(OperationPart::pending(
-                    call_id,
-                    invocation,
-                    tool_execution_title(pending.name.as_deref()),
-                    TimeRange {
-                        start_ms: start.timestamp_millis(),
-                        end_ms: None,
-                    },
-                )),
+                PartContent::Operation(operation),
             );
             part.part_index = assistant.parts.len() as i32;
             assistant.parts.push(part);
@@ -877,7 +887,7 @@ impl SessionProcessor {
                         "tool part missing from assistant snapshot: {part_id}"
                     ))
                 })?;
-            part.set_content(PartContent::Operation(OperationPart::pending(
+            let mut operation = OperationPart::pending(
                 call_id,
                 invocation,
                 tool_execution_title(Some(tool_name.as_str())),
@@ -885,7 +895,17 @@ impl SessionProcessor {
                     start_ms: pending.started_at_ms.unwrap_or_default(),
                     end_ms: None,
                 },
-            )));
+            );
+            if let Some(identity) = tool_definition_identity_from_model_name(
+                tool_name.as_str(),
+                run.completion.tools.as_slice(),
+            ) {
+                operation.metadata.insert(
+                    "advertised_tool_identity".to_string(),
+                    serde_json::Value::String(identity),
+                );
+            }
+            part.set_content(PartContent::Operation(operation));
 
             // Re-assert name on RunBuffer (final, authoritative). The
             // accumulated `arguments_json` was already streamed in chunks via
@@ -1530,6 +1550,13 @@ fn tool_for_model_name<'a>(
     available_tools
         .iter()
         .find(|tool| crate::tool::tool_matches_model_name(tool, name))
+}
+
+fn tool_definition_identity_from_model_name(
+    name: &str,
+    available_tools: &[RegisteredTool],
+) -> Option<String> {
+    tool_for_model_name(name, available_tools).map(RegisteredTool::definition_identity)
 }
 
 fn canonical_tool_name_from_model_name(name: &str, available_tools: &[RegisteredTool]) -> String {

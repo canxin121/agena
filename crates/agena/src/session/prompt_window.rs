@@ -883,17 +883,17 @@ fn fallback_tool_result_output(part: &MessagePart, exec: &OperationPart) -> Stri
             SYNTHETIC_TOOL_INTERRUPTED_PLACEHOLDER.to_string()
         }
         ExecutionStatus::Completed => {
-            let output_text = exec.model_output.text.as_str();
+            let output_text = project_session_tool_result_output(part.status, exec);
             if output_text.trim().is_empty() {
                 SYNTHETIC_TOOL_COMPLETED_PLACEHOLDER.to_string()
             } else {
-                output_text.to_string()
+                output_text
             }
         }
         ExecutionStatus::Failed => {
-            let output_text = exec.model_output.text.as_str();
+            let output_text = project_session_tool_result_output(part.status, exec);
             if !output_text.trim().is_empty() {
-                output_text.to_string()
+                output_text
             } else if let Some(error_message) = exec.error_message() {
                 if !error_message.trim().is_empty() {
                     error_message.to_string()

@@ -322,7 +322,11 @@ impl ToolPayloadOutput {
         object.remove("tool");
         let payload =
             StructuredObject::try_from(serde_json::Value::Object(object)).unwrap_or_default();
-        ToolOutput { payload }
+        ToolOutput {
+            payload,
+            managed_output_paths: Vec::new(),
+            truncated: None,
+        }
     }
 
     /// Reverse of [`into_tool_output`]: try to decode a generic output

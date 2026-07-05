@@ -411,11 +411,11 @@ impl PluginHost {
         (self.plugins.len(), by_kind)
     }
 
-    pub fn lookup_tool(&self, exposed_name: &str) -> Option<RegisteredTool> {
+    pub fn lookup_tool(&self, model_name: &str) -> Option<RegisteredTool> {
         self.tool_registry
             .read()
             .ok()?
-            .lookup_tool(exposed_name)
+            .lookup_tool(model_name)
             .cloned()
     }
 
@@ -676,20 +676,23 @@ impl PluginHost {
     ) -> Result<ToolInvokeOutput, PluginError> {
         let plugin = self
             .plugins_by_id
-            .get(&registered_tool.plugin_id)
+            .get(&registered_tool.target.plugin_id)
             .cloned()
             .ok_or_else(|| {
-                PluginError::new(format!("plugin `{}` not loaded", registered_tool.plugin_id))
+                PluginError::new(format!(
+                    "plugin `{}` not loaded",
+                    registered_tool.target.plugin_id
+                ))
             })?;
         let timeout = self.tool_invoke_timeout(registered_tool);
         let mut input = input;
-        // ensure tool name is the plugin-original name (in case caller passed exposed)
-        input.tool_name = registered_tool.original_name.clone();
+        // ensure tool name is the plugin-original name (in case caller passed model name)
+        input.tool_name = registered_tool.target.plugin_tool_name.clone();
         let session_id = input.session_id;
         let call_id = input.call_id;
         let workspace_root = input.workspace_root.clone();
-        let plugin_id = registered_tool.plugin_id.clone();
-        let tool_name = registered_tool.original_name.clone();
+        let plugin_id = registered_tool.target.plugin_id.clone();
+        let tool_name = registered_tool.target.plugin_tool_name.clone();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
         let result = self.block_on_static(async move {
@@ -712,8 +715,8 @@ impl PluginHost {
     fn tool_invoke_timeout(&self, registered_tool: &RegisteredTool) -> Duration {
         let base = self.timeouts.tool_invoke_or(Duration::from_secs(300));
         if registered_tool
-            .decl
-            .host_capabilities
+            .definition
+            .capabilities
             .iter()
             .any(|capability| *capability == HostCapability::AskUser)
         {
@@ -729,18 +732,21 @@ impl PluginHost {
     ) -> Result<Vec<crate::sdk::PathRequest>, PluginError> {
         let plugin = self
             .plugins_by_id
-            .get(&registered_tool.plugin_id)
+            .get(&registered_tool.target.plugin_id)
             .cloned()
             .ok_or_else(|| {
-                PluginError::new(format!("plugin `{}` not loaded", registered_tool.plugin_id))
+                PluginError::new(format!(
+                    "plugin `{}` not loaded",
+                    registered_tool.target.plugin_id
+                ))
             })?;
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let mut input = input;
-        input.tool_name = registered_tool.original_name.clone();
+        input.tool_name = registered_tool.target.plugin_tool_name.clone();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
-        let plugin_id = registered_tool.plugin_id.clone();
-        let tool_name = registered_tool.original_name.clone();
+        let plugin_id = registered_tool.target.plugin_id.clone();
+        let tool_name = registered_tool.target.plugin_tool_name.clone();
         let workspace_root = input.workspace_root.clone();
         let result = self.block_on_static(async move {
             host_api::with_host_callback_context(
@@ -765,18 +771,21 @@ impl PluginHost {
     ) -> Result<Vec<crate::sdk::NetworkRequest>, PluginError> {
         let plugin = self
             .plugins_by_id
-            .get(&registered_tool.plugin_id)
+            .get(&registered_tool.target.plugin_id)
             .cloned()
             .ok_or_else(|| {
-                PluginError::new(format!("plugin `{}` not loaded", registered_tool.plugin_id))
+                PluginError::new(format!(
+                    "plugin `{}` not loaded",
+                    registered_tool.target.plugin_id
+                ))
             })?;
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let mut input = input;
-        input.tool_name = registered_tool.original_name.clone();
+        input.tool_name = registered_tool.target.plugin_tool_name.clone();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
-        let plugin_id = registered_tool.plugin_id.clone();
-        let tool_name = registered_tool.original_name.clone();
+        let plugin_id = registered_tool.target.plugin_id.clone();
+        let tool_name = registered_tool.target.plugin_tool_name.clone();
         let workspace_root = input.workspace_root.clone();
         let result = self.block_on_static(async move {
             host_api::with_host_callback_context(
@@ -811,13 +820,16 @@ impl PluginHost {
     ) -> Result<ToolInvokeStream, PluginError> {
         let plugin = self
             .plugins_by_id
-            .get(&registered_tool.plugin_id)
+            .get(&registered_tool.target.plugin_id)
             .cloned()
             .ok_or_else(|| {
-                PluginError::new(format!("plugin `{}` not loaded", registered_tool.plugin_id))
+                PluginError::new(format!(
+                    "plugin `{}` not loaded",
+                    registered_tool.target.plugin_id
+                ))
             })?;
         let mut input = input;
-        input.tool_name = registered_tool.original_name.clone();
+        input.tool_name = registered_tool.target.plugin_tool_name.clone();
 
         let context = tool_hook_context(
             &plugin,
@@ -1774,8 +1786,8 @@ impl PluginHost {
         tool_name: &str,
     ) -> Option<RegisteredTool> {
         self.registered_tools().into_iter().find(|tool| {
-            tool.plugin_id == plugin_id
-                && (tool.original_name == tool_name || tool.exposed_name == tool_name)
+            tool.target.plugin_id == plugin_id
+                && (tool.target.plugin_tool_name == tool_name || tool.model_name == tool_name)
         })
     }
 }
@@ -3070,7 +3082,7 @@ impl HostHandle {
                         let response = self.tool_remove_for_plugin(
                             &plugin_id,
                             &p.request.name,
-                            p.request.exposed,
+                            p.request.by_model_name,
                         )?;
                         serde_json::to_value(&response)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
@@ -3589,9 +3601,9 @@ impl HostHandle {
             .ok_or_else(|| {
                 host_unavailable(format!("plugin `{plugin_id}` manifest name missing"))
             })?;
-        let original_name = decl.name.clone();
+        let plugin_tool_name = decl.name.clone();
         let kind = if tool_registry
-            .lookup_for_plugin(plugin_id, &original_name)
+            .lookup_for_plugin(plugin_id, &plugin_tool_name)
             .is_some()
         {
             ToolRegistryChangeKind::Updated
@@ -3604,15 +3616,15 @@ impl HostHandle {
             generation: tool_registry.generation(),
             timestamp_ms: unix_timestamp_ms(),
             plugin_id: plugin_id.to_string(),
-            original_name: tool.original_name.clone(),
-            exposed_name: tool.exposed_name.clone(),
-            tool: Some(tool.decl.clone()),
+            plugin_tool_name: tool.target.plugin_tool_name.clone(),
+            model_name: tool.model_name.clone(),
+            tool: Some(tool.definition.to_decl()),
         };
         self.record_tool_registry_event(event.clone());
         Ok(HostToolMutationResponse {
             generation: tool_registry.generation(),
-            exposed_name: Some(tool.exposed_name.clone()),
-            tool: Some(tool.decl.clone()),
+            model_name: Some(tool.model_name.clone()),
+            tool: Some(tool.definition.to_decl()),
             event: Some(event),
         })
     }
@@ -3621,14 +3633,14 @@ impl HostHandle {
         &self,
         plugin_id: &str,
         name: &str,
-        exposed: bool,
+        by_model_name: bool,
     ) -> Result<HostToolMutationResponse, PluginError> {
         let mut tool_registry = self
             .tool_registry
             .write()
             .map_err(|_| host_unavailable("tool registry lock poisoned"))?;
-        let removed = if exposed {
-            tool_registry.remove_exposed_from_plugin(plugin_id, name)
+        let removed = if by_model_name {
+            tool_registry.remove_by_model_name_from_plugin(plugin_id, name)
         } else {
             tool_registry.remove_from_plugin(plugin_id, name)
         };
@@ -3637,17 +3649,17 @@ impl HostHandle {
             generation: tool_registry.generation(),
             timestamp_ms: unix_timestamp_ms(),
             plugin_id: plugin_id.to_string(),
-            original_name: tool.original_name.clone(),
-            exposed_name: tool.exposed_name.clone(),
-            tool: Some(tool.decl.clone()),
+            plugin_tool_name: tool.target.plugin_tool_name.clone(),
+            model_name: tool.model_name.clone(),
+            tool: Some(tool.definition.to_decl()),
         });
         if let Some(event) = event.as_ref() {
             self.record_tool_registry_event(event.clone());
         }
         Ok(HostToolMutationResponse {
             generation: tool_registry.generation(),
-            exposed_name: removed.as_ref().map(|tool| tool.exposed_name.clone()),
-            tool: removed.map(|tool| tool.decl),
+            model_name: removed.as_ref().map(|tool| tool.model_name.clone()),
+            tool: removed.map(|tool| tool.definition.to_decl()),
             event,
         })
     }
@@ -3662,10 +3674,10 @@ impl HostHandle {
             .tools
             .into_iter()
             .map(|tool| HostRegisteredToolDescriptor {
-                plugin_id: tool.plugin_id,
-                original_name: tool.original_name,
-                exposed_name: tool.exposed_name,
-                tool: tool.decl,
+                plugin_id: tool.target.plugin_id,
+                plugin_tool_name: tool.target.plugin_tool_name,
+                model_name: tool.model_name,
+                tool: tool.definition.to_decl(),
             })
             .collect();
         Ok(HostRegisteredToolListResponse {
@@ -4409,7 +4421,7 @@ impl HostClient for ScopedHostClient {
         )
         .await?;
         self.handle
-            .tool_remove_for_plugin(&self.plugin_id, &req.name, req.exposed)
+            .tool_remove_for_plugin(&self.plugin_id, &req.name, req.by_model_name)
     }
 
     async fn list_registered_tools(&self) -> crate::sdk::Result<HostRegisteredToolListResponse> {
@@ -4745,7 +4757,7 @@ mod tests {
             registered
                 .event
                 .as_ref()
-                .map(|event| event.exposed_name.as_str()),
+                .map(|event| event.model_name.as_str()),
             Some("fixture_plugin.echo")
         );
 

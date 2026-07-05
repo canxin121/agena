@@ -88,7 +88,7 @@ impl SkillsPlugin {
 
     fn visible_aliases(skill: &Skill) -> Vec<String> {
         let canonical =
-            crate::plugin::registry::exposed_tool_name_segment(skill.frontmatter.name.as_str());
+            crate::plugin::registry::model_tool_name_segment(skill.frontmatter.name.as_str());
         let mut seen = BTreeSet::new();
         skill
             .frontmatter
@@ -99,7 +99,7 @@ impl SkillsPlugin {
                 if trimmed.is_empty() {
                     return None;
                 }
-                let normalized = crate::plugin::registry::exposed_tool_name_segment(trimmed);
+                let normalized = crate::plugin::registry::model_tool_name_segment(trimmed);
                 if normalized.is_empty() || normalized == canonical || !seen.insert(normalized) {
                     return None;
                 }
@@ -227,7 +227,7 @@ impl SkillsPlugin {
             let _ = host
                 .remove_tool(HostToolRemoveRequest {
                     name: removed.clone(),
-                    exposed: false,
+                    by_model_name: false,
                 })
                 .await?;
         }

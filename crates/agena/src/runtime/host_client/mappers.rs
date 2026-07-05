@@ -103,22 +103,22 @@ pub(super) fn render_tool_descriptor(
     let summary = tool.summary_text().map(ToString::to_string);
     let help = tool.help_text().map(ToString::to_string);
     let input_schema = Some(tool.sanitized_input_schema());
-    let description_mode = tool.decl.description_mode;
+    let description_mode = tool.definition.display.description_mode;
     let tags = tool.effective_tags();
-    let aliases = tool.alias_exposed_names();
+    let aliases = tool.alias_model_names();
     ToolDescriptor {
-        name: tool.exposed_name,
+        name: tool.model_name,
         aliases,
         description: (!description.is_empty()).then_some(description),
         before_help,
         after_help,
         summary,
         help,
-        examples: tool.decl.examples.clone(),
+        examples: tool.definition.model.examples.clone(),
         input_schema,
         description_mode,
         tags,
-        plugin_id: (!tool.plugin_id.trim().is_empty()).then_some(tool.plugin_id),
+        plugin_id: (!tool.target.plugin_id.trim().is_empty()).then_some(tool.target.plugin_id),
     }
 }
 

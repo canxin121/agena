@@ -72,11 +72,11 @@ impl Plugin for CatalogPlugin {
 pub(crate) fn tools_tool_descriptor_for_tests() -> ToolDescriptor {
     let decl = ToolsToolInput::tool_decl();
     ToolDescriptor {
-        name: crate::plugin::registry::exposed_tool_name(CATALOG_PLUGIN_ID, "tools"),
+        name: crate::plugin::registry::model_tool_name(CATALOG_PLUGIN_ID, "tools"),
         aliases: decl
             .alias_texts()
             .iter()
-            .map(|alias| crate::plugin::registry::exposed_tool_name(CATALOG_PLUGIN_ID, alias))
+            .map(|alias| crate::plugin::registry::model_tool_name(CATALOG_PLUGIN_ID, alias))
             .collect(),
         description: Some(decl.description_text().to_string()),
         before_help: decl.before_help_text().map(ToString::to_string),

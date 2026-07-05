@@ -64,16 +64,16 @@ impl ToolCatalog {
         } else if enabled {
             format!(
                 "tool '{}' enabled for {:?} profile",
-                tool.exposed_name, self.profile
+                tool.model_name, self.profile
             )
         } else {
             format!(
                 "tool '{}' disabled for {:?} profile",
-                tool.exposed_name, self.profile
+                tool.model_name, self.profile
             )
         };
         ToolAvailability {
-            tool_name: tool.exposed_name.clone(),
+            tool_name: tool.model_name.clone(),
             enabled: enabled && !agent.disable,
             reason,
         }

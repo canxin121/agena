@@ -367,8 +367,8 @@ const DIRECT_GROUPED_TOOL_MAPPINGS: &[(&str, &str, &str, &str)] = &[
     ("lsp_diagnostics", "agena.lsp", "lsp", "diagnostics"),
 ];
 
-fn exposed_tool_name(plugin: &str, tool: &str) -> String {
-    crate::plugin::registry::exposed_tool_name(plugin, tool)
+fn model_tool_name(plugin: &str, tool: &str) -> String {
+    crate::plugin::registry::model_tool_name(plugin, tool)
 }
 
 fn grouped_mapping_for_tool(tool: &str) -> Option<(&'static str, &'static str, &'static str)> {
@@ -392,13 +392,13 @@ fn invocation_name_for_payload_tool(
     input: &mut serde_json::Map<String, serde_json::Value>,
 ) -> Option<String> {
     Some(match tool {
-        "web_fetch" => exposed_tool_name("agena.web", "fetch"),
-        "web_search" => exposed_tool_name("agena.web", "search"),
-        "process" => exposed_tool_name("agena.process", "process"),
-        "cron_create" => exposed_tool_name("agena.cron", "schedule.create"),
-        "cron_list" => exposed_tool_name("agena.cron", "schedule.list"),
-        "cron_delete" => exposed_tool_name("agena.cron", "schedule.delete"),
-        "schedule_wakeup" => exposed_tool_name("agena.cron", "schedule.wakeup"),
+        "web_fetch" => model_tool_name("agena.web", "fetch"),
+        "web_search" => model_tool_name("agena.web", "search"),
+        "process" => model_tool_name("agena.process", "process"),
+        "cron_create" => model_tool_name("agena.cron", "schedule.create"),
+        "cron_list" => model_tool_name("agena.cron", "schedule.list"),
+        "cron_delete" => model_tool_name("agena.cron", "schedule.delete"),
+        "schedule_wakeup" => model_tool_name("agena.cron", "schedule.wakeup"),
         "enter_snapshot" => {
             let name = input
                 .remove("name")
@@ -428,7 +428,7 @@ fn invocation_name_for_payload_tool(
                 "action".to_string(),
                 serde_json::Value::String("enter".to_string()),
             );
-            exposed_tool_name("agena.snapshot", "snapshot")
+            model_tool_name("agena.snapshot", "snapshot")
         }
         _ => {
             let (plugin, entry, action) = grouped_mapping_for_tool(tool)?;
@@ -436,7 +436,7 @@ fn invocation_name_for_payload_tool(
                 "action".to_string(),
                 serde_json::Value::String(action.to_string()),
             );
-            exposed_tool_name(plugin, entry)
+            model_tool_name(plugin, entry)
         }
     })
 }

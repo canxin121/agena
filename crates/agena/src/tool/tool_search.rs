@@ -23,7 +23,7 @@ impl SearchableTool {
             .to_string();
         let tags = registered_tool.effective_tags();
         Self {
-            name: registered_tool.exposed_name,
+            name: registered_tool.model_name,
             description,
             tags,
         }

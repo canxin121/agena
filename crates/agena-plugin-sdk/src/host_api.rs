@@ -757,14 +757,14 @@ pub struct HostToolUpdateRequest {
 pub struct HostToolRemoveRequest {
     pub name: String,
     #[serde(default)]
-    pub exposed: bool,
+    pub by_model_name: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostToolMutationResponse {
     pub generation: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exposed_name: Option<String>,
+    pub model_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<PluginToolDecl>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -785,8 +785,8 @@ pub struct ToolRegistryChangedEvent {
     pub generation: u64,
     pub timestamp_ms: i64,
     pub plugin_id: String,
-    pub original_name: String,
-    pub exposed_name: String,
+    pub plugin_tool_name: String,
+    pub model_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<PluginToolDecl>,
 }
@@ -794,8 +794,8 @@ pub struct ToolRegistryChangedEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostRegisteredToolDescriptor {
     pub plugin_id: String,
-    pub original_name: String,
-    pub exposed_name: String,
+    pub plugin_tool_name: String,
+    pub model_name: String,
     pub tool: PluginToolDecl,
 }
 

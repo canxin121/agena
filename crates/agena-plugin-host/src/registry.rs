@@ -7,14 +7,17 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::sdk::manifest::UiTextDisplayMode;
-use crate::sdk::{HostCapability, PluginToolDecl, ToolDescriptionMode};
+use crate::sdk::{
+    HostCapability, InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PathAccessSpec,
+    PluginToolDecl, ToolDescriptionMode, ToolResultPolicy, ToolStreamingMode, ToolTag,
+};
 
 #[derive(Debug, Clone)]
 pub struct PluginToolRegistry {
-    /// `exposed_name -> tool`. `exposed_name` is the name shown to the model.
-    by_exposed: BTreeMap<String, RegisteredTool>,
-    /// `alias_exposed_name -> canonical_exposed_name`.
-    aliases_by_exposed: BTreeMap<String, String>,
+    /// `model_name -> tool`. `model_name` is the name shown to the model.
+    by_model: BTreeMap<String, RegisteredTool>,
+    /// `alias_model_name -> canonical_model_name`.
+    aliases_by_model: BTreeMap<String, String>,
     plugin_tool_defaults: BTreeMap<String, ToolDescriptionMode>,
     plugin_ui_defaults: BTreeMap<String, UiTextDisplayMode>,
     generation: u64,
@@ -26,23 +29,251 @@ pub struct ToolRegistrySnapshot {
     pub tools: Vec<RegisteredTool>,
 }
 
+pub type RegisteredTool = ToolBinding;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct RegisteredTool {
-    /// Host-local plugin id from `plugins.list.<id>`. This is used to route
-    /// calls back to the loaded transport.
+pub struct ToolBinding {
+    pub tool_id: String,
+    pub model_name: String,
+    pub definition: ToolDefinition,
+    pub target: ToolInvocationTarget,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolInvocationTarget {
     pub plugin_id: String,
-    /// Manifest plugin name. This is the namespace shown to the model.
     pub plugin_name: String,
-    pub original_name: String,
-    pub exposed_name: String,
-    pub decl: PluginToolDecl,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_exposed_name: Option<String>,
+    pub plugin_tool_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fixed_input: Option<serde_json::Value>,
 }
 
-impl RegisteredTool {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolDefinition {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    pub contract: ToolContract,
+    pub model: ToolModelSurface,
+    pub docs: ToolDocs,
+    pub runtime: ToolRuntimePolicy,
+    pub permissions: ToolPermissionContract,
+    pub display: ToolDisplay,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<HostCapability>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolContract {
+    #[serde(default)]
+    pub input_schema: serde_json::Value,
+    #[serde(default, skip_serializing_if = "is_empty_schema")]
+    pub output_schema: serde_json::Value,
+    #[serde(default)]
+    pub strict: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ToolModelSurface {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ToolDocs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_help: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_help: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolRuntimePolicy {
+    #[serde(default)]
+    pub concurrency_safe: bool,
+    #[serde(default)]
+    pub streaming: ToolStreamingMode,
+    #[serde(default, skip_serializing_if = "ToolResultPolicy::is_default")]
+    pub result_policy: ToolResultPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ToolPermissionContract {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_paths: Vec<InputPathSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_networks: Vec<InputNetworkSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path_access: Vec<PathAccessSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub network_access: Vec<NetworkAccessSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<ToolTag>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ToolDisplay {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_mode: Option<ToolDescriptionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_display_mode: Option<UiTextDisplayMode>,
+}
+
+impl Default for ToolContract {
+    fn default() -> Self {
+        Self {
+            input_schema: serde_json::Value::Null,
+            output_schema: serde_json::Value::Null,
+            strict: false,
+        }
+    }
+}
+
+impl Default for ToolRuntimePolicy {
+    fn default() -> Self {
+        Self {
+            concurrency_safe: false,
+            streaming: ToolStreamingMode::Buffered,
+            result_policy: ToolResultPolicy::default(),
+        }
+    }
+}
+
+impl ToolDefinition {
+    pub fn from_decl(decl: PluginToolDecl) -> Self {
+        Self {
+            name: decl.name,
+            aliases: decl.aliases,
+            contract: ToolContract {
+                input_schema: decl.input_schema,
+                output_schema: decl.output_schema,
+                strict: decl.strict,
+            },
+            model: ToolModelSurface {
+                description: decl.description,
+                examples: decl.examples,
+            },
+            docs: ToolDocs {
+                before_help: decl.before_help,
+                after_help: decl.after_help,
+                summary: decl.summary,
+                help: decl.help,
+            },
+            runtime: ToolRuntimePolicy {
+                concurrency_safe: decl.concurrency_safe,
+                streaming: decl.streaming,
+                result_policy: decl.result_policy,
+            },
+            permissions: ToolPermissionContract {
+                input_paths: decl.input_paths,
+                input_networks: decl.input_networks,
+                path_access: decl.path_access,
+                network_access: decl.network_access,
+                tags: decl.tags,
+            },
+            display: ToolDisplay {
+                description_mode: decl.description_mode,
+                ui_display_mode: decl.ui_display_mode,
+            },
+            capabilities: decl.host_capabilities,
+        }
+    }
+
+    pub fn to_decl(&self) -> PluginToolDecl {
+        PluginToolDecl {
+            name: self.name.clone(),
+            aliases: self.aliases.clone(),
+            description: self.model.description.clone(),
+            before_help: self.docs.before_help.clone(),
+            after_help: self.docs.after_help.clone(),
+            summary: self.docs.summary.clone(),
+            help: self.docs.help.clone(),
+            examples: self.model.examples.clone(),
+            description_mode: self.display.description_mode,
+            ui_display_mode: self.display.ui_display_mode,
+            input_schema: self.contract.input_schema.clone(),
+            output_schema: self.contract.output_schema.clone(),
+            input_paths: self.permissions.input_paths.clone(),
+            input_networks: self.permissions.input_networks.clone(),
+            path_access: self.permissions.path_access.clone(),
+            network_access: self.permissions.network_access.clone(),
+            tags: self.permissions.tags.clone(),
+            concurrency_safe: self.runtime.concurrency_safe,
+            strict: self.contract.strict,
+            streaming: self.runtime.streaming,
+            result_policy: self.runtime.result_policy.clone(),
+            host_capabilities: self.capabilities.clone(),
+        }
+    }
+
+    pub fn description_text(&self) -> &str {
+        self.model.description.as_deref().unwrap_or("")
+    }
+
+    pub fn alias_texts(&self) -> &[String] {
+        self.aliases.as_slice()
+    }
+
+    pub fn summary_text(&self) -> Option<&str> {
+        self.docs
+            .summary
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn help_text(&self) -> Option<&str> {
+        self.docs
+            .help
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn before_help_text(&self) -> Option<&str> {
+        self.docs
+            .before_help
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn after_help_text(&self) -> Option<&str> {
+        self.docs
+            .after_help
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn sanitized_input_schema(&self) -> serde_json::Value {
+        self.to_decl().sanitized_input_schema()
+    }
+
+    pub fn sanitized_output_schema(&self) -> serde_json::Value {
+        self.to_decl().sanitized_output_schema()
+    }
+
+    pub fn effective_tags(&self) -> Vec<ToolTag> {
+        self.to_decl().effective_tags()
+    }
+
+    pub fn has_tag(&self, tag: ToolTag) -> bool {
+        self.to_decl().has_tag(tag)
+    }
+
+    pub fn preferred_description_mode(&self) -> Option<ToolDescriptionMode> {
+        self.display.description_mode
+    }
+}
+
+impl ToolBinding {
     pub fn new(plugin_name: impl Into<String>, decl: PluginToolDecl) -> Self {
         let plugin_name = plugin_name.into();
         Self::new_with_plugin_id(plugin_name.clone(), plugin_name, decl)
@@ -55,130 +286,165 @@ impl RegisteredTool {
     ) -> Self {
         let plugin_id = plugin_id.into();
         let plugin_name = plugin_name.into();
-        let original_name = decl.name.clone();
-        let exposed_name = exposed_tool_name(&plugin_name, &original_name);
+        let definition = ToolDefinition::from_decl(decl);
+        let plugin_tool_name = definition.name.clone();
+        let model_name = model_tool_name(&plugin_name, &plugin_tool_name);
         Self {
-            plugin_id,
-            plugin_name,
-            original_name: original_name.clone(),
-            exposed_name,
-            decl,
-            base_exposed_name: None,
-            fixed_input: None,
+            tool_id: tool_id(&plugin_id, &plugin_tool_name, None),
+            model_name,
+            definition,
+            target: ToolInvocationTarget {
+                plugin_id,
+                plugin_name,
+                plugin_tool_name,
+                fixed_input: None,
+            },
         }
     }
 
-    pub fn behavior_exposed_name(&self) -> &str {
-        self.base_exposed_name
-            .as_deref()
-            .unwrap_or(self.exposed_name.as_str())
+    pub fn behavior_model_name(&self) -> String {
+        if self.is_model_alias() {
+            self.base_model_name()
+        } else {
+            self.model_name.clone()
+        }
+    }
+
+    pub fn base_model_name(&self) -> String {
+        model_tool_name(&self.target.plugin_name, &self.target.plugin_tool_name)
+    }
+
+    pub fn is_model_alias(&self) -> bool {
+        self.model_name.as_str() != self.base_model_name()
     }
 
     pub fn with_model_alias(
         &self,
         alias_name: impl Into<String>,
-        mut decl: PluginToolDecl,
+        mut definition: ToolDefinition,
         fixed_input: serde_json::Value,
     ) -> Self {
         let alias_name = alias_name.into();
-        decl.aliases.clear();
+        definition.aliases.clear();
+        let model_name = model_tool_name(&self.target.plugin_name, &alias_name);
         Self {
-            plugin_id: self.plugin_id.clone(),
-            plugin_name: self.plugin_name.clone(),
-            original_name: self.original_name.clone(),
-            exposed_name: exposed_tool_name(&self.plugin_name, &alias_name),
-            decl,
-            base_exposed_name: Some(self.behavior_exposed_name().to_string()),
-            fixed_input: Some(fixed_input),
+            tool_id: tool_id(
+                &self.target.plugin_id,
+                &self.target.plugin_tool_name,
+                Some(&alias_name),
+            ),
+            model_name,
+            definition,
+            target: ToolInvocationTarget {
+                plugin_id: self.target.plugin_id.clone(),
+                plugin_name: self.target.plugin_name.clone(),
+                plugin_tool_name: self.target.plugin_tool_name.clone(),
+                fixed_input: Some(fixed_input),
+            },
         }
     }
 
-    pub fn with_tool_alias(&self, alias_name: impl Into<String>, mut decl: PluginToolDecl) -> Self {
+    pub fn with_tool_alias(
+        &self,
+        alias_name: impl Into<String>,
+        mut definition: ToolDefinition,
+    ) -> Self {
         let alias_name = alias_name.into();
-        decl.aliases.clear();
+        definition.aliases.clear();
+        let model_name = model_tool_name(&self.target.plugin_name, &alias_name);
         Self {
-            plugin_id: self.plugin_id.clone(),
-            plugin_name: self.plugin_name.clone(),
-            original_name: self.original_name.clone(),
-            exposed_name: exposed_tool_name(&self.plugin_name, &alias_name),
-            decl,
-            base_exposed_name: Some(self.behavior_exposed_name().to_string()),
-            fixed_input: None,
+            tool_id: tool_id(
+                &self.target.plugin_id,
+                &self.target.plugin_tool_name,
+                Some(&alias_name),
+            ),
+            model_name,
+            definition,
+            target: ToolInvocationTarget {
+                plugin_id: self.target.plugin_id.clone(),
+                plugin_name: self.target.plugin_name.clone(),
+                plugin_tool_name: self.target.plugin_tool_name.clone(),
+                fixed_input: None,
+            },
         }
     }
 
     pub fn alias_names(&self) -> impl Iterator<Item = &str> {
-        self.decl.alias_texts().iter().map(String::as_str)
+        self.definition.alias_texts().iter().map(String::as_str)
     }
 
-    pub fn alias_exposed_names(&self) -> Vec<String> {
+    pub fn alias_model_names(&self) -> Vec<String> {
         self.alias_names()
-            .map(|alias| exposed_tool_name(&self.plugin_name, alias))
+            .map(|alias| model_tool_name(&self.target.plugin_name, alias))
             .collect()
     }
 
     pub fn description_text(&self) -> &str {
-        self.decl.description_text()
+        self.definition.description_text()
     }
 
     pub fn summary_text(&self) -> Option<&str> {
-        self.decl.summary_text()
+        self.definition.summary_text()
     }
 
     pub fn help_text(&self) -> Option<&str> {
-        self.decl.help_text()
+        self.definition.help_text()
     }
 
     pub fn before_help_text(&self) -> Option<&str> {
-        self.decl.before_help_text()
+        self.definition.before_help_text()
     }
 
     pub fn after_help_text(&self) -> Option<&str> {
-        self.decl.after_help_text()
+        self.definition.after_help_text()
     }
 
     pub fn sanitized_input_schema(&self) -> serde_json::Value {
-        self.decl.sanitized_input_schema()
+        self.definition.sanitized_input_schema()
     }
 
     pub fn sanitized_output_schema(&self) -> serde_json::Value {
-        self.decl.sanitized_output_schema()
+        self.definition.sanitized_output_schema()
     }
 
     pub fn definition_identity(&self) -> String {
         let value = serde_json::json!({
-            "plugin_id": self.plugin_id,
-            "plugin_name": self.plugin_name,
-            "original_name": self.original_name,
-            "exposed_name": self.exposed_name,
-            "base_exposed_name": self.base_exposed_name,
-            "fixed_input": self.fixed_input,
+            "tool_id": self.tool_id,
+            "model_name": self.model_name,
+            "target": self.target,
             "description": self.description_text(),
             "summary": self.summary_text(),
             "input_schema": self.sanitized_input_schema(),
             "output_schema": self.sanitized_output_schema(),
-            "strict": self.decl.strict,
-            "streaming": self.decl.streaming,
+            "strict": self.definition.contract.strict,
+            "streaming": self.definition.runtime.streaming,
             "tags": self.effective_tags(),
         });
         let bytes = serde_json::to_vec(&value).unwrap_or_default();
         blake3::hash(bytes.as_slice()).to_hex().to_string()
     }
 
-    pub fn effective_tags(&self) -> Vec<crate::sdk::ToolTag> {
-        self.decl.effective_tags()
+    pub fn effective_tags(&self) -> Vec<ToolTag> {
+        self.definition.effective_tags()
     }
 
-    pub fn has_tag(&self, tag: crate::sdk::ToolTag) -> bool {
-        self.decl.has_tag(tag)
+    pub fn has_tag(&self, tag: ToolTag) -> bool {
+        self.definition.has_tag(tag)
+    }
+}
+
+fn tool_id(plugin_id: &str, plugin_tool_name: &str, model_alias: Option<&str>) -> String {
+    match model_alias {
+        Some(alias) => format!("{plugin_id}/{plugin_tool_name}:{alias}"),
+        None => format!("{plugin_id}/{plugin_tool_name}"),
     }
 }
 
 impl PluginToolRegistry {
     pub fn new() -> Self {
         Self {
-            by_exposed: BTreeMap::new(),
-            aliases_by_exposed: BTreeMap::new(),
+            by_model: BTreeMap::new(),
+            aliases_by_model: BTreeMap::new(),
             plugin_tool_defaults: BTreeMap::new(),
             plugin_ui_defaults: BTreeMap::new(),
             generation: 0,
@@ -223,22 +489,21 @@ impl PluginToolRegistry {
         if decl.ui_display_mode.is_none() {
             decl.ui_display_mode = self.plugin_ui_defaults.get(plugin_id).copied();
         }
-        let original_name = decl.name.clone();
-        assert_valid_tool_namespace(&original_name, "tool name");
+        let plugin_tool_name = decl.name.clone();
+        assert_valid_tool_namespace(&plugin_tool_name, "tool name");
         let mut tools = self.registered_tools_owned();
-        tools.retain(|tool| !(tool.plugin_id == plugin_id && tool.original_name == original_name));
-        tools.push(RegisteredTool {
-            plugin_id: plugin_id.to_string(),
-            plugin_name: plugin_name.to_string(),
-            original_name: original_name.clone(),
-            exposed_name: exposed_tool_name(plugin_name, &original_name),
-            decl,
-            base_exposed_name: None,
-            fixed_input: None,
+        tools.retain(|tool| {
+            !(tool.target.plugin_id == plugin_id
+                && tool.target.plugin_tool_name == plugin_tool_name)
         });
+        tools.push(ToolBinding::new_with_plugin_id(
+            plugin_id,
+            plugin_name,
+            decl,
+        ));
         self.rebuild(tools);
         self.generation += 1;
-        self.lookup_for_plugin(plugin_id, &original_name)
+        self.lookup_for_plugin(plugin_id, &plugin_tool_name)
             .expect("upserted tool should exist after rebuild")
             .clone()
     }
@@ -246,39 +511,42 @@ impl PluginToolRegistry {
     pub fn remove_from_plugin(
         &mut self,
         plugin_id: &str,
-        original_name: &str,
+        plugin_tool_name: &str,
     ) -> Option<RegisteredTool> {
-        assert_valid_tool_namespace(original_name, "tool name");
-        let removed = self.lookup_for_plugin(plugin_id, original_name)?.clone();
+        assert_valid_tool_namespace(plugin_tool_name, "tool name");
+        let removed = self.lookup_for_plugin(plugin_id, plugin_tool_name)?.clone();
         let mut tools = self.registered_tools_owned();
-        tools.retain(|tool| !(tool.plugin_id == plugin_id && tool.original_name == original_name));
+        tools.retain(|tool| {
+            !(tool.target.plugin_id == plugin_id
+                && tool.target.plugin_tool_name == plugin_tool_name)
+        });
         self.rebuild(tools);
         self.generation += 1;
         Some(removed)
     }
 
-    pub fn remove_exposed_from_plugin(
+    pub fn remove_by_model_name_from_plugin(
         &mut self,
         plugin_id: &str,
-        exposed_name: &str,
+        model_name: &str,
     ) -> Option<RegisteredTool> {
-        let canonical_exposed_name = self
-            .aliases_by_exposed
-            .get(exposed_name)
+        let canonical_model_name = self
+            .aliases_by_model
+            .get(model_name)
             .map(String::as_str)
-            .unwrap_or(exposed_name);
-        let original_name = self
-            .by_exposed
-            .get(canonical_exposed_name)
-            .filter(|tool| tool.plugin_id == plugin_id)
-            .map(|tool| tool.original_name.clone())?;
-        self.remove_from_plugin(plugin_id, &original_name)
+            .unwrap_or(model_name);
+        let plugin_tool_name = self
+            .by_model
+            .get(canonical_model_name)
+            .filter(|tool| tool.target.plugin_id == plugin_id)
+            .map(|tool| tool.target.plugin_tool_name.clone())?;
+        self.remove_from_plugin(plugin_id, &plugin_tool_name)
     }
 
-    pub fn lookup_tool(&self, exposed_name: &str) -> Option<&RegisteredTool> {
-        self.by_exposed.get(exposed_name).or_else(|| {
-            let canonical = self.aliases_by_exposed.get(exposed_name)?;
-            self.by_exposed.get(canonical)
+    pub fn lookup_tool(&self, model_name: &str) -> Option<&RegisteredTool> {
+        self.by_model.get(model_name).or_else(|| {
+            let canonical = self.aliases_by_model.get(model_name)?;
+            self.by_model.get(canonical)
         })
     }
 
@@ -294,71 +562,83 @@ impl PluginToolRegistry {
     }
 
     pub fn registered_tools_owned(&self) -> Vec<RegisteredTool> {
-        self.by_exposed.values().cloned().collect()
+        self.by_model.values().cloned().collect()
     }
 
     pub fn registered_tools(&self) -> impl Iterator<Item = &RegisteredTool> {
-        self.by_exposed.values()
+        self.by_model.values()
     }
 
     pub fn count(&self) -> usize {
-        self.by_exposed.len()
+        self.by_model.len()
     }
 
     fn rebuild(&mut self, mut tools: Vec<RegisteredTool>) {
         for tool in &mut tools {
-            assert_valid_tool_namespace(&tool.plugin_name, "plugin name");
-            assert_valid_tool_namespace(&tool.original_name, "tool name");
-            tool.decl.aliases = normalize_tool_aliases(&tool.original_name, &tool.decl.aliases);
-            tool.exposed_name = exposed_tool_name(&tool.plugin_name, &tool.original_name);
+            assert_valid_tool_namespace(&tool.target.plugin_name, "plugin name");
+            assert_valid_tool_namespace(&tool.target.plugin_tool_name, "tool name");
+            tool.definition.aliases =
+                normalize_tool_aliases(&tool.definition.name, &tool.definition.aliases);
+            tool.model_name = model_tool_name(&tool.target.plugin_name, &tool.definition.name);
+            tool.tool_id = tool_id(
+                &tool.target.plugin_id,
+                &tool.target.plugin_tool_name,
+                (tool.definition.name != tool.target.plugin_tool_name)
+                    .then_some(tool.definition.name.as_str()),
+            );
         }
-        let mut by_exposed = BTreeMap::new();
+        let mut by_model = BTreeMap::new();
         for tool in tools {
-            if let Some(existing) = by_exposed.insert(tool.exposed_name.clone(), tool) {
+            if let Some(existing) = by_model.insert(tool.model_name.clone(), tool) {
                 panic!(
                     "tool `{}` collides with another registered tool after model-visible name normalization",
-                    existing.exposed_name
+                    existing.model_name
                 );
             }
         }
-        let mut aliases_by_exposed = BTreeMap::new();
-        for tool in by_exposed.values() {
-            for alias_exposed_name in tool.alias_exposed_names() {
+        let mut aliases_by_model = BTreeMap::new();
+        for tool in by_model.values() {
+            for alias_model_name in tool.alias_model_names() {
                 assert!(
-                    !by_exposed.contains_key(&alias_exposed_name),
-                    "tool alias `{alias_exposed_name}` for `{}` collides with a registered tool",
-                    tool.exposed_name
+                    !by_model.contains_key(&alias_model_name),
+                    "tool alias `{alias_model_name}` for `{}` collides with a registered tool",
+                    tool.model_name
                 );
                 if let Some(existing) =
-                    aliases_by_exposed.insert(alias_exposed_name.clone(), tool.exposed_name.clone())
+                    aliases_by_model.insert(alias_model_name.clone(), tool.model_name.clone())
                 {
                     panic!(
-                        "tool alias `{alias_exposed_name}` for `{}` collides with alias for `{existing}`",
-                        tool.exposed_name
+                        "tool alias `{alias_model_name}` for `{}` collides with alias for `{existing}`",
+                        tool.model_name
                     );
                 }
             }
         }
-        self.by_exposed = by_exposed;
-        self.aliases_by_exposed = aliases_by_exposed;
+        self.by_model = by_model;
+        self.aliases_by_model = aliases_by_model;
     }
 
     pub fn lookup_for_plugin(
         &self,
         plugin_id: &str,
-        original_name: &str,
+        plugin_tool_name: &str,
     ) -> Option<&RegisteredTool> {
-        self.by_exposed
-            .values()
-            .find(|tool| tool.plugin_id == plugin_id && tool.original_name == original_name)
+        self.by_model.values().find(|tool| {
+            tool.target.plugin_id == plugin_id && tool.target.plugin_tool_name == plugin_tool_name
+        })
     }
 }
 
-pub fn exposed_tool_name(plugin_name: &str, tool_name: &str) -> String {
+fn is_empty_schema(value: &serde_json::Value) -> bool {
+    matches!(value, serde_json::Value::Null)
+        || value.as_object().is_some_and(serde_json::Map::is_empty)
+}
+
+pub fn model_tool_name(plugin_name: &str, tool_name: &str) -> String {
     assert_valid_tool_namespace(plugin_name, "plugin name");
     assert_valid_tool_namespace(tool_name, "tool name");
-    let dotted_tool_name = exposed_dotted_tool_name(tool_name);
-    let plugin_prefix = exposed_plugin_prefix(plugin_name);
+    let dotted_tool_name = model_dotted_tool_name(tool_name);
+    let plugin_prefix = model_plugin_prefix(plugin_name);
     if dotted_tool_name == plugin_prefix {
         return dotted_tool_name;
     }
@@ -374,7 +654,7 @@ pub fn exposed_tool_name(plugin_name: &str, tool_name: &str) -> String {
     format!("{plugin_prefix}.{dotted_tool_name}")
 }
 
-pub fn exposed_tool_name_segment(value: &str) -> String {
+pub fn model_tool_name_segment(value: &str) -> String {
     let trimmed = value.trim();
     let mut out = String::with_capacity(trimmed.len());
     let mut previous_was_separator = false;
@@ -408,17 +688,17 @@ pub fn exposed_tool_name_segment(value: &str) -> String {
     out
 }
 
-fn exposed_plugin_prefix(plugin_name: &str) -> String {
+fn model_plugin_prefix(plugin_name: &str) -> String {
     let trimmed = plugin_name.trim();
     let trimmed = trimmed.strip_prefix("agena.").unwrap_or(trimmed);
-    exposed_flat_tool_name(trimmed)
+    model_flat_tool_name(trimmed)
 }
 
-fn exposed_dotted_tool_name(value: &str) -> String {
+fn model_dotted_tool_name(value: &str) -> String {
     let parts = value
         .trim()
         .split('.')
-        .map(exposed_tool_name_segment)
+        .map(model_tool_name_segment)
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>();
     if parts.is_empty() {
@@ -428,11 +708,11 @@ fn exposed_dotted_tool_name(value: &str) -> String {
     }
 }
 
-fn exposed_flat_tool_name(value: &str) -> String {
+fn model_flat_tool_name(value: &str) -> String {
     let parts = value
         .trim()
         .split('.')
-        .map(exposed_tool_name_segment)
+        .map(model_tool_name_segment)
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>();
     if parts.is_empty() {
@@ -520,8 +800,14 @@ mod tests {
         let tool = registry
             .lookup_tool("fixture.inspect")
             .expect("tool should be registered");
-        assert_eq!(tool.decl.description_mode, Some(ToolDescriptionMode::Brief));
-        assert_eq!(tool.decl.ui_display_mode, Some(UiTextDisplayMode::Summary));
+        assert_eq!(
+            tool.definition.display.description_mode,
+            Some(ToolDescriptionMode::Brief)
+        );
+        assert_eq!(
+            tool.definition.display.ui_display_mode,
+            Some(UiTextDisplayMode::Summary)
+        );
     }
 
     #[test]
@@ -543,10 +829,13 @@ mod tests {
             .lookup_tool("fixture.inspect")
             .expect("tool should be registered");
         assert_eq!(
-            tool.decl.description_mode,
+            tool.definition.display.description_mode,
             Some(ToolDescriptionMode::Detailed)
         );
-        assert_eq!(tool.decl.ui_display_mode, Some(UiTextDisplayMode::Detailed));
+        assert_eq!(
+            tool.definition.display.ui_display_mode,
+            Some(UiTextDisplayMode::Detailed)
+        );
     }
 
     #[test]
@@ -609,31 +898,31 @@ mod tests {
         let canonical = registry
             .lookup_tool("fixture.inspect")
             .expect("canonical tool should be registered");
-        assert_eq!(canonical.exposed_name, "fixture.inspect");
+        assert_eq!(canonical.model_name, "fixture.inspect");
         assert_eq!(
-            canonical.alias_exposed_names(),
+            canonical.alias_model_names(),
             vec!["fixture.i".to_string(), "fixture.show".to_string()]
         );
 
         let alias = registry
             .lookup_tool("fixture.i")
             .expect("alias should resolve to canonical tool");
-        assert_eq!(alias.exposed_name, "fixture.inspect");
-        assert_eq!(alias.original_name, "inspect");
+        assert_eq!(alias.model_name, "fixture.inspect");
+        assert_eq!(alias.target.plugin_tool_name, "inspect");
 
         let removed = registry
-            .remove_exposed_from_plugin("plugin-id", "fixture.show")
+            .remove_by_model_name_from_plugin("plugin-id", "fixture.show")
             .expect("alias removal should remove canonical tool");
-        assert_eq!(removed.exposed_name, "fixture.inspect");
+        assert_eq!(removed.model_name, "fixture.inspect");
         assert!(registry.lookup_tool("fixture.inspect").is_none());
         assert!(registry.lookup_tool("fixture.i").is_none());
     }
 
     #[test]
-    fn exposed_tool_names_use_dotted_normalized_segments() {
-        assert_eq!(exposed_tool_name("agena.plan", "plan.set"), "plan.set");
+    fn model_tool_names_use_dotted_normalized_segments() {
+        assert_eq!(model_tool_name("agena.plan", "plan.set"), "plan.set");
         assert_eq!(
-            exposed_tool_name("streaming-fixture", "stream_fixture.count"),
+            model_tool_name("streaming-fixture", "stream_fixture.count"),
             "streaming-fixture.stream_fixture.count"
         );
     }

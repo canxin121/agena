@@ -99,7 +99,7 @@ pub(crate) fn model_safe_tool_name(name: &str) -> String {
         return trimmed.to_owned();
     }
 
-    crate::plugin::registry::exposed_tool_name_segment(trimmed)
+    crate::plugin::registry::model_tool_name_segment(trimmed)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -122,15 +122,15 @@ pub enum ModelToolExecution {
 
 impl ModelToolSpec {
     pub fn from_registered_tool(tool: &RegisteredTool) -> Self {
-        let model_name = tool.exposed_name.clone();
+        let model_name = tool.model_name.clone();
         Self {
-            canonical_name: tool.exposed_name.clone(),
+            canonical_name: tool.model_name.clone(),
             provider_safe_name: model_safe_tool_name(model_name.as_str()),
             model_name,
             description: tool.description_text().to_string(),
             input_schema: model_safe_tool_schema(&tool.sanitized_input_schema()),
             output_schema: tool.sanitized_output_schema(),
-            strict: tool.decl.strict,
+            strict: tool.definition.contract.strict,
             execution: ModelToolExecution::Local,
             definition_identity: tool.definition_identity(),
         }
@@ -142,44 +142,6 @@ pub fn model_tool_specs(tools: &[RegisteredTool]) -> Vec<ModelToolSpec> {
         .iter()
         .map(ModelToolSpec::from_registered_tool)
         .collect()
-}
-
-fn legacy_exposed_tool_name(plugin_name: &str, tool_name: &str) -> String {
-    format!(
-        "{}__{}",
-        legacy_exposed_tool_name_segment(plugin_name),
-        legacy_exposed_tool_name_segment(tool_name)
-    )
-}
-
-fn legacy_exposed_tool_name_segment(value: &str) -> String {
-    let trimmed = value.trim();
-    let mut out = String::with_capacity(trimmed.len());
-    let mut previous_was_separator = false;
-
-    for ch in trimmed.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch);
-            previous_was_separator = false;
-        } else if !previous_was_separator {
-            out.push('_');
-            previous_was_separator = true;
-        }
-    }
-
-    while out.ends_with('_') {
-        out.pop();
-    }
-    while out.starts_with('_') {
-        out.remove(0);
-    }
-    if out.is_empty() {
-        out.push_str("tool");
-    }
-    if out.bytes().next().is_some_and(|byte| byte.is_ascii_digit()) {
-        out.insert(0, '_');
-    }
-    out
 }
 
 pub(crate) fn suggest_tool_names<I, T>(requested: &str, candidates: I, limit: usize) -> Vec<String>
@@ -271,23 +233,12 @@ fn normalized_tool_name_distance(left: &str, right: &str) -> usize {
 
 pub(crate) fn tool_matches_model_name(registered_tool: &RegisteredTool, name: &str) -> bool {
     let trimmed = name.trim();
-    let legacy_name = legacy_exposed_tool_name(
-        registered_tool.plugin_name.as_str(),
-        registered_tool.decl.name.as_str(),
-    );
-    registered_tool.exposed_name == trimmed
-        || model_safe_tool_name(registered_tool.exposed_name.as_str()) == trimmed
-        || legacy_name == trimmed
-        || model_safe_tool_name(legacy_name.as_str()) == trimmed
+    registered_tool.model_name == trimmed
+        || model_safe_tool_name(registered_tool.model_name.as_str()) == trimmed
         || registered_tool
-            .alias_exposed_names()
+            .alias_model_names()
             .iter()
             .any(|alias| alias == trimmed || model_safe_tool_name(alias) == trimmed)
-        || registered_tool.alias_names().any(|alias| {
-            let legacy_alias =
-                legacy_exposed_tool_name(registered_tool.plugin_name.as_str(), alias);
-            legacy_alias == trimmed || model_safe_tool_name(legacy_alias.as_str()) == trimmed
-        })
 }
 
 pub(crate) fn model_safe_tool_schema(schema: &serde_json::Value) -> serde_json::Value {
@@ -616,7 +567,7 @@ fn model_alias_description(
     if base_description.is_empty() {
         return format!(
             "Specialized model-visible alias for `{}`.{}",
-            base.behavior_exposed_name(),
+            base.behavior_model_name(),
             fixed
         )
         .trim()
@@ -629,7 +580,7 @@ fn model_alias_help(base: &RegisteredTool, fixed_input: &serde_json::Value) -> O
     let fixed = fixed_input_summary(fixed_input)?;
     let prefix = format!(
         "This model-visible alias dispatches to `{}` with fixed {}.",
-        base.behavior_exposed_name(),
+        base.behavior_model_name(),
         fixed
     );
     Some(match base.help_text() {
@@ -639,7 +590,7 @@ fn model_alias_help(base: &RegisteredTool, fixed_input: &serde_json::Value) -> O
 }
 
 fn tool_name_alias_description(base: &RegisteredTool) -> String {
-    let prefix = format!("Alias for `{}`.", base.behavior_exposed_name());
+    let prefix = format!("Alias for `{}`.", base.behavior_model_name());
     let base_description = base.description_text().trim();
     if base_description.is_empty() {
         prefix
@@ -651,7 +602,7 @@ fn tool_name_alias_description(base: &RegisteredTool) -> String {
 fn tool_name_alias_help(base: &RegisteredTool) -> Option<String> {
     let prefix = format!(
         "This tool alias dispatches to `{}`.",
-        base.behavior_exposed_name()
+        base.behavior_model_name()
     );
     Some(match base.help_text() {
         Some(help) => format!("{prefix}\n\n{help}"),
@@ -662,17 +613,21 @@ fn tool_name_alias_help(base: &RegisteredTool) -> Option<String> {
 fn allocate_model_alias_name(
     base: &RegisteredTool,
     alias_segments: &[String],
-    used_exposed_names: &mut BTreeSet<String>,
+    used_model_names: &mut BTreeSet<String>,
 ) -> String {
-    let stem = format!("{}.{}", base.original_name, alias_segments.join("."));
+    let stem = format!(
+        "{}.{}",
+        base.target.plugin_tool_name,
+        alias_segments.join(".")
+    );
     let mut candidate = stem.clone();
     let mut suffix = 2usize;
     loop {
-        let exposed = crate::plugin::registry::exposed_tool_name(
-            base.plugin_name.as_str(),
+        let model_name = crate::plugin::registry::model_tool_name(
+            base.target.plugin_name.as_str(),
             candidate.as_str(),
         );
-        if used_exposed_names.insert(exposed) {
+        if used_model_names.insert(model_name) {
             return candidate;
         }
         candidate = format!("{stem}_{suffix}");
@@ -682,20 +637,20 @@ fn allocate_model_alias_name(
 
 fn expand_registered_tool_for_model(
     base: &RegisteredTool,
-    used_exposed_names: &mut BTreeSet<String>,
+    used_model_names: &mut BTreeSet<String>,
     out: &mut Vec<RegisteredTool>,
 ) {
     for alias_name in base.alias_names() {
-        let alias_exposed_name =
-            crate::plugin::registry::exposed_tool_name(base.plugin_name.as_str(), alias_name);
-        if !used_exposed_names.insert(alias_exposed_name) {
+        let alias_model_name =
+            crate::plugin::registry::model_tool_name(base.target.plugin_name.as_str(), alias_name);
+        if !used_model_names.insert(alias_model_name) {
             continue;
         }
-        let mut decl = base.decl.clone();
+        let mut decl = base.definition.clone();
         decl.name = alias_name.to_string();
         decl.aliases.clear();
-        decl.description = Some(tool_name_alias_description(base));
-        decl.help = tool_name_alias_help(base);
+        decl.model.description = Some(tool_name_alias_description(base));
+        decl.docs.help = tool_name_alias_help(base);
         out.push(base.with_tool_alias(alias_name, decl));
     }
     expand_registered_tool_for_model_inner(
@@ -703,7 +658,7 @@ fn expand_registered_tool_for_model(
         base.sanitized_input_schema(),
         serde_json::Map::new(),
         Vec::new(),
-        used_exposed_names,
+        used_model_names,
         out,
     );
 }
@@ -713,7 +668,7 @@ fn expand_registered_tool_for_model_inner(
     schema: serde_json::Value,
     fixed_input: serde_json::Map<String, serde_json::Value>,
     alias_segments: Vec<String>,
-    used_exposed_names: &mut BTreeSet<String>,
+    used_model_names: &mut BTreeSet<String>,
     out: &mut Vec<RegisteredTool>,
 ) {
     if let Some(variants) = top_level_discriminated_variants(&schema) {
@@ -730,7 +685,7 @@ fn expand_registered_tool_for_model_inner(
                 variant.schema,
                 next_fixed_input,
                 next_alias_segments,
-                used_exposed_names,
+                used_model_names,
                 out,
             );
         }
@@ -742,24 +697,24 @@ fn expand_registered_tool_for_model_inner(
         return;
     }
 
-    let alias_name = allocate_model_alias_name(base, &alias_segments, used_exposed_names);
+    let alias_name = allocate_model_alias_name(base, &alias_segments, used_model_names);
     let fixed_input_value = serde_json::Value::Object(fixed_input);
-    let mut decl = base.decl.clone();
+    let mut decl = base.definition.clone();
     decl.name = alias_name.clone();
-    decl.input_schema = schema;
-    decl.description = Some(model_alias_description(
+    decl.contract.input_schema = schema;
+    decl.model.description = Some(model_alias_description(
         base,
         &fixed_input_value,
-        &decl.input_schema,
+        &decl.contract.input_schema,
     ));
-    decl.help = model_alias_help(base, &fixed_input_value);
+    decl.docs.help = model_alias_help(base, &fixed_input_value);
 
     let mut alias = base.with_model_alias(alias_name, decl, fixed_input_value.clone());
     let fixed_input_object = StructuredObject::try_from(fixed_input_value)
         .expect("model tool alias fixed input should always be an object");
-    let invocation = ToolInvocation::new(alias.exposed_name.as_str(), fixed_input_object);
-    alias.decl.tags = invocation_effective_tags(&alias, &invocation);
-    alias.decl.concurrency_safe = is_concurrency_safe_tool_invocation(
+    let invocation = ToolInvocation::new(alias.model_name.as_str(), fixed_input_object);
+    alias.definition.permissions.tags = invocation_effective_tags(&alias, &invocation);
+    alias.definition.runtime.concurrency_safe = is_concurrency_safe_tool_invocation(
         &alias,
         &PluginInvocation::from_tool_invocation(&invocation),
     );
@@ -988,22 +943,25 @@ fn present_registered_tool(
     presentation: &crate::plugin::ToolPresentationConfig,
 ) -> RegisteredTool {
     let mode = presentation.mode_for(
-        registered_tool.plugin_name.as_str(),
-        registered_tool.original_name.as_str(),
-        registered_tool.exposed_name.as_str(),
-        registered_tool.decl.preferred_description_mode(),
+        registered_tool.target.plugin_name.as_str(),
+        registered_tool.target.plugin_tool_name.as_str(),
+        registered_tool.model_name.as_str(),
+        registered_tool.definition.preferred_description_mode(),
     );
     if mode == crate::plugin::ToolDescriptionMode::Brief {
-        registered_tool.decl.description = Some(compact_tool_description(&registered_tool));
+        registered_tool.definition.model.description =
+            Some(compact_tool_description(&registered_tool));
     }
-    registered_tool.decl.help = None;
+    registered_tool.definition.docs.help = None;
     registered_tool
 }
 
 fn compact_tool_description(registered_tool: &RegisteredTool) -> String {
     let summary = tool_summary_sentence(registered_tool);
-    if let Some(base_tool) = registered_tool.base_exposed_name.as_deref() {
+    if registered_tool.is_model_alias() {
+        let base_tool = registered_tool.base_model_name();
         let alias_note = registered_tool
+            .target
             .fixed_input
             .as_ref()
             .and_then(fixed_input_summary)
@@ -1013,7 +971,7 @@ fn compact_tool_description(registered_tool: &RegisteredTool) -> String {
     }
     format!(
         "{summary} See `tools.help` for `{}`.",
-        registered_tool.exposed_name
+        registered_tool.model_name
     )
 }
 
@@ -1026,14 +984,14 @@ fn tool_summary_sentence(registered_tool: &RegisteredTool) -> String {
 }
 
 fn tool_summary(registered_tool: &RegisteredTool) -> String {
-    if registered_tool.base_exposed_name.is_some() {
+    if registered_tool.is_model_alias() {
         return registered_tool
             .description_text()
             .lines()
             .map(str::trim)
             .find(|line| !line.is_empty())
             .map(ToString::to_string)
-            .unwrap_or_else(|| format!("Tool `{}`.", registered_tool.exposed_name));
+            .unwrap_or_else(|| format!("Tool `{}`.", registered_tool.model_name));
     }
     if let Some(summary) = registered_tool.summary_text() {
         return summary.to_string();
@@ -1044,7 +1002,7 @@ fn tool_summary(registered_tool: &RegisteredTool) -> String {
         .map(str::trim)
         .find(|line| !line.is_empty())
         .map(ToString::to_string)
-        .unwrap_or_else(|| format!("Tool `{}`.", registered_tool.exposed_name))
+        .unwrap_or_else(|| format!("Tool `{}`.", registered_tool.model_name))
 }
 
 #[derive(Clone)]
@@ -1204,8 +1162,8 @@ impl ToolExecutor {
             .collect::<Vec<_>>();
 
         tools.sort_by(|left, right| {
-            left.exposed_name
-                .cmp(&right.exposed_name)
+            left.model_name
+                .cmp(&right.model_name)
                 .then_with(|| left.description_text().cmp(right.description_text()))
         });
 
@@ -1216,27 +1174,27 @@ impl ToolExecutor {
                 .into_iter()
                 .map(|mut entry| {
                     let input = PluginToolDefinitionInput {
-                        tool_name: entry.original_name.clone(),
-                        plugin_name: entry.plugin_name.clone(),
+                        tool_name: entry.target.plugin_tool_name.clone(),
+                        plugin_name: entry.target.plugin_name.clone(),
                         description: entry.description_text().to_string(),
-                        summary: entry.decl.summary.clone(),
-                        help: entry.decl.help.clone(),
-                        description_mode: entry.decl.description_mode,
+                        summary: entry.definition.docs.summary.clone(),
+                        help: entry.definition.docs.help.clone(),
+                        description_mode: entry.definition.display.description_mode,
                         input_schema: entry.sanitized_input_schema(),
                     };
                     match self.plugins.dispatch_tool_definition_blocking(input) {
                         Ok(patched) => {
-                            entry.decl.description = Some(patched.description);
-                            entry.decl.summary = patched.summary;
-                            entry.decl.help = patched.help;
-                            entry.decl.description_mode = patched.description_mode;
-                            entry.decl.input_schema = patched.input_schema;
+                            entry.definition.model.description = Some(patched.description);
+                            entry.definition.docs.summary = patched.summary;
+                            entry.definition.docs.help = patched.help;
+                            entry.definition.display.description_mode = patched.description_mode;
+                            entry.definition.contract.input_schema = patched.input_schema;
                             entry
                         }
                         Err(err) => {
                             tracing::warn!(
                                 target: "agena_plugin_host::tool_definition",
-                                tool = %entry.exposed_name,
+                                tool = %entry.model_name,
                                 "tool.definition hook failed (keeping original): {err}"
                             );
                             entry
@@ -1259,33 +1217,33 @@ impl ToolExecutor {
     }
 
     fn catalogued_model_tools_raw(&self) -> Vec<RegisteredTool> {
-        let mut used_exposed_names = self
+        let mut used_model_names = self
             .plugins
             .registered_tools()
             .into_iter()
-            .map(|tool| tool.exposed_name.clone())
+            .map(|tool| tool.model_name.clone())
             .collect::<BTreeSet<_>>();
         let mut expanded = Vec::new();
         for tool in self.registered_tools_with_definition_overrides() {
-            expand_registered_tool_for_model(&tool, &mut used_exposed_names, &mut expanded);
+            expand_registered_tool_for_model(&tool, &mut used_model_names, &mut expanded);
         }
         let catalog = self.tool_catalog();
         expanded.retain(|entry| catalog.is_tool_enabled(entry));
         expanded.retain(|entry| self.is_tool_visible_to_agent(entry));
         expanded.sort_by(|left, right| {
-            left.exposed_name
-                .cmp(&right.exposed_name)
+            left.model_name
+                .cmp(&right.model_name)
                 .then_with(|| left.description_text().cmp(right.description_text()))
         });
         expanded
     }
 
     fn is_tool_visible_to_agent(&self, entry: &RegisteredTool) -> bool {
-        let mut tool_name_aliases = vec![entry.exposed_name.as_str()];
-        if entry.original_name != entry.exposed_name
-            && self.original_tool_name_is_unambiguous(entry.original_name.as_str())
+        let mut tool_name_aliases = vec![entry.model_name.as_str()];
+        if entry.target.plugin_tool_name != entry.model_name
+            && self.plugin_tool_name_is_unambiguous(entry.target.plugin_tool_name.as_str())
         {
-            tool_name_aliases.push(entry.original_name.as_str());
+            tool_name_aliases.push(entry.target.plugin_tool_name.as_str());
         }
         !matches!(
             self.agent
@@ -1333,8 +1291,8 @@ impl ToolExecutor {
             .catalogued_tools_raw()
             .into_iter()
             .flat_map(|tool| {
-                let mut names = tool.alias_exposed_names();
-                names.insert(0, tool.exposed_name);
+                let mut names = tool.alias_model_names();
+                names.insert(0, tool.model_name);
                 names
             })
             .collect::<Vec<_>>();
@@ -1342,8 +1300,8 @@ impl ToolExecutor {
             self.catalogued_model_tools_raw()
                 .into_iter()
                 .flat_map(|tool| {
-                    let mut names = tool.alias_exposed_names();
-                    names.insert(0, tool.exposed_name);
+                    let mut names = tool.alias_model_names();
+                    names.insert(0, tool.model_name);
                     names
                 }),
         );
@@ -1368,7 +1326,7 @@ impl ToolExecutor {
         let Some(entry) = self.plugin_invocation_definition(&invocation) else {
             return false;
         };
-        entry.decl.concurrency_safe
+        entry.definition.runtime.concurrency_safe
             && !entry.has_tag(crate::plugin::sdk::ToolTag::Interactive)
             && is_concurrency_safe_tool_invocation(&entry, &invocation)
     }
@@ -1436,12 +1394,12 @@ impl ToolExecutor {
 
     fn plugin_invocation_plugin_name_for(&self, invocation: &PluginInvocation) -> String {
         if let Some(entry) = self.plugin_invocation_definition(invocation) {
-            return entry.plugin_name;
+            return entry.target.plugin_name;
         }
 
         self.plugins
             .lookup_tool(invocation.tool_name.as_str())
-            .map(|entry| entry.plugin_name)
+            .map(|entry| entry.target.plugin_name)
             .unwrap_or_else(|| "custom".to_string())
     }
 
@@ -1457,7 +1415,7 @@ impl ToolExecutor {
         invocation: &PluginInvocation,
     ) -> Option<SdkToolStreamingMode> {
         self.plugin_resolution_for_plugin_invocation(invocation)
-            .map(|entry| entry.decl.streaming)
+            .map(|entry| entry.definition.runtime.streaming)
     }
 
     fn authorize_invocation(
@@ -1478,10 +1436,10 @@ impl ToolExecutor {
         let resolution = self.plugin_resolution_for_invocation(invocation);
         let mut tool_name_aliases = vec![tool_name.as_str()];
         if let Some(resolution) = resolution.as_ref()
-            && resolution.original_name != tool_name
-            && self.original_tool_name_is_unambiguous(resolution.original_name.as_str())
+            && resolution.target.plugin_tool_name != tool_name
+            && self.plugin_tool_name_is_unambiguous(resolution.target.plugin_tool_name.as_str())
         {
-            tool_name_aliases.push(resolution.original_name.as_str());
+            tool_name_aliases.push(resolution.target.plugin_tool_name.as_str());
         }
         Ok((
             tool_name.clone(),
@@ -1490,11 +1448,11 @@ impl ToolExecutor {
         ))
     }
 
-    fn original_tool_name_is_unambiguous(&self, original_name: &str) -> bool {
+    fn plugin_tool_name_is_unambiguous(&self, plugin_tool_name: &str) -> bool {
         self.plugins
             .registered_tools()
             .into_iter()
-            .filter(|tool| tool.original_name == original_name)
+            .filter(|tool| tool.target.plugin_tool_name == plugin_tool_name)
             .take(2)
             .count()
             == 1
@@ -1557,7 +1515,7 @@ impl ToolExecutor {
         let result = self.plugins.dispatch_tool_permission_paths(
             registered_tool,
             PluginToolPermissionPathsInput {
-                tool_name: registered_tool.original_name.clone(),
+                tool_name: registered_tool.target.plugin_tool_name.clone(),
                 workspace_root: self.workspace_root.to_string_lossy().to_string(),
                 input: input.clone(),
             },
@@ -1609,7 +1567,7 @@ impl ToolExecutor {
         let result = self.plugins.dispatch_tool_permission_networks(
             registered_tool,
             PluginToolPermissionNetworksInput {
-                tool_name: registered_tool.original_name.clone(),
+                tool_name: registered_tool.target.plugin_tool_name.clone(),
                 workspace_root: self.workspace_root.to_string_lossy().to_string(),
                 input: input.clone(),
             },
@@ -1891,7 +1849,7 @@ impl ToolExecutor {
         session_id: i64,
         call_id: i64,
     ) -> Result<PreparedToolInvocation, ToolError> {
-        let exposed_tool_name = invocation_name(invocation).to_owned();
+        let model_tool_name = invocation_name(invocation).to_owned();
         let definition = self.invocation_definition(invocation);
         let plugin_name = self.invocation_plugin_name_for(invocation);
         if definition.is_none() {
@@ -1905,15 +1863,18 @@ impl ToolExecutor {
         }
         let hook_tool_name = self
             .plugin_resolution_for_invocation(invocation)
-            .map(|entry| entry.original_name)
-            .unwrap_or_else(|| exposed_tool_name.clone());
+            .map(|entry| entry.target.plugin_tool_name)
+            .unwrap_or_else(|| model_tool_name.clone());
         let input_json = invocation_input_json(invocation)?;
         let parsed_input_value: serde_json::Value = serde_json::from_str(&input_json)
             .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
         let input_value = definition
             .as_ref()
             .map(|definition| {
-                merge_fixed_tool_input(parsed_input_value.clone(), definition.fixed_input.as_ref())
+                merge_fixed_tool_input(
+                    parsed_input_value.clone(),
+                    definition.target.fixed_input.as_ref(),
+                )
             })
             .unwrap_or(parsed_input_value);
 
@@ -1941,7 +1902,7 @@ impl ToolExecutor {
             .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
 
         let mut prepared_invocation =
-            parse_invocation_from_json(exposed_tool_name.as_str(), input_json.as_str())?;
+            parse_invocation_from_json(model_tool_name.as_str(), input_json.as_str())?;
         prepared_invocation.plugin_name = Some(plugin_name);
 
         Ok(PreparedToolInvocation {
@@ -1984,15 +1945,15 @@ impl ToolExecutor {
             self.collect_declared_path_checks(
                 &mut checks,
                 &input_value,
-                &resolution.decl.input_paths,
-                &resolution.decl.path_access,
+                &resolution.definition.permissions.input_paths,
+                &resolution.definition.permissions.path_access,
             )?;
             self.collect_dynamic_path_checks(&mut checks, &resolution, &input_value)?;
             self.collect_declared_network_checks(
                 &mut checks,
                 &input_value,
-                &resolution.decl.input_networks,
-                &resolution.decl.network_access,
+                &resolution.definition.permissions.input_networks,
+                &resolution.definition.permissions.network_access,
             )?;
             self.collect_dynamic_network_checks(&mut checks, &resolution, &input_value)?;
         }
@@ -2020,14 +1981,14 @@ impl ToolExecutor {
             self,
             session_id,
             call_id,
-            resolution.original_name.clone(),
+            resolution.target.plugin_tool_name.clone(),
         );
         let stream = self
             .plugins
             .invoke_tool_stream(
                 &resolution,
                 PluginToolInvokeInput {
-                    tool_name: resolution.original_name.clone(),
+                    tool_name: resolution.target.plugin_tool_name.clone(),
                     session_id,
                     call_id,
                     workspace_root: self.workspace_root.to_string_lossy().to_string(),
@@ -2039,8 +2000,8 @@ impl ToolExecutor {
         let stream_id = stream.stream_id;
         let chunks = stream.chunks;
         let end = stream.end;
-        let result_policy = resolution.decl.result_policy.clone();
-        let exposed_tool_name = resolution.exposed_name.clone();
+        let result_policy = resolution.definition.runtime.result_policy.clone();
+        let model_tool_name = resolution.model_name.clone();
         let executor = self.clone();
         let invocation = invocation.clone();
         let (end_tx, end_rx) = tokio::sync::oneshot::channel();
@@ -2059,13 +2020,13 @@ impl ToolExecutor {
                         .with_apply_patch_option(apply_patch_execution_from_tool_output(&output));
                     executor.apply_after_hooks(&invocation, session_id, call_id, &mut execution)?;
                     executor.apply_result_policy(
-                        exposed_tool_name.as_str(),
+                        model_tool_name.as_str(),
                         &result_policy,
                         call_id,
                         &mut execution,
                     )?;
                     executor.apply_model_output_boundary(
-                        exposed_tool_name.as_str(),
+                        model_tool_name.as_str(),
                         call_id,
                         &mut execution,
                     )?;
@@ -2131,7 +2092,7 @@ impl ToolExecutor {
             self,
             session_id,
             call_id,
-            resolution.original_name.clone(),
+            resolution.target.plugin_tool_name.clone(),
         );
 
         let response = self
@@ -2139,7 +2100,7 @@ impl ToolExecutor {
             .invoke_tool(
                 &resolution,
                 PluginToolInvokeInput {
-                    tool_name: resolution.original_name.clone(),
+                    tool_name: resolution.target.plugin_tool_name.clone(),
                     session_id,
                     call_id,
                     workspace_root: self.workspace_root.to_string_lossy().to_string(),
@@ -2160,16 +2121,12 @@ impl ToolExecutor {
             .with_apply_patch_option(apply_patch_execution_from_tool_output(&output));
         self.apply_after_hooks(invocation, session_id, call_id, &mut execution)?;
         self.apply_result_policy(
-            resolution.exposed_name.as_str(),
-            &resolution.decl.result_policy,
+            resolution.model_name.as_str(),
+            &resolution.definition.runtime.result_policy,
             call_id,
             &mut execution,
         )?;
-        self.apply_model_output_boundary(
-            resolution.exposed_name.as_str(),
-            call_id,
-            &mut execution,
-        )?;
+        self.apply_model_output_boundary(resolution.model_name.as_str(), call_id, &mut execution)?;
         Ok(execution)
     }
 
@@ -2233,11 +2190,11 @@ impl ToolExecutor {
         call_id: i64,
         execution: &mut ToolInvocationExecution,
     ) -> Result<(), ToolError> {
-        let exposed_tool_name = invocation_name(invocation).to_owned();
+        let model_tool_name = invocation_name(invocation).to_owned();
         let hook_tool_name = self
             .plugin_resolution_for_invocation(invocation)
-            .map(|entry| entry.original_name)
-            .unwrap_or(exposed_tool_name);
+            .map(|entry| entry.target.plugin_tool_name)
+            .unwrap_or(model_tool_name);
         let plugin_name = self.invocation_plugin_name_for(invocation);
         let after_in = PluginToolAfterInput {
             tool_name: hook_tool_name,
@@ -2272,7 +2229,7 @@ impl ToolExecutor {
 
     fn apply_result_policy(
         &self,
-        exposed_tool_name: &str,
+        model_tool_name: &str,
         policy: &SdkToolResultPolicy,
         call_id: i64,
         execution: &mut ToolInvocationExecution,
@@ -2339,7 +2296,7 @@ impl ToolExecutor {
         if policy.persist_large_output {
             if let Some(path) = persist_tool_result_output(
                 self.workspace_root(),
-                exposed_tool_name,
+                model_tool_name,
                 call_id,
                 &original,
             )? {
@@ -2361,7 +2318,7 @@ impl ToolExecutor {
 
     fn apply_model_output_boundary(
         &self,
-        exposed_tool_name: &str,
+        model_tool_name: &str,
         call_id: i64,
         execution: &mut ToolInvocationExecution,
     ) -> Result<(), ToolError> {
@@ -2378,7 +2335,7 @@ impl ToolExecutor {
 
         let Some(path) = persist_tool_result_output(
             self.workspace_root(),
-            exposed_tool_name,
+            model_tool_name,
             call_id,
             contextual.as_str(),
         )?
@@ -2435,11 +2392,11 @@ impl ToolExecutor {
         if self.plugins.is_empty() {
             return;
         }
-        let exposed_tool_name = invocation_name(invocation).to_owned();
+        let model_tool_name = invocation_name(invocation).to_owned();
         let hook_tool_name = self
             .plugin_resolution_for_invocation(invocation)
-            .map(|entry| entry.original_name)
-            .unwrap_or(exposed_tool_name);
+            .map(|entry| entry.target.plugin_tool_name)
+            .unwrap_or(model_tool_name);
         let plugin_name = self.invocation_plugin_name_for(invocation);
         let input_value = invocation_input_json(invocation)
             .ok()
@@ -2762,7 +2719,7 @@ fn truncate_to_utf8_bytes(value: &str, max_bytes: usize) -> String {
 
 fn persist_tool_result_output(
     workspace_root: &Path,
-    exposed_tool_name: &str,
+    model_tool_name: &str,
     call_id: i64,
     output_text: &str,
 ) -> Result<Option<PathBuf>, ToolError> {
@@ -2774,7 +2731,7 @@ fn persist_tool_result_output(
     fs::create_dir_all(&dir)?;
     let digest = blake3::hash(output_text.as_bytes()).to_hex().to_string();
     let short_digest = digest.get(..12).unwrap_or(digest.as_str());
-    let safe_tool = model_safe_tool_name(exposed_tool_name).replace("__", "_");
+    let safe_tool = model_safe_tool_name(model_tool_name).replace("__", "_");
     let call_part = if call_id >= 0 {
         call_id.to_string()
     } else {
@@ -2861,7 +2818,7 @@ fn resolved_tool_input_value(
 ) -> serde_json::Value {
     merge_fixed_tool_input(
         invocation_input_value(invocation),
-        registered_tool.fixed_input.as_ref(),
+        registered_tool.target.fixed_input.as_ref(),
     )
 }
 
@@ -2871,7 +2828,7 @@ fn resolved_plugin_invocation_input_value(
 ) -> serde_json::Value {
     merge_fixed_tool_input(
         plugin_invocation_input_value(invocation),
-        registered_tool.fixed_input.as_ref(),
+        registered_tool.target.fixed_input.as_ref(),
     )
 }
 
@@ -2897,7 +2854,8 @@ fn invocation_effective_tags(
         return tags;
     };
 
-    match (definition.behavior_exposed_name(), command) {
+    let behavior_model_name = definition.behavior_model_name();
+    match (behavior_model_name.as_str(), command) {
         ("fs" | "agena_fs__fs", "read" | "glob" | "grep") => {
             set_invocation_access_tags(&mut tags, true, false, true, false)
         }
@@ -2971,10 +2929,11 @@ fn is_concurrency_safe_tool_invocation(
 ) -> bool {
     let input = resolved_plugin_invocation_input_value(registered_tool, invocation);
     let Some(command) = command_from_input_value(&input) else {
-        return registered_tool.decl.concurrency_safe;
+        return registered_tool.definition.runtime.concurrency_safe;
     };
 
-    match (registered_tool.behavior_exposed_name(), command) {
+    let behavior_model_name = registered_tool.behavior_model_name();
+    match (behavior_model_name.as_str(), command) {
         ("fs" | "agena_fs__fs", "read" | "glob" | "grep") => true,
         ("fs" | "agena_fs__fs", "apply_patch") => false,
         ("process", "list" | "logs") => true,
@@ -2990,7 +2949,7 @@ fn is_concurrency_safe_tool_invocation(
             "list_resources" | "read_resource" | "list_prompts" | "get_prompt",
         ) => true,
         ("tools.call" | "agena_mcp__mcp", "call") => false,
-        _ => registered_tool.decl.concurrency_safe,
+        _ => registered_tool.definition.runtime.concurrency_safe,
     }
 }
 
@@ -6760,12 +6719,12 @@ mod tests {
         let tools = executor.available_model_tools();
         let alias = tools
             .iter()
-            .find(|tool| tool.exposed_name == "tool_catalog")
+            .find(|tool| tool.model_name == "tool_catalog")
             .expect("declared tool alias should be model-visible");
 
-        assert_eq!(alias.base_exposed_name.as_deref(), Some(TOOLS_TOOL));
-        assert_eq!(alias.original_name, "tools");
-        assert!(alias.fixed_input.is_none());
+        assert_eq!(alias.base_model_name(), TOOLS_TOOL);
+        assert_eq!(alias.target.plugin_tool_name, "tools");
+        assert!(alias.target.fixed_input.is_none());
         assert!(alias.description_text().contains("Alias for `tools`."));
     }
 
@@ -7034,9 +6993,9 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let initial = executor.available_tools();
-        assert!(initial.iter().any(|tool| tool.exposed_name == TOOLS_TOOL));
-        assert!(initial.iter().any(|tool| tool.exposed_name == PROCESS_TOOL));
-        assert!(initial.iter().any(|tool| tool.exposed_name == TASK_TOOL));
+        assert!(initial.iter().any(|tool| tool.model_name == TOOLS_TOOL));
+        assert!(initial.iter().any(|tool| tool.model_name == PROCESS_TOOL));
+        assert!(initial.iter().any(|tool| tool.model_name == TASK_TOOL));
 
         let messages = vec![Message {
             id: 99,
@@ -7056,12 +7015,8 @@ mod tests {
         }];
         let available = executor.available_tools_for_messages(messages.as_slice());
 
-        assert!(
-            available
-                .iter()
-                .any(|tool| tool.exposed_name == PROCESS_TOOL)
-        );
-        assert!(available.iter().any(|tool| tool.exposed_name == TASK_TOOL));
+        assert!(available.iter().any(|tool| tool.model_name == PROCESS_TOOL));
+        assert!(available.iter().any(|tool| tool.model_name == TASK_TOOL));
     }
 
     #[test]
@@ -7073,20 +7028,20 @@ mod tests {
         let tools = executor.available_tools();
         let fs = tools
             .iter()
-            .find(|tool| tool.exposed_name == FS_TOOL)
+            .find(|tool| tool.model_name == FS_TOOL)
             .expect("fs tool should be available");
-        assert_eq!(fs.plugin_name, super::fs_plugin_id());
+        assert_eq!(fs.target.plugin_name, super::fs_plugin_id());
         assert!(fs.has_tag(crate::plugin::sdk::ToolTag::FilesystemRead));
         let web = tools
             .iter()
-            .find(|tool| tool.exposed_name == WEB_FETCH_TOOL)
+            .find(|tool| tool.model_name == WEB_FETCH_TOOL)
             .expect("web fetch tool should be available");
-        assert_eq!(web.plugin_name, crate::web::web_plugin_id());
+        assert_eq!(web.target.plugin_name, crate::web::web_plugin_id());
         assert!(web.has_tag(crate::plugin::sdk::ToolTag::Network));
 
         let fs_count = tools
             .iter()
-            .filter(|tool| tool.exposed_name == FS_TOOL)
+            .filter(|tool| tool.model_name == FS_TOOL)
             .count();
         assert_eq!(fs_count, 1);
     }
@@ -7098,45 +7053,45 @@ mod tests {
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
 
         let tools = executor.available_model_tools();
-        assert!(!tools.iter().any(|tool| tool.exposed_name == "plan"));
-        assert!(tools.iter().any(|tool| tool.exposed_name == "tools.list"));
-        assert!(tools.iter().any(|tool| tool.exposed_name == "plan.get"));
-        assert!(tools.iter().any(|tool| tool.exposed_name == "plan.set"));
-        assert!(tools.iter().any(|tool| tool.exposed_name == "plan.update"));
-        assert!(tools.iter().any(|tool| tool.exposed_name == "plan.clear"));
-        assert!(!tools.iter().any(|tool| tool.exposed_name == "task"));
-        assert!(tools.iter().any(|tool| tool.exposed_name == "task.run"));
-        assert!(!tools.iter().any(|tool| tool.exposed_name == "user"));
+        assert!(!tools.iter().any(|tool| tool.model_name == "plan"));
+        assert!(tools.iter().any(|tool| tool.model_name == "tools.list"));
+        assert!(tools.iter().any(|tool| tool.model_name == "plan.get"));
+        assert!(tools.iter().any(|tool| tool.model_name == "plan.set"));
+        assert!(tools.iter().any(|tool| tool.model_name == "plan.update"));
+        assert!(tools.iter().any(|tool| tool.model_name == "plan.clear"));
+        assert!(!tools.iter().any(|tool| tool.model_name == "task"));
+        assert!(tools.iter().any(|tool| tool.model_name == "task.run"));
+        assert!(!tools.iter().any(|tool| tool.model_name == "user"));
         assert!(
             tools
                 .iter()
-                .any(|tool| tool.exposed_name == "user.request_input")
+                .any(|tool| tool.model_name == "user.request_input")
         );
-        assert!(!tools.iter().any(|tool| tool.exposed_name == "snapshot"));
+        assert!(!tools.iter().any(|tool| tool.model_name == "snapshot"));
 
         let plan_update = tools
             .iter()
-            .find(|tool| tool.exposed_name == "plan.update")
+            .find(|tool| tool.model_name == "plan.update")
             .expect("plan.update alias should be model-visible");
         let plan_get = tools
             .iter()
-            .find(|tool| tool.exposed_name == "plan.get")
+            .find(|tool| tool.model_name == "plan.get")
             .expect("plan.get alias should be model-visible");
         let plan_set = tools
             .iter()
-            .find(|tool| tool.exposed_name == "plan.set")
+            .find(|tool| tool.model_name == "plan.set")
             .expect("plan.set alias should be model-visible");
         let snapshot_existing = tools
             .iter()
-            .find(|tool| tool.exposed_name == "snapshot.enter.existing")
+            .find(|tool| tool.model_name == "snapshot.enter.existing")
             .expect("nested snapshot.enter.existing tool should be model-visible");
         let task_run = tools
             .iter()
-            .find(|tool| tool.exposed_name == "task.run")
+            .find(|tool| tool.model_name == "task.run")
             .expect("task.run alias should be model-visible");
         let user_request_input = tools
             .iter()
-            .find(|tool| tool.exposed_name == "user.request_input")
+            .find(|tool| tool.model_name == "user.request_input")
             .expect("user.request_input alias should be model-visible");
 
         let plan_update_schema =
@@ -7247,7 +7202,7 @@ mod tests {
         let names = executor
             .available_model_tools()
             .into_iter()
-            .map(|tool| tool.exposed_name)
+            .map(|tool| tool.model_name)
             .collect::<std::collections::BTreeSet<_>>();
 
         assert!(names.contains("tools.list"));
@@ -7273,11 +7228,11 @@ mod tests {
         let tools = executor.available_model_tools();
         let plan_set = tools
             .iter()
-            .find(|tool| tool.exposed_name == "plan.set")
+            .find(|tool| tool.model_name == "plan.set")
             .expect("plan.set alias should be model-visible");
         let plan_update = tools
             .iter()
-            .find(|tool| tool.exposed_name == "plan.update")
+            .find(|tool| tool.model_name == "plan.update")
             .expect("plan.update alias should be model-visible");
 
         assert!(
@@ -7308,7 +7263,7 @@ mod tests {
         let names = executor
             .available_model_tools()
             .into_iter()
-            .map(|tool| tool.exposed_name)
+            .map(|tool| tool.model_name)
             .collect::<std::collections::BTreeSet<_>>();
 
         assert!(names.contains("settings.get"));
@@ -7337,7 +7292,7 @@ mod tests {
         let names = scoped
             .available_model_tools()
             .into_iter()
-            .map(|tool| tool.exposed_name)
+            .map(|tool| tool.model_name)
             .collect::<std::collections::BTreeSet<_>>();
 
         assert!(names.contains("skills.review.run"));
@@ -7406,7 +7361,7 @@ mod tests {
         let alias = executor
             .available_model_tools()
             .into_iter()
-            .find(|tool| tool.exposed_name == "settings.get")
+            .find(|tool| tool.model_name == "settings.get")
             .expect("settings.get alias should be model-visible");
         assert!(
             alias
@@ -7433,21 +7388,21 @@ mod tests {
         let visible = executor
             .available_tools()
             .into_iter()
-            .find(|tool| tool.exposed_name == FIXTURE_ECHO_TOOL)
+            .find(|tool| tool.model_name == FIXTURE_ECHO_TOOL)
             .expect("plugin_echo should be model-visible");
         assert_eq!(
             visible.description_text(),
             "Echo a plugin message. See `tools.help` for `fixture.plugin_echo`."
         );
         assert!(
-            visible.decl.help.is_none(),
+            visible.definition.docs.help.is_none(),
             "detailed help should not be carried in provider-visible tool definitions"
         );
 
         let detailed = executor
             .detailed_tools()
             .into_iter()
-            .find(|tool| tool.exposed_name == FIXTURE_ECHO_TOOL)
+            .find(|tool| tool.model_name == FIXTURE_ECHO_TOOL)
             .expect("plugin_echo should have detailed help");
         assert_eq!(
             detailed.help_text(),
@@ -7464,7 +7419,7 @@ mod tests {
         let visible = executor
             .available_tools()
             .into_iter()
-            .find(|tool| tool.exposed_name == "fixture.plugin_paths")
+            .find(|tool| tool.model_name == "fixture.plugin_paths")
             .expect("plugin_paths should be model-visible");
         assert_eq!(
             visible.description_text(),
@@ -7474,7 +7429,7 @@ mod tests {
         let detailed = executor
             .detailed_tools()
             .into_iter()
-            .find(|tool| tool.exposed_name == "fixture.plugin_paths")
+            .find(|tool| tool.model_name == "fixture.plugin_paths")
             .expect("plugin_paths should have a detailed definition");
         assert_eq!(
             detailed.description_text(),
@@ -7493,7 +7448,7 @@ mod tests {
 
         let web_crawl = model_tools
             .iter()
-            .find(|tool| tool.exposed_name == WEB_CRAWL_TOOL)
+            .find(|tool| tool.model_name == WEB_CRAWL_TOOL)
             .expect("web crawl should be model-visible");
         assert_eq!(
             web_crawl.description_text(),
@@ -7502,7 +7457,7 @@ mod tests {
 
         let workflow_tools = tools
             .iter()
-            .find(|tool| tool.exposed_name == TOOLS_TOOL)
+            .find(|tool| tool.model_name == TOOLS_TOOL)
             .expect("tools catalog should be model-visible");
         assert_eq!(
             workflow_tools.description_text(),
@@ -7511,7 +7466,7 @@ mod tests {
 
         let web_search = tools
             .iter()
-            .find(|tool| tool.exposed_name == WEB_SEARCH_TOOL)
+            .find(|tool| tool.model_name == WEB_SEARCH_TOOL)
             .expect("web search should be model-visible");
         assert_eq!(
             web_search.description_text(),
@@ -7520,7 +7475,7 @@ mod tests {
 
         let task = model_tools
             .iter()
-            .find(|tool| tool.exposed_name == "task.run")
+            .find(|tool| tool.model_name == "task.run")
             .expect("task.run should be model-visible");
         assert!(
             !task.description_text().contains("See `tools.help`"),
@@ -7538,10 +7493,10 @@ mod tests {
             assert!(
                 executor
                     .plugin_manager()
-                    .lookup_tool(definition.exposed_name.as_str())
+                    .lookup_tool(definition.model_name.as_str())
                     .is_some(),
                 "missing registered tool for {}",
-                definition.exposed_name
+                definition.model_name
             );
         }
 
@@ -7549,10 +7504,10 @@ mod tests {
             assert!(
                 executor
                     .plugin_manager()
-                    .lookup_tool(definition.exposed_name.as_str())
+                    .lookup_tool(definition.model_name.as_str())
                     .is_some(),
                 "missing registered tool for {}",
-                definition.exposed_name
+                definition.model_name
             );
         }
     }
@@ -7566,13 +7521,13 @@ mod tests {
         let available = executor
             .searchable_tools()
             .into_iter()
-            .map(|item| item.exposed_name)
+            .map(|item| item.model_name)
             .collect::<std::collections::BTreeSet<_>>();
         let registry = executor
             .plugin_manager()
             .registered_tools()
             .into_iter()
-            .map(|entry| entry.exposed_name.clone())
+            .map(|entry| entry.model_name.clone())
             .collect::<std::collections::BTreeSet<_>>();
 
         assert_eq!(available, registry);
@@ -7586,7 +7541,7 @@ mod tests {
         let names = executor
             .available_tools()
             .into_iter()
-            .map(|tool| tool.exposed_name)
+            .map(|tool| tool.model_name)
             .collect::<Vec<_>>();
         let mut expected = names.clone();
         expected.sort();
@@ -7825,7 +7780,7 @@ mod tests {
         let availability = executor.available_tools();
         let names = availability
             .iter()
-            .map(|item| item.exposed_name.as_str())
+            .map(|item| item.model_name.as_str())
             .collect::<std::collections::BTreeSet<_>>();
 
         assert!(names.contains(FS_TOOL));
@@ -7847,7 +7802,7 @@ mod tests {
             .with_plugin_manager(build_plugin_manager(&workspace.root));
 
         assert!(executor.available_tools().iter().any(|tool| {
-            tool.exposed_name == FIXTURE_ECHO_TOOL && tool.plugin_name == "fixture"
+            tool.model_name == FIXTURE_ECHO_TOOL && tool.target.plugin_name == "fixture"
         }));
 
         let invocation = ToolInvocation {

@@ -1558,7 +1558,7 @@ fn tool_definition_identity_from_model_name(
 
 fn canonical_tool_name_from_model_name(name: &str, available_tools: &[RegisteredTool]) -> String {
     tool_for_model_name(name, available_tools)
-        .map(|tool| tool.exposed_name.clone())
+        .map(|tool| tool.model_name.clone())
         .unwrap_or_else(|| name.trim().to_owned())
 }
 
@@ -1567,8 +1567,8 @@ fn tool_invocation_for_definition(
     input: StructuredObject,
 ) -> ToolInvocation {
     ToolInvocation {
-        name: tool.exposed_name.clone(),
-        plugin_name: Some(tool.plugin_name.clone()),
+        name: tool.model_name.clone(),
+        plugin_name: Some(tool.target.plugin_name.clone()),
         input,
     }
 }

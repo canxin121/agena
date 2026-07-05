@@ -20,7 +20,7 @@ pub struct PluginManifest {
     /// Detailed plugin help shown by inspect/catalog surfaces when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
-    /// Preferred default presentation mode for tools exposed by this plugin
+    /// Preferred default presentation mode for tools published by this plugin
     /// when an individual tool declaration does not specify its own mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_description_mode: Option<ToolDescriptionMode>,
@@ -214,7 +214,7 @@ pub struct PluginToolDecl {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_help: Option<String>,
     /// Short model-visible one-line description. Hosts may use this when a
-    /// tool is exposed in help mode.
+    /// tool is shown in help mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     /// Detailed usage help returned by host/tool catalog help flows. When

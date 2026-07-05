@@ -2281,17 +2281,17 @@ mod tests {
             "fixture",
             "tool_name_that_is_long_enough_to_exceed_the_gemini_native_limit",
         )];
-        let exposed_name = request.tools[0].exposed_name.clone();
+        let model_name = request.tools[0].model_name.clone();
 
         let body = adapter
             .generate_request(&request, None)
             .expect("gemini request should build");
 
-        assert!(exposed_name.len() > 64);
+        assert!(model_name.len() > 64);
         let tools = body.tools.expect("gemini tools should be present");
         assert_eq!(
             tools[0]["functionDeclarations"][0]["name"],
-            serde_json::json!(crate::tool::model_safe_tool_name(exposed_name.as_str()))
+            serde_json::json!(crate::tool::model_safe_tool_name(model_name.as_str()))
         );
         assert!(body.system_instruction.is_none());
     }
@@ -2306,7 +2306,7 @@ mod tests {
         );
         let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
         let mut tool = test_tool("fixture", "search");
-        tool.exposed_name = "mcp:docs.search".to_owned();
+        tool.model_name = "mcp:docs.search".to_owned();
         request.tools = vec![tool];
 
         let body = adapter

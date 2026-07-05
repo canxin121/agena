@@ -704,7 +704,7 @@ fn manifest_from_snapshot(
         mcp_decls(&servers, &tools, !network_access.is_empty())
     };
     PluginManifest::builder(MCP_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
-        .description("Agena MCP bridge exposed as hierarchical plugin commands.")
+        .description("Agena MCP bridge published as hierarchical plugin commands.")
         .hooks(HookSubscription::TOOL_INVOKE)
         .config_schema(mcp_config_schema())
         .brief()

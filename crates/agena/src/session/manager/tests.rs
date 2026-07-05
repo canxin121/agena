@@ -1143,19 +1143,20 @@ impl crate::plugin::sdk::host_api::HostClient for SessionTestHostClient {
                 let summary = tool.summary_text().map(ToString::to_string);
                 let help = tool.help_text().map(ToString::to_string);
                 let input_schema = Some(tool.sanitized_input_schema());
-                let description_mode = tool.decl.description_mode;
+                let description_mode = tool.definition.display.description_mode;
                 let tags = tool.effective_tags();
-                let aliases = tool.alias_exposed_names();
-                let plugin_id = (!tool.plugin_name.trim().is_empty()).then_some(tool.plugin_name);
+                let aliases = tool.alias_model_names();
+                let plugin_id =
+                    (!tool.target.plugin_name.trim().is_empty()).then_some(tool.target.plugin_name);
                 crate::plugin::sdk::host_api::ToolDescriptor {
-                    name: tool.exposed_name,
+                    name: tool.model_name,
                     aliases,
                     description: Some(description),
                     before_help,
                     after_help,
                     summary,
                     help,
-                    examples: tool.decl.examples.clone(),
+                    examples: tool.definition.model.examples.clone(),
                     input_schema,
                     description_mode,
                     tags,
@@ -4614,26 +4615,26 @@ mod runtime_builtin_tool_tests {
                 .detailed_tools()
                 .into_iter()
                 .map(|tool| {
-                    let name = tool.exposed_name.clone();
+                    let name = tool.model_name.clone();
                     let description = Some(tool.description_text().to_string());
                     let before_help = tool.before_help_text().map(ToString::to_string);
                     let after_help = tool.after_help_text().map(ToString::to_string);
                     let summary = tool.summary_text().map(ToString::to_string);
                     let help = tool.help_text().map(ToString::to_string);
                     let input_schema = Some(tool.sanitized_input_schema());
-                    let description_mode = tool.decl.description_mode;
+                    let description_mode = tool.definition.display.description_mode;
                     let tags = tool.effective_tags();
-                    let plugin_id =
-                        (!tool.plugin_name.trim().is_empty()).then_some(tool.plugin_name.clone());
+                    let plugin_id = (!tool.target.plugin_name.trim().is_empty())
+                        .then_some(tool.target.plugin_name.clone());
                     ToolDescriptor {
                         name,
-                        aliases: tool.alias_exposed_names(),
+                        aliases: tool.alias_model_names(),
                         description,
                         before_help,
                         after_help,
                         summary,
                         help,
-                        examples: tool.decl.examples.clone(),
+                        examples: tool.definition.model.examples.clone(),
                         input_schema,
                         description_mode,
                         tags,

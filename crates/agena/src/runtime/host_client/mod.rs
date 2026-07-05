@@ -88,7 +88,7 @@ async fn publish_tool_registry_changed_event(
         tracing::debug!(
             target: "agena_plugin_host::events",
             generation = event.generation,
-            exposed_name = %event.exposed_name,
+            model_name = %event.model_name,
             "skipping tool-registry event publish: no session manager"
         );
         return;
@@ -477,7 +477,7 @@ impl HostClient for RuntimeHostClient {
             .ok_or_else(|| PluginError::new(format!("tool `{tool}` not found")))?;
 
         let caller = self.callback_context()?;
-        let plugin_id = resolution.plugin_id.clone();
+        let plugin_id = resolution.target.plugin_id.clone();
         if caller
             .plugin_id
             .as_ref()

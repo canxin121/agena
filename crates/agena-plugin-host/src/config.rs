@@ -74,7 +74,7 @@ impl PluginHostConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct PluginPolicyConfig {
-    /// Controls how tool descriptions are exposed to the model. Compact mode
+    /// Controls how tool descriptions are shown to the model. Compact mode
     /// keeps detailed help available through host/tool help APIs.
     #[serde(default, skip_serializing_if = "ToolPresentationConfig::is_default")]
     pub tool_presentation: ToolPresentationConfig,
@@ -127,12 +127,11 @@ impl ToolPresentationConfig {
     pub fn mode_for(
         &self,
         plugin_name: &str,
-        original_name: &str,
-        exposed_name: &str,
+        plugin_tool_name: &str,
+        model_name: &str,
         tool_default: Option<ToolDescriptionMode>,
     ) -> ToolDescriptionMode {
-        let legacy_exposed_name = legacy_exposed_tool_name(plugin_name, original_name);
-        for key in [exposed_name, original_name, legacy_exposed_name.as_str()] {
+        for key in [model_name, plugin_tool_name] {
             if let Some(mode) = self.tools.get(key).copied() {
                 return resolve_tool_description_override(mode, tool_default, self.default_mode);
             }
@@ -193,12 +192,11 @@ impl UiPresentationConfig {
     pub fn mode_for(
         &self,
         plugin_name: &str,
-        original_name: &str,
-        exposed_name: &str,
+        plugin_tool_name: &str,
+        model_name: &str,
         tool_default: Option<UiTextDisplayMode>,
     ) -> UiTextDisplayMode {
-        let legacy_exposed_name = legacy_exposed_tool_name(plugin_name, original_name);
-        for key in [exposed_name, original_name, legacy_exposed_name.as_str()] {
+        for key in [model_name, plugin_tool_name] {
             if let Some(mode) = self.tools.get(key).copied() {
                 return resolve_ui_presentation_override(mode, tool_default, self.default_mode);
             }
@@ -229,42 +227,6 @@ fn resolve_ui_presentation_override(
         UiPresentationOverride::Detailed => UiTextDisplayMode::Detailed,
         UiPresentationOverride::Summary => UiTextDisplayMode::Summary,
     }
-}
-
-fn legacy_exposed_tool_name(plugin_name: &str, tool_name: &str) -> String {
-    format!(
-        "{}__{}",
-        legacy_exposed_tool_name_segment(plugin_name),
-        legacy_exposed_tool_name_segment(tool_name)
-    )
-}
-
-fn legacy_exposed_tool_name_segment(value: &str) -> String {
-    let trimmed = value.trim();
-    let mut out = String::with_capacity(trimmed.len());
-    let mut previous_was_separator = false;
-    for ch in trimmed.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch);
-            previous_was_separator = false;
-        } else if !previous_was_separator {
-            out.push('_');
-            previous_was_separator = true;
-        }
-    }
-    while out.ends_with('_') {
-        out.pop();
-    }
-    while out.starts_with('_') {
-        out.remove(0);
-    }
-    if out.is_empty() {
-        out.push_str("tool");
-    }
-    if out.bytes().next().is_some_and(|byte| byte.is_ascii_digit()) {
-        out.insert(0, '_');
-    }
-    out
 }
 
 #[cfg(test)]
@@ -389,25 +351,6 @@ mod tests {
                 Some(UiTextDisplayMode::Summary),
             ),
             UiTextDisplayMode::Summary,
-        );
-    }
-
-    #[test]
-    fn presentation_overrides_accept_legacy_exposed_tool_names() {
-        let mut presentation = ToolPresentationConfig::default();
-        presentation.tools.insert(
-            "agena_settings__settings".to_string(),
-            ToolDescriptionOverride::Brief,
-        );
-
-        assert_eq!(
-            presentation.mode_for(
-                "agena.settings",
-                "settings",
-                "settings",
-                Some(ToolDescriptionMode::Detailed),
-            ),
-            ToolDescriptionMode::Brief,
         );
     }
 }

@@ -2842,9 +2842,9 @@ impl McpServerBackend for AgenaMcpBackend {
                 let before_help = tool.before_help_text().map(ToString::to_string);
                 let after_help = tool.after_help_text().map(ToString::to_string);
                 let input_schema = tool.sanitized_input_schema();
-                let aliases = tool.alias_exposed_names();
+                let aliases = tool.alias_model_names();
                 ToolDescriptor {
-                    name: tool.exposed_name,
+                    name: tool.model_name,
                     aliases,
                     description: Some(description),
                     before_help,
@@ -2947,10 +2947,10 @@ impl McpServerBackend for AgenaMcpBackend {
             .plugins
             .registered_tools()
             .into_iter()
-            .filter(|entry| matches!(entry.plugin_name.as_str(), "agena.skills"))
+            .filter(|entry| matches!(entry.target.plugin_name.as_str(), "agena.skills"))
             .map(|entry| PromptDescriptor {
-                name: entry.exposed_name,
-                description: entry.decl.description,
+                name: entry.model_name,
+                description: entry.definition.model.description,
                 arguments: Vec::new(),
             })
             .collect::<Vec<_>>();
@@ -2963,7 +2963,7 @@ impl McpServerBackend for AgenaMcpBackend {
             .plugins
             .lookup_tool(params.name.as_str())
             .ok_or_else(|| McpServerError::NotFound(params.name.clone()))?;
-        if !matches!(entry.plugin_name.as_str(), "agena.skills") {
+        if !matches!(entry.target.plugin_name.as_str(), "agena.skills") {
             return Err(McpServerError::NotFound(params.name));
         }
 
@@ -2981,7 +2981,7 @@ impl McpServerBackend for AgenaMcpBackend {
             }
         });
         let invocation = ToolInvocation::new(
-            entry.exposed_name.clone(),
+            entry.model_name.clone(),
             StructuredObject::try_from(serde_json::json!({ "args": args }))
                 .map_err(McpServerError::InvalidParams)?,
         );
@@ -2990,7 +2990,7 @@ impl McpServerBackend for AgenaMcpBackend {
             .execute_invocation_detailed(&invocation, -1, -1)
             .map_err(|err| McpServerError::Backend(err.to_string()))?;
         Ok(GetPromptResult {
-            description: entry.decl.description,
+            description: entry.definition.model.description,
             messages: vec![PromptMessage {
                 role: "user".to_owned(),
                 content: ContentBlock::Text {
@@ -3537,7 +3537,7 @@ fn validate_plugin_manifest_value(
         push_error(
             output,
             "manifest.name.invalid",
-            "manifest name must not contain `/`; exposed tool names use dotted segments",
+            "manifest name must not contain `/`; model-visible tool names use dotted segments",
             Some(format!("{path}.name")),
         );
     }
@@ -3683,16 +3683,16 @@ fn validate_tool_segment(
         push_error(
             output,
             "tool.name.invalid",
-            "tool name must not contain `/`; exposed tool names use dotted segments",
+            "tool name must not contain `/`; model-visible tool names use dotted segments",
             Some(path),
         );
     }
-    let exposed = safe_exposed_tool_name(plugin_name, tool_name);
-    if exposed == "tool" || exposed.ends_with(".tool") {
+    let model_name = safe_model_tool_name(plugin_name, tool_name);
+    if model_name == "tool" || model_name.ends_with(".tool") {
         push_warning(
             output,
             "tool.name.normalized_empty",
-            "tool name normalizes to a generic exposed name",
+            "tool name normalizes to a generic model-visible name",
             Some(path),
         );
     }
@@ -3711,14 +3711,14 @@ fn validate_tool_name_collisions(
                 .enumerate()
                 .map(|(alias_idx, alias)| (format!("aliases[{alias_idx}]"), alias.as_str())),
         ) {
-            let exposed = safe_exposed_tool_name(manifest.name.as_str(), raw_name);
+            let model_name = safe_model_tool_name(manifest.name.as_str(), raw_name);
             let location = format!("{path}.tools[{idx}].{label}");
-            if let Some(existing) = seen.insert(exposed.clone(), location.clone()) {
+            if let Some(existing) = seen.insert(model_name.clone(), location.clone()) {
                 push_error(
                     output,
                     "tool.name.collision",
                     format!(
-                        "`{raw_name}` normalizes to exposed name `{exposed}`, colliding with {existing}"
+                        "`{raw_name}` normalizes to model-visible name `{model_name}`, colliding with {existing}"
                     ),
                     Some(location),
                 );
@@ -3768,7 +3768,7 @@ fn validate_ui_action_tool(
             push_error(
                 output,
                 "ui.action.tool.invalid",
-                "UI action tool must use the local tool name or exposed dotted tool name, not plugin/tool",
+                "UI action tool must use the local tool name or model-visible dotted tool name, not plugin/tool",
                 Some(format!("{path}.tool")),
             );
         }
@@ -4280,14 +4280,14 @@ fn warn_marketplace_fields(
     }
 }
 
-fn safe_exposed_tool_name(plugin_name: &str, tool_name: &str) -> String {
+fn safe_model_tool_name(plugin_name: &str, tool_name: &str) -> String {
     if plugin_name.trim().is_empty() || tool_name.trim().is_empty() {
         return "tool".to_string();
     }
     if plugin_name.contains('/') || tool_name.contains('/') {
         return "tool".to_string();
     }
-    crate::plugin::registry::exposed_tool_name(plugin_name, tool_name)
+    crate::plugin::registry::model_tool_name(plugin_name, tool_name)
 }
 
 fn push_error(

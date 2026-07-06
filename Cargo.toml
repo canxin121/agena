@@ -5,7 +5,6 @@ members = [
     "apps/agena-studio-desktop/src-tauri",
     "apps/agena-studio-desktop/src-tauri-cef",
     "apps/agena-studio-server",
-    "apps/agena-tui",
     "crates/agena-tui-components",
     "crates/agena",
     "crates/agena-web",

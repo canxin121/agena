@@ -215,6 +215,22 @@ function readStringArray(value: unknown): string[] {
     .filter((item) => item.length > 0)
 }
 
+function readManifestToolDefinition(entry: Record<string, unknown>) {
+  const model = readRecord(entry.model)
+  const docs = readRecord(entry.docs)
+  const permissions = readRecord(entry.permissions)
+  const display = readRecord(entry.display)
+  return {
+    name: readString(entry.name) || 'unnamed entry',
+    description: readString(model.description) || readString(docs.summary) || 'No description provided.',
+    summary: readString(docs.summary),
+    help: readString(docs.help),
+    tags: readStringArray(permissions.tags),
+    descriptionMode: readOptionalToolDescriptionMode(display.description_mode),
+    uiDisplayMode: readOptionalPluginUiDisplayMode(display.ui_display_mode),
+  }
+}
+
 function readPluginEntry(value: unknown): Record<string, unknown> {
   return readRecord(value)
 }
@@ -354,17 +370,11 @@ function resolveUiDisplayModeForTool(
 ): PluginUiDisplayMode {
   const toolOverride = findToolOverride(presentation.effectiveToolOverrides, pluginId, toolName)
   if (toolOverride) {
-    return resolveUiDisplayOverride(
-      toolOverride,
-      toolDefault ?? pluginDefault ?? presentation.defaultMode,
-    )
+    return resolveUiDisplayOverride(toolOverride, toolDefault ?? pluginDefault ?? presentation.defaultMode)
   }
   const pluginOverride = presentation.effectivePluginOverrides[pluginId] ?? null
   if (pluginOverride) {
-    return resolveUiDisplayOverride(
-      pluginOverride,
-      toolDefault ?? pluginDefault ?? presentation.defaultMode,
-    )
+    return resolveUiDisplayOverride(pluginOverride, toolDefault ?? pluginDefault ?? presentation.defaultMode)
   }
   return toolDefault ?? resolveUiDisplayModeForPlugin(presentation, pluginId, pluginDefault)
 }
@@ -380,14 +390,8 @@ function readPluginPromptPresentationSnapshot(
   return {
     defaultMode: readToolDescriptionMode(effectiveToolPresentation.default_mode, 'detailed'),
     fileDefaultMode: readOptionalToolDescriptionMode(fileToolPresentation.default_mode),
-    effectivePluginOverrides: readOverrideMap(
-      effectiveToolPresentation.plugins,
-      readOptionalToolDescriptionOverride,
-    ),
-    effectiveToolOverrides: readOverrideMap(
-      effectiveToolPresentation.tools,
-      readOptionalToolDescriptionOverride,
-    ),
+    effectivePluginOverrides: readOverrideMap(effectiveToolPresentation.plugins, readOptionalToolDescriptionOverride),
+    effectiveToolOverrides: readOverrideMap(effectiveToolPresentation.tools, readOptionalToolDescriptionOverride),
     filePluginOverrides: readOverrideMap(fileToolPresentation.plugins, readOptionalToolDescriptionOverride),
     fileToolOverrides: readOverrideMap(fileToolPresentation.tools, readOptionalToolDescriptionOverride),
   }
@@ -404,14 +408,8 @@ function readPluginUiPresentationSnapshot(
   return {
     defaultMode: readPluginUiDisplayMode(effectiveUiPresentation.default_mode, 'detailed'),
     fileDefaultMode: readOptionalPluginUiDisplayMode(fileUiPresentation.default_mode),
-    effectivePluginOverrides: readOverrideMap(
-      effectiveUiPresentation.plugins,
-      readOptionalPluginUiDisplayOverride,
-    ),
-    effectiveToolOverrides: readOverrideMap(
-      effectiveUiPresentation.tools,
-      readOptionalPluginUiDisplayOverride,
-    ),
+    effectivePluginOverrides: readOverrideMap(effectiveUiPresentation.plugins, readOptionalPluginUiDisplayOverride),
+    effectiveToolOverrides: readOverrideMap(effectiveUiPresentation.tools, readOptionalPluginUiDisplayOverride),
     filePluginOverrides: readOverrideMap(fileUiPresentation.plugins, readOptionalPluginUiDisplayOverride),
     fileToolOverrides: readOverrideMap(fileUiPresentation.tools, readOptionalPluginUiDisplayOverride),
   }
@@ -428,16 +426,17 @@ function readManifestTools(
   return readArray(manifestRecord.tools || manifestRecord.entries)
     .map((entry) => readRecord(entry))
     .map((entry) => {
-      const toolName = readString(entry.name) || 'unnamed entry'
-      const declaredPromptMode = readOptionalToolDescriptionMode(entry.description_mode) ?? manifestPromptDefault
-      const declaredUiDisplayMode = readOptionalPluginUiDisplayMode(entry.ui_display_mode) ?? manifestUiDefault
+      const tool = readManifestToolDefinition(entry)
+      const toolName = tool.name
+      const declaredPromptMode = tool.descriptionMode ?? manifestPromptDefault
+      const declaredUiDisplayMode = tool.uiDisplayMode ?? manifestUiDefault
       return {
         toolName,
         toolKey: canonicalToolKey(pluginId, toolName),
-        description: readString(entry.description) || readString(entry.summary) || 'No description provided.',
-        summary: readString(entry.summary) || '',
-        help: readString(entry.help) || '',
-        tags: readStringArray(entry.tags),
+        description: tool.description,
+        summary: tool.summary,
+        help: tool.help,
+        tags: tool.tags,
         declaredPromptMode,
         declaredUiDisplayMode,
         filePromptOverride: findToolOverride(promptPresentation.fileToolOverrides, pluginId, toolName),
@@ -484,7 +483,8 @@ function buildPluginSnapshot(
     filePresent: fileEntry != null,
     manifestAvailable: Object.keys(manifestRecord).length > 0,
     entry,
-    description: readString(manifestRecord.description) || readString(manifestRecord.summary) || 'Manifest unavailable.',
+    description:
+      readString(manifestRecord.description) || readString(manifestRecord.summary) || 'Manifest unavailable.',
     summary: readString(manifestRecord.summary) || '',
     help: readString(manifestRecord.help) || '',
     declaredPromptDefault: readOptionalToolDescriptionMode(manifestRecord.tool_description_mode),

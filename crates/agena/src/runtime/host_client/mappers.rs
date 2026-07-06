@@ -105,10 +105,8 @@ pub(super) fn render_tool_descriptor(
     let input_schema = Some(tool.sanitized_input_schema());
     let description_mode = tool.definition.display.description_mode;
     let tags = tool.effective_tags();
-    let aliases = tool.alias_model_names();
     ToolDescriptor {
         name: tool.model_name,
-        aliases,
         description: (!description.is_empty()).then_some(description),
         before_help,
         after_help,
@@ -118,7 +116,7 @@ pub(super) fn render_tool_descriptor(
         input_schema,
         description_mode,
         tags,
-        plugin_id: (!tool.target.plugin_id.trim().is_empty()).then_some(tool.target.plugin_id),
+        plugin_id: (!tool.plugin_name.trim().is_empty()).then_some(tool.plugin_name),
     }
 }
 

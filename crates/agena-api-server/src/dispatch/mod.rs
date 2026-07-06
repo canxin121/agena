@@ -263,7 +263,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             .plugin_manager()
             .registered_tools()
             .into_iter()
-            .filter(|entry| entry.target.plugin_name == "agena.skills")
+            .filter(|entry| entry.plugin_name == "agena.skills")
             .collect::<Vec<_>>();
         let skill_key_for = |entry: &agena::plugin::registry::RegisteredTool| {
             entry
@@ -277,7 +277,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
                     }
                     _ => None,
                 })
-                .unwrap_or_else(|| entry.target.plugin_tool_name.clone())
+                .unwrap_or_else(|| entry.tool_name.clone())
         };
         let has_custom_tag = |entry: &agena::plugin::registry::RegisteredTool, expected: &str| {
             entry

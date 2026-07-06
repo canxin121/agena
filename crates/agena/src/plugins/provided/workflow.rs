@@ -310,17 +310,10 @@ impl WorkflowPlugin {
 
     fn tool_search_document_from_descriptor(descriptor: ToolDescriptor) -> ToolCatalogDocument {
         let name = descriptor.name;
-        let mut description = descriptor
+        let description = descriptor
             .summary
             .or(descriptor.description)
             .unwrap_or_default();
-        if !descriptor.aliases.is_empty() {
-            if !description.is_empty() {
-                description.push(' ');
-            }
-            description.push_str("Aliases: ");
-            description.push_str(descriptor.aliases.join(" ").as_str());
-        }
         let tags = descriptor
             .tags
             .into_iter()
@@ -2002,17 +1995,11 @@ impl WorkflowPlugin {
         let mut exact: Option<&ToolDescriptor> = None;
         let mut case_insensitive: Option<&ToolDescriptor> = None;
         for tool in &tools {
-            if tool.name == requested || tool.aliases.iter().any(|alias| alias == requested) {
+            if tool.name == requested {
                 exact = Some(tool);
                 break;
             }
-            if case_insensitive.is_none()
-                && (tool.name.eq_ignore_ascii_case(requested)
-                    || tool
-                        .aliases
-                        .iter()
-                        .any(|alias| alias.eq_ignore_ascii_case(requested)))
-            {
+            if case_insensitive.is_none() && tool.name.eq_ignore_ascii_case(requested) {
                 case_insensitive = Some(tool);
             }
         }
@@ -2034,9 +2021,6 @@ impl WorkflowPlugin {
         };
 
         let mut lines = vec![format!("Tool: {}", descriptor.name)];
-        if !descriptor.aliases.is_empty() {
-            lines.push(format!("Aliases: {}", descriptor.aliases.join(", ")));
-        }
         if let Some(before_help) = descriptor
             .before_help
             .as_deref()
@@ -2140,9 +2124,7 @@ impl WorkflowPlugin {
     fn suggest_tool_names(requested: &str, tools: &[ToolDescriptor]) -> Vec<String> {
         let candidate_names = tools
             .iter()
-            .flat_map(|tool| {
-                std::iter::once(tool.name.as_str()).chain(tool.aliases.iter().map(String::as_str))
-            })
+            .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>();
         let mut suggestions = crate::tool::suggest_tool_names(requested, candidate_names, 1);
         if suggestions.is_empty() {

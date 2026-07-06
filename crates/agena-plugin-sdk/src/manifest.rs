@@ -200,8 +200,6 @@ pub fn normalize_tool_tag_name(tag: impl AsRef<str>) -> Option<String> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolDefinition {
     pub name: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub aliases: Vec<String>,
     #[serde(default)]
     pub contract: ToolContract,
     #[serde(default)]
@@ -306,7 +304,7 @@ pub trait ToolSurface: Sized {
     fn parse_input(input: serde_json::Value) -> crate::Result<Self>;
     fn parse_tool(tool: &str, input: serde_json::Value) -> crate::Result<Self> {
         let definition = Self::tool_definition();
-        if tool == definition.name || definition.aliases.iter().any(|alias| alias == tool) {
+        if tool == definition.name {
             return Self::parse_input(input);
         }
         Err(crate::PluginError::invalid_params(format!(
@@ -360,10 +358,6 @@ pub trait ToolInputShape: Sized {
 impl ToolDefinition {
     pub fn description_text(&self) -> &str {
         self.model.description.as_deref().unwrap_or("")
-    }
-
-    pub fn alias_texts(&self) -> &[String] {
-        self.aliases.as_slice()
     }
 
     pub fn summary_text(&self) -> Option<&str> {
@@ -1287,7 +1281,6 @@ impl ToolDefinition {
     pub fn new(name: impl Into<String>, schema: serde_json::Value) -> Self {
         Self {
             name: name.into(),
-            aliases: Vec::new(),
             contract: ToolContract {
                 input_schema: schema,
                 ..ToolContract::default()
@@ -1320,36 +1313,6 @@ impl ToolDefinition {
     pub fn description(mut self, d: impl Into<String>) -> Self {
         self.model.description = Some(d.into());
         self
-    }
-
-    pub fn alias(self, alias: impl Into<String>) -> Self {
-        let mut this = self;
-        this.push_alias(alias);
-        this
-    }
-
-    pub fn visible_alias(self, alias: impl Into<String>) -> Self {
-        self.alias(alias)
-    }
-
-    pub fn aliases<I, S>(self, aliases: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        let mut this = self;
-        for alias in aliases {
-            this.push_alias(alias);
-        }
-        this
-    }
-
-    pub fn visible_aliases<I, S>(self, aliases: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.aliases(aliases)
     }
 
     pub fn long_about(self, description: impl Into<String>) -> Self {
@@ -1516,14 +1479,6 @@ impl ToolDefinition {
     pub fn capabilities(mut self, capabilities: impl IntoIterator<Item = HostCapability>) -> Self {
         self.capabilities.extend(capabilities);
         self
-    }
-
-    fn push_alias(&mut self, alias: impl Into<String>) {
-        let alias = alias.into().trim().to_string();
-        if alias.is_empty() || alias == self.name || self.aliases.contains(&alias) {
-            return;
-        }
-        self.aliases.push(alias);
     }
 }
 
@@ -1813,25 +1768,6 @@ mod tests {
     }
 
     #[test]
-    fn plugin_tool_definition_supports_tool_aliases() {
-        let definition = ToolDefinition::new("dummy", serde_json::json!({"type":"object"}))
-            .alias("d")
-            .visible_alias("show")
-            .aliases(["d", "dummy", " inspect "])
-            .visible_aliases(["inspect", "lookup"]);
-
-        assert_eq!(
-            definition.alias_texts(),
-            &[
-                "d".to_string(),
-                "show".to_string(),
-                "inspect".to_string(),
-                "lookup".to_string()
-            ]
-        );
-    }
-
-    #[test]
     fn plugin_tool_definition_supports_before_help_aliases() {
         let definition = ToolDefinition::new("dummy", serde_json::json!({"type":"object"}))
             .before_help("Dummy before-help.")
@@ -2008,7 +1944,6 @@ mod tests {
     #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, crate::ToolCommand)]
     #[tool_command(
         tool = "layer.echo",
-        aliases("layer.echo.alias"),
         description = "Exercise plugin-layer tool aggregation.",
         trim("text"),
         non_empty("text"),
@@ -2023,7 +1958,6 @@ mod tests {
     #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, crate::ToolCommand)]
     #[tool_command(
         tool = "layer.lookup",
-        aliases("layer.lookup.alias"),
         description = "Exercise plugin-layer suite aggregation.",
         trim("query"),
         non_empty("query"),
@@ -2146,18 +2080,13 @@ mod tests {
             );
             assert!(manifest.hooks.contains(HookSubscription::SHELL_ENV));
             assert_eq!(manifest.tools.len(), 2);
-            let echo_definition = manifest
-                .tools
-                .iter()
-                .find(|tool| tool.name == "layer.echo")
-                .expect("echo tool");
-            assert_eq!(echo_definition.aliases, vec!["layer.echo.alias"]);
-            let lookup_definition = manifest
-                .tools
-                .iter()
-                .find(|tool| tool.name == "layer.lookup")
-                .expect("lookup tool");
-            assert_eq!(lookup_definition.aliases, vec!["layer.lookup.alias"]);
+            assert!(manifest.tools.iter().any(|tool| tool.name == "layer.echo"));
+            assert!(
+                manifest
+                    .tools
+                    .iter()
+                    .any(|tool| tool.name == "layer.lookup")
+            );
             assert_eq!(
                 manifest
                     .config_schema
@@ -2193,7 +2122,7 @@ mod tests {
             let output = crate::Plugin::tool_invoke(
                 &plugin,
                 crate::ToolInvokeInput {
-                    tool_name: "layer.echo.alias".to_string(),
+                    tool_name: "layer.echo".to_string(),
                     session_id: 1,
                     call_id: 2,
                     workspace_root: "/tmp/plugin-layer".to_string(),
@@ -2207,7 +2136,7 @@ mod tests {
             let suite_output = crate::Plugin::tool_invoke(
                 &plugin,
                 crate::ToolInvokeInput {
-                    tool_name: "layer.lookup.alias".to_string(),
+                    tool_name: "layer.lookup".to_string(),
                     session_id: 1,
                     call_id: 3,
                     workspace_root: "/tmp/plugin-layer".to_string(),
@@ -2222,7 +2151,7 @@ mod tests {
             let end = crate::Plugin::tool_invoke_stream(
                 &plugin,
                 crate::ToolInvokeInput {
-                    tool_name: "layer.echo.alias".to_string(),
+                    tool_name: "layer.echo".to_string(),
                     session_id: 1,
                     call_id: 4,
                     workspace_root: "/tmp/plugin-layer".to_string(),
@@ -2241,7 +2170,7 @@ mod tests {
             let suite_end = crate::Plugin::tool_invoke_stream(
                 &plugin,
                 crate::ToolInvokeInput {
-                    tool_name: "layer.lookup.alias".to_string(),
+                    tool_name: "layer.lookup".to_string(),
                     session_id: 1,
                     call_id: 5,
                     workspace_root: "/tmp/plugin-layer".to_string(),
@@ -2257,7 +2186,7 @@ mod tests {
 
             let path_requests = crate::Plugin::permission_paths(
                 &plugin,
-                "layer.echo.alias",
+                "layer.echo",
                 &serde_json::json!({"text":"  hello  "}),
             )
             .await?;
@@ -2268,7 +2197,7 @@ mod tests {
 
             let network_requests = crate::Plugin::permission_networks(
                 &plugin,
-                "layer.lookup.alias",
+                "layer.lookup",
                 &serde_json::json!({"query":"  docs  "}),
             )
             .await?;

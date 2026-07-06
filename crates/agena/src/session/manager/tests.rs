@@ -37,30 +37,30 @@ use crate::session::{ContextGovernor, ContextPolicy};
 use super::*;
 use crate::session::cache::SessionCachePolicy;
 
-const FS_TOOL: &str = "fs";
-const PROCESS_TOOL: &str = "process";
-const PROCESS_RUN_TOOL: &str = "process.run";
-const WEB_CRAWL_TOOL: &str = "web.crawl";
-const WEB_FETCH_TOOL: &str = "web.fetch";
-const TOOLS_TOOL: &str = "tools";
+const FS_TOOL: &str = "agena.fs.fs";
+const PROCESS_TOOL: &str = "agena.process.process";
+const PROCESS_RUN_TOOL: &str = PROCESS_TOOL;
+const WEB_CRAWL_TOOL: &str = "agena.web.crawl";
+const WEB_FETCH_TOOL: &str = "agena.web.fetch";
+const TOOLS_TOOL: &str = "agena.catalog.tools";
 const PERMISSION_TOOL: &str = FS_TOOL;
-const USER_TOOL: &str = "user";
-const PLAN_TOOL: &str = "plan";
-const PLAN_SET_TOOL: &str = "plan.set";
-const PLAN_UPDATE_TOOL: &str = "plan.update";
-const SNAPSHOT_ENTER_NEW_TOOL: &str = "snapshot.enter.new";
-const SNAPSHOT_EXIT_TOOL: &str = "snapshot.exit";
-const TASK_TOOL: &str = "task";
-const LSP_TOOL: &str = "lsp";
-const INIT_SKILL_TOOL: &str = "skills.init";
-const REVIEW_SKILL_TOOL: &str = "skills.review";
-const SECURITY_REVIEW_SKILL_TOOL: &str = "skills.security_review";
-const AGENT_TOOL: &str = "agent";
-const SESSION_TOOL: &str = "session";
-const SETTINGS_TOOL: &str = "settings";
-const SETTINGS_GET_TOOL: &str = "settings.get";
-const SETTINGS_VALIDATE_TOOL: &str = "settings.validate";
-const SCHEDULE_LIST_TOOL: &str = "schedule.list";
+const USER_TOOL: &str = "agena.runtime.user";
+const PLAN_TOOL: &str = "agena.plan.plan";
+const PLAN_SET_TOOL: &str = PLAN_TOOL;
+const PLAN_UPDATE_TOOL: &str = PLAN_TOOL;
+const SNAPSHOT_ENTER_NEW_TOOL: &str = "agena.snapshot.snapshot";
+const SNAPSHOT_EXIT_TOOL: &str = "agena.snapshot.snapshot";
+const TASK_TOOL: &str = "agena.tasks.task";
+const LSP_TOOL: &str = "agena.lsp.lsp";
+const INIT_SKILL_TOOL: &str = "agena.skills.init";
+const REVIEW_SKILL_TOOL: &str = "agena.skills.review";
+const SECURITY_REVIEW_SKILL_TOOL: &str = "agena.skills.security_review";
+const AGENT_TOOL: &str = "agena.runtime.agent";
+const SESSION_TOOL: &str = "agena.runtime.session";
+const SETTINGS_TOOL: &str = "agena.settings.settings";
+const SETTINGS_GET_TOOL: &str = SETTINGS_TOOL;
+const SETTINGS_VALIDATE_TOOL: &str = SETTINGS_TOOL;
+const SCHEDULE_LIST_TOOL: &str = "agena.cron.schedule";
 const STREAM_FIXTURE_PLUGIN: &str = "streaming-fixture";
 const STREAM_FIXTURE_TOOL: &str = "streaming-fixture.stream_fixture.count";
 
@@ -1145,12 +1145,9 @@ impl crate::plugin::sdk::host_api::HostClient for SessionTestHostClient {
                 let input_schema = Some(tool.sanitized_input_schema());
                 let description_mode = tool.definition.display.description_mode;
                 let tags = tool.effective_tags();
-                let aliases = tool.alias_model_names();
-                let plugin_id =
-                    (!tool.target.plugin_name.trim().is_empty()).then_some(tool.target.plugin_name);
+                let plugin_id = (!tool.plugin_name.trim().is_empty()).then_some(tool.plugin_name);
                 crate::plugin::sdk::host_api::ToolDescriptor {
                     name: tool.model_name,
-                    aliases,
                     description: Some(description),
                     before_help,
                     after_help,
@@ -1690,7 +1687,7 @@ fn operation_snapshot(
 #[test]
 fn operation_blocks_from_web_search_output_include_structured_search_results() {
     let invocation = ToolInvocation::new(
-        "web.search",
+        "agena.web.search",
         StructuredObject::try_from(serde_json::json!({
             "query": "OpenAI Responses API"
         }))
@@ -1733,7 +1730,7 @@ fn operation_blocks_from_web_search_output_include_structured_search_results() {
 #[test]
 fn operation_blocks_from_web_crawl_output_include_document_titles() {
     let invocation = ToolInvocation::new(
-        "web.crawl",
+        "agena.web.crawl",
         StructuredObject::try_from(serde_json::json!({
             "start_url": "https://example.com/docs"
         }))
@@ -4624,11 +4621,10 @@ mod runtime_builtin_tool_tests {
                     let input_schema = Some(tool.sanitized_input_schema());
                     let description_mode = tool.definition.display.description_mode;
                     let tags = tool.effective_tags();
-                    let plugin_id = (!tool.target.plugin_name.trim().is_empty())
-                        .then_some(tool.target.plugin_name.clone());
+                    let plugin_id =
+                        (!tool.plugin_name.trim().is_empty()).then_some(tool.plugin_name.clone());
                     ToolDescriptor {
                         name,
-                        aliases: tool.alias_model_names(),
                         description,
                         before_help,
                         after_help,
@@ -7024,7 +7020,7 @@ while True:
                 .expect("session should be created");
             session
                 .runtime
-                .set_allowed_tools(vec!["skills.bootstrap".to_string()]);
+                .set_allowed_tools(vec!["agena.skills.bootstrap".to_string()]);
 
             let state = manager.execution_state();
             let mut options = SessionRunOptions::new(scripted_model_ref());
@@ -7039,7 +7035,7 @@ while True:
             );
             assert_eq!(
                 updated.runtime.allowed_tools(),
-                ["skills.bootstrap"],
+                ["agena.skills.bootstrap"],
                 "manual tool restrictions should survive run setup"
             );
             assert!(

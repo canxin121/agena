@@ -1617,7 +1617,6 @@ fn expand_plugin_layer_tool_invoke_branch(binding: &PluginToolBinding) -> proc_m
             {
                 let __definition = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definition();
                 if __definition.name.as_str() == __tool_name.as_str()
-                    || __definition.aliases.iter().any(|__alias| __alias.as_str() == __tool_name.as_str())
                 {
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(
                         __tool_name.as_str(),
@@ -1632,7 +1631,6 @@ fn expand_plugin_layer_tool_invoke_branch(binding: &PluginToolBinding) -> proc_m
                 let __definitions = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::tool_definitions();
                 if __definitions.iter().any(|__definition| {
                     __definition.name.as_str() == __tool_name.as_str()
-                        || __definition.aliases.iter().any(|__alias| __alias.as_str() == __tool_name.as_str())
                 }) {
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::parse_tool(
                         __tool_name.as_str(),
@@ -1692,7 +1690,6 @@ fn expand_plugin_layer_tool_stream_branch(
             {
                 let __definition = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definition();
                 if __definition.name.as_str() == __tool_name.as_str()
-                    || __definition.aliases.iter().any(|__alias| __alias.as_str() == __tool_name.as_str())
                 {
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(
                         __tool_name.as_str(),
@@ -1707,7 +1704,6 @@ fn expand_plugin_layer_tool_stream_branch(
                 let __definitions = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::tool_definitions();
                 if __definitions.iter().any(|__definition| {
                     __definition.name.as_str() == __tool_name.as_str()
-                        || __definition.aliases.iter().any(|__alias| __alias.as_str() == __tool_name.as_str())
                 }) {
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::parse_tool(
                         __tool_name.as_str(),
@@ -1778,7 +1774,6 @@ fn expand_plugin_layer_permission_branch(
             {
                 let __definition = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definition();
                 if __definition.name.as_str() == tool
-                    || __definition.aliases.iter().any(|__alias| __alias.as_str() == tool)
                 {
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(
                         tool,
@@ -1793,7 +1788,6 @@ fn expand_plugin_layer_permission_branch(
                 let __definitions = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::tool_definitions();
                 if __definitions.iter().any(|__definition| {
                     __definition.name.as_str() == tool
-                        || __definition.aliases.iter().any(|__alias| __alias.as_str() == tool)
                 }) {
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::parse_tool(
                         tool,
@@ -2560,12 +2554,7 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
         let examples = surface.examples;
         quote! { .examples([#(#examples),*]) }
     };
-    let aliases = surface.aliases.clone();
-    let aliases_chain = if aliases.is_empty() {
-        quote! {}
-    } else {
-        quote! { .aliases([#(#aliases),*]) }
-    };
+    let aliases_chain = quote! {};
     let display_chain = match surface.display.as_ref().map(LitStr::value).as_deref() {
         Some("brief") => quote! { .display(::agena_plugin_sdk::ToolDisplayPreset::Compact) },
         Some("compact") => {
@@ -3033,7 +3022,7 @@ fn expand_tool_suite(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
             );
         quote! {
             let __definition = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definition();
-            if tool == __definition.name || __definition.aliases.iter().any(|alias| alias == tool) {
+            if tool == __definition.name {
                 return Ok(Self::#ident(#parse_expr?));
             }
         }
@@ -3113,7 +3102,7 @@ fn expand_tool_suite(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         };
         Ok(quote! {
             let __definition = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definition();
-            if tool == __definition.name || __definition.aliases.iter().any(|alias| alias == tool) {
+            if tool == __definition.name {
                 return #resolve_expr;
             }
         })
@@ -6696,10 +6685,18 @@ fn apply_surface_name_value(config: &mut SurfaceConfig, value: MetaNameValue) ->
     };
     match ident.to_string().as_str() {
         "tool" => config.tool = Some(expr_lit_str(&value.value, "tool")?),
-        "alias" => config.aliases.push(expr_lit_str(&value.value, "alias")?),
-        "visible_alias" => config
-            .aliases
-            .push(expr_lit_str(&value.value, "visible_alias")?),
+        "alias" => {
+            return Err(syn::Error::new_spanned(
+                value.path,
+                "tool aliases were removed; use the canonical tool name",
+            ));
+        }
+        "visible_alias" => {
+            return Err(syn::Error::new_spanned(
+                value.path,
+                "tool aliases were removed; use the canonical tool name",
+            ));
+        }
         "description" => config.description = Some(expr_lit_str(&value.value, "description")?),
         "long_about" => config.description = Some(expr_lit_str(&value.value, "long_about")?),
         "summary" => config.summary = Some(expr_lit_str(&value.value, "summary")?),
@@ -6796,7 +6793,10 @@ fn apply_surface_list(config: &mut SurfaceConfig, list: MetaList) -> Result<()> 
             config.examples.extend(parse_lit_str_list(list.tokens)?);
         }
         "aliases" | "visible_aliases" => {
-            config.aliases.extend(parse_lit_str_list(list.tokens)?);
+            return Err(syn::Error::new_spanned(
+                list.path,
+                "tool aliases were removed; use the canonical tool name",
+            ));
         }
         "requires" => {
             config

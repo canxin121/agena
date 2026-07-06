@@ -1568,7 +1568,7 @@ fn tool_invocation_for_definition(
 ) -> ToolInvocation {
     ToolInvocation {
         name: tool.model_name.clone(),
-        plugin_name: Some(tool.target.plugin_name.clone()),
+        plugin_name: Some(tool.plugin_name.clone()),
         input,
     }
 }

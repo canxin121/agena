@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::HostClient;
 use crate::plugin::sdk::{
     HookSubscription, InitContext, InitOutcome, Plugin, PluginManifest, Result as SdkResult,
@@ -31,11 +30,9 @@ impl Plugin for RuntimePlugin {
             .description("Runtime session, agent, and user-interaction tools.")
             .brief_detailed()
             .hooks(HookSubscription::TOOL_INVOKE)
-            .tools([
-                AgentToolInput::tool_definition(),
-                SessionToolInput::tool_definition(),
-                UserToolInput::tool_definition(),
-            ])
+            .tools(AgentToolInput::tool_definitions())
+            .tools(SessionToolInput::tool_definitions())
+            .tools(UserToolInput::tool_definitions())
             .build()
     }
 
@@ -46,23 +43,22 @@ impl Plugin for RuntimePlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        match input.tool_name.as_str() {
-            "agent" => {
-                let parsed = AgentToolInput::parse_input(input.input)?;
-                parsed.dispatch_tool_invoke(&self.inner).await
-            }
-            "session" => {
-                let parsed = SessionToolInput::parse_input(input.input)?;
-                parsed.dispatch_tool_invoke(&self.inner).await
-            }
-            "user" => {
-                let parsed = UserToolInput::parse_input(input.input)?;
-                parsed.dispatch_tool_invoke(&self.inner).await
-            }
-            _ => Err(PluginError::not_implemented(format!(
-                "tool_invoke({})",
-                input.tool_name
-            ))),
+        let tool_name = input.tool_name.as_str();
+        if AgentToolInput::tool_definitions()
+            .iter()
+            .any(|definition| definition.name == tool_name)
+        {
+            let parsed = AgentToolInput::parse_tool(tool_name, input.input)?;
+            return parsed.dispatch_tool_invoke(&self.inner).await;
         }
+        if SessionToolInput::tool_definitions()
+            .iter()
+            .any(|definition| definition.name == tool_name)
+        {
+            let parsed = SessionToolInput::parse_tool(tool_name, input.input)?;
+            return parsed.dispatch_tool_invoke(&self.inner).await;
+        }
+        let parsed = UserToolInput::parse_tool(tool_name, input.input)?;
+        parsed.dispatch_tool_invoke(&self.inner).await
     }
 }

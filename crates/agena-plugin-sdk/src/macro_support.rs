@@ -582,6 +582,13 @@ fn top_level_discriminated_variants(schema: &Value) -> Option<Vec<DiscriminatedS
     Some(expanded)
 }
 
+pub fn schema_for_discriminated_variant(schema: &Value, field: &str, value: &str) -> Option<Value> {
+    top_level_discriminated_variants(schema)?
+        .into_iter()
+        .find(|variant| variant.field == field && variant.value == value)
+        .map(|variant| variant.schema)
+}
+
 fn strip_discriminant_from_variant(variant: &serde_json::Map<String, Value>, field: &str) -> Value {
     let mut stripped = variant.clone();
     if let Some(properties) = stripped

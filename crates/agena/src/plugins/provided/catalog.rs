@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::HostClient;
 use crate::plugin::sdk::{
     HookSubscription, InitContext, InitOutcome, Plugin, PluginManifest, Result as SdkResult,
@@ -36,7 +35,7 @@ impl Plugin for CatalogPlugin {
             .config_schema(tool_catalog_plugin_config_schema())
             .brief_detailed()
             .hooks(HookSubscription::TOOL_INVOKE)
-            .tool(ToolsToolInput::tool_definition())
+            .tools(ToolsToolInput::tool_definitions())
             .build()
     }
 
@@ -57,13 +56,7 @@ impl Plugin for CatalogPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        if input.tool_name != "tools" {
-            return Err(PluginError::not_implemented(format!(
-                "tool_invoke({})",
-                input.tool_name
-            )));
-        }
-        let parsed = ToolsToolInput::parse_input(input.input)?;
+        let parsed = ToolsToolInput::parse_tool(input.tool_name.as_str(), input.input)?;
         parsed.dispatch_tool_invoke(&self.inner).await
     }
 }

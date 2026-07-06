@@ -1615,9 +1615,10 @@ fn expand_plugin_layer_tool_invoke_branch(binding: &PluginToolBinding) -> proc_m
     match binding.kind {
         PluginToolBindingKind::Surface => quote! {
             {
-                let __definition = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definition();
-                if __definition.name.as_str() == __tool_name.as_str()
-                {
+                let __definitions = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definitions();
+                if __definitions.iter().any(|__definition| {
+                    __definition.name.as_str() == __tool_name.as_str()
+                }) {
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(
                         __tool_name.as_str(),
                         input.input.clone(),
@@ -1688,9 +1689,10 @@ fn expand_plugin_layer_tool_stream_branch(
     match binding.kind {
         PluginToolBindingKind::Surface => quote! {
             {
-                let __definition = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definition();
-                if __definition.name.as_str() == __tool_name.as_str()
-                {
+                let __definitions = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definitions();
+                if __definitions.iter().any(|__definition| {
+                    __definition.name.as_str() == __tool_name.as_str()
+                }) {
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(
                         __tool_name.as_str(),
                         input.input,
@@ -1772,9 +1774,10 @@ fn expand_plugin_layer_permission_branch(
     match binding.kind {
         PluginToolBindingKind::Surface => quote! {
             {
-                let __definition = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definition();
-                if __definition.name.as_str() == tool
-                {
+                let __definitions = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definitions();
+                if __definitions.iter().any(|__definition| {
+                    __definition.name.as_str() == tool
+                }) {
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(
                         tool,
                         input.clone(),
@@ -2703,11 +2706,14 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
         }
     };
 
-    let tool_definition_fn = quote! {
-        pub(crate) fn tool_definition() -> ::agena_plugin_sdk::ToolDefinition {
+    let make_tool_definition_fn = quote! {
+        fn __macro_tool_definition(
+            name: impl Into<String>,
+            schema: serde_json::Value,
+        ) -> ::agena_plugin_sdk::ToolDefinition {
             ::agena_plugin_sdk::ToolDefinition::new(
-                #tool,
-                Self::input_schema(),
+                name,
+                schema,
             )
             .description(#description)
             #aliases_chain
@@ -2728,6 +2734,12 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
         }
     };
 
+    let tool_definition_fn = quote! {
+        pub(crate) fn tool_definition() -> ::agena_plugin_sdk::ToolDefinition {
+            Self::__macro_tool_definition(#tool, Self::input_schema())
+        }
+    };
+
     let dispatch_tool_invoke_fn =
         expand_static_surface_dispatch_fn(&input.data, &surface_for_dispatch)?;
     let flatten_shape_post_parse_expr = expand_flatten_shape_post_parse_tokens(&input.data)?;
@@ -2736,8 +2748,71 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
         .iter()
         .map(|alias| quote! { | #alias })
         .collect::<Vec<_>>();
+    let resolve_tool_exec_match_arms = match &input.data {
+        Data::Enum(data_enum) => data_enum
+            .variants
+            .iter()
+            .filter_map(|variant| {
+                let config = parse_tool_variant_config(variant).ok()?;
+                let VariantMapping::Exec(tool_name) = config.mapping else {
+                    return None;
+                };
+                Some(quote! { #tool_name => {} })
+            })
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
 
     let mut enum_helper_fn = quote! {};
+    let tool_definitions_body = match &input.data {
+        Data::Enum(data_enum) => {
+            let variant_definition_pushes = data_enum
+                .variants
+                .iter()
+                .filter_map(|variant| {
+                    let config = parse_tool_variant_config(variant).ok()?;
+                    let VariantMapping::Exec(tool_name) = config.mapping else {
+                        return None;
+                    };
+                    let action = LitStr::new(
+                        ident_to_snake_case(&variant.ident).as_str(),
+                        variant.ident.span(),
+                    );
+                    Some(quote! {
+                        let schema = ::agena_plugin_sdk::macro_support::schema_for_discriminated_variant(
+                            &input_schema,
+                            "action",
+                            #action,
+                        )
+                        .unwrap_or_else(|| input_schema.clone());
+                        definitions.push(Self::__macro_tool_definition(#tool_name, schema));
+                    })
+                })
+                .collect::<Vec<_>>();
+            if variant_definition_pushes.is_empty() {
+                quote! {
+                    vec![Self::tool_definition()]
+                }
+            } else {
+                quote! {
+                    let input_schema = Self::input_schema();
+                    let mut definitions = Vec::new();
+                    #(#variant_definition_pushes)*
+                    definitions
+                }
+            }
+        }
+        _ => quote! {
+            vec![Self::tool_definition()]
+        },
+    };
+
+    let tool_definitions_fn = quote! {
+        pub(crate) fn tool_definitions() -> Vec<::agena_plugin_sdk::ToolDefinition> {
+            #tool_definitions_body
+        }
+    };
+
     let (parse_input_body, parse_tool_body, resolve_tool_body) = match input.data {
         Data::Enum(data_enum) => {
             enum_helper_fn = expand_enum_input_normalize_fn(&data_enum.variants)?;
@@ -2819,7 +2894,7 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
                     }
                 },
                 quote! {
-                    let parsed = Self::parse_input(input)?;
+                    let parsed = Self::parse_tool(tool, input)?;
 
                     match parsed {
                         #(#match_arms),*
@@ -2901,7 +2976,11 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
 
             #parse_json_str_fn
 
+            #make_tool_definition_fn
+
             #tool_definition_fn
+
+            #tool_definitions_fn
 
             #dispatch_tool_invoke_fn
 
@@ -2911,6 +2990,7 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
             ) -> ::agena_plugin_sdk::Result<(String, serde_json::Value)> {
                 match tool {
                     #tool #(#tool_alias_match_arms)* => {}
+                    #(#resolve_tool_exec_match_arms,)*
                     other => {
                         return Err(::agena_plugin_sdk::PluginError::invalid_params(format!(
                             "unknown {} tool '{other}'",
@@ -2938,6 +3018,10 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
 
             fn tool_definition() -> ::agena_plugin_sdk::ToolDefinition {
                 Self::tool_definition()
+            }
+
+            fn tool_definitions() -> Vec<::agena_plugin_sdk::ToolDefinition> {
+                Self::tool_definitions()
             }
 
             fn parse_input(input: serde_json::Value) -> ::agena_plugin_sdk::Result<Self> {
@@ -3006,7 +3090,7 @@ fn expand_tool_suite(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
     let definition_pushes = variants.iter().map(|variant| {
         let ty = &variant.ty;
         quote! {
-            definitions.push(<#ty as ::agena_plugin_sdk::ToolSurface>::tool_definition());
+            definitions.extend(<#ty as ::agena_plugin_sdk::ToolSurface>::tool_definitions());
         }
     });
     let parse_arms = variants.iter().map(|variant| {
@@ -3021,8 +3105,8 @@ fn expand_tool_suite(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
                 || quote! { <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(tool, input) },
             );
         quote! {
-            let __definition = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definition();
-            if tool == __definition.name {
+            let __definitions = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definitions();
+            if __definitions.iter().any(|__definition| tool == __definition.name) {
                 return Ok(Self::#ident(#parse_expr?));
             }
         }
@@ -3101,8 +3185,8 @@ fn expand_tool_suite(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
             quote! { <#ty as ::agena_plugin_sdk::ToolSurface>::resolve_tool(tool, input) }
         };
         Ok(quote! {
-            let __definition = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definition();
-            if tool == __definition.name {
+            let __definitions = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definitions();
+            if __definitions.iter().any(|__definition| tool == __definition.name) {
                 return #resolve_expr;
             }
         })

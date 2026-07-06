@@ -91,7 +91,7 @@ impl Plugin for ProcessPlugin {
         PluginManifest::builder("agena", "process", env!("CARGO_PKG_VERSION"))
             .description("Command execution and background process tools.")
             .brief_detailed()
-            .tool(ProcessToolSurfaceInput::tool_definition())
+            .tools(ProcessToolSurfaceInput::tool_definitions())
             .build()
     }
 

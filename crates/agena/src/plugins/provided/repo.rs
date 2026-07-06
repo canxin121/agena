@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::HostClient;
 use crate::plugin::sdk::{
     HookSubscription, InitContext, InitOutcome, PathRequest, Plugin, PluginManifest,
@@ -29,7 +28,7 @@ impl Plugin for SnapshotPlugin {
             .description("Managed snapshot tools backed by Rift or git worktree.")
             .brief_detailed()
             .hooks(HookSubscription::TOOL_INVOKE)
-            .tool(SnapshotToolInput::tool_definition())
+            .tools(SnapshotToolInput::tool_definitions())
             .build()
     }
 
@@ -40,13 +39,7 @@ impl Plugin for SnapshotPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        if input.tool_name != "snapshot" {
-            return Err(PluginError::not_implemented(format!(
-                "tool_invoke({})",
-                input.tool_name
-            )));
-        }
-        let parsed = SnapshotToolInput::parse_input(input.input)?;
+        let parsed = SnapshotToolInput::parse_tool(input.tool_name.as_str(), input.input)?;
         parsed.dispatch_tool_invoke(&self.inner).await
     }
 

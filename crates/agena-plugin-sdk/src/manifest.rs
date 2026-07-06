@@ -302,6 +302,9 @@ impl Default for ToolRuntimePolicy {
 pub trait ToolSurface: Sized {
     fn tool_name() -> &'static str;
     fn tool_definition() -> ToolDefinition;
+    fn tool_definitions() -> Vec<ToolDefinition> {
+        vec![Self::tool_definition()]
+    }
     fn parse_input(input: serde_json::Value) -> crate::Result<Self>;
     fn parse_tool(tool: &str, input: serde_json::Value) -> crate::Result<Self> {
         let definition = Self::tool_definition();
@@ -1198,7 +1201,7 @@ impl PluginManifestBuilder {
     }
 
     pub fn tool_surface<T: ToolSurface>(self) -> Self {
-        self.tool(T::tool_definition())
+        self.tools(T::tool_definitions())
     }
 
     pub fn tools(mut self, tools: impl IntoIterator<Item = ToolDefinition>) -> Self {

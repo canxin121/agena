@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::HostClient;
 use crate::plugin::sdk::{
     HookSubscription, InitContext, InitOutcome, Plugin, PluginManifest, Result as SdkResult,
@@ -31,7 +30,7 @@ impl Plugin for TasksPlugin {
             .description("Delegated subtask orchestration tools.")
             .brief_detailed()
             .hooks(HookSubscription::TOOL_INVOKE)
-            .tool(TaskToolActionInput::tool_definition())
+            .tools(TaskToolActionInput::tool_definitions())
             .build()
     }
 
@@ -42,13 +41,7 @@ impl Plugin for TasksPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        if input.tool_name != "task" {
-            return Err(PluginError::not_implemented(format!(
-                "tool_invoke({})",
-                input.tool_name
-            )));
-        }
-        let parsed = TaskToolActionInput::parse_input(input.input)?;
+        let parsed = TaskToolActionInput::parse_tool(input.tool_name.as_str(), input.input)?;
         parsed.dispatch_tool_invoke(&self.inner).await
     }
 }

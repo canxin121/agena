@@ -115,8 +115,9 @@ fn routed_tool_name(tool_name: &str) -> Option<&'static str> {
         "cron_create" => Some("schedule.create"),
         "cron_delete" => Some("schedule.delete"),
         "schedule_wakeup" => Some("schedule.wakeup"),
+        "process" => Some("run"),
         "lsp_servers" | "lsp_definition" | "lsp_references" | "lsp_hover" | "lsp_diagnostics" => {
-            Some("lsp")
+            Some("servers")
         }
         _ => None,
     }
@@ -129,6 +130,12 @@ fn routed_internal_tool_names(tool_name: &str) -> &'static [&'static str] {
         "schedule.create" => &["cron_create"],
         "schedule.delete" => &["cron_delete"],
         "schedule.wakeup" => &["schedule_wakeup"],
+        "run" | "list" | "logs" | "stop" => &["process"],
+        "servers" => &["lsp_servers"],
+        "definition" => &["lsp_definition"],
+        "references" => &["lsp_references"],
+        "hover" => &["lsp_hover"],
+        "diagnostics" => &["lsp_diagnostics"],
         _ => &[],
     }
 }

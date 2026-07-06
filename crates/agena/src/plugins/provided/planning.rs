@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::HostClient;
 use crate::plugin::sdk::{
     CommandBeforeInput, CommandBeforeResponse, HookSubscription, HostCapability, InitContext,
@@ -39,7 +38,7 @@ impl Plugin for PlanPlugin {
                     | HookSubscription::AGENT_STOP,
             )
             .plugin_capabilities([HostCapability::PluginStorage, HostCapability::Statusline])
-            .tool(PlanToolInput::tool_definition())
+            .tools(PlanToolInput::tool_definitions())
             .build()
     }
 
@@ -60,13 +59,7 @@ impl Plugin for PlanPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        if input.tool_name != "plan" {
-            return Err(PluginError::not_implemented(format!(
-                "tool_invoke({})",
-                input.tool_name
-            )));
-        }
-        let parsed = PlanToolInput::parse_input(input.input)?;
+        let parsed = PlanToolInput::parse_tool(input.tool_name.as_str(), input.input)?;
         parsed.dispatch_tool_invoke(&self.inner).await
     }
 

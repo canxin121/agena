@@ -14,13 +14,13 @@ use agena_macros::{StaticToolSurface, ToolInputShape};
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub(crate) enum AgentToolInput {
-    #[tool(exec = "switch", handle = WorkflowPlugin::invoke_agent_switch)]
+    #[tool(exec = "agent.switch", handle = WorkflowPlugin::invoke_agent_switch)]
     Switch {
         #[tool(flatten_shape)]
         #[serde(flatten)]
         args: AgentSwitchToolInput,
     },
-    #[tool(exec = "restore", handle = WorkflowPlugin::invoke_agent_restore)]
+    #[tool(exec = "agent.restore", handle = WorkflowPlugin::invoke_agent_restore)]
     Restore {
         #[tool(flatten_shape)]
         #[serde(flatten)]
@@ -48,9 +48,9 @@ pub(crate) struct SessionRenameToolInput {
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub(crate) enum SessionToolInput {
-    #[tool(exec = "get", handle = WorkflowPlugin::invoke_get_session)]
+    #[tool(exec = "session.get", handle = WorkflowPlugin::invoke_get_session)]
     Get,
-    #[tool(exec = "rename", handle = WorkflowPlugin::invoke_rename_session)]
+    #[tool(exec = "session.rename", handle = WorkflowPlugin::invoke_rename_session)]
     Rename {
         #[tool(flatten_shape)]
         #[serde(flatten)]
@@ -72,7 +72,7 @@ pub(crate) enum SessionToolInput {
 #[serde(tag = "action", rename_all = "snake_case")]
 pub(crate) enum UserToolInput {
     #[tool(
-        exec = "request_input",
+        exec = "user.request_input",
         handle = WorkflowPlugin::invoke_ask_user,
         min_items("questions", 1),
         max_items("questions", 3),

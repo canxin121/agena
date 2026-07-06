@@ -150,37 +150,6 @@ pub(crate) fn provider_native_tools_preset_from_config(
             ProviderNativeToolsPreset::OpenAiHostedDefaults,
             &ProviderNativeToolsConfig::default(),
         )
-        || *config
-            == (ProviderNativeToolsConfig {
-                enabled: true,
-                routes: agena::config::ProviderNativeToolRoutesConfig {
-                    web_search: Some(ProviderNativeToolRoute::ProviderHosted),
-                    image_generation: Some(ProviderNativeToolRoute::ProviderHosted),
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-        || *config
-            == (ProviderNativeToolsConfig {
-                enabled: true,
-                routes: agena::config::ProviderNativeToolRoutesConfig {
-                    web_search: Some(ProviderNativeToolRoute::ProviderHosted),
-                    code_execution: Some(ProviderNativeToolRoute::ProviderHosted),
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-        || *config
-            == (ProviderNativeToolsConfig {
-                enabled: true,
-                routes: agena::config::ProviderNativeToolRoutesConfig {
-                    web_search: Some(ProviderNativeToolRoute::ProviderHosted),
-                    file_search: Some(ProviderNativeToolRoute::ProviderHosted),
-                    code_execution: Some(ProviderNativeToolRoute::ProviderHosted),
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
     {
         ProviderNativeToolsPreset::OpenAiHostedDefaults
     } else if *config
@@ -6303,55 +6272,6 @@ mod tests {
         assert_eq!(
             config.routes.image_generation,
             Some(ProviderNativeToolRoute::ProviderHosted)
-        );
-    }
-
-    #[test]
-    fn provider_native_tools_preset_accepts_legacy_openai_routes() {
-        let config = ProviderNativeToolsConfig {
-            enabled: true,
-            routes: agena::config::ProviderNativeToolRoutesConfig {
-                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
-                image_generation: Some(ProviderNativeToolRoute::ProviderHosted),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        assert_eq!(
-            provider_native_tools_preset_from_config(&config),
-            ProviderNativeToolsPreset::OpenAiHostedDefaults
-        );
-
-        let config = ProviderNativeToolsConfig {
-            enabled: true,
-            routes: agena::config::ProviderNativeToolRoutesConfig {
-                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
-                file_search: Some(ProviderNativeToolRoute::ProviderHosted),
-                code_execution: Some(ProviderNativeToolRoute::ProviderHosted),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        assert_eq!(
-            provider_native_tools_preset_from_config(&config),
-            ProviderNativeToolsPreset::OpenAiHostedDefaults
-        );
-
-        let config = ProviderNativeToolsConfig {
-            enabled: true,
-            routes: agena::config::ProviderNativeToolRoutesConfig {
-                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
-                code_execution: Some(ProviderNativeToolRoute::ProviderHosted),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        assert_eq!(
-            provider_native_tools_preset_from_config(&config),
-            ProviderNativeToolsPreset::OpenAiHostedDefaults
         );
     }
 

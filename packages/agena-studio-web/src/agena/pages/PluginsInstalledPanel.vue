@@ -55,6 +55,19 @@ type ManifestEntrySummary = {
   facts: string[]
 }
 
+type ManifestToolDefinition = {
+  name: string
+  description: string
+  summary: string
+  help: string
+  tags: string[]
+  strict: boolean
+  streaming: string
+  concurrencySafe: boolean
+  descriptionMode: string
+  uiDisplayMode: 'detailed' | 'summary' | null
+}
+
 const pluginUiMessage = ref('')
 const pluginUiError = ref('')
 const controlDrafts = ref<Record<string, unknown>>({})
@@ -83,6 +96,27 @@ function readStringArray(value: unknown): string[] {
   return readArray(value)
     .map((item) => readString(item))
     .filter((item) => item.length > 0)
+}
+
+function readManifestToolDefinition(entry: Record<string, unknown>): ManifestToolDefinition {
+  const contract = readRecord(entry.contract)
+  const model = readRecord(entry.model)
+  const docs = readRecord(entry.docs)
+  const runtime = readRecord(entry.runtime)
+  const permissions = readRecord(entry.permissions)
+  const display = readRecord(entry.display)
+  return {
+    name: readString(entry.name) || 'unnamed entry',
+    description: readString(model.description) || readString(docs.summary) || 'No description provided.',
+    summary: readString(docs.summary),
+    help: readString(docs.help),
+    tags: readStringArray(permissions.tags),
+    strict: contract.strict === true,
+    streaming: readString(runtime.streaming),
+    concurrencySafe: runtime.concurrency_safe === true,
+    descriptionMode: readString(display.description_mode),
+    uiDisplayMode: readOptionalUiDisplayMode(display.ui_display_mode),
+  }
 }
 
 function readOptionalUiDisplayMode(value: unknown): 'detailed' | 'summary' | null {
@@ -122,10 +156,7 @@ function findToolUiOverride(pluginId: string, toolName: string): 'default' | 'de
   return null
 }
 
-function pluginDisplayMode(
-  pluginId: string,
-  pluginDefault: 'detailed' | 'summary' | null,
-): 'detailed' | 'summary' {
+function pluginDisplayMode(pluginId: string, pluginDefault: 'detailed' | 'summary' | null): 'detailed' | 'summary' {
   const pluginOverride = readOptionalUiDisplayOverride(props.pluginUiPresentation?.effectivePluginOverrides?.[pluginId])
   if (pluginOverride) return resolveDisplayOverride(pluginOverride, pluginDefault || globalDisplayMode())
   return pluginDefault || globalDisplayMode()
@@ -147,10 +178,7 @@ function toolDisplayMode(
   return pluginDisplayMode(pluginId, pluginDefault)
 }
 
-function pluginDisplaySource(
-  pluginId: string,
-  pluginDefault: 'detailed' | 'summary' | null,
-): string {
+function pluginDisplaySource(pluginId: string, pluginDefault: 'detailed' | 'summary' | null): string {
   const pluginOverride = readOptionalUiDisplayOverride(props.pluginUiPresentation?.effectivePluginOverrides?.[pluginId])
   if (pluginOverride === 'summary' || pluginOverride === 'detailed') return 'plugin override'
   if (pluginDefault) return 'plugin default'
@@ -263,38 +291,41 @@ const manifestEntries = computed<ManifestEntrySummary[]>(() => {
   return readArray(manifestRecord.tools || manifestRecord.entries)
     .map((entry) => readRecord(entry))
     .map((entry) => {
-      const tags = readStringArray(entry.tags)
-      const toolName = readString(entry.name) || 'unnamed entry'
-      const toolDeclaredDefault = readOptionalUiDisplayMode(entry.ui_display_mode)
+      const tool = readManifestToolDefinition(entry)
+      const toolName = tool.name
+      const toolDeclaredDefault = tool.uiDisplayMode
       const toolDefault = toolDeclaredDefault || pluginDefault
       const effectiveUiDisplayMode = pluginId
         ? toolDisplayMode(pluginId, toolName, toolDefault, pluginDefault)
         : 'detailed'
       const facts = [
-        entry.strict === true ? 'strict' : null,
-        entry.streaming === true ? 'streaming' : null,
-        entry.concurrency_safe === true ? 'concurrency-safe' : null,
-        readString(entry.description_mode) ? `mode=${readString(entry.description_mode)}` : null,
+        tool.strict ? 'strict' : null,
+        tool.streaming ? `streaming=${tool.streaming}` : null,
+        tool.concurrencySafe ? 'concurrency-safe' : null,
+        tool.descriptionMode ? `mode=${tool.descriptionMode}` : null,
         toolDefault ? `ui_default=${toolDefault}` : null,
         pluginId ? `ui_source=${toolDisplaySource(pluginId, toolName, toolDeclaredDefault, pluginDefault)}` : null,
       ].filter(Boolean) as string[]
       return {
         name: toolName,
-        description: readString(entry.description) || readString(entry.summary) || 'No description provided.',
-        summary: readString(entry.summary) || '',
-        help: readString(entry.help) || '',
+        description: tool.description,
+        summary: tool.summary,
+        help: tool.help,
         effectiveUiDisplayMode,
         effectiveUiDisplaySource: pluginId
           ? toolDisplaySource(pluginId, toolName, toolDeclaredDefault, pluginDefault)
           : 'global default',
-        tags,
+        tags: tool.tags,
         facts,
       }
     })
 })
 
 const studioUi = computed(() => {
-  const ui = manifest.value && typeof manifest.value === 'object' && !Array.isArray(manifest.value) ? (manifest.value as Record<string, unknown>).ui : null
+  const ui =
+    manifest.value && typeof manifest.value === 'object' && !Array.isArray(manifest.value)
+      ? (manifest.value as Record<string, unknown>).ui
+      : null
   if (!ui || typeof ui !== 'object' || Array.isArray(ui)) {
     return { commands: [], controls: [], views: [] } as {
       commands: ManifestStudioUiItem[]
@@ -456,21 +487,21 @@ async function runStudioUiControl(control: ManifestStudioUiItem) {
       <p v-if="props.selectedPlugin && !props.canTogglePluginConfig" class="muted">
         This plugin does not expose a writable config entry.
       </p>
-        <div v-if="props.selectedPlugin" class="stack">
-          <div><strong>ID:</strong> {{ props.selectedPlugin.status.plugin_id }}</div>
-          <div><strong>Kind:</strong> {{ props.selectedPlugin.status.kind }}</div>
-          <div><strong>State:</strong> {{ props.selectedPlugin.status.state }}</div>
-          <div class="button-row" style="align-items: center; flex-wrap: wrap">
-            <strong>Config:</strong>
-            <span class="badge">{{ selectedPluginEntryKind }}</span>
-            <span v-if="selectedPluginDisabled" class="badge warn">disabled</span>
-            <span v-else class="badge success">enabled</span>
-            <span class="badge">ui={{ selectedPluginDisplayMode }}</span>
-            <span class="badge">{{ selectedPluginDisplaySource }}</span>
-          </div>
-          <div><strong>PID:</strong> {{ props.selectedPlugin.status.pid ?? 'n/a' }}</div>
-          <div><strong>Last Exit:</strong> {{ props.selectedPlugin.status.last_exit_code ?? 'n/a' }}</div>
-          <div><strong>Last Restart:</strong> {{ props.selectedPlugin.status.last_restart_at_ms ?? 'n/a' }}</div>
+      <div v-if="props.selectedPlugin" class="stack">
+        <div><strong>ID:</strong> {{ props.selectedPlugin.status.plugin_id }}</div>
+        <div><strong>Kind:</strong> {{ props.selectedPlugin.status.kind }}</div>
+        <div><strong>State:</strong> {{ props.selectedPlugin.status.state }}</div>
+        <div class="button-row" style="align-items: center; flex-wrap: wrap">
+          <strong>Config:</strong>
+          <span class="badge">{{ selectedPluginEntryKind }}</span>
+          <span v-if="selectedPluginDisabled" class="badge warn">disabled</span>
+          <span v-else class="badge success">enabled</span>
+          <span class="badge">ui={{ selectedPluginDisplayMode }}</span>
+          <span class="badge">{{ selectedPluginDisplaySource }}</span>
+        </div>
+        <div><strong>PID:</strong> {{ props.selectedPlugin.status.pid ?? 'n/a' }}</div>
+        <div><strong>Last Exit:</strong> {{ props.selectedPlugin.status.last_exit_code ?? 'n/a' }}</div>
+        <div><strong>Last Restart:</strong> {{ props.selectedPlugin.status.last_restart_at_ms ?? 'n/a' }}</div>
         <div v-if="manifestFacts.length" class="stack">
           <div><strong>Manifest Summary:</strong></div>
           <div v-for="fact in manifestFacts" :key="fact.label" class="muted">
@@ -497,7 +528,14 @@ async function runStudioUiControl(control: ManifestStudioUiItem) {
                     <span class="badge">{{ entry.effectiveUiDisplaySource }}</span>
                   </div>
                   <div class="muted">
-                    {{ primaryManifestText(entry.effectiveUiDisplayMode, entry.description, entry.summary, 'No description provided.') }}
+                    {{
+                      primaryManifestText(
+                        entry.effectiveUiDisplayMode,
+                        entry.description,
+                        entry.summary,
+                        'No description provided.',
+                      )
+                    }}
                   </div>
                   <div
                     v-if="secondaryManifestText(entry.effectiveUiDisplayMode, entry.description, entry.summary)"

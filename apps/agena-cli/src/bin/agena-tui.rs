@@ -5,5 +5,5 @@ fn main() -> Result<(), AppError> {
 }
 
 async fn async_main() -> Result<(), AppError> {
-    agena_tui::run_cli().await
+    agena_cli::run_cli().await
 }

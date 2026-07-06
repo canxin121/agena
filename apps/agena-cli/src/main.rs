@@ -34,9 +34,9 @@ fn main() -> Result<(), agena::AppError> {
 async fn async_main() -> Result<(), agena::AppError> {
     let cli = AgenaCli::parse();
     if let Some(args) = tui_launch_args(&cli) {
-        return agena_tui::run_with_load_request(
+        return agena_cli::run_with_load_request(
             cli.load_request(),
-            agena_tui::TuiLaunchArgs {
+            agena_cli::TuiLaunchArgs {
                 database_url: args.database_url.or_else(|| cli.database_url.clone()),
                 database_path: args.database_path.or_else(|| cli.database_path.clone()),
                 workspace_root: args.workspace,

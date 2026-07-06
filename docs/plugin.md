@@ -63,9 +63,9 @@ Plugin tool registry 现在有三条统一观测路径，分别面向快照、�
 - `kind`: `registered`、`updated`、`removed`
 - `generation`: 当前 registry generation
 - `plugin_id`
-- `original_name`
-- `exposed_name`
-- `tool`: 注册或更新时的 tool decl；删除时通常为空
+- `plugin_tool_name`
+- `model_name`
+- `tool`: 注册或更新时的 `ToolDefinition`；删除时通常为空
 
 如果一个客户端同时消费 plugin UI 和 runtime 事件，推荐策略是：
 
@@ -78,23 +78,19 @@ Plugin tool registry 现在有三条统一观测路径，分别面向快照、�
 
 一个 plugin 是一组扩展能力。它可以只提供 hooks，也可以提供一个或多个 tools。
 
-一个 tool 是模型可调用的能力单元。Tool 包含：
+一个 tool 是模型可调用的能力单元。Tool 使用统一的 `ToolDefinition`，顶层只保留少量入口字段：
 
 - `name`: plugin 内部 tool 名称。
-- `description`: 展示给模型和 UI 的说明。
-- `summary`: 简短说明。开启 help 模式时，模型只看到这个简短说明和 `tools help` 引导。
-- `help`: 详细帮助文本。不会直接进入 provider tool definition；需要时通过 `tools` 的 `help` action 获取。
-- `description_mode`: tool 自己建议的模型可见说明模式，`detailed` 或 `help`。运行时配置可以覆盖它。
-- `input_schema`: JSON Schema，用来描述调用入参。
-- `input_paths`: 从调用入参中提取本地路径并做读写权限审计。
-- `input_networks`: 从调用入参中提取网络目标并做网络权限审计。
-- `path_access`: tool 固定会访问的本地路径，带 `read/write` 语义。
-- `network_access`: tool 固定访问的网络目标。
-- `tags`: tool 的规范化语义标签。权限 fallback、catalog/profile 过滤、tool search，以及运行时的一些判断都基于 tags、name 和 description。
-- `concurrency_safe`: 是否允许并发执行。现在是显式字段，不再从 tags 自动推导。
-- `strict`: 是否启用更严格的 schema/调用约束。
-- `streaming`: 是否支持流式 tool 输出。
-- `host_capabilities`: 这个 tool 调用 host callback 时需要的能力声明。
+- `aliases`: plugin 内部别名。
+- `contract`: 调用契约，包含 `input_schema`、`output_schema`、`strict`。
+- `model`: 给模型看的内容，包含 `description`、`examples`。
+- `docs`: 给 help/catalog/UI 使用的文档，包含 `summary`、`help`、`before_help`、`after_help`。
+- `display`: 展示策略，包含 `description_mode`、`ui_display_mode`。运行时配置可以覆盖它。
+- `permissions`: 权限声明，包含 `input_paths`、`input_networks`、`path_access`、`network_access`、`tags`。
+- `runtime`: 运行策略，包含 `concurrency_safe`、`streaming`、`result_policy`。
+- `capabilities`: 这个 tool 调用 host callback 时需要的能力声明。
+
+Rust SDK 的 builder 仍然保留 `.description()`、`.summary()`、`.input_path()`、`.capability()` 这类快捷方法，但序列化后的 manifest 统一落到上面的分组字段里。
 
 Tool 的模型可见名称由 tool registry 决定：
 
@@ -123,7 +119,7 @@ Tool 的模型可见说明有两种模式：
 
 1. `plugins.policy.tool_presentation.tools` 中的具体 tool 覆盖。
 2. `plugins.policy.tool_presentation.plugins` 中的 plugin 覆盖。
-3. manifest 里的 `description_mode`。
+3. manifest tool definition 里的 `display.description_mode`。
 4. `plugins.policy.tool_presentation.default_mode`。
 
 示例：
@@ -148,7 +144,7 @@ Tool 的模型可见说明有两种模式：
 }
 ```
 
-`tools` 的 `search` action 用于发现已注册 tools；`help` action 用于拿到任意已注册 tool 的详细说明。Plugin 作者可以在 manifest 中设置 `summary` 和 `help`，也可以通过 `tool.definition` hook 改写 `description`、`summary`、`help`、`description_mode` 和 `input_schema`。
+`tools` 的 `search` action 用于发现已注册 tools；`help` action 用于拿到任意已注册 tool 的详细说明。Plugin 作者可以在 manifest 中设置 `docs.summary` 和 `docs.help`，也可以通过 `tool.definition` hook 改写 `model.description`、`docs.summary`、`docs.help`、`display.description_mode` 和 `contract.input_schema`。
 
 ## Provided Static Plugins
 
@@ -601,7 +597,7 @@ impl Plugin for EchoPlugin {
             .description("Echo text.")
             .hooks(HookSubscription::TOOL_INVOKE)
             .tool(
-                PluginToolDecl::new(
+                ToolDefinition::new(
                     "echo",
                     json!({
                         "type": "object",
@@ -695,7 +691,7 @@ use serde_json::json;
 fn manifest() -> PluginManifest {
     PluginManifest::builder("project-helper", env!("CARGO_PKG_VERSION"))
         .tool(
-            PluginToolDecl::new(
+            ToolDefinition::new(
                 "summarize",
                 json!({
                     "type": "object",
@@ -829,7 +825,7 @@ Capability 可以写在 tool 上，也可以写在 manifest 的 `plugin_capabili
 
 Plugin tool 调用会经过同一套 permission system：
 
-1. Tool manifest 声明 `input_paths`、`input_networks`、`network_access`。
+1. Tool manifest 在 `permissions` 中声明 `input_paths`、`input_networks`、`network_access`。
 2. Plugin 可以在运行时通过 `permission_paths` / `permission_networks` 补充动态审计项。
 3. Permission runtime 检查 path/network/tool policy。
 4. `permission.ask_permission` hooks 可以给出建议；拥有 `PermissionDecision` capability 的 plugin 可以返回最终决策。
@@ -838,7 +834,7 @@ Plugin tool 调用会经过同一套 permission system：
 Manifest 中的权限声明适合 tool 调用前就能知道的资源：
 
 ```rust
-PluginToolDecl::new("download", schema)
+ToolDefinition::new("download", schema)
     .input_path(InputPathSpec {
         jsonpath: "$.output_path".to_string(),
         kind: PathKind::Write,

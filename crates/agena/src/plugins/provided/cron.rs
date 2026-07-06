@@ -30,7 +30,7 @@ pub(crate) struct CronPlugin {
     help = "Use action `list` to inspect registered jobs, `create` to add one cron schedule, `delete` to remove one schedule by id, and `wakeup` to create one one-shot wakeup request.",
     display = brief,
     tags(ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Scheduler),
-    host_capabilities(HostCapability::Scheduler),
+    capabilities(HostCapability::Scheduler),
     concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]

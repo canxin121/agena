@@ -16,8 +16,9 @@ use crate::message::WorkflowPromptToolInput;
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostToolRegisterRequest, HostToolRemoveRequest};
 use crate::plugin::sdk::{
-    HookSubscription, HostCapability, InitContext, InitOutcome, PluginManifest, PluginToolDecl,
-    Result as SdkResult, ToolInvokeContext, ToolInvokeInput, ToolInvokeOutput, ToolTag,
+    HookSubscription, HostCapability, InitContext, InitOutcome, PluginManifest,
+    Result as SdkResult, ToolDefinition, ToolInvokeContext, ToolInvokeInput, ToolInvokeOutput,
+    ToolTag,
 };
 
 pub(crate) const SKILLS_PLUGIN_ID: &str = "agena.skills";
@@ -136,7 +137,7 @@ impl SkillsPlugin {
             .with_metadata("skill_tool_kind", kind))
     }
 
-    fn tool_decl(name: &str, discovered_tool: &DiscoveredTool) -> PluginToolDecl {
+    fn tool_definition(name: &str, discovered_tool: &DiscoveredTool) -> ToolDefinition {
         let category = match discovered_tool.kind {
             DiscoveredToolKind::Skill => "workflow",
             DiscoveredToolKind::Command => "command",
@@ -161,7 +162,7 @@ impl SkillsPlugin {
         } else {
             discovered_tool.skill.frontmatter.description.clone()
         };
-        PluginToolDecl::new(name.to_string(), SkillToolInput::input_schema())
+        ToolDefinition::new(name.to_string(), SkillToolInput::input_schema())
             .description(description.clone())
             .summary(description)
             .help(discovered_tool.skill.body.clone())
@@ -235,7 +236,7 @@ impl SkillsPlugin {
         for (name, discovered_tool) in &new_tools {
             let _ = host
                 .register_tool(HostToolRegisterRequest {
-                    tool: Self::tool_decl(name, discovered_tool),
+                    tool: Self::tool_definition(name, discovered_tool),
                 })
                 .await?;
         }
@@ -322,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn skill_tool_decl_uses_macro_generated_schema() {
+    fn skill_tool_definition_uses_macro_generated_schema() {
         let schema = SkillToolInput::input_schema();
         assert_eq!(
             schema,
@@ -331,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn skill_tool_decl_filters_aliases_that_collapse_to_canonical_name() {
+    fn skill_tool_definition_filters_aliases_that_collapse_to_canonical_name() {
         let skill = Skill {
             frontmatter: agena_skills::skill::SkillFrontmatter {
                 name: "security_review".to_string(),
@@ -347,7 +348,7 @@ mod tests {
             source_path: None,
         };
 
-        let decl = SkillsPlugin::tool_decl(
+        let definition = SkillsPlugin::tool_definition(
             "security_review",
             &DiscoveredTool {
                 skill,
@@ -356,7 +357,7 @@ mod tests {
         );
 
         assert_eq!(
-            decl.aliases,
+            definition.aliases,
             vec![
                 "security-review".to_string(),
                 "sec-review".to_string(),

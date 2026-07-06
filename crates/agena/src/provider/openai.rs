@@ -4962,7 +4962,7 @@ mod tests {
         let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
         request.tools = vec![crate::plugin::registry::RegisteredTool::new(
             "agena.web",
-            crate::plugin::sdk::PluginToolDecl::new(
+            crate::plugin::sdk::ToolDefinition::new(
                 "search",
                 serde_json::json!({
                     "type": "object",
@@ -5001,7 +5001,7 @@ mod tests {
         let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
         request.tools = vec![crate::plugin::registry::RegisteredTool::new(
             "streaming-fixture",
-            crate::plugin::sdk::PluginToolDecl::new(
+            crate::plugin::sdk::ToolDefinition::new(
                 "stream_fixture.count",
                 serde_json::json!({
                     "type": "object",
@@ -5039,7 +5039,7 @@ mod tests {
         let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
         request.tools = vec![crate::plugin::registry::RegisteredTool::new(
             "web",
-            crate::plugin::sdk::PluginToolDecl::new(
+            crate::plugin::sdk::ToolDefinition::new(
                 "search",
                 serde_json::json!({
                     "type": "object",
@@ -5099,7 +5099,7 @@ mod tests {
         let mut request = test_completion_request(vec![Message::prompt_text(Role::User, "hi")]);
         request.tools = vec![crate::plugin::registry::RegisteredTool::new(
             "agena.web",
-            crate::plugin::sdk::PluginToolDecl::new(
+            crate::plugin::sdk::ToolDefinition::new(
                 "search",
                 serde_json::json!({
                     "type": "object",
@@ -5471,7 +5471,7 @@ mod tests {
         request.model = ModelId::new("cline-pass/deepseek-v4-flash");
         request.tools = vec![crate::plugin::registry::RegisteredTool::new(
             "web",
-            crate::plugin::sdk::PluginToolDecl::new(
+            crate::plugin::sdk::ToolDefinition::new(
                 "search",
                 serde_json::json!({
                     "type": "object",

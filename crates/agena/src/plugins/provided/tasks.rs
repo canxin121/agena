@@ -31,7 +31,7 @@ impl Plugin for TasksPlugin {
             .description("Delegated subtask orchestration tools.")
             .brief_detailed()
             .hooks(HookSubscription::TOOL_INVOKE)
-            .tool(TaskToolActionInput::tool_decl())
+            .tool(TaskToolActionInput::tool_definition())
             .build()
     }
 

@@ -3592,7 +3592,7 @@ fn validate_plugin_manifest_value(
 
 fn validate_tool_manifest_value(
     plugin_name: &str,
-    parsed_tool: &Option<&crate::plugin::PluginToolDecl>,
+    parsed_tool: &Option<&crate::plugin::ToolDefinition>,
     value: &serde_json::Value,
     path: &str,
     output: &mut PluginValidateOutput,
@@ -3603,33 +3603,57 @@ fn validate_tool_manifest_value(
         &[
             "name",
             "aliases",
-            "description",
-            "before_help",
-            "after_help",
-            "summary",
-            "help",
-            "examples",
-            "description_mode",
-            "ui_display_mode",
-            "input_schema",
-            "input_paths",
-            "input_networks",
-            "path_access",
-            "network_access",
-            "tags",
-            "concurrency_safe",
-            "strict",
-            "streaming",
-            "result_policy",
-            "host_capabilities",
+            "contract",
+            "model",
+            "docs",
+            "runtime",
+            "permissions",
+            "display",
+            "capabilities",
         ],
         "tool.unknown_field",
         output,
     );
-    if let Some(policy) = value.get("result_policy") {
+    if let Some(contract) = value.get("contract") {
+        check_object_keys(
+            contract,
+            &format!("{path}.contract"),
+            &["input_schema", "output_schema", "strict"],
+            "tool.contract.unknown_field",
+            output,
+        );
+    }
+    if let Some(model) = value.get("model") {
+        check_object_keys(
+            model,
+            &format!("{path}.model"),
+            &["description", "examples"],
+            "tool.model.unknown_field",
+            output,
+        );
+    }
+    if let Some(docs) = value.get("docs") {
+        check_object_keys(
+            docs,
+            &format!("{path}.docs"),
+            &["before_help", "after_help", "summary", "help"],
+            "tool.docs.unknown_field",
+            output,
+        );
+    }
+    if let Some(runtime) = value.get("runtime") {
+        check_object_keys(
+            runtime,
+            &format!("{path}.runtime"),
+            &["concurrency_safe", "streaming", "result_policy"],
+            "tool.runtime.unknown_field",
+            output,
+        );
+    }
+    if let Some(policy) = value.pointer("/runtime/result_policy") {
         check_object_keys(
             policy,
-            &format!("{path}.result_policy"),
+            &format!("{path}.runtime.result_policy"),
             &[
                 "max_model_chars",
                 "preview_lines",
@@ -3637,6 +3661,30 @@ fn validate_tool_manifest_value(
                 "ui_render_kind",
             ],
             "tool.result_policy.unknown_field",
+            output,
+        );
+    }
+    if let Some(permissions) = value.get("permissions") {
+        check_object_keys(
+            permissions,
+            &format!("{path}.permissions"),
+            &[
+                "input_paths",
+                "input_networks",
+                "path_access",
+                "network_access",
+                "tags",
+            ],
+            "tool.permissions.unknown_field",
+            output,
+        );
+    }
+    if let Some(display) = value.get("display") {
+        check_object_keys(
+            display,
+            &format!("{path}.display"),
+            &["description_mode", "ui_display_mode"],
+            "tool.display.unknown_field",
             output,
         );
     }
@@ -3655,7 +3703,7 @@ fn validate_tool_manifest_value(
                 output,
             );
         }
-        for (idx, spec) in tool.path_access.iter().enumerate() {
+        for (idx, spec) in tool.permissions.path_access.iter().enumerate() {
             validate_no_parent_path(
                 spec.path.as_str(),
                 &format!("{path}.path_access[{idx}].path"),
@@ -5040,13 +5088,21 @@ mod tests {
                 "tools": [
                     {
                         "name": "plan@get",
-                        "input_schema": { "type": "object" },
-                        "concurrency_safe": false
+                        "contract": {
+                            "input_schema": { "type": "object" }
+                        },
+                        "runtime": {
+                            "concurrency_safe": false
+                        }
                     },
                     {
                         "name": "plan_get",
-                        "input_schema": { "type": "object" },
-                        "concurrency_safe": false
+                        "contract": {
+                            "input_schema": { "type": "object" }
+                        },
+                        "runtime": {
+                            "concurrency_safe": false
+                        }
                     }
                 ]
             }))
@@ -5077,8 +5133,12 @@ mod tests {
                 "tools": [
                     {
                         "name": "echo",
-                        "input_schema": { "type": "object" },
-                        "concurrency_safe": false
+                        "contract": {
+                            "input_schema": { "type": "object" }
+                        },
+                        "runtime": {
+                            "concurrency_safe": false
+                        }
                     }
                 ]
             }))

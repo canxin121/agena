@@ -182,10 +182,10 @@ fn invoke_plugin_tool_for_ui(
                     .map(|manifest| {
                         format!(
                             "{}__{}",
-                            agena::plugin::registry::exposed_tool_name_segment(
+                            agena::plugin::registry::model_tool_name_segment(
                                 manifest.name.as_str()
                             ),
-                            agena::plugin::registry::exposed_tool_name_segment(tool_name),
+                            agena::plugin::registry::model_tool_name_segment(tool_name),
                         )
                     })
             })
@@ -205,8 +205,8 @@ fn invoke_plugin_tool_for_ui(
     let structured =
         agena::message::StructuredObject::try_from(input).map_err(ServerError::BadRequest)?;
     let invocation = agena::message::ToolInvocation::with_plugin_name(
-        entry.exposed_name.clone(),
-        entry.plugin_name.clone(),
+        entry.model_name.clone(),
+        entry.target.plugin_name.clone(),
         structured,
     );
     let executor = manager.tool_executor();
@@ -234,8 +234,8 @@ fn invoke_plugin_tool_for_ui(
         .execute_invocation_detailed(&invocation, session_id.unwrap_or(-1), -1)
         .map_err(|error| ServerError::Internal(error.to_string()))?;
     Ok(agena::plugin::PluginUiToolInvokeResponse {
-        plugin_id: entry.plugin_name,
-        tool: entry.exposed_name,
+        plugin_id: entry.target.plugin_name,
+        tool: entry.model_name,
         title: execution.view.title,
         output_text: execution.view.output_text,
         payload: execution.output.to_json_payload(),

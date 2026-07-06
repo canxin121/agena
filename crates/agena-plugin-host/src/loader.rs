@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::config::{ConfiguredPlugin, PluginPackage, PluginSignature};
 use crate::error::{HostError, TransportError};
 use crate::host::{HostHandle, LoadedPlugin};
-use crate::registry::{effective_host_capabilities_for_manifest, per_tool_host_capabilities};
+use crate::registry::{effective_capabilities_for_manifest, per_tool_capabilities};
 use crate::sdk::rpc::method;
 use crate::sdk::{InitContext, InitOutcome, PluginManifest};
 use crate::transport::{
@@ -208,7 +208,7 @@ pub async fn load_entry(
     host_handle
         .set_plugin_capabilities(
             plugin_id.to_string(),
-            effective_host_capabilities_for_manifest(
+            effective_capabilities_for_manifest(
                 &prefetched_manifest.tools,
                 &prefetched_manifest.plugin_capabilities,
             ),
@@ -217,7 +217,7 @@ pub async fn load_entry(
     host_handle
         .set_plugin_tool_capabilities(
             plugin_id.to_string(),
-            per_tool_host_capabilities(&prefetched_manifest.tools),
+            per_tool_capabilities(&prefetched_manifest.tools),
         )
         .await;
 

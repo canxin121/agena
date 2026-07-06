@@ -29,7 +29,7 @@ impl Plugin for SnapshotPlugin {
             .description("Managed snapshot tools backed by Rift or git worktree.")
             .brief_detailed()
             .hooks(HookSubscription::TOOL_INVOKE)
-            .tool(SnapshotToolInput::tool_decl())
+            .tool(SnapshotToolInput::tool_definition())
             .build()
     }
 

@@ -91,7 +91,7 @@ impl Plugin for ProcessPlugin {
         PluginManifest::builder(PROCESS_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
             .description("Command execution and background process tools.")
             .brief_detailed()
-            .tool(ProcessToolSurfaceInput::tool_decl())
+            .tool(ProcessToolSurfaceInput::tool_definition())
             .build()
     }
 
@@ -207,7 +207,9 @@ mod tests {
     #[test]
     fn process_schema_usage_includes_background_flow() {
         let usage = crate::tool::definition::schema_usage_text(
-            &ProcessToolSurfaceInput::tool_decl().input_schema,
+            &ProcessToolSurfaceInput::tool_definition()
+                .contract
+                .input_schema,
         )
         .expect("usage text");
         assert!(usage.contains("Actions:"));

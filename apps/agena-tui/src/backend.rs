@@ -4541,11 +4541,11 @@ impl Backend {
             .registered_tools()
             .into_iter()
             .map(|entry| InspectorRow {
-                label: entry.exposed_name,
+                label: entry.model_name,
                 detail: format!(
                     "{} | {}",
-                    entry.plugin_name,
-                    entry.decl.description.unwrap_or_default()
+                    entry.target.plugin_name,
+                    entry.definition.description_text()
                 ),
             })
             .collect::<Vec<_>>();

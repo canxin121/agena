@@ -4,7 +4,7 @@ import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
 import LoginPage from './agena/pages/LoginPage.vue'
 import { dispatchAuthCallback } from './agena/lib/authCallbackRegistry'
-import { createCommandPalette } from './agena/lib/commandPalette'
+import { createCommandPalette, type CommandItem } from './agena/lib/commandPalette'
 import { registeredLocalCommands, setGlobalCommandPaletteOpenHandler } from './agena/lib/commandPaletteRegistry'
 import {
   fetchRuntimeStatus,
@@ -66,6 +66,11 @@ const commandPalette = createCommandPalette({
     }
   },
 })
+
+function runPaletteItem(item: CommandItem) {
+  void item.run()
+  commandPalette.closePalette()
+}
 
 function applyRuntimeSnapshot(status: RuntimeStatus | null) {
   runtimeSnapshot.value = status
@@ -289,10 +294,7 @@ watch(
             :key="item.id"
             class="list-item palette-item"
             :class="{ active: index === commandPalette.highlightedIndex.value }"
-            @click="
-              void item.run()
-              commandPalette.closePalette()
-            "
+            @click="runPaletteItem(item)"
           >
             <div>
               <strong>{{ item.title }}</strong>

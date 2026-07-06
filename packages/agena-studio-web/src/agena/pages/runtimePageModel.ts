@@ -58,8 +58,8 @@ export function buildRuntimeSnapshotFacts(runtime: RuntimeStatus | null): Sessio
     { label: 'Tool Registry Generation', value: String(runtime.operator.ui?.tool_registry_generation ?? 0) },
     {
       label: 'Tool Registry Last Event',
-      value: runtime.operator.ui?.tool_registry_last_event?.exposed_name || 'n/a',
-      mono: Boolean(runtime.operator.ui?.tool_registry_last_event?.exposed_name),
+      value: runtime.operator.ui?.tool_registry_last_event?.model_name || 'n/a',
+      mono: Boolean(runtime.operator.ui?.tool_registry_last_event?.model_name),
     },
     { label: 'Providers', value: runtime.provider_ids.join(', ') || 'none' },
     { label: 'Session Runtime', value: runtime.session_runtime_available ? 'enabled' : 'disabled' },

@@ -144,6 +144,6 @@ fn extend_manifest_entries(entries: &mut Vec<RegisteredTool>, manifest: PluginMa
         manifest
             .tools
             .into_iter()
-            .map(|decl| RegisteredTool::new(plugin_name.clone(), decl)),
+            .map(|definition| RegisteredTool::new(plugin_name.clone(), definition)),
     );
 }

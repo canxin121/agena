@@ -188,7 +188,7 @@ impl crate::plugin::sdk::Plugin for StreamingFixturePlugin {
         crate::plugin::sdk::PluginManifest::builder("streaming-fixture", "0.1.0")
             .hooks(crate::plugin::sdk::HookSubscription::TOOL_INVOKE_STREAM)
             .tool(
-                crate::plugin::sdk::PluginToolDecl::new(
+                crate::plugin::sdk::ToolDefinition::new(
                     "stream_fixture.count",
                     serde_json::json!({
                         "type": "object",

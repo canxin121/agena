@@ -39,7 +39,7 @@ impl Plugin for PlanPlugin {
                     | HookSubscription::AGENT_STOP,
             )
             .plugin_capabilities([HostCapability::PluginStorage, HostCapability::Statusline])
-            .tool(PlanToolInput::tool_decl())
+            .tool(PlanToolInput::tool_definition())
             .build()
     }
 

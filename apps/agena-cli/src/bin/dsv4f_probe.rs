@@ -102,10 +102,10 @@ async fn async_main() -> Result<(), AppError> {
         .tool_executor()
         .with_model_id(model.model_id.to_string());
     let mut tools = executor.available_model_tools();
-    tools.sort_by(|left, right| left.exposed_name.cmp(&right.exposed_name));
+    tools.sort_by(|left, right| left.model_name.cmp(&right.model_name));
 
     if let Some(name) = args.tool.as_deref() {
-        tools.retain(|tool| tool.exposed_name == name);
+        tools.retain(|tool| tool.model_name == name);
     }
     if let Some(limit) = args.limit {
         tools.truncate(limit);
@@ -113,7 +113,7 @@ async fn async_main() -> Result<(), AppError> {
 
     if args.list {
         for tool in &tools {
-            println!("{}", tool.exposed_name);
+            println!("{}", tool.model_name);
         }
         return Ok(());
     }
@@ -121,7 +121,7 @@ async fn async_main() -> Result<(), AppError> {
     let mut cases = Vec::new();
     for tool in &tools {
         cases.extend(build_probe_cases(
-            tool.exposed_name.as_str(),
+            tool.model_name.as_str(),
             &tool.sanitized_input_schema(),
         ));
     }

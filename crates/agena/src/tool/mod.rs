@@ -646,12 +646,12 @@ fn expand_registered_tool_for_model(
         if !used_model_names.insert(alias_model_name) {
             continue;
         }
-        let mut decl = base.definition.clone();
-        decl.name = alias_name.to_string();
-        decl.aliases.clear();
-        decl.model.description = Some(tool_name_alias_description(base));
-        decl.docs.help = tool_name_alias_help(base);
-        out.push(base.with_tool_alias(alias_name, decl));
+        let mut definition = base.definition.clone();
+        definition.name = alias_name.to_string();
+        definition.aliases.clear();
+        definition.model.description = Some(tool_name_alias_description(base));
+        definition.docs.help = tool_name_alias_help(base);
+        out.push(base.with_tool_alias(alias_name, definition));
     }
     expand_registered_tool_for_model_inner(
         base,
@@ -699,17 +699,17 @@ fn expand_registered_tool_for_model_inner(
 
     let alias_name = allocate_model_alias_name(base, &alias_segments, used_model_names);
     let fixed_input_value = serde_json::Value::Object(fixed_input);
-    let mut decl = base.definition.clone();
-    decl.name = alias_name.clone();
-    decl.contract.input_schema = schema;
-    decl.model.description = Some(model_alias_description(
+    let mut definition = base.definition.clone();
+    definition.name = alias_name.clone();
+    definition.contract.input_schema = schema;
+    definition.model.description = Some(model_alias_description(
         base,
         &fixed_input_value,
-        &decl.contract.input_schema,
+        &definition.contract.input_schema,
     ));
-    decl.docs.help = model_alias_help(base, &fixed_input_value);
+    definition.docs.help = model_alias_help(base, &fixed_input_value);
 
-    let mut alias = base.with_model_alias(alias_name, decl, fixed_input_value.clone());
+    let mut alias = base.with_model_alias(alias_name, definition, fixed_input_value.clone());
     let fixed_input_object = StructuredObject::try_from(fixed_input_value)
         .expect("model tool alias fixed input should always be an object");
     let invocation = ToolInvocation::new(alias.model_name.as_str(), fixed_input_object);
@@ -4153,73 +4153,79 @@ mod tests {
 
     #[test]
     fn static_tool_surface_can_derive_docs_from_rust_doc_comments() {
-        let decl = DocBackedToolInput::tool_decl();
+        let definition = DocBackedToolInput::tool_definition();
         assert_eq!(
-            decl.description_text(),
+            definition.description_text(),
             "Doc-backed tool.\n\nSecond paragraph becomes help text automatically."
         );
-        assert_eq!(decl.summary_text(), Some("Doc-backed tool."));
+        assert_eq!(definition.summary_text(), Some("Doc-backed tool."));
         assert_eq!(
-            decl.help_text(),
+            definition.help_text(),
             Some("Doc-backed tool.\n\nSecond paragraph becomes help text automatically.")
         );
         assert_eq!(
-            decl.example_texts(),
+            definition.example_texts(),
             &[r#"{"action":"run","value":"ok"}"#.to_string()]
         );
     }
 
     #[test]
     fn static_tool_surface_accepts_about_aliases() {
-        let decl = AboutAliasSurfaceInput::tool_decl();
-        assert_eq!(decl.summary_text(), Some("About summary."));
-        assert_eq!(decl.description_text(), "About description.");
-        assert_eq!(decl.help_text(), Some("About help."));
+        let definition = AboutAliasSurfaceInput::tool_definition();
+        assert_eq!(definition.summary_text(), Some("About summary."));
+        assert_eq!(definition.description_text(), "About description.");
+        assert_eq!(definition.help_text(), Some("About help."));
     }
 
     #[test]
     fn tool_command_accepts_about_aliases() {
-        let decl = AboutAliasCommandInput::tool_decl();
-        assert_eq!(decl.summary_text(), Some("Command summary."));
-        assert_eq!(decl.description_text(), "Command description.");
-        assert_eq!(decl.help_text(), Some("Command help."));
+        let definition = AboutAliasCommandInput::tool_definition();
+        assert_eq!(definition.summary_text(), Some("Command summary."));
+        assert_eq!(definition.description_text(), "Command description.");
+        assert_eq!(definition.help_text(), Some("Command help."));
     }
 
     #[test]
     fn static_tool_surface_accepts_after_help_aliases() {
-        let decl = AfterHelpAliasSurfaceInput::tool_decl();
-        assert_eq!(decl.after_help_text(), Some("After-long-help text."));
-        assert_eq!(decl.help_text(), None);
+        let definition = AfterHelpAliasSurfaceInput::tool_definition();
+        assert_eq!(definition.after_help_text(), Some("After-long-help text."));
+        assert_eq!(definition.help_text(), None);
     }
 
     #[test]
     fn tool_command_accepts_after_help_aliases() {
-        let decl = AfterHelpAliasCommandInput::tool_decl();
+        let definition = AfterHelpAliasCommandInput::tool_definition();
         assert_eq!(
-            decl.after_help_text(),
+            definition.after_help_text(),
             Some("Command after-long-help text.")
         );
-        assert_eq!(decl.help_text(), None);
+        assert_eq!(definition.help_text(), None);
     }
 
     #[test]
     fn static_tool_surface_accepts_before_help_aliases() {
-        let decl = BeforeHelpAliasSurfaceInput::tool_decl();
+        let definition = BeforeHelpAliasSurfaceInput::tool_definition();
         assert_eq!(
-            decl.before_help_text(),
+            definition.before_help_text(),
             Some("Before-long-help surface fixture.")
         );
-        assert_eq!(decl.description_text(), "Before-help surface fixture.");
+        assert_eq!(
+            definition.description_text(),
+            "Before-help surface fixture."
+        );
     }
 
     #[test]
     fn tool_command_accepts_before_help_aliases() {
-        let decl = BeforeHelpAliasCommandInput::tool_decl();
+        let definition = BeforeHelpAliasCommandInput::tool_definition();
         assert_eq!(
-            decl.before_help_text(),
+            definition.before_help_text(),
             Some("Command before-long-help text.")
         );
-        assert_eq!(decl.description_text(), "Command before-help fixture.");
+        assert_eq!(
+            definition.description_text(),
+            "Command before-help fixture."
+        );
     }
 
     #[test]
@@ -4276,25 +4282,29 @@ mod tests {
             .expect("sdk alias args should parse through ToolArgs re-export");
         assert_eq!(parsed.value, "ok");
 
-        let command_decl = SdkAliasCommandInput::tool_decl();
-        assert_eq!(command_decl.name, "fixture.sdk_alias_command");
+        let command_definition = SdkAliasCommandInput::tool_definition();
+        assert_eq!(command_definition.name, "fixture.sdk_alias_command");
         assert_eq!(
-            command_decl.alias_texts(),
+            command_definition.alias_texts(),
             &[
                 "fixture.sdk_alias_short".to_string(),
                 "fixture.sdk_alias_visible".to_string(),
                 "fixture.sdk_alias_lookup".to_string()
             ]
         );
-        let usage = crate::tool::definition::schema_usage_text(&command_decl.input_schema)
-            .expect("sdk alias command usage");
+        let usage =
+            crate::tool::definition::schema_usage_text(&command_definition.contract.input_schema)
+                .expect("sdk alias command usage");
         assert!(usage.contains("Value routed through the SDK alias surface."));
 
-        let decl_names = SdkAliasToolSuite::tool_decls()
+        let definition_names = SdkAliasToolSuite::tool_definitions()
             .into_iter()
-            .map(|decl| decl.name)
+            .map(|definition| definition.name)
             .collect::<Vec<_>>();
-        assert_eq!(decl_names, vec!["fixture.sdk_alias_command".to_string()]);
+        assert_eq!(
+            definition_names,
+            vec!["fixture.sdk_alias_command".to_string()]
+        );
 
         let (resolved_tool, resolved_input) =
             SdkAliasCommandInput::resolve_json_str("fixture.sdk_alias_short", r#"{"value":"ok"}"#)
@@ -4879,36 +4889,39 @@ mod tests {
 
     #[test]
     fn static_tool_surface_schema_carries_variant_and_field_doc_descriptions() {
-        let tool_decl = DocBackedToolInput::tool_decl();
-        let usage = crate::tool::definition::schema_usage_text(&tool_decl.input_schema)
-            .expect("usage text");
+        let tool_definition = DocBackedToolInput::tool_definition();
+        let usage =
+            crate::tool::definition::schema_usage_text(&tool_definition.contract.input_schema)
+                .expect("usage text");
         assert!(usage.contains("run: Run the documented action."));
 
-        let struct_decl = DocBackedStructToolInput::tool_decl();
+        let struct_definition = DocBackedStructToolInput::tool_definition();
         assert_eq!(
-            struct_decl
+            struct_definition
+                .contract
                 .input_schema
                 .pointer("/properties/path/description")
                 .and_then(serde_json::Value::as_str),
             Some("Path to inspect.")
         );
-        let struct_usage = crate::tool::definition::schema_usage_text(&struct_decl.input_schema)
-            .expect("struct usage text");
+        let struct_usage =
+            crate::tool::definition::schema_usage_text(&struct_definition.contract.input_schema)
+                .expect("struct usage text");
         assert!(struct_usage.contains("Path to inspect."));
 
-        let ui_decl = UiDisplaySurfaceInput::tool_decl();
+        let ui_definition = UiDisplaySurfaceInput::tool_definition();
         assert_eq!(
-            ui_decl.preferred_ui_display_mode(),
+            ui_definition.preferred_ui_display_mode(),
             Some(crate::plugin::sdk::UiTextDisplayMode::Summary)
         );
 
-        let brief_decl = BriefDisplaySurfaceInput::tool_decl();
+        let brief_definition = BriefDisplaySurfaceInput::tool_definition();
         assert_eq!(
-            brief_decl.preferred_description_mode(),
+            brief_definition.preferred_description_mode(),
             Some(crate::plugin::sdk::ToolDescriptionMode::Brief)
         );
         assert_eq!(
-            brief_decl.preferred_ui_display_mode(),
+            brief_definition.preferred_ui_display_mode(),
             Some(crate::plugin::sdk::UiTextDisplayMode::Summary)
         );
     }
@@ -5791,7 +5804,7 @@ mod tests {
                         | HookSubscription::SHELL_ENV,
                 )
                 .tool(
-                    PluginToolDecl::new(
+                    ToolDefinition::new(
                         "plugin_echo",
                         json!({
                             "type": "object",
@@ -5809,7 +5822,7 @@ mod tests {
                     .tag(crate::plugin::sdk::ToolTag::ReadOnly),
                 )
                 .tool(
-                    PluginToolDecl::new(
+                    ToolDefinition::new(
                         "plugin_paths",
                         json!({
                             "type": "object",

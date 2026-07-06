@@ -173,10 +173,8 @@
           "kind": "static"
         },
         "config": {
-          "plan": {
-            "default_auto_continue": true,
-            "allow_direct_approval": true
-          }
+          "default_autorun": true,
+          "allow_direct_approval": true
         }
       },
       "agena.memory": {

@@ -9,7 +9,7 @@ use agena_macros::{StaticToolSurface, ToolInputShape};
     summary = "Switch or restore the current runtime agent profile.",
     handler_receiver = WorkflowPlugin,
     display = brief,
-    host_capabilities(HostCapability::AgentRegistry),
+    capabilities(HostCapability::AgentRegistry),
     concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
@@ -43,7 +43,7 @@ pub(crate) struct SessionRenameToolInput {
     handler_receiver = WorkflowPlugin,
     display = brief,
     tags(ToolTag::ReadOnly, ToolTag::Mutating),
-    host_capabilities(HostCapability::SessionRegistry),
+    capabilities(HostCapability::SessionRegistry),
     concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
@@ -66,7 +66,7 @@ pub(crate) enum SessionToolInput {
     handler_receiver = WorkflowPlugin,
     display = brief,
     tags(ToolTag::ReadOnly, ToolTag::Interactive),
-    host_capabilities(HostCapability::AskUser),
+    capabilities(HostCapability::AskUser),
     concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]

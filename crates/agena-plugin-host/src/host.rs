@@ -16,9 +16,7 @@ use crate::dispatcher::{self, call_with_timeout};
 use crate::error::{HostError, TransportError};
 use crate::loader::{StaticRegistration, load_entry, shutdown_transport};
 use crate::logs::{PluginLogRecord, PluginLogStore};
-use crate::registry::{
-    PluginToolRegistry, RegisteredTool, effective_host_capabilities_for_manifest,
-};
+use crate::registry::{PluginToolRegistry, RegisteredTool, effective_capabilities_for_manifest};
 use crate::sdk::host_api::{
     self, AskUserRequest, AskUserResponse, EventSubscription, HostAgentGetRequest,
     HostAgentGetResponse, HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
@@ -83,7 +81,7 @@ impl LoadedPlugin {
     }
 
     pub fn authority_summary(&self) -> PluginAuthoritySummary {
-        let plugin_capabilities = effective_host_capabilities_for_manifest(
+        let plugin_capabilities = effective_capabilities_for_manifest(
             &self.manifest.tools,
             &self.manifest.plugin_capabilities,
         )
@@ -94,11 +92,11 @@ impl LoadedPlugin {
             .manifest
             .tools
             .iter()
-            .filter(|tool| !tool.host_capabilities.is_empty())
+            .filter(|tool| !tool.capabilities.is_empty())
             .map(|tool| {
                 (
                     tool.name.clone(),
-                    tool.host_capabilities
+                    tool.capabilities
                         .iter()
                         .map(|capability| format!("{capability:?}"))
                         .collect::<Vec<_>>(),
@@ -1813,7 +1811,7 @@ fn tool_hook_context(
 }
 
 fn plugin_has_capability(plugin: &LoadedPlugin, capability: HostCapability) -> bool {
-    effective_host_capabilities_for_manifest(
+    effective_capabilities_for_manifest(
         &plugin.manifest.tools,
         &plugin.manifest.plugin_capabilities,
     )
@@ -2124,7 +2122,7 @@ impl PluginHostBuilder {
                 host_handle
                     .set_plugin_capabilities(
                         reused.id.clone(),
-                        effective_host_capabilities_for_manifest(
+                        effective_capabilities_for_manifest(
                             &reused.manifest.tools,
                             &reused.manifest.plugin_capabilities,
                         ),
@@ -2133,7 +2131,7 @@ impl PluginHostBuilder {
                 host_handle
                     .set_plugin_tool_capabilities(
                         reused.id.clone(),
-                        crate::registry::per_tool_host_capabilities(&reused.manifest.tools),
+                        crate::registry::per_tool_capabilities(&reused.manifest.tools),
                     )
                     .await;
                 host_handle.set_plugin_hook_catalog(hook_registration_for_plugin(&reused));
@@ -2180,7 +2178,7 @@ impl PluginHostBuilder {
                     host_handle
                         .set_plugin_capabilities(
                             plugin.id.clone(),
-                            effective_host_capabilities_for_manifest(
+                            effective_capabilities_for_manifest(
                                 &plugin.manifest.tools,
                                 &plugin.manifest.plugin_capabilities,
                             ),
@@ -2189,7 +2187,7 @@ impl PluginHostBuilder {
                     host_handle
                         .set_plugin_tool_capabilities(
                             plugin.id.clone(),
-                            crate::registry::per_tool_host_capabilities(&plugin.manifest.tools),
+                            crate::registry::per_tool_capabilities(&plugin.manifest.tools),
                         )
                         .await;
                     host_handle.set_plugin_hook_catalog(hook_registration_for_plugin(&plugin));
@@ -3576,7 +3574,7 @@ impl HostHandle {
     fn tool_upsert_for_plugin(
         &self,
         plugin_id: &str,
-        decl: crate::sdk::PluginToolDecl,
+        definition: crate::sdk::ToolDefinition,
     ) -> Result<HostToolMutationResponse, PluginError> {
         let registered = self
             .plugin_indices
@@ -3601,7 +3599,7 @@ impl HostHandle {
             .ok_or_else(|| {
                 host_unavailable(format!("plugin `{plugin_id}` manifest name missing"))
             })?;
-        let plugin_tool_name = decl.name.clone();
+        let plugin_tool_name = definition.name.clone();
         let kind = if tool_registry
             .lookup_for_plugin(plugin_id, &plugin_tool_name)
             .is_some()
@@ -3610,7 +3608,7 @@ impl HostHandle {
         } else {
             ToolRegistryChangeKind::Registered
         };
-        let tool = tool_registry.upsert_from_plugin(plugin_id, &plugin_name, decl);
+        let tool = tool_registry.upsert_from_plugin(plugin_id, &plugin_name, definition);
         let event = ToolRegistryChangedEvent {
             kind,
             generation: tool_registry.generation(),
@@ -3618,13 +3616,13 @@ impl HostHandle {
             plugin_id: plugin_id.to_string(),
             plugin_tool_name: tool.target.plugin_tool_name.clone(),
             model_name: tool.model_name.clone(),
-            tool: Some(tool.definition.to_decl()),
+            tool: Some(tool.definition.clone()),
         };
         self.record_tool_registry_event(event.clone());
         Ok(HostToolMutationResponse {
             generation: tool_registry.generation(),
             model_name: Some(tool.model_name.clone()),
-            tool: Some(tool.definition.to_decl()),
+            tool: Some(tool.definition.clone()),
             event: Some(event),
         })
     }
@@ -3651,7 +3649,7 @@ impl HostHandle {
             plugin_id: plugin_id.to_string(),
             plugin_tool_name: tool.target.plugin_tool_name.clone(),
             model_name: tool.model_name.clone(),
-            tool: Some(tool.definition.to_decl()),
+            tool: Some(tool.definition.clone()),
         });
         if let Some(event) = event.as_ref() {
             self.record_tool_registry_event(event.clone());
@@ -3659,7 +3657,7 @@ impl HostHandle {
         Ok(HostToolMutationResponse {
             generation: tool_registry.generation(),
             model_name: removed.as_ref().map(|tool| tool.model_name.clone()),
-            tool: removed.map(|tool| tool.definition.to_decl()),
+            tool: removed.map(|tool| tool.definition.clone()),
             event,
         })
     }
@@ -3677,7 +3675,7 @@ impl HostHandle {
                 plugin_id: tool.target.plugin_id,
                 plugin_tool_name: tool.target.plugin_tool_name,
                 model_name: tool.model_name,
-                tool: tool.definition.to_decl(),
+                tool: tool.definition.clone(),
             })
             .collect();
         Ok(HostRegisteredToolListResponse {
@@ -4715,7 +4713,7 @@ impl HostClient for ScopedHostClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sdk::PluginToolDecl;
+    use crate::sdk::ToolDefinition;
     use serde_json::json;
     use std::sync::Mutex;
 
@@ -4746,7 +4744,7 @@ mod tests {
         let registered = handle
             .tool_upsert_for_plugin(
                 "fixture",
-                PluginToolDecl::new("echo", json!({ "type": "object" })),
+                ToolDefinition::new("echo", json!({ "type": "object" })),
             )
             .expect("register should succeed");
         assert_eq!(
@@ -4764,7 +4762,7 @@ mod tests {
         let updated = handle
             .tool_upsert_for_plugin(
                 "fixture",
-                PluginToolDecl::new("echo", json!({ "type": "object" })).description("updated"),
+                ToolDefinition::new("echo", json!({ "type": "object" })).description("updated"),
             )
             .expect("update should succeed");
         assert_eq!(
@@ -4804,13 +4802,13 @@ mod tests {
         handle
             .tool_upsert_for_plugin(
                 "fixture",
-                PluginToolDecl::new("echo", json!({ "type": "object" })),
+                ToolDefinition::new("echo", json!({ "type": "object" })),
             )
             .expect("register should succeed");
         handle
             .tool_upsert_for_plugin(
                 "fixture",
-                PluginToolDecl::new("echo", json!({ "type": "object" })).description("updated"),
+                ToolDefinition::new("echo", json!({ "type": "object" })).description("updated"),
             )
             .expect("update should succeed");
         handle

@@ -575,7 +575,7 @@ impl Agent {
         self.tool_policy.check_tool(tool_name, command, tags)
     }
 
-    pub fn authorize_tool_aliases(
+    pub fn authorize_tool_names(
         &self,
         tool_names: &[&str],
         command: Option<&str>,
@@ -587,7 +587,7 @@ impl Agent {
             };
         }
         self.tool_policy
-            .check_tool_with_aliases(tool_names, command, tags)
+            .check_tool_with_names(tool_names, command, tags)
     }
 
     pub fn authorize_tool_name(&self, tool_name: &str) -> PermissionDecision {

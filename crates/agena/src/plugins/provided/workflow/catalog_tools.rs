@@ -5,7 +5,6 @@ use agena_macros::{StaticToolSurface, ToolInputShape};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "tools",
-    aliases("tool_catalog", "tool.help"),
     description = "Tool catalog command. Use action `usage` for examples, `list` to enumerate tools, `search` to find tools, or `help` to fetch detailed usage for a tool. This tool does not execute the target tool for you.",
     before_help = "Quick reference for browsing the registered tool catalog.",
     summary = "Show usage examples, list tools, search tools, or fetch detailed tool help.",

@@ -477,7 +477,7 @@ impl HostClient for RuntimeHostClient {
             .ok_or_else(|| PluginError::new(format!("tool `{tool}` not found")))?;
 
         let caller = self.callback_context()?;
-        let plugin_id = resolution.target.plugin_id.clone();
+        let plugin_id = resolution.plugin_name.clone();
         if caller
             .plugin_id
             .as_ref()

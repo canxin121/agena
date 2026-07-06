@@ -339,7 +339,7 @@ impl ToolPermissionPolicy {
         self.check_tool(name, None, &[])
     }
 
-    pub fn check_tool_with_aliases(
+    pub fn check_tool_with_names(
         &self,
         names: &[&str],
         command: Option<&str>,
@@ -358,7 +358,7 @@ impl ToolPermissionPolicy {
                 return decision;
             }
         }
-        self.check_tool_mode_with_aliases(names, tags)
+        self.check_tool_mode_with_names(names, tags)
     }
 
     pub fn check_tool(
@@ -367,10 +367,10 @@ impl ToolPermissionPolicy {
         command: Option<&str>,
         tags: &[ToolTag],
     ) -> PermissionDecision {
-        self.check_tool_with_aliases(&[name], command, tags)
+        self.check_tool_with_names(&[name], command, tags)
     }
 
-    fn check_tool_mode_with_aliases(&self, names: &[&str], tags: &[ToolTag]) -> PermissionDecision {
+    fn check_tool_mode_with_names(&self, names: &[&str], tags: &[ToolTag]) -> PermissionDecision {
         if let Some((matched_name, mode)) = names.iter().find_map(|name| {
             self.tool_modes
                 .get(*name)

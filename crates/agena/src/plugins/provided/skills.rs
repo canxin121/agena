@@ -87,28 +87,6 @@ impl SkillsPlugin {
         }
     }
 
-    fn visible_aliases(skill: &Skill) -> Vec<String> {
-        let canonical =
-            crate::plugin::registry::model_tool_name_segment(skill.frontmatter.name.as_str());
-        let mut seen = BTreeSet::new();
-        skill
-            .frontmatter
-            .aliases
-            .iter()
-            .filter_map(|alias| {
-                let trimmed = alias.trim();
-                if trimmed.is_empty() {
-                    return None;
-                }
-                let normalized = crate::plugin::registry::model_tool_name_segment(trimmed);
-                if normalized.is_empty() || normalized == canonical || !seen.insert(normalized) {
-                    return None;
-                }
-                Some(trimmed.to_string())
-            })
-            .collect()
-    }
-
     async fn dispatch_run(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -166,7 +144,6 @@ impl SkillsPlugin {
             .description(description.clone())
             .summary(description)
             .help(discovered_tool.skill.body.clone())
-            .aliases(Self::visible_aliases(&discovered_tool.skill))
             .compact()
             .tags(tags)
             .concurrency_safe(true)
@@ -332,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn skill_tool_definition_filters_aliases_that_collapse_to_canonical_name() {
+    fn skill_tool_definition_does_not_export_aliases() {
         let skill = Skill {
             frontmatter: agena_skills::skill::SkillFrontmatter {
                 name: "security_review".to_string(),
@@ -356,14 +333,7 @@ mod tests {
             },
         );
 
-        assert_eq!(
-            definition.aliases,
-            vec![
-                "security-review".to_string(),
-                "sec-review".to_string(),
-                "sec review".to_string()
-            ]
-        );
+        assert_eq!(definition.name, "security_review");
     }
 
     #[test]

@@ -2842,10 +2842,9 @@ impl McpServerBackend for AgenaMcpBackend {
                 let before_help = tool.before_help_text().map(ToString::to_string);
                 let after_help = tool.after_help_text().map(ToString::to_string);
                 let input_schema = tool.sanitized_input_schema();
-                let aliases = tool.alias_model_names();
                 ToolDescriptor {
                     name: tool.model_name,
-                    aliases,
+                    aliases: Vec::new(),
                     description: Some(description),
                     before_help,
                     after_help,
@@ -2947,7 +2946,7 @@ impl McpServerBackend for AgenaMcpBackend {
             .plugins
             .registered_tools()
             .into_iter()
-            .filter(|entry| matches!(entry.target.plugin_name.as_str(), "agena.skills"))
+            .filter(|entry| matches!(entry.plugin_name.as_str(), "agena.skills"))
             .map(|entry| PromptDescriptor {
                 name: entry.model_name,
                 description: entry.definition.model.description,
@@ -2963,7 +2962,7 @@ impl McpServerBackend for AgenaMcpBackend {
             .plugins
             .lookup_tool(params.name.as_str())
             .ok_or_else(|| McpServerError::NotFound(params.name.clone()))?;
-        if !matches!(entry.target.plugin_name.as_str(), "agena.skills") {
+        if !matches!(entry.plugin_name.as_str(), "agena.skills") {
             return Err(McpServerError::NotFound(params.name));
         }
 
@@ -3695,14 +3694,6 @@ fn validate_tool_manifest_value(
             &format!("{path}.name"),
             output,
         );
-        for (idx, alias) in tool.aliases.iter().enumerate() {
-            validate_tool_segment(
-                plugin_name,
-                alias.as_str(),
-                &format!("{path}.aliases[{idx}]"),
-                output,
-            );
-        }
         for (idx, spec) in tool.permissions.path_access.iter().enumerate() {
             validate_no_parent_path(
                 spec.path.as_str(),
@@ -3753,24 +3744,18 @@ fn validate_tool_name_collisions(
 ) {
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
     for (idx, tool) in manifest.tools.iter().enumerate() {
-        for (label, raw_name) in std::iter::once(("name".to_string(), tool.name.as_str())).chain(
-            tool.aliases
-                .iter()
-                .enumerate()
-                .map(|(alias_idx, alias)| (format!("aliases[{alias_idx}]"), alias.as_str())),
-        ) {
-            let model_name = safe_model_tool_name(manifest.name.as_str(), raw_name);
-            let location = format!("{path}.tools[{idx}].{label}");
-            if let Some(existing) = seen.insert(model_name.clone(), location.clone()) {
-                push_error(
-                    output,
-                    "tool.name.collision",
-                    format!(
-                        "`{raw_name}` normalizes to model-visible name `{model_name}`, colliding with {existing}"
-                    ),
-                    Some(location),
-                );
-            }
+        let raw_name = tool.name.as_str();
+        let model_name = safe_model_tool_name(manifest.name.as_str(), raw_name);
+        let location = format!("{path}.tools[{idx}].name");
+        if let Some(existing) = seen.insert(model_name.clone(), location.clone()) {
+            push_error(
+                output,
+                "tool.name.collision",
+                format!(
+                    "`{raw_name}` normalizes to model-visible name `{model_name}`, colliding with {existing}"
+                ),
+                Some(location),
+            );
         }
     }
 }
@@ -3783,9 +3768,7 @@ fn validate_manifest_ui_actions(
     let known_tools = manifest
         .tools
         .iter()
-        .flat_map(|tool| {
-            std::iter::once(tool.name.as_str()).chain(tool.aliases.iter().map(String::as_str))
-        })
+        .map(|tool| tool.name.as_str())
         .collect::<HashSet<_>>();
     for (idx, command) in manifest.commands.iter().enumerate() {
         validate_ui_action_tool(

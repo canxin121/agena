@@ -4513,7 +4513,7 @@ impl Backend {
                 label: entry.model_name,
                 detail: format!(
                     "{} | {}",
-                    entry.target.plugin_name,
+                    entry.plugin_name,
                     entry.definition.description_text()
                 ),
             })

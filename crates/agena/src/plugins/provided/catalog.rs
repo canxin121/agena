@@ -73,11 +73,6 @@ pub(crate) fn tools_tool_descriptor_for_tests() -> ToolDescriptor {
     let definition = ToolsToolInput::tool_definition();
     ToolDescriptor {
         name: crate::plugin::registry::model_tool_name(CATALOG_PLUGIN_ID, "tools"),
-        aliases: definition
-            .alias_texts()
-            .iter()
-            .map(|alias| crate::plugin::registry::model_tool_name(CATALOG_PLUGIN_ID, alias))
-            .collect(),
         description: Some(definition.description_text().to_string()),
         before_help: definition.before_help_text().map(ToString::to_string),
         after_help: definition.after_help_text().map(ToString::to_string),

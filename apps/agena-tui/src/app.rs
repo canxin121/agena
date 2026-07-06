@@ -22311,7 +22311,7 @@ fn timeline_event_summary(i18n: &I18n, record: &DomainEvent) -> String {
                 agena::plugin::sdk::host_api::ToolRegistryChangeKind::Updated => "updated",
                 agena::plugin::sdk::host_api::ToolRegistryChangeKind::Removed => "removed",
             },
-            event.exposed_name
+            event.model_name
         ),
     }
 }
@@ -22683,24 +22683,28 @@ fn timeline_event_detail_lines(i18n: &I18n, record: &DomainEvent) -> Vec<DetailT
                 timeline_detail_labeled_line(
                     i18n,
                     "timeline-label-name",
-                    event.original_name.clone(),
+                    event.plugin_tool_name.clone(),
                 ),
-                app_detail_plain_line(format!("exposed_name: {}", event.exposed_name)),
+                app_detail_plain_line(format!("model_name: {}", event.model_name)),
                 app_detail_plain_line(format!("generation: {}", event.generation)),
                 app_detail_plain_line(format!("timestamp_ms: {}", event.timestamp_ms)),
             ];
             if let Some(tool) = &event.tool {
+                let description = tool.description_text();
+                let summary = tool
+                    .summary_text()
+                    .or_else(|| (!description.is_empty()).then_some(description))
+                    .unwrap_or(tool.name.as_str())
+                    .to_owned();
                 lines.push(timeline_detail_labeled_line(
                     i18n,
                     "timeline-label-summary",
-                    tool.description
-                        .clone()
-                        .unwrap_or_else(|| tool.name.clone()),
+                    summary,
                 ));
                 lines.push(timeline_detail_labeled_line(
                     i18n,
                     "timeline-label-payload",
-                    timeline_excerpt(i18n, &tool.input_schema.to_string(), 200),
+                    timeline_excerpt(i18n, &tool.contract.input_schema.to_string(), 200),
                 ));
             }
             lines

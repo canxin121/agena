@@ -14,7 +14,7 @@ use crate::error::{PluginError, Result};
 use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
 };
-use crate::manifest::{PathKind, PluginToolDecl, ToolDescriptionMode, ToolTag};
+use crate::manifest::{PathKind, ToolDefinition, ToolDescriptionMode, ToolTag};
 
 #[async_trait]
 pub trait HostClient: Send + Sync + 'static {
@@ -145,7 +145,7 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Dynamic tool registry — replace the decl of an existing tool owned by
+    /// Dynamic tool registry — replace the definition of an existing tool owned by
     /// this plugin (matched by `tool.name`).
     async fn update_tool(&self, _req: HostToolUpdateRequest) -> Result<HostToolMutationResponse> {
         Err(unavailable())
@@ -745,12 +745,12 @@ pub struct MonitorStopRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostToolRegisterRequest {
-    pub tool: PluginToolDecl,
+    pub tool: ToolDefinition,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostToolUpdateRequest {
-    pub tool: PluginToolDecl,
+    pub tool: ToolDefinition,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -766,7 +766,7 @@ pub struct HostToolMutationResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool: Option<PluginToolDecl>,
+    pub tool: Option<ToolDefinition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event: Option<ToolRegistryChangedEvent>,
 }
@@ -788,7 +788,7 @@ pub struct ToolRegistryChangedEvent {
     pub plugin_tool_name: String,
     pub model_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool: Option<PluginToolDecl>,
+    pub tool: Option<ToolDefinition>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -796,7 +796,7 @@ pub struct HostRegisteredToolDescriptor {
     pub plugin_id: String,
     pub plugin_tool_name: String,
     pub model_name: String,
-    pub tool: PluginToolDecl,
+    pub tool: ToolDefinition,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

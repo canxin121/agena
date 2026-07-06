@@ -21,11 +21,11 @@ pub struct PluginManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
     /// Preferred default presentation mode for tools published by this plugin
-    /// when an individual tool declaration does not specify its own mode.
+    /// when an individual tool definition does not specify its own mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_description_mode: Option<ToolDescriptionMode>,
     /// Preferred default text density for UI surfaces that render this plugin
-    /// or its tools when an individual tool declaration does not specify its
+    /// or its tools when an individual tool definition does not specify its
     /// own mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui_display_mode: Option<UiTextDisplayMode>,
@@ -36,13 +36,13 @@ pub struct PluginManifest {
     #[serde(default)]
     pub hooks: HookSubscription,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<PluginToolDecl>,
+    pub tools: Vec<ToolDefinition>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<PluginStudioCommand>,
     /// Plugin-level host capabilities. Useful for plugins that need to
     /// call host APIs without exposing any model-visible tool. These are merged
     /// into the effective capability set alongside the per-tool
-    /// declarations.
+    /// definitions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugin_capabilities: Vec<HostCapability>,
     /// UI contributions owned by this plugin. TUI-facing content and Studio
@@ -198,96 +198,115 @@ pub fn normalize_tool_tag_name(tag: impl AsRef<str>) -> Option<String> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PluginToolDecl {
+pub struct ToolDefinition {
     pub name: String,
-    /// Alternate local tool names accepted by the host for the same tool.
-    /// Hosts expose these in the same namespace as `name`, e.g. a tool alias
-    /// `cat` in plugin `agena.catalog` becomes `agena_catalog__cat`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Optional text shown before the main help block.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub before_help: Option<String>,
-    /// Optional text shown after the main help block.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub after_help: Option<String>,
-    /// Short model-visible one-line description. Hosts may use this when a
-    /// tool is shown in help mode.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
-    /// Detailed usage help returned by host/tool catalog help flows. When
-    /// omitted, hosts fall back to `description` plus the input schema.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub help: Option<String>,
-    /// Structured example invocations shown in tool help flows.
+    #[serde(default)]
+    pub contract: ToolContract,
+    #[serde(default)]
+    pub model: ToolModelSurface,
+    #[serde(default)]
+    pub docs: ToolDocs,
+    #[serde(default)]
+    pub runtime: ToolRuntimePolicy,
+    #[serde(default)]
+    pub permissions: ToolPermissionContract,
+    #[serde(default)]
+    pub display: ToolDisplay,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub examples: Vec<String>,
-    /// Preferred model-visible description mode for this tool. Host config can
-    /// override it per plugin or per tool, or explicitly follow this tool's
-    /// default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description_mode: Option<ToolDescriptionMode>,
-    /// Preferred text density for UI surfaces that render this tool. Host UI
-    /// config can override it per plugin or per tool, or explicitly follow
-    /// this tool's default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ui_display_mode: Option<UiTextDisplayMode>,
+    pub capabilities: Vec<HostCapability>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolContract {
     #[serde(default)]
     pub input_schema: serde_json::Value,
-    /// Optional schema for the tool's successful structured output. Providers
-    /// usually do not accept this in function definitions, but hosts use it to
-    /// document and validate the local tool/result contract.
     #[serde(default, skip_serializing_if = "serde_json_value_is_empty_schema")]
     pub output_schema: serde_json::Value,
-    /// Declarative path-permission specs. The host extracts paths from the
-    /// tool input via JSONPath before invocation and audits them as
-    /// [`PathKind`]. Use [`Plugin::permission_paths`] for paths that can only
-    /// be derived dynamically.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub input_paths: Vec<InputPathSpec>,
-    /// Declarative network-permission specs. The host extracts hosts/URLs from
-    /// the tool input via JSONPath before invocation and audits them as
-    /// outbound connect targets. Use [`Plugin::permission_networks`] for
-    /// targets that can only be derived dynamically.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub input_networks: Vec<InputNetworkSpec>,
-    /// Static local filesystem targets used by this tool regardless of input.
-    /// Use this for fixed workspace paths owned by a plugin; use
-    /// [`Plugin::permission_paths`] for targets that can only be derived
-    /// dynamically.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub path_access: Vec<PathAccessSpec>,
-    /// Static outbound network targets used by this tool regardless of input.
-    /// Typical values are URLs (`https://api.example.com/search`) or
-    /// `host:port` patterns (`api.example.com:443`).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub network_access: Vec<NetworkAccessSpec>,
-    /// Host-policy tags used to derive the tool default permission when the
-    /// tool does not have an exact tool rule. Hosts also use canonical tags
-    /// such as `read_only`, `task`, `network`, and `filesystem_write` to drive
-    /// catalog filtering, plan-mode defaults, and other runtime policy.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<ToolTag>,
-    pub concurrency_safe: bool,
     #[serde(default)]
     pub strict: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ToolModelSurface {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ToolDocs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_help: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_help: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolRuntimePolicy {
+    #[serde(default)]
+    pub concurrency_safe: bool,
     #[serde(default)]
     pub streaming: ToolStreamingMode,
     #[serde(default, skip_serializing_if = "ToolResultPolicy::is_default")]
     pub result_policy: ToolResultPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ToolPermissionContract {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub host_capabilities: Vec<HostCapability>,
+    pub input_paths: Vec<InputPathSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_networks: Vec<InputNetworkSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path_access: Vec<PathAccessSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub network_access: Vec<NetworkAccessSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<ToolTag>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ToolDisplay {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_mode: Option<ToolDescriptionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_display_mode: Option<UiTextDisplayMode>,
+}
+
+impl Default for ToolContract {
+    fn default() -> Self {
+        Self {
+            input_schema: serde_json::Value::Null,
+            output_schema: serde_json::Value::Null,
+            strict: false,
+        }
+    }
+}
+
+impl Default for ToolRuntimePolicy {
+    fn default() -> Self {
+        Self {
+            concurrency_safe: false,
+            streaming: ToolStreamingMode::Buffered,
+            result_policy: ToolResultPolicy::default(),
+        }
+    }
 }
 
 pub trait ToolSurface: Sized {
     fn tool_name() -> &'static str;
-    fn tool_decl() -> PluginToolDecl;
+    fn tool_definition() -> ToolDefinition;
     fn parse_input(input: serde_json::Value) -> crate::Result<Self>;
     fn parse_tool(tool: &str, input: serde_json::Value) -> crate::Result<Self> {
-        let decl = Self::tool_decl();
-        if tool == decl.name || decl.aliases.iter().any(|alias| alias == tool) {
+        let definition = Self::tool_definition();
+        if tool == definition.name || definition.aliases.iter().any(|alias| alias == tool) {
             return Self::parse_input(input);
         }
         Err(crate::PluginError::invalid_params(format!(
@@ -310,7 +329,7 @@ pub trait ToolSurface: Sized {
 }
 
 pub trait ToolSuiteSurface: Sized {
-    fn tool_decls() -> Vec<PluginToolDecl>;
+    fn tool_definitions() -> Vec<ToolDefinition>;
     fn parse_tool(tool: &str, input: serde_json::Value) -> crate::Result<Self>;
     fn parse_tool_json_str(tool: &str, input: &str) -> crate::Result<Self> {
         let value = crate::macro_support::parse_json_value_str(input)?;
@@ -338,9 +357,9 @@ pub trait ToolInputShape: Sized {
     }
 }
 
-impl PluginToolDecl {
+impl ToolDefinition {
     pub fn description_text(&self) -> &str {
-        self.description.as_deref().unwrap_or("")
+        self.model.description.as_deref().unwrap_or("")
     }
 
     pub fn alias_texts(&self) -> &[String] {
@@ -348,68 +367,74 @@ impl PluginToolDecl {
     }
 
     pub fn summary_text(&self) -> Option<&str> {
-        self.summary
+        self.docs
+            .summary
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
     }
 
     pub fn help_text(&self) -> Option<&str> {
-        self.help
+        self.docs
+            .help
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
     }
 
     pub fn before_help_text(&self) -> Option<&str> {
-        self.before_help
+        self.docs
+            .before_help
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
     }
 
     pub fn after_help_text(&self) -> Option<&str> {
-        self.after_help
+        self.docs
+            .after_help
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
     }
 
     pub fn example_texts(&self) -> &[String] {
-        self.examples.as_slice()
+        self.model.examples.as_slice()
     }
 
     pub fn preferred_description_mode(&self) -> Option<ToolDescriptionMode> {
-        self.description_mode
+        self.display.description_mode
     }
 
     pub fn preferred_ui_display_mode(&self) -> Option<UiTextDisplayMode> {
-        self.ui_display_mode
+        self.display.ui_display_mode
     }
 
     pub fn sanitized_input_schema(&self) -> serde_json::Value {
-        sanitize_schema_json(self.input_schema.clone())
+        sanitize_schema_json(self.contract.input_schema.clone())
     }
 
     pub fn sanitized_output_schema(&self) -> serde_json::Value {
-        sanitize_schema_json(self.output_schema.clone())
+        sanitize_schema_json(self.contract.output_schema.clone())
     }
 
     pub fn effective_tags(&self) -> Vec<ToolTag> {
-        let mut tags = normalize_tags(self.tags.iter().cloned());
-        for spec in &self.input_paths {
+        let mut tags = normalize_tags(self.permissions.tags.iter().cloned());
+        for spec in &self.permissions.input_paths {
             match spec.kind {
                 PathKind::Read => push_normalized_tag(&mut tags, ToolTag::FilesystemRead),
                 PathKind::Write => push_normalized_tag(&mut tags, ToolTag::FilesystemWrite),
             }
         }
-        for spec in &self.path_access {
+        for spec in &self.permissions.path_access {
             match spec.kind {
                 PathKind::Read => push_normalized_tag(&mut tags, ToolTag::FilesystemRead),
                 PathKind::Write => push_normalized_tag(&mut tags, ToolTag::FilesystemWrite),
             }
         }
-        if !self.input_networks.is_empty() || !self.network_access.is_empty() {
+        if !self.permissions.input_networks.is_empty()
+            || !self.permissions.network_access.is_empty()
+        {
             push_normalized_tag(&mut tags, ToolTag::Network);
         }
         tags
@@ -1154,22 +1179,22 @@ impl PluginManifestBuilder {
         self
     }
 
-    pub fn tool(mut self, tool: PluginToolDecl) -> Self {
+    pub fn tool(mut self, tool: ToolDefinition) -> Self {
         self.inner.tools.push(tool);
         self
     }
 
     pub fn tool_surface<T: ToolSurface>(self) -> Self {
-        self.tool(T::tool_decl())
+        self.tool(T::tool_definition())
     }
 
-    pub fn tools(mut self, tools: impl IntoIterator<Item = PluginToolDecl>) -> Self {
+    pub fn tools(mut self, tools: impl IntoIterator<Item = ToolDefinition>) -> Self {
         self.inner.tools.extend(tools);
         self
     }
 
     pub fn tool_suite<T: ToolSuiteSurface>(self) -> Self {
-        self.tools(T::tool_decls())
+        self.tools(T::tool_definitions())
     }
 
     pub fn command(mut self, command: PluginStudioCommand) -> Self {
@@ -1258,31 +1283,21 @@ impl PluginManifestBuilder {
     }
 }
 
-impl PluginToolDecl {
+impl ToolDefinition {
     pub fn new(name: impl Into<String>, schema: serde_json::Value) -> Self {
         Self {
             name: name.into(),
             aliases: Vec::new(),
-            description: None,
-            before_help: None,
-            after_help: None,
-            summary: None,
-            help: None,
-            examples: Vec::new(),
-            description_mode: None,
-            ui_display_mode: None,
-            input_schema: schema,
-            output_schema: serde_json::Value::Null,
-            input_paths: Vec::new(),
-            input_networks: Vec::new(),
-            path_access: Vec::new(),
-            network_access: Vec::new(),
-            tags: Vec::new(),
-            concurrency_safe: false,
-            strict: false,
-            streaming: ToolStreamingMode::Buffered,
-            result_policy: ToolResultPolicy::default(),
-            host_capabilities: Vec::new(),
+            contract: ToolContract {
+                input_schema: schema,
+                ..ToolContract::default()
+            },
+            model: ToolModelSurface::default(),
+            docs: ToolDocs::default(),
+            runtime: ToolRuntimePolicy::default(),
+            permissions: ToolPermissionContract::default(),
+            display: ToolDisplay::default(),
+            capabilities: Vec::new(),
         }
     }
 
@@ -1303,7 +1318,7 @@ impl PluginToolDecl {
     }
 
     pub fn description(mut self, d: impl Into<String>) -> Self {
-        self.description = Some(d.into());
+        self.model.description = Some(d.into());
         self
     }
 
@@ -1342,7 +1357,7 @@ impl PluginToolDecl {
     }
 
     pub fn summary(mut self, summary: impl Into<String>) -> Self {
-        self.summary = Some(summary.into());
+        self.docs.summary = Some(summary.into());
         self
     }
 
@@ -1351,7 +1366,7 @@ impl PluginToolDecl {
     }
 
     pub fn help(mut self, help: impl Into<String>) -> Self {
-        self.help = Some(help.into());
+        self.docs.help = Some(help.into());
         self
     }
 
@@ -1361,36 +1376,36 @@ impl PluginToolDecl {
 
     pub fn after_help(self, help: impl Into<String>) -> Self {
         let mut this = self;
-        this.after_help = Some(help.into());
+        this.docs.after_help = Some(help.into());
         this
     }
 
     pub fn after_long_help(self, help: impl Into<String>) -> Self {
         let mut this = self;
-        this.after_help = Some(help.into());
+        this.docs.after_help = Some(help.into());
         this
     }
 
     pub fn before_help(self, description: impl Into<String>) -> Self {
         let mut this = self;
-        this.before_help = Some(description.into());
+        this.docs.before_help = Some(description.into());
         this
     }
 
     pub fn before_long_help(self, description: impl Into<String>) -> Self {
         let mut this = self;
-        this.before_help = Some(description.into());
+        this.docs.before_help = Some(description.into());
         this
     }
 
     pub fn display(mut self, preset: ToolDisplayPreset) -> Self {
-        self.description_mode = Some(preset.tool_description_mode());
-        self.ui_display_mode = Some(preset.ui_display_mode());
+        self.display.description_mode = Some(preset.tool_description_mode());
+        self.display.ui_display_mode = Some(preset.ui_display_mode());
         self
     }
 
     pub fn example(mut self, example: impl Into<String>) -> Self {
-        self.examples.push(example.into());
+        self.model.examples.push(example.into());
         self
     }
 
@@ -1399,47 +1414,49 @@ impl PluginToolDecl {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.examples.extend(examples.into_iter().map(Into::into));
+        self.model
+            .examples
+            .extend(examples.into_iter().map(Into::into));
         self
     }
 
     pub fn description_mode(mut self, mode: ToolDescriptionMode) -> Self {
-        self.description_mode = Some(mode);
+        self.display.description_mode = Some(mode);
         self
     }
 
     pub fn ui_display_mode(mut self, mode: UiTextDisplayMode) -> Self {
-        self.ui_display_mode = Some(mode);
+        self.display.ui_display_mode = Some(mode);
         self
     }
 
     pub fn input_path(mut self, spec: InputPathSpec) -> Self {
-        self.input_paths.push(spec);
+        self.permissions.input_paths.push(spec);
         self
     }
 
     pub fn output_schema(mut self, schema: serde_json::Value) -> Self {
-        self.output_schema = schema;
+        self.contract.output_schema = schema;
         self
     }
 
     pub fn input_network(mut self, spec: InputNetworkSpec) -> Self {
-        self.input_networks.push(spec);
+        self.permissions.input_networks.push(spec);
         self
     }
 
     pub fn path_access(mut self, spec: PathAccessSpec) -> Self {
-        self.path_access.push(spec);
+        self.permissions.path_access.push(spec);
         self
     }
 
     pub fn network_access(mut self, spec: NetworkAccessSpec) -> Self {
-        self.network_access.push(spec);
+        self.permissions.network_access.push(spec);
         self
     }
 
     pub fn tag(mut self, tag: ToolTag) -> Self {
-        self.tags.push(tag);
+        self.permissions.tags.push(tag);
         self
     }
 
@@ -1447,60 +1464,57 @@ impl PluginToolDecl {
     where
         I: IntoIterator<Item = ToolTag>,
     {
-        self.tags = tags.into_iter().collect();
+        self.permissions.tags = tags.into_iter().collect();
         self
     }
 
     pub fn concurrency_safe(mut self, concurrency_safe: bool) -> Self {
-        self.concurrency_safe = concurrency_safe;
+        self.runtime.concurrency_safe = concurrency_safe;
         self
     }
 
     pub fn strict(mut self, strict: bool) -> Self {
-        self.strict = strict;
+        self.contract.strict = strict;
         self
     }
 
     pub fn streaming(mut self, streaming: ToolStreamingMode) -> Self {
-        self.streaming = streaming;
+        self.runtime.streaming = streaming;
         self
     }
 
     pub fn result_policy(mut self, policy: ToolResultPolicy) -> Self {
-        self.result_policy = policy;
+        self.runtime.result_policy = policy;
         self
     }
 
     pub fn max_model_chars(mut self, max_model_chars: usize) -> Self {
-        self.result_policy.max_model_chars = Some(max_model_chars);
+        self.runtime.result_policy.max_model_chars = Some(max_model_chars);
         self
     }
 
     pub fn preview_lines(mut self, preview_lines: usize) -> Self {
-        self.result_policy.preview_lines = Some(preview_lines);
+        self.runtime.result_policy.preview_lines = Some(preview_lines);
         self
     }
 
     pub fn persist_large_output(mut self, persist: bool) -> Self {
-        self.result_policy.persist_large_output = persist;
+        self.runtime.result_policy.persist_large_output = persist;
         self
     }
 
     pub fn ui_render_kind(mut self, kind: ToolResultRenderKind) -> Self {
-        self.result_policy.ui_render_kind = kind;
+        self.runtime.result_policy.ui_render_kind = kind;
         self
     }
 
-    pub fn host_capability(mut self, capability: HostCapability) -> Self {
-        self.host_capabilities.push(capability);
+    pub fn capability(mut self, capability: HostCapability) -> Self {
+        self.capabilities.push(capability);
         self
     }
 
-    pub fn host_capabilities(
-        mut self,
-        capabilities: impl IntoIterator<Item = HostCapability>,
-    ) -> Self {
-        self.host_capabilities.extend(capabilities);
+    pub fn capabilities(mut self, capabilities: impl IntoIterator<Item = HostCapability>) -> Self {
+        self.capabilities.extend(capabilities);
         self
     }
 
@@ -1513,7 +1527,7 @@ impl PluginToolDecl {
     }
 }
 
-/// Free-form metadata attached to manifests, tools, and UI declarations.
+/// Free-form metadata attached to manifests, tools, and UI definitions.
 pub type Metadata = BTreeMap<String, String>;
 
 #[cfg(test)]
@@ -1530,8 +1544,8 @@ mod tests {
             "dummy"
         }
 
-        fn tool_decl() -> PluginToolDecl {
-            PluginToolDecl::new("dummy", serde_json::json!({"type":"object"}))
+        fn tool_definition() -> ToolDefinition {
+            ToolDefinition::new("dummy", serde_json::json!({"type":"object"}))
         }
 
         fn parse_input(_input: serde_json::Value) -> crate::Result<Self> {
@@ -1549,10 +1563,10 @@ mod tests {
     struct DummySuite;
 
     impl ToolSuiteSurface for DummySuite {
-        fn tool_decls() -> Vec<PluginToolDecl> {
+        fn tool_definitions() -> Vec<ToolDefinition> {
             vec![
-                PluginToolDecl::new("suite.one", serde_json::json!({"type":"object"})),
-                PluginToolDecl::new("suite.two", serde_json::json!({"type":"object"})),
+                ToolDefinition::new("suite.one", serde_json::json!({"type":"object"})),
+                ToolDefinition::new("suite.two", serde_json::json!({"type":"object"})),
             ]
         }
 
@@ -1578,7 +1592,7 @@ mod tests {
         let tool_names = manifest
             .tools
             .iter()
-            .map(|decl| decl.name.as_str())
+            .map(|definition| definition.name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(tool_names, vec!["dummy", "suite.one", "suite.two"]);
     }
@@ -1669,100 +1683,108 @@ mod tests {
     }
 
     #[test]
-    fn plugin_tool_decl_supports_brief_shortcut() {
-        let decl = PluginToolDecl::new("dummy", serde_json::json!({"type":"object"})).brief();
+    fn plugin_tool_definition_supports_brief_shortcut() {
+        let definition = ToolDefinition::new("dummy", serde_json::json!({"type":"object"})).brief();
 
         assert_eq!(
-            decl.preferred_description_mode(),
+            definition.preferred_description_mode(),
             Some(ToolDescriptionMode::Brief)
         );
         assert_eq!(
-            decl.preferred_ui_display_mode(),
+            definition.preferred_ui_display_mode(),
             Some(UiTextDisplayMode::Summary)
         );
     }
 
     #[test]
-    fn plugin_tool_decl_supports_compact_shortcut() {
-        let decl = PluginToolDecl::new("dummy", serde_json::json!({"type":"object"})).compact();
+    fn plugin_tool_definition_supports_compact_shortcut() {
+        let definition =
+            ToolDefinition::new("dummy", serde_json::json!({"type":"object"})).compact();
 
         assert_eq!(
-            decl.preferred_description_mode(),
+            definition.preferred_description_mode(),
             Some(ToolDescriptionMode::Brief)
         );
         assert_eq!(
-            decl.preferred_ui_display_mode(),
+            definition.preferred_ui_display_mode(),
             Some(UiTextDisplayMode::Summary)
         );
     }
 
     #[test]
-    fn plugin_tool_decl_supports_detailed_shortcut() {
-        let decl = PluginToolDecl::new("dummy", serde_json::json!({"type":"object"})).detailed();
+    fn plugin_tool_definition_supports_detailed_shortcut() {
+        let definition =
+            ToolDefinition::new("dummy", serde_json::json!({"type":"object"})).detailed();
 
         assert_eq!(
-            decl.preferred_description_mode(),
+            definition.preferred_description_mode(),
             Some(ToolDescriptionMode::Detailed)
         );
         assert_eq!(
-            decl.preferred_ui_display_mode(),
+            definition.preferred_ui_display_mode(),
             Some(UiTextDisplayMode::Detailed)
         );
     }
 
     #[test]
-    fn plugin_tool_decl_supports_brief_detailed_shortcut() {
-        let decl =
-            PluginToolDecl::new("dummy", serde_json::json!({"type":"object"})).brief_detailed();
+    fn plugin_tool_definition_supports_brief_detailed_shortcut() {
+        let definition =
+            ToolDefinition::new("dummy", serde_json::json!({"type":"object"})).brief_detailed();
 
         assert_eq!(
-            decl.preferred_description_mode(),
+            definition.preferred_description_mode(),
             Some(ToolDescriptionMode::Brief)
         );
         assert_eq!(
-            decl.preferred_ui_display_mode(),
+            definition.preferred_ui_display_mode(),
             Some(UiTextDisplayMode::Detailed)
         );
     }
 
     #[test]
-    fn plugin_tool_decl_supports_about_aliases() {
-        let decl = PluginToolDecl::new("dummy", serde_json::json!({"type":"object"}))
+    fn plugin_tool_definition_supports_about_aliases() {
+        let definition = ToolDefinition::new("dummy", serde_json::json!({"type":"object"}))
             .about("Dummy summary.")
             .long_about("Dummy description.")
             .long_help("Dummy help.");
 
-        assert_eq!(decl.summary_text(), Some("Dummy summary."));
-        assert_eq!(decl.description_text(), "Dummy description.");
-        assert_eq!(decl.help_text(), Some("Dummy help."));
+        assert_eq!(definition.summary_text(), Some("Dummy summary."));
+        assert_eq!(definition.description_text(), "Dummy description.");
+        assert_eq!(definition.help_text(), Some("Dummy help."));
     }
 
     #[test]
-    fn plugin_tool_decl_supports_result_policy_builder() {
-        let decl = PluginToolDecl::new("dummy", serde_json::json!({"type":"object"}))
+    fn plugin_tool_definition_supports_result_policy_builder() {
+        let definition = ToolDefinition::new("dummy", serde_json::json!({"type":"object"}))
             .max_model_chars(1200)
             .preview_lines(8)
             .persist_large_output(true)
             .ui_render_kind(ToolResultRenderKind::Markdown);
 
-        assert_eq!(decl.result_policy.max_model_chars, Some(1200));
-        assert_eq!(decl.result_policy.preview_lines, Some(8));
-        assert!(decl.result_policy.persist_large_output);
+        assert_eq!(definition.runtime.result_policy.max_model_chars, Some(1200));
+        assert_eq!(definition.runtime.result_policy.preview_lines, Some(8));
+        assert!(definition.runtime.result_policy.persist_large_output);
         assert_eq!(
-            decl.result_policy.ui_render_kind,
+            definition.runtime.result_policy.ui_render_kind,
             ToolResultRenderKind::Markdown
         );
 
-        let value = serde_json::to_value(&decl).expect("tool decl serializes");
-        assert_eq!(value["result_policy"]["max_model_chars"], 1200);
-        assert_eq!(value["result_policy"]["preview_lines"], 8);
-        assert_eq!(value["result_policy"]["persist_large_output"], true);
-        assert_eq!(value["result_policy"]["ui_render_kind"], "markdown");
+        let value = serde_json::to_value(&definition).expect("tool definition serializes");
+        assert_eq!(value["runtime"]["result_policy"]["max_model_chars"], 1200);
+        assert_eq!(value["runtime"]["result_policy"]["preview_lines"], 8);
+        assert_eq!(
+            value["runtime"]["result_policy"]["persist_large_output"],
+            true
+        );
+        assert_eq!(
+            value["runtime"]["result_policy"]["ui_render_kind"],
+            "markdown"
+        );
     }
 
     #[test]
-    fn plugin_tool_decl_supports_output_schema() {
-        let decl = PluginToolDecl::new("dummy", serde_json::json!({"type":"object"}))
+    fn plugin_tool_definition_supports_output_schema() {
+        let definition = ToolDefinition::new("dummy", serde_json::json!({"type":"object"}))
             .output_schema(serde_json::json!({
                 "type": "object",
                 "title": "DummyOutput",
@@ -1773,7 +1795,7 @@ mod tests {
             }));
 
         assert_eq!(
-            decl.sanitized_output_schema(),
+            definition.sanitized_output_schema(),
             serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1783,23 +1805,23 @@ mod tests {
             })
         );
 
-        let value = serde_json::to_value(&decl).expect("tool decl serializes");
+        let value = serde_json::to_value(&definition).expect("tool definition serializes");
         assert_eq!(
-            value["output_schema"]["properties"]["count"]["type"],
+            value["contract"]["output_schema"]["properties"]["count"]["type"],
             "integer"
         );
     }
 
     #[test]
-    fn plugin_tool_decl_supports_tool_aliases() {
-        let decl = PluginToolDecl::new("dummy", serde_json::json!({"type":"object"}))
+    fn plugin_tool_definition_supports_tool_aliases() {
+        let definition = ToolDefinition::new("dummy", serde_json::json!({"type":"object"}))
             .alias("d")
             .visible_alias("show")
             .aliases(["d", "dummy", " inspect "])
             .visible_aliases(["inspect", "lookup"]);
 
         assert_eq!(
-            decl.alias_texts(),
+            definition.alias_texts(),
             &[
                 "d".to_string(),
                 "show".to_string(),
@@ -1810,23 +1832,26 @@ mod tests {
     }
 
     #[test]
-    fn plugin_tool_decl_supports_before_help_aliases() {
-        let decl = PluginToolDecl::new("dummy", serde_json::json!({"type":"object"}))
+    fn plugin_tool_definition_supports_before_help_aliases() {
+        let definition = ToolDefinition::new("dummy", serde_json::json!({"type":"object"}))
             .before_help("Dummy before-help.")
             .before_long_help("Dummy before-long-help.");
 
-        assert_eq!(decl.before_help_text(), Some("Dummy before-long-help."));
-        assert_eq!(decl.description_text(), "");
+        assert_eq!(
+            definition.before_help_text(),
+            Some("Dummy before-long-help.")
+        );
+        assert_eq!(definition.description_text(), "");
     }
 
     #[test]
-    fn plugin_tool_decl_supports_after_help_aliases() {
-        let decl = PluginToolDecl::new("dummy", serde_json::json!({"type":"object"}))
+    fn plugin_tool_definition_supports_after_help_aliases() {
+        let definition = ToolDefinition::new("dummy", serde_json::json!({"type":"object"}))
             .after_help("Dummy after-help.")
             .after_long_help("Dummy after-long-help.");
 
-        assert_eq!(decl.after_help_text(), Some("Dummy after-long-help."));
-        assert_eq!(decl.help_text(), None);
+        assert_eq!(definition.after_help_text(), Some("Dummy after-long-help."));
+        assert_eq!(definition.help_text(), None);
     }
 
     #[test]
@@ -2121,18 +2146,18 @@ mod tests {
             );
             assert!(manifest.hooks.contains(HookSubscription::SHELL_ENV));
             assert_eq!(manifest.tools.len(), 2);
-            let echo_decl = manifest
+            let echo_definition = manifest
                 .tools
                 .iter()
                 .find(|tool| tool.name == "layer.echo")
                 .expect("echo tool");
-            assert_eq!(echo_decl.aliases, vec!["layer.echo.alias"]);
-            let lookup_decl = manifest
+            assert_eq!(echo_definition.aliases, vec!["layer.echo.alias"]);
+            let lookup_definition = manifest
                 .tools
                 .iter()
                 .find(|tool| tool.name == "layer.lookup")
                 .expect("lookup tool");
-            assert_eq!(lookup_decl.aliases, vec!["layer.lookup.alias"]);
+            assert_eq!(lookup_definition.aliases, vec!["layer.lookup.alias"]);
             assert_eq!(
                 manifest
                     .config_schema
@@ -2288,8 +2313,8 @@ mod tests {
             "dispatch.surface"
         }
 
-        fn tool_decl() -> PluginToolDecl {
-            PluginToolDecl::new("dispatch.surface", serde_json::json!({"type":"object"}))
+        fn tool_definition() -> ToolDefinition {
+            ToolDefinition::new("dispatch.surface", serde_json::json!({"type":"object"}))
         }
 
         fn parse_input(input: serde_json::Value) -> crate::Result<Self> {
@@ -2321,8 +2346,8 @@ mod tests {
     }
 
     impl ToolSuiteSurface for DispatchSuiteInput {
-        fn tool_decls() -> Vec<PluginToolDecl> {
-            vec![DispatchSurfaceInput::tool_decl()]
+        fn tool_definitions() -> Vec<ToolDefinition> {
+            vec![DispatchSurfaceInput::tool_definition()]
         }
 
         fn parse_tool(tool: &str, input: serde_json::Value) -> crate::Result<Self> {

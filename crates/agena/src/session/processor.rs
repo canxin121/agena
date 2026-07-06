@@ -1637,7 +1637,7 @@ mod tests {
     fn parse_tool_invocation_lossy_preserves_tool_name_for_malformed_json() {
         let tools = vec![RegisteredTool::new(
             "fs",
-            crate::plugin::sdk::PluginToolDecl::new(
+            crate::plugin::sdk::ToolDefinition::new(
                 "read",
                 json!({
                     "type": "object",

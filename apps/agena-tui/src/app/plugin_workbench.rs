@@ -88,13 +88,13 @@ struct PluginPolicyItem {
     label: String,
     scope_label: String,
     description: String,
-    prompt_tool_declared_default: Option<agena::plugin::ToolDescriptionMode>,
+    prompt_tool_default: Option<agena::plugin::ToolDescriptionMode>,
     prompt_plugin_declared_default: Option<agena::plugin::ToolDescriptionMode>,
     prompt_file_override: Option<agena::plugin::ToolDescriptionOverride>,
     prompt_effective_mode: agena::plugin::ToolDescriptionMode,
     prompt_source: PluginTextDisplaySource,
     prompt_path: String,
-    ui_tool_declared_default: Option<PluginTextDisplayMode>,
+    ui_tool_default: Option<PluginTextDisplayMode>,
     ui_plugin_declared_default: Option<PluginTextDisplayMode>,
     ui_file_override: Option<agena::plugin::UiPresentationOverride>,
     ui_effective_mode: PluginTextDisplayMode,
@@ -217,7 +217,7 @@ struct PluginWorkbenchPlugin {
     tool_ui_display_modes: BTreeMap<String, PluginTextDisplayMode>,
     tool_ui_display_defaults: BTreeMap<String, PluginTextDisplayMode>,
     tool_ui_display_sources: BTreeMap<String, PluginTextDisplaySource>,
-    tools: Vec<agena::plugin::PluginToolDecl>,
+    tools: Vec<agena::plugin::ToolDefinition>,
     commands: Vec<agena::plugin::PluginStudioCommand>,
     config_status: PluginConfigStatus,
     status: agena::plugin::status::PluginStatus,
@@ -4167,7 +4167,7 @@ fn plugin_policy_detail_text(dialog: &PluginPolicyStudioOverlay) -> Text<'static
         "Source: {}",
         plugin_text_display_source_label(item.prompt_source)
     )));
-    if let Some(mode) = item.prompt_tool_declared_default {
+    if let Some(mode) = item.prompt_tool_default {
         lines.push(Line::from(format!(
             "Tool default: {}",
             prompt_mode_label(mode)
@@ -4197,7 +4197,7 @@ fn plugin_policy_detail_text(dialog: &PluginPolicyStudioOverlay) -> Text<'static
         "Source: {}",
         plugin_text_display_source_label(item.ui_source)
     )));
-    if let Some(mode) = item.ui_tool_declared_default {
+    if let Some(mode) = item.ui_tool_default {
         lines.push(Line::from(format!(
             "Tool default: {}",
             plugin_text_display_mode_label(mode)
@@ -5268,7 +5268,7 @@ fn build_plugin_policy_section(
         label: "Plugin".to_owned(),
         scope_label: format!("plugin {}", status.plugin_id),
         description: description.clone(),
-        prompt_tool_declared_default: None,
+        prompt_tool_default: None,
         prompt_plugin_declared_default: plugin_prompt_default,
         prompt_file_override: file_plugins
             .policy
@@ -5286,7 +5286,7 @@ fn build_plugin_policy_section(
             plugin_prompt_default,
         ),
         prompt_path: plugin_policy_prompt_path(status.plugin_id.as_str(), None),
-        ui_tool_declared_default: None,
+        ui_tool_default: None,
         ui_plugin_declared_default: plugin_ui_default,
         ui_file_override: file_plugins
             .policy
@@ -5305,9 +5305,10 @@ fn build_plugin_policy_section(
 
     if let Some(manifest) = manifest {
         for tool in &manifest.tools {
-            let tool_prompt_default = tool.description_mode;
+            let tool_prompt_default = tool.display.description_mode;
             let nearest_prompt_default = tool_prompt_default.or(plugin_prompt_default);
-            let tool_ui_default = plugin_text_display_mode_from_declared(tool.ui_display_mode);
+            let tool_ui_default =
+                plugin_text_display_mode_from_declared(tool.display.ui_display_mode);
             let nearest_ui_default = tool_ui_default.or(plugin_ui_default);
             let effective_tool_prompt_override = tool_prompt_override_from_policy(
                 &effective_plugins.policy.tool_presentation,
@@ -5324,12 +5325,13 @@ fn build_plugin_policy_section(
                 label: tool.name.clone(),
                 scope_label: format!("tool {}/{}", status.plugin_id, tool.name),
                 description: tool
+                    .docs
                     .summary
                     .clone()
-                    .or_else(|| tool.description.clone())
-                    .or_else(|| tool.help.clone())
+                    .or_else(|| tool.model.description.clone())
+                    .or_else(|| tool.docs.help.clone())
                     .unwrap_or_else(|| "No tool metadata available.".to_owned()),
-                prompt_tool_declared_default: tool_prompt_default,
+                prompt_tool_default: tool_prompt_default,
                 prompt_plugin_declared_default: plugin_prompt_default,
                 prompt_file_override: tool_prompt_override_from_policy(
                     &file_plugins.policy.tool_presentation,
@@ -5352,7 +5354,7 @@ fn build_plugin_policy_section(
                     status.plugin_id.as_str(),
                     Some(tool.name.as_str()),
                 ),
-                ui_tool_declared_default: tool_ui_default,
+                ui_tool_default: tool_ui_default,
                 ui_plugin_declared_default: plugin_ui_default,
                 ui_file_override: tool_ui_override_from_policy(
                     &file_plugins.policy.ui_presentation,
@@ -5534,7 +5536,7 @@ fn build_plugin_workbench_plugin(
     let tool_ui_display_modes = tools
         .iter()
         .map(|tool| {
-            let tool_default = plugin_text_display_mode_from_declared(tool.ui_display_mode);
+            let tool_default = plugin_text_display_mode_from_declared(tool.display.ui_display_mode);
             (
                 tool.name.clone(),
                 resolve_tool_text_display_mode(
@@ -5550,7 +5552,7 @@ fn build_plugin_workbench_plugin(
     let tool_ui_display_defaults = tools
         .iter()
         .filter_map(|tool| {
-            plugin_text_display_mode_from_declared(tool.ui_display_mode)
+            plugin_text_display_mode_from_declared(tool.display.ui_display_mode)
                 .or(plugin_ui_default)
                 .map(|mode| (tool.name.clone(), mode))
         })
@@ -5558,7 +5560,7 @@ fn build_plugin_workbench_plugin(
     let tool_ui_display_sources = tools
         .iter()
         .map(|tool| {
-            let tool_default = plugin_text_display_mode_from_declared(tool.ui_display_mode);
+            let tool_default = plugin_text_display_mode_from_declared(tool.display.ui_display_mode);
             let source = if config_tool_text_display_mode_override(
                 sources,
                 status.plugin_id.as_str(),
@@ -11072,7 +11074,7 @@ fn plugin_tools_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
         Style::default().add_modifier(Modifier::BOLD),
     )));
     for tool in &plugin.tools {
-        let inputs = schema_property_count(&tool.input_schema);
+        let inputs = schema_property_count(&tool.contract.input_schema);
         let mode = plugin
             .tool_ui_display_modes
             .get(tool.name.as_str())
@@ -11093,14 +11095,16 @@ fn plugin_tools_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
             .unwrap_or("global-default");
         let description = match mode {
             PluginTextDisplayMode::Detailed => tool
+                .model
                 .description
                 .as_deref()
-                .or(tool.summary.as_deref())
+                .or(tool.docs.summary.as_deref())
                 .unwrap_or(""),
             PluginTextDisplayMode::Summary => tool
+                .docs
                 .summary
                 .as_deref()
-                .or(tool.description.as_deref())
+                .or(tool.model.description.as_deref())
                 .unwrap_or(""),
         };
         lines.push(Line::from(fixed_columns(
@@ -11130,11 +11134,12 @@ fn plugin_tools_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
             format!("Input preview: {}", tool.name),
             Style::default().add_modifier(Modifier::BOLD),
         )));
-        let default = default_value_for_schema(&tool.input_schema, &tool.input_schema);
+        let default =
+            default_value_for_schema(&tool.contract.input_schema, &tool.contract.input_schema);
         append_schema_editor_lines(
             &mut lines,
-            Some(&tool.input_schema),
-            Some(&tool.input_schema),
+            Some(&tool.contract.input_schema),
+            Some(&tool.contract.input_schema),
             &default,
             "Arguments",
             0,
@@ -12319,7 +12324,7 @@ fn command_schema_and_value(
         .tools
         .iter()
         .find(|candidate| candidate.name == *tool)?;
-    let schema = tool.input_schema.clone();
+    let schema = tool.contract.input_schema.clone();
     let mut value = default_value_for_schema(&schema, &schema);
     if let Some(input) = input {
         merge_config_override(&mut value, input);
@@ -12953,7 +12958,7 @@ mod tests {
         };
         let manifest = agena::plugin::PluginManifest::builder("fixture", "0.1.0")
             .tool(
-                agena::plugin::PluginToolDecl::new(
+                agena::plugin::ToolDefinition::new(
                     "fetch",
                     json!({
                         "type": "object",
@@ -13001,7 +13006,7 @@ mod tests {
         let manifest = agena::plugin::PluginManifest::builder("fixture", "0.1.0")
             .ui_display_mode(agena::plugin::UiTextDisplayMode::Summary)
             .tool(
-                agena::plugin::PluginToolDecl::new(
+                agena::plugin::ToolDefinition::new(
                     "fetch",
                     json!({
                         "type": "object",
@@ -13050,7 +13055,7 @@ mod tests {
             .tool_description_mode(agena::plugin::ToolDescriptionMode::Brief)
             .ui_display_mode(agena::plugin::UiTextDisplayMode::Summary)
             .tool(
-                agena::plugin::PluginToolDecl::new(
+                agena::plugin::ToolDefinition::new(
                     "fetch",
                     json!({
                         "type": "object",
@@ -13115,7 +13120,7 @@ mod tests {
             .tool_description_mode(agena::plugin::ToolDescriptionMode::Brief)
             .ui_display_mode(agena::plugin::UiTextDisplayMode::Summary)
             .tool(
-                agena::plugin::PluginToolDecl::new(
+                agena::plugin::ToolDefinition::new(
                     "fetch",
                     json!({
                         "type": "object",
@@ -13167,7 +13172,7 @@ mod tests {
             .tool_description_mode(agena::plugin::ToolDescriptionMode::Brief)
             .ui_display_mode(agena::plugin::UiTextDisplayMode::Summary)
             .tool(
-                agena::plugin::PluginToolDecl::new(
+                agena::plugin::ToolDefinition::new(
                     "fetch",
                     json!({
                         "type": "object",

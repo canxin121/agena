@@ -298,8 +298,8 @@ export type ToolRegistryChangedEvent = {
   generation: number
   timestamp_ms: number
   plugin_id: string
-  original_name: string
-  exposed_name: string
+  plugin_tool_name: string
+  model_name: string
   tool?: Record<string, unknown> | null
 }
 

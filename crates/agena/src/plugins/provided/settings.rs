@@ -210,7 +210,7 @@ struct SettingsPatchToolInput {
         ToolTag::Discovery,
         settings_tag()
     ),
-    host_capabilities(
+    capabilities(
         crate::plugin::sdk::HostCapability::ReadConfig,
         crate::plugin::sdk::HostCapability::ReloadConfig
     ),

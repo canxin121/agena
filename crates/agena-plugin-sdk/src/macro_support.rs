@@ -2330,7 +2330,7 @@ fn display_path(path: &str) -> &str {
 }
 
 #[cfg(test)]
-mod help_examples_compat_tests {
+mod help_examples_tests {
     use super::{
         empty_config_schema, schema_example_texts, schema_usage_text, set_schema_metadata,
     };

@@ -197,7 +197,7 @@ pub(crate) struct PlanUpdateInput {
     help = "Use action `set` to create or replace the current plan and return it to planning. Use action `get` to inspect the current plan with `view = current|summary|full`. Use action `update` to change the plan phase / autorun flag, a step's status, or a check's status. Keep plan-level updates separate from step/check updates: do not send `phase` together with `step_id`, `check_id`, `status`, `wait_until_ms`, or `note`. To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`. Use action `clear` to remove the current plan. If workflow plan config disables direct approval, `plan.update` automatically requests review before moving a planning or cancelled plan into active, blocked, or completed.",
     display = brief,
     tags(ToolTag::Planning, ToolTag::Mutating),
-    host_capabilities(
+    capabilities(
         HostCapability::AskUser,
         HostCapability::PluginStorage,
         HostCapability::Statusline

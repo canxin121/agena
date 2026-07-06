@@ -262,7 +262,7 @@ impl LspPlugin {
     handler_receiver = LspPlugin,
     display = brief,
     tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp),
-    host_capabilities(HostCapability::LspRegistry),
+    capabilities(HostCapability::LspRegistry),
     concurrency_safe = true
 )]
 #[serde(tag = "action", rename_all = "snake_case")]

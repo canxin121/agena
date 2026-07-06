@@ -85,7 +85,6 @@ impl Default for WorkflowToolCatalogHelpConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct WorkflowPlanConfig {
-    #[serde(alias = "default_auto_continue")]
     pub(crate) default_autorun: bool,
     pub(crate) allow_direct_approval: bool,
 }
@@ -2685,7 +2684,7 @@ mod tests {
 
     #[test]
     fn tools_search_schema_includes_flattened_shape_field_docs() {
-        let schema = ToolsToolInput::tool_decl().sanitized_input_schema();
+        let schema = ToolsToolInput::tool_definition().sanitized_input_schema();
         let usage = crate::tool::definition::schema_usage_text(&schema).expect("tools usage text");
         assert!(usage.contains("Search text used to rank matching tool names and descriptions."));
         assert!(usage.contains("Maximum number of search results to return."));
@@ -2725,7 +2724,7 @@ mod tests {
             "{tool_schema:#}"
         );
 
-        let sanitized = SessionToolInput::tool_decl().sanitized_input_schema();
+        let sanitized = SessionToolInput::tool_definition().sanitized_input_schema();
         assert!(
             sanitized.pointer("/oneOf/1/properties/title").is_some(),
             "{sanitized:#}"
@@ -2824,7 +2823,7 @@ mod tests {
         assert_eq!(action, "usage");
         assert_eq!(action_input, json!({}));
 
-        let schema = ToolsToolInput::tool_decl().sanitized_input_schema();
+        let schema = ToolsToolInput::tool_definition().sanitized_input_schema();
         let literals = schema_string_literals(&schema, &schema);
         assert!(literals.contains("list"));
         assert!(literals.contains("usage"));
@@ -2866,16 +2865,6 @@ mod tests {
     }
 
     #[test]
-    fn workflow_plan_config_accepts_legacy_auto_continue_name() {
-        let config: WorkflowPlanConfig = serde_json::from_value(json!({
-            "default_auto_continue": false
-        }))
-        .expect("legacy workflow plan config should parse");
-
-        assert!(!config.default_autorun);
-    }
-
-    #[test]
     fn allowlisted_workflow_tools_skip_plan_storage_probe_before_init() {
         let plugin = WorkflowPlugin::new();
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -2902,17 +2891,17 @@ mod tests {
 
     #[test]
     fn task_and_snapshot_tools_declare_plan_storage_capability() {
-        let task_decl = TaskToolActionInput::tool_decl();
+        let task_definition = TaskToolActionInput::tool_definition();
         assert!(
-            task_decl
-                .host_capabilities
+            task_definition
+                .capabilities
                 .contains(&HostCapability::PluginStorage)
         );
 
-        let snapshot_decl = SnapshotToolInput::tool_decl();
+        let snapshot_definition = SnapshotToolInput::tool_definition();
         assert!(
-            snapshot_decl
-                .host_capabilities
+            snapshot_definition
+                .capabilities
                 .contains(&HostCapability::PluginStorage)
         );
     }
@@ -3025,7 +3014,7 @@ mod tests {
 
     #[test]
     fn snapshot_enter_schema_exposes_target_variants() {
-        let schema = SnapshotToolInput::tool_decl().sanitized_input_schema();
+        let schema = SnapshotToolInput::tool_definition().sanitized_input_schema();
         assert!(
             schema.pointer("/oneOf/0/properties/target").is_some(),
             "{schema:#}"
@@ -3192,7 +3181,7 @@ mod tests {
 
     #[test]
     fn user_request_input_schema_includes_question_parameters() {
-        let schema = UserToolInput::tool_decl().sanitized_input_schema();
+        let schema = UserToolInput::tool_definition().sanitized_input_schema();
         assert!(
             schema.pointer("/oneOf/0/properties/questions").is_some(),
             "{schema:#}"
@@ -3388,7 +3377,7 @@ mod tests {
     #[test]
     fn model_safe_plan_schema_keeps_phase_distinct_from_step_status() {
         let safe_schema = crate::tool::model_safe_tool_schema(
-            &PlanToolInput::tool_decl().sanitized_input_schema(),
+            &PlanToolInput::tool_definition().sanitized_input_schema(),
         );
         let properties = safe_schema
             .get("properties")

@@ -576,7 +576,7 @@ enum WebSearchEngineSelection {
         ToolTag::Internet,
         ToolTag::Discovery
     ),
-    host_capabilities(HostCapability::PermissionCheck),
+    capabilities(HostCapability::PermissionCheck),
     concurrency_safe = true
 )]
 #[serde(deny_unknown_fields)]
@@ -603,7 +603,7 @@ struct SearchToolInput {
     ),
     display = detailed,
     tags(ToolTag::ReadOnly, ToolTag::Network, ToolTag::Internet),
-    host_capabilities(HostCapability::PermissionCheck),
+    capabilities(HostCapability::PermissionCheck),
     concurrency_safe = true
 )]
 #[serde(deny_unknown_fields)]
@@ -630,7 +630,7 @@ struct FetchToolInput {
         ToolTag::Internet,
         ToolTag::Discovery
     ),
-    host_capabilities(HostCapability::PermissionCheck),
+    capabilities(HostCapability::PermissionCheck),
     concurrency_safe = false
 )]
 #[serde(deny_unknown_fields)]
@@ -1375,17 +1375,18 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn web_decls_declare_permission_check_host_capability() {
-        let decls = WebToolSuite::tool_decls();
-        assert_eq!(decls.len(), 3);
-        assert!(decls.iter().all(|decl| {
-            decl.host_capabilities
+    fn web_definitions_declare_permission_check_capability() {
+        let definitions = WebToolSuite::tool_definitions();
+        assert_eq!(definitions.len(), 3);
+        assert!(definitions.iter().all(|definition| {
+            definition
+                .capabilities
                 .contains(&HostCapability::PermissionCheck)
         }));
         assert_eq!(
-            decls
+            definitions
                 .iter()
-                .map(|decl| decl.name.as_str())
+                .map(|definition| definition.name.as_str())
                 .collect::<Vec<_>>(),
             vec!["search", "fetch", "crawl"]
         );
@@ -1403,18 +1404,21 @@ mod tests {
             let tool = manifest
                 .tools
                 .iter()
-                .find(|decl| decl.name == tool_name)
+                .find(|definition| definition.name == tool_name)
                 .expect("tool should be declared");
-            assert_eq!(tool.description_mode, Some(ToolDescriptionMode::Detailed));
+            assert_eq!(
+                tool.display.description_mode,
+                Some(ToolDescriptionMode::Detailed)
+            );
         }
 
         for tool_name in ["crawl"] {
             let tool = manifest
                 .tools
                 .iter()
-                .find(|decl| decl.name == tool_name)
+                .find(|definition| definition.name == tool_name)
                 .expect("tool should be declared");
-            assert_eq!(tool.description_mode, None);
+            assert_eq!(tool.display.description_mode, None);
         }
     }
 
@@ -1638,7 +1642,7 @@ mod tests {
 
 The release date is 2026-06-30 and the rollout starts immediately.
 
-Breaking changes include removing legacy workflow aliases and renaming agena.repo to agena.snapshot.
+Breaking changes include simplifying workflow aliases and renaming agena.repo to agena.snapshot.
 
 This paragraph is unrelated filler about project history."
                 .to_string(),
@@ -1657,7 +1661,7 @@ This paragraph is unrelated filler about project history."
         assert!(rendered.contains("Focus: extract the release date and breaking changes"));
         assert!(rendered.contains("Relevant excerpts:"));
         assert!(rendered.contains("The release date is 2026-06-30"));
-        assert!(rendered.contains("Breaking changes include removing legacy workflow aliases"));
+        assert!(rendered.contains("Breaking changes include simplifying workflow aliases"));
         assert!(!rendered.contains("This paragraph is unrelated filler"));
     }
 }

@@ -15,7 +15,7 @@ use agena_macros::{StaticToolSurface, ToolInputShape};
     trim("query", "tool"),
     ui_display = detailed,
     tags(ToolTag::ReadOnly, ToolTag::Discovery),
-    host_capabilities(HostCapability::ListTools),
+    capabilities(HostCapability::ListTools),
     concurrency_safe = true
 )]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]

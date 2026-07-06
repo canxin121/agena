@@ -263,11 +263,12 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             .plugin_manager()
             .registered_tools()
             .into_iter()
-            .filter(|entry| entry.plugin_name == "agena.skills")
+            .filter(|entry| entry.target.plugin_name == "agena.skills")
             .collect::<Vec<_>>();
         let skill_key_for = |entry: &agena::plugin::registry::RegisteredTool| {
             entry
-                .decl
+                .definition
+                .permissions
                 .tags
                 .iter()
                 .find_map(|tag| match tag {
@@ -276,13 +277,18 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
                     }
                     _ => None,
                 })
-                .unwrap_or_else(|| entry.original_name.clone())
+                .unwrap_or_else(|| entry.target.plugin_tool_name.clone())
         };
         let has_custom_tag = |entry: &agena::plugin::registry::RegisteredTool, expected: &str| {
-            entry.decl.tags.iter().any(|tag| match tag {
-                agena::plugin::sdk::ToolTag::Custom(value) => value == expected,
-                _ => false,
-            })
+            entry
+                .definition
+                .permissions
+                .tags
+                .iter()
+                .any(|tag| match tag {
+                    agena::plugin::sdk::ToolTag::Custom(value) => value == expected,
+                    _ => false,
+                })
         };
         let mut aliases_by_skill = HashMap::<String, Vec<String>>::new();
         for entry in &entries {
@@ -292,7 +298,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             aliases_by_skill
                 .entry(skill_key_for(entry))
                 .or_default()
-                .push(entry.exposed_name.clone());
+                .push(entry.model_name.clone());
         }
         for entry in entries {
             if has_custom_tag(&entry, "alias") {
@@ -301,8 +307,8 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             let skill_key = skill_key_for(&entry);
             let is_command = has_custom_tag(&entry, "command");
             let item = RuntimeSkillResource {
-                name: entry.exposed_name,
-                description: entry.decl.description.unwrap_or_default(),
+                name: entry.model_name,
+                description: entry.definition.description_text().to_owned(),
                 aliases: aliases_by_skill.remove(&skill_key).unwrap_or_default(),
                 source_path: None,
             };

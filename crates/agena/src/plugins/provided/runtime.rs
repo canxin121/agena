@@ -32,9 +32,9 @@ impl Plugin for RuntimePlugin {
             .brief_detailed()
             .hooks(HookSubscription::TOOL_INVOKE)
             .tools([
-                AgentToolInput::tool_decl(),
-                SessionToolInput::tool_decl(),
-                UserToolInput::tool_decl(),
+                AgentToolInput::tool_definition(),
+                SessionToolInput::tool_definition(),
+                UserToolInput::tool_definition(),
             ])
             .build()
     }

@@ -7,10 +7,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::sdk::manifest::UiTextDisplayMode;
-use crate::sdk::{
-    HostCapability, InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PathAccessSpec,
-    PluginToolDecl, ToolDescriptionMode, ToolResultPolicy, ToolStreamingMode, ToolTag,
-};
+use crate::sdk::{HostCapability, ToolDefinition, ToolDescriptionMode, ToolTag};
 
 #[derive(Debug, Clone)]
 pub struct PluginToolRegistry {
@@ -48,245 +45,19 @@ pub struct ToolInvocationTarget {
     pub fixed_input: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ToolDefinition {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub aliases: Vec<String>,
-    pub contract: ToolContract,
-    pub model: ToolModelSurface,
-    pub docs: ToolDocs,
-    pub runtime: ToolRuntimePolicy,
-    pub permissions: ToolPermissionContract,
-    pub display: ToolDisplay,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub capabilities: Vec<HostCapability>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ToolContract {
-    #[serde(default)]
-    pub input_schema: serde_json::Value,
-    #[serde(default, skip_serializing_if = "is_empty_schema")]
-    pub output_schema: serde_json::Value,
-    #[serde(default)]
-    pub strict: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct ToolModelSurface {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub examples: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct ToolDocs {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub before_help: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub after_help: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub help: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ToolRuntimePolicy {
-    #[serde(default)]
-    pub concurrency_safe: bool,
-    #[serde(default)]
-    pub streaming: ToolStreamingMode,
-    #[serde(default, skip_serializing_if = "ToolResultPolicy::is_default")]
-    pub result_policy: ToolResultPolicy,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct ToolPermissionContract {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub input_paths: Vec<InputPathSpec>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub input_networks: Vec<InputNetworkSpec>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub path_access: Vec<PathAccessSpec>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub network_access: Vec<NetworkAccessSpec>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<ToolTag>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct ToolDisplay {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description_mode: Option<ToolDescriptionMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ui_display_mode: Option<UiTextDisplayMode>,
-}
-
-impl Default for ToolContract {
-    fn default() -> Self {
-        Self {
-            input_schema: serde_json::Value::Null,
-            output_schema: serde_json::Value::Null,
-            strict: false,
-        }
-    }
-}
-
-impl Default for ToolRuntimePolicy {
-    fn default() -> Self {
-        Self {
-            concurrency_safe: false,
-            streaming: ToolStreamingMode::Buffered,
-            result_policy: ToolResultPolicy::default(),
-        }
-    }
-}
-
-impl ToolDefinition {
-    pub fn from_decl(decl: PluginToolDecl) -> Self {
-        Self {
-            name: decl.name,
-            aliases: decl.aliases,
-            contract: ToolContract {
-                input_schema: decl.input_schema,
-                output_schema: decl.output_schema,
-                strict: decl.strict,
-            },
-            model: ToolModelSurface {
-                description: decl.description,
-                examples: decl.examples,
-            },
-            docs: ToolDocs {
-                before_help: decl.before_help,
-                after_help: decl.after_help,
-                summary: decl.summary,
-                help: decl.help,
-            },
-            runtime: ToolRuntimePolicy {
-                concurrency_safe: decl.concurrency_safe,
-                streaming: decl.streaming,
-                result_policy: decl.result_policy,
-            },
-            permissions: ToolPermissionContract {
-                input_paths: decl.input_paths,
-                input_networks: decl.input_networks,
-                path_access: decl.path_access,
-                network_access: decl.network_access,
-                tags: decl.tags,
-            },
-            display: ToolDisplay {
-                description_mode: decl.description_mode,
-                ui_display_mode: decl.ui_display_mode,
-            },
-            capabilities: decl.host_capabilities,
-        }
-    }
-
-    pub fn to_decl(&self) -> PluginToolDecl {
-        PluginToolDecl {
-            name: self.name.clone(),
-            aliases: self.aliases.clone(),
-            description: self.model.description.clone(),
-            before_help: self.docs.before_help.clone(),
-            after_help: self.docs.after_help.clone(),
-            summary: self.docs.summary.clone(),
-            help: self.docs.help.clone(),
-            examples: self.model.examples.clone(),
-            description_mode: self.display.description_mode,
-            ui_display_mode: self.display.ui_display_mode,
-            input_schema: self.contract.input_schema.clone(),
-            output_schema: self.contract.output_schema.clone(),
-            input_paths: self.permissions.input_paths.clone(),
-            input_networks: self.permissions.input_networks.clone(),
-            path_access: self.permissions.path_access.clone(),
-            network_access: self.permissions.network_access.clone(),
-            tags: self.permissions.tags.clone(),
-            concurrency_safe: self.runtime.concurrency_safe,
-            strict: self.contract.strict,
-            streaming: self.runtime.streaming,
-            result_policy: self.runtime.result_policy.clone(),
-            host_capabilities: self.capabilities.clone(),
-        }
-    }
-
-    pub fn description_text(&self) -> &str {
-        self.model.description.as_deref().unwrap_or("")
-    }
-
-    pub fn alias_texts(&self) -> &[String] {
-        self.aliases.as_slice()
-    }
-
-    pub fn summary_text(&self) -> Option<&str> {
-        self.docs
-            .summary
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-    }
-
-    pub fn help_text(&self) -> Option<&str> {
-        self.docs
-            .help
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-    }
-
-    pub fn before_help_text(&self) -> Option<&str> {
-        self.docs
-            .before_help
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-    }
-
-    pub fn after_help_text(&self) -> Option<&str> {
-        self.docs
-            .after_help
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-    }
-
-    pub fn sanitized_input_schema(&self) -> serde_json::Value {
-        self.to_decl().sanitized_input_schema()
-    }
-
-    pub fn sanitized_output_schema(&self) -> serde_json::Value {
-        self.to_decl().sanitized_output_schema()
-    }
-
-    pub fn effective_tags(&self) -> Vec<ToolTag> {
-        self.to_decl().effective_tags()
-    }
-
-    pub fn has_tag(&self, tag: ToolTag) -> bool {
-        self.to_decl().has_tag(tag)
-    }
-
-    pub fn preferred_description_mode(&self) -> Option<ToolDescriptionMode> {
-        self.display.description_mode
-    }
-}
-
 impl ToolBinding {
-    pub fn new(plugin_name: impl Into<String>, decl: PluginToolDecl) -> Self {
+    pub fn new(plugin_name: impl Into<String>, definition: ToolDefinition) -> Self {
         let plugin_name = plugin_name.into();
-        Self::new_with_plugin_id(plugin_name.clone(), plugin_name, decl)
+        Self::new_with_plugin_id(plugin_name.clone(), plugin_name, definition)
     }
 
     pub fn new_with_plugin_id(
         plugin_id: impl Into<String>,
         plugin_name: impl Into<String>,
-        decl: PluginToolDecl,
+        definition: ToolDefinition,
     ) -> Self {
         let plugin_id = plugin_id.into();
         let plugin_name = plugin_name.into();
-        let definition = ToolDefinition::from_decl(decl);
         let plugin_tool_name = definition.name.clone();
         let model_name = model_tool_name(&plugin_name, &plugin_tool_name);
         Self {
@@ -455,7 +226,7 @@ impl PluginToolRegistry {
         &mut self,
         plugin_id: &str,
         plugin_name: &str,
-        decls: &[PluginToolDecl],
+        definitions: &[ToolDefinition],
         plugin_tool_default: Option<ToolDescriptionMode>,
         plugin_ui_default: Option<UiTextDisplayMode>,
     ) {
@@ -471,8 +242,8 @@ impl PluginToolRegistry {
         } else {
             self.plugin_ui_defaults.remove(plugin_id);
         }
-        for decl in decls {
-            self.upsert_from_plugin(plugin_id, plugin_name, decl.clone());
+        for definition in definitions {
+            self.upsert_from_plugin(plugin_id, plugin_name, definition.clone());
         }
     }
 
@@ -480,16 +251,16 @@ impl PluginToolRegistry {
         &mut self,
         plugin_id: &str,
         plugin_name: &str,
-        mut decl: PluginToolDecl,
+        mut definition: ToolDefinition,
     ) -> RegisteredTool {
         assert_valid_tool_namespace(plugin_name, "plugin name");
-        if decl.description_mode.is_none() {
-            decl.description_mode = self.plugin_tool_defaults.get(plugin_id).copied();
+        if definition.display.description_mode.is_none() {
+            definition.display.description_mode = self.plugin_tool_defaults.get(plugin_id).copied();
         }
-        if decl.ui_display_mode.is_none() {
-            decl.ui_display_mode = self.plugin_ui_defaults.get(plugin_id).copied();
+        if definition.display.ui_display_mode.is_none() {
+            definition.display.ui_display_mode = self.plugin_ui_defaults.get(plugin_id).copied();
         }
-        let plugin_tool_name = decl.name.clone();
+        let plugin_tool_name = definition.name.clone();
         assert_valid_tool_namespace(&plugin_tool_name, "tool name");
         let mut tools = self.registered_tools_owned();
         tools.retain(|tool| {
@@ -499,7 +270,7 @@ impl PluginToolRegistry {
         tools.push(ToolBinding::new_with_plugin_id(
             plugin_id,
             plugin_name,
-            decl,
+            definition,
         ));
         self.rebuild(tools);
         self.generation += 1;
@@ -627,11 +398,6 @@ impl PluginToolRegistry {
             tool.target.plugin_id == plugin_id && tool.target.plugin_tool_name == plugin_tool_name
         })
     }
-}
-
-fn is_empty_schema(value: &serde_json::Value) -> bool {
-    matches!(value, serde_json::Value::Null)
-        || value.as_object().is_some_and(serde_json::Map::is_empty)
 }
 
 pub fn model_tool_name(plugin_name: &str, tool_name: &str) -> String {
@@ -789,7 +555,7 @@ mod tests {
         registry.extend_from_plugin(
             "plugin-id",
             "fixture",
-            &[PluginToolDecl::new(
+            &[ToolDefinition::new(
                 "inspect",
                 serde_json::json!({ "type": "object" }),
             )],
@@ -817,7 +583,7 @@ mod tests {
             "plugin-id",
             "fixture",
             &[
-                PluginToolDecl::new("inspect", serde_json::json!({ "type": "object" }))
+                ToolDefinition::new("inspect", serde_json::json!({ "type": "object" }))
                     .description_mode(ToolDescriptionMode::Detailed)
                     .ui_display_mode(UiTextDisplayMode::Detailed),
             ],
@@ -845,7 +611,7 @@ mod tests {
             "plugin-id",
             "fixture",
             &[
-                PluginToolDecl::new("inspect", serde_json::json!({ "type": "object" }))
+                ToolDefinition::new("inspect", serde_json::json!({ "type": "object" }))
                     .output_schema(serde_json::json!({
                         "type": "object",
                         "properties": { "count": { "type": "integer" } }
@@ -863,7 +629,7 @@ mod tests {
             "plugin-id",
             "fixture",
             &[
-                PluginToolDecl::new("inspect", serde_json::json!({ "type": "object" }))
+                ToolDefinition::new("inspect", serde_json::json!({ "type": "object" }))
                     .output_schema(serde_json::json!({
                         "type": "object",
                         "properties": { "count": { "type": "string" } }
@@ -887,7 +653,7 @@ mod tests {
             "plugin-id",
             "fixture",
             &[
-                PluginToolDecl::new("inspect", serde_json::json!({ "type": "object" }))
+                ToolDefinition::new("inspect", serde_json::json!({ "type": "object" }))
                     .alias("i")
                     .aliases(["show", "i", " inspect "]),
             ],
@@ -928,10 +694,10 @@ mod tests {
     }
 }
 
-pub fn effective_host_capabilities(decls: &[PluginToolDecl]) -> Vec<HostCapability> {
+pub fn effective_capabilities(definitions: &[ToolDefinition]) -> Vec<HostCapability> {
     let mut capabilities = Vec::new();
-    for decl in decls {
-        for capability in &decl.host_capabilities {
+    for definition in definitions {
+        for capability in &definition.capabilities {
             if !capabilities.contains(capability) {
                 capabilities.push(*capability);
             }
@@ -940,15 +706,15 @@ pub fn effective_host_capabilities(decls: &[PluginToolDecl]) -> Vec<HostCapabili
     capabilities
 }
 
-/// Same as [`effective_host_capabilities`] but additionally folds in
+/// Same as [`effective_capabilities`] but additionally folds in
 /// manifest-level `plugin_capabilities`. Used by the host to authorize
 /// plugins that need host capabilities without exposing any model-visible tool
 /// (e.g. background skill discovery plugins).
-pub fn effective_host_capabilities_for_manifest(
-    decls: &[PluginToolDecl],
+pub fn effective_capabilities_for_manifest(
+    definitions: &[ToolDefinition],
     plugin_capabilities: &[HostCapability],
 ) -> Vec<HostCapability> {
-    let mut capabilities = effective_host_capabilities(decls);
+    let mut capabilities = effective_capabilities(definitions);
     for capability in plugin_capabilities {
         if !capabilities.contains(capability) {
             capabilities.push(*capability);
@@ -958,16 +724,16 @@ pub fn effective_host_capabilities_for_manifest(
 }
 
 /// Per-tool capability map: each declared tool maps to its own
-/// declared `host_capabilities` list. Used by [`HostHandle`] so that a
+/// declared `capabilities` list. Used by [`HostHandle`] so that a
 /// plugin shipping multiple tools can scope dangerous capabilities to
 /// just the tool that needs them rather than leaking them via the union
 /// to every tool the plugin owns.
-pub fn per_tool_host_capabilities(
-    decls: &[PluginToolDecl],
+pub fn per_tool_capabilities(
+    definitions: &[ToolDefinition],
 ) -> std::collections::HashMap<String, Vec<HostCapability>> {
     let mut out = std::collections::HashMap::new();
-    for decl in decls {
-        out.insert(decl.name.clone(), decl.host_capabilities.clone());
+    for definition in definitions {
+        out.insert(definition.name.clone(), definition.capabilities.clone());
     }
     out
 }

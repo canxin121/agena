@@ -37,7 +37,7 @@ const props = defineProps<{
         <div><strong>Commands:</strong> {{ props.runtime.operator.skills.command_count }}</div>
         <div>
           <strong>Last Tool Event:</strong>
-          {{ props.runtime.operator.ui?.tool_registry_last_event?.exposed_name || 'n/a' }}
+          {{ props.runtime.operator.ui?.tool_registry_last_event?.model_name || 'n/a' }}
         </div>
       </div>
     </section>

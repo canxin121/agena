@@ -2130,7 +2130,7 @@ mod tests {
     fn test_tool(plugin_name: &str, tool_name: &str) -> crate::plugin::registry::RegisteredTool {
         crate::plugin::registry::RegisteredTool::new(
             plugin_name,
-            crate::plugin::sdk::PluginToolDecl::new(
+            crate::plugin::sdk::ToolDefinition::new(
                 tool_name,
                 serde_json::json!({
                     "type": "object",

@@ -1174,12 +1174,14 @@ The SSE response sends keepalive every 25 seconds.
   "generation": 42,
   "timestamp_ms": 1780800000000,
   "plugin_id": "agena.skills",
-  "original_name": "workflow_search",
-  "exposed_name": "agena_skills__workflow_search",
+  "plugin_tool_name": "workflow_search",
+  "model_name": "agena.skills.workflow_search",
   "tool": {
     "name": "workflow_search",
-    "input_schema": {
-      "type": "object"
+    "contract": {
+      "input_schema": {
+        "type": "object"
+      }
     }
   }
 }
@@ -1197,7 +1199,7 @@ curl -N \
 
 ```text
 event: notification
-data: {"kind":"event","data":{"subscription":"sse","event":{"meta":{"seq_global":901},"kind":"plugin_tool_registry_changed","payload":{"kind":"updated","generation":42,"timestamp_ms":1780800000000,"plugin_id":"agena.skills","original_name":"workflow_search","exposed_name":"agena_skills__workflow_search","tool":{"name":"workflow_search","input_schema":{"type":"object"}}}}}}
+data: {"kind":"event","data":{"subscription":"sse","event":{"meta":{"seq_global":901},"kind":"plugin_tool_registry_changed","payload":{"kind":"updated","generation":42,"timestamp_ms":1780800000000,"plugin_id":"agena.skills","plugin_tool_name":"workflow_search","model_name":"agena.skills.workflow_search","tool":{"name":"workflow_search","contract":{"input_schema":{"type":"object"}}}}}}}
 ```
 
 浏览器 `EventSource` 示例：
@@ -1213,7 +1215,7 @@ stream.addEventListener('notification', (raw) => {
   if (notification.kind !== 'event') return
   const event = notification.data.event
   if (event.kind !== 'plugin_tool_registry_changed') return
-  console.log(event.payload.exposed_name, event.payload.generation)
+  console.log(event.payload.model_name, event.payload.generation)
 })
 ```
 

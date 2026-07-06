@@ -43,8 +43,8 @@ pub use crate::manifest::{
     HookSubscription, HostCapability, InputNetworkSpec, InputPathSpec, NetworkAccessSpec,
     PathAccessSpec, PathKind, PluginManifest, PluginManifestBuilder, PluginStudioCommand,
     PluginStudioControl, PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView,
-    PluginToolDecl, PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions,
-    PluginUiAction, PluginUiContributions, PluginUiThemePalette, ToolDescriptionMode,
+    PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions, PluginUiAction,
+    PluginUiContributions, PluginUiThemePalette, ToolDefinition, ToolDescriptionMode,
     ToolDisplayPreset, ToolInputShape, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode,
     ToolSuiteSurface, ToolSurface, ToolTag, TransportKind, normalize_tool_tag_name,
 };

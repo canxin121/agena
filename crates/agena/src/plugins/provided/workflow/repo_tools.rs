@@ -10,7 +10,7 @@ use agena_macros::{StaticToolSurface, ToolInputShape};
     handler_receiver = WorkflowPlugin,
     display = brief,
     tags(ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Snapshot),
-    host_capabilities(HostCapability::SnapshotRegistry, HostCapability::PluginStorage),
+    capabilities(HostCapability::SnapshotRegistry, HostCapability::PluginStorage),
     concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]

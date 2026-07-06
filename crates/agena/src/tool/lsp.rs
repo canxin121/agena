@@ -68,12 +68,12 @@ pub(super) fn execute_references(
     executor.ensure_read_permission(&path)?;
     let uri = path_to_uri(&path)?;
     let pos = Position::new(input.position.line, input.position.character);
-    let include_decl = input.include_declaration;
+    let include_definition = input.include_declaration;
 
     let response = super::mcp::block_on(async {
         let client = registry.client_for_path(&path).await?;
         sync_document(&client, &path, &uri).await?;
-        client.references(uri, pos, include_decl).await
+        client.references(uri, pos, include_definition).await
     })
     .map_err(map_lsp_err)?;
 

@@ -19,7 +19,7 @@ use crate::message::{AttachmentItem, OperationBlock};
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
     HookSubscription, InitOutcome, NetworkAccessSpec, NetworkRequest, PluginManifest,
-    PluginToolDecl, Result as SdkResult, ToolInvokeOutput, ToolTag,
+    Result as SdkResult, ToolDefinition, ToolInvokeOutput, ToolTag,
 };
 
 pub(crate) const MCP_PLUGIN_ID: &str = "agena.mcp";
@@ -698,17 +698,17 @@ fn manifest_from_snapshot(
     tools: Vec<(String, ToolDescriptor)>,
     network_access: &BTreeMap<String, NetworkAccessSpec>,
 ) -> PluginManifest {
-    let tool_decls = if servers.is_empty() && tools.is_empty() {
+    let tool_definitions = if servers.is_empty() && tools.is_empty() {
         Vec::new()
     } else {
-        mcp_decls(&servers, &tools, !network_access.is_empty())
+        mcp_definitions(&servers, &tools, !network_access.is_empty())
     };
     PluginManifest::builder(MCP_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
         .description("Agena MCP bridge published as hierarchical plugin commands.")
         .hooks(HookSubscription::TOOL_INVOKE)
         .config_schema(mcp_config_schema())
         .brief()
-        .tools(tool_decls)
+        .tools(tool_definitions)
         .build()
 }
 
@@ -733,44 +733,45 @@ fn network_requests_for_server(
         .unwrap_or_default()
 }
 
-fn mcp_decls(
+fn mcp_definitions(
     servers: &[String],
     tools: &[(String, ToolDescriptor)],
     has_network_servers: bool,
-) -> Vec<PluginToolDecl> {
+) -> Vec<ToolDefinition> {
     let server_count = servers.len();
     let tool_count = tools.len();
     let common_help = mcp_help(servers, tools);
-    McpToolSuite::tool_decls()
+    McpToolSuite::tool_definitions()
         .into_iter()
-        .map(|decl| {
-            let decl = decorate_mcp_decl(decl, server_count, tool_count, common_help.as_str());
-            maybe_network_tag(decl, has_network_servers)
+        .map(|definition| {
+            let definition =
+                decorate_mcp_definition(definition, server_count, tool_count, common_help.as_str());
+            maybe_network_tag(definition, has_network_servers)
         })
         .collect()
 }
 
-fn decorate_mcp_decl(
-    tool_decl: PluginToolDecl,
+fn decorate_mcp_definition(
+    tool_definition: ToolDefinition,
     server_count: usize,
     tool_count: usize,
     common_help: &str,
-) -> PluginToolDecl {
-    match tool_decl.name.as_str() {
-        "resources.list" => tool_decl
+) -> ToolDefinition {
+    match tool_definition.name.as_str() {
+        "resources.list" => tool_definition
             .description(format!(
                 "List resource descriptors from one configured MCP server. {server_count} server(s) are currently configured."
             ))
             .help(common_help.to_string()),
-        "resources.read" => tool_decl.help(common_help.to_string()),
-        "prompts.list" => tool_decl.help(common_help.to_string()),
-        "prompts.get" => tool_decl.help(common_help.to_string()),
-        "tools.call" => tool_decl
+        "resources.read" => tool_definition.help(common_help.to_string()),
+        "prompts.list" => tool_definition.help(common_help.to_string()),
+        "prompts.get" => tool_definition.help(common_help.to_string()),
+        "tools.call" => tool_definition
             .description(format!(
                 "Call one discovered MCP tool on one configured server. {tool_count} discovered tool(s) are currently available across {server_count} server(s)."
             ))
             .help(common_help.to_string()),
-        _ => tool_decl,
+        _ => tool_definition,
     }
 }
 
@@ -799,11 +800,11 @@ fn mcp_help(servers: &[String], tools: &[(String, ToolDescriptor)]) -> String {
     lines.join("\n")
 }
 
-fn maybe_network_tag(tool_decl: PluginToolDecl, has_network_servers: bool) -> PluginToolDecl {
+fn maybe_network_tag(tool_definition: ToolDefinition, has_network_servers: bool) -> ToolDefinition {
     if has_network_servers {
-        tool_decl.tag(ToolTag::Network)
+        tool_definition.tag(ToolTag::Network)
     } else {
-        tool_decl
+        tool_definition
     }
 }
 
@@ -1333,7 +1334,7 @@ mod tests {
         let names = manifest
             .tools
             .iter()
-            .map(|tool_decl| tool_decl.name.as_str())
+            .map(|tool_definition| tool_definition.name.as_str())
             .collect::<BTreeSet<_>>();
 
         assert_eq!(
@@ -1387,9 +1388,15 @@ mod tests {
         );
 
         assert_eq!(manifest.tools.len(), 5);
-        for tool_decl in &manifest.tools {
-            assert!(tool_decl.network_access.is_empty());
-            assert!(tool_decl.tags.iter().any(|tag| tag == &ToolTag::Network));
+        for tool_definition in &manifest.tools {
+            assert!(tool_definition.permissions.network_access.is_empty());
+            assert!(
+                tool_definition
+                    .permissions
+                    .tags
+                    .iter()
+                    .any(|tag| tag == &ToolTag::Network)
+            );
         }
     }
 

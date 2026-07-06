@@ -26,12 +26,14 @@ impl TasksPlugin {
 #[async_trait]
 impl Plugin for TasksPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder("agena", "tasks", env!("CARGO_PKG_VERSION"))
-            .description("Delegated subtask orchestration tools.")
-            .brief_detailed()
-            .hooks(HookSubscription::TOOL_INVOKE)
-            .tools(TaskToolActionInput::tool_definitions())
-            .build()
+        let mut manifest = PluginManifest::new("agena", "tasks", env!("CARGO_PKG_VERSION"));
+        manifest.description = Some("Delegated subtask orchestration tools.".to_string());
+        manifest.set_display(crate::plugin::sdk::ToolDisplayPreset::BriefDetailed);
+        manifest.hooks |= HookSubscription::TOOL_INVOKE;
+        manifest
+            .tools
+            .extend(TaskToolActionInput::tool_definitions());
+        manifest
     }
 
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {

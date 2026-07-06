@@ -298,13 +298,16 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
             .with_context(|| format!("failed to connect to database {database_url}"))?,
     );
 
-    let runtime = AgenaRuntime::builder()
-        .with_load_request(args.load_request())
-        .with_workspace_root(workspace_root)
-        .with_database_connection(db.as_ref().clone())
-        .build()
-        .await
-        .context("failed to build agena runtime")?;
+    let runtime = AgenaRuntime::new(agena::runtime::AgenaRuntimeConfig {
+        load_request: args.load_request(),
+        workspace_root: Some(workspace_root),
+        database_connection: Some(Arc::clone(&db)),
+        database_url: None,
+        auto_migrate: true,
+        tracing_reload_handle: None,
+    })
+    .await
+    .context("failed to build agena runtime")?;
 
     let ui_auth = crate::ui_auth::init_ui_auth(args.ui_password.clone());
     let studio_db = Arc::new(

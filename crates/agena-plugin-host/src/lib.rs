@@ -21,10 +21,10 @@ pub use config::{
 };
 pub use error::{HostError, TransportError};
 pub use host::{
-    LoadedPlugin, PluginHost, PluginHostBuilder, PluginInspect, PluginStudioCommandCatalogItem,
+    LoadedPlugin, PluginHost, PluginHostBuildConfig, PluginInspect, PluginStudioCommandCatalogItem,
     PluginStudioControlCatalogItem, PluginStudioUiCatalog, PluginStudioViewCatalogItem,
     PluginTuiContentBlockCatalogItem, PluginTuiUiCatalog, PluginUiCatalog,
-    PluginUiToolInvokeResponse, ToolInvokeStream,
+    PluginUiToolInvokeResponse, StaticPluginRegistration, ToolInvokeStream,
 };
 #[cfg(feature = "signing")]
 pub use loader::{verify_sha256, verify_signature, verify_signature_bytes};

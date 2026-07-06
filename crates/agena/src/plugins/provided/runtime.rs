@@ -26,14 +26,15 @@ impl RuntimePlugin {
 #[async_trait]
 impl Plugin for RuntimePlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder("agena", "runtime", env!("CARGO_PKG_VERSION"))
-            .description("Runtime session, agent, and user-interaction tools.")
-            .brief_detailed()
-            .hooks(HookSubscription::TOOL_INVOKE)
-            .tools(AgentToolInput::tool_definitions())
-            .tools(SessionToolInput::tool_definitions())
-            .tools(UserToolInput::tool_definitions())
-            .build()
+        let mut manifest = PluginManifest::new("agena", "runtime", env!("CARGO_PKG_VERSION"));
+        manifest.description =
+            Some("Runtime session, agent, and user-interaction tools.".to_string());
+        manifest.set_display(crate::plugin::sdk::ToolDisplayPreset::BriefDetailed);
+        manifest.hooks |= HookSubscription::TOOL_INVOKE;
+        manifest.tools.extend(AgentToolInput::tool_definitions());
+        manifest.tools.extend(SessionToolInput::tool_definitions());
+        manifest.tools.extend(UserToolInput::tool_definitions());
+        manifest
     }
 
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {

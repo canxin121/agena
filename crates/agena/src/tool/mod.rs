@@ -40,7 +40,7 @@ use crate::message::{
 };
 use crate::permission::{AccessKind, NetworkTarget, PermissionAction, PermissionDecision};
 use crate::plugin::{
-    PluginHost, PluginHostBuilder, ToolAfterInput as PluginToolAfterInput,
+    PluginHost, PluginHostBuildConfig, ToolAfterInput as PluginToolAfterInput,
     ToolBeforeInput as PluginToolBeforeInput, ToolDefinitionInput as PluginToolDefinitionInput,
     ToolFailureInput as PluginToolFailureInput, ToolInvokeInput as PluginToolInvokeInput,
     ToolPermissionNetworksInput as PluginToolPermissionNetworksInput,
@@ -521,11 +521,17 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
         let mcp_config =
             mcp::config_from_plugins(&config).map_err(crate::plugin::HostError::Config)?;
         let mcp_manager = mcp::build_manager(&mcp_config).await;
-        let builder =
-            PluginHostBuilder::new(workspace_root, env!("CARGO_PKG_VERSION")).with_config(config);
-        crate::plugins::sources::register_static_transports(builder, Some(mcp_manager))
-            .build()
-            .await
+        PluginHost::new(PluginHostBuildConfig {
+            static_plugins: crate::plugins::sources::static_plugin_registrations(Some(mcp_manager)),
+            config,
+            workspace_root,
+            agena_version: env!("CARGO_PKG_VERSION").to_string(),
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: std::collections::HashMap::new(),
+        })
+        .await
     })
     .map_err(|err| err.to_string())
 }

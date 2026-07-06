@@ -27,13 +27,13 @@ impl CatalogPlugin {
 #[async_trait]
 impl Plugin for CatalogPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder("agena", "catalog", env!("CARGO_PKG_VERSION"))
-            .description("Tool catalog discovery and help tools.")
-            .config_schema(tool_catalog_plugin_config_schema())
-            .brief_detailed()
-            .hooks(HookSubscription::TOOL_INVOKE)
-            .tools(ToolsToolInput::tool_definitions())
-            .build()
+        let mut manifest = PluginManifest::new("agena", "catalog", env!("CARGO_PKG_VERSION"));
+        manifest.description = Some("Tool catalog discovery and help tools.".to_string());
+        manifest.config_schema = Some(tool_catalog_plugin_config_schema());
+        manifest.set_display(crate::plugin::sdk::ToolDisplayPreset::BriefDetailed);
+        manifest.hooks |= HookSubscription::TOOL_INVOKE;
+        manifest.tools.extend(ToolsToolInput::tool_definitions());
+        manifest
     }
 
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {

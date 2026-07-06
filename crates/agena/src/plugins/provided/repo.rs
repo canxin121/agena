@@ -24,12 +24,13 @@ impl SnapshotPlugin {
 #[async_trait]
 impl Plugin for SnapshotPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder("agena", "snapshot", env!("CARGO_PKG_VERSION"))
-            .description("Managed snapshot tools backed by Rift or git worktree.")
-            .brief_detailed()
-            .hooks(HookSubscription::TOOL_INVOKE)
-            .tools(SnapshotToolInput::tool_definitions())
-            .build()
+        let mut manifest = PluginManifest::new("agena", "snapshot", env!("CARGO_PKG_VERSION"));
+        manifest.description =
+            Some("Managed snapshot tools backed by Rift or git worktree.".to_string());
+        manifest.set_display(crate::plugin::sdk::ToolDisplayPreset::BriefDetailed);
+        manifest.hooks |= HookSubscription::TOOL_INVOKE;
+        manifest.tools.extend(SnapshotToolInput::tool_definitions());
+        manifest
     }
 
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {

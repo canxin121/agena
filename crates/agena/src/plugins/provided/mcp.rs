@@ -654,13 +654,14 @@ fn manifest_from_snapshot(
     } else {
         mcp_definitions(&servers, &tools, !network_access.is_empty())
     };
-    PluginManifest::builder("agena", "mcp", env!("CARGO_PKG_VERSION"))
-        .description("Agena MCP bridge published as hierarchical plugin commands.")
-        .hooks(HookSubscription::TOOL_INVOKE)
-        .config_schema(mcp_config_schema())
-        .brief()
-        .tools(tool_definitions)
-        .build()
+    let mut manifest = PluginManifest::new("agena", "mcp", env!("CARGO_PKG_VERSION"));
+    manifest.description =
+        Some("Agena MCP bridge published as hierarchical plugin commands.".to_string());
+    manifest.hooks |= HookSubscription::TOOL_INVOKE;
+    manifest.config_schema = Some(mcp_config_schema());
+    manifest.set_display(crate::plugin::sdk::ToolDisplayPreset::Compact);
+    manifest.tools = tool_definitions;
+    manifest
 }
 
 async fn network_access_by_server(

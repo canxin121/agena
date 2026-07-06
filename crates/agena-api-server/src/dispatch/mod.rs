@@ -263,7 +263,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             .plugin_manager()
             .registered_tools()
             .into_iter()
-            .filter(|entry| entry.plugin_name == "agena.skills")
+            .filter(|entry| entry.plugin_full_name() == "agena.skills")
             .collect::<Vec<_>>();
         let skill_key_for = |entry: &agena::plugin::registry::RegisteredTool| {
             entry

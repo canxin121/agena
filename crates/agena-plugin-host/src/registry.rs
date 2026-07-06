@@ -1,5 +1,5 @@
 //! Plugin tool registry. A tool has exactly one model-visible name:
-//! `plugin_name.tool_name`.
+//! `namespace.plugin_name.tool_name`.
 
 use std::collections::BTreeMap;
 
@@ -26,6 +26,7 @@ pub type RegisteredTool = ToolBinding;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolBinding {
+    pub namespace: String,
     pub plugin_name: String,
     pub tool_name: String,
     pub model_name: String,
@@ -33,16 +34,31 @@ pub struct ToolBinding {
 }
 
 impl ToolBinding {
-    pub fn new(plugin_name: impl Into<String>, definition: ToolDefinition) -> Self {
+    pub fn new(plugin_full_name: impl AsRef<str>, definition: ToolDefinition) -> Self {
+        let (namespace, plugin_name) = split_plugin_full_name(plugin_full_name.as_ref());
+        Self::new_scoped(namespace, plugin_name, definition)
+    }
+
+    pub fn new_scoped(
+        namespace: impl Into<String>,
+        plugin_name: impl Into<String>,
+        definition: ToolDefinition,
+    ) -> Self {
+        let namespace = namespace.into();
         let plugin_name = plugin_name.into();
         let tool_name = definition.name.clone();
-        let model_name = model_tool_name(&plugin_name, &tool_name);
+        let model_name = model_tool_name(&namespace, &plugin_name, &tool_name);
         Self {
+            namespace,
             plugin_name,
             tool_name,
             model_name,
             definition,
         }
+    }
+
+    pub fn plugin_full_name(&self) -> String {
+        plugin_full_name(&self.namespace, &self.plugin_name)
     }
 
     pub fn description_text(&self) -> &str {
@@ -75,6 +91,7 @@ impl ToolBinding {
 
     pub fn definition_identity(&self) -> String {
         let value = serde_json::json!({
+            "namespace": self.namespace,
             "plugin_name": self.plugin_name,
             "tool_name": self.tool_name,
             "model_name": self.model_name,
@@ -111,51 +128,59 @@ impl PluginToolRegistry {
 
     pub fn extend_from_plugin(
         &mut self,
+        namespace: &str,
         plugin_name: &str,
         definitions: &[ToolDefinition],
         plugin_tool_default: Option<ToolDescriptionMode>,
         plugin_ui_default: Option<UiTextDisplayMode>,
     ) {
+        assert_valid_tool_namespace(namespace, "plugin namespace");
         assert_valid_tool_namespace(plugin_name, "plugin name");
+        let plugin_key = plugin_full_name(namespace, plugin_name);
         if let Some(mode) = plugin_tool_default {
-            self.plugin_tool_defaults
-                .insert(plugin_name.to_string(), mode);
+            self.plugin_tool_defaults.insert(plugin_key.clone(), mode);
         } else {
-            self.plugin_tool_defaults.remove(plugin_name);
+            self.plugin_tool_defaults.remove(&plugin_key);
         }
         if let Some(mode) = plugin_ui_default {
-            self.plugin_ui_defaults
-                .insert(plugin_name.to_string(), mode);
+            self.plugin_ui_defaults.insert(plugin_key.clone(), mode);
         } else {
-            self.plugin_ui_defaults.remove(plugin_name);
+            self.plugin_ui_defaults.remove(&plugin_key);
         }
         for definition in definitions {
-            self.upsert_from_plugin(plugin_name, definition.clone());
+            self.upsert_from_plugin(namespace, plugin_name, definition.clone());
         }
     }
 
     pub fn upsert_from_plugin(
         &mut self,
+        namespace: &str,
         plugin_name: &str,
         mut definition: ToolDefinition,
     ) -> RegisteredTool {
+        assert_valid_tool_namespace(namespace, "plugin namespace");
         assert_valid_tool_namespace(plugin_name, "plugin name");
+        let plugin_key = plugin_full_name(namespace, plugin_name);
         if definition.display.description_mode.is_none() {
             definition.display.description_mode =
-                self.plugin_tool_defaults.get(plugin_name).copied();
+                self.plugin_tool_defaults.get(&plugin_key).copied();
         }
         if definition.display.ui_display_mode.is_none() {
-            definition.display.ui_display_mode = self.plugin_ui_defaults.get(plugin_name).copied();
+            definition.display.ui_display_mode = self.plugin_ui_defaults.get(&plugin_key).copied();
         }
         let tool_name = definition.name.clone();
         assert_valid_tool_namespace(&tool_name, "tool name");
-        let model_name = model_tool_name(plugin_name, &tool_name);
+        let model_name = model_tool_name(namespace, plugin_name, &tool_name);
         let mut tools = self.registered_tools_owned();
-        tools.retain(|tool| !(tool.plugin_name == plugin_name && tool.tool_name == tool_name));
-        tools.push(ToolBinding::new(plugin_name, definition));
+        tools.retain(|tool| {
+            !(tool.namespace == namespace
+                && tool.plugin_name == plugin_name
+                && tool.tool_name == tool_name)
+        });
+        tools.push(ToolBinding::new_scoped(namespace, plugin_name, definition));
         self.rebuild(tools);
         self.generation += 1;
-        self.lookup_for_plugin(plugin_name, &tool_name)
+        self.lookup_for_plugin(namespace, plugin_name, &tool_name)
             .or_else(|| self.lookup_tool(&model_name))
             .expect("upserted tool should exist after rebuild")
             .clone()
@@ -163,14 +188,22 @@ impl PluginToolRegistry {
 
     pub fn remove_from_plugin(
         &mut self,
+        namespace: &str,
         plugin_name: &str,
         tool_name: &str,
     ) -> Option<RegisteredTool> {
+        assert_valid_tool_namespace(namespace, "plugin namespace");
         assert_valid_tool_namespace(plugin_name, "plugin name");
         assert_valid_tool_namespace(tool_name, "tool name");
-        let removed = self.lookup_for_plugin(plugin_name, tool_name)?.clone();
+        let removed = self
+            .lookup_for_plugin(namespace, plugin_name, tool_name)?
+            .clone();
         let mut tools = self.registered_tools_owned();
-        tools.retain(|tool| !(tool.plugin_name == plugin_name && tool.tool_name == tool_name));
+        tools.retain(|tool| {
+            !(tool.namespace == namespace
+                && tool.plugin_name == plugin_name
+                && tool.tool_name == tool_name)
+        });
         self.rebuild(tools);
         self.generation += 1;
         Some(removed)
@@ -205,10 +238,11 @@ impl PluginToolRegistry {
 
     fn rebuild(&mut self, mut tools: Vec<RegisteredTool>) {
         for tool in &mut tools {
+            assert_valid_tool_namespace(&tool.namespace, "plugin namespace");
             assert_valid_tool_namespace(&tool.plugin_name, "plugin name");
             assert_valid_tool_namespace(&tool.tool_name, "tool name");
             tool.definition.name = tool.tool_name.clone();
-            tool.model_name = model_tool_name(&tool.plugin_name, &tool.tool_name);
+            tool.model_name = model_tool_name(&tool.namespace, &tool.plugin_name, &tool.tool_name);
         }
         let mut by_model = BTreeMap::new();
         for tool in tools {
@@ -222,17 +256,41 @@ impl PluginToolRegistry {
         self.by_model = by_model;
     }
 
-    pub fn lookup_for_plugin(&self, plugin_name: &str, tool_name: &str) -> Option<&RegisteredTool> {
-        self.by_model
-            .values()
-            .find(|tool| tool.plugin_name == plugin_name && tool.tool_name == tool_name)
+    pub fn lookup_for_plugin(
+        &self,
+        namespace: &str,
+        plugin_name: &str,
+        tool_name: &str,
+    ) -> Option<&RegisteredTool> {
+        self.by_model.values().find(|tool| {
+            tool.namespace == namespace
+                && tool.plugin_name == plugin_name
+                && tool.tool_name == tool_name
+        })
     }
 }
 
-pub fn model_tool_name(plugin_name: &str, tool_name: &str) -> String {
+pub fn plugin_full_name(namespace: &str, plugin_name: &str) -> String {
+    assert_valid_tool_namespace(namespace, "plugin namespace");
+    assert_valid_tool_namespace(plugin_name, "plugin name");
+    format!("{}.{}", dotted_name(namespace), dotted_name(plugin_name))
+}
+
+pub fn split_plugin_full_name(value: &str) -> (String, String) {
+    let normalized = dotted_name(value);
+    match normalized.split_once('.') {
+        Some((namespace, plugin_name)) if !namespace.is_empty() && !plugin_name.is_empty() => {
+            (namespace.to_string(), plugin_name.to_string())
+        }
+        _ => ("local".to_string(), normalized),
+    }
+}
+
+pub fn model_tool_name(namespace: &str, plugin_name: &str, tool_name: &str) -> String {
+    assert_valid_tool_namespace(namespace, "plugin namespace");
     assert_valid_tool_namespace(plugin_name, "plugin name");
     assert_valid_tool_namespace(tool_name, "tool name");
-    let plugin = dotted_name(plugin_name);
+    let plugin = plugin_full_name(namespace, plugin_name);
     let tool = dotted_name(tool_name);
     if tool.starts_with(format!("{plugin}.").as_str()) {
         return tool;

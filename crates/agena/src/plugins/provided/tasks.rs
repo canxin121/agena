@@ -27,7 +27,7 @@ impl TasksPlugin {
 #[async_trait]
 impl Plugin for TasksPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(TASKS_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
+        PluginManifest::builder("agena", "tasks", env!("CARGO_PKG_VERSION"))
             .description("Delegated subtask orchestration tools.")
             .brief_detailed()
             .hooks(HookSubscription::TOOL_INVOKE)

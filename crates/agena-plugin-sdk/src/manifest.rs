@@ -10,6 +10,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginManifest {
     pub schema_version: u32,
+    pub namespace: String,
     pub name: String,
     pub version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1039,10 +1040,15 @@ pub struct PluginManifestBuilder {
 }
 
 impl PluginManifest {
-    pub fn builder(name: impl Into<String>, version: impl Into<String>) -> PluginManifestBuilder {
+    pub fn builder(
+        namespace: impl Into<String>,
+        name: impl Into<String>,
+        version: impl Into<String>,
+    ) -> PluginManifestBuilder {
         PluginManifestBuilder {
             inner: PluginManifest {
                 schema_version: 1,
+                namespace: namespace.into(),
                 name: name.into(),
                 version: version.into(),
                 description: None,
@@ -1061,6 +1067,19 @@ impl PluginManifest {
                 config_schema_i18n: BTreeMap::new(),
             },
         }
+    }
+
+    pub fn builder_from_full_name(
+        full_name: impl AsRef<str>,
+        version: impl Into<String>,
+    ) -> PluginManifestBuilder {
+        let full_name = full_name.as_ref().trim();
+        let (namespace, name) = full_name
+            .split_once('.')
+            .filter(|(namespace, name)| !namespace.is_empty() && !name.is_empty())
+            .map(|(namespace, name)| (namespace.to_string(), name.to_string()))
+            .unwrap_or_else(|| ("local".to_string(), full_name.to_string()));
+        Self::builder(namespace, name, version)
     }
 
     pub fn description_text(&self) -> &str {
@@ -1539,7 +1558,7 @@ mod tests {
 
     #[test]
     fn manifest_builder_accepts_tool_surface_and_tool_suite_generics() {
-        let manifest = PluginManifest::builder("dummy.plugin", "1.0.0")
+        let manifest = PluginManifest::builder("dummy", "plugin", "1.0.0")
             .tool_surface::<DummySurface>()
             .tool_suite::<DummySuite>()
             .build();
@@ -1554,7 +1573,7 @@ mod tests {
 
     #[test]
     fn plugin_manifest_builder_supports_brief_shortcut() {
-        let manifest = PluginManifest::builder("dummy.plugin", "1.0.0")
+        let manifest = PluginManifest::builder("dummy", "plugin", "1.0.0")
             .description("Dummy plugin.")
             .hooks(HookSubscription::TOOL_INVOKE)
             .brief()
@@ -1569,7 +1588,7 @@ mod tests {
 
     #[test]
     fn plugin_manifest_builder_supports_compact_shortcut() {
-        let manifest = PluginManifest::builder("dummy.plugin", "1.0.0")
+        let manifest = PluginManifest::builder("dummy", "plugin", "1.0.0")
             .description("Dummy plugin.")
             .hooks(HookSubscription::TOOL_INVOKE)
             .compact()
@@ -1584,7 +1603,7 @@ mod tests {
 
     #[test]
     fn plugin_manifest_builder_supports_detailed_shortcut() {
-        let manifest = PluginManifest::builder("dummy.plugin", "1.0.0")
+        let manifest = PluginManifest::builder("dummy", "plugin", "1.0.0")
             .description("Dummy plugin.")
             .hooks(HookSubscription::TOOL_INVOKE)
             .detailed()
@@ -1599,7 +1618,7 @@ mod tests {
 
     #[test]
     fn plugin_manifest_builder_supports_brief_detailed_shortcut() {
-        let manifest = PluginManifest::builder("dummy.plugin", "1.0.0")
+        let manifest = PluginManifest::builder("dummy", "plugin", "1.0.0")
             .description("Dummy plugin.")
             .hooks(HookSubscription::TOOL_INVOKE)
             .brief_detailed()
@@ -1614,7 +1633,7 @@ mod tests {
 
     #[test]
     fn plugin_manifest_builder_supports_about_aliases() {
-        let manifest = PluginManifest::builder("dummy.plugin", "1.0.0")
+        let manifest = PluginManifest::builder("dummy", "plugin", "1.0.0")
             .about("Dummy summary.")
             .long_about("Dummy description.")
             .long_help("Dummy help.")
@@ -1628,7 +1647,7 @@ mod tests {
 
     #[test]
     fn plugin_manifest_builder_supports_before_help_aliases() {
-        let manifest = PluginManifest::builder("dummy.plugin", "1.0.0")
+        let manifest = PluginManifest::builder("dummy", "plugin", "1.0.0")
             .before_help("Dummy before-help.")
             .before_long_help("Dummy before-long-help.")
             .hooks(HookSubscription::TOOL_INVOKE)
@@ -2070,7 +2089,8 @@ mod tests {
         runtime.block_on(async {
             let plugin = PluginLayerFixture::default();
             let manifest = crate::Plugin::manifest(&plugin);
-            assert_eq!(manifest.name, "dummy.plugin_layer");
+            assert_eq!(manifest.namespace, "dummy");
+            assert_eq!(manifest.name, "plugin_layer");
             assert!(manifest.hooks.contains(HookSubscription::INIT));
             assert!(manifest.hooks.contains(HookSubscription::TOOL_INVOKE));
             assert!(
@@ -2109,7 +2129,8 @@ mod tests {
                 Arc::new(crate::NoopHostClient),
             )
             .await?;
-            assert_eq!(init.manifest.name, "dummy.plugin_layer");
+            assert_eq!(init.manifest.namespace, "dummy");
+            assert_eq!(init.manifest.name, "plugin_layer");
             assert_eq!(
                 plugin.config.get(),
                 Some(&DummyInitConfig { enabled: true })

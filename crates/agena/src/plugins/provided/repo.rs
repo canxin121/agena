@@ -25,7 +25,7 @@ impl SnapshotPlugin {
 #[async_trait]
 impl Plugin for SnapshotPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(SNAPSHOT_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
+        PluginManifest::builder("agena", "snapshot", env!("CARGO_PKG_VERSION"))
             .description("Managed snapshot tools backed by Rift or git worktree.")
             .brief_detailed()
             .hooks(HookSubscription::TOOL_INVOKE)

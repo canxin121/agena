@@ -229,7 +229,7 @@ impl SkillsPlugin {
 #[crate::plugin::sdk::async_trait]
 impl crate::plugin::sdk::Plugin for SkillsPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(SKILLS_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
+        PluginManifest::builder("agena", "skills", env!("CARGO_PKG_VERSION"))
             .description(
                 "Discovers SKILL.md files and slash commands, then registers them as dynamic plugin tools.",
             )

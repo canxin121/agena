@@ -27,7 +27,7 @@ impl RuntimePlugin {
 #[async_trait]
 impl Plugin for RuntimePlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(RUNTIME_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
+        PluginManifest::builder("agena", "runtime", env!("CARGO_PKG_VERSION"))
             .description("Runtime session, agent, and user-interaction tools.")
             .brief_detailed()
             .hooks(HookSubscription::TOOL_INVOKE)

@@ -4318,7 +4318,8 @@ fn safe_model_tool_name(plugin_name: &str, tool_name: &str) -> String {
     if plugin_name.contains('/') || tool_name.contains('/') {
         return "tool".to_string();
     }
-    crate::plugin::registry::model_tool_name(plugin_name, tool_name)
+    let (namespace, plugin_name) = crate::plugin::registry::split_plugin_full_name(plugin_name);
+    crate::plugin::registry::model_tool_name(&namespace, &plugin_name, tool_name)
 }
 
 fn push_error(

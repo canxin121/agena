@@ -368,7 +368,8 @@ const DIRECT_GROUPED_TOOL_MAPPINGS: &[(&str, &str, &str, &str)] = &[
 ];
 
 fn model_tool_name(plugin: &str, tool: &str) -> String {
-    crate::plugin::registry::model_tool_name(plugin, tool)
+    let (namespace, plugin_name) = crate::plugin::registry::split_plugin_full_name(plugin);
+    crate::plugin::registry::model_tool_name(&namespace, &plugin_name, tool)
 }
 
 fn grouped_mapping_for_tool(tool: &str) -> Option<(&'static str, &'static str, &'static str)> {

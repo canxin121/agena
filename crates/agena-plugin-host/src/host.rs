@@ -674,12 +674,12 @@ impl PluginHost {
     ) -> Result<ToolInvokeOutput, PluginError> {
         let plugin = self
             .plugins_by_id
-            .get(&registered_tool.plugin_name)
+            .get(&registered_tool.plugin_full_name())
             .cloned()
             .ok_or_else(|| {
                 PluginError::new(format!(
                     "plugin `{}` not loaded",
-                    registered_tool.plugin_name
+                    registered_tool.plugin_full_name()
                 ))
             })?;
         let timeout = self.tool_invoke_timeout(registered_tool);
@@ -689,7 +689,7 @@ impl PluginHost {
         let session_id = input.session_id;
         let call_id = input.call_id;
         let workspace_root = input.workspace_root.clone();
-        let plugin_id = registered_tool.plugin_name.clone();
+        let plugin_id = registered_tool.plugin_full_name().clone();
         let tool_name = registered_tool.tool_name.clone();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
@@ -730,12 +730,12 @@ impl PluginHost {
     ) -> Result<Vec<crate::sdk::PathRequest>, PluginError> {
         let plugin = self
             .plugins_by_id
-            .get(&registered_tool.plugin_name)
+            .get(&registered_tool.plugin_full_name())
             .cloned()
             .ok_or_else(|| {
                 PluginError::new(format!(
                     "plugin `{}` not loaded",
-                    registered_tool.plugin_name
+                    registered_tool.plugin_full_name()
                 ))
             })?;
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
@@ -743,7 +743,7 @@ impl PluginHost {
         input.tool_name = registered_tool.tool_name.clone();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
-        let plugin_id = registered_tool.plugin_name.clone();
+        let plugin_id = registered_tool.plugin_full_name().clone();
         let tool_name = registered_tool.tool_name.clone();
         let workspace_root = input.workspace_root.clone();
         let result = self.block_on_static(async move {
@@ -769,12 +769,12 @@ impl PluginHost {
     ) -> Result<Vec<crate::sdk::NetworkRequest>, PluginError> {
         let plugin = self
             .plugins_by_id
-            .get(&registered_tool.plugin_name)
+            .get(&registered_tool.plugin_full_name())
             .cloned()
             .ok_or_else(|| {
                 PluginError::new(format!(
                     "plugin `{}` not loaded",
-                    registered_tool.plugin_name
+                    registered_tool.plugin_full_name()
                 ))
             })?;
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
@@ -782,7 +782,7 @@ impl PluginHost {
         input.tool_name = registered_tool.tool_name.clone();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
-        let plugin_id = registered_tool.plugin_name.clone();
+        let plugin_id = registered_tool.plugin_full_name().clone();
         let tool_name = registered_tool.tool_name.clone();
         let workspace_root = input.workspace_root.clone();
         let result = self.block_on_static(async move {
@@ -818,12 +818,12 @@ impl PluginHost {
     ) -> Result<ToolInvokeStream, PluginError> {
         let plugin = self
             .plugins_by_id
-            .get(&registered_tool.plugin_name)
+            .get(&registered_tool.plugin_full_name())
             .cloned()
             .ok_or_else(|| {
                 PluginError::new(format!(
                     "plugin `{}` not loaded",
-                    registered_tool.plugin_name
+                    registered_tool.plugin_full_name()
                 ))
             })?;
         let mut input = input;
@@ -1784,7 +1784,7 @@ impl PluginHost {
         tool_name: &str,
     ) -> Option<RegisteredTool> {
         self.registered_tools().into_iter().find(|tool| {
-            tool.plugin_name == plugin_id
+            tool.plugin_full_name() == plugin_id
                 && (tool.tool_name == tool_name || tool.model_name == tool_name)
         })
     }
@@ -2109,7 +2109,8 @@ impl PluginHostBuilder {
                     })?;
                 if let Ok(mut reg) = tool_registry_shared.write() {
                     reg.extend_from_plugin(
-                        &reused.id,
+                        &reused.manifest.namespace,
+                        &reused.manifest.name,
                         &reused.manifest.tools,
                         reused.manifest.tool_description_mode,
                         reused.manifest.ui_display_mode,
@@ -2164,7 +2165,8 @@ impl PluginHostBuilder {
                     let plugin = Arc::new(plugin);
                     if let Ok(mut reg) = tool_registry_shared.write() {
                         reg.extend_from_plugin(
-                            &plugin.id,
+                            &plugin.manifest.namespace,
+                            &plugin.manifest.name,
                             &plugin.manifest.tools,
                             plugin.manifest.tool_description_mode,
                             plugin.manifest.ui_display_mode,
@@ -3589,21 +3591,23 @@ impl HostHandle {
             .write()
             .map_err(|_| host_unavailable("tool registry lock poisoned"))?;
         let plugin_tool_name = definition.name.clone();
+        let (namespace, plugin_name) = crate::registry::split_plugin_full_name(plugin_id);
         let kind = if tool_registry
-            .lookup_for_plugin(plugin_id, &plugin_tool_name)
+            .lookup_for_plugin(&namespace, &plugin_name, &plugin_tool_name)
             .is_some()
         {
             ToolRegistryChangeKind::Updated
         } else {
             ToolRegistryChangeKind::Registered
         };
-        let tool = tool_registry.upsert_from_plugin(plugin_id, definition);
+        let tool = tool_registry.upsert_from_plugin(&namespace, &plugin_name, definition);
         let event = ToolRegistryChangedEvent {
             kind,
             generation: tool_registry.generation(),
             timestamp_ms: unix_timestamp_ms(),
-            plugin_id: plugin_id.to_string(),
-            plugin_tool_name: tool.tool_name.clone(),
+            namespace: tool.namespace.clone(),
+            plugin_name: tool.plugin_name.clone(),
+            tool_name: tool.tool_name.clone(),
             model_name: tool.model_name.clone(),
             tool: Some(tool.definition.clone()),
         };
@@ -3626,13 +3630,15 @@ impl HostHandle {
             .tool_registry
             .write()
             .map_err(|_| host_unavailable("tool registry lock poisoned"))?;
-        let removed = tool_registry.remove_from_plugin(plugin_id, name);
+        let (namespace, plugin_name) = crate::registry::split_plugin_full_name(plugin_id);
+        let removed = tool_registry.remove_from_plugin(&namespace, &plugin_name, name);
         let event = removed.as_ref().map(|tool| ToolRegistryChangedEvent {
             kind: ToolRegistryChangeKind::Removed,
             generation: tool_registry.generation(),
             timestamp_ms: unix_timestamp_ms(),
-            plugin_id: plugin_id.to_string(),
-            plugin_tool_name: tool.tool_name.clone(),
+            namespace: tool.namespace.clone(),
+            plugin_name: tool.plugin_name.clone(),
+            tool_name: tool.tool_name.clone(),
             model_name: tool.model_name.clone(),
             tool: Some(tool.definition.clone()),
         });
@@ -3657,8 +3663,9 @@ impl HostHandle {
             .tools
             .into_iter()
             .map(|tool| HostRegisteredToolDescriptor {
-                plugin_id: tool.plugin_name,
-                plugin_tool_name: tool.tool_name,
+                namespace: tool.namespace,
+                plugin_name: tool.plugin_name,
+                tool_name: tool.tool_name,
                 model_name: tool.model_name,
                 tool: tool.definition.clone(),
             })
@@ -4741,7 +4748,7 @@ mod tests {
                 .event
                 .as_ref()
                 .map(|event| event.model_name.as_str()),
-            Some("fixture.echo")
+            Some("local.fixture.echo")
         );
 
         let updated = handle

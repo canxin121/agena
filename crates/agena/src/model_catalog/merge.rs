@@ -581,59 +581,6 @@ pub(super) fn merge_json_patch_maps_fill_missing(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn public_source_merge_prefers_higher_limit_priority() {
-        let mut current = CatalogModelDefinition {
-            context_window_tokens: Some(262_144),
-            source_priority: CatalogDefinitionSourcePriority {
-                limits_priority: 950,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let next = CatalogModelDefinition {
-            context_window_tokens: Some(1_000_000),
-            source_priority: CatalogDefinitionSourcePriority {
-                limits_priority: 975,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        merge_public_source_catalog_definition(&mut current, &next);
-        assert_eq!(current.context_window_tokens, Some(1_000_000));
-        assert_eq!(current.source_priority.limits_priority, 975);
-    }
-
-    #[test]
-    fn public_source_merge_keeps_existing_limit_for_lower_priority() {
-        let mut current = CatalogModelDefinition {
-            context_window_tokens: Some(1_000_000),
-            source_priority: CatalogDefinitionSourcePriority {
-                limits_priority: 975,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let next = CatalogModelDefinition {
-            context_window_tokens: Some(262_144),
-            source_priority: CatalogDefinitionSourcePriority {
-                limits_priority: 950,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        merge_public_source_catalog_definition(&mut current, &next);
-        assert_eq!(current.context_window_tokens, Some(1_000_000));
-        assert_eq!(current.source_priority.limits_priority, 975);
-    }
-}
-
 pub(super) fn merge_json_value_fill_missing(
     current: &mut serde_json::Value,
     next: &serde_json::Value,

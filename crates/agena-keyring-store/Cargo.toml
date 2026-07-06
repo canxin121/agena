@@ -9,8 +9,5 @@ keyring = { workspace = true }
 keyring-core = { workspace = true }
 thiserror = { workspace = true }
 
-[dev-dependencies]
-parking_lot = { workspace = true }
-
 [lints]
 workspace = true

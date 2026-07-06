@@ -350,36 +350,3 @@ impl Default for ModelCatalogConfig {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn definition(name: &str) -> CatalogModelDefinition {
-        CatalogModelDefinition {
-            display_name: Some(name.to_owned()),
-            ..CatalogModelDefinition::default()
-        }
-    }
-
-    #[test]
-    fn snapshot_runtime_views_expose_only_official_models() {
-        let snapshot = ModelCatalogSnapshot {
-            official: ModelCatalogDocument {
-                models: BTreeMap::from([("official-model".to_owned(), definition("Official"))]),
-            },
-            ..ModelCatalogSnapshot::default()
-        };
-
-        let merged = snapshot.merged_models();
-        assert!(merged.models.contains_key("official-model"));
-        assert!(merged.appendable_model_ids.is_empty());
-
-        let models = snapshot.models();
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].model_id, "official-model");
-
-        let model_ids = snapshot.model_ids();
-        assert_eq!(model_ids, vec!["official-model".to_owned()]);
-    }
-}

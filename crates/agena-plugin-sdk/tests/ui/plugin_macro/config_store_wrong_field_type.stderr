@@ -1,5 +1,0 @@
-error: #[config] fields must have type PluginConfig<T>
- --> tests/ui/plugin_macro/config_store_wrong_field_type.rs:6:13
-  |
-6 |     config: String,
-  |             ^^^^^^

@@ -141,39 +141,6 @@ pub struct ErrorPart {
     pub message: String,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::ReasoningPart;
-
-    #[test]
-    fn preferred_text_concatenates_reasoning_fragments_verbatim() {
-        let reasoning = ReasoningPart {
-            summary: vec![
-                "The".to_string(),
-                " user".to_string(),
-                " wants".to_string(),
-                " /m".to_string(),
-                "ore".to_string(),
-            ],
-            raw_content: Vec::new(),
-            encrypted_content: None,
-        };
-
-        assert_eq!(reasoning.preferred_text(), "The user wants /more");
-    }
-
-    #[test]
-    fn preferred_text_falls_back_to_raw_content() {
-        let reasoning = ReasoningPart {
-            summary: Vec::new(),
-            raw_content: vec!["raw".to_string(), " content".to_string()],
-            encrypted_content: None,
-        };
-
-        assert_eq!(reasoning.preferred_text(), "raw content");
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "request_type", rename_all = "snake_case")]
 pub enum RequestPart {

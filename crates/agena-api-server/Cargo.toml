@@ -36,14 +36,5 @@ tower = { workspace = true, features = ["util"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
-[dev-dependencies]
-async-trait = { workspace = true }
-mockito = { workspace = true }
-sea-orm = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
-tower = { workspace = true, features = ["util"] }
-hyper = { workspace = true }
-http-body-util = { workspace = true }
-
 [lints]
 workspace = true

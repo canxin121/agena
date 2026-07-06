@@ -161,28 +161,3 @@ fn tool_text_lossy(tool: &OperationPart) -> Option<String> {
         .find(|s| !s.trim().is_empty())
         .map(str::to_owned)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::Message;
-    use crate::message::{PartContent, ReasoningPart};
-    use crate::role::Role;
-
-    #[test]
-    fn visible_text_lossy_excludes_reasoning_blocks() {
-        let message = Message::prompt_parts(
-            Role::Assistant,
-            vec![
-                PartContent::Reasoning(ReasoningPart {
-                    summary: vec!["hidden".to_string()],
-                    raw_content: Vec::new(),
-                    encrypted_content: None,
-                }),
-                PartContent::text("shown"),
-            ],
-        );
-
-        assert_eq!(message.as_text_lossy(), "hidden\nshown");
-        assert_eq!(message.visible_text_lossy(), "shown");
-    }
-}

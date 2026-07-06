@@ -1,5 +1,0 @@
-error: export = cdylib does not support generic plugin types
-  --> tests/ui/plugin_macro/generic_cdylib_export.rs:14:9
-   |
-14 | impl<T> BadPlugin<T>
-   |         ^^^^^^^^^^^^

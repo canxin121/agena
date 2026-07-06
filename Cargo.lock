@@ -136,7 +136,6 @@ dependencies = [
  "aws-smithy-eventstream",
  "aws-smithy-http",
  "aws-smithy-types",
- "axum",
  "backoff",
  "base64 0.22.1",
  "blake3",
@@ -161,7 +160,6 @@ dependencies = [
  "lru 0.18.0",
  "merge",
  "mime_guess",
- "mockito",
  "moka",
  "oauth2",
  "parking_lot",
@@ -178,7 +176,6 @@ dependencies = [
  "smol_str",
  "strum 0.28.0",
  "tantivy",
- "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite",
@@ -219,9 +216,6 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "futures-util",
- "http-body-util",
- "hyper",
- "mockito",
  "path-clean",
  "sea-orm",
  "semver",
@@ -257,13 +251,9 @@ version = "0.1.0"
 dependencies = [
  "agena",
  "agena-api",
- "agena-api-server",
  "async-trait",
- "axum",
  "futures-util",
- "mockito",
  "reqwest 0.13.3",
- "sea-orm",
  "serde",
  "serde_json",
  "smol_str",
@@ -306,7 +296,6 @@ version = "0.1.0"
 dependencies = [
  "keyring",
  "keyring-core",
- "parking_lot",
  "thiserror 2.0.18",
 ]
 
@@ -314,7 +303,6 @@ dependencies = [
 name = "agena-lsp"
 version = "0.1.0"
 dependencies = [
- "agena-lsp",
  "arc-swap",
  "async-trait",
  "dashmap",
@@ -341,17 +329,14 @@ name = "agena-marketplace-server"
 version = "0.1.0"
 dependencies = [
  "axum",
- "http-body-util",
  "serde_json",
  "tokio",
- "tower",
 ]
 
 [[package]]
 name = "agena-mcp-client"
 version = "0.1.0"
 dependencies = [
- "axum",
  "http 1.4.0",
  "rmcp",
  "serde",
@@ -383,7 +368,6 @@ dependencies = [
  "abi_stable",
  "agena-plugin-sdk",
  "async-trait",
- "axum",
  "blake3",
  "dashmap",
  "ed25519-dalek",
@@ -416,7 +400,6 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "tar",
- "tempfile",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -441,7 +424,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "trybuild",
 ]
 
 [[package]]
@@ -451,7 +433,6 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -468,7 +449,6 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -480,7 +460,6 @@ name = "agena-skills"
 version = "0.1.0"
 dependencies = [
  "serde",
- "tempfile",
  "thiserror 2.0.18",
  "tracing",
  "walkdir",
@@ -545,7 +524,6 @@ dependencies = [
  "futures-util",
  "getrandom 0.4.2",
  "git2",
- "http-body-util",
  "ignore",
  "indexmap 2.14.0",
  "json5 1.3.1",
@@ -566,7 +544,6 @@ dependencies = [
  "time",
  "tokio",
  "tokio-tungstenite",
- "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -645,7 +622,6 @@ dependencies = [
  "simhash",
  "spider",
  "tantivy",
- "tempfile",
  "text-splitter",
  "thiserror 2.0.18",
  "tokio",
@@ -908,16 +884,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "assert-json-diff"
-version = "2.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47e4f2b81832e72834d7518d8487a0396a28cc408186a2e8854c0f98011faf12"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -2523,15 +2489,6 @@ name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
-
-[[package]]
-name = "colored"
-version = "3.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
-dependencies = [
- "windows-sys 0.61.2",
-]
 
 [[package]]
 name = "combine"
@@ -6533,31 +6490,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mockito"
-version = "1.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90820618712cab19cfc46b274c6c22546a82affcb3c3bdf0f29e3db8e1bb92c0"
-dependencies = [
- "assert-json-diff",
- "bytes",
- "colored",
- "futures-core",
- "http 1.4.0",
- "http-body 1.0.1",
- "http-body-util",
- "hyper",
- "hyper-util",
- "log",
- "pin-project-lite",
- "rand 0.9.2",
- "regex",
- "serde_json",
- "serde_urlencoded",
- "similar",
- "tokio",
-]
-
-[[package]]
 name = "moka"
 version = "0.12.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9694,12 +9626,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "similar"
-version = "2.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
-
-[[package]]
 name = "simsimd"
 version = "6.5.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10766,12 +10692,6 @@ name = "target-lexicon"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
-
-[[package]]
-name = "target-triple"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "591ef38edfb78ca4771ee32cf494cb8771944bee237a9b91fc9c1424ac4b777b"
 
 [[package]]
 name = "tauri"
@@ -11980,21 +11900,6 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
-
-[[package]]
-name = "trybuild"
-version = "1.0.116"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47c635f0191bd3a2941013e5062667100969f8c4e9cd787c14f977265d73616e"
-dependencies = [
- "glob",
- "serde",
- "serde_derive",
- "serde_json",
- "target-triple",
- "termcolor",
- "toml 1.1.2+spec-1.1.0",
-]
 
 [[package]]
 name = "tstr"

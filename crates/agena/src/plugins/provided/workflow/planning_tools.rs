@@ -227,10 +227,3 @@ pub(crate) enum PlanToolInput {
     #[tool(exec = "clear", handle = WorkflowPlugin::invoke_plan_clear)]
     Clear,
 }
-
-#[cfg(test)]
-pub(crate) fn resolve_plan_tool_input(
-    input: serde_json::Value,
-) -> SdkResult<(String, serde_json::Value)> {
-    PlanToolInput::resolve_tool("plan", input)
-}

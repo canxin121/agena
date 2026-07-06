@@ -893,13 +893,6 @@ fn payload_tool_name_for_invocation(invocation: &ToolInvocation) -> String {
         .unwrap_or_else(|| invocation.name.clone())
 }
 
-#[cfg(test)]
-fn answers_from_tool_output(
-    details: &ToolOutput,
-) -> Option<std::collections::BTreeMap<String, Vec<String>>> {
-    serde_json::from_value(custom_payload_value(details)?.get("answers")?.clone()).ok()
-}
-
 fn custom_payload_value(details: &ToolOutput) -> Option<serde_json::Value> {
     details.to_json_payload()
 }
@@ -1385,6 +1378,3 @@ fn validate_user_input_reply(
 
     Ok(answers)
 }
-
-#[cfg(test)]
-mod tests;

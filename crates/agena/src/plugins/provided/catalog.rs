@@ -10,9 +10,6 @@ use crate::plugins::provided::workflow::{
     tool_catalog_plugin_config_schema,
 };
 
-#[cfg(test)]
-use crate::plugin::sdk::host_api::ToolDescriptor;
-
 pub(crate) const CATALOG_PLUGIN_ID: &str = "agena.catalog";
 
 pub(crate) struct CatalogPlugin {
@@ -58,23 +55,5 @@ impl Plugin for CatalogPlugin {
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
         let parsed = ToolsToolInput::parse_tool(input.tool_name.as_str(), input.input)?;
         parsed.dispatch_tool_invoke(&self.inner).await
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn tools_tool_descriptor_for_tests() -> ToolDescriptor {
-    let definition = ToolsToolInput::tool_definition();
-    ToolDescriptor {
-        name: crate::plugin::registry::model_tool_name("agena", "catalog", "tools"),
-        description: Some(definition.description_text().to_string()),
-        before_help: definition.before_help_text().map(ToString::to_string),
-        after_help: definition.after_help_text().map(ToString::to_string),
-        summary: definition.summary_text().map(ToString::to_string),
-        help: definition.help_text().map(ToString::to_string),
-        examples: vec![],
-        input_schema: Some(definition.sanitized_input_schema()),
-        description_mode: None,
-        tags: definition.effective_tags(),
-        plugin_id: None,
     }
 }

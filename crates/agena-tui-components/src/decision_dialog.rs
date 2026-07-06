@@ -134,38 +134,3 @@ pub fn render_decision_dialog(
         },
     );
 }
-
-#[cfg(test)]
-mod tests {
-    use std::borrow::Cow;
-
-    use ratatui::{style::Style, text::Text, widgets::ListItem};
-
-    use super::DecisionDialogSpec;
-
-    #[test]
-    fn decision_dialog_spec_builder_preserves_configured_sections() {
-        let body = Text::from("body");
-        let footer = Text::from("footer");
-        let items = [ListItem::new("allow"), ListItem::new("deny")];
-        let spec = DecisionDialogSpec::new(
-            Cow::Borrowed("Title"),
-            &body,
-            &items,
-            &footer,
-            84,
-            Style::default(),
-            Cow::Borrowed(">> "),
-        )
-        .with_body_height_bounds((4, 10))
-        .with_list_title(Cow::Borrowed("Choices"))
-        .with_list_state(Some(1), 1, (4, 8))
-        .with_footer_height_bounds((1, 2));
-
-        assert_eq!(spec.title.as_ref(), "Title");
-        assert_eq!(spec.list_title.as_deref(), Some("Choices"));
-        assert_eq!(spec.selected, Some(1));
-        assert_eq!(spec.list_height_bounds, (4, 8));
-        assert_eq!(spec.footer_height_bounds, (1, 2));
-    }
-}

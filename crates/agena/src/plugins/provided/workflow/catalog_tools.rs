@@ -79,10 +79,3 @@ pub(crate) struct ToolListInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verbose: Option<bool>,
 }
-
-#[cfg(test)]
-pub(crate) fn resolve_tools_tool_input(
-    input: serde_json::Value,
-) -> SdkResult<(String, serde_json::Value)> {
-    ToolsToolInput::resolve_tool("tools", input)
-}

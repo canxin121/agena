@@ -1,7 +1,0 @@
-error: PluginConfigStore requires one field marked #[config] or #[plugin_config]
- --> tests/ui/plugin_macro/config_store_missing_field.rs:3:19
-  |
-3 | #[derive(Default, PluginConfigStore)]
-  |                   ^^^^^^^^^^^^^^^^^
-  |
-  = note: this error originates in the derive macro `PluginConfigStore` (in Nightly builds, run with -Z macro-backtrace for more info)

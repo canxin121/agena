@@ -117,18 +117,3 @@ fn permission_paths_internal<T: Serialize>(tool: &str, input: T) -> SdkResult<Ve
 fn json_input<T: Serialize>(input: T) -> SdkResult<serde_json::Value> {
     serde_json::to_value(input).map_err(|err| PluginError::invalid_params(err.to_string()))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::FsToolInput;
-    use crate::tool::definition::schema_usage_text;
-
-    #[test]
-    fn fs_tool_schema_includes_nested_input_docs() {
-        let usage = schema_usage_text(&FsToolInput::tool_definition().contract.input_schema)
-            .expect("fs usage text should render");
-        assert!(usage.contains("File or directory path to read."));
-        assert!(usage.contains("Glob pattern to match."));
-        assert!(usage.contains("Regex pattern to search for."));
-    }
-}

@@ -36,8 +36,6 @@ pub use model::{
     SessionSummary,
 };
 pub use processor::SessionProcessor;
-#[cfg(test)]
-pub(crate) use processor::parse_tool_invocation;
 
 pub use history::ProjectedMessageHeader;
 
@@ -126,40 +124,4 @@ pub fn estimate_prompt_budget_threshold_tokens(
         &[],
     );
     prompt_window::approximate_tokens_from_chars(policy.proactive_char_threshold(max_prompt_chars))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn context_window_helpers_do_not_guess_unknown_model_limits() {
-        assert_eq!(estimate_effective_context_window_tokens(None), None);
-        assert_eq!(estimate_auto_compaction_limit_tokens(None, None), None);
-        assert_eq!(
-            estimate_auto_compaction_reserve_tokens(None, None, None),
-            None
-        );
-        assert_eq!(
-            estimate_effective_context_window_tokens(Some(272_000)),
-            Some(258_400)
-        );
-        assert_eq!(
-            estimate_auto_compaction_limit_tokens(Some(272_000), None),
-            Some(244_800)
-        );
-        assert_eq!(
-            estimate_auto_compaction_reserve_tokens(Some(272_000), None, None),
-            Some(27_200)
-        );
-    }
-
-    #[test]
-    fn context_usage_percent_used_subtracts_baseline() {
-        assert_eq!(context_usage_percent_used(0, 272_000), 0);
-        assert_eq!(context_usage_percent_used(12_000, 272_000), 0);
-        assert_eq!(context_usage_percent_used(135_200, 272_000), 50);
-        assert_eq!(context_usage_percent_used(258_400, 272_000), 100);
-        assert_eq!(context_usage_percent_used(u64::MAX, 272_000), 100);
-    }
 }

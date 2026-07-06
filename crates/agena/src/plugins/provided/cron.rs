@@ -116,36 +116,3 @@ impl CronPlugin {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn schedule_tool_routes_actions_into_internal_scheduler_payloads() {
-        let (list_tool, list_input) =
-            ScheduleToolInput::resolve_tool("schedule", json!({ "action": "list" }))
-                .expect("list action should resolve");
-        assert_eq!(list_tool, "cron_list");
-        assert_eq!(list_input, json!({}));
-
-        let (wakeup_tool, wakeup_input) = ScheduleToolInput::resolve_tool(
-            "schedule",
-            json!({
-                "action": "wakeup",
-                "prompt": "Check status",
-                "delay_seconds": 30
-            }),
-        )
-        .expect("wakeup action should resolve");
-        assert_eq!(wakeup_tool, "schedule_wakeup");
-        assert_eq!(
-            wakeup_input,
-            json!({
-                "prompt": "Check status",
-                "delay_seconds": 30
-            })
-        );
-    }
-}

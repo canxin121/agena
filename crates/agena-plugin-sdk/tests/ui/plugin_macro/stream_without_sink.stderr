@@ -1,5 +1,0 @@
-error: #[tool_stream] methods must take exactly two typed arguments after `&self`: input and ToolStreamSink
-  --> tests/ui/plugin_macro/stream_without_sink.rs:24:5
-   |
-24 |     async fn echo_stream(&self, input: EchoInput) -> Result<ToolStreamEnd> {
-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

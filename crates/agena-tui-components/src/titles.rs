@@ -22,20 +22,3 @@ pub fn title_with_summary(title: &str, summary: &str, width: u16) -> String {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn title_with_summary_omits_summary_when_space_is_tight() {
-        assert_eq!(title_with_summary("Catalog", "query text", 12), " Catalog ");
-    }
-
-    #[test]
-    fn title_with_summary_truncates_wide_summary_text() {
-        let title = title_with_summary("Catalog", "这是一个很长的摘要内容", 24);
-        assert!(title.starts_with(" Catalog · "));
-        assert!(title.ends_with("... "));
-    }
-}

@@ -1037,52 +1037,62 @@ pub fn hook_subscription_for_name(name: &str) -> Option<HookSubscription> {
         .find_map(|(hook_name, flag)| (*hook_name == name).then_some(*flag))
 }
 
-/// Builder for ergonomic manifest construction inside `Plugin::manifest`.
-pub struct PluginManifestBuilder {
-    inner: PluginManifest,
-}
-
 impl PluginManifest {
-    pub fn builder(
+    pub fn new(
         namespace: impl Into<String>,
         name: impl Into<String>,
         version: impl Into<String>,
-    ) -> PluginManifestBuilder {
-        PluginManifestBuilder {
-            inner: PluginManifest {
-                schema_version: 1,
-                namespace: namespace.into(),
-                name: name.into(),
-                version: version.into(),
-                description: None,
-                summary: None,
-                help: None,
-                tool_description_mode: None,
-                ui_display_mode: None,
-                authors: Vec::new(),
-                transports: Vec::new(),
-                hooks: HookSubscription::INIT | HookSubscription::SHUTDOWN,
-                tools: Vec::new(),
-                commands: Vec::new(),
-                plugin_capabilities: Vec::new(),
-                ui: PluginUiContributions::default(),
-                config_schema: None,
-                config_schema_i18n: BTreeMap::new(),
-            },
+    ) -> Self {
+        Self {
+            schema_version: 1,
+            namespace: namespace.into(),
+            name: name.into(),
+            version: version.into(),
+            description: None,
+            summary: None,
+            help: None,
+            tool_description_mode: None,
+            ui_display_mode: None,
+            authors: Vec::new(),
+            transports: Vec::new(),
+            hooks: HookSubscription::INIT | HookSubscription::SHUTDOWN,
+            tools: Vec::new(),
+            commands: Vec::new(),
+            plugin_capabilities: Vec::new(),
+            ui: PluginUiContributions::default(),
+            config_schema: None,
+            config_schema_i18n: BTreeMap::new(),
         }
     }
 
-    pub fn builder_from_full_name(
-        full_name: impl AsRef<str>,
-        version: impl Into<String>,
-    ) -> PluginManifestBuilder {
+    pub fn from_full_name(full_name: impl AsRef<str>, version: impl Into<String>) -> Self {
         let full_name = full_name.as_ref().trim();
         let (namespace, name) = full_name
             .split_once('.')
             .filter(|(namespace, name)| !namespace.is_empty() && !name.is_empty())
             .map(|(namespace, name)| (namespace.to_string(), name.to_string()))
             .unwrap_or_else(|| ("local".to_string(), full_name.to_string()));
-        Self::builder(namespace, name, version)
+        Self::new(namespace, name, version)
+    }
+
+    pub fn set_display(&mut self, preset: ToolDisplayPreset) {
+        self.tool_description_mode = Some(preset.tool_description_mode());
+        self.ui_display_mode = Some(preset.ui_display_mode());
+    }
+
+    pub fn add_plugin_capability(&mut self, capability: HostCapability) {
+        if !self.plugin_capabilities.contains(&capability) {
+            self.plugin_capabilities.push(capability);
+        }
+    }
+
+    pub fn add_plugin_capabilities(
+        &mut self,
+        capabilities: impl IntoIterator<Item = HostCapability>,
+    ) {
+        for capability in capabilities {
+            self.add_plugin_capability(capability);
+        }
     }
 
     pub fn description_text(&self) -> &str {
@@ -1101,201 +1111,6 @@ impl PluginManifest {
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-    }
-}
-
-impl PluginManifestBuilder {
-    pub fn compact(self) -> Self {
-        self.display(ToolDisplayPreset::Compact)
-    }
-
-    pub fn brief(self) -> Self {
-        self.display(ToolDisplayPreset::Compact)
-    }
-
-    pub fn brief_detailed(self) -> Self {
-        self.display(ToolDisplayPreset::BriefDetailed)
-    }
-
-    pub fn detailed(self) -> Self {
-        self.display(ToolDisplayPreset::Detailed)
-    }
-
-    pub fn description(mut self, d: impl Into<String>) -> Self {
-        self.inner.description = Some(d.into());
-        self
-    }
-
-    pub fn long_about(self, description: impl Into<String>) -> Self {
-        self.description(description)
-    }
-
-    pub fn summary(mut self, summary: impl Into<String>) -> Self {
-        self.inner.summary = Some(summary.into());
-        self
-    }
-
-    pub fn about(self, summary: impl Into<String>) -> Self {
-        self.summary(summary)
-    }
-
-    pub fn help(mut self, help: impl Into<String>) -> Self {
-        self.inner.help = Some(help.into());
-        self
-    }
-
-    pub fn long_help(self, help: impl Into<String>) -> Self {
-        self.help(help)
-    }
-
-    pub fn after_help(self, help: impl Into<String>) -> Self {
-        self.help(help)
-    }
-
-    pub fn after_long_help(self, help: impl Into<String>) -> Self {
-        self.help(help)
-    }
-
-    pub fn before_help(self, description: impl Into<String>) -> Self {
-        self.description(description)
-    }
-
-    pub fn before_long_help(self, description: impl Into<String>) -> Self {
-        self.description(description)
-    }
-
-    pub fn display(mut self, preset: ToolDisplayPreset) -> Self {
-        self.inner.tool_description_mode = Some(preset.tool_description_mode());
-        self.inner.ui_display_mode = Some(preset.ui_display_mode());
-        self
-    }
-
-    pub fn tool_description_mode(mut self, mode: ToolDescriptionMode) -> Self {
-        self.inner.tool_description_mode = Some(mode);
-        self
-    }
-
-    pub fn ui_display_mode(mut self, mode: UiTextDisplayMode) -> Self {
-        self.inner.ui_display_mode = Some(mode);
-        self
-    }
-
-    pub fn author(mut self, a: impl Into<String>) -> Self {
-        self.inner.authors.push(a.into());
-        self
-    }
-
-    pub fn transports(mut self, t: impl IntoIterator<Item = TransportKind>) -> Self {
-        self.inner.transports.extend(t);
-        self
-    }
-
-    pub fn hooks(mut self, h: HookSubscription) -> Self {
-        self.inner.hooks |= h;
-        self
-    }
-
-    pub fn tool(mut self, tool: ToolDefinition) -> Self {
-        self.inner.tools.push(tool);
-        self
-    }
-
-    pub fn tool_surface<T: ToolSurface>(self) -> Self {
-        self.tools(T::tool_definitions())
-    }
-
-    pub fn tools(mut self, tools: impl IntoIterator<Item = ToolDefinition>) -> Self {
-        self.inner.tools.extend(tools);
-        self
-    }
-
-    pub fn tool_suite<T: ToolSuiteSurface>(self) -> Self {
-        self.tools(T::tool_definitions())
-    }
-
-    pub fn command(mut self, command: PluginStudioCommand) -> Self {
-        self.inner.commands.push(command);
-        self
-    }
-
-    pub fn commands(mut self, commands: impl IntoIterator<Item = PluginStudioCommand>) -> Self {
-        self.inner.commands.extend(commands);
-        self
-    }
-
-    pub fn plugin_capability(mut self, capability: HostCapability) -> Self {
-        if !self.inner.plugin_capabilities.contains(&capability) {
-            self.inner.plugin_capabilities.push(capability);
-        }
-        self
-    }
-
-    pub fn plugin_capabilities(
-        mut self,
-        capabilities: impl IntoIterator<Item = HostCapability>,
-    ) -> Self {
-        for capability in capabilities {
-            if !self.inner.plugin_capabilities.contains(&capability) {
-                self.inner.plugin_capabilities.push(capability);
-            }
-        }
-        self
-    }
-
-    pub fn config_schema(mut self, schema: serde_json::Value) -> Self {
-        self.inner.config_schema = Some(schema);
-        self
-    }
-
-    pub fn config_schema_locale(
-        mut self,
-        locale: impl Into<String>,
-        schema: serde_json::Value,
-    ) -> Self {
-        self.inner.config_schema_i18n.insert(locale.into(), schema);
-        self
-    }
-
-    pub fn config_schema_i18n(
-        mut self,
-        schemas: impl IntoIterator<Item = (String, serde_json::Value)>,
-    ) -> Self {
-        self.inner.config_schema_i18n.extend(schemas);
-        self
-    }
-
-    pub fn ui(mut self, ui: PluginUiContributions) -> Self {
-        self.inner.ui = ui;
-        self
-    }
-
-    pub fn tui_statusline_segment(mut self, segment: PluginTuiStatuslineSegment) -> Self {
-        self.inner.ui.tui.statusline_segments.push(segment);
-        self
-    }
-
-    pub fn tui_theme(mut self, theme: PluginUiThemePalette) -> Self {
-        self.inner.ui.tui.themes.push(theme);
-        self
-    }
-
-    pub fn tui_content_block(mut self, block: PluginTuiContentBlock) -> Self {
-        self.inner.ui.tui.content_blocks.push(block);
-        self
-    }
-
-    pub fn studio_control(mut self, control: PluginStudioControl) -> Self {
-        self.inner.ui.studio.controls.push(control);
-        self
-    }
-
-    pub fn studio_view(mut self, view: PluginStudioView) -> Self {
-        self.inner.ui.studio.views.push(view);
-        self
-    }
-
-    pub fn build(self) -> PluginManifest {
-        self.inner
     }
 }
 

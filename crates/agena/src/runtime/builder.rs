@@ -34,72 +34,25 @@ use super::{
 pub type TracingFilterReloadHandle =
     tracing_subscriber::reload::Handle<EnvFilter, tracing_subscriber::Registry>;
 
-pub struct AgenaRuntimeBuilder {
-    load_request: LoadConfigRequest,
-    workspace_root: Option<PathBuf>,
-    database_connection: Option<Arc<DatabaseConnection>>,
-    database_url: Option<String>,
-    auto_migrate: bool,
-    tracing_reload_handle: Option<TracingFilterReloadHandle>,
+pub struct AgenaRuntimeConfig {
+    pub load_request: LoadConfigRequest,
+    pub workspace_root: Option<PathBuf>,
+    pub database_connection: Option<Arc<DatabaseConnection>>,
+    pub database_url: Option<String>,
+    pub auto_migrate: bool,
+    pub tracing_reload_handle: Option<TracingFilterReloadHandle>,
 }
 
-impl Default for AgenaRuntimeBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl AgenaRuntimeBuilder {
-    pub fn new() -> Self {
-        Self {
-            load_request: LoadConfigRequest::default(),
-            workspace_root: None,
-            database_connection: None,
-            database_url: None,
-            auto_migrate: true,
-            tracing_reload_handle: None,
-        }
-    }
-
-    pub fn with_load_request(mut self, request: LoadConfigRequest) -> Self {
-        self.load_request = request;
-        self
-    }
-
-    pub fn with_workspace_root(mut self, workspace_root: impl Into<PathBuf>) -> Self {
-        self.workspace_root = Some(workspace_root.into());
-        self
-    }
-
-    pub fn with_database_connection(mut self, db: DatabaseConnection) -> Self {
-        self.database_connection = Some(Arc::new(db));
-        self
-    }
-
-    pub fn with_database_url(mut self, url: impl Into<String>) -> Self {
-        self.database_url = Some(url.into());
-        self
-    }
-
-    pub fn with_auto_migrate(mut self, auto_migrate: bool) -> Self {
-        self.auto_migrate = auto_migrate;
-        self
-    }
-
-    pub fn with_tracing_reload_handle(mut self, handle: TracingFilterReloadHandle) -> Self {
-        self.tracing_reload_handle = Some(handle);
-        self
-    }
-
-    pub async fn build(self) -> Result<AgenaRuntime, AppError> {
-        let AgenaRuntimeBuilder {
+impl AgenaRuntime {
+    pub async fn new(config: AgenaRuntimeConfig) -> Result<Self, AppError> {
+        let AgenaRuntimeConfig {
             load_request,
             workspace_root,
             database_connection,
             database_url,
             auto_migrate,
             tracing_reload_handle,
-        } = self;
+        } = config;
         let workspace_root = workspace_root.unwrap_or(env::current_dir()?);
         let mut load_request = load_request;
         if load_request.workspace_root.is_none() {
@@ -206,10 +159,6 @@ impl Drop for AgenaRuntimeInner {
 }
 
 impl AgenaRuntime {
-    pub fn builder() -> AgenaRuntimeBuilder {
-        AgenaRuntimeBuilder::new()
-    }
-
     pub fn current_snapshot(&self) -> Arc<RuntimeSnapshot> {
         self.inner.snapshot_store.current()
     }

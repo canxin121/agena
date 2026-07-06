@@ -110,13 +110,15 @@ async fn session_runtime_with_workspace(
     if let Some(workspace) = workspace {
         load_request.workspace_root = Some(workspace.clone());
     }
-    let mut builder = AgenaRuntime::builder()
-        .with_load_request(load_request)
-        .with_database_url(database_url);
-    if let Some(workspace) = workspace {
-        builder = builder.with_workspace_root(workspace.clone());
-    }
-    builder.build().await
+    AgenaRuntime::new(agena::runtime::AgenaRuntimeConfig {
+        load_request,
+        workspace_root: workspace.cloned(),
+        database_connection: None,
+        database_url: Some(database_url),
+        auto_migrate: true,
+        tracing_reload_handle: None,
+    })
+    .await
 }
 
 #[derive(Clone)]

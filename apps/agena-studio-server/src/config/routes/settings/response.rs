@@ -9,15 +9,15 @@ use super::super::utils::normalize_string_array;
 use super::sanitize::sanitize_settings_update;
 
 pub(crate) fn format_settings_response(settings_value: &Value) -> Value {
-    SettingsResponseBuilder::new(settings_value).build()
+    SettingsResponseFormatter::new(settings_value).finish()
 }
 
-struct SettingsResponseBuilder<'a> {
+struct SettingsResponseFormatter<'a> {
     input: &'a Value,
     output: serde_json::Map<String, Value>,
 }
 
-impl<'a> SettingsResponseBuilder<'a> {
+impl<'a> SettingsResponseFormatter<'a> {
     fn new(input: &'a Value) -> Self {
         let sanitized = sanitize_settings_update(input);
         let Value::Object(output) = sanitized else {
@@ -30,7 +30,7 @@ impl<'a> SettingsResponseBuilder<'a> {
         Self { input, output }
     }
 
-    fn build(mut self) -> Value {
+    fn finish(mut self) -> Value {
         self.copy_projects_alias();
         self.set_normalized_directory_arrays();
         self.set_typography_sizes();

@@ -572,12 +572,12 @@ pub struct UsageStatRecord {
 }
 
 #[derive(Debug, Clone, Default)]
-struct UsageTotalsBuilder {
+struct UsageTotalsAccumulator {
     totals: UsageTotals,
     sessions: BTreeSet<i64>,
 }
 
-impl UsageTotalsBuilder {
+impl UsageTotalsAccumulator {
     fn fold(&mut self, session_id: i64, provider_id: &str, model_id: &str, usage: &MessageUsage) {
         self.sessions.insert(session_id);
         self.totals.fold(provider_id, model_id, usage);
@@ -590,15 +590,15 @@ impl UsageTotalsBuilder {
 }
 
 #[derive(Debug, Clone)]
-struct SessionUsageBuilder {
+struct SessionUsageAccumulator {
     title: String,
     is_subagent: bool,
     first_message_at: DateTime<Utc>,
     last_message_at: DateTime<Utc>,
-    totals: UsageTotalsBuilder,
+    totals: UsageTotalsAccumulator,
 }
 
-impl SessionUsageBuilder {
+impl SessionUsageAccumulator {
     fn fold(&mut self, record: &UsageStatRecord) {
         if record.created_at < self.first_message_at {
             self.first_message_at = record.created_at;
@@ -620,11 +620,11 @@ pub fn summarize_usage_records(
     query: &UsageStatsQuery,
     generated_at: DateTime<Utc>,
 ) -> UsageStats {
-    let mut totals = UsageTotalsBuilder::default();
-    let mut by_day: BTreeMap<String, UsageTotalsBuilder> = BTreeMap::new();
-    let mut by_provider: BTreeMap<String, UsageTotalsBuilder> = BTreeMap::new();
-    let mut by_model: BTreeMap<(String, String), UsageTotalsBuilder> = BTreeMap::new();
-    let mut by_session: BTreeMap<i64, SessionUsageBuilder> = BTreeMap::new();
+    let mut totals = UsageTotalsAccumulator::default();
+    let mut by_day: BTreeMap<String, UsageTotalsAccumulator> = BTreeMap::new();
+    let mut by_provider: BTreeMap<String, UsageTotalsAccumulator> = BTreeMap::new();
+    let mut by_model: BTreeMap<(String, String), UsageTotalsAccumulator> = BTreeMap::new();
+    let mut by_session: BTreeMap<i64, SessionUsageAccumulator> = BTreeMap::new();
 
     for record in records {
         totals.fold(
@@ -663,12 +663,12 @@ pub fn summarize_usage_records(
             );
         by_session
             .entry(record.session_id)
-            .or_insert_with(|| SessionUsageBuilder {
+            .or_insert_with(|| SessionUsageAccumulator {
                 title: record.session_title.clone(),
                 is_subagent: record.is_subagent,
                 first_message_at: record.created_at,
                 last_message_at: record.created_at,
-                totals: UsageTotalsBuilder::default(),
+                totals: UsageTotalsAccumulator::default(),
             })
             .fold(record);
     }

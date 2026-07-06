@@ -1584,8 +1584,8 @@ impl PluginHost {
     }
 
     /// Async shutdown — sends `meta/shutdown` and closes every transport.
-    /// Plugins whose transport has been transferred to a successor host
-    /// (via [`PluginHostBuilder::with_previous`] hot-reload) are skipped.
+    /// Plugins whose transport has been transferred to a successor host during
+    /// hot-reload are skipped.
     pub async fn shutdown(&self) {
         let transferred = self.transferred_to_successor.lock().await.clone();
         for plugin in &self.plugins {
@@ -1927,95 +1927,68 @@ fn merge_json(into: &mut serde_json::Value, from: serde_json::Value) {
     }
 }
 
-// ---------- builder ----------
+// ---------- host construction ----------
 
-pub struct PluginHostBuilder {
-    static_plugins: HashMap<String, StaticRegistration>,
-    config: PluginsConfig,
-    workspace_root: PathBuf,
-    agena_version: String,
-    callback_base_url: Option<String>,
-    host_client: Option<Arc<dyn HostClient>>,
-    /// Optional previous host: for any configured plugin whose config is byte-identical
-    /// to the previous run, the old transport is reused (hot-reload).
-    previous: Option<Arc<PluginHost>>,
-    previous_plugins: HashMap<String, ConfiguredPlugin>,
+pub struct StaticPluginRegistration {
+    pub id: String,
+    registration: StaticRegistration,
 }
 
-impl PluginHostBuilder {
-    pub fn new(workspace_root: impl Into<PathBuf>, agena_version: impl Into<String>) -> Self {
+impl StaticPluginRegistration {
+    pub fn new<P: crate::sdk::Plugin>(id: impl Into<String>, plugin: P) -> Self {
+        let inproc = InProcessTransport::new(plugin);
         Self {
-            static_plugins: HashMap::new(),
-            config: PluginsConfig::default(),
-            workspace_root: workspace_root.into(),
-            agena_version: agena_version.into(),
-            callback_base_url: None,
-            host_client: None,
-            previous: None,
-            previous_plugins: HashMap::new(),
+            id: id.into(),
+            registration: StaticRegistration {
+                builder: Box::new(move || Arc::new(inproc) as Arc<dyn PluginTransport>),
+            },
         }
     }
+}
 
-    pub fn with_config(mut self, config: PluginsConfig) -> Self {
-        self.config = config;
-        self
-    }
+pub struct PluginHostBuildConfig {
+    pub static_plugins: Vec<StaticPluginRegistration>,
+    pub config: PluginsConfig,
+    pub workspace_root: PathBuf,
+    pub agena_version: String,
+    pub callback_base_url: Option<String>,
+    pub host_client: Option<Arc<dyn HostClient>>,
+    /// Optional previous host: for any configured plugin whose config is byte-identical
+    /// to the previous run, the old transport is reused (hot-reload).
+    pub previous: Option<Arc<PluginHost>>,
+    pub previous_plugins: HashMap<String, ConfiguredPlugin>,
+}
 
-    pub fn with_callback_base_url(mut self, url: impl Into<String>) -> Self {
-        self.callback_base_url = Some(url.into());
-        self
-    }
-
-    pub fn with_host_client(mut self, client: Arc<dyn HostClient>) -> Self {
-        self.host_client = Some(client);
-        self
-    }
-
-    /// Reuse transports from a previous build for configured plugins whose config is
-    /// byte-identical. Used for hot-reload across snapshot rebuilds.
-    pub fn with_previous(
-        mut self,
-        previous: Arc<PluginHost>,
-        previous_config: &PluginsConfig,
-    ) -> Self {
-        self.previous_plugins = previous_config
+impl PluginHostBuildConfig {
+    pub fn previous_plugins(previous_config: &PluginsConfig) -> HashMap<String, ConfiguredPlugin> {
+        previous_config
             .list
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        self.previous = Some(previous);
-        self
+            .collect()
     }
+}
 
-    /// Register a factory for the `static` package kind. A static transport is
-    /// only instantiated when the active config contains a matching
-    /// `plugins.list.<id>` configured plugin.
-    pub fn register_static<P: crate::sdk::Plugin>(
-        mut self,
-        id: impl Into<String>,
-        plugin: P,
-    ) -> Self {
-        let id = id.into();
-        let inproc = InProcessTransport::new(plugin);
-        self.static_plugins.insert(
-            id.clone(),
-            StaticRegistration {
-                builder: Box::new(move || Arc::new(inproc) as Arc<dyn PluginTransport>),
-            },
-        );
-        self
-    }
-
-    pub async fn build(self) -> Result<Arc<PluginHost>, HostError> {
-        let host_inner = self.host_client.unwrap_or_else(|| Arc::new(NoopHostClient));
+impl PluginHost {
+    pub async fn new(build: PluginHostBuildConfig) -> Result<Arc<PluginHost>, HostError> {
+        let PluginHostBuildConfig {
+            static_plugins,
+            config,
+            workspace_root,
+            agena_version,
+            callback_base_url,
+            host_client,
+            previous,
+            previous_plugins,
+        } = build;
+        let host_inner = host_client.unwrap_or_else(|| Arc::new(NoopHostClient));
         let tool_registry_shared = Arc::new(RwLock::new(PluginToolRegistry::new()));
         let plugin_indices: Arc<RwLock<HashMap<String, usize>>> =
             Arc::new(RwLock::new(HashMap::new()));
         let plugin_names: Arc<RwLock<HashMap<String, String>>> =
             Arc::new(RwLock::new(HashMap::new()));
         let statuses_shared = Arc::new(crate::status::StatusRegistry::new());
-        let logs_shared = self
-            .previous
+        let logs_shared = previous
             .as_ref()
             .map(|previous| previous.log_store())
             .unwrap_or_else(|| Arc::new(PluginLogStore::default()));
@@ -2027,13 +2000,13 @@ impl PluginHostBuilder {
             Arc::clone(&statuses_shared),
             Arc::clone(&logs_shared),
         );
-        if let Some(url) = self.callback_base_url.clone() {
+        if let Some(url) = callback_base_url.clone() {
             handle = handle.with_callback_base_url(url);
         }
         let quotas = Arc::new(crate::quota::QuotaRegistry::new(
-            self.config.host.default_quota.clone(),
+            config.host.default_quota.clone(),
         ));
-        for (plugin_id, quota) in &self.config.host.quotas {
+        for (plugin_id, quota) in &config.host.quotas {
             quotas.set_plugin(plugin_id.clone(), quota.clone());
         }
         handle.install_quota_registry(Arc::clone(&quotas));
@@ -2042,18 +2015,20 @@ impl PluginHostBuilder {
         let env_lookup: Box<dyn Fn(&str) -> Option<String> + Send + Sync> =
             Box::new(|k: &str| std::env::var(k).ok());
 
-        let mut static_registry = self.static_plugins;
+        let mut static_registry: HashMap<String, StaticRegistration> = static_plugins
+            .into_iter()
+            .map(|entry| (entry.id, entry.registration))
+            .collect();
         let mut loaded: Vec<Arc<LoadedPlugin>> = Vec::new();
         let mut by_id: HashMap<String, Arc<LoadedPlugin>> = HashMap::new();
 
         // Sort configured plugins by id for deterministic load order.
         let mut configured_plugins: Vec<(String, ConfiguredPlugin)> =
-            self.config.list.into_iter().collect();
+            config.list.into_iter().collect();
         configured_plugins.sort_by(|a, b| a.0.cmp(&b.0));
 
         // Build a quick lookup of previous LoadedPlugin by id for reuse.
-        let previous_loaded: HashMap<String, Arc<LoadedPlugin>> = self
-            .previous
+        let previous_loaded: HashMap<String, Arc<LoadedPlugin>> = previous
             .as_ref()
             .map(|p| {
                 p.plugins
@@ -2083,7 +2058,7 @@ impl PluginHostBuilder {
             }
             // Hot-reload: if a previous host had this id with a byte-identical
             // configured plugin, reuse the transport (no respawn).
-            if let Some(previous_plugin) = self.previous_plugins.get(&id)
+            if let Some(previous_plugin) = previous_plugins.get(&id)
                 && previous_plugin == &configured_plugin
                 && let Some(reused) = previous_loaded.get(&id).cloned()
             {
@@ -2092,7 +2067,7 @@ impl PluginHostBuilder {
                     plugin = %id,
                     "reusing existing plugin transport (config unchanged)"
                 );
-                if let Some(prev_host) = &self.previous {
+                if let Some(prev_host) = &previous {
                     prev_host
                         .transferred_to_successor
                         .lock()
@@ -2135,8 +2110,7 @@ impl PluginHostBuilder {
                     )
                     .await;
                 host_handle.set_plugin_hook_catalog(hook_registration_for_plugin(&reused));
-                if let Some(previous_status) = self
-                    .previous
+                if let Some(previous_status) = previous
                     .as_ref()
                     .and_then(|previous| previous.plugin_status(&reused.id))
                 {
@@ -2154,10 +2128,10 @@ impl PluginHostBuilder {
                 &configured_plugin,
                 &mut static_registry,
                 Arc::clone(&host_handle),
-                &self.agena_version,
-                &self.workspace_root,
+                &agena_version,
+                &workspace_root,
                 &env_lookup,
-                &self.config.host.trusted_keys,
+                &config.host.trusted_keys,
             )
             .await
             {
@@ -2226,7 +2200,7 @@ impl PluginHostBuilder {
             tool_registry: tool_registry_shared,
             statuses: statuses_shared,
             logs: logs_shared,
-            timeouts: self.config.host.timeouts,
+            timeouts: config.host.timeouts,
             runtime: None,
             runtime_handle: tokio::runtime::Handle::try_current().ok(),
             _host_handle: host_handle,

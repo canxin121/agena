@@ -1216,11 +1216,15 @@ impl AgenaCli {
         tracing_reload_handle: Option<TracingFilterReloadHandle>,
     ) -> Result<(), AppError> {
         loader.load(&self.load_request())?;
-        let mut builder = AgenaRuntime::builder().with_load_request(self.load_request());
-        if let Some(handle) = tracing_reload_handle {
-            builder = builder.with_tracing_reload_handle(handle);
-        }
-        let runtime = builder.build().await?;
+        let runtime = AgenaRuntime::new(crate::runtime::AgenaRuntimeConfig {
+            load_request: self.load_request(),
+            workspace_root: None,
+            database_connection: None,
+            database_url: None,
+            auto_migrate: true,
+            tracing_reload_handle,
+        })
+        .await?;
         let snapshot = runtime.current_snapshot();
         tracing::info!(
             generation = snapshot.generation(),
@@ -2652,13 +2656,15 @@ impl AgenaCli {
         if let Some(workspace) = workspace {
             load_request.workspace_root = Some(workspace.clone());
         }
-        let mut builder = AgenaRuntime::builder()
-            .with_load_request(load_request)
-            .with_database_url(database_url);
-        if let Some(workspace) = workspace {
-            builder = builder.with_workspace_root(workspace.clone());
-        }
-        builder.build().await
+        AgenaRuntime::new(crate::runtime::AgenaRuntimeConfig {
+            load_request,
+            workspace_root: workspace.cloned(),
+            database_connection: None,
+            database_url: Some(database_url),
+            auto_migrate: true,
+            tracing_reload_handle: None,
+        })
+        .await
     }
 
     fn memory_store_for_workspace(

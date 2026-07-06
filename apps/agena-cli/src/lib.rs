@@ -225,12 +225,15 @@ pub async fn run_embedded(
         .unwrap_or_default();
     let db = Arc::new(tracing_config::connect_database(database_url.as_str(), &tracing).await?);
     let workspace_root = args.workspace_root.unwrap_or(env::current_dir()?);
-    let runtime = AgenaRuntime::builder()
-        .with_load_request(load_request)
-        .with_workspace_root(workspace_root.clone())
-        .with_database_connection(db.as_ref().clone())
-        .build()
-        .await?;
+    let runtime = AgenaRuntime::new(agena::runtime::AgenaRuntimeConfig {
+        load_request,
+        workspace_root: Some(workspace_root.clone()),
+        database_connection: Some(Arc::clone(&db)),
+        database_url: None,
+        auto_migrate: true,
+        tracing_reload_handle: None,
+    })
+    .await?;
 
     let backend = Backend::new(runtime, db, workspace_root.clone());
     let i18n = I18n::resolve(args.locale.as_deref(), config_locale.as_deref());

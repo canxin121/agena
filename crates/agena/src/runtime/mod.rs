@@ -13,7 +13,7 @@ pub use background_tasks::{
     RuntimeBackgroundTaskOrigin, RuntimeBackgroundTaskOutcome, RuntimeBackgroundTaskStart,
     RuntimeBackgroundTaskStatus,
 };
-pub use builder::{AgenaRuntime, AgenaRuntimeBuilder, TracingFilterReloadHandle};
+pub use builder::{AgenaRuntime, AgenaRuntimeConfig, TracingFilterReloadHandle};
 pub use event_bridge::spawn_event_bridge;
 pub use host_client::{host_client_for, noop_host_client};
 pub use reload::{RuntimeReloadCause, RuntimeReloadReport};

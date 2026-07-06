@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::plugin::{ConfiguredPlugin, PluginHostBuilder, PluginsConfig};
+use crate::plugin::{ConfiguredPlugin, PluginsConfig, StaticPluginRegistration};
 
 fn static_entry(config: serde_json::Value) -> ConfiguredPlugin {
     ConfiguredPlugin::static_config(config)
@@ -96,70 +96,69 @@ pub(crate) fn resolve_plugin_config(configured: PluginsConfig) -> PluginsConfig 
     PluginsConfig { host, policy, list }
 }
 
-pub(crate) fn register_static_transports(
-    mut builder: PluginHostBuilder,
+pub(crate) fn static_plugin_registrations(
     mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
-) -> PluginHostBuilder {
-    builder = builder
-        .register_static(
+) -> Vec<StaticPluginRegistration> {
+    let mut registrations = vec![
+        StaticPluginRegistration::new(
             crate::tool::skills_plugin_id(),
             crate::tool::new_skills_plugin(),
-        )
-        .register_static(crate::tool::lsp_plugin_id(), crate::tool::new_lsp_plugin())
-        .register_static(
+        ),
+        StaticPluginRegistration::new(crate::tool::lsp_plugin_id(), crate::tool::new_lsp_plugin()),
+        StaticPluginRegistration::new(
             crate::tool::cron_plugin_id(),
             crate::tool::new_cron_plugin(),
-        )
-        .register_static(
+        ),
+        StaticPluginRegistration::new(
             crate::tool::code_plugin_id(),
             crate::tool::new_code_plugin(),
-        )
-        .register_static(crate::tool::fs_plugin_id(), crate::tool::new_fs_plugin())
-        .register_static(
+        ),
+        StaticPluginRegistration::new(crate::tool::fs_plugin_id(), crate::tool::new_fs_plugin()),
+        StaticPluginRegistration::new(
             crate::tool::settings_plugin_id(),
             crate::tool::new_settings_plugin(),
-        )
-        .register_static(
+        ),
+        StaticPluginRegistration::new(
             crate::tool::process_plugin_id(),
             crate::tool::new_process_plugin(),
-        )
-        .register_static(
+        ),
+        StaticPluginRegistration::new(
             crate::tool::catalog_plugin_id(),
             crate::tool::new_catalog_plugin(),
-        )
-        .register_static(
+        ),
+        StaticPluginRegistration::new(
             crate::tool::runtime_plugin_id(),
             crate::tool::new_runtime_plugin(),
-        )
-        .register_static(
+        ),
+        StaticPluginRegistration::new(
             crate::tool::plan_plugin_id(),
             crate::tool::new_plan_plugin(),
-        )
-        .register_static(
+        ),
+        StaticPluginRegistration::new(
             crate::tool::tasks_plugin_id(),
             crate::tool::new_tasks_plugin(),
-        )
-        .register_static(
+        ),
+        StaticPluginRegistration::new(
             crate::tool::snapshot_plugin_id(),
             crate::tool::new_snapshot_plugin(),
-        );
-    if crate::tool::schema_lab_builtin_enabled() {
-        builder = builder.register_static(
-            crate::tool::schema_lab_plugin_id(),
-            crate::tool::new_schema_lab_plugin(),
-        );
-    }
-    builder = builder
-        .register_static(crate::web::web_plugin_id(), crate::web::new_web_plugin())
-        .register_static(
+        ),
+        StaticPluginRegistration::new(crate::web::web_plugin_id(), crate::web::new_web_plugin()),
+        StaticPluginRegistration::new(
             crate::memory::memory_plugin_id(),
             crate::memory::new_memory_plugin(),
-        );
+        ),
+    ];
+    if crate::tool::schema_lab_builtin_enabled() {
+        registrations.push(StaticPluginRegistration::new(
+            crate::tool::schema_lab_plugin_id(),
+            crate::tool::new_schema_lab_plugin(),
+        ));
+    }
     if let Some(manager) = mcp_manager {
-        builder = builder.register_static(
+        registrations.push(StaticPluginRegistration::new(
             crate::tool::mcp_plugin_id(),
             crate::tool::new_mcp_plugin(manager),
-        );
+        ));
     }
-    builder
+    registrations
 }

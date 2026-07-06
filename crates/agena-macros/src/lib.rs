@@ -1295,123 +1295,123 @@ fn expand_plugin_layer_manifest(
         hooks,
     );
 
-    let config_schema_chain = expand_plugin_layer_config_schema_chain(
+    let config_schema_assignment = expand_plugin_layer_config_schema_assignment(
         config.config_schema_type.as_ref(),
         config,
         self_ty,
     )?;
-    let config_schema_value_chain = config
+    let config_schema_value_assignment = config
         .config_schema
         .as_ref()
-        .map(|schema| quote! { builder = builder.config_schema(#schema); })
+        .map(|schema| quote! { manifest.config_schema = Some(#schema); })
         .unwrap_or_default();
-    let display_chain = config
+    let display_assignment = config
         .display
         .as_ref()
         .map(|display| {
             match display.to_string().as_str() {
                 "brief" | "compact" => {
-                    quote! { builder = builder.display(::agena_plugin_sdk::ToolDisplayPreset::Compact); }
+                    quote! { manifest.set_display(::agena_plugin_sdk::ToolDisplayPreset::Compact); }
                 }
                 "brief_detailed" => {
-                    quote! { builder = builder.display(::agena_plugin_sdk::ToolDisplayPreset::BriefDetailed); }
+                    quote! { manifest.set_display(::agena_plugin_sdk::ToolDisplayPreset::BriefDetailed); }
                 }
                 "detailed" => {
-                    quote! { builder = builder.display(::agena_plugin_sdk::ToolDisplayPreset::Detailed); }
+                    quote! { manifest.set_display(::agena_plugin_sdk::ToolDisplayPreset::Detailed); }
                 }
                 _ => quote! { compile_error!("unsupported plugin display mode"); },
             }
         })
         .unwrap_or_default();
-    let ui_display_chain = config
+    let ui_display_assignment = config
         .ui_display
         .as_ref()
         .map(|display| {
             match display.to_string().as_str() {
                 "brief" | "summary" => {
-                    quote! { builder = builder.ui_display_mode(::agena_plugin_sdk::UiTextDisplayMode::Summary); }
+                    quote! { manifest.ui_display_mode = Some(::agena_plugin_sdk::UiTextDisplayMode::Summary); }
                 }
                 "detailed" => {
-                    quote! { builder = builder.ui_display_mode(::agena_plugin_sdk::UiTextDisplayMode::Detailed); }
+                    quote! { manifest.ui_display_mode = Some(::agena_plugin_sdk::UiTextDisplayMode::Detailed); }
                 }
                 _ => quote! { compile_error!("unsupported plugin UI display mode"); },
             }
         })
         .unwrap_or_default();
-    let summary_chain = if let Some(summary) = config.summary.as_ref() {
-        quote! { builder = builder.summary(#summary); }
+    let summary_assignment = if let Some(summary) = config.summary.as_ref() {
+        quote! { manifest.summary = Some(#summary.to_string()); }
     } else if let Some(summary) = lit_str_from_text(doc_summary(docs).as_deref()) {
-        quote! { builder = builder.summary(#summary); }
+        quote! { manifest.summary = Some(#summary.to_string()); }
     } else {
         quote! {}
     };
-    let help_chain = if let Some(help) = config.help.as_ref() {
-        quote! { builder = builder.help(#help); }
+    let help_assignment = if let Some(help) = config.help.as_ref() {
+        quote! { manifest.help = Some(#help.to_string()); }
     } else if let Some(help) = lit_str_from_text(docs) {
-        quote! { builder = builder.help(#help); }
+        quote! { manifest.help = Some(#help.to_string()); }
     } else {
         quote! {}
     };
-    let tool_description_mode_chain = config
+    let tool_description_mode_assignment = config
         .tool_description_mode
         .as_ref()
-        .map(|mode| quote! { builder = builder.tool_description_mode(#mode); })
+        .map(|mode| quote! { manifest.tool_description_mode = Some(#mode); })
         .unwrap_or_default();
-    let ui_display_mode_chain = config
+    let ui_display_mode_assignment = config
         .ui_display_mode
         .as_ref()
-        .map(|mode| quote! { builder = builder.ui_display_mode(#mode); })
+        .map(|mode| quote! { manifest.ui_display_mode = Some(#mode); })
         .unwrap_or_default();
-    let commands_chain = config
+    let commands_assignment = config
         .commands
         .as_ref()
-        .map(|commands| quote! { builder = builder.commands(#commands); })
+        .map(|commands| quote! { manifest.commands.extend(#commands); })
         .unwrap_or_default();
-    let plugin_capabilities_expr_chain = config
+    let plugin_capabilities_expr_assignment = config
         .plugin_capabilities_expr
         .as_ref()
-        .map(|capabilities| quote! { builder = builder.plugin_capabilities(#capabilities); })
+        .map(|capabilities| quote! { manifest.add_plugin_capabilities(#capabilities); })
         .unwrap_or_default();
-    let plugin_capability_chains = config
+    let plugin_capability_assignments = config
         .plugin_capabilities
         .iter()
-        .map(|capability| quote! { builder = builder.plugin_capability(#capability); })
+        .map(|capability| quote! { manifest.add_plugin_capability(#capability); })
         .collect::<Vec<_>>();
     let (surface_types, suite_types) = unique_manifest_tool_types(tools, streams);
-    let surface_chains = surface_types
+    let surface_assignments = surface_types
         .iter()
-        .map(|ty| quote! { builder = builder.tool_surface::<#ty>(); })
+        .map(|ty| quote! { manifest.tools.extend(<#ty as ::agena_plugin_sdk::ToolSurface>::tool_definitions()); })
         .collect::<Vec<_>>();
-    let suite_chains = suite_types
+    let suite_assignments = suite_types
         .iter()
-        .map(|ty| quote! { builder = builder.tool_suite::<#ty>(); })
+        .map(|ty| quote! { manifest.tools.extend(<#ty as ::agena_plugin_sdk::ToolSuiteSurface>::tool_definitions()); })
         .collect::<Vec<_>>();
 
     Ok(quote! {
         fn manifest(&self) -> ::agena_plugin_sdk::PluginManifest {
-            let mut builder = ::agena_plugin_sdk::PluginManifest::builder_from_full_name(#id, #version)
-                .description(#description)
-                .hooks(#hooks_expr)
-                .config_schema(::agena_plugin_sdk::macro_support::empty_config_schema());
-            #config_schema_chain
-            #config_schema_value_chain
-            #display_chain
-            #ui_display_chain
-            #summary_chain
-            #help_chain
-            #tool_description_mode_chain
-            #ui_display_mode_chain
-            #commands_chain
-            #plugin_capabilities_expr_chain
-            #(#plugin_capability_chains)*
-            #(#surface_chains)*
-            #(#suite_chains)*
-            builder.build()
+            let mut manifest = ::agena_plugin_sdk::PluginManifest::from_full_name(#id, #version);
+            manifest.description = Some(#description.to_string());
+            manifest.hooks = #hooks_expr;
+            manifest.config_schema = Some(::agena_plugin_sdk::macro_support::empty_config_schema());
+            #config_schema_assignment
+            #config_schema_value_assignment
+            #display_assignment
+            #ui_display_assignment
+            #summary_assignment
+            #help_assignment
+            #tool_description_mode_assignment
+            #ui_display_mode_assignment
+            #commands_assignment
+            #plugin_capabilities_expr_assignment
+            #(#plugin_capability_assignments)*
+            #(#surface_assignments)*
+            #(#suite_assignments)*
+            manifest
         }
     })
 }
 
-fn expand_plugin_layer_config_schema_chain(
+fn expand_plugin_layer_config_schema_assignment(
     config_schema_type: Option<&Type>,
     config: &PluginImplConfig,
     self_ty: &Type,
@@ -1419,7 +1419,7 @@ fn expand_plugin_layer_config_schema_chain(
     let Some(ty) = config_schema_type else {
         if config.config_schema_store {
             return Ok(quote! {
-                builder = builder.config_schema(
+                manifest.config_schema = Some(
                     <#self_ty as ::agena_plugin_sdk::plugin::PluginConfigStoreAccess>::plugin_config_schema(),
                 );
             });
@@ -1428,12 +1428,12 @@ fn expand_plugin_layer_config_schema_chain(
     };
     let Some(default) = config.config_schema_default.as_ref() else {
         return Ok(quote! {
-            builder = builder.config_schema(::agena_plugin_sdk::macro_support::json_schema_for::<#ty>());
+            manifest.config_schema = Some(::agena_plugin_sdk::macro_support::json_schema_for::<#ty>());
         });
     };
     if expr_is_ident(default, "default") {
         Ok(quote! {
-            builder = builder.config_schema(
+            manifest.config_schema = Some(
                 ::agena_plugin_sdk::macro_support::json_schema_for_with_default(
                     <#ty as ::core::default::Default>::default(),
                 ),
@@ -1441,7 +1441,7 @@ fn expand_plugin_layer_config_schema_chain(
         })
     } else {
         Ok(quote! {
-            builder = builder.config_schema(
+            manifest.config_schema = Some(
                 ::agena_plugin_sdk::macro_support::json_schema_for_with_default(#default),
             );
         })

@@ -11,7 +11,7 @@ use crate::{
     error::AppError,
     model::{AdapterId, ProviderId},
     model_catalog::ModelCatalogSnapshot,
-    plugin::{PluginHost, PluginHostBuilder},
+    plugin::{PluginHost, PluginHostBuildConfig},
     provider::{
         AmazonBedrockAdapter, AnthropicAdapter, AnthropicProfile, AuthRefreshStrategy,
         AuthSecretSelector, CatalogedModelsProvider, GeminiAdapter, GitlabProvider,
@@ -329,14 +329,22 @@ impl super::ConfigResolution {
             Some(manager) => Some(manager),
             None => self.build_mcp_manager_from_plugin_config().await?,
         };
-        let mut builder =
-            PluginHostBuilder::new(workspace_root, agena_version).with_config(plugin_config);
-        builder = crate::plugins::sources::register_static_transports(builder, mcp_manager);
+        let static_plugins = crate::plugins::sources::static_plugin_registrations(mcp_manager);
+        let mut build_config = PluginHostBuildConfig {
+            static_plugins,
+            config: plugin_config,
+            workspace_root,
+            agena_version,
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: HashMap::new(),
+        };
         if let (Some(prev_host), Some(prev_cfg)) = (previous_host, previous_config) {
-            builder = builder.with_previous(prev_host, prev_cfg);
+            build_config.previous_plugins = PluginHostBuildConfig::previous_plugins(prev_cfg);
+            build_config.previous = Some(prev_host);
         }
-        builder
-            .build()
+        PluginHost::new(build_config)
             .await
             .map_err(|e| ConfigError::Validation(format!("plugin host: {e}")))
     }

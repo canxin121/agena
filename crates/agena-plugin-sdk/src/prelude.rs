@@ -41,8 +41,8 @@ pub use crate::host_api::{
 pub use crate::macro_support::{schema_example_texts, schema_usage_text};
 pub use crate::manifest::{
     HookSubscription, HostCapability, InputNetworkSpec, InputPathSpec, NetworkAccessSpec,
-    PathAccessSpec, PathKind, PluginManifest, PluginManifestBuilder, PluginStudioCommand,
-    PluginStudioControl, PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView,
+    PathAccessSpec, PathKind, PluginManifest, PluginStudioCommand, PluginStudioControl,
+    PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView,
     PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions, PluginUiAction,
     PluginUiContributions, PluginUiThemePalette, ToolDefinition, ToolDescriptionMode,
     ToolDisplayPreset, ToolInputShape, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode,

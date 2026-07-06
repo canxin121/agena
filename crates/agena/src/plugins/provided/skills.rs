@@ -229,14 +229,15 @@ impl SkillsPlugin {
 #[crate::plugin::sdk::async_trait]
 impl crate::plugin::sdk::Plugin for SkillsPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder("agena", "skills", env!("CARGO_PKG_VERSION"))
-            .description(
-                "Discovers SKILL.md files and slash commands, then registers them as dynamic plugin tools.",
-            )
-            .hooks(HookSubscription::TOOL_INVOKE)
-            .brief()
-            .plugin_capabilities([HostCapability::ToolRegistry])
-            .build()
+        let mut manifest = PluginManifest::new("agena", "skills", env!("CARGO_PKG_VERSION"));
+        manifest.description = Some(
+            "Discovers SKILL.md files and slash commands, then registers them as dynamic plugin tools."
+                .to_string(),
+        );
+        manifest.hooks |= HookSubscription::TOOL_INVOKE;
+        manifest.set_display(crate::plugin::sdk::ToolDisplayPreset::Compact);
+        manifest.add_plugin_capability(HostCapability::ToolRegistry);
+        manifest
     }
 
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {

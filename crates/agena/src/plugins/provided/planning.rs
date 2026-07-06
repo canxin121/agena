@@ -27,19 +27,18 @@ impl PlanPlugin {
 #[async_trait]
 impl Plugin for PlanPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder("agena", "plan", env!("CARGO_PKG_VERSION"))
-            .description("Plan orchestration and plan-autorun tools.")
-            .config_schema(planning_plugin_config_schema())
-            .brief_detailed()
-            .hooks(
-                HookSubscription::TOOL_INVOKE
-                    | HookSubscription::TOOL_BEFORE
-                    | HookSubscription::COMMAND_BEFORE
-                    | HookSubscription::AGENT_STOP,
-            )
-            .plugin_capabilities([HostCapability::PluginStorage, HostCapability::Statusline])
-            .tools(PlanToolInput::tool_definitions())
-            .build()
+        let mut manifest = PluginManifest::new("agena", "plan", env!("CARGO_PKG_VERSION"));
+        manifest.description = Some("Plan orchestration and plan-autorun tools.".to_string());
+        manifest.config_schema = Some(planning_plugin_config_schema());
+        manifest.set_display(crate::plugin::sdk::ToolDisplayPreset::BriefDetailed);
+        manifest.hooks |= HookSubscription::TOOL_INVOKE
+            | HookSubscription::TOOL_BEFORE
+            | HookSubscription::COMMAND_BEFORE
+            | HookSubscription::AGENT_STOP;
+        manifest
+            .add_plugin_capabilities([HostCapability::PluginStorage, HostCapability::Statusline]);
+        manifest.tools.extend(PlanToolInput::tool_definitions());
+        manifest
     }
 
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {

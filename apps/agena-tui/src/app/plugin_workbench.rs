@@ -12889,7 +12889,7 @@ mod tests {
         schema: JsonValue,
         raw_config: JsonValue,
     ) -> PluginWorkbenchPlugin {
-        let manifest = agena::plugin::PluginManifest::builder("fixture", "0.1.0")
+        let manifest = agena::plugin::PluginManifest::builder("test", "fixture", "0.1.0")
             .config_schema(schema)
             .build();
         let status = agena::plugin::status::PluginStatus::initial("fixture.plugin", "static");
@@ -12956,7 +12956,7 @@ mod tests {
                 }
             }),
         };
-        let manifest = agena::plugin::PluginManifest::builder("fixture", "0.1.0")
+        let manifest = agena::plugin::PluginManifest::builder("test", "fixture", "0.1.0")
             .tool(
                 agena::plugin::ToolDefinition::new(
                     "fetch",
@@ -13003,7 +13003,7 @@ mod tests {
             file: json!({}),
             effective: json!({}),
         };
-        let manifest = agena::plugin::PluginManifest::builder("fixture", "0.1.0")
+        let manifest = agena::plugin::PluginManifest::builder("test", "fixture", "0.1.0")
             .ui_display_mode(agena::plugin::UiTextDisplayMode::Summary)
             .tool(
                 agena::plugin::ToolDefinition::new(
@@ -13051,7 +13051,7 @@ mod tests {
             file: json!({}),
             effective: json!({}),
         };
-        let manifest = agena::plugin::PluginManifest::builder("fixture", "0.1.0")
+        let manifest = agena::plugin::PluginManifest::builder("test", "fixture", "0.1.0")
             .tool_description_mode(agena::plugin::ToolDescriptionMode::Brief)
             .ui_display_mode(agena::plugin::UiTextDisplayMode::Summary)
             .tool(
@@ -13116,7 +13116,7 @@ mod tests {
             file: json!({}),
             effective: json!({}),
         };
-        let manifest = agena::plugin::PluginManifest::builder("fixture", "0.1.0")
+        let manifest = agena::plugin::PluginManifest::builder("test", "fixture", "0.1.0")
             .tool_description_mode(agena::plugin::ToolDescriptionMode::Brief)
             .ui_display_mode(agena::plugin::UiTextDisplayMode::Summary)
             .tool(
@@ -13168,7 +13168,7 @@ mod tests {
             file: json!({}),
             effective: json!({}),
         };
-        let manifest = agena::plugin::PluginManifest::builder("fixture", "0.1.0")
+        let manifest = agena::plugin::PluginManifest::builder("test", "fixture", "0.1.0")
             .tool_description_mode(agena::plugin::ToolDescriptionMode::Brief)
             .ui_display_mode(agena::plugin::UiTextDisplayMode::Summary)
             .tool(
@@ -13507,7 +13507,7 @@ mod tests {
                 }
             }
         });
-        let manifest = agena::plugin::PluginManifest::builder("fixture", "0.1.0")
+        let manifest = agena::plugin::PluginManifest::builder("test", "fixture", "0.1.0")
             .config_schema(schema)
             .build();
         let status = agena::plugin::status::PluginStatus::initial("fixture.plugin", "static");
@@ -15970,7 +15970,7 @@ mod tests {
                 }
             }
         });
-        let manifest = agena::plugin::PluginManifest::builder("fixture", "0.1.0")
+        let manifest = agena::plugin::PluginManifest::builder("test", "fixture", "0.1.0")
             .config_schema(schema)
             .build();
         let status = agena::plugin::status::PluginStatus::initial("fixture.plugin", "static");
@@ -16210,7 +16210,7 @@ mod tests {
                 }
             }
         });
-        let manifest = agena::plugin::PluginManifest::builder("agena.web", "1.0.0")
+        let manifest = agena::plugin::PluginManifest::builder("agena", "web", "1.0.0")
             .config_schema(schema)
             .build();
         let status = agena::plugin::status::PluginStatus::initial("agena.web", "static");

@@ -782,8 +782,9 @@ pub struct ToolRegistryChangedEvent {
     pub kind: ToolRegistryChangeKind,
     pub generation: u64,
     pub timestamp_ms: i64,
-    pub plugin_id: String,
-    pub plugin_tool_name: String,
+    pub namespace: String,
+    pub plugin_name: String,
+    pub tool_name: String,
     pub model_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<ToolDefinition>,
@@ -791,8 +792,9 @@ pub struct ToolRegistryChangedEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostRegisteredToolDescriptor {
-    pub plugin_id: String,
-    pub plugin_tool_name: String,
+    pub namespace: String,
+    pub plugin_name: String,
+    pub tool_name: String,
     pub model_name: String,
     pub tool: ToolDefinition,
 }

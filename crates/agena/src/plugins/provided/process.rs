@@ -88,7 +88,7 @@ pub(crate) enum ProcessToolSurfaceInput {
 #[async_trait]
 impl Plugin for ProcessPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(PROCESS_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
+        PluginManifest::builder("agena", "process", env!("CARGO_PKG_VERSION"))
             .description("Command execution and background process tools.")
             .brief_detailed()
             .tool(ProcessToolSurfaceInput::tool_definition())

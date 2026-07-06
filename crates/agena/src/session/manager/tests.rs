@@ -132,7 +132,7 @@ struct SessionStartFixturePlugin;
 #[async_trait]
 impl crate::plugin::sdk::Plugin for SessionStartFixturePlugin {
     fn manifest(&self) -> crate::plugin::sdk::PluginManifest {
-        crate::plugin::sdk::PluginManifest::builder("session-start-fixture", "0.1.0")
+        crate::plugin::sdk::PluginManifest::builder("test", "session-start-fixture", "0.1.0")
             .hooks(crate::plugin::sdk::HookSubscription::SESSION_START)
             .build()
     }
@@ -163,7 +163,7 @@ struct SessionEndFixturePlugin {
 #[async_trait]
 impl crate::plugin::sdk::Plugin for SessionEndFixturePlugin {
     fn manifest(&self) -> crate::plugin::sdk::PluginManifest {
-        crate::plugin::sdk::PluginManifest::builder("session-end-fixture", "0.1.0")
+        crate::plugin::sdk::PluginManifest::builder("test", "session-end-fixture", "0.1.0")
             .hooks(crate::plugin::sdk::HookSubscription::SESSION_END)
             .build()
     }
@@ -185,7 +185,7 @@ struct StreamingFixturePlugin {
 #[async_trait]
 impl crate::plugin::sdk::Plugin for StreamingFixturePlugin {
     fn manifest(&self) -> crate::plugin::sdk::PluginManifest {
-        crate::plugin::sdk::PluginManifest::builder("streaming-fixture", "0.1.0")
+        crate::plugin::sdk::PluginManifest::builder("test", "streaming-fixture", "0.1.0")
             .hooks(crate::plugin::sdk::HookSubscription::TOOL_INVOKE_STREAM)
             .tool(
                 crate::plugin::sdk::ToolDefinition::new(

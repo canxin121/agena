@@ -22305,7 +22305,7 @@ fn timeline_event_summary(i18n: &I18n, record: &DomainEvent) -> String {
         ),
         AgenaSessionEvent::PluginToolRegistryChanged(event) => format!(
             "{} {} {}",
-            event.plugin_id,
+            format!("{}.{}", event.namespace, event.plugin_name),
             match event.kind {
                 agena::plugin::sdk::host_api::ToolRegistryChangeKind::Registered => "registered",
                 agena::plugin::sdk::host_api::ToolRegistryChangeKind::Updated => "updated",
@@ -22663,12 +22663,9 @@ fn timeline_event_detail_lines(i18n: &I18n, record: &DomainEvent) -> Vec<DetailT
             ),
         ],
         AgenaSessionEvent::PluginToolRegistryChanged(event) => {
+            let plugin_full_name = format!("{}.{}", event.namespace, event.plugin_name);
             let mut lines = vec![
-                timeline_detail_labeled_line(
-                    i18n,
-                    "timeline-label-plugin-id",
-                    event.plugin_id.clone(),
-                ),
+                timeline_detail_labeled_line(i18n, "timeline-label-plugin-id", plugin_full_name),
                 timeline_detail_labeled_line(
                     i18n,
                     "timeline-label-kind",
@@ -22680,11 +22677,7 @@ fn timeline_event_detail_lines(i18n: &I18n, record: &DomainEvent) -> Vec<DetailT
                         agena::plugin::sdk::host_api::ToolRegistryChangeKind::Removed => "removed",
                     },
                 ),
-                timeline_detail_labeled_line(
-                    i18n,
-                    "timeline-label-name",
-                    event.plugin_tool_name.clone(),
-                ),
+                timeline_detail_labeled_line(i18n, "timeline-label-name", event.tool_name.clone()),
                 app_detail_plain_line(format!("model_name: {}", event.model_name)),
                 app_detail_plain_line(format!("generation: {}", event.generation)),
                 app_detail_plain_line(format!("timestamp_ms: {}", event.timestamp_ms)),

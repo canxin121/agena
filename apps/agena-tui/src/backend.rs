@@ -4509,13 +4509,16 @@ impl Backend {
             .plugin_manager()
             .registered_tools()
             .into_iter()
-            .map(|entry| InspectorRow {
-                label: entry.model_name,
-                detail: format!(
+            .map(|entry| {
+                let detail = format!(
                     "{} | {}",
-                    entry.plugin_name,
+                    entry.plugin_full_name(),
                     entry.definition.description_text()
-                ),
+                );
+                InspectorRow {
+                    label: entry.model_name,
+                    detail,
+                }
             })
             .collect::<Vec<_>>();
         rows.sort_by(|left, right| left.label.cmp(&right.label));

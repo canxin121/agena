@@ -28,7 +28,7 @@ impl PlanPlugin {
 #[async_trait]
 impl Plugin for PlanPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(PLAN_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
+        PluginManifest::builder("agena", "plan", env!("CARGO_PKG_VERSION"))
             .description("Plan orchestration and plan-autorun tools.")
             .config_schema(planning_plugin_config_schema())
             .brief_detailed()

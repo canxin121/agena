@@ -31,7 +31,7 @@ impl CatalogPlugin {
 #[async_trait]
 impl Plugin for CatalogPlugin {
     fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder(CATALOG_PLUGIN_ID, env!("CARGO_PKG_VERSION"))
+        PluginManifest::builder("agena", "catalog", env!("CARGO_PKG_VERSION"))
             .description("Tool catalog discovery and help tools.")
             .config_schema(tool_catalog_plugin_config_schema())
             .brief_detailed()
@@ -72,7 +72,7 @@ impl Plugin for CatalogPlugin {
 pub(crate) fn tools_tool_descriptor_for_tests() -> ToolDescriptor {
     let definition = ToolsToolInput::tool_definition();
     ToolDescriptor {
-        name: crate::plugin::registry::model_tool_name(CATALOG_PLUGIN_ID, "tools"),
+        name: crate::plugin::registry::model_tool_name("agena", "catalog", "tools"),
         description: Some(definition.description_text().to_string()),
         before_help: definition.before_help_text().map(ToString::to_string),
         after_help: definition.after_help_text().map(ToString::to_string),

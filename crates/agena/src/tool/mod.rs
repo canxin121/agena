@@ -624,7 +624,7 @@ fn present_registered_tool(
     presentation: &crate::plugin::ToolPresentationConfig,
 ) -> RegisteredTool {
     let mode = presentation.mode_for(
-        registered_tool.plugin_name.as_str(),
+        registered_tool.plugin_full_name().as_str(),
         registered_tool.tool_name.as_str(),
         registered_tool.model_name.as_str(),
         registered_tool.definition.preferred_description_mode(),
@@ -836,7 +836,7 @@ impl ToolExecutor {
                 .map(|mut entry| {
                     let input = PluginToolDefinitionInput {
                         tool_name: entry.tool_name.clone(),
-                        plugin_name: entry.plugin_name.clone(),
+                        plugin_name: entry.plugin_full_name(),
                         description: entry.description_text().to_string(),
                         summary: entry.definition.docs.summary.clone(),
                         help: entry.definition.docs.help.clone(),
@@ -1038,12 +1038,12 @@ impl ToolExecutor {
 
     fn plugin_invocation_plugin_name_for(&self, invocation: &PluginInvocation) -> String {
         if let Some(entry) = self.plugin_invocation_definition(invocation) {
-            return entry.plugin_name;
+            return entry.plugin_full_name();
         }
 
         self.plugins
             .lookup_tool(invocation.tool_name.as_str())
-            .map(|entry| entry.plugin_name)
+            .map(|entry| entry.plugin_full_name())
             .unwrap_or_else(|| "custom".to_string())
     }
 
@@ -5404,7 +5404,7 @@ mod tests {
     #[async_trait::async_trait]
     impl Plugin for FixturePlugin {
         fn manifest(&self) -> PluginManifest {
-            PluginManifest::builder("fixture", "0.1.0")
+            PluginManifest::builder("test", "fixture", "0.1.0")
                 .description("fixture plugin")
                 .hooks(
                     HookSubscription::TOOL_BEFORE
@@ -6664,10 +6664,22 @@ mod tests {
 
         let tools = executor.available_model_tools();
         assert!(!tools.iter().any(|tool| tool.model_name == "plan"));
-        assert!(tools.iter().any(|tool| tool.model_name == "agena.catalog.tools"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.model_name == "agena.catalog.tools")
+        );
         assert!(tools.iter().any(|tool| tool.model_name == "plan.get"));
-        assert!(tools.iter().any(|tool| tool.model_name == "agena.plan.plan"));
-        assert!(tools.iter().any(|tool| tool.model_name == "agena.plan.plan"));
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.model_name == "agena.plan.plan")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.model_name == "agena.plan.plan")
+        );
         assert!(tools.iter().any(|tool| tool.model_name == "plan.clear"));
         assert!(!tools.iter().any(|tool| tool.model_name == "task"));
         assert!(tools.iter().any(|tool| tool.model_name == "task.run"));
@@ -7409,11 +7421,9 @@ mod tests {
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_plugin_manager(&workspace.root));
 
-        assert!(
-            executor.available_tools().iter().any(|tool| {
-                tool.model_name == FIXTURE_ECHO_TOOL && tool.plugin_name == "fixture"
-            })
-        );
+        assert!(executor.available_tools().iter().any(|tool| {
+            tool.model_name == FIXTURE_ECHO_TOOL && tool.plugin_full_name() == "test.fixture"
+        }));
 
         let invocation = ToolInvocation {
             name: FIXTURE_ECHO_TOOL.to_string(),

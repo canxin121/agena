@@ -1389,7 +1389,7 @@ fn expand_plugin_layer_manifest(
 
     Ok(quote! {
         fn manifest(&self) -> ::agena_plugin_sdk::PluginManifest {
-            let mut builder = ::agena_plugin_sdk::PluginManifest::builder(#id, #version)
+            let mut builder = ::agena_plugin_sdk::PluginManifest::builder_from_full_name(#id, #version)
                 .description(#description)
                 .hooks(#hooks_expr)
                 .config_schema(::agena_plugin_sdk::macro_support::empty_config_schema());

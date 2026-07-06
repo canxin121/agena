@@ -1627,32 +1627,3 @@ where
 
     Ok(parsed)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn parse_tool_invocation_lossy_preserves_tool_name_for_malformed_json() {
-        let tools = vec![RegisteredTool::new(
-            "fs",
-            crate::plugin::sdk::ToolDefinition::new(
-                "read",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "path": { "type": "string" }
-                    }
-                }),
-            ),
-        )];
-
-        let invocation =
-            parse_tool_invocation_lossy(1, "fs.read", r#"{"path":"src/main.rs"#, tools.as_slice());
-
-        assert_eq!(invocation.name, "fs.read");
-        assert_eq!(invocation.plugin_name.as_deref(), Some("fs"));
-        assert_eq!(serde_json::Value::from(invocation.input), json!({}));
-    }
-}

@@ -20,13 +20,5 @@ tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 
-[dev-dependencies]
-agena = { workspace = true }
-agena-api-server = { workspace = true }
-axum = { workspace = true }
-mockito = { workspace = true }
-sea-orm = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
-
 [lints]
 workspace = true

@@ -108,11 +108,6 @@ impl SessionStore {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(crate) fn db(&self) -> &DatabaseConnection {
-        &self.db
-    }
-
     pub(crate) async fn create_session(
         &self,
         title: String,

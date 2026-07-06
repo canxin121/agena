@@ -80,11 +80,6 @@ url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true }
 walkdir = { workspace = true }
 
-[dev-dependencies]
-axum = { workspace = true }
-mockito = { workspace = true }
-tempfile = { workspace = true }
-
 [features]
 default = ["schema-lab"]
 schema-lab = []

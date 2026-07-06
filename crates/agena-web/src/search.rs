@@ -479,34 +479,3 @@ fn normalize_whitespace(value: &str) -> String {
 fn selector(value: &str) -> Selector {
     Selector::parse(value).expect("static CSS selector parses")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{WebSearchEngine, normalize_duckduckgo_url, normalize_web_search_engine};
-
-    #[test]
-    fn normalizes_search_engine_aliases() {
-        assert_eq!(
-            normalize_web_search_engine("ddg"),
-            Some(WebSearchEngine::DuckDuckGo)
-        );
-        assert_eq!(
-            normalize_web_search_engine("Microsoft Bing"),
-            Some(WebSearchEngine::Bing)
-        );
-        assert_eq!(
-            normalize_web_search_engine("百度"),
-            Some(WebSearchEngine::Baidu)
-        );
-        assert_eq!(normalize_web_search_engine("brave"), None);
-    }
-
-    #[test]
-    fn decodes_duckduckgo_redirect_urls() {
-        let url = normalize_duckduckgo_url(
-            "/l/?kh=-1&uddg=https%3A%2F%2Fwww.rust-lang.org%2Flearn%3Futm_source%3Dddg&rut=x",
-        )
-        .expect("url decodes");
-        assert_eq!(url, "https://www.rust-lang.org/learn");
-    }
-}

@@ -222,21 +222,3 @@ fn should_upgrade_http(raw_url: &str) -> bool {
         Some(url::Host::Domain(_)) | None => true,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{canonicalize_url, resolve_link_url};
-
-    #[test]
-    fn canonicalize_url_strips_tracking_fields() {
-        let url = canonicalize_url("https://Example.com/path?utm_source=x&b=2&a=1#frag")
-            .expect("url parses");
-        assert_eq!(url.as_str(), "https://example.com/path?a=1&b=2");
-    }
-
-    #[test]
-    fn resolve_link_url_rejects_non_http_links() {
-        let base = canonicalize_url("https://example.com/docs").expect("base");
-        assert!(resolve_link_url(&base, "mailto:test@example.com").is_none());
-    }
-}

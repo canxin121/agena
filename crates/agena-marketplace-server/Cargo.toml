@@ -13,9 +13,5 @@ axum = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["net"], optional = true }
 
-[dev-dependencies]
-http-body-util = { workspace = true }
-tower = { workspace = true, features = ["util"] }
-
 [lints]
 workspace = true

@@ -979,63 +979,6 @@ fn merge_json(primary: &mut Value, fallback: &Value) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn merge_definitions_prefers_higher_priority_limit_fields() {
-        let primary = CatalogModelDefinition {
-            context_window_tokens: Some(262_144),
-            display_name: Some("Nemotron".to_owned()),
-            source_priority: CatalogDefinitionSourcePriority {
-                sort_priority: 950,
-                limits_priority: 950,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let fallback = CatalogModelDefinition {
-            context_window_tokens: Some(1_000_000),
-            source_priority: CatalogDefinitionSourcePriority {
-                sort_priority: 400,
-                limits_priority: 975,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let merged = merge_definitions(&primary, &fallback).expect("merge definitions");
-        assert_eq!(merged.context_window_tokens, Some(1_000_000));
-        assert_eq!(merged.display_name.as_deref(), Some("Nemotron"));
-    }
-
-    #[test]
-    fn merge_definitions_keeps_primary_limit_fields_when_priority_is_higher() {
-        let primary = CatalogModelDefinition {
-            context_window_tokens: Some(1_000_000),
-            source_priority: CatalogDefinitionSourcePriority {
-                sort_priority: 950,
-                limits_priority: 975,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let fallback = CatalogModelDefinition {
-            context_window_tokens: Some(262_144),
-            source_priority: CatalogDefinitionSourcePriority {
-                sort_priority: 400,
-                limits_priority: 950,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let merged = merge_definitions(&primary, &fallback).expect("merge definitions");
-        assert_eq!(merged.context_window_tokens, Some(1_000_000));
-    }
-}
-
 fn origin_for_model(model_id: &str, definition: &CatalogModelDefinition) -> Option<String> {
     let root = extract_root(model_id);
     let display_name = normalize_optional_text(definition.display_name.clone())

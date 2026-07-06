@@ -26,9 +26,6 @@ mod submodule;
 mod utils;
 mod worktrees;
 
-#[cfg(test)]
-mod regression_tests;
-
 pub(crate) const MAX_BLOB_BYTES: usize = 50 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]

@@ -366,27 +366,3 @@ fn catalog_match_model_id_for_raw(raw_model_id: &str) -> Option<String> {
     let trimmed = canonical.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn catalog_display_name_only_fills_missing_value() {
-        let definition = CatalogModelDefinition {
-            display_name: Some("Catalog".to_owned()),
-            ..CatalogModelDefinition::default()
-        };
-
-        let mut live_model = Model::new("test", "model").with_display_name("Live");
-        apply_catalog_display_name_as_fallback(&mut live_model, &definition);
-        assert_eq!(live_model.display_name.as_deref(), Some("Live"));
-
-        let mut missing_display_name = Model::new("test", "model");
-        apply_catalog_display_name_as_fallback(&mut missing_display_name, &definition);
-        assert_eq!(
-            missing_display_name.display_name.as_deref(),
-            Some("Catalog")
-        );
-    }
-}

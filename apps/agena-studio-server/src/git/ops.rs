@@ -21,14 +21,3 @@ pub use stash::{
     git_stash_apply, git_stash_branch, git_stash_drop, git_stash_drop_all, git_stash_list,
     git_stash_pop, git_stash_push, git_stash_show,
 };
-
-#[cfg(test)]
-pub use abort::GitAbortBody;
-#[cfg(test)]
-pub use continue_skip::GitContinueBody;
-#[cfg(test)]
-pub use fetch::GitFetchBody;
-#[cfg(test)]
-pub use pull::GitPullBody;
-#[cfg(test)]
-pub use stash::{GitStashRefBody, GitStashShowQuery};

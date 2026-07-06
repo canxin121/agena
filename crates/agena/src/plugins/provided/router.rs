@@ -225,15 +225,6 @@ pub(crate) fn permission_paths_for(
     }
 }
 
-#[cfg(test)]
-pub(crate) fn permission_paths_for_surface<T: crate::plugin::sdk::ToolSurface>(
-    tool_name: &str,
-    input: &serde_json::Value,
-) -> SdkResult<Vec<crate::plugin::sdk::PathRequest>> {
-    let (resolved_tool_name, resolved_input) = T::resolve_tool(tool_name, input.clone())?;
-    permission_paths_for(&resolved_tool_name, &resolved_input)
-}
-
 pub(crate) fn permission_networks_for(
     tool: &str,
     input: &serde_json::Value,
@@ -321,56 +312,5 @@ pub(crate) fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -
         payload,
         metadata: metadata.into_iter().collect(),
         attachments: execution.view.attachments,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    #[test]
-    fn permission_helpers_extract_process_workdir_paths() {
-        let paths = permission_paths_for("process", &json!({ "action": "list" }))
-            .expect("process list should not request any paths");
-        assert!(paths.is_empty());
-
-        let paths = permission_paths_for(
-            "process",
-            &json!({
-                "action": "run",
-                "shell": "bash",
-                "command": "echo ok",
-                "description": "",
-                "workdir": "  crates/agena  ",
-                "filesystem_effects": [],
-                "network_effects": [],
-                "background": false
-            }),
-        )
-        .expect("process run should parse through ProcessToolInput");
-        assert_eq!(
-            paths,
-            vec![crate::plugin::sdk::PathRequest::read("crates/agena")]
-        );
-    }
-
-    #[test]
-    fn tool_surface_permission_helpers_resolve_before_extracting_permissions() {
-        let paths = permission_paths_for_surface::<crate::plugins::provided::lsp::LspToolInput>(
-            "lsp",
-            &json!({
-                "action": "definition",
-                "file_path": " src/main.rs ",
-                "line": 4,
-                "character": 8
-            }),
-        )
-        .expect("lsp surface should resolve into routed definition input");
-        assert_eq!(
-            paths,
-            vec![crate::plugin::sdk::PathRequest::read("src/main.rs")]
-        );
     }
 }

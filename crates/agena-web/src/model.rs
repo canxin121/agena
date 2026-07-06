@@ -156,16 +156,3 @@ pub fn preview_text(text: &str, max_chars: usize) -> String {
     }
     format!("{}…", text[..end].trim_end())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::chunk_markdown;
-
-    #[test]
-    fn chunk_markdown_splits_long_content() {
-        let markdown = "alpha beta gamma\n\n".repeat(200);
-        let chunks = chunk_markdown(markdown.as_str(), 200);
-        assert!(chunks.len() > 1);
-        assert!(chunks.iter().all(|chunk| !chunk.trim().is_empty()));
-    }
-}

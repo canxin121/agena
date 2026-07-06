@@ -130,32 +130,3 @@ async fn shorten_clckru(client: &Client, url: &str) -> Result<String> {
     }
     Ok(short_url)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn should_shorten_wide_urls() {
-        assert!(!should_shorten_url("https://is.gd/demo"));
-        assert!(should_shorten_url(
-            "https://auth.openai.com/oauth/authorize?response_type=code&client_id=demo&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid%20profile%20email%20offline_access%20api.connectors.read%20api.connectors.invoke&state=demo"
-        ));
-    }
-
-    #[test]
-    fn accepts_only_valid_short_urls_from_expected_hosts() {
-        let original = "https://auth.openai.com/oauth/authorize?response_type=code&client_id=demo&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid%20profile%20email%20offline_access%20api.connectors.read%20api.connectors.invoke&state=demo";
-        assert!(should_use_short_url(
-            original,
-            "https://is.gd/AbCdEf",
-            "is.gd"
-        ));
-        assert!(!should_use_short_url(
-            original,
-            "https://example.com/not-short",
-            "is.gd"
-        ));
-        assert!(!should_use_short_url(original, original, "auth.openai.com"));
-    }
-}

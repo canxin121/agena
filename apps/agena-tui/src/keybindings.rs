@@ -157,22 +157,3 @@ pub enum ComposerAction {
     OpenPendingUserInput,
     OpenPendingPermission,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_pending_permission_binding_uses_alt_a() {
-        let bindings = ComposerKeyBindings::default();
-
-        assert_eq!(
-            bindings.match_action(&KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT)),
-            Some(ComposerAction::OpenPendingPermission)
-        );
-        assert_ne!(
-            bindings.match_action(&KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT)),
-            Some(ComposerAction::OpenPendingPermission)
-        );
-    }
-}

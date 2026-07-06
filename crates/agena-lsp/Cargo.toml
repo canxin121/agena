@@ -20,9 +20,5 @@ arc-swap = { workspace = true }
 default = []
 test-support = []
 
-[dev-dependencies]
-agena-lsp = { path = ".", features = ["test-support"] }
-tokio = { workspace = true, features = ["full", "test-util"] }
-
 [lints]
 workspace = true

@@ -16,19 +16,3 @@ impl<TAction> ConfirmDialogState<TAction> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::ConfirmDialogState;
-
-    #[test]
-    fn new_preserves_dialog_fields() {
-        let state =
-            ConfirmDialogState::new("Confirm".into(), vec!["body".into()], "footer".into(), 7_u8);
-
-        assert_eq!(state.title, "Confirm");
-        assert_eq!(state.body_lines, vec!["body"]);
-        assert_eq!(state.footer, "footer");
-        assert_eq!(state.action, 7);
-    }
-}

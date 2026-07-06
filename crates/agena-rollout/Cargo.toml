@@ -13,9 +13,5 @@ tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
 tracing = { workspace = true }
 walkdir = { workspace = true }
 
-[dev-dependencies]
-tempfile = { workspace = true }
-tokio = { workspace = true, features = ["full"] }
-
 [lints]
 workspace = true

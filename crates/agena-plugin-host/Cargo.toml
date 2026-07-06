@@ -30,13 +30,5 @@ default = []
 wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:sha2", "dep:hex"]
 signing = ["dep:sha2", "dep:hex", "dep:ed25519-dalek"]
 
-[dev-dependencies]
-agena-plugin-sdk = { workspace = true, features = ["http", "stdio"] }
-async-trait = { workspace = true }
-axum = { workspace = true }
-ed25519-dalek = { workspace = true }
-hex = { workspace = true }
-tokio = { workspace = true, features = ["full"] }
-
 [lints]
 workspace = true

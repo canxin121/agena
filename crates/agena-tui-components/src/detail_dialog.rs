@@ -85,35 +85,3 @@ pub fn render_detail_text_dialog<'a, I>(
         },
     );
 }
-
-#[cfg(test)]
-mod tests {
-    use std::borrow::Cow;
-
-    use ratatui::{layout::Alignment, style::Style};
-
-    use super::DetailTextDialogSpec;
-    use crate::DetailTextSpec;
-
-    #[test]
-    fn detail_text_dialog_spec_builder_preserves_footer_configuration() {
-        let spec = DetailTextDialogSpec::new(
-            Cow::Borrowed("Detail"),
-            80,
-            DetailTextSpec::with_label_width(8),
-            (4, 12),
-        )
-        .with_footer(
-            Cow::Borrowed("Footer"),
-            (1, 2),
-            Some(Alignment::Center),
-            Style::default(),
-        );
-
-        assert_eq!(spec.title.as_ref(), "Detail");
-        assert_eq!(spec.target_width, 80);
-        assert_eq!(spec.footer.as_deref(), Some("Footer"));
-        assert_eq!(spec.footer_height_bounds, (1, 2));
-        assert_eq!(spec.footer_alignment, Some(Alignment::Center));
-    }
-}

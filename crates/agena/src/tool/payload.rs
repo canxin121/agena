@@ -352,19 +352,18 @@ fn canonical_tool_payload_name(name: &str) -> &str {
         .unwrap_or(name)
 }
 
-const DIRECT_GROUPED_TOOL_MAPPINGS: &[(&str, &str, &str, &str)] = &[
-    ("read", "agena.fs", "fs", "read"),
-    ("glob", "agena.fs", "fs", "glob"),
-    ("grep", "agena.fs", "fs", "grep"),
-    ("apply_patch", "agena.fs", "fs", "apply_patch"),
-    ("task", "agena.tasks", "task", "run"),
-    ("tool_search", "agena.catalog", "tools", "search"),
-    ("ask_user", "agena.runtime", "user", "request_input"),
-    ("exit_snapshot", "agena.snapshot", "snapshot", "exit"),
-    ("lsp_definition", "agena.lsp", "lsp", "definition"),
-    ("lsp_references", "agena.lsp", "lsp", "references"),
-    ("lsp_hover", "agena.lsp", "lsp", "hover"),
-    ("lsp_diagnostics", "agena.lsp", "lsp", "diagnostics"),
+const DIRECT_TOOL_MAPPINGS: &[(&str, &str, &str)] = &[
+    ("read", "agena.fs", "read"),
+    ("glob", "agena.fs", "glob"),
+    ("grep", "agena.fs", "grep"),
+    ("apply_patch", "agena.fs", "apply_patch"),
+    ("task", "agena.tasks", "run"),
+    ("tool_search", "agena.catalog", "search"),
+    ("ask_user", "agena.runtime", "user.request_input"),
+    ("lsp_definition", "agena.lsp", "definition"),
+    ("lsp_references", "agena.lsp", "references"),
+    ("lsp_hover", "agena.lsp", "hover"),
+    ("lsp_diagnostics", "agena.lsp", "diagnostics"),
 ];
 
 fn model_tool_name(plugin: &str, tool: &str) -> String {
@@ -372,20 +371,18 @@ fn model_tool_name(plugin: &str, tool: &str) -> String {
     crate::plugin::registry::model_tool_name(&namespace, &plugin_name, tool)
 }
 
-fn grouped_mapping_for_tool(tool: &str) -> Option<(&'static str, &'static str, &'static str)> {
-    DIRECT_GROUPED_TOOL_MAPPINGS
+fn direct_mapping_for_tool(tool: &str) -> Option<(&'static str, &'static str)> {
+    DIRECT_TOOL_MAPPINGS
         .iter()
-        .find(|(name, _, _, _)| *name == tool)
-        .map(|(_, plugin, entry, action)| (*plugin, *entry, *action))
+        .find(|(name, _, _)| *name == tool)
+        .map(|(_, plugin, tool)| (*plugin, *tool))
 }
 
-fn tool_name_for_grouped_mapping(entry: &str, action: &str) -> Option<&'static str> {
-    DIRECT_GROUPED_TOOL_MAPPINGS
+fn payload_name_for_direct_mapping(tool: &str) -> Option<&'static str> {
+    DIRECT_TOOL_MAPPINGS
         .iter()
-        .find(|(_, _, mapped_entry, mapped_action)| {
-            *mapped_entry == entry && *mapped_action == action
-        })
-        .map(|(tool, _, _, _)| *tool)
+        .find(|(_, _, mapped_tool)| *mapped_tool == tool)
+        .map(|(payload, _, _)| *payload)
 }
 
 fn invocation_name_for_payload_tool(
@@ -395,7 +392,13 @@ fn invocation_name_for_payload_tool(
     Some(match tool {
         "web_fetch" => model_tool_name("agena.web", "fetch"),
         "web_search" => model_tool_name("agena.web", "search"),
-        "process" => model_tool_name("agena.process", "process"),
+        "process" => {
+            let action = input
+                .remove("action")
+                .and_then(|value| value.as_str().map(str::to_string))
+                .unwrap_or_else(|| "list".to_string());
+            model_tool_name("agena.process", action.as_str())
+        }
         "cron_create" => model_tool_name("agena.cron", "schedule.create"),
         "cron_list" => model_tool_name("agena.cron", "schedule.list"),
         "cron_delete" => model_tool_name("agena.cron", "schedule.delete"),
@@ -425,19 +428,17 @@ fn invocation_name_for_payload_tool(
                     }
                 }
             }
-            input.insert(
-                "action".to_string(),
-                serde_json::Value::String("enter".to_string()),
-            );
-            model_tool_name("agena.snapshot", "snapshot")
+            model_tool_name("agena.snapshot", "enter")
+        }
+        "exit_snapshot" => {
+            if let Some(action) = input.remove("action") {
+                input.insert("exit_action".to_string(), action);
+            }
+            model_tool_name("agena.snapshot", "exit")
         }
         _ => {
-            let (plugin, entry, action) = grouped_mapping_for_tool(tool)?;
-            input.insert(
-                "action".to_string(),
-                serde_json::Value::String(action.to_string()),
-            );
-            model_tool_name(plugin, entry)
+            let (plugin, tool) = direct_mapping_for_tool(tool)?;
+            model_tool_name(plugin, tool)
         }
     })
 }
@@ -451,68 +452,133 @@ fn payload_name_for_invocation(
         "agena_web__search" | "web.search" | "web_search" => {
             return Some("web_search".to_string());
         }
-        "agena_fs__fs_read" | "fs.read" => return Some("read".to_string()),
-        "agena_fs__fs_glob" | "fs.glob" => return Some("glob".to_string()),
-        "agena_fs__fs_grep" | "fs.grep" => return Some("grep".to_string()),
-        "agena_fs__fs_apply_patch" | "fs.apply_patch" => {
+        "agena_fs_read" | "agena_fs__fs_read" | "agena.fs.read" | "fs.read" | "read" => {
+            return Some("read".to_string());
+        }
+        "agena_fs_glob" | "agena_fs__fs_glob" | "agena.fs.glob" | "fs.glob" | "glob" => {
+            return Some("glob".to_string());
+        }
+        "agena_fs_grep" | "agena_fs__fs_grep" | "agena.fs.grep" | "fs.grep" | "grep" => {
+            return Some("grep".to_string());
+        }
+        "agena_fs_apply_patch"
+        | "agena_fs__fs_apply_patch"
+        | "agena.fs.apply_patch"
+        | "fs.apply_patch"
+        | "apply_patch" => {
             return Some("apply_patch".to_string());
         }
-        "agena_process__process_run" | "process.run" => {
+        "agena_process_run"
+        | "agena_process__process_run"
+        | "agena.process.run"
+        | "process.run" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("run".to_string()),
             );
             return Some("process".to_string());
         }
-        "agena_process__process_list" | "process.list" => {
+        "agena_process_list"
+        | "agena_process__process_list"
+        | "agena.process.list"
+        | "process.list" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("list".to_string()),
             );
             return Some("process".to_string());
         }
-        "agena_process__process_logs" | "process.logs" => {
+        "agena_process_logs"
+        | "agena_process__process_logs"
+        | "agena.process.logs"
+        | "process.logs" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("logs".to_string()),
             );
             return Some("process".to_string());
         }
-        "agena_process__process_stop" | "process.stop" => {
+        "agena_process_stop"
+        | "agena_process__process_stop"
+        | "agena.process.stop"
+        | "process.stop" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("stop".to_string()),
             );
             return Some("process".to_string());
         }
-        "agena_cron__schedule_create" | "schedule.create" => {
+        "agena_cron_schedule_create"
+        | "agena_cron__schedule_create"
+        | "agena.cron.schedule.create"
+        | "schedule.create" => {
             return Some("cron_create".to_string());
         }
-        "agena_cron__schedule_list" | "schedule.list" => return Some("cron_list".to_string()),
-        "agena_cron__schedule_delete" | "schedule.delete" => {
+        "agena_cron_schedule_list"
+        | "agena_cron__schedule_list"
+        | "agena.cron.schedule.list"
+        | "schedule.list" => {
+            return Some("cron_list".to_string());
+        }
+        "agena_cron_schedule_delete"
+        | "agena_cron__schedule_delete"
+        | "agena.cron.schedule.delete"
+        | "schedule.delete" => {
             return Some("cron_delete".to_string());
         }
-        "agena_cron__schedule_wakeup" | "schedule.wakeup" => {
+        "agena_cron_schedule_wakeup"
+        | "agena_cron__schedule_wakeup"
+        | "agena.cron.schedule.wakeup"
+        | "schedule.wakeup" => {
             return Some("schedule_wakeup".to_string());
         }
-        "agena_tasks__task_run" | "task.run" => return Some("task".to_string()),
-        "agena_catalog__tools_search" | "tools.search" | "tool.search" => {
+        "agena_tasks_run" | "agena_tasks__task_run" | "agena.tasks.run" | "task.run" => {
+            return Some("task".to_string());
+        }
+        "agena_catalog_search"
+        | "agena_catalog__tools_search"
+        | "agena.catalog.search"
+        | "tools.search"
+        | "tool.search" => {
             return Some("tool_search".to_string());
         }
-        "agena_runtime__user_request_input" | "user.request_input" => {
+        "agena_runtime_user_request_input"
+        | "agena_runtime__user_request_input"
+        | "agena.runtime.user.request_input"
+        | "user.request_input" => {
             return Some("ask_user".to_string());
         }
-        "agena_snapshot__snapshot_exit" | "snapshot.exit" => {
+        "agena_snapshot_enter"
+        | "agena_snapshot__snapshot_enter"
+        | "agena.snapshot.enter"
+        | "snapshot.enter" => {
+            return Some("enter_snapshot".to_string());
+        }
+        "agena_snapshot_exit"
+        | "agena_snapshot__snapshot_exit"
+        | "agena.snapshot.exit"
+        | "snapshot.exit" => {
             return Some("exit_snapshot".to_string());
         }
-        "agena_lsp__lsp_definition" | "lsp.definition" => {
+        "agena_lsp_definition"
+        | "agena_lsp__lsp_definition"
+        | "agena.lsp.definition"
+        | "lsp.definition" => {
             return Some("lsp_definition".to_string());
         }
-        "agena_lsp__lsp_references" | "lsp.references" => {
+        "agena_lsp_references"
+        | "agena_lsp__lsp_references"
+        | "agena.lsp.references"
+        | "lsp.references" => {
             return Some("lsp_references".to_string());
         }
-        "agena_lsp__lsp_hover" | "lsp.hover" => return Some("lsp_hover".to_string()),
-        "agena_lsp__lsp_diagnostics" | "lsp.diagnostics" => {
+        "agena_lsp_hover" | "agena_lsp__lsp_hover" | "agena.lsp.hover" | "lsp.hover" => {
+            return Some("lsp_hover".to_string());
+        }
+        "agena_lsp_diagnostics"
+        | "agena_lsp__lsp_diagnostics"
+        | "agena.lsp.diagnostics"
+        | "lsp.diagnostics" => {
             return Some("lsp_diagnostics".to_string());
         }
         _ => {}
@@ -529,7 +595,7 @@ fn grouped_tool_payload_name(
     let tool = match (entry, action.as_str()) {
         ("process", "run" | "list" | "logs" | "stop") => "process",
         ("snapshot", "enter") => "enter_snapshot",
-        _ => tool_name_for_grouped_mapping(entry, action.as_str())?,
+        _ => payload_name_for_direct_mapping(entry)?,
     };
     input.remove("action");
     match tool {
@@ -567,7 +633,15 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
         "agena_web__search" | "web.search" | "web_search" | "search" => {
             Some("web_search".to_string())
         }
-        "agena_process__process"
+        "agena.process.run"
+        | "agena.process.list"
+        | "agena.process.logs"
+        | "agena.process.stop"
+        | "agena_process_run"
+        | "agena_process_list"
+        | "agena_process_logs"
+        | "agena_process_stop"
+        | "agena_process__process"
         | "agena_process__process_run"
         | "agena_process__process_list"
         | "agena_process__process_logs"
@@ -577,11 +651,31 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
         | "process.logs"
         | "process.stop"
         | "process" => Some("process".to_string()),
-        "agena_cron__schedule_create" | "schedule.create" => Some("cron_create".to_string()),
-        "agena_cron__schedule_list" | "schedule.list" => Some("cron_list".to_string()),
-        "agena_cron__schedule_delete" | "schedule.delete" => Some("cron_delete".to_string()),
-        "agena_cron__schedule_wakeup" | "schedule.wakeup" => Some("schedule_wakeup".to_string()),
-        "agena_fs__fs"
+        "agena.cron.schedule.create"
+        | "agena_cron_schedule_create"
+        | "agena_cron__schedule_create"
+        | "schedule.create" => Some("cron_create".to_string()),
+        "agena.cron.schedule.list"
+        | "agena_cron_schedule_list"
+        | "agena_cron__schedule_list"
+        | "schedule.list" => Some("cron_list".to_string()),
+        "agena.cron.schedule.delete"
+        | "agena_cron_schedule_delete"
+        | "agena_cron__schedule_delete"
+        | "schedule.delete" => Some("cron_delete".to_string()),
+        "agena.cron.schedule.wakeup"
+        | "agena_cron_schedule_wakeup"
+        | "agena_cron__schedule_wakeup"
+        | "schedule.wakeup" => Some("schedule_wakeup".to_string()),
+        "agena.fs.read"
+        | "agena.fs.glob"
+        | "agena.fs.grep"
+        | "agena.fs.apply_patch"
+        | "agena_fs_read"
+        | "agena_fs_glob"
+        | "agena_fs_grep"
+        | "agena_fs_apply_patch"
+        | "agena_fs__fs"
         | "agena_fs__fs_read"
         | "agena_fs__fs_glob"
         | "agena_fs__fs_grep"
@@ -591,20 +685,33 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
         | "fs.glob"
         | "fs.grep"
         | "fs.apply_patch" => None,
-        "agena_tasks__task" | "agena_tasks__task_run" | "task" | "task.run" => {
-            Some("task".to_string())
-        }
-        "agena_catalog__tools" | "agena_catalog__tools_search" | "tools" | "tools.search" => {
-            Some("tool_search".to_string())
-        }
-        "agena_runtime__user"
+        "agena.tasks.run"
+        | "agena_tasks_run"
+        | "agena_tasks__task"
+        | "agena_tasks__task_run"
+        | "task"
+        | "task.run" => Some("task".to_string()),
+        "agena.catalog.search"
+        | "agena_catalog_search"
+        | "agena_catalog__tools"
+        | "agena_catalog__tools_search"
+        | "tools"
+        | "tools.search" => Some("tool_search".to_string()),
+        "agena.runtime.user.request_input"
+        | "agena_runtime_user_request_input"
+        | "agena_runtime__user"
         | "agena_runtime__user_request_input"
         | "user"
         | "user.request_input" => Some("ask_user".to_string()),
-        "agena_plan__plan" | "plan" | "plan.get" | "plan.set" | "plan.update" | "plan.clear" => {
+        "agena.plan.get" | "agena.plan.set" | "agena.plan.update" | "agena.plan.clear"
+        | "agena_plan__plan" | "plan" | "plan.get" | "plan.set" | "plan.update" | "plan.clear" => {
             None
         }
-        "agena_snapshot__snapshot"
+        "agena.snapshot.enter"
+        | "agena.snapshot.exit"
+        | "agena_snapshot_enter"
+        | "agena_snapshot_exit"
+        | "agena_snapshot__snapshot"
         | "snapshot"
         | "snapshot.enter"
         | "snapshot.enter_new"
@@ -613,7 +720,19 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
         | "snapshot.enter.existing"
         | "snapshot.exit" => None,
         "agena_cron__schedule" | "schedule" => None,
-        "agena_lsp__lsp" | "lsp" | "lsp.definition" | "lsp.references" | "lsp.hover"
+        "agena.lsp.definition"
+        | "agena.lsp.references"
+        | "agena.lsp.hover"
+        | "agena.lsp.diagnostics"
+        | "agena_lsp_definition"
+        | "agena_lsp_references"
+        | "agena_lsp_hover"
+        | "agena_lsp_diagnostics"
+        | "agena_lsp__lsp"
+        | "lsp"
+        | "lsp.definition"
+        | "lsp.references"
+        | "lsp.hover"
         | "lsp.diagnostics" => None,
         _ => None,
     }

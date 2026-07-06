@@ -268,13 +268,13 @@ impl LspPlugin {
 #[serde(tag = "action", rename_all = "snake_case")]
 pub(crate) enum LspToolInput {
     #[tool(
-        exec = "lsp_servers",
+        exec = "servers",
         handle_with_context = LspPlugin::dispatch_servers,
         permission_paths_handle = LspPlugin::permission_servers
     )]
     Servers,
     #[tool(
-        exec = "lsp_definition",
+        exec = "definition",
         handle_with_context = LspPlugin::dispatch_definition,
         permission_paths_handle = LspPlugin::permission_definition,
         handle_by_value = true
@@ -285,7 +285,7 @@ pub(crate) enum LspToolInput {
         args: LspDefinitionToolInput,
     },
     #[tool(
-        exec = "lsp_references",
+        exec = "references",
         handle_with_context = LspPlugin::dispatch_references,
         permission_paths_handle = LspPlugin::permission_references,
         handle_by_value = true
@@ -296,7 +296,7 @@ pub(crate) enum LspToolInput {
         args: LspReferencesToolInput,
     },
     #[tool(
-        exec = "lsp_hover",
+        exec = "hover",
         handle_with_context = LspPlugin::dispatch_hover,
         permission_paths_handle = LspPlugin::permission_hover,
         handle_by_value = true
@@ -307,7 +307,7 @@ pub(crate) enum LspToolInput {
         args: LspHoverToolInput,
     },
     #[tool(
-        exec = "lsp_diagnostics",
+        exec = "diagnostics",
         handle_with_context = LspPlugin::dispatch_diagnostics,
         permission_paths_handle = LspPlugin::permission_diagnostics,
         handle_by_value = true

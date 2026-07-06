@@ -35,22 +35,22 @@ pub(crate) struct CronPlugin {
 )]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum ScheduleToolInput {
-    #[tool(exec = "list", route = "cron_list", shape = CronListToolInput)]
+    #[tool(exec = "schedule.list", route = "cron_list", shape = CronListToolInput)]
     List {
         #[serde(flatten)]
         args: CronListToolInput,
     },
-    #[tool(exec = "create", route = "cron_create", shape = CronCreateToolInput)]
+    #[tool(exec = "schedule.create", route = "cron_create", shape = CronCreateToolInput)]
     Create {
         #[serde(flatten)]
         args: CronCreateToolInput,
     },
-    #[tool(exec = "delete", route = "cron_delete", shape = CronDeleteToolInput)]
+    #[tool(exec = "schedule.delete", route = "cron_delete", shape = CronDeleteToolInput)]
     Delete {
         #[serde(flatten)]
         args: CronDeleteToolInput,
     },
-    #[tool(exec = "wakeup", route = "schedule_wakeup", shape = ScheduleWakeupToolInput)]
+    #[tool(exec = "schedule.wakeup", route = "schedule_wakeup", shape = ScheduleWakeupToolInput)]
     Wakeup {
         #[serde(flatten)]
         args: ScheduleWakeupToolInput,

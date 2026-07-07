@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::{
@@ -121,14 +122,28 @@ pub(crate) fn search_tool_catalog(
     }
     let collector = TopDocs::with_limit(limit).order_by_score();
     let top_docs: Vec<(f32, DocAddress)> = searcher.search(&parsed_query, &collector)?;
-    if top_docs.is_empty() {
-        return Ok(fallback_search(documents, &normalized_query, limit));
-    }
-    let mut results = Vec::with_capacity(top_docs.len());
+    let mut results = Vec::with_capacity(limit);
+    let mut seen_ids = HashSet::new();
     for (_score, address) in top_docs {
         let doc = searcher.doc::<TantivyDocument>(address)?;
-        results.push(document_from_hit(&doc, &fields));
+        let document = document_from_hit(&doc, &fields);
+        if seen_ids.insert(document.id.clone()) {
+            results.push(document);
+        }
     }
+    let fallback_limit = limit.saturating_mul(3).max(limit);
+    for document in fallback_search(documents, &normalized_query, fallback_limit) {
+        if seen_ids.insert(document.id.clone()) {
+            results.push(document);
+        }
+        if results.len() >= limit {
+            break;
+        }
+    }
+    if results.is_empty() {
+        return Ok(results);
+    }
+    results.truncate(limit);
     Ok(results)
 }
 
@@ -269,6 +284,13 @@ fn fallback_score(
         .iter()
         .map(|tag| normalize_search_text(tag))
         .collect::<Vec<_>>();
+    let compact_query = compact_search_text(normalized_query);
+    let compact_name = compact_search_text(&normalized_name);
+    let compact_plugin_id = compact_search_text(&normalized_plugin_id);
+    let compact_tags = normalized_tags
+        .iter()
+        .map(|tag| compact_search_text(tag))
+        .collect::<Vec<_>>();
 
     let mut score = 0;
 
@@ -292,8 +314,32 @@ fn fallback_score(
     if normalized_description.contains(normalized_query) {
         score += 20;
     }
+    if compact_name.starts_with(compact_query.as_str()) {
+        score += 36;
+    } else if compact_name.contains(compact_query.as_str()) {
+        score += 18;
+    }
+    if compact_plugin_id.starts_with(compact_query.as_str()) {
+        score += 14;
+    }
+    if compact_tags
+        .iter()
+        .any(|tag| tag.starts_with(compact_query.as_str()) || tag.contains(compact_query.as_str()))
+    {
+        score += 16;
+    }
+    if is_subsequence(compact_query.as_str(), compact_name.as_str()) {
+        score += 14;
+    }
+    let name_distance = bounded_edit_distance(compact_query.as_str(), compact_name.as_str(), 2);
+    if name_distance == Some(1) {
+        score += 28;
+    } else if name_distance == Some(2) {
+        score += 14;
+    }
 
     for token in tokens {
+        let compact_token = compact_search_text(token);
         if normalized_name.contains(token) {
             score += 12;
         }
@@ -306,6 +352,17 @@ fn fallback_score(
         if normalized_description.contains(token) {
             score += 5;
         }
+        if compact_name.starts_with(compact_token.as_str()) {
+            score += 10;
+        } else if compact_name.contains(compact_token.as_str()) {
+            score += 6;
+        }
+        if compact_tags.iter().any(|tag| tag.contains(compact_token.as_str())) {
+            score += 5;
+        }
+        if is_subsequence(compact_token.as_str(), compact_name.as_str()) {
+            score += 4;
+        }
     }
 
     score
@@ -317,4 +374,99 @@ fn normalized_tokens(value: &str) -> Vec<String> {
         .filter(|token| token.len() >= 2)
         .map(str::to_string)
         .collect()
+}
+
+fn compact_search_text(value: &str) -> String {
+    value.chars().filter(|ch| !ch.is_whitespace()).collect()
+}
+
+fn is_subsequence(needle: &str, haystack: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let mut needle_chars = needle.chars();
+    let mut current = needle_chars.next();
+    for haystack_char in haystack.chars() {
+        if Some(haystack_char) == current {
+            current = needle_chars.next();
+            if current.is_none() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn bounded_edit_distance(left: &str, right: &str, max_distance: usize) -> Option<usize> {
+    let left_chars = left.chars().collect::<Vec<_>>();
+    let right_chars = right.chars().collect::<Vec<_>>();
+    if left_chars.is_empty() {
+        return Some(right_chars.len()).filter(|distance| *distance <= max_distance);
+    }
+    if right_chars.is_empty() {
+        return Some(left_chars.len()).filter(|distance| *distance <= max_distance);
+    }
+    let len_diff = left_chars.len().abs_diff(right_chars.len());
+    if len_diff > max_distance {
+        return None;
+    }
+
+    let mut previous = (0..=right_chars.len()).collect::<Vec<_>>();
+    let mut current = vec![0; right_chars.len() + 1];
+    for (i, left_char) in left_chars.iter().enumerate() {
+        current[0] = i + 1;
+        let mut row_min = current[0];
+        for (j, right_char) in right_chars.iter().enumerate() {
+            let substitution_cost = usize::from(left_char != right_char);
+            current[j + 1] = (previous[j + 1] + 1)
+                .min(current[j] + 1)
+                .min(previous[j] + substitution_cost);
+            row_min = row_min.min(current[j + 1]);
+        }
+        if row_min > max_distance {
+            return None;
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    Some(previous[right_chars.len()]).filter(|distance| *distance <= max_distance)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn doc(name: &str, description: &str, tags: &[&str]) -> ToolCatalogDocument {
+        ToolCatalogDocument::new(
+            name.to_string(),
+            description.to_string(),
+            tags.iter().map(|tag| tag.to_string()).collect(),
+            None,
+        )
+    }
+
+    #[test]
+    fn search_matches_compact_tool_names() {
+        let docs = vec![
+            doc("agena.fs/apply_patch", "Apply a patch to files", &["mutating"]),
+            doc("agena.fs/read", "Read a file", &["read_only"]),
+        ];
+
+        let results =
+            search_tool_catalog(&docs, "applypatch", 5).expect("compact search should succeed");
+
+        assert_eq!(results.first().map(|doc| doc.name.as_str()), Some("agena.fs/apply_patch"));
+    }
+
+    #[test]
+    fn search_matches_small_typos() {
+        let docs = vec![
+            doc("agena.process/run", "Run a foreground command", &["shell"]),
+            doc("agena.process/logs", "Read process logs", &["read_only"]),
+        ];
+
+        let results =
+            search_tool_catalog(&docs, "rn", 5).expect("fuzzy search should succeed");
+
+        assert_eq!(results.first().map(|doc| doc.name.as_str()), Some("agena.process/run"));
+    }
 }

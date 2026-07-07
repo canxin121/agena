@@ -179,7 +179,7 @@ Runtime build 注册：
 | `agena.memory` | `search`, `get`, `list`, `write`, `delete` |
 | `agena.settings` | `get`, `list`, `validate`, `set`, `delete`, `patch` |
 | `agena.cron` | `list`, `create`, `delete`, `wakeup` |
-| `agena.tools` | `usage`, `list`, `search`, `tags`, `help`, `call` |
+| `agena.tools` | `list`, `search`, `tags`, `help`, `call` |
 | `agena.runtime` | `switch`, `restore`, `get`, `rename`, `request_input` |
 | `agena.plan` | `get`, `set`, `update`, `clear` |
 | `agena.tasks` | `run` |

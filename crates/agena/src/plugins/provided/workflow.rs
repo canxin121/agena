@@ -37,14 +37,12 @@ pub(crate) struct WorkflowPluginConfig {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct WorkflowToolCatalogConfig {
     pub(crate) search: WorkflowToolCatalogSearchConfig,
-    pub(crate) help: WorkflowToolCatalogHelpConfig,
 }
 
 impl Default for WorkflowToolCatalogConfig {
     fn default() -> Self {
         Self {
             search: WorkflowToolCatalogSearchConfig::default(),
-            help: WorkflowToolCatalogHelpConfig::default(),
         }
     }
 }
@@ -54,24 +52,16 @@ impl Default for WorkflowToolCatalogConfig {
 pub(crate) struct WorkflowToolCatalogSearchConfig {
     pub(crate) default_limit: u32,
     pub(crate) max_limit: u32,
+    pub(crate) max_query_length: u32,
 }
 
 impl Default for WorkflowToolCatalogSearchConfig {
     fn default() -> Self {
         Self {
-            default_limit: 8,
-            max_limit: 25,
+            default_limit: 50,
+            max_limit: 100,
+            max_query_length: 512,
         }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct WorkflowToolCatalogHelpConfig {}
-
-impl Default for WorkflowToolCatalogHelpConfig {
-    fn default() -> Self {
-        Self {}
     }
 }
 
@@ -98,7 +88,7 @@ pub(crate) fn tool_catalog_plugin_config_schema() -> serde_json::Value {
         (
             "",
             "Tool Catalog Plugin Config",
-            "Defaults for tool catalog search and tool help rendering.",
+            "Defaults for tool catalog search behavior.",
         ),
         (
             "/properties/search",
@@ -116,9 +106,9 @@ pub(crate) fn tool_catalog_plugin_config_schema() -> serde_json::Value {
             "Upper bound enforced for tool catalog search results.",
         ),
         (
-            "/properties/help",
-            "Help",
-            "Default behavior for the catalog help tool.",
+            "/properties/search/properties/max_query_length",
+            "Max Query Length",
+            "Upper bound enforced for the catalog search query length.",
         ),
     ] {
         crate::tool::definition::set_schema_metadata(
@@ -188,6 +178,8 @@ const PLAN_KEY_ACTIVE: &str = "active";
 const PLAN_RUNTIME_NAMESPACE: &str = "workflow_plan_runtime";
 const PLAN_RUNTIME_AUTO_SIGNATURE_KEY: &str = "last_autorun_signature";
 const PLAN_STATUSLINE_SEGMENT_ID: &str = "plan";
+const TOOL_CATALOG_RUNTIME_NAMESPACE: &str = "workflow_tool_catalog_runtime";
+const TOOL_CATALOG_HELPED_TOOLS_KEY: &str = "helped_tools";
 const PLAN_REVIEW_DECISION_APPROVE: &str = "Approve";
 const PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON: &str = "Approve with autorun on";
 const PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF: &str = "Approve with autorun off";
@@ -227,6 +219,11 @@ struct CatalogTagRecord {
     tool_count: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct HelpedToolsState {
+    tools: Vec<String>,
+}
+
 impl WorkflowPlugin {
     pub(crate) fn new() -> Self {
         Self {
@@ -242,11 +239,36 @@ impl WorkflowPlugin {
             .ok_or_else(|| PluginError::new("workflow plugin invoked before init"))
     }
 
-    async fn invoke_tools_usage(
-        &self,
-        _input: &catalog_tools::CatalogUsageToolInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        Ok(Self::invoke_tool_catalog_usage())
+    fn resolve_tool_descriptor<'a>(
+        requested: &str,
+        tools: &'a [ToolDescriptor],
+    ) -> SdkResult<&'a ToolDescriptor> {
+        let mut case_insensitive: Option<&ToolDescriptor> = None;
+        for tool in tools {
+            if tool.name == requested {
+                return Ok(tool);
+            }
+            if case_insensitive.is_none() && tool.name.eq_ignore_ascii_case(requested) {
+                case_insensitive = Some(tool);
+            }
+        }
+        if let Some(tool) = case_insensitive {
+            return Ok(tool);
+        }
+        let suggestions = Self::suggest_tool_names(requested, tools);
+        let message = if suggestions.is_empty() {
+            format!("unknown tool '{requested}'")
+        } else {
+            format!(
+                "unknown tool '{requested}'. Did you mean {}?",
+                suggestions
+                    .iter()
+                    .map(|tool| format!("`{tool}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        Err(PluginError::invalid_params(message))
     }
 
     async fn switch_agent_for_tool(
@@ -315,10 +337,26 @@ impl WorkflowPlugin {
         )
     }
 
-    fn normalized_tag_filter(tag: Option<&str>) -> Option<String> {
-        tag.map(str::trim)
+    fn normalized_tag_filters(tag: Option<&str>, tags: Option<&[String]>) -> Vec<String> {
+        let mut filters = Vec::new();
+        if let Some(tag) = tag
+            .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(|value| value.to_ascii_lowercase())
+        {
+            filters.push(tag);
+        }
+        if let Some(tags) = tags {
+            for tag in tags {
+                let normalized = tag.trim().to_ascii_lowercase();
+                if !normalized.is_empty() {
+                    filters.push(normalized);
+                }
+            }
+        }
+        filters.sort();
+        filters.dedup();
+        filters
     }
 
     fn paginate<T: Clone>(
@@ -378,15 +416,19 @@ impl WorkflowPlugin {
     fn filter_catalog_records_by_tag(
         mut records: Vec<CatalogToolRecord>,
         tag: Option<&str>,
+        tags: Option<&[String]>,
     ) -> Vec<CatalogToolRecord> {
-        let Some(tag) = Self::normalized_tag_filter(tag) else {
+        let required_tags = Self::normalized_tag_filters(tag, tags);
+        if required_tags.is_empty() {
             return records;
-        };
+        }
         records.retain(|record| {
-            record
-                .tags
-                .iter()
-                .any(|candidate| candidate.eq_ignore_ascii_case(tag.as_str()))
+            required_tags.iter().all(|required_tag| {
+                record
+                    .tags
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(required_tag.as_str()))
+            })
         });
         records
     }
@@ -535,6 +577,52 @@ impl WorkflowPlugin {
             })
             .await?
             .value)
+    }
+
+    async fn load_helped_tools_state(&self) -> SdkResult<HelpedToolsState> {
+        let response = self
+            .host()?
+            .storage_get(HostStorageGetRequest {
+                scope: HostStorageScope::Session,
+                visibility: HostStorageVisibility::Private,
+                namespace: TOOL_CATALOG_RUNTIME_NAMESPACE.to_string(),
+                key: TOOL_CATALOG_HELPED_TOOLS_KEY.to_string(),
+            })
+            .await?;
+        let Some(value) = response.value else {
+            return Ok(HelpedToolsState::default());
+        };
+        serde_json::from_str::<HelpedToolsState>(&value)
+            .map_err(|err| PluginError::new(format!("invalid helped-tools payload: {err}")))
+    }
+
+    async fn save_helped_tool(&self, tool_name: &str) -> SdkResult<()> {
+        let mut state = self.load_helped_tools_state().await?;
+        if !state.tools.iter().any(|tool| tool == tool_name) {
+            state.tools.push(tool_name.to_string());
+            state.tools.sort();
+            state.tools.dedup();
+        }
+        let value =
+            serde_json::to_string(&state).map_err(|err| PluginError::new(err.to_string()))?;
+        self.host()?
+            .storage_set(HostStorageSetRequest {
+                scope: HostStorageScope::Session,
+                visibility: HostStorageVisibility::Private,
+                namespace: TOOL_CATALOG_RUNTIME_NAMESPACE.to_string(),
+                key: TOOL_CATALOG_HELPED_TOOLS_KEY.to_string(),
+                value,
+            })
+            .await
+    }
+
+    async fn has_help_for_tool(&self, tool_name: &str) -> SdkResult<bool> {
+        Ok(self
+            .load_helped_tools_state()
+            .await?
+            .tools
+            .iter()
+            .any(|tool| tool == tool_name))
     }
 
     async fn save_autorun_signature(&self, signature: &str) -> SdkResult<()> {
@@ -1494,10 +1582,7 @@ impl WorkflowPlugin {
                 );
             }
             "agena.tools" => {
-                return matches!(
-                    input.tool_name(),
-                    "usage" | "list" | "search" | "tags" | "help" | "call"
-                );
+                return matches!(input.tool_name(), "list" | "search" | "tags" | "help" | "call");
             }
             "agena.tasks" if input.tool_name() == "run" => {
                 return TaskToolInput::parse_input(input.input.clone()).is_ok_and(|task| {
@@ -2030,6 +2115,14 @@ impl WorkflowPlugin {
     async fn invoke_tool_search(&self, input: &CatalogSearchInput) -> SdkResult<ToolInvokeOutput> {
         let query = input.query.as_str();
         let config = self.config()?;
+        let max_query_length = config.tool_catalog.search.max_query_length as usize;
+        if query.chars().count() > max_query_length {
+            return Err(PluginError::invalid_params(format!(
+                "search query is too long: {} characters (max {})",
+                query.chars().count(),
+                max_query_length
+            )));
+        }
         let limit = input
             .limit
             .unwrap_or(config.tool_catalog.search.default_limit)
@@ -2037,6 +2130,7 @@ impl WorkflowPlugin {
         let records = Self::filter_catalog_records_by_tag(
             self.catalog_tool_records().await?,
             input.tag.as_deref(),
+            input.tags.as_deref(),
         );
         let catalog = records
             .iter()
@@ -2073,6 +2167,7 @@ impl WorkflowPlugin {
             "results": names,
             "query": query,
             "tag": input.tag.as_deref(),
+            "tags": input.tags.as_deref(),
             "total": total,
             "offset": offset,
             "returned": results.len(),
@@ -2100,6 +2195,7 @@ impl WorkflowPlugin {
         let records = Self::filter_catalog_records_by_tag(
             self.catalog_tool_records().await?,
             input.tag.as_deref(),
+            input.tags.as_deref(),
         );
         let (tools, total, offset) = Self::paginate(&records, input.offset, Some(limit));
         let mut lines = vec![format!(
@@ -2109,24 +2205,20 @@ impl WorkflowPlugin {
             offset
         )];
         for tool in &tools {
-            if input.verbose {
-                let summary = tool.summary.trim();
-                if summary.is_empty() {
-                    lines.push(format!(
-                        "- {} [{}]",
-                        tool.name,
-                        tags_summary(tool.tags.as_slice())
-                    ));
-                } else {
-                    lines.push(format!(
-                        "- {} [{}]: {}",
-                        tool.name,
-                        tags_summary(tool.tags.as_slice()),
-                        summary
-                    ));
-                }
+            let summary = tool.summary.trim();
+            if summary.is_empty() {
+                lines.push(format!(
+                    "- {} [{}]",
+                    tool.name,
+                    tags_summary(tool.tags.as_slice())
+                ));
             } else {
-                lines.push(format!("- {}", tool.name));
+                lines.push(format!(
+                    "- {} [{}]: {}",
+                    tool.name,
+                    tags_summary(tool.tags.as_slice()),
+                    summary
+                ));
             }
         }
 
@@ -2140,6 +2232,7 @@ impl WorkflowPlugin {
             "offset": offset,
             "returned": tools.len(),
             "tag": input.tag.as_deref(),
+            "tags": input.tags.as_deref(),
         });
         Ok(ToolInvokeOutput::from_parts(
             "Tool list",
@@ -2199,33 +2292,7 @@ impl WorkflowPlugin {
             .into_iter()
             .map(|record| (record.name, record.tags))
             .collect::<HashMap<_, _>>();
-        let mut exact: Option<&ToolDescriptor> = None;
-        let mut case_insensitive: Option<&ToolDescriptor> = None;
-        for tool in &tools {
-            if tool.name == requested {
-                exact = Some(tool);
-                break;
-            }
-            if case_insensitive.is_none() && tool.name.eq_ignore_ascii_case(requested) {
-                case_insensitive = Some(tool);
-            }
-        }
-        let Some(descriptor) = exact.or(case_insensitive) else {
-            let suggestions = Self::suggest_tool_names(requested, &tools);
-            let message = if suggestions.is_empty() {
-                format!("unknown tool '{requested}'")
-            } else {
-                format!(
-                    "unknown tool '{requested}'. Did you mean {}?",
-                    suggestions
-                        .iter()
-                        .map(|tool| format!("`{tool}`"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            };
-            return Err(PluginError::invalid_params(message));
-        };
+        let descriptor = Self::resolve_tool_descriptor(requested, &tools)?;
 
         let mut lines = vec![format!("Tool: {}", descriptor.name)];
         if let Some(tags) = tag_index.get(descriptor.name.as_str())
@@ -2280,6 +2347,7 @@ impl WorkflowPlugin {
                     .map_err(|err| PluginError::new(err.to_string()))?,
             );
         }
+        self.save_helped_tool(descriptor.name.as_str()).await?;
 
         Ok(ToolInvokeOutput::from_parts(
             format!("{} help", descriptor.name),
@@ -2297,8 +2365,18 @@ impl WorkflowPlugin {
                 "agena.tools/call cannot invoke itself".to_string(),
             ));
         }
+        let tools = self.host()?.list_tools().await?;
+        let descriptor = Self::resolve_tool_descriptor(requested, &tools)?;
+        if !descriptor.name.eq_ignore_ascii_case("agena.tools/help")
+            && !self.has_help_for_tool(descriptor.name.as_str()).await?
+        {
+            return Err(PluginError::invalid_params(format!(
+                "read agena.tools/help for `{}` before invoking it through agena.tools/call",
+                descriptor.name
+            )));
+        }
         self.host()?
-            .invoke_tool(requested.to_string(), input.input.clone())
+            .invoke_tool(descriptor.name.clone(), input.input.clone())
             .await
     }
 
@@ -2332,30 +2410,6 @@ impl WorkflowPlugin {
             }
         }
         suggestions
-    }
-
-    fn invoke_tool_catalog_usage() -> ToolInvokeOutput {
-        ToolInvokeOutput::from_parts(
-            "Tool catalog usage",
-            [
-                "Tool catalog usage:",
-                "Usage:",
-                r#"- {}"#,
-                "Examples:",
-                r#"- List: {"offset":0,"limit":50,"verbose":true}"#,
-                r#"- Search: {"query":"web","offset":0,"limit":8}"#,
-                r#"- Tags: {"offset":0,"limit":20}"#,
-                r#"- Help: {"tool":"agena.web/search"}"#,
-                r#"- Call: {"tool":"agena.web/search","input":{"query":"rust docs","limit":5}}"#,
-                "Notes:",
-                "Read agena.tools/help first when you need the target tool's input schema.",
-                "Execute tools through agena.tools/call.",
-            ]
-            .join("\n"),
-            None,
-            std::collections::BTreeMap::new(),
-            Vec::new(),
-        )
     }
 }
 
@@ -2468,4 +2522,34 @@ fn tags_summary(tags: &[String]) -> String {
         return "untagged".to_string();
     }
     tags.join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CatalogToolRecord, WorkflowPlugin};
+
+    #[test]
+    fn filter_catalog_records_supports_multiple_tags() {
+        let records = vec![
+            CatalogToolRecord {
+                name: "agena.fs/read".to_string(),
+                summary: "Read file".to_string(),
+                tags: vec!["read_only".to_string(), "filesystem_read".to_string()],
+            },
+            CatalogToolRecord {
+                name: "agena.web/search".to_string(),
+                summary: "Search web".to_string(),
+                tags: vec!["read_only".to_string(), "network".to_string()],
+            },
+        ];
+
+        let filtered = WorkflowPlugin::filter_catalog_records_by_tag(
+            records,
+            Some("read_only"),
+            Some(&["filesystem_read".to_string()]),
+        );
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "agena.fs/read");
+    }
 }

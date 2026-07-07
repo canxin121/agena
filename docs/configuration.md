@@ -1368,7 +1368,7 @@ Network target 会先分到三类默认策略：`loopback` 匹配 `localhost`、
 
 ## Workflow Tool Search
 
-`agena.tools/search` 现在使用进程内 Tantivy 索引。每次搜索都会基于当前已注册的 tools catalog 在本地重建索引，因此不依赖 Meilisearch 或其他外部服务。
+`agena.tools/search` 现在使用进程内 Tantivy 索引。每次搜索都会基于当前已注册的 tools catalog 在本地重建索引，因此不依赖 Meilisearch 或其他外部服务。检索会混合精确匹配、ngram、子串、简易模糊匹配和联想补召回；`list`/`search` 默认返回 50 条、最大 100 条；`tag` 之外也支持 `tags` 传多个 tag 做交集过滤。
 
 旧的 external search backend 配置已经移除。当前版本不会读取 `tool_search.url`、`tool_search.api_key`、`tool_search.index` 这些字段。
 

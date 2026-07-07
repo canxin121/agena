@@ -4,23 +4,6 @@ use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    tool = "usage",
-    summary = "Show quick examples for browsing the registered tool catalog.",
-    before_help = "Quick reference for browsing the registered tool catalog.",
-    summary = "Show quick tool-catalog examples.",
-    after_help = "To run a tool, read agena.tools/help first and then execute it through agena.tools/call.",
-    handler_receiver = WorkflowPlugin,
-    handle = WorkflowPlugin::invoke_tools_usage,
-    ui_display = detailed,
-    tags(ToolTag::ReadOnly, ToolTag::Discovery),
-    capabilities(HostCapability::ListTools, HostCapability::ToolRegistry),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct CatalogUsageToolInput {}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
     tool = "list",
     summary = "Enumerate current tools.",
     handler_receiver = WorkflowPlugin,
@@ -124,7 +107,6 @@ pub(crate) struct CatalogCallToolInput {
 #[derive(Debug, ToolSuite)]
 #[tool_suite(handler_receiver = WorkflowPlugin)]
 pub(crate) enum CatalogToolSuite {
-    Usage(CatalogUsageToolInput),
     List(CatalogListToolInput),
     Search(CatalogSearchToolInput),
     Help(CatalogHelpToolInput),
@@ -161,12 +143,12 @@ pub(crate) struct ToolListInput {
     /// Maximum number of tools to return.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
-    /// Optional tag filter such as `read_only` or `network`.
+    /// Optional single tag filter such as `read_only` or `network`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
-    /// Include one-line summaries next to each tool name.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub verbose: bool,
+    /// Optional tag filters. When present, all normalized tags must match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
@@ -182,9 +164,12 @@ pub(crate) struct CatalogSearchInput {
     /// Maximum number of search results to return.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
-    /// Optional tag filter such as `read_only` or `network`.
+    /// Optional single tag filter such as `read_only` or `network`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
+    /// Optional tag filters. When present, all normalized tags must match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
@@ -197,10 +182,6 @@ pub(crate) struct ToolTagsInput {
     /// Maximum number of tags to return.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
 }
 
 fn tool_call_input_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {

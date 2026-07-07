@@ -10,7 +10,7 @@ use crate::error::{HostError, TransportError};
 use crate::host::{HostHandle, LoadedPlugin};
 use crate::registry::{effective_capabilities_for_manifest, per_tool_capabilities};
 use crate::sdk::rpc::method;
-use crate::sdk::{InitContext, InitOutcome, PluginManifest};
+use crate::sdk::{InitContext, InitOutcome, PluginKey, PluginManifest};
 use crate::transport::{
     PluginTransport, cdylib::CdylibTransport, http::HttpTransport, stdio::StdioTransport,
 };
@@ -23,7 +23,7 @@ pub struct StaticRegistration {
 pub async fn load_entry(
     plugin_id: &str,
     configured_plugin: &ConfiguredPlugin,
-    static_registry: &mut std::collections::HashMap<String, StaticRegistration>,
+    static_registry: &mut std::collections::HashMap<PluginKey, StaticRegistration>,
     host_handle: Arc<HostHandle>,
     agena_version: &str,
     workspace_root: &Path,
@@ -32,9 +32,13 @@ pub async fn load_entry(
 ) -> Result<LoadedPlugin, HostError> {
     let transport: Arc<dyn PluginTransport> = match &configured_plugin.package {
         PluginPackage::Static { .. } => {
+            let plugin_key = PluginKey::parse(plugin_id).map_err(|err| HostError::Load {
+                plugin: plugin_id.to_string(),
+                message: format!("invalid plugin id `{plugin_id}`: {err}"),
+            })?;
             let registration =
                 static_registry
-                    .remove(plugin_id)
+                    .remove(&plugin_key)
                     .ok_or_else(|| HostError::Load {
                         plugin: plugin_id.to_string(),
                         message: format!("no static plugin registered with id `{plugin_id}`"),
@@ -123,6 +127,10 @@ pub async fn load_entry(
             let host_handler = host_handle.host_handler_for(plugin_id.to_string());
             let status_sink = host_handle.status_registry();
             let log_sink = host_handle.log_store();
+            let plugin_key = PluginKey::parse(plugin_id).map_err(|err| HostError::Load {
+                plugin: plugin_id.to_string(),
+                message: format!("invalid plugin id `{plugin_id}`: {err}"),
+            })?;
             let t = StdioTransport::spawn_with_policy_and_status(
                 command,
                 args,
@@ -130,7 +138,7 @@ pub async fn load_entry(
                 cwd.as_ref(),
                 Some(host_handler),
                 restart.clone(),
-                Some(plugin_id.to_string()),
+                Some(plugin_key),
                 Some(status_sink),
                 Some(log_sink),
             )
@@ -204,10 +212,14 @@ pub async fn load_entry(
             plugin: plugin_id.to_string(),
             message: e.to_string(),
         })?;
-    host_handle.set_plugin_manifest_name(plugin_id.to_string(), prefetched_manifest.name.clone());
+    let plugin_key = PluginKey::parse(plugin_id).map_err(|err| HostError::Init {
+        plugin: plugin_id.to_string(),
+        message: format!("invalid plugin id `{plugin_id}`: {err}"),
+    })?;
+    host_handle.set_plugin_manifest_name(plugin_key.clone(), prefetched_manifest.name.clone());
     host_handle
         .set_plugin_capabilities(
-            plugin_id.to_string(),
+            plugin_key.clone(),
             effective_capabilities_for_manifest(
                 &prefetched_manifest.tools,
                 &prefetched_manifest.plugin_capabilities,
@@ -216,7 +228,7 @@ pub async fn load_entry(
         .await;
     host_handle
         .set_plugin_tool_capabilities(
-            plugin_id.to_string(),
+            plugin_key.clone(),
             per_tool_capabilities(&prefetched_manifest.tools),
         )
         .await;
@@ -224,7 +236,7 @@ pub async fn load_entry(
     let init_ctx = InitContext {
         agena_version: agena_version.to_string(),
         workspace_root: workspace_root.to_path_buf(),
-        plugin_id: plugin_id.to_string(),
+        plugin_id: plugin_key.clone(),
         host_callback_url: host_handle.callback_url(plugin_id),
         host_callback_token: host_handle.callback_token(plugin_id).await,
         config: configured_plugin.config().clone(),
@@ -256,7 +268,6 @@ pub async fn load_entry(
     let provenance = plugin_provenance(configured_plugin, trusted_keys);
 
     Ok(LoadedPlugin::new(
-        plugin_id.to_string(),
         configured_plugin.kind_str(),
         configured_plugin.clone(),
         transport,

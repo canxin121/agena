@@ -187,18 +187,18 @@ impl PathPermissionConfig {
     ) -> Result<PermissionPolicy, PermissionConfigError> {
         if let Some(workspace) = self.workspace.as_ref() {
             if let Some(mode) = workspace.read {
-                base = base.with_workspace_read_default(mode);
+                base.workspace_read_default = mode;
             }
             if let Some(mode) = workspace.write {
-                base = base.with_workspace_write_default(mode);
+                base.workspace_write_default = mode;
             }
         }
         if let Some(external) = self.external.as_ref() {
             if let Some(mode) = external.read {
-                base = base.with_external_read_default(mode);
+                base.external_read_default = mode;
             }
             if let Some(mode) = external.write {
-                base = base.with_external_write_default(mode);
+                base.external_write_default = mode;
             }
         }
         for (pattern, access) in &self.rules {
@@ -208,10 +208,10 @@ impl PathPermissionConfig {
                 continue;
             }
             if let Some(mode) = modes.read {
-                base = base.with_path_pattern_rule(AccessSelector::Read, mode, trimmed)?;
+                base.add_path_pattern_rule(AccessSelector::Read, mode, trimmed)?;
             }
             if let Some(mode) = modes.write {
-                base = base.with_path_pattern_rule(AccessSelector::Write, mode, trimmed)?;
+                base.add_path_pattern_rule(AccessSelector::Write, mode, trimmed)?;
             }
         }
         Ok(base)
@@ -320,20 +320,20 @@ impl NetworkPermissionConfig {
         mut base: NetworkPermissionPolicy,
     ) -> Result<NetworkPermissionPolicy, PermissionConfigError> {
         if let Some(mode) = self.internet {
-            base = base.with_internet_default(mode);
+            base.internet_default = mode;
         }
         if let Some(mode) = self.private {
-            base = base.with_private_default(mode);
+            base.private_default = mode;
         }
         if let Some(mode) = self.loopback {
-            base = base.with_loopback_default(mode);
+            base.loopback_default = mode;
         }
         for (pattern, mode) in &self.rules {
             let trimmed = pattern.trim();
             if trimmed.is_empty() {
                 continue;
             }
-            base = base.with_rule(trimmed, *mode)?;
+            base.add_rule(trimmed, *mode)?;
         }
         Ok(base)
     }
@@ -379,11 +379,11 @@ impl ToolPermissionConfig {
         mut base: ToolPermissionPolicy,
     ) -> Result<ToolPermissionPolicy, PermissionConfigError> {
         if let Some(mode) = self.default {
-            base = base.with_default_mode(mode);
+            base.default_mode = mode;
         }
         for (tag, mode) in &self.tags {
             if let Some(tag) = ToolTag::from_tag(tag) {
-                base = base.with_tag_mode(tag, *mode);
+                base.tag_modes.insert(tag.as_str().to_string(), *mode);
             }
         }
         for (tool_name, mode) in self.names.iter().chain(self.plugin.iter()) {
@@ -391,7 +391,7 @@ impl ToolPermissionConfig {
             if name.is_empty() {
                 continue;
             }
-            base = base.with_tool_mode(name.to_string(), *mode);
+            base.tool_modes.insert(name.to_string(), *mode);
         }
         for (tool_name, rules) in &self.rules {
             let name = tool_name.trim();
@@ -417,7 +417,10 @@ fn apply_tool_permission_rules(
     rules: &ToolPermissionRules,
 ) -> Result<ToolPermissionPolicy, PermissionConfigError> {
     match rules {
-        ToolPermissionRules::Mode(mode) => Ok(base.with_tool_mode(tool_name.to_string(), *mode)),
+        ToolPermissionRules::Mode(mode) => {
+            base.tool_modes.insert(tool_name.to_string(), *mode);
+            Ok(base)
+        }
         ToolPermissionRules::Ordered(entries) => {
             if tool_name == "bash" {
                 for (pattern, mode) in sorted_rule_entries(entries) {
@@ -426,9 +429,9 @@ fn apply_tool_permission_rules(
                         continue;
                     }
                     if trimmed == "*" {
-                        base = base.with_tool_mode(tool_name.to_string(), mode);
+                        base.tool_modes.insert(tool_name.to_string(), mode);
                     } else {
-                        base = base.with_bash_overlay_rule(trimmed, mode);
+                        base.add_bash_overlay_rule(trimmed, mode);
                     }
                 }
                 Ok(base)
@@ -444,7 +447,7 @@ fn apply_tool_permission_rules(
                     }
                 }
                 if let Some(mode) = fallback {
-                    base = base.with_tool_mode(tool_name.to_string(), mode);
+                    base.tool_modes.insert(tool_name.to_string(), mode);
                 }
                 Ok(base)
             }
@@ -478,7 +481,11 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn new(name: impl Into<String>, permission_policy: PermissionPolicy) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        permission_policy: PermissionPolicy,
+        tool_policy: ToolPermissionPolicy,
+    ) -> Self {
         let name = name.into();
         Self {
             description: None,
@@ -487,16 +494,11 @@ impl Agent {
             name,
             permission_policy,
             network_policy: NetworkPermissionPolicy::allow_all(),
-            tool_policy: ToolPermissionPolicy::allow_all(),
+            tool_policy,
         }
     }
 
-    pub fn with_tool_policy(mut self, tool_policy: ToolPermissionPolicy) -> Self {
-        self.tool_policy = tool_policy;
-        self
-    }
-
-    pub fn with_allowed_tools<I, S>(mut self, allowed_tools: I) -> Self
+    pub fn restricted_to_allowed_tools<I, S>(mut self, allowed_tools: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
@@ -512,27 +514,26 @@ impl Agent {
                 .check_tool_name(name)
                 .into_mode()
                 .unwrap_or(PermissionMode::Allow);
-            tool_policy = tool_policy.with_tool_mode(name.to_string(), mode);
+            tool_policy.tool_modes.insert(name.to_string(), mode);
         }
         for rule in current_policy.bash_deny_rules() {
-            tool_policy = tool_policy
-                .with_bash_deny_pattern(rule.pattern().to_string())
+            tool_policy
+                .add_bash_deny_pattern(rule.pattern().to_string())
                 .expect("existing bash deny pattern should remain valid");
         }
         for rule in current_policy.bash_pattern_rules() {
-            tool_policy = tool_policy
-                .with_bash_pattern_rule(rule.pattern().to_string(), rule.mode())
+            tool_policy
+                .add_bash_pattern_rule(rule.pattern().to_string(), rule.mode())
                 .expect("existing bash rule should remain valid");
         }
         for rule in current_policy.bash_overlay_rules() {
-            tool_policy =
-                tool_policy.with_bash_overlay_rule(rule.pattern().to_string(), rule.mode());
+            tool_policy.add_bash_overlay_rule(rule.pattern().to_string(), rule.mode());
         }
         self.tool_policy = tool_policy;
         self
     }
 
-    pub fn try_with_permission_config(
+    pub fn try_apply_permission_config(
         mut self,
         config: &PermissionConfig,
     ) -> Result<Self, PermissionConfigError> {
@@ -547,8 +548,8 @@ impl Agent {
         Ok(self)
     }
 
-    pub fn with_permission_config(self, config: &PermissionConfig) -> Self {
-        match self.clone().try_with_permission_config(config) {
+    pub fn apply_permission_config_or_self(self, config: &PermissionConfig) -> Self {
+        match self.clone().try_apply_permission_config(config) {
             Ok(agent) => agent,
             Err(err) => {
                 tracing::warn!(

@@ -1,4 +1,4 @@
-use crate::selection::SelectionCursor;
+use crate::selection::{SelectionCursor, clamped_selected_index};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionedListFocus {
@@ -33,14 +33,18 @@ where
         selected_item: usize,
         focus: SectionedListFocus,
     ) -> Self {
-        let mut state = Self {
+        let selected_section = clamped_selected_index(selected_section, sections.len());
+        let item_count = sections
+            .get(selected_section)
+            .map(|section| section.items().len())
+            .unwrap_or(0);
+        let selected_item = clamped_selected_index(selected_item, item_count);
+        Self {
             sections,
             section_selection: SelectionCursor::new(selected_section),
             item_selection: SelectionCursor::new(selected_item),
             focus,
-        };
-        state.clamp_selection();
-        state
+        }
     }
 
     pub fn sections(&self) -> &[TSection] {

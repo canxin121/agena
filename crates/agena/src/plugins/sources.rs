@@ -9,6 +9,10 @@ use std::sync::Arc;
 
 use crate::plugin::{ConfiguredPlugin, PluginsConfig, StaticPluginRegistration};
 
+fn plugin_key(value: &str) -> crate::plugin::PluginKey {
+    crate::plugin::PluginKey::parse(value).expect("static plugin key")
+}
+
 fn static_entry(config: serde_json::Value) -> ConfiguredPlugin {
     ConfiguredPlugin::static_config(config)
 }
@@ -101,62 +105,71 @@ pub(crate) fn static_plugin_registrations(
 ) -> Vec<StaticPluginRegistration> {
     let mut registrations = vec![
         StaticPluginRegistration::new(
-            crate::tool::skills_plugin_id(),
+            plugin_key(crate::tool::skills_plugin_id()),
             crate::tool::new_skills_plugin(),
         ),
-        StaticPluginRegistration::new(crate::tool::lsp_plugin_id(), crate::tool::new_lsp_plugin()),
         StaticPluginRegistration::new(
-            crate::tool::cron_plugin_id(),
+            plugin_key(crate::tool::lsp_plugin_id()),
+            crate::tool::new_lsp_plugin(),
+        ),
+        StaticPluginRegistration::new(
+            plugin_key(crate::tool::cron_plugin_id()),
             crate::tool::new_cron_plugin(),
         ),
         StaticPluginRegistration::new(
-            crate::tool::code_plugin_id(),
+            plugin_key(crate::tool::code_plugin_id()),
             crate::tool::new_code_plugin(),
         ),
-        StaticPluginRegistration::new(crate::tool::fs_plugin_id(), crate::tool::new_fs_plugin()),
         StaticPluginRegistration::new(
-            crate::tool::settings_plugin_id(),
+            plugin_key(crate::tool::fs_plugin_id()),
+            crate::tool::new_fs_plugin(),
+        ),
+        StaticPluginRegistration::new(
+            plugin_key(crate::tool::settings_plugin_id()),
             crate::tool::new_settings_plugin(),
         ),
         StaticPluginRegistration::new(
-            crate::tool::process_plugin_id(),
+            plugin_key(crate::tool::process_plugin_id()),
             crate::tool::new_process_plugin(),
         ),
         StaticPluginRegistration::new(
-            crate::tool::catalog_plugin_id(),
+            plugin_key(crate::tool::catalog_plugin_id()),
             crate::tool::new_catalog_plugin(),
         ),
         StaticPluginRegistration::new(
-            crate::tool::runtime_plugin_id(),
+            plugin_key(crate::tool::runtime_plugin_id()),
             crate::tool::new_runtime_plugin(),
         ),
         StaticPluginRegistration::new(
-            crate::tool::plan_plugin_id(),
+            plugin_key(crate::tool::plan_plugin_id()),
             crate::tool::new_plan_plugin(),
         ),
         StaticPluginRegistration::new(
-            crate::tool::tasks_plugin_id(),
+            plugin_key(crate::tool::tasks_plugin_id()),
             crate::tool::new_tasks_plugin(),
         ),
         StaticPluginRegistration::new(
-            crate::tool::snapshot_plugin_id(),
+            plugin_key(crate::tool::snapshot_plugin_id()),
             crate::tool::new_snapshot_plugin(),
         ),
-        StaticPluginRegistration::new(crate::web::web_plugin_id(), crate::web::new_web_plugin()),
         StaticPluginRegistration::new(
-            crate::memory::memory_plugin_id(),
+            plugin_key(crate::web::web_plugin_id()),
+            crate::web::new_web_plugin(),
+        ),
+        StaticPluginRegistration::new(
+            plugin_key(crate::memory::memory_plugin_id()),
             crate::memory::new_memory_plugin(),
         ),
     ];
     if crate::tool::schema_lab_builtin_enabled() {
         registrations.push(StaticPluginRegistration::new(
-            crate::tool::schema_lab_plugin_id(),
+            plugin_key(crate::tool::schema_lab_plugin_id()),
             crate::tool::new_schema_lab_plugin(),
         ));
     }
     if let Some(manager) = mcp_manager {
         registrations.push(StaticPluginRegistration::new(
-            crate::tool::mcp_plugin_id(),
+            plugin_key(crate::tool::mcp_plugin_id()),
             crate::tool::new_mcp_plugin(manager),
         ));
     }

@@ -47,12 +47,16 @@ struct SequencedTerminalUiStateEvent {
 pub(crate) struct TerminalUiSessionMeta {
     #[serde(default)]
     pub name: Option<String>,
-    #[serde(default)]
-    pub pinned: Option<bool>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pinned: bool,
     #[serde(default)]
     pub folder_id: Option<String>,
     #[serde(default)]
     pub last_used_at: Option<u64>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -307,32 +311,25 @@ fn sanitize_session_meta(
     input: TerminalUiSessionMeta,
     folder_ids: &HashSet<String>,
 ) -> Option<TerminalUiSessionMeta> {
-    let mut out = TerminalUiSessionMeta::default();
-
     let name = normalize_session_name(input.name.as_deref().unwrap_or_default());
-    if !name.is_empty() {
-        out.name = Some(name);
-    }
-
-    if input.pinned.unwrap_or(false) {
-        out.pinned = Some(true);
-    }
-
+    let name = (!name.is_empty()).then_some(name);
     let folder_id = normalize_folder_id(input.folder_id.as_deref().unwrap_or_default());
-    if !folder_id.is_empty() && folder_ids.contains(&folder_id) && folder_id != DEFAULT_FOLDER_ID {
-        out.folder_id = Some(folder_id);
-    }
+    let folder_id = (!folder_id.is_empty()
+        && folder_ids.contains(&folder_id)
+        && folder_id != DEFAULT_FOLDER_ID)
+        .then_some(folder_id);
 
     let last_used_at = input.last_used_at.unwrap_or(0);
-    if last_used_at > 0 {
-        out.last_used_at = Some(last_used_at);
-    }
+    let last_used_at = (last_used_at > 0).then_some(last_used_at);
 
-    if out.name.is_none()
-        && out.pinned.is_none()
-        && out.folder_id.is_none()
-        && out.last_used_at.is_none()
-    {
+    let out = TerminalUiSessionMeta {
+        name,
+        pinned: input.pinned,
+        folder_id,
+        last_used_at,
+    };
+
+    if out.name.is_none() && !out.pinned && out.folder_id.is_none() && out.last_used_at.is_none() {
         return None;
     }
 

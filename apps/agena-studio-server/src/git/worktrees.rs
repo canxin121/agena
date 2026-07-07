@@ -184,7 +184,12 @@ pub struct GitWorktreeAddBody {
     pub path: Option<String>,
     pub branch: Option<String>,
     pub start_point: Option<String>,
-    pub create_branch: Option<bool>,
+    #[serde(default)]
+    pub create_branch: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn resolve_worktree_path(repo: &Path, raw: &str) -> Result<PathBuf, Box<Response>> {
@@ -256,11 +261,9 @@ pub async fn git_worktree_add(
         .as_deref()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty());
-    let create_branch = body.create_branch.unwrap_or(false);
-
     let target_str = target.to_string_lossy().to_string();
     let mut args: Vec<String> = vec!["worktree".into(), "add".into()];
-    if create_branch {
+    if body.create_branch {
         let Some(name) = branch else {
             return (
                 StatusCode::BAD_REQUEST,
@@ -349,10 +352,10 @@ pub async fn git_worktree_prune(Query(q): Query<DirectoryQuery>) -> Response {
 #[serde(rename_all = "camelCase")]
 pub struct GitWorktreeMigrateBody {
     pub source_path: Option<String>,
-    #[serde(default)]
-    pub include_untracked: Option<bool>,
-    #[serde(default)]
-    pub delete_from_source: Option<bool>,
+    #[serde(default = "default_true")]
+    pub include_untracked: bool,
+    #[serde(default = "default_true")]
+    pub delete_from_source: bool,
 }
 
 pub async fn git_worktree_migrate(
@@ -450,9 +453,6 @@ pub async fn git_worktree_migrate(
             .into_response();
     }
 
-    let include_untracked = body.include_untracked.unwrap_or(true);
-    let delete_from_source = body.delete_from_source.unwrap_or(true);
-
     let source_name = source
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -469,7 +469,7 @@ pub async fn git_worktree_migrate(
         "-m".to_string(),
         stash_name,
     ];
-    if include_untracked {
+    if body.include_untracked {
         stash_args.push("--include-untracked".to_string());
     }
     let stash_args_ref: Vec<&str> = stash_args.iter().map(|s| s.as_str()).collect();
@@ -497,7 +497,7 @@ pub async fn git_worktree_migrate(
         .unwrap_or("stash@{0}")
         .to_string();
 
-    let apply_cmd = if delete_from_source {
+    let apply_cmd = if body.delete_from_source {
         ["stash", "pop", stash_ref.as_str()]
     } else {
         ["stash", "apply", stash_ref.as_str()]
@@ -522,7 +522,7 @@ pub async fn git_worktree_migrate(
             .into_response();
     }
 
-    if !delete_from_source
+    if !body.delete_from_source
         && let Err(resp) = run_git_checked(
             &source,
             &["stash", "pop", "--index", &stash_ref],
@@ -538,8 +538,8 @@ pub async fn git_worktree_migrate(
         "sourcePath": source.to_string_lossy(),
         "targetPath": dir.to_string_lossy(),
         "migratedFiles": changed_files,
-        "deleteFromSource": delete_from_source,
-        "includeUntracked": include_untracked,
+        "deleteFromSource": body.delete_from_source,
+        "includeUntracked": body.include_untracked,
     }))
     .into_response()
 }

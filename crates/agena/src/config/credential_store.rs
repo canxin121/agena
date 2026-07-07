@@ -349,10 +349,11 @@ fn load_provider_configs(path: &Path) -> Result<HashMap<String, ResolvedProvider
     let file_state = RawConfigFile::read(path)?;
     let env_overlay = RawConfig::from_env(&env)?;
 
-    let mut merged = RawConfig::default();
-    if file_state.found {
-        merged.merge_from(file_state.config);
-    }
+    let mut merged = if file_state.found {
+        file_state.config
+    } else {
+        RawConfig::default()
+    };
     if !env_overlay.is_empty() {
         merged.merge_from(env_overlay);
     }

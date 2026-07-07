@@ -6,7 +6,9 @@ use futures_core::Stream;
 use crate::{
     config::ProviderNativeToolsConfig,
     error::AppError,
-    model::{AdapterId, Model, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode},
+    model::{
+        AdapterId, Model, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode, ProviderId,
+    },
     model_catalog::{
         ModelCatalogProviderRecord, apply_catalog_definition_as_baseline,
         apply_catalog_display_name_as_fallback, canonical_model_catalog_id,
@@ -65,7 +67,7 @@ impl CatalogedModelsProvider {
         })
     }
 
-    fn with_configured_definition<T>(
+    fn using_configured_definition<T>(
         &self,
         model: &ModelId,
         base: T,
@@ -167,8 +169,8 @@ impl ModelRuntime for CatalogedModelsProvider {
         let primary = self
             .target
             .model_capabilities_for_adapter(adapter_id, model);
-        self.with_configured_definition(model, primary, |primary, configured| {
-            primary.with_fallbacks_from(
+        self.using_configured_definition(model, primary, |primary, configured| {
+            primary.merged_with_fallbacks_from(
                 &configured
                     .capabilities
                     .apply_to(ModelCapabilities::default()),
@@ -182,8 +184,8 @@ impl ModelRuntime for CatalogedModelsProvider {
         model: &ModelId,
     ) -> ModelMetadata {
         let metadata = self.target.model_metadata_for_adapter(adapter_id, model);
-        self.with_configured_definition(model, metadata, |metadata, configured| {
-            metadata.with_fallbacks_from(&configured.metadata())
+        self.using_configured_definition(model, metadata, |metadata, configured| {
+            metadata.merged_with_fallbacks_from(&configured.metadata())
         })
     }
 
@@ -198,7 +200,7 @@ impl ModelRuntime for CatalogedModelsProvider {
         for (name, mode) in self.synthesize_thinking_modes_from_metadata(adapter_id, model) {
             modes.entry(name).or_insert(mode);
         }
-        self.with_configured_definition(model, modes, |modes, configured| {
+        self.using_configured_definition(model, modes, |modes, configured| {
             merge_catalog_baseline_thinking_modes(modes, &configured.thinking_modes)
         })
     }
@@ -208,7 +210,7 @@ impl ModelRuntime for CatalogedModelsProvider {
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> BTreeMap<String, ModelSpeedMode> {
-        self.with_configured_definition(
+        self.using_configured_definition(
             model,
             self.target.model_speed_modes_for_adapter(adapter_id, model),
             |modes, configured| merge_catalog_baseline_speed_modes(modes, &configured.speed_modes),
@@ -266,12 +268,17 @@ impl ModelRuntime for CatalogedModelsProvider {
                 continue;
             }
             let model_id = ModelId::new(model_id.clone());
-            let base = Model::new(self.target.id(), model_id.as_str())
-                .with_catalog_model_id(model_id.as_str())
-                .with_capabilities(self.model_capabilities(&model_id))
-                .with_metadata(self.model_metadata(&model_id))
-                .with_thinking_modes(self.model_thinking_modes(&model_id))
-                .with_speed_modes(self.model_speed_modes(&model_id));
+            let base = Model {
+                provider_id: ProviderId::new(self.target.id()),
+                adapter_id: None,
+                id: ModelId::new(model_id.as_str()),
+                catalog_model_id: Some(model_id.clone()),
+                display_name: None,
+                capabilities: self.model_capabilities(&model_id),
+                metadata: self.model_metadata(&model_id),
+                thinking_modes: self.model_thinking_modes(&model_id),
+                speed_modes: self.model_speed_modes(&model_id),
+            };
             models.push(self.apply_to_model(&model_id, base));
         }
         Ok(models)

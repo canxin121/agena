@@ -75,20 +75,6 @@ impl EventFilter {
         }
     }
 
-    pub fn with_kinds<I, S>(mut self, kinds: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<EventKindTag>,
-    {
-        self.kinds = Some(kinds.into_iter().map(Into::into).collect());
-        self
-    }
-
-    pub fn since(mut self, seq_global: i64) -> Self {
-        self.since_seq_global = Some(seq_global);
-        self
-    }
-
     pub fn matches_meta(&self, meta: &EventMeta) -> bool {
         if !self.scope.matches(meta) {
             return false;

@@ -50,6 +50,7 @@ impl MultiAdapterProvider {
         default_model: impl Into<String>,
         adapters: BTreeMap<String, Arc<dyn ModelRuntime>>,
         routes: BTreeMap<ProviderModelRouteKey, ProviderModelRoute>,
+        configured_only_adapters: BTreeSet<String>,
     ) -> Self {
         Self {
             id: id.into(),
@@ -57,13 +58,8 @@ impl MultiAdapterProvider {
             default_model: ModelId::new(default_model),
             adapters,
             routes,
-            configured_only_adapters: BTreeSet::new(),
+            configured_only_adapters,
         }
-    }
-
-    pub fn with_configured_only_adapters(mut self, adapters: BTreeSet<String>) -> Self {
-        self.configured_only_adapters = adapters;
-        self
     }
 
     fn adapter(&self, adapter_id: &str) -> Result<Arc<dyn ModelRuntime>, AppError> {
@@ -189,9 +185,19 @@ impl MultiAdapterProvider {
         adapter: &dyn ModelRuntime,
         definition: &ConfiguredModelDefinition,
     ) -> Model {
+        let model = Model {
+            provider_id: ProviderId::new(self.id.as_str()),
+            adapter_id: Some(adapter_id.clone()),
+            id: target_model.clone(),
+            catalog_model_id: None,
+            display_name: None,
+            capabilities: ModelCapabilities::default(),
+            metadata: ModelMetadata::default(),
+            thinking_modes: BTreeMap::new(),
+            speed_modes: BTreeMap::new(),
+        };
         definition.apply_to_model(
-            Model::new(self.id.as_str(), target_model.as_str())
-                .with_adapter_id(adapter_id.as_str()),
+            model,
             &adapter.model_capabilities(target_model),
             &adapter.model_metadata(target_model),
         )
@@ -250,7 +256,7 @@ impl ModelRuntime for MultiAdapterProvider {
             |_adapter_id, target_model, _native_tools, definition, adapter| {
                 definition
                     .metadata()
-                    .with_fallbacks_from(&adapter.model_metadata(target_model))
+                    .merged_with_fallbacks_from(&adapter.model_metadata(target_model))
             },
         )
         .unwrap_or_default()

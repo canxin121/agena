@@ -74,14 +74,17 @@ where
         let project_file_state = RawConfigFile::read(&project_config_path)?;
         let env_overlay = RawConfig::from_env(&self.env)?;
 
-        let mut merged = RawConfig::default();
+        let mut merged = if file_state.found {
+            file_state.config.clone()
+        } else {
+            RawConfig::default()
+        };
         let mut applied_layers = vec![AppliedLayer {
             source: ConfigSource::Default,
             description: "built-in defaults".to_owned(),
         }];
 
         if file_state.found {
-            merged.merge_from(file_state.config.clone());
             applied_layers.push(AppliedLayer {
                 source: ConfigSource::File,
                 description: format!("file:{}", config_path.display()),

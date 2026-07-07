@@ -65,12 +65,12 @@ impl RequestRetryPolicy {
 }
 
 fn assign_catalog_model_id(model: &mut Model) {
-    let catalog_model_id = crate::model_catalog::canonical_model_catalog_id(model.id.as_str());
-    if catalog_model_id.is_empty() {
-        model.catalog_model_id = None;
-        return;
-    }
-    model.catalog_model_id = Some(ModelId::new(catalog_model_id));
+    model.catalog_model_id = catalog_model_id_for(&model.id);
+}
+
+fn catalog_model_id_for(model_id: &ModelId) -> Option<ModelId> {
+    let catalog_model_id = crate::model_catalog::canonical_model_catalog_id(model_id.as_str());
+    (!catalog_model_id.is_empty()).then(|| ModelId::new(catalog_model_id))
 }
 
 fn provider_not_found_error(provider_id: &str) -> AppError {
@@ -95,14 +95,14 @@ fn hydrate_model_from_provider(
     model.capabilities = if current_capabilities.is_default_placeholder() {
         fallback
     } else {
-        current_capabilities.with_fallbacks_from(&fallback)
+        current_capabilities.merged_with_fallbacks_from(&fallback)
     };
 
     let metadata_fallback = provider.model_metadata_for_adapter(adapter_id.as_ref(), &model.id);
     model.metadata = model
         .metadata
         .clone()
-        .with_fallbacks_from(&metadata_fallback);
+        .merged_with_fallbacks_from(&metadata_fallback);
 
     let thinking_modes = provider.model_thinking_modes_for_adapter(adapter_id.as_ref(), &model.id);
     let speed_modes = provider.model_speed_modes_for_adapter(adapter_id.as_ref(), &model.id);
@@ -124,6 +124,16 @@ fn hydrate_model_from_provider(
             }
         }
     }
+}
+
+fn hydrated_model_from_provider(
+    provider: &dyn ModelRuntime,
+    mut model: Model,
+    adapter_id: Option<&AdapterId>,
+    mode_hydration: ModeHydration,
+) -> Model {
+    hydrate_model_from_provider(provider, &mut model, adapter_id, mode_hydration);
+    model
 }
 
 fn prepare_listed_model(
@@ -446,9 +456,16 @@ impl ModelRuntime for PluginRegisteredProvider {
         Ok(self
             .models
             .iter()
-            .map(|model| {
-                Model::new(self.id.as_str(), model.as_str())
-                    .with_display_name(self.display_name.clone())
+            .map(|model| Model {
+                provider_id: ProviderId::new(self.id.as_str()),
+                adapter_id: None,
+                id: ModelId::new(model.as_str()),
+                catalog_model_id: None,
+                display_name: Some(self.display_name.clone()),
+                capabilities: ModelCapabilities::default(),
+                metadata: ModelMetadata::default(),
+                thinking_modes: std::collections::BTreeMap::new(),
+                speed_modes: std::collections::BTreeMap::new(),
             })
             .collect())
     }
@@ -480,26 +497,18 @@ impl ProviderRegistry {
         }
     }
 
-    pub fn with_runtime_config(config: ProviderRuntimeConfig) -> Self {
-        Self::new()
-            .with_request_retry_policy(RequestRetryPolicy::from_config(config.request_retry))
-            .with_stream_replay_policy(StreamReplayPolicy::from_config(config.stream_replay))
+    pub fn from_runtime_config(config: ProviderRuntimeConfig) -> Self {
+        Self {
+            providers: HashMap::new(),
+            retry_policy: RequestRetryPolicy::from_config(config.request_retry),
+            stream_replay_policy: StreamReplayPolicy::from_config(config.stream_replay),
+        }
     }
 
     pub fn build_http_client(
         config: ProviderHttpClientConfig,
     ) -> Result<reqwest::Client, AppError> {
         config.build_client()
-    }
-
-    fn with_request_retry_policy(mut self, retry_policy: RequestRetryPolicy) -> Self {
-        self.retry_policy = retry_policy;
-        self
-    }
-
-    fn with_stream_replay_policy(mut self, stream_replay_policy: StreamReplayPolicy) -> Self {
-        self.stream_replay_policy = stream_replay_policy;
-        self
     }
 
     pub fn register<P>(&mut self, provider: P)
@@ -566,7 +575,7 @@ impl ProviderRegistry {
         self.require_provider(model.provider_id.as_str())
     }
 
-    pub(super) fn with_model_ref_provider<T>(
+    pub(super) fn use_model_ref_provider<T>(
         &self,
         model: &ModelRef,
         map: impl FnOnce(&dyn ModelRuntime, Option<&AdapterId>, &ModelId) -> T,

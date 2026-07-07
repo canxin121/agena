@@ -620,7 +620,10 @@ pub fn summarize_usage_records(
     query: &UsageStatsQuery,
     generated_at: DateTime<Utc>,
 ) -> UsageStats {
-    let mut totals = UsageTotalsAccumulator::default();
+    let mut totals = UsageTotalsAccumulator {
+        totals: UsageTotals::default(),
+        sessions: BTreeSet::new(),
+    };
     let mut by_day: BTreeMap<String, UsageTotalsAccumulator> = BTreeMap::new();
     let mut by_provider: BTreeMap<String, UsageTotalsAccumulator> = BTreeMap::new();
     let mut by_model: BTreeMap<(String, String), UsageTotalsAccumulator> = BTreeMap::new();
@@ -636,7 +639,10 @@ pub fn summarize_usage_records(
 
         by_day
             .entry(record.created_at.format("%Y-%m-%d").to_string())
-            .or_default()
+            .or_insert_with(|| UsageTotalsAccumulator {
+                totals: UsageTotals::default(),
+                sessions: BTreeSet::new(),
+            })
             .fold(
                 record.session_id,
                 &record.provider_id,
@@ -645,7 +651,10 @@ pub fn summarize_usage_records(
             );
         by_provider
             .entry(record.provider_id.clone())
-            .or_default()
+            .or_insert_with(|| UsageTotalsAccumulator {
+                totals: UsageTotals::default(),
+                sessions: BTreeSet::new(),
+            })
             .fold(
                 record.session_id,
                 &record.provider_id,
@@ -654,7 +663,10 @@ pub fn summarize_usage_records(
             );
         by_model
             .entry((record.provider_id.clone(), record.model_id.clone()))
-            .or_default()
+            .or_insert_with(|| UsageTotalsAccumulator {
+                totals: UsageTotals::default(),
+                sessions: BTreeSet::new(),
+            })
             .fold(
                 record.session_id,
                 &record.provider_id,
@@ -668,7 +680,10 @@ pub fn summarize_usage_records(
                 is_subagent: record.is_subagent,
                 first_message_at: record.created_at,
                 last_message_at: record.created_at,
-                totals: UsageTotalsAccumulator::default(),
+                totals: UsageTotalsAccumulator {
+                    totals: UsageTotals::default(),
+                    sessions: BTreeSet::new(),
+                },
             })
             .fold(record);
     }
@@ -761,7 +776,16 @@ impl HasUsageTotals for SessionUsageBreakdown {
 
 /// Build a per-session summary from the session's message history.
 pub fn summarize(messages: &[Message]) -> SessionCostSummary {
-    let mut totals = SessionCostSummary::default();
+    let mut runs = 0_u64;
+    let mut input_tokens = 0_u64;
+    let mut output_tokens = 0_u64;
+    let mut reasoning_tokens = 0_u64;
+    let mut cache_write_tokens = 0_u64;
+    let mut cache_read_tokens = 0_u64;
+    let mut total_cost_usd = 0.0_f64;
+    let mut recorded_cost_usd = 0.0_f64;
+    let mut estimated_cost_usd = 0.0_f64;
+    let mut unpriced_runs = 0_u64;
     let mut by_key: BTreeMap<(String, String), ModelCostBreakdown> = BTreeMap::new();
 
     for message in messages {
@@ -774,23 +798,17 @@ pub fn summarize(messages: &[Message]) -> SessionCostSummary {
         let provider = message.metadata.model_provider_id.clone();
         let model = message.metadata.model_id.clone();
 
-        totals.runs = totals.runs.saturating_add(1);
-        totals.input_tokens = totals.input_tokens.saturating_add(usage.input_tokens);
-        totals.output_tokens = totals.output_tokens.saturating_add(usage.output_tokens);
-        totals.reasoning_tokens = totals
-            .reasoning_tokens
-            .saturating_add(usage.reasoning_tokens);
-        totals.cache_write_tokens = totals
-            .cache_write_tokens
-            .saturating_add(usage.cache_write_tokens);
-        totals.cache_read_tokens = totals
-            .cache_read_tokens
-            .saturating_add(usage.cache_read_tokens);
+        runs = runs.saturating_add(1);
+        input_tokens = input_tokens.saturating_add(usage.input_tokens);
+        output_tokens = output_tokens.saturating_add(usage.output_tokens);
+        reasoning_tokens = reasoning_tokens.saturating_add(usage.reasoning_tokens);
+        cache_write_tokens = cache_write_tokens.saturating_add(usage.cache_write_tokens);
+        cache_read_tokens = cache_read_tokens.saturating_add(usage.cache_read_tokens);
         let cost = cost_contribution(&provider, &model, usage);
-        totals.total_cost_usd += cost.total_cost_usd;
-        totals.recorded_cost_usd += cost.recorded_cost_usd;
-        totals.estimated_cost_usd += cost.estimated_cost_usd;
-        totals.unpriced_runs = totals.unpriced_runs.saturating_add(cost.unpriced_runs);
+        total_cost_usd += cost.total_cost_usd;
+        recorded_cost_usd += cost.recorded_cost_usd;
+        estimated_cost_usd += cost.estimated_cost_usd;
+        unpriced_runs = unpriced_runs.saturating_add(cost.unpriced_runs);
 
         let entry = by_key
             .entry((provider.clone(), model.clone()))
@@ -802,8 +820,19 @@ pub fn summarize(messages: &[Message]) -> SessionCostSummary {
         entry.fold(usage);
     }
 
-    totals.by_model = by_key.into_values().collect();
-    totals
+    SessionCostSummary {
+        runs,
+        input_tokens,
+        output_tokens,
+        reasoning_tokens,
+        cache_write_tokens,
+        cache_read_tokens,
+        total_cost_usd,
+        recorded_cost_usd,
+        estimated_cost_usd,
+        unpriced_runs,
+        by_model: by_key.into_values().collect(),
+    }
 }
 
 fn start_of_day(now: DateTime<Utc>) -> DateTime<Utc> {

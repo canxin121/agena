@@ -4,74 +4,151 @@
 //! Packaged skills from `agena-skills` are also projected here so a fresh
 //! install has workflow-like tools before any user-defined content exists.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
-use agena_macros::ToolInputShape;
+use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
 use agena_skills::discovery::{default_command_roots, default_roots, scan, scan_commands};
 use agena_skills::skill::Skill;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
-use crate::message::WorkflowPromptToolInput;
 use crate::plugin::PluginError;
-use crate::plugin::sdk::host_api::{HostClient, HostToolRegisterRequest, HostToolRemoveRequest};
 use crate::plugin::sdk::{
-    HookSubscription, HostCapability, InitContext, InitOutcome, PluginManifest,
-    Result as SdkResult, ToolDefinition, ToolInvokeContext, ToolInvokeInput, ToolInvokeOutput,
-    ToolTag,
+    HookSubscription, InitContext, InitOutcome, PluginManifest, Result as SdkResult,
+    ToolDefinitionInput, ToolDefinitionPatch, ToolInvokeInput, ToolInvokeOutput, ToolTag,
 };
 
 pub(crate) const SKILLS_PLUGIN_ID: &str = "agena.skills";
 
-#[derive(
-    Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema, ToolInputShape,
-)]
-#[tool_input(handler_receiver = SkillsPlugin)]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum SkillToolInput {
-    #[tool(
-        default_when_empty = true,
-        infer_when_present("args"),
-        handle_with_context = SkillsPlugin::dispatch_run,
-        handle_by_value = true
-    )]
-    Run {
-        #[serde(flatten)]
-        args: WorkflowPromptToolInput,
-    },
-}
-
-#[derive(Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DiscoveredToolKind {
     Skill,
     Command,
 }
 
-#[derive(Clone)]
+impl DiscoveredToolKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Skill => "skill",
+            Self::Command => "command",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct DiscoveredTool {
     skill: Skill,
     kind: DiscoveredToolKind,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input()]
+#[serde(deny_unknown_fields)]
+struct SkillsListInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    offset: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
+    #[serde(default)]
+    verbose: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("name"), non_empty("name"))]
+#[serde(deny_unknown_fields)]
+struct SkillsGetInput {
+    name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("name", "args"), non_empty("name"))]
+#[serde(deny_unknown_fields)]
+struct SkillsRunInput {
+    name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    args: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "list",
+    summary = "List discovered skills and slash commands.",
+    handler_receiver = SkillsPlugin,
+    handle = SkillsPlugin::invoke_list,
+    handle_field = args,
+    ui_display = detailed,
+    tags(ToolTag::ReadOnly, ToolTag::Discovery),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+struct SkillsListToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: SkillsListInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "get",
+    summary = "Read one discovered skill or slash command.",
+    handler_receiver = SkillsPlugin,
+    handle = SkillsPlugin::invoke_get,
+    handle_field = args,
+    trim("name"),
+    non_empty("name"),
+    ui_display = detailed,
+    tags(ToolTag::ReadOnly, ToolTag::Discovery),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+struct SkillsGetToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: SkillsGetInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "run",
+    summary = "Render one discovered skill or slash command prompt.",
+    handler_receiver = SkillsPlugin,
+    handle = SkillsPlugin::invoke_run,
+    handle_field = args,
+    trim("name", "args"),
+    non_empty("name"),
+    ui_display = detailed,
+    tags(ToolTag::ReadOnly),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+struct SkillsRunToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: SkillsRunInput,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, ToolSuite)]
+#[tool_suite(handler_receiver = SkillsPlugin)]
+enum SkillsToolSuite {
+    List(SkillsListToolInput),
+    Get(SkillsGetToolInput),
+    Run(SkillsRunToolInput),
+}
+
 pub(crate) struct SkillsPlugin {
-    host: RwLock<Option<Arc<dyn HostClient>>>,
-    tools: RwLock<BTreeMap<String, DiscoveredTool>>,
+    workspace_root: OnceLock<PathBuf>,
 }
 
 impl SkillsPlugin {
     pub(crate) fn new() -> Self {
         Self {
-            host: RwLock::new(None),
-            tools: RwLock::new(BTreeMap::new()),
+            workspace_root: OnceLock::new(),
         }
-    }
-
-    fn host(&self) -> SdkResult<Arc<dyn HostClient>> {
-        self.host
-            .read()
-            .map_err(|_| PluginError::new("skills host lock poisoned"))?
-            .clone()
-            .ok_or_else(|| PluginError::new("skills invoked before init"))
     }
 
     fn render_prompt(body: &str, args: &str) -> String {
@@ -87,71 +164,19 @@ impl SkillsPlugin {
         }
     }
 
-    async fn dispatch_run(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        args: WorkflowPromptToolInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let discovered_tool = self
-            .tools
-            .read()
-            .map_err(|_| PluginError::new("skills tools lock poisoned"))?
-            .get(context.tool_name)
-            .cloned()
-            .ok_or_else(|| {
-                PluginError::invalid_params(format!("unknown skills tool '{}'", context.tool_name))
-            })?;
-        let prompt = Self::render_prompt(
-            discovered_tool.skill.body.as_str(),
-            args.args.as_deref().unwrap_or_default(),
-        );
-        let kind = match discovered_tool.kind {
-            DiscoveredToolKind::Skill => "skill",
-            DiscoveredToolKind::Command => "command",
-        };
-        Ok(ToolInvokeOutput::text(prompt)
-            .with_title(discovered_tool.skill.frontmatter.name.clone())
-            .with_metadata("workflow", discovered_tool.skill.frontmatter.name)
-            .with_metadata("skill_tool_kind", kind))
+    fn workspace_root(&self) -> SdkResult<&Path> {
+        self.workspace_root
+            .get()
+            .map(PathBuf::as_path)
+            .ok_or_else(|| PluginError::new("skills invoked before init"))
     }
 
-    fn tool_definition(name: &str, discovered_tool: &DiscoveredTool) -> ToolDefinition {
-        let category = match discovered_tool.kind {
-            DiscoveredToolKind::Skill => "workflow",
-            DiscoveredToolKind::Command => "command",
-        };
-        let tags = vec![
-            ToolTag::ReadOnly,
-            ToolTag::custom(category).expect("category tags are valid"),
-            ToolTag::custom(format!("skill:{}", discovered_tool.skill.frontmatter.name))
-                .expect("skill identity tags are valid"),
-        ];
-        let description = if discovered_tool
-            .skill
-            .frontmatter
-            .description
-            .trim()
-            .is_empty()
-        {
-            format!(
-                "Generate the '{}' {category} prompt.",
-                discovered_tool.skill.frontmatter.name
-            )
-        } else {
-            discovered_tool.skill.frontmatter.description.clone()
-        };
-        ToolDefinition::new(name.to_string(), SkillToolInput::input_schema())
-            .description(description.clone())
-            .summary(description)
-            .help(discovered_tool.skill.body.clone())
-            .compact()
-            .tags(tags)
-            .concurrency_safe(true)
+    fn discovered_tools(&self) -> SdkResult<BTreeMap<String, DiscoveredTool>> {
+        Ok(Self::discovered_tools_for_workspace(self.workspace_root()?))
     }
 
-    fn discovered_tools(ctx: &InitContext) -> BTreeMap<String, DiscoveredTool> {
-        let workspace =
-            Some(ctx.workspace_root.clone()).filter(|p: &PathBuf| !p.as_os_str().is_empty());
+    fn discovered_tools_for_workspace(workspace_root: &Path) -> BTreeMap<String, DiscoveredTool> {
+        let workspace = Some(workspace_root.to_path_buf()).filter(|p| !p.as_os_str().is_empty());
         let roots = default_roots(workspace.as_deref());
         let command_roots = default_command_roots(workspace.as_deref());
 
@@ -189,40 +214,233 @@ impl SkillsPlugin {
         tools
     }
 
-    async fn sync_tools(&self, ctx: &InitContext) -> SdkResult<()> {
-        let host = self.host()?;
-        let new_tools = Self::discovered_tools(ctx);
-        let old_names = self
-            .tools
-            .read()
-            .map_err(|_| PluginError::new("skills tools lock poisoned"))?
-            .keys()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let new_names = new_tools.keys().cloned().collect::<BTreeSet<_>>();
+    fn normalize_kind_filter(kind: Option<&str>) -> SdkResult<Option<DiscoveredToolKind>> {
+        match kind.map(str::trim).filter(|value| !value.is_empty()) {
+            None => Ok(None),
+            Some("skill") => Ok(Some(DiscoveredToolKind::Skill)),
+            Some("command") => Ok(Some(DiscoveredToolKind::Command)),
+            Some(other) => Err(PluginError::invalid_params(format!(
+                "unknown kind '{other}', expected 'skill' or 'command'"
+            ))),
+        }
+    }
 
-        for removed in old_names.difference(&new_names) {
-            let _ = host
-                .remove_tool(HostToolRemoveRequest {
-                    name: removed.clone(),
-                    by_model_name: false,
-                })
-                .await?;
+    fn paginate<T>(
+        items: Vec<T>,
+        offset: Option<u32>,
+        limit: Option<u32>,
+    ) -> (Vec<T>, usize, usize) {
+        let total = items.len();
+        let offset = offset.unwrap_or(0) as usize;
+        if offset >= total {
+            return (Vec::new(), total, offset);
+        }
+        let limit = limit
+            .map(|value| value as usize)
+            .unwrap_or(total.saturating_sub(offset));
+        let end = offset.saturating_add(limit).min(total);
+        let page = items
+            .into_iter()
+            .skip(offset)
+            .take(end.saturating_sub(offset))
+            .collect::<Vec<_>>();
+        (page, total, offset)
+    }
+
+    fn tool_description(discovered_tool: &DiscoveredTool) -> String {
+        let category = discovered_tool.kind.as_str();
+        if discovered_tool
+            .skill
+            .frontmatter
+            .description
+            .trim()
+            .is_empty()
+        {
+            format!(
+                "Generate the '{}' {category} prompt.",
+                discovered_tool.skill.frontmatter.name
+            )
+        } else {
+            discovered_tool.skill.frontmatter.description.clone()
+        }
+    }
+
+    fn resolve_tool<'a>(
+        tools: &'a BTreeMap<String, DiscoveredTool>,
+        requested: &str,
+    ) -> SdkResult<(&'a str, &'a DiscoveredTool)> {
+        if let Some((name, tool)) = tools.get_key_value(requested) {
+            return Ok((name.as_str(), tool));
+        }
+        let normalized = requested.trim().to_ascii_lowercase();
+        tools
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(normalized.as_str()))
+            .map(|(name, tool)| (name.as_str(), tool))
+            .ok_or_else(|| PluginError::invalid_params(format!("unknown skill '{}'", requested)))
+    }
+
+    fn tool_definition_patch(
+        &self,
+        input: ToolDefinitionInput,
+    ) -> SdkResult<Option<ToolDefinitionPatch>> {
+        if input.plugin_key().to_model_string() != SKILLS_PLUGIN_ID {
+            return Ok(None);
+        }
+        let tools = self.discovered_tools()?;
+        let skill_count = tools
+            .values()
+            .filter(|tool| tool.kind == DiscoveredToolKind::Skill)
+            .count();
+        let command_count = tools
+            .values()
+            .filter(|tool| tool.kind == DiscoveredToolKind::Command)
+            .count();
+        let preview = tools
+            .iter()
+            .take(12)
+            .map(|(name, tool)| {
+                format!(
+                    "- {} [{}]: {}",
+                    name,
+                    tool.kind.as_str(),
+                    Self::tool_description(tool)
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut lines = vec![
+            format!("Currently discovered: {skill_count} skill(s), {command_count} command(s)."),
+            "Use `agena.skills/list` to page through discovered items.".to_string(),
+            "Use `agena.skills/get` to inspect one item in full.".to_string(),
+            "Use `agena.skills/run` with `name` and optional `args` to render one prompt."
+                .to_string(),
+        ];
+        if !preview.is_empty() {
+            lines.push("Preview:".to_string());
+            lines.extend(preview);
         }
 
-        for (name, discovered_tool) in &new_tools {
-            let _ = host
-                .register_tool(HostToolRegisterRequest {
-                    tool: Self::tool_definition(name, discovered_tool),
-                })
-                .await?;
-        }
+        let summary = match input.tool_name() {
+            "list" => Some(format!(
+                "List discovered skills and slash commands. Currently {skill_count} skill(s) and {command_count} command(s)."
+            )),
+            "get" => Some("Read one discovered skill or slash command.".to_string()),
+            "run" => Some(format!(
+                "Render one discovered skill or slash command prompt. Currently {skill_count} skill(s) and {command_count} command(s)."
+            )),
+            _ => None,
+        };
 
-        *self
-            .tools
-            .write()
-            .map_err(|_| PluginError::new("skills tools lock poisoned"))? = new_tools;
-        Ok(())
+        Ok(Some(ToolDefinitionPatch {
+            summary,
+            help: Some(lines.join("\n")),
+            description_mode: None,
+            input_schema: None,
+        }))
+    }
+
+    async fn invoke_list(&self, input: &SkillsListInput) -> SdkResult<ToolInvokeOutput> {
+        let tools = self.discovered_tools()?;
+        let kind_filter = Self::normalize_kind_filter(input.kind.as_deref())?;
+        let entries = tools
+            .into_iter()
+            .filter(|(_, tool)| kind_filter.is_none_or(|kind| tool.kind == kind))
+            .collect::<Vec<_>>();
+        let (entries, total, offset) = Self::paginate(entries, input.offset, input.limit);
+        let mut lines = vec![format!(
+            "Discovered skill tool(s): returned {}/{} starting at offset {}.",
+            entries.len(),
+            total,
+            offset
+        )];
+        for (name, tool) in &entries {
+            if input.verbose {
+                lines.push(format!(
+                    "- {} [{}]: {}",
+                    name,
+                    tool.kind.as_str(),
+                    Self::tool_description(tool)
+                ));
+            } else {
+                lines.push(format!("- {} [{}]", name, tool.kind.as_str()));
+            }
+        }
+        let payload = serde_json::json!({
+            "tools": entries.iter().map(|(name, tool)| serde_json::json!({
+                "name": name,
+                "kind": tool.kind.as_str(),
+                "summary": Self::tool_description(tool),
+            })).collect::<Vec<_>>(),
+            "total": total,
+            "offset": offset,
+            "returned": entries.len(),
+            "kind": kind_filter.map(DiscoveredToolKind::as_str),
+        });
+        Ok(ToolInvokeOutput::from_parts(
+            "skills list",
+            lines.join("\n"),
+            Some(payload),
+            std::collections::BTreeMap::from([
+                ("total_tools".to_string(), total.to_string()),
+                ("returned_tools".to_string(), entries.len().to_string()),
+                ("offset".to_string(), offset.to_string()),
+            ]),
+            Vec::new(),
+        ))
+    }
+
+    async fn invoke_get(&self, input: &SkillsGetInput) -> SdkResult<ToolInvokeOutput> {
+        let tools = self.discovered_tools()?;
+        let (name, discovered_tool) = Self::resolve_tool(&tools, input.name.as_str())?;
+        let summary = Self::tool_description(discovered_tool);
+        let body = discovered_tool.skill.body.trim();
+        let text = format!(
+            "Name: {name}\nKind: {}\nSummary: {}\n\nBody:\n{}",
+            discovered_tool.kind.as_str(),
+            summary,
+            body
+        );
+        let payload = serde_json::json!({
+            "name": name,
+            "kind": discovered_tool.kind.as_str(),
+            "summary": summary,
+            "body": body,
+        });
+        Ok(ToolInvokeOutput::from_parts(
+            format!("skills get {name}"),
+            text,
+            Some(payload),
+            std::collections::BTreeMap::from([
+                ("name".to_string(), name.to_string()),
+                (
+                    "kind".to_string(),
+                    discovered_tool.kind.as_str().to_string(),
+                ),
+            ]),
+            Vec::new(),
+        ))
+    }
+
+    async fn invoke_run(&self, input: &SkillsRunInput) -> SdkResult<ToolInvokeOutput> {
+        let tools = self.discovered_tools()?;
+        let (name, discovered_tool) = Self::resolve_tool(&tools, input.name.as_str())?;
+        let prompt = Self::render_prompt(
+            discovered_tool.skill.body.as_str(),
+            input.args.as_deref().unwrap_or_default(),
+        );
+        Ok(ToolInvokeOutput::from_parts(
+            name.to_string(),
+            prompt,
+            None,
+            std::collections::BTreeMap::from([
+                ("workflow".to_string(), name.to_string()),
+                (
+                    "skill_tool_kind".to_string(),
+                    discovered_tool.kind.as_str().to_string(),
+                ),
+            ]),
+            Vec::new(),
+        ))
     }
 }
 
@@ -230,30 +448,32 @@ impl SkillsPlugin {
 impl crate::plugin::sdk::Plugin for SkillsPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::new("agena", "skills", env!("CARGO_PKG_VERSION"));
-        manifest.description = Some(
-            "Discovers SKILL.md files and slash commands, then registers them as dynamic plugin tools."
-                .to_string(),
-        );
-        manifest.hooks |= HookSubscription::TOOL_INVOKE;
+        manifest.summary =
+            Some("Discover, inspect, and render skills and slash commands.".to_string());
+        manifest.hooks |= HookSubscription::TOOL_INVOKE | HookSubscription::TOOL_DEFINITION;
         manifest.set_display(crate::plugin::sdk::ToolDisplayPreset::Compact);
-        manifest.add_plugin_capability(HostCapability::ToolRegistry);
+        manifest.tools.extend(SkillsToolSuite::tool_definitions());
         manifest
     }
 
-    async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
-        *self
-            .host
-            .write()
-            .map_err(|_| PluginError::new("skills host lock poisoned"))? = Some(host);
-        self.sync_tools(&ctx).await?;
+    async fn init(
+        &self,
+        ctx: InitContext,
+        _host: Arc<dyn crate::plugin::sdk::HostClient>,
+    ) -> SdkResult<InitOutcome> {
+        let _ = self.workspace_root.set(ctx.workspace_root);
         Ok(InitOutcome::ack(self.manifest()))
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        let context = input.context();
-        let parsed = SkillToolInput::parse_input(input.input.clone())?;
-        parsed
-            .dispatch_tool_invoke_with_context(self, &context)
-            .await
+        let parsed = SkillsToolSuite::parse_tool(input.tool_name.as_str(), input.input)?;
+        parsed.dispatch_tool_invoke(self).await
+    }
+
+    async fn tool_definition(
+        &self,
+        input: ToolDefinitionInput,
+    ) -> SdkResult<Option<ToolDefinitionPatch>> {
+        self.tool_definition_patch(input)
     }
 }

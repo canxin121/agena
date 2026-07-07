@@ -45,7 +45,7 @@ pub fn rebuild_search_index(
             document.chunks.clone()
         };
         for (chunk_index, chunk) in chunks.into_iter().enumerate() {
-            let mut stored = TantivyDocument::default();
+            let mut stored = TantivyDocument::new();
             stored.add_text(fields.doc_id, document.id.clone());
             stored.add_text(fields.url, document.canonical_url.clone());
             stored.add_text(fields.title, document.title.clone());

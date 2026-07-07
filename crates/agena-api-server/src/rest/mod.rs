@@ -645,7 +645,11 @@ async fn plugin_rpc_response(
     }
 
     let id = req.id.clone();
-    if host.plugins().iter().all(|plugin| plugin.id != plugin_id) {
+    if host
+        .plugins()
+        .iter()
+        .all(|plugin| plugin.key().to_string() != plugin_id)
+    {
         return Ok(Response {
             jsonrpc: JsonRpcVersion,
             id,

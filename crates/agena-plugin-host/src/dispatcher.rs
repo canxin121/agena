@@ -29,7 +29,7 @@ where
     P: DeserializeOwned,
     F: FnMut(&mut I, P),
 {
-    chain_patch_with_context(
+    chain_patch_in_context(
         plugins,
         method_name,
         subscription,
@@ -41,7 +41,7 @@ where
     .await
 }
 
-pub async fn chain_patch_with_context<I, P, F, C>(
+pub async fn chain_patch_in_context<I, P, F, C>(
     plugins: &[std::sync::Arc<LoadedPlugin>],
     method_name: &str,
     subscription: HookSubscription,
@@ -63,7 +63,7 @@ where
         let params = serde_json::to_value(&input)?;
         let call = call_with_timeout(plugin, method_name, params, timeout);
         let result = if let Some(context) = context(plugin, &input) {
-            host_api::with_host_callback_context(context, call).await?
+            host_api::run_in_host_callback_context(context, call).await?
         } else {
             call.await?
         };

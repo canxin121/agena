@@ -67,54 +67,32 @@ pub struct LineTextDialogSpec<'a> {
 }
 
 impl<'a> LineTextDialogSpec<'a> {
-    pub fn new(title: Cow<'a, str>, lines: &'a [TextDialogLine<'a>], target_width: u16) -> Self {
-        Self {
-            title,
-            lines,
-            footer: None,
-            target_width,
-            body_wrap: true,
-            body_scroll: None,
-            body_alignment: None,
-            body_height_bounds: (1, 1),
-            footer_height_bounds: (0, 0),
-            footer_alignment: None,
-            footer_style: Style::default(),
-        }
-    }
-
-    pub fn with_footer(
-        mut self,
-        footer: Cow<'a, str>,
+    pub fn new(
+        title: Cow<'a, str>,
+        lines: &'a [TextDialogLine<'a>],
+        footer: Option<Cow<'a, str>>,
+        target_width: u16,
+        body_wrap: bool,
+        body_scroll: Option<(u16, u16)>,
+        body_alignment: Option<Alignment>,
+        body_height_bounds: (u16, u16),
         footer_height_bounds: (u16, u16),
         footer_alignment: Option<Alignment>,
         footer_style: Style,
     ) -> Self {
-        self.footer = Some(footer);
-        self.footer_height_bounds = footer_height_bounds;
-        self.footer_alignment = footer_alignment;
-        self.footer_style = footer_style;
-        self
-    }
-
-    pub fn with_body_height_bounds(mut self, body_height_bounds: (u16, u16)) -> Self {
-        self.body_height_bounds = body_height_bounds;
-        self
-    }
-
-    pub fn with_body_scroll(mut self, body_scroll: (u16, u16)) -> Self {
-        self.body_scroll = Some(body_scroll);
-        self
-    }
-
-    pub fn with_body_alignment(mut self, body_alignment: Alignment) -> Self {
-        self.body_alignment = Some(body_alignment);
-        self
-    }
-
-    pub fn with_body_wrap(mut self, body_wrap: bool) -> Self {
-        self.body_wrap = body_wrap;
-        self
+        Self {
+            title,
+            lines,
+            footer,
+            target_width,
+            body_wrap,
+            body_scroll,
+            body_alignment,
+            body_height_bounds,
+            footer_height_bounds,
+            footer_alignment,
+            footer_style,
+        }
     }
 }
 

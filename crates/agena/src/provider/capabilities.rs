@@ -26,10 +26,12 @@ impl Default for CapabilityRegistry {
                     openai_default_capabilities(),
                     vec![
                         ModelCapabilityRule::new(
-                            ModelMatcher::any_prefix(["gpt-4o", "gpt-4.1", "gpt-5"]),
+                            ModelMatcher::any(vec![
+                                ModelMatcher::any_prefix(["gpt-4o", "gpt-4.1", "gpt-5"]),
+                                ModelMatcher::contains("codex"),
+                            ]),
                             openai_multimodal_capabilities(),
-                        )
-                        .or(ModelMatcher::contains("codex")),
+                        ),
                         ModelCapabilityRule::new(
                             ModelMatcher::any_prefix(["o1", "o3", "o4"]),
                             openai_reasoning_capabilities(),
@@ -41,10 +43,12 @@ impl Default for CapabilityRegistry {
                     openai_default_capabilities(),
                     vec![
                         ModelCapabilityRule::new(
-                            ModelMatcher::any_prefix(["gpt-4o", "gpt-4.1", "gpt-5"]),
+                            ModelMatcher::any(vec![
+                                ModelMatcher::any_prefix(["gpt-4o", "gpt-4.1", "gpt-5"]),
+                                ModelMatcher::contains("codex"),
+                            ]),
                             openai_multimodal_capabilities(),
-                        )
-                        .or(ModelMatcher::contains("codex")),
+                        ),
                         ModelCapabilityRule::new(
                             ModelMatcher::any_prefix(["o1", "o3", "o4"]),
                             openai_reasoning_capabilities(),
@@ -72,10 +76,14 @@ impl Default for CapabilityRegistry {
                     bedrock_default_capabilities(),
                     vec![
                         ModelCapabilityRule::new(
-                            ModelMatcher::contains("opus-4-7")
-                                .or(ModelMatcher::contains("opus-4.7")),
-                            anthropic_claude_capabilities()
-                                .with_temperature_supported(CapabilitySupport::Unsupported),
+                            ModelMatcher::any(vec![
+                                ModelMatcher::contains("opus-4-7"),
+                                ModelMatcher::contains("opus-4.7"),
+                            ]),
+                            ModelCapabilities {
+                                temperature_supported: CapabilitySupport::Unsupported,
+                                ..anthropic_claude_capabilities()
+                            },
                         ),
                         ModelCapabilityRule::new(
                             ModelMatcher::contains("claude"),
@@ -92,10 +100,12 @@ impl Default for CapabilityRegistry {
                             anthropic_claude_capabilities(),
                         ),
                         ModelCapabilityRule::new(
-                            ModelMatcher::any_prefix(["gpt-4o", "gpt-4.1", "gpt-5"]),
+                            ModelMatcher::any(vec![
+                                ModelMatcher::any_prefix(["gpt-4o", "gpt-4.1", "gpt-5"]),
+                                ModelMatcher::contains("gpt"),
+                            ]),
                             openai_multimodal_capabilities(),
-                        )
-                        .or(ModelMatcher::contains("gpt")),
+                        ),
                         ModelCapabilityRule::new(
                             ModelMatcher::any_prefix(["o1", "o3", "o4"]),
                             openai_reasoning_capabilities(),
@@ -164,11 +174,6 @@ impl ModelCapabilityRule {
             capabilities,
         }
     }
-
-    fn or(mut self, matcher: ModelMatcher) -> Self {
-        self.matcher = self.matcher.or(matcher);
-        self
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,27 +192,12 @@ impl ModelMatcher {
         Self::AnyOf(values.into_iter().map(Self::prefix).collect())
     }
 
-    fn contains(value: impl Into<String>) -> Self {
-        Self::Contains(value.into())
+    fn any(values: Vec<ModelMatcher>) -> Self {
+        Self::AnyOf(values)
     }
 
-    fn or(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::AnyOf(mut left), Self::AnyOf(right)) => {
-                left.extend(right);
-                Self::AnyOf(left)
-            }
-            (Self::AnyOf(mut left), right) => {
-                left.push(right);
-                Self::AnyOf(left)
-            }
-            (left, Self::AnyOf(mut right)) => {
-                let mut values = vec![left];
-                values.append(&mut right);
-                Self::AnyOf(values)
-            }
-            (left, right) => Self::AnyOf(vec![left, right]),
-        }
+    fn contains(value: impl Into<String>) -> Self {
+        Self::Contains(value.into())
     }
 
     fn matches(&self, normalized_model: &str) -> bool {
@@ -229,72 +219,90 @@ fn normalize_model(model: &str) -> String {
 }
 
 fn openai_default_capabilities() -> ModelCapabilities {
-    ModelCapabilities::default()
-        .with_tool_calling(CapabilitySupport::Supported)
-        .with_streaming(CapabilitySupport::Supported)
-        .with_structured_output(CapabilitySupport::Unknown)
-        .with_reasoning(CapabilitySupport::Unsupported)
-        .with_temperature_supported(CapabilitySupport::Supported)
+    ModelCapabilities {
+        tool_calling: CapabilitySupport::Supported,
+        streaming: CapabilitySupport::Supported,
+        structured_output: CapabilitySupport::Unknown,
+        reasoning: CapabilitySupport::Unsupported,
+        temperature_supported: CapabilitySupport::Supported,
+        ..ModelCapabilities::default()
+    }
 }
 
 fn openai_multimodal_capabilities() -> ModelCapabilities {
-    openai_default_capabilities()
-        .with_image_input(CapabilitySupport::Supported)
-        .with_document_input(CapabilitySupport::Supported)
-        .with_file_input(CapabilitySupport::Supported)
-        .with_structured_output(CapabilitySupport::Supported)
+    ModelCapabilities {
+        image_input: CapabilitySupport::Supported,
+        document_input: CapabilitySupport::Supported,
+        file_input: CapabilitySupport::Supported,
+        structured_output: CapabilitySupport::Supported,
+        ..openai_default_capabilities()
+    }
 }
 
 fn openai_reasoning_capabilities() -> ModelCapabilities {
-    openai_multimodal_capabilities()
-        .with_reasoning(CapabilitySupport::Supported)
-        .with_structured_output(CapabilitySupport::Supported)
-        .with_temperature_supported(CapabilitySupport::Unsupported)
+    ModelCapabilities {
+        reasoning: CapabilitySupport::Supported,
+        structured_output: CapabilitySupport::Supported,
+        temperature_supported: CapabilitySupport::Unsupported,
+        ..openai_multimodal_capabilities()
+    }
 }
 
 fn anthropic_default_capabilities() -> ModelCapabilities {
-    ModelCapabilities::default()
-        .with_tool_calling(CapabilitySupport::Supported)
-        .with_streaming(CapabilitySupport::Supported)
-        .with_audio_input(CapabilitySupport::Unsupported)
-        .with_video_input(CapabilitySupport::Unsupported)
-        .with_reasoning(CapabilitySupport::Unsupported)
-        .with_structured_output(CapabilitySupport::Unsupported)
+    ModelCapabilities {
+        tool_calling: CapabilitySupport::Supported,
+        streaming: CapabilitySupport::Supported,
+        audio_input: CapabilitySupport::Unsupported,
+        video_input: CapabilitySupport::Unsupported,
+        reasoning: CapabilitySupport::Unsupported,
+        structured_output: CapabilitySupport::Unsupported,
+        ..ModelCapabilities::default()
+    }
 }
 
 fn anthropic_claude_capabilities() -> ModelCapabilities {
-    anthropic_default_capabilities()
-        .with_image_input(CapabilitySupport::Supported)
-        .with_document_input(CapabilitySupport::Supported)
-        .with_file_input(CapabilitySupport::Unsupported)
-        .with_reasoning(CapabilitySupport::Supported)
+    ModelCapabilities {
+        image_input: CapabilitySupport::Supported,
+        document_input: CapabilitySupport::Supported,
+        file_input: CapabilitySupport::Unsupported,
+        reasoning: CapabilitySupport::Supported,
+        ..anthropic_default_capabilities()
+    }
 }
 
 fn gemini_default_capabilities() -> ModelCapabilities {
-    ModelCapabilities::default()
-        .with_tool_calling(CapabilitySupport::Unsupported)
-        .with_streaming(CapabilitySupport::Supported)
-        .with_structured_output(CapabilitySupport::Supported)
-        .with_reasoning(CapabilitySupport::Unsupported)
+    ModelCapabilities {
+        tool_calling: CapabilitySupport::Unsupported,
+        streaming: CapabilitySupport::Supported,
+        structured_output: CapabilitySupport::Supported,
+        reasoning: CapabilitySupport::Unsupported,
+        ..ModelCapabilities::default()
+    }
 }
 
 fn gemini_multimodal_capabilities() -> ModelCapabilities {
-    gemini_default_capabilities()
-        .with_tool_calling(CapabilitySupport::Supported)
-        .with_image_input(CapabilitySupport::Supported)
-        .with_document_input(CapabilitySupport::Supported)
-        .with_file_input(CapabilitySupport::Supported)
-        .with_reasoning(CapabilitySupport::Supported)
+    ModelCapabilities {
+        tool_calling: CapabilitySupport::Supported,
+        image_input: CapabilitySupport::Supported,
+        document_input: CapabilitySupport::Supported,
+        file_input: CapabilitySupport::Supported,
+        reasoning: CapabilitySupport::Supported,
+        ..gemini_default_capabilities()
+    }
 }
 
 fn bedrock_default_capabilities() -> ModelCapabilities {
-    ModelCapabilities::default()
-        .with_tool_calling(CapabilitySupport::Supported)
-        .with_streaming(CapabilitySupport::Supported)
+    ModelCapabilities {
+        tool_calling: CapabilitySupport::Supported,
+        streaming: CapabilitySupport::Supported,
+        ..ModelCapabilities::default()
+    }
 }
 
 fn gitlab_default_capabilities() -> ModelCapabilities {
-    ModelCapabilities::default()
-        .with_tool_calling(CapabilitySupport::Supported)
-        .with_streaming(CapabilitySupport::Supported)
+    ModelCapabilities {
+        tool_calling: CapabilitySupport::Supported,
+        streaming: CapabilitySupport::Supported,
+        ..ModelCapabilities::default()
+    }
 }

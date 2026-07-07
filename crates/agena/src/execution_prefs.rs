@@ -34,7 +34,7 @@ pub struct ExecutionSelection {
 }
 
 impl ExecutionSelection {
-    pub fn with_default_agent(agent: impl Into<String>) -> Self {
+    pub fn default_agent(agent: impl Into<String>) -> Self {
         Self {
             agent: normalize_optional_string(Some(agent.into())),
             ..Self::default()

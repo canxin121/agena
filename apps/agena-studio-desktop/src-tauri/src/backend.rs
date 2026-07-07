@@ -39,42 +39,22 @@ pub struct BackendErrorInfo {
 }
 
 impl BackendErrorInfo {
-    fn new(code: impl Into<String>, summary: impl Into<String>) -> Self {
+    fn from_parts(
+        code: impl Into<String>,
+        summary: impl Into<String>,
+        detail: Option<String>,
+        hint: Option<String>,
+        exit_code: Option<i32>,
+        signal: Option<i32>,
+    ) -> Self {
         Self {
             code: code.into(),
             summary: summary.into(),
-            detail: None,
-            hint: None,
-            exit_code: None,
-            signal: None,
+            detail: detail.and_then(non_empty_trimmed_string),
+            hint: hint.and_then(non_empty_trimmed_string),
+            exit_code,
+            signal,
         }
-    }
-
-    fn with_detail(mut self, detail: impl Into<String>) -> Self {
-        let value = detail.into();
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            self.detail = Some(trimmed.to_string());
-        }
-        self
-    }
-
-    fn with_hint(mut self, hint: Option<String>) -> Self {
-        self.hint = hint.and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        });
-        self
-    }
-
-    fn with_exit_context(mut self, exit_code: Option<i32>, signal: Option<i32>) -> Self {
-        self.exit_code = exit_code;
-        self.signal = signal;
-        self
     }
 
     fn message(&self) -> String {
@@ -95,6 +75,11 @@ impl BackendErrorInfo {
         }
         out
     }
+}
+
+fn non_empty_trimmed_string(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 #[derive(Clone, Default)]
@@ -715,76 +700,90 @@ fn backend_start_error_info(detail: impl Into<String>) -> BackendErrorInfo {
     let lower = detail.to_ascii_lowercase();
 
     if lower.contains("backend service not available in this build") {
-        return BackendErrorInfo::new(
+        return BackendErrorInfo::from_parts(
             "sidecar_unavailable",
             "Desktop backend service is not available in this build",
-        )
-        .with_detail(detail)
-        .with_hint(Some(
-            "Reinstall Agena Studio Desktop or use a build that includes the backend sidecar."
-                .to_string(),
-        ));
+            Some(detail),
+            Some(
+                "Reinstall Agena Studio Desktop or use a build that includes the backend sidecar."
+                    .to_string(),
+            ),
+            None,
+            None,
+        );
     }
 
     if lower.contains("unable to locate ui dist directory") {
-        return BackendErrorInfo::new("ui_dist_missing", "Desktop UI assets were not found")
-            .with_detail(detail)
-            .with_hint(Some(
-                "Reinstall Agena Studio Desktop so bundled web assets are available.".to_string(),
-            ));
+        return BackendErrorInfo::from_parts(
+            "ui_dist_missing",
+            "Desktop UI assets were not found",
+            Some(detail),
+            Some("Reinstall Agena Studio Desktop so bundled web assets are available.".to_string()),
+            None,
+            None,
+        );
     }
 
     if lower.contains("backend port") && lower.contains("not available") {
-        return BackendErrorInfo::new(
+        return BackendErrorInfo::from_parts(
             "backend_port_unavailable",
             "Configured desktop backend port is not available",
-        )
-        .with_detail(detail)
-        .with_hint(Some(
-            "Change `desktop.backend.port` in `~/agena/agena.json` or stop the process using that port."
-                .to_string(),
-        ));
+            Some(detail),
+            Some(
+                "Change `desktop.backend.port` in `~/agena/agena.json` or stop the process using that port."
+                    .to_string(),
+            ),
+            None,
+            None,
+        );
     }
 
     if lower.contains("healthcheck timed out") {
-        return BackendErrorInfo::new(
+        return BackendErrorInfo::from_parts(
             "backend_health_timeout",
             "Timed out waiting for desktop backend health endpoint",
-        )
-        .with_detail(detail)
-        .with_hint(Some(
-            "Check desktop backend logs and ensure startup dependencies are available.".to_string(),
-        ));
+            Some(detail),
+            Some(
+                "Check desktop backend logs and ensure startup dependencies are available."
+                    .to_string(),
+            ),
+            None,
+            None,
+        );
     }
 
     if lower.contains("spawn backend") {
-        return BackendErrorInfo::new(
+        return BackendErrorInfo::from_parts(
             "backend_spawn_failed",
             "Failed to spawn desktop backend process",
-        )
-        .with_detail(detail.clone())
-        .with_hint(infer_backend_spawn_hint(&detail));
+            Some(detail.clone()),
+            infer_backend_spawn_hint(&detail),
+            None,
+            None,
+        );
     }
 
-    BackendErrorInfo::new(
+    BackendErrorInfo::from_parts(
         "backend_start_failed",
         "Failed to start desktop backend service",
+        Some(detail.clone()),
+        infer_backend_spawn_hint(&detail),
+        None,
+        None,
     )
-    .with_detail(detail.clone())
-    .with_hint(infer_backend_spawn_hint(&detail))
 }
 
 fn backend_process_error_info(detail: impl Into<String>) -> BackendErrorInfo {
     let detail = detail.into();
-    BackendErrorInfo::new(
+    BackendErrorInfo::from_parts(
         "backend_process_error",
         "Desktop backend process reported an error",
-    )
-    .with_detail(detail.clone())
-    .with_hint(
+        Some(detail.clone()),
         infer_backend_spawn_hint(&detail).or_else(|| {
             Some("Check desktop backend logs for details and retry startup.".to_string())
         }),
+        None,
+        None,
     )
 }
 
@@ -797,11 +796,14 @@ fn backend_terminated_error_info(exit_code: Option<i32>, signal: Option<i32>) ->
         "Desktop backend process terminated".to_string()
     };
 
-    BackendErrorInfo::new("backend_terminated", summary)
-        .with_exit_context(exit_code, signal)
-        .with_hint(Some(
-            "Check desktop backend logs to understand why the process exited.".to_string(),
-        ))
+    BackendErrorInfo::from_parts(
+        "backend_terminated",
+        summary,
+        None,
+        Some("Check desktop backend logs to understand why the process exited.".to_string()),
+        exit_code,
+        signal,
+    )
 }
 
 fn infer_backend_spawn_hint(detail: &str) -> Option<String> {

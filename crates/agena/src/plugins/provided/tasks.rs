@@ -5,9 +5,7 @@ use crate::plugin::sdk::{
     HookSubscription, InitContext, InitOutcome, Plugin, PluginManifest, Result as SdkResult,
     ToolInvokeInput, ToolInvokeOutput, async_trait,
 };
-use crate::plugins::provided::workflow::{
-    TaskToolActionInput, WorkflowPlugin, WorkflowPluginConfig,
-};
+use crate::plugins::provided::workflow::{TaskToolSuite, WorkflowPlugin, WorkflowPluginConfig};
 
 pub(crate) const TASKS_PLUGIN_ID: &str = "agena.tasks";
 
@@ -27,12 +25,10 @@ impl TasksPlugin {
 impl Plugin for TasksPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::new("agena", "tasks", env!("CARGO_PKG_VERSION"));
-        manifest.description = Some("Delegated subtask orchestration tools.".to_string());
+        manifest.summary = Some("Delegated subtask orchestration tools.".to_string());
         manifest.set_display(crate::plugin::sdk::ToolDisplayPreset::BriefDetailed);
         manifest.hooks |= HookSubscription::TOOL_INVOKE;
-        manifest
-            .tools
-            .extend(TaskToolActionInput::tool_definitions());
+        manifest.tools.extend(TaskToolSuite::tool_definitions());
         manifest
     }
 
@@ -43,7 +39,7 @@ impl Plugin for TasksPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        let parsed = TaskToolActionInput::parse_tool(input.tool_name.as_str(), input.input)?;
+        let parsed = TaskToolSuite::parse_tool(input.tool_name.as_str(), input.input)?;
         parsed.dispatch_tool_invoke(&self.inner).await
     }
 }

@@ -30,10 +30,10 @@ pub struct RegistryHandle<'a, F: HttpFetcher> {
 
 impl<'a, F: HttpFetcher> RegistryHandle<'a, F> {
     pub fn fetch_index(&self, force_refresh: bool) -> Result<RegistryIndex, MarketplaceError> {
-        self.fetch_index_with_cache(force_refresh, true)
+        self.fetch_index_using_cache(force_refresh, true)
     }
 
-    fn fetch_index_with_cache(
+    fn fetch_index_using_cache(
         &self,
         force_refresh: bool,
         persist_cache: bool,
@@ -57,10 +57,7 @@ pub struct MarketplaceClient<F: HttpFetcher = ReqwestFetcher> {
 }
 
 impl MarketplaceClient<ReqwestFetcher> {
-    pub fn with_default_fetcher(
-        cache: MarketplaceCache,
-        trusted_keys: BTreeMap<String, String>,
-    ) -> Self {
+    pub fn new(cache: MarketplaceCache, trusted_keys: BTreeMap<String, String>) -> Self {
         Self {
             cache,
             fetcher: ReqwestFetcher::new(),
@@ -70,7 +67,7 @@ impl MarketplaceClient<ReqwestFetcher> {
 }
 
 impl<F: HttpFetcher> MarketplaceClient<F> {
-    pub fn new(
+    pub fn from_parts(
         cache: MarketplaceCache,
         fetcher: F,
         trusted_keys: BTreeMap<String, String>,
@@ -103,7 +100,7 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
             self.cache.ensure_dirs()?;
         }
         let registry_handle = self.registry(req.registry.clone());
-        let index = registry_handle.fetch_index_with_cache(req.refresh_index, !req.dry_run)?;
+        let index = registry_handle.fetch_index_using_cache(req.refresh_index, !req.dry_run)?;
         let installed = self.cache.load_installed()?;
 
         let mut plan: Vec<(String, Option<String>)> = Vec::new();
@@ -215,7 +212,7 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
 
     fn install_one(&self, req: InstallRequest) -> Result<InstallOutcome, MarketplaceError> {
         let registry = self.registry(req.registry.clone());
-        let index = registry.fetch_index_with_cache(false, !req.dry_run)?;
+        let index = registry.fetch_index_using_cache(false, !req.dry_run)?;
         let plugin = index
             .plugins
             .into_iter()

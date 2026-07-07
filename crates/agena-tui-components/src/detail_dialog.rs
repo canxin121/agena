@@ -25,34 +25,24 @@ pub struct DetailTextDialogSpec<'a> {
 impl<'a> DetailTextDialogSpec<'a> {
     pub fn new(
         title: Cow<'a, str>,
+        footer: Option<Cow<'a, str>>,
         target_width: u16,
         detail_spec: DetailTextSpec<'a>,
         body_height_bounds: (u16, u16),
-    ) -> Self {
-        Self {
-            title,
-            footer: None,
-            target_width,
-            detail_spec,
-            body_height_bounds,
-            footer_height_bounds: (0, 0),
-            footer_alignment: None,
-            footer_style: Style::default(),
-        }
-    }
-
-    pub fn with_footer(
-        mut self,
-        footer: Cow<'a, str>,
         footer_height_bounds: (u16, u16),
         footer_alignment: Option<Alignment>,
         footer_style: Style,
     ) -> Self {
-        self.footer = Some(footer);
-        self.footer_height_bounds = footer_height_bounds;
-        self.footer_alignment = footer_alignment;
-        self.footer_style = footer_style;
-        self
+        Self {
+            title,
+            footer,
+            target_width,
+            detail_spec,
+            body_height_bounds,
+            footer_height_bounds,
+            footer_alignment,
+            footer_style,
+        }
     }
 }
 

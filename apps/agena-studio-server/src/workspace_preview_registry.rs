@@ -98,10 +98,10 @@ pub(crate) struct WorkspacePreviewRegistry {
 
 impl WorkspacePreviewRegistry {
     pub(crate) fn new(db: Arc<studio_db::StudioDb>) -> Self {
-        Self::with_ttl(db, CACHE_TTL)
+        Self::new_with_ttl(db, CACHE_TTL)
     }
 
-    fn with_ttl(db: Arc<studio_db::StudioDb>, ttl: Duration) -> Self {
+    fn new_with_ttl(db: Arc<studio_db::StudioDb>, ttl: Duration) -> Self {
         Self {
             db,
             ttl,

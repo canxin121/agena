@@ -124,10 +124,6 @@ struct AgentRegistryInner {
 }
 
 impl SubagentRegistry {
-    pub fn empty() -> Self {
-        Self::default()
-    }
-
     pub fn discover(_workspace_root: &Path, _user_root: Option<&Path>) -> Self {
         let registry = Self::default();
         registry.reload_disk();
@@ -484,7 +480,7 @@ fn default_profile(
             defaults: AgentSelectionConfig::default(),
         },
         prompt: format!(
-            "{prompt} When the user asks what tools are available, whether a tool exists, or how to inspect tool usage, do not answer from memory. Inspect the live tool catalog first with `tools.list`, `tools.search`, or `tools.help` when those tools are available."
+            "{prompt} When the user asks what tools are available, whether a tool exists, or how to inspect tool usage, do not answer from memory. Inspect the live tools gateway first. Use `agena.tools/help` for exact tool schemas and `agena.tools/call` to execute tools through the tools gateway."
         ),
         source_path: None,
         scope: AgentScope::Default,

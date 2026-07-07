@@ -52,12 +52,12 @@ pub enum PermissionDecision {
 
 #[derive(Debug, Clone)]
 pub struct ToolPermissionPolicy {
-    default_mode: PermissionMode,
-    tag_modes: HashMap<String, PermissionMode>,
-    tool_modes: HashMap<String, PermissionMode>,
-    bash_pattern_rules: Vec<BashPatternRule>,
-    bash_deny_rules: Vec<BashPatternRule>,
-    bash_overlay_rules: Vec<BashPatternRule>,
+    pub(crate) default_mode: PermissionMode,
+    pub(crate) tag_modes: HashMap<String, PermissionMode>,
+    pub(crate) tool_modes: HashMap<String, PermissionMode>,
+    pub(crate) bash_pattern_rules: Vec<BashPatternRule>,
+    pub(crate) bash_deny_rules: Vec<BashPatternRule>,
+    pub(crate) bash_overlay_rules: Vec<BashPatternRule>,
 }
 
 #[derive(Debug, Clone)]
@@ -265,34 +265,19 @@ impl ToolPermissionPolicy {
         Self::new(PermissionMode::Allow)
     }
 
-    pub fn with_default_mode(mut self, mode: PermissionMode) -> Self {
-        self.default_mode = mode;
-        self
-    }
-
-    pub fn with_tag_mode(mut self, tag: ToolTag, mode: PermissionMode) -> Self {
-        self.tag_modes.insert(tag.as_str().to_string(), mode);
-        self
-    }
-
-    pub fn with_tool_mode(mut self, tool_name: impl Into<String>, mode: PermissionMode) -> Self {
-        self.tool_modes.insert(tool_name.into(), mode);
-        self
-    }
-
     /// Append a bash command pattern rule. Patterns use `globset` glob syntax
     /// against the literal command string (e.g. `git status`, `rm *`,
     /// `pnpm *`). Rules are evaluated in registration order; the first match
     /// wins. Bash-pattern rules apply *only* to `bash`
     /// override the per-tool default for that one invocation when matched.
-    pub fn with_bash_pattern_rule(
-        mut self,
+    pub fn add_bash_pattern_rule(
+        &mut self,
         pattern: impl Into<String>,
         mode: PermissionMode,
-    ) -> Result<Self, PermissionConfigError> {
+    ) -> Result<(), PermissionConfigError> {
         self.bash_pattern_rules
             .push(BashPatternRule::new(pattern, mode)?);
-        Ok(self)
+        Ok(())
     }
 
     /// Append a bash command pattern that *unconditionally* denies execution
@@ -300,27 +285,22 @@ impl ToolPermissionPolicy {
     /// per-tool override. Useful for a global blocklist (`rm -rf *`,
     /// `:(){:|:&};:`, etc.) that even an explicit `Ask` rule should not be
     /// able to whitelist.
-    pub fn with_bash_deny_pattern(
-        mut self,
+    pub fn add_bash_deny_pattern(
+        &mut self,
         pattern: impl Into<String>,
-    ) -> Result<Self, PermissionConfigError> {
+    ) -> Result<(), PermissionConfigError> {
         self.bash_deny_rules
             .push(BashPatternRule::new(pattern, PermissionMode::Deny)?);
-        Ok(self)
+        Ok(())
     }
 
     /// Append an overlay bash command pattern rule using shell-style wildcard
     /// semantics. These rules are evaluated after unconditional deny
     /// patterns but before the base bash pattern rules, and the last matching
     /// overlay rule wins.
-    pub fn with_bash_overlay_rule(
-        mut self,
-        pattern: impl Into<String>,
-        mode: PermissionMode,
-    ) -> Self {
+    pub fn add_bash_overlay_rule(&mut self, pattern: impl Into<String>, mode: PermissionMode) {
         self.bash_overlay_rules
             .push(BashPatternRule::new_wildcard(pattern, mode));
-        self
     }
 
     pub fn bash_pattern_rules(&self) -> &[BashPatternRule] {
@@ -578,9 +558,9 @@ pub enum NetworkTargetParseError {
 
 #[derive(Debug, Clone)]
 pub struct NetworkPermissionPolicy {
-    internet_default: PermissionMode,
-    private_default: PermissionMode,
-    loopback_default: PermissionMode,
+    pub(crate) internet_default: PermissionMode,
+    pub(crate) private_default: PermissionMode,
+    pub(crate) loopback_default: PermissionMode,
     rules: Vec<NetworkPermissionRule>,
 }
 
@@ -598,28 +578,13 @@ impl NetworkPermissionPolicy {
         Self::new(PermissionMode::Allow)
     }
 
-    pub fn with_internet_default(mut self, mode: PermissionMode) -> Self {
-        self.internet_default = mode;
-        self
-    }
-
-    pub fn with_private_default(mut self, mode: PermissionMode) -> Self {
-        self.private_default = mode;
-        self
-    }
-
-    pub fn with_loopback_default(mut self, mode: PermissionMode) -> Self {
-        self.loopback_default = mode;
-        self
-    }
-
-    pub fn with_rule(
-        mut self,
+    pub fn add_rule(
+        &mut self,
         pattern: impl Into<String>,
         mode: PermissionMode,
-    ) -> Result<Self, PermissionConfigError> {
+    ) -> Result<(), PermissionConfigError> {
         self.rules.push(NetworkPermissionRule::new(pattern, mode)?);
-        Ok(self)
+        Ok(())
     }
 
     pub fn check_connect(&self, target: &NetworkTarget) -> PermissionDecision {
@@ -941,11 +906,11 @@ fn ipv6_to_u128(addr: Ipv6Addr) -> u128 {
 
 #[derive(Debug, Clone)]
 pub struct PermissionPolicy {
-    workspace_read_default: PermissionMode,
-    workspace_write_default: PermissionMode,
-    external_read_default: PermissionMode,
-    external_write_default: PermissionMode,
-    rules: Vec<PermissionRule>,
+    pub(crate) workspace_read_default: PermissionMode,
+    pub(crate) workspace_write_default: PermissionMode,
+    pub(crate) external_read_default: PermissionMode,
+    pub(crate) external_write_default: PermissionMode,
+    pub(crate) rules: Vec<PermissionRule>,
 }
 
 impl PermissionPolicy {
@@ -957,38 +922,6 @@ impl PermissionPolicy {
             external_write_default: workspace_write,
             rules: Vec::new(),
         }
-    }
-
-    pub fn with_workspace_defaults(mut self, read: PermissionMode, write: PermissionMode) -> Self {
-        self.workspace_read_default = read;
-        self.workspace_write_default = write;
-        self
-    }
-
-    pub fn with_workspace_read_default(mut self, mode: PermissionMode) -> Self {
-        self.workspace_read_default = mode;
-        self
-    }
-
-    pub fn with_workspace_write_default(mut self, mode: PermissionMode) -> Self {
-        self.workspace_write_default = mode;
-        self
-    }
-
-    pub fn with_external_defaults(mut self, read: PermissionMode, write: PermissionMode) -> Self {
-        self.external_read_default = read;
-        self.external_write_default = write;
-        self
-    }
-
-    pub fn with_external_read_default(mut self, mode: PermissionMode) -> Self {
-        self.external_read_default = mode;
-        self
-    }
-
-    pub fn with_external_write_default(mut self, mode: PermissionMode) -> Self {
-        self.external_write_default = mode;
-        self
     }
 
     pub fn allow_all() -> Self {
@@ -1010,42 +943,41 @@ impl PermissionPolicy {
         }
     }
 
-    pub fn with_absolute_glob_rule(
-        mut self,
+    pub fn add_absolute_glob_rule(
+        &mut self,
         selector: AccessSelector,
         mode: PermissionMode,
         pattern: impl Into<String>,
-    ) -> Result<Self, PermissionConfigError> {
+    ) -> Result<(), PermissionConfigError> {
         self.rules
             .push(PermissionRule::absolute_glob(selector, mode, pattern)?);
-        Ok(self)
+        Ok(())
     }
 
-    pub fn with_workspace_glob_rule(
-        mut self,
+    pub fn add_workspace_glob_rule(
+        &mut self,
         selector: AccessSelector,
         mode: PermissionMode,
         pattern: impl Into<String>,
-    ) -> Result<Self, PermissionConfigError> {
+    ) -> Result<(), PermissionConfigError> {
         self.rules
             .push(PermissionRule::workspace_glob(selector, mode, pattern)?);
-        Ok(self)
+        Ok(())
     }
 
-    pub fn with_rule(mut self, rule: PermissionRule) -> Self {
+    pub fn add_rule(&mut self, rule: PermissionRule) {
         self.rules.push(rule);
-        self
     }
 
-    pub fn with_path_pattern_rule(
-        mut self,
+    pub fn add_path_pattern_rule(
+        &mut self,
         selector: AccessSelector,
         mode: PermissionMode,
         pattern: impl Into<String>,
-    ) -> Result<Self, PermissionConfigError> {
+    ) -> Result<(), PermissionConfigError> {
         self.rules
             .push(PermissionRule::path_pattern(selector, mode, pattern)?);
-        Ok(self)
+        Ok(())
     }
 
     pub fn check_access(

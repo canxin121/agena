@@ -33,7 +33,7 @@ pub use crate::model::{
     ModelThinkingMode, ModelTokenLimits, ProviderId,
 };
 pub use amazon_bedrock::AmazonBedrockAdapter;
-pub use anthropic::{AnthropicAdapter, AnthropicProfile};
+pub use anthropic::{AnthropicAdapter, AnthropicAdapterOptions, AnthropicProfile};
 pub use capabilities::{CapabilityFamily, CapabilityRegistry, default_capability_registry};
 pub use cataloged_models::CatalogedModelsProvider;
 pub use configured_models::{
@@ -46,13 +46,20 @@ pub use credential::{
     AuthRefreshStrategy, AuthSecretSelector, ManagedCredential, SapAiCoreServiceKey,
     parse_sap_ai_core_service_key, should_retry_credential,
 };
-pub use gemini::{GeminiAdapter, GeminiStreamMode};
+pub use gemini::{GeminiAdapter, GeminiAdapterOptions, GeminiStreamMode};
 pub use gitlab::{GitlabProvider, GitlabProviderConfig};
+pub(crate) use gitlab::{
+    default_ai_gateway_headers as default_gitlab_ai_gateway_headers,
+    default_feature_flags as default_gitlab_feature_flags,
+};
 pub use model_metadata::{ModelMetadataRegistry, default_model_metadata_registry};
 pub use model_modes::{ModelModeRegistry, default_model_mode_registry};
 pub use multi_adapter::{MultiAdapterProvider, ProviderModelRoute, ProviderModelRouteKey};
 pub use ollama::OllamaAdapter;
-pub use openai::{OpenAiAdapter, OpenAiApiMode, OpenAiBackend, OpenAiProfile, OpenAiStreamMode};
+pub use openai::{
+    OpenAiAdapter, OpenAiAdapterOptions, OpenAiApiMode, OpenAiBackend, OpenAiProfile,
+    OpenAiStreamMode,
+};
 pub use prompt_cache_shape::{PromptCacheShape, PromptCacheShapeChange, PromptCacheShapeDiff};
 pub use registry::{NamedProvider, ProviderRegistry};
 pub use runtime::{

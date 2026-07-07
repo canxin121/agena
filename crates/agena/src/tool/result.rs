@@ -38,11 +38,6 @@ impl ToolPayloadExecution {
             apply_patch: None,
         }
     }
-
-    pub fn with_apply_patch(mut self, execution: ApplyPatchExecution) -> Self {
-        self.apply_patch = Some(execution);
-        self
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,16 +54,6 @@ impl ToolInvocationExecution {
             view,
             apply_patch: None,
         }
-    }
-
-    pub fn with_apply_patch(mut self, execution: ApplyPatchExecution) -> Self {
-        self.apply_patch = Some(execution);
-        self
-    }
-
-    pub fn with_apply_patch_option(mut self, execution: Option<ApplyPatchExecution>) -> Self {
-        self.apply_patch = execution;
-        self
     }
 }
 

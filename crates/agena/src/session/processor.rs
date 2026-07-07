@@ -74,31 +74,23 @@ pub(crate) struct SessionRunResult {
 pub struct SessionProcessor {
     provider_registry: Arc<ProviderRegistry>,
     context_governor: ContextGovernor,
-    plugins: Option<Arc<crate::plugin::PluginHost>>,
-    workspace_root: Option<PathBuf>,
+    plugins: Arc<crate::plugin::PluginHost>,
+    workspace_root: PathBuf,
 }
 
 impl SessionProcessor {
     pub fn new(
         provider_registry: Arc<ProviderRegistry>,
         context_governor: ContextGovernor,
+        plugins: Arc<crate::plugin::PluginHost>,
+        workspace_root: impl Into<PathBuf>,
     ) -> Self {
         Self {
             provider_registry,
             context_governor,
-            plugins: None,
-            workspace_root: None,
+            plugins,
+            workspace_root: workspace_root.into(),
         }
-    }
-
-    pub fn with_plugin_host(mut self, plugins: Arc<crate::plugin::PluginHost>) -> Self {
-        self.plugins = Some(plugins);
-        self
-    }
-
-    pub fn with_workspace_root(mut self, workspace_root: impl Into<PathBuf>) -> Self {
-        self.workspace_root = Some(workspace_root.into());
-        self
     }
 
     pub(crate) fn provider_registry(&self) -> &Arc<ProviderRegistry> {
@@ -113,7 +105,7 @@ impl SessionProcessor {
         model_id: &str,
         request: &mut CompletionRequest,
     ) {
-        let Some(plugins) = &self.plugins else { return };
+        let plugins = &self.plugins;
         if plugins.is_empty() {
             return;
         }
@@ -221,7 +213,7 @@ impl SessionProcessor {
         let mut part_delta_sequences = BTreeMap::<i64, u64>::new();
         let mut provider_err: Option<AppError> = None;
         let mut usage = None;
-        let mut finish_reason_enum = FinishReason::default();
+        let mut finish_reason_enum = FinishReason::Stop;
         let mut provider_metadata = None;
         let mut visible_text = String::new();
         let mut reasoning_text = String::new();
@@ -629,7 +621,7 @@ impl SessionProcessor {
         part_id: i64,
         created_at: DateTime<Utc>,
     ) -> Result<(), AppError> {
-        let mut part = MessagePart::with_content(
+        let mut part = MessagePart::from_content(
             part_id,
             assistant.id,
             created_at,
@@ -650,7 +642,7 @@ impl SessionProcessor {
         part_id: i64,
         created_at: DateTime<Utc>,
     ) -> Result<(), AppError> {
-        let mut part = MessagePart::with_content(
+        let mut part = MessagePart::from_content(
             part_id,
             assistant.id,
             created_at,
@@ -755,7 +747,7 @@ impl SessionProcessor {
                 operation.set_advertised_tool_identity(identity);
             }
 
-            let mut part = MessagePart::with_content(
+            let mut part = MessagePart::from_content(
                 part_id,
                 assistant.id,
                 start,
@@ -959,7 +951,7 @@ impl SessionProcessor {
             operation.raw = raw.clone();
             operation.result.raw = raw;
 
-            let mut part = MessagePart::with_content(
+            let mut part = MessagePart::from_content(
                 part_id,
                 assistant.id,
                 start,
@@ -1079,7 +1071,7 @@ impl SessionProcessor {
             },
         );
         if !title.trim().is_empty() {
-            operation = operation.with_title(title);
+            operation.set_title(title);
         }
         operation.set_provider_native_only(true);
         operation.raw = raw.clone();
@@ -1108,9 +1100,7 @@ impl SessionProcessor {
         call_id: &str,
         blocks: Vec<OperationBlock>,
     ) -> Vec<OperationBlock> {
-        let Some(workspace_root) = self.workspace_root.as_deref() else {
-            return blocks;
-        };
+        let workspace_root = self.workspace_root.as_path();
 
         let mut media_index = 0usize;
         let mut persisted = Vec::with_capacity(blocks.len());
@@ -1558,7 +1548,7 @@ fn tool_definition_identity_from_model_name(
 
 fn canonical_tool_name_from_model_name(name: &str, available_tools: &[RegisteredTool]) -> String {
     tool_for_model_name(name, available_tools)
-        .map(|tool| tool.model_name.clone())
+        .map(RegisteredTool::model_name)
         .unwrap_or_else(|| name.trim().to_owned())
 }
 
@@ -1567,7 +1557,7 @@ fn tool_invocation_for_definition(
     input: StructuredObject,
 ) -> ToolInvocation {
     ToolInvocation {
-        name: tool.model_name.clone(),
+        name: tool.model_name(),
         plugin_name: Some(tool.plugin_full_name().clone()),
         input,
     }

@@ -361,24 +361,25 @@ fn collapse_assistant_group(
 }
 
 fn aggregate_usage<'a>(usages: impl Iterator<Item = &'a MessageUsage>) -> Option<MessageUsage> {
-    let mut total = MessageUsage::default();
-    let mut seen = false;
-    for usage in usages {
-        seen = true;
-        total.input_tokens = total.input_tokens.saturating_add(usage.input_tokens);
-        total.output_tokens = total.output_tokens.saturating_add(usage.output_tokens);
-        total.reasoning_tokens = total
-            .reasoning_tokens
-            .saturating_add(usage.reasoning_tokens);
-        total.cache_write_tokens = total
-            .cache_write_tokens
-            .saturating_add(usage.cache_write_tokens);
-        total.cache_read_tokens = total
-            .cache_read_tokens
-            .saturating_add(usage.cache_read_tokens);
-        total.total_cost += usage.total_cost;
-    }
-    seen.then_some(total)
+    usages.fold(None, |total, usage| {
+        Some(match total {
+            Some(total) => MessageUsage {
+                input_tokens: total.input_tokens.saturating_add(usage.input_tokens),
+                output_tokens: total.output_tokens.saturating_add(usage.output_tokens),
+                reasoning_tokens: total
+                    .reasoning_tokens
+                    .saturating_add(usage.reasoning_tokens),
+                cache_write_tokens: total
+                    .cache_write_tokens
+                    .saturating_add(usage.cache_write_tokens),
+                cache_read_tokens: total
+                    .cache_read_tokens
+                    .saturating_add(usage.cache_read_tokens),
+                total_cost: total.total_cost + usage.total_cost,
+            },
+            None => usage.clone(),
+        })
+    })
 }
 
 fn collapse_assistant_metadata(group: &[Message]) -> agena::message::MessageMetadata {

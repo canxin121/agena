@@ -5,6 +5,7 @@
 
 use std::{collections::BTreeMap, future::Future, sync::Arc};
 
+use agena_plugin_sdk::PluginKey;
 use async_trait::async_trait;
 
 use crate::message::{
@@ -88,7 +89,7 @@ async fn publish_tool_registry_changed_event(
         tracing::debug!(
             target: "agena_plugin_host::events",
             generation = event.generation,
-            model_name = %event.model_name,
+            tool = %event.tool_key,
             "skipping tool-registry event publish: no session manager"
         );
         return;
@@ -135,7 +136,7 @@ impl RuntimeHostClient {
         Ok(self.session_manager()?.tool_executor())
     }
 
-    async fn with_session_manager<T, E, F>(
+    async fn use_session_manager<T, E, F>(
         &self,
         use_manager: impl FnOnce(Arc<crate::session::SessionManager>) -> F,
     ) -> Result<T, PluginError>
@@ -222,11 +223,14 @@ impl RuntimeHostClient {
         Ok((session_id, call_id))
     }
 
-    fn callback_plugin_id(&self) -> Result<String, PluginError> {
-        self.callback_context()?
+    fn callback_plugin_key(&self) -> Result<PluginKey, PluginError> {
+        let plugin_id = self
+            .callback_context()?
             .plugin_id
             .filter(|id| !id.trim().is_empty())
-            .ok_or_else(|| host_unavailable("host callback context is missing plugin_id"))
+            .ok_or_else(|| host_unavailable("host callback context is missing plugin_id"))?;
+        PluginKey::parse(plugin_id.as_str())
+            .map_err(|err| host_unavailable(format!("invalid host callback plugin_id: {err}")))
     }
 
     fn storage_locator(
@@ -234,7 +238,7 @@ impl RuntimeHostClient {
         scope: crate::plugin::sdk::host_api::HostStorageScope,
         visibility: crate::plugin::sdk::host_api::HostStorageVisibility,
     ) -> Result<StorageLocator, PluginError> {
-        let plugin_id = self.callback_plugin_id()?;
+        let plugin_id = self.callback_plugin_key()?;
         let context = self.callback_context()?;
         StorageLocator::new(
             scope,
@@ -265,7 +269,7 @@ impl RuntimeHostClient {
         self.snapshot().plugin_manager()
     }
 
-    fn with_plugin_storage<T>(
+    fn use_plugin_storage<T>(
         &self,
         scope: crate::plugin::sdk::host_api::HostStorageScope,
         visibility: crate::plugin::sdk::host_api::HostStorageVisibility,
@@ -276,13 +280,13 @@ impl RuntimeHostClient {
         use_store(store.as_ref(), &locator).map_err(map_storage_error)
     }
 
-    fn with_plugin_secret_store<T>(
+    fn use_plugin_secret_store<T>(
         &self,
-        use_store: impl FnOnce(&dyn PluginSecretStore, &str) -> Result<T, PluginStorageError>,
+        use_store: impl FnOnce(&dyn PluginSecretStore, &PluginKey) -> Result<T, PluginStorageError>,
     ) -> Result<T, PluginError> {
-        let plugin_id = self.callback_plugin_id()?;
+        let plugin_id = self.callback_plugin_key()?;
         let store = self.plugin_secret_store();
-        use_store(store.as_ref(), plugin_id.as_str()).map_err(map_storage_error)
+        use_store(store.as_ref(), &plugin_id).map_err(map_storage_error)
     }
 
     async fn resolve_permission_check(
@@ -387,6 +391,9 @@ impl HostClient for RuntimeHostClient {
             .and_then(|context| context.plugin_id)
             .or_else(active_invocations::current_plugin)
             .unwrap_or_else(|| "<unknown>".into());
+        let plugin_id = crate::plugin::PluginKey::parse(plugin_id.as_str()).unwrap_or_else(|_| {
+            crate::plugin::PluginKey::new("unknown", "unknown").expect("static plugin key")
+        });
         let kind = crate::event::EventKind::PluginEvent(crate::event::PluginEventPayload {
             plugin_id,
             kind_label: env.kind,
@@ -477,7 +484,7 @@ impl HostClient for RuntimeHostClient {
             .ok_or_else(|| PluginError::new(format!("tool `{tool}` not found")))?;
 
         let caller = self.callback_context()?;
-        let plugin_id = resolution.plugin_name.clone();
+        let plugin_id = resolution.plugin_full_name();
         if caller
             .plugin_id
             .as_ref()
@@ -542,7 +549,7 @@ impl HostClient for RuntimeHostClient {
         let request_model = requested_model.clone();
         let request_profile_name = profile_name.clone();
         let response = self
-            .with_session_manager(|manager| async move {
+            .use_session_manager(|manager| async move {
                 manager
                     .spawn_subtask(crate::session::SessionSubtaskRequest {
                         parent_session_id,
@@ -608,7 +615,7 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<HostGetSessionResponse, PluginError> {
         let session_id = self.callback_or_requested_session_id(req.session_id, "get_session")?;
         let session = self
-            .with_session_manager(|manager| async move { manager.get_session(session_id).await })
+            .use_session_manager(|manager| async move { manager.get_session(session_id).await })
             .await?;
         Ok(HostGetSessionResponse {
             session: host_session_from_session(&session),
@@ -628,7 +635,7 @@ impl HostClient for RuntimeHostClient {
         }
         let title = title.to_string();
         let session = self
-            .with_session_manager(|manager| async move {
+            .use_session_manager(|manager| async move {
                 manager.rename_session(session_id, title).await
             })
             .await?;
@@ -749,14 +756,14 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostStorageGetRequest,
     ) -> Result<HostStorageGetResponse, PluginError> {
-        let value = self.with_plugin_storage(req.scope, req.visibility, |store, locator| {
+        let value = self.use_plugin_storage(req.scope, req.visibility, |store, locator| {
             store.get(locator, req.namespace.as_str(), req.key.as_str())
         })?;
         Ok(HostStorageGetResponse { value })
     }
 
     async fn storage_set(&self, req: HostStorageSetRequest) -> Result<(), PluginError> {
-        self.with_plugin_storage(req.scope, req.visibility, |store, locator| {
+        self.use_plugin_storage(req.scope, req.visibility, |store, locator| {
             store.set(
                 locator,
                 req.namespace.as_str(),
@@ -767,7 +774,7 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn storage_delete(&self, req: HostStorageDeleteRequest) -> Result<(), PluginError> {
-        self.with_plugin_storage(req.scope, req.visibility, |store, locator| {
+        self.use_plugin_storage(req.scope, req.visibility, |store, locator| {
             store.delete(locator, req.namespace.as_str(), req.key.as_str())
         })
     }
@@ -777,7 +784,7 @@ impl HostClient for RuntimeHostClient {
         req: HostStorageListRequest,
     ) -> Result<HostStorageListResponse, PluginError> {
         let records = self
-            .with_plugin_storage(req.scope, req.visibility, |store, locator| {
+            .use_plugin_storage(req.scope, req.visibility, |store, locator| {
                 store.list(locator, req.namespace.as_deref(), req.prefix.as_deref())
             })?
             .into_iter()
@@ -794,22 +801,22 @@ impl HostClient for RuntimeHostClient {
         req: HostSecretGetRequest,
     ) -> Result<HostSecretGetResponse, PluginError> {
         let value = self
-            .with_plugin_secret_store(|store, plugin_id| store.get(plugin_id, req.name.as_str()))?;
+            .use_plugin_secret_store(|store, plugin_id| store.get(plugin_id, req.name.as_str()))?;
         Ok(HostSecretGetResponse { value })
     }
 
     async fn secret_set(&self, req: HostSecretSetRequest) -> Result<(), PluginError> {
-        self.with_plugin_secret_store(|store, plugin_id| {
+        self.use_plugin_secret_store(|store, plugin_id| {
             store.set(plugin_id, req.name.as_str(), req.value.as_str())
         })
     }
 
     async fn secret_delete(&self, req: HostSecretDeleteRequest) -> Result<(), PluginError> {
-        self.with_plugin_secret_store(|store, plugin_id| store.delete(plugin_id, req.name.as_str()))
+        self.use_plugin_secret_store(|store, plugin_id| store.delete(plugin_id, req.name.as_str()))
     }
 
     async fn secret_list(&self) -> Result<HostSecretListResponse, PluginError> {
-        let names = self.with_plugin_secret_store(|store, plugin_id| store.list(plugin_id))?;
+        let names = self.use_plugin_secret_store(|store, plugin_id| store.list(plugin_id))?;
         Ok(HostSecretListResponse { names })
     }
 
@@ -829,7 +836,9 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<HostPluginStatusGetResponse, PluginError> {
         let host = self.plugin_manager();
         Ok(HostPluginStatusGetResponse {
-            status: host.plugin_status(&req.plugin_id).map(host_status_to_sdk),
+            status: host
+                .plugin_status_by_key(&req.plugin_id)
+                .map(host_status_to_sdk),
         })
     }
 
@@ -938,7 +947,7 @@ impl HostClient for RuntimeHostClient {
                 )
                 .map_err(|err| PluginError::invalid_params(err.to_string()))?;
                 if let Some(session) = owner_session_id {
-                    job = job.with_owner(session);
+                    job.set_owner(session);
                 }
                 job
             }
@@ -951,7 +960,7 @@ impl HostClient for RuntimeHostClient {
                     .ok_or_else(|| PluginError::invalid_params("invalid at_ms"))?;
                 let mut job = agena_scheduler::ScheduledJob::new_once(at, prompt);
                 if let Some(session) = owner_session_id {
-                    job = job.with_owner(session);
+                    job.set_owner(session);
                 }
                 job
             }
@@ -984,8 +993,9 @@ impl HostClient for RuntimeHostClient {
         crate::agent::Agent::new(
             req.agent.name.clone(),
             crate::permission::PermissionPolicy::allow_all(),
+            crate::permission::ToolPermissionPolicy::allow_all(),
         )
-        .try_with_permission_config(&permission)
+        .try_apply_permission_config(&permission)
         .map_err(|err| {
             PluginError::invalid_params(format!(
                 "agent.permission is invalid for '{}': {err}",
@@ -1051,7 +1061,7 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<HostAgentSwitchResponse, PluginError> {
         let session_id = self.callback_or_requested_session_id(req.session_id, "agent.switch")?;
         let outcome = self
-            .with_session_manager(|manager| async move {
+            .use_session_manager(|manager| async move {
                 manager
                     .switch_session_agent(session_id, req.agent, req.push_previous)
                     .await
@@ -1071,7 +1081,7 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<HostAgentRestoreResponse, PluginError> {
         let session_id = self.callback_or_requested_session_id(req.session_id, "agent.restore")?;
         let outcome = self
-            .with_session_manager(|manager| async move {
+            .use_session_manager(|manager| async move {
                 manager.restore_session_agent(session_id).await
             })
             .await?;

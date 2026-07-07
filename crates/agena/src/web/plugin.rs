@@ -263,208 +263,220 @@ fn default_web_fetch_enabled() -> bool {
     true
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
 fn web_config_schema() -> serde_json::Value {
-    let mut schema = crate::tool::definition::json_schema_for_with_default(WebConfig::default());
-    for (pointer, title, description) in [
-        (
-            "",
-            "Web Plugin Config",
-            "Fetch, crawl, search, embedded cache, and browser defaults for the agena.web plugin.",
-        ),
-        (
-            "/properties/fetch",
-            "Fetch",
-            "Controls direct page fetch operations, request throttling, and fetch cache behavior.",
-        ),
-        (
-            "/properties/fetch/properties/enabled",
-            "Enabled",
-            "Allows web.fetch and web.crawl to run. Disable this to turn off network page retrieval.",
-        ),
-        (
-            "/properties/fetch/properties/request",
-            "Request",
-            "Default timing, timeout, and body-size limits for HTTP page fetches.",
-        ),
-        (
-            "/properties/fetch/properties/request/properties/delay_ms",
-            "Delay (ms)",
-            "Minimum delay between fetches to the same host.",
-        ),
-        (
-            "/properties/fetch/properties/request/properties/timeout_secs",
-            "Timeout (sec)",
-            "Maximum time allowed for one fetch request before it fails.",
-        ),
-        (
-            "/properties/fetch/properties/request/properties/max_body_bytes",
-            "Max Body Bytes",
-            "Largest response body accepted from a fetched page.",
-        ),
-        (
-            "/properties/fetch/properties/request/properties/respect_robots_txt",
-            "Respect robots.txt",
-            "Honors robots.txt restrictions during fetch and crawl operations.",
-        ),
-        (
-            "/properties/fetch/properties/cache",
-            "Cache",
-            "Short-lived cache for fetched page content and metadata.",
-        ),
-        (
-            "/properties/fetch/properties/cache/properties/ttl_secs",
-            "TTL (sec)",
-            "How long cached fetch results stay valid.",
-        ),
-        (
-            "/properties/fetch/properties/cache/properties/capacity",
-            "Capacity",
-            "Maximum number of cached fetch results kept in memory.",
-        ),
-        (
-            "/properties/crawl",
-            "Crawl",
-            "Defaults, limits, and indexing behavior for site crawls.",
-        ),
-        (
-            "/properties/crawl/properties/defaults",
-            "Defaults",
-            "Default crawl options used when callers omit them.",
-        ),
-        (
-            "/properties/crawl/properties/defaults/properties/max_pages",
-            "Max Pages",
-            "Default page limit for one crawl run.",
-        ),
-        (
-            "/properties/crawl/properties/defaults/properties/max_depth",
-            "Max Depth",
-            "Default traversal depth for one crawl run.",
-        ),
-        (
-            "/properties/crawl/properties/defaults/properties/same_host_only",
-            "Same Host Only",
-            "Keeps crawls on the original host unless the caller opts out.",
-        ),
-        (
-            "/properties/crawl/properties/limits",
-            "Limits",
-            "Hard upper bounds enforced for crawl requests.",
-        ),
-        (
-            "/properties/crawl/properties/limits/properties/max_pages",
-            "Max Pages Limit",
-            "Largest page count any crawl request may ask for.",
-        ),
-        (
-            "/properties/crawl/properties/limits/properties/max_depth",
-            "Max Depth Limit",
-            "Largest traversal depth any crawl request may ask for.",
-        ),
-        (
-            "/properties/crawl/properties/indexing",
-            "Indexing",
-            "Controls how crawled documents are cached and chunked before storage.",
-        ),
-        (
-            "/properties/crawl/properties/indexing/properties/document_cache_ttl_secs",
-            "Document Cache TTL (sec)",
-            "How long indexed crawl documents stay in the crawl document cache.",
-        ),
-        (
-            "/properties/crawl/properties/indexing/properties/chunk_chars",
-            "Chunk Size (chars)",
-            "Target character size for indexed text chunks.",
-        ),
-        (
-            "/properties/crawl/properties/indexing/properties/near_duplicate_hamming_distance",
-            "Near-Duplicate Distance",
-            "Similarity threshold used when suppressing near-duplicate crawl content.",
-        ),
-        (
-            "/properties/search",
-            "Search",
-            "Default and maximum limits for web search result lists.",
-        ),
-        (
-            "/properties/search/properties/default_limit",
-            "Default Limit",
-            "Number of web search results returned when callers omit a limit.",
-        ),
-        (
-            "/properties/search/properties/max_limit",
-            "Max Limit",
-            "Largest number of web search results a caller may request.",
-        ),
-        (
-            "/properties/store",
-            "Cache",
-            "Retention defaults for the embedded crawl document cache.",
-        ),
-        (
-            "/properties/store/properties/retention",
-            "Retention",
-            "Maximum document count and byte size retained in the local crawl cache.",
-        ),
-        (
-            "/properties/store/properties/retention/properties/max_documents",
-            "Max Documents",
-            "Maximum number of cached crawl documents retained locally.",
-        ),
-        (
-            "/properties/store/properties/retention/properties/max_bytes",
-            "Max Bytes",
-            "Maximum total byte size retained by the local crawl cache.",
-        ),
-        (
-            "/properties/browser",
-            "Browser",
-            "Optional browser rendering support for JavaScript-heavy pages.",
-        ),
-        (
-            "/properties/browser/properties/enabled",
-            "Enabled",
-            "Allows rendered fetches and crawls to use a local browser.",
-        ),
-        (
-            "/properties/browser/properties/executable_path",
-            "Executable Path",
-            "Optional browser executable path. Leave unset to use the default browser resolution logic.",
-        ),
-        (
-            "/properties/browser/properties/wait",
-            "Wait",
-            "Browser rendering wait strategy applied before capturing page content.",
-        ),
-        (
-            "/properties/browser/properties/wait/properties/for_network_idle",
-            "Wait for Network Idle",
-            "Waits for the page network to go idle before reading rendered content.",
-        ),
-        (
-            "/properties/browser/properties/wait/properties/timeout_secs",
-            "Timeout (sec)",
-            "Maximum browser wait time before rendered capture fails.",
-        ),
-        (
-            "/properties/browser/properties/wait/properties/for_selector",
-            "Wait for Selector",
-            "Optional CSS selector that must appear before rendered capture continues.",
-        ),
-        (
-            "/properties/browser/properties/wait/properties/delay_ms",
-            "Extra Delay (ms)",
-            "Additional delay after wait conditions succeed before capturing the page.",
-        ),
-    ] {
-        crate::tool::definition::set_schema_metadata(
-            &mut schema,
-            pointer,
-            Some(title),
-            Some(description),
-        );
+    crate::tool::definition::json_schema_for_default_with_metadata(
+        default_web_config(),
+        &[
+            (
+                "",
+                "Web Plugin Config",
+                "Fetch, crawl, search, embedded cache, and browser defaults for the agena.web plugin.",
+            ),
+            (
+                "/properties/fetch",
+                "Fetch",
+                "Controls direct page fetch operations, request throttling, and fetch cache behavior.",
+            ),
+            (
+                "/properties/fetch/properties/enabled",
+                "Enabled",
+                "Allows web.fetch and web.crawl to run. Disable this to turn off network page retrieval.",
+            ),
+            (
+                "/properties/fetch/properties/request",
+                "Request",
+                "Default timing, timeout, and body-size limits for HTTP page fetches.",
+            ),
+            (
+                "/properties/fetch/properties/request/properties/delay_ms",
+                "Delay (ms)",
+                "Minimum delay between fetches to the same host.",
+            ),
+            (
+                "/properties/fetch/properties/request/properties/timeout_secs",
+                "Timeout (sec)",
+                "Maximum time allowed for one fetch request before it fails.",
+            ),
+            (
+                "/properties/fetch/properties/request/properties/max_body_bytes",
+                "Max Body Bytes",
+                "Largest response body accepted from a fetched page.",
+            ),
+            (
+                "/properties/fetch/properties/request/properties/respect_robots_txt",
+                "Respect robots.txt",
+                "Honors robots.txt restrictions during fetch and crawl operations.",
+            ),
+            (
+                "/properties/fetch/properties/cache",
+                "Cache",
+                "Short-lived cache for fetched page content and metadata.",
+            ),
+            (
+                "/properties/fetch/properties/cache/properties/ttl_secs",
+                "TTL (sec)",
+                "How long cached fetch results stay valid.",
+            ),
+            (
+                "/properties/fetch/properties/cache/properties/capacity",
+                "Capacity",
+                "Maximum number of cached fetch results kept in memory.",
+            ),
+            (
+                "/properties/crawl",
+                "Crawl",
+                "Defaults, limits, and indexing behavior for site crawls.",
+            ),
+            (
+                "/properties/crawl/properties/defaults",
+                "Defaults",
+                "Default crawl options used when callers omit them.",
+            ),
+            (
+                "/properties/crawl/properties/defaults/properties/max_pages",
+                "Max Pages",
+                "Default page limit for one crawl run.",
+            ),
+            (
+                "/properties/crawl/properties/defaults/properties/max_depth",
+                "Max Depth",
+                "Default traversal depth for one crawl run.",
+            ),
+            (
+                "/properties/crawl/properties/defaults/properties/same_host_only",
+                "Same Host Only",
+                "Keeps crawls on the original host unless the caller opts out.",
+            ),
+            (
+                "/properties/crawl/properties/limits",
+                "Limits",
+                "Hard upper bounds enforced for crawl requests.",
+            ),
+            (
+                "/properties/crawl/properties/limits/properties/max_pages",
+                "Max Pages Limit",
+                "Largest page count any crawl request may ask for.",
+            ),
+            (
+                "/properties/crawl/properties/limits/properties/max_depth",
+                "Max Depth Limit",
+                "Largest traversal depth any crawl request may ask for.",
+            ),
+            (
+                "/properties/crawl/properties/indexing",
+                "Indexing",
+                "Controls how crawled documents are cached and chunked before storage.",
+            ),
+            (
+                "/properties/crawl/properties/indexing/properties/document_cache_ttl_secs",
+                "Document Cache TTL (sec)",
+                "How long indexed crawl documents stay in the crawl document cache.",
+            ),
+            (
+                "/properties/crawl/properties/indexing/properties/chunk_chars",
+                "Chunk Size (chars)",
+                "Target character size for indexed text chunks.",
+            ),
+            (
+                "/properties/crawl/properties/indexing/properties/near_duplicate_hamming_distance",
+                "Near-Duplicate Distance",
+                "Similarity threshold used when suppressing near-duplicate crawl content.",
+            ),
+            (
+                "/properties/search",
+                "Search",
+                "Default and maximum limits for web search result lists.",
+            ),
+            (
+                "/properties/search/properties/default_limit",
+                "Default Limit",
+                "Number of web search results returned when callers omit a limit.",
+            ),
+            (
+                "/properties/search/properties/max_limit",
+                "Max Limit",
+                "Largest number of web search results a caller may request.",
+            ),
+            (
+                "/properties/store",
+                "Cache",
+                "Retention defaults for the embedded crawl document cache.",
+            ),
+            (
+                "/properties/store/properties/retention",
+                "Retention",
+                "Maximum document count and byte size retained in the local crawl cache.",
+            ),
+            (
+                "/properties/store/properties/retention/properties/max_documents",
+                "Max Documents",
+                "Maximum number of cached crawl documents retained locally.",
+            ),
+            (
+                "/properties/store/properties/retention/properties/max_bytes",
+                "Max Bytes",
+                "Maximum total byte size retained by the local crawl cache.",
+            ),
+            (
+                "/properties/browser",
+                "Browser",
+                "Optional browser rendering support for JavaScript-heavy pages.",
+            ),
+            (
+                "/properties/browser/properties/enabled",
+                "Enabled",
+                "Allows rendered fetches and crawls to use a local browser.",
+            ),
+            (
+                "/properties/browser/properties/executable_path",
+                "Executable Path",
+                "Optional browser executable path. Leave unset to use the default browser resolution logic.",
+            ),
+            (
+                "/properties/browser/properties/wait",
+                "Wait",
+                "Browser rendering wait strategy applied before capturing page content.",
+            ),
+            (
+                "/properties/browser/properties/wait/properties/for_network_idle",
+                "Wait for Network Idle",
+                "Waits for the page network to go idle before reading rendered content.",
+            ),
+            (
+                "/properties/browser/properties/wait/properties/timeout_secs",
+                "Timeout (sec)",
+                "Maximum browser wait time before rendered capture fails.",
+            ),
+            (
+                "/properties/browser/properties/wait/properties/for_selector",
+                "Wait for Selector",
+                "Optional CSS selector that must appear before rendered capture continues.",
+            ),
+            (
+                "/properties/browser/properties/wait/properties/delay_ms",
+                "Extra Delay (ms)",
+                "Additional delay after wait conditions succeed before capturing the page.",
+            ),
+        ],
+    )
+}
+
+fn default_web_config() -> WebConfig {
+    WebConfig {
+        fetch: WebFetchConfig::default(),
+        crawl: WebCrawlConfig::default(),
+        search: WebSearchConfig::default(),
+        store: WebStoreConfig::default(),
+        browser: WebBrowserConfig::default(),
     }
-    schema
 }
 
 pub struct WebPlugin {
@@ -504,8 +516,8 @@ struct CrawlFetchInput {
     url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     prompt: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    use_cache: Option<bool>,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    use_cache: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     render_js: Option<bool>,
 }
@@ -521,8 +533,8 @@ struct CrawlRunInput {
     max_depth: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     same_host_only: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    use_cache: Option<bool>,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    use_cache: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     render_js: Option<bool>,
 }
@@ -557,7 +569,6 @@ enum WebSearchEngineSelection {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "search",
-    description = "Search the public web for candidate pages. Search results are discovery-only; for factual answers, continue by fetching the most relevant result URLs.",
     summary = "Find candidate public-web pages to fetch.",
     help = "Use this tool to discover candidate pages, not to answer from result snippets alone. After searching, fetch 1-3 relevant result URLs before answering when the user needs facts, summaries, comparisons, or latest information. Use allowed_domains and blocked_domains to steer source quality.",
     handler_receiver = WebPlugin,
@@ -589,7 +600,6 @@ struct SearchToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "fetch",
-    description = "Fetch one web page and return readable page content or focused excerpts. Use this after search to inspect the most relevant result pages.",
     summary = "Fetch one web page and inspect its actual content.",
     help = "Use this tool after search when you need evidence from the actual page rather than search snippets. If you already know what facts you need, set `prompt` so Agena prioritizes the most relevant excerpts from the page in the returned text output.",
     handler_receiver = WebPlugin,
@@ -616,7 +626,6 @@ struct FetchToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "crawl",
-    description = "Crawl a site and cache indexed pages locally.",
     summary = "Crawl a site and cache indexed pages locally.",
     handler_receiver = WebPlugin,
     handle = WebPlugin::invoke_crawl,
@@ -764,15 +773,17 @@ impl WebPlugin {
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
         let config = self.config()?;
         let render_js = input.render_js.unwrap_or(config.browser.enabled);
-        let page = self
-            .fetch_page(&url, input.use_cache.unwrap_or(true), render_js)
-            .await?;
+        let page = self.fetch_page(&url, input.use_cache, render_js).await?;
         let payload =
             serde_json::to_value(&page).map_err(|err| PluginError::new(err.to_string()))?;
         let text = format_fetched_page(&page, input.prompt.as_deref());
-        Ok(ToolInvokeOutput::text(text)
-            .with_title(format!("web fetch {}", url))
-            .with_payload(payload))
+        Ok(ToolInvokeOutput::from_parts(
+            format!("web fetch {}", url),
+            text,
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
     }
 
     async fn invoke_crawl(&self, input: &CrawlRunInput) -> SdkResult<ToolInvokeOutput> {
@@ -794,7 +805,7 @@ impl WebPlugin {
             same_host_only: input
                 .same_host_only
                 .unwrap_or(config.crawl.defaults.same_host_only),
-            use_cache: input.use_cache.unwrap_or(true),
+            use_cache: input.use_cache,
             render_js: input.render_js.unwrap_or(config.browser.enabled),
             document_cache_ttl: Duration::from_secs(config.crawl.indexing.document_cache_ttl_secs),
             max_chunk_chars: config.crawl.indexing.chunk_chars as usize,
@@ -811,9 +822,13 @@ impl WebPlugin {
         let text = format_crawl_run(&report);
         let payload =
             serde_json::to_value(report).map_err(|err| PluginError::new(err.to_string()))?;
-        Ok(ToolInvokeOutput::text(text)
-            .with_title(format!("web crawl {}", start_url))
-            .with_payload(payload))
+        Ok(ToolInvokeOutput::from_parts(
+            format!("web crawl {}", start_url),
+            text,
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
     }
 
     async fn invoke_search(&self, input: &CrawlWebSearchInput) -> SdkResult<ToolInvokeOutput> {
@@ -865,9 +880,13 @@ impl WebPlugin {
         let text = format_web_search(&output);
         let payload =
             serde_json::to_value(output).map_err(|err| PluginError::new(err.to_string()))?;
-        Ok(ToolInvokeOutput::text(text)
-            .with_title(format!("web search {query}"))
-            .with_payload(payload))
+        Ok(ToolInvokeOutput::from_parts(
+            format!("web search {query}"),
+            text,
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
     }
 
     async fn search_with_engine(
@@ -960,9 +979,10 @@ impl WebPlugin {
 }
 
 #[crate::plugin::sdk::plugin(
-    id = WEB_PLUGIN_ID,
+    namespace = "agena",
+    name = "web",
     version = env!("CARGO_PKG_VERSION"),
-    description = "Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering.",
+    summary = "Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering.",
     config_schema = web_config_schema(),
     display = brief_detailed
 )]

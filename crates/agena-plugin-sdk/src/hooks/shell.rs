@@ -22,8 +22,9 @@ pub struct ShellEnvPatch {
 
 impl ShellEnvPatch {
     pub fn set(k: impl Into<String>, v: impl Into<String>) -> Self {
-        let mut p = Self::default();
-        p.set.insert(k.into(), v.into());
-        p
+        Self {
+            set: BTreeMap::from([(k.into(), v.into())]),
+            unset: Vec::new(),
+        }
     }
 }

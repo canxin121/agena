@@ -955,44 +955,38 @@ impl SettingsStudioItem {
     ) -> Self {
         let value = value.into();
         let current_value = (!value.trim().is_empty()).then(|| value.clone());
+        Self::from_parts(
+            label,
+            value,
+            detail,
+            None,
+            current_value,
+            None,
+            Vec::new(),
+            action,
+        )
+    }
+
+    fn from_parts(
+        label: impl Into<String>,
+        value: impl Into<String>,
+        detail: impl Into<String>,
+        path: Option<String>,
+        current_value: Option<String>,
+        effective_value: Option<String>,
+        source_rows: Vec<SettingsSourceRow>,
+        action: SettingsPickerAction,
+    ) -> Self {
         Self {
             label: label.into(),
-            value,
+            value: value.into(),
             detail: detail.into(),
-            path: None,
+            path,
             current_value,
-            effective_value: None,
-            source_rows: Vec::new(),
+            effective_value,
+            source_rows,
             action,
         }
-    }
-
-    fn with_path(mut self, path: impl Into<String>) -> Self {
-        self.path = Some(path.into());
-        self
-    }
-
-    fn with_current_value(mut self, value: impl Into<String>) -> Self {
-        self.current_value = Some(value.into());
-        self
-    }
-
-    fn with_effective_value(mut self, value: impl Into<String>) -> Self {
-        self.effective_value = Some(value.into());
-        self
-    }
-
-    fn with_source_rows(mut self, rows: Vec<SettingsSourceRow>) -> Self {
-        self.source_rows = rows;
-        self
-    }
-
-    fn without_value_details(mut self) -> Self {
-        self.current_value = None;
-        self.effective_value = None;
-        self.path = None;
-        self.source_rows.clear();
-        self
     }
 }
 
@@ -8455,7 +8449,7 @@ impl App {
         }
 
         let draft = if draft.text.starts_with("//") {
-            draft.with_text_prefix_stripped(1)
+            composer_draft_with_text_prefix_stripped(draft, 1)
         } else {
             draft
         };
@@ -8623,7 +8617,7 @@ impl App {
     }
 
     fn build_user_input_overlay(session_id: i64, request: UserInputRequest) -> UserInputOverlay {
-        let mut overlay = UserInputOverlay {
+        UserInputOverlay {
             session_id,
             request,
             answers: BTreeMap::new(),
@@ -8632,9 +8626,7 @@ impl App {
             custom_input: Editor::default(),
             review_option: 0,
             review_scroll: 0,
-        };
-        Self::sync_user_input_option_selection(&mut overlay);
-        overlay
+        }
     }
 
     fn user_input_review_question(request: &UserInputRequest) -> Option<&UserInputQuestion> {
@@ -12362,19 +12354,7 @@ impl App {
             draft: self
                 .backend
                 .provider_config_draft(None)
-                .unwrap_or_else(|_| {
-                    let mut draft = ProviderConfigDraft {
-                        source_provider_id: None,
-                        provider_id: String::new(),
-                        auth_kind: ProviderDraftAuthKind::Unset,
-                        auth: Default::default(),
-                        credential_drafts: Default::default(),
-                        default_adapter: String::new(),
-                        default_model: String::new(),
-                    };
-                    draft.normalize_shape();
-                    draft
-                }),
+                .unwrap_or_else(|_| ProviderConfigDraft::new_empty()),
             adapter_models: Vec::new(),
             configured_adapter_ids: BTreeSet::new(),
             adapter_candidate_ids: Vec::new(),
@@ -12920,12 +12900,10 @@ impl App {
             return;
         }
         dialog.model_page = None;
-        let mut selection = SelectionCursor::default();
-        selection.selected = provider_studio_preferred_detail_field_index(dialog);
         dialog.detail_page = Some(ProviderStudioDetailPage {
             title: ui_text::t(&self.i18n, "overlay-provider-studio-detail"),
             footer: ui_text::t(&self.i18n, "overlay-provider-studio-detail-footer"),
-            selection,
+            selection: SelectionCursor::new(provider_studio_preferred_detail_field_index(dialog)),
         });
     }
 
@@ -16824,16 +16802,16 @@ fn settings_studio_field_items(
                 current_summary.clone(),
                 effective_summary.clone(),
             );
-            SettingsStudioItem::new(
+            SettingsStudioItem::from_parts(
                 settings_field_display_label(i18n, *field),
                 effective_summary.clone(),
                 settings_field_display_description(i18n, *field),
+                Some(field.path.to_string()),
+                Some(current_summary),
+                Some(effective_summary),
+                source_rows,
                 SettingsPickerAction::EditField(*field),
             )
-            .with_path(field.path)
-            .with_current_value(current_summary)
-            .with_effective_value(effective_summary)
-            .with_source_rows(source_rows)
         })
         .collect()
 }
@@ -16884,16 +16862,16 @@ fn settings_studio_provider_default_item(
         current_summary.clone(),
         effective_summary.clone(),
     );
-    SettingsStudioItem::new(
+    SettingsStudioItem::from_parts(
         settings_field_display_label(i18n, field),
         effective_summary.clone(),
         settings_field_display_description(i18n, field),
+        Some(field.path.to_string()),
+        Some(current_summary),
+        Some(effective_summary),
+        source_rows,
         SettingsPickerAction::OpenProviderDefaultWizard,
     )
-    .with_path(field.path)
-    .with_current_value(current_summary)
-    .with_effective_value(effective_summary)
-    .with_source_rows(source_rows)
 }
 
 fn provider_default_selection_summary(
@@ -17108,16 +17086,16 @@ fn settings_studio_config_path_item(
         current_summary.clone(),
         effective_summary.clone(),
     );
-    SettingsStudioItem::new(
+    SettingsStudioItem::from_parts(
         settings_config_path_display_label(i18n, path),
         effective_summary.clone(),
         ui_text::t(i18n, "settings-config-open-file-detail"),
+        Some(path.to_string()),
+        Some(current_summary),
+        Some(effective_summary),
+        source_rows,
         SettingsPickerAction::OpenConfigFile,
     )
-    .with_path(path)
-    .with_current_value(current_summary)
-    .with_effective_value(effective_summary)
-    .with_source_rows(source_rows)
 }
 
 fn settings_config_path_display_label(i18n: &I18n, path: &str) -> String {
@@ -17171,18 +17149,19 @@ fn settings_studio_runtime_items(
     }
     items.extend(RUNTIME_SETTINGS.iter().map(|field| {
         let summary = run_options.runtime_setting_summary(i18n, *field);
-        SettingsStudioItem::new(
+        SettingsStudioItem::from_parts(
             runtime_setting_display_label(i18n, *field),
             summary.clone(),
             runtime_setting_display_description(i18n, *field),
+            None,
+            Some(summary.clone()),
+            Some(summary),
+            vec![SettingsSourceRow::new(
+                ui_text::t(i18n, "settings-source-row-write-target"),
+                ui_text::t(i18n, "settings-source-current-session-runtime"),
+            )],
             SettingsPickerAction::EditRuntimeSetting(*field),
         )
-        .with_current_value(summary.clone())
-        .with_effective_value(summary)
-        .with_source_rows(vec![SettingsSourceRow::new(
-            ui_text::t(i18n, "settings-source-row-write-target"),
-            ui_text::t(i18n, "settings-source-current-session-runtime"),
-        )])
     }));
     items
 }
@@ -17196,20 +17175,26 @@ fn settings_studio_plugin_items(
     _sources: &ConfigJsonSources,
 ) -> Vec<SettingsStudioItem> {
     vec![
-        SettingsStudioItem::new(
+        SettingsStudioItem::from_parts(
             ui_text::t(i18n, "settings-plugin-policy-label"),
             ui_text::t(i18n, "value-open"),
             ui_text::t(i18n, "settings-plugin-policy-detail"),
+            None,
+            None,
+            None,
+            Vec::new(),
             SettingsPickerAction::OpenPluginPolicyStudio,
-        )
-        .without_value_details(),
-        SettingsStudioItem::new(
+        ),
+        SettingsStudioItem::from_parts(
             ui_text::t(i18n, "settings-plugin-workbench-label"),
             ui_text::t(i18n, "value-open"),
             ui_text::t(i18n, "settings-plugin-workbench-detail"),
+            None,
+            None,
+            None,
+            Vec::new(),
             SettingsPickerAction::OpenPluginWorkbench,
-        )
-        .without_value_details(),
+        ),
     ]
 }
 
@@ -17469,105 +17454,97 @@ fn settings_studio_permission_items(
     let mut items = Vec::new();
     if let Some(session) = current_session {
         let effective_summary = permission_override_summary(i18n, &session.effective_permission);
-        items.push(
-            SettingsStudioItem::new(
-                ui_text::t(i18n, "settings-permission-effective-label"),
-                effective_summary.clone(),
-                i18n.text_args(
-                    "settings-permission-effective-detail",
-                    &crate::fl_args!("session" => session.session_title.clone()),
-                ),
-                SettingsPickerAction::OpenSessionEffectivePermissionView(session.session_id),
-            )
-            .with_current_value(effective_summary.clone())
-            .with_effective_value(effective_summary)
-            .with_source_rows(permission_layer_source_rows(
-                i18n,
-                global_effective_permission,
-                Some(session),
-            )),
-        );
+        items.push(SettingsStudioItem::from_parts(
+            ui_text::t(i18n, "settings-permission-effective-label"),
+            effective_summary.clone(),
+            i18n.text_args(
+                "settings-permission-effective-detail",
+                &crate::fl_args!("session" => session.session_title.clone()),
+            ),
+            None,
+            Some(effective_summary.clone()),
+            Some(effective_summary),
+            permission_layer_source_rows(i18n, global_effective_permission, Some(session)),
+            SettingsPickerAction::OpenSessionEffectivePermissionView(session.session_id),
+        ));
         let session_summary = permission_override_summary(i18n, &session.permission);
-        items.push(
-            SettingsStudioItem::new(
-                ui_text::t(i18n, "settings-permission-current-label"),
-                session_summary.clone(),
-                i18n.text_args(
-                    "settings-permission-current-detail",
-                    &crate::fl_args!("session" => session.session_title.clone()),
-                ),
-                SettingsPickerAction::OpenCurrentSessionPermissionWorkbench,
-            )
-            .with_current_value(session_summary.clone())
-            .with_effective_value(permission_override_summary(
-                i18n,
-                &session.effective_permission,
-            ))
-            .with_source_rows({
-                let mut rows =
-                    permission_layer_source_rows(i18n, global_effective_permission, Some(session));
-                rows.push(SettingsSourceRow::new(
-                    ui_text::t(i18n, "settings-source-row-write-target"),
-                    ui_text::t(i18n, "settings-source-current-session"),
-                ));
-                rows
-            }),
-        );
+        let session_effective_summary =
+            permission_override_summary(i18n, &session.effective_permission);
+        let session_source_rows = {
+            let mut rows =
+                permission_layer_source_rows(i18n, global_effective_permission, Some(session));
+            rows.push(SettingsSourceRow::new(
+                ui_text::t(i18n, "settings-source-row-write-target"),
+                ui_text::t(i18n, "settings-source-current-session"),
+            ));
+            rows
+        };
+        items.push(SettingsStudioItem::from_parts(
+            ui_text::t(i18n, "settings-permission-current-label"),
+            session_summary.clone(),
+            i18n.text_args(
+                "settings-permission-current-detail",
+                &crate::fl_args!("session" => session.session_title.clone()),
+            ),
+            None,
+            Some(session_summary.clone()),
+            Some(session_effective_summary),
+            session_source_rows,
+            SettingsPickerAction::OpenCurrentSessionPermissionWorkbench,
+        ));
         if let Some(agent_name) = session.agent_name.as_deref() {
             let agent_permission = session.agent_permission.clone().unwrap_or_default();
             let agent_summary = permission_override_summary(i18n, &agent_permission);
-            items.push(
-                SettingsStudioItem::new(
+            let agent_effective_summary =
+                permission_override_summary(i18n, &session.effective_permission);
+            let agent_source_rows = vec![
+                SettingsSourceRow::new(
+                    ui_text::t(i18n, "settings-permission-layer-agent"),
+                    agent_summary.clone(),
+                ),
+                SettingsSourceRow::new(
+                    ui_text::t(i18n, "settings-source-row-write-target"),
                     i18n.text_args(
-                        "settings-permission-agent-label",
+                        "settings-source-agent-profile",
                         &crate::fl_args!("agent" => agent_name.to_string()),
                     ),
-                    agent_summary.clone(),
-                    ui_text::t(i18n, "settings-permission-agent-detail"),
-                    SettingsPickerAction::OpenAgentPermissionWorkbench(agent_name.to_string()),
-                )
-                .with_current_value(agent_summary.clone())
-                .with_effective_value(permission_override_summary(
-                    i18n,
-                    &session.effective_permission,
-                ))
-                .with_source_rows(vec![
-                    SettingsSourceRow::new(
-                        ui_text::t(i18n, "settings-permission-layer-agent"),
-                        agent_summary,
-                    ),
-                    SettingsSourceRow::new(
-                        ui_text::t(i18n, "settings-source-row-write-target"),
-                        i18n.text_args(
-                            "settings-source-agent-profile",
-                            &crate::fl_args!("agent" => agent_name.to_string()),
-                        ),
-                    ),
-                ]),
-            );
+                ),
+            ];
+            items.push(SettingsStudioItem::from_parts(
+                i18n.text_args(
+                    "settings-permission-agent-label",
+                    &crate::fl_args!("agent" => agent_name.to_string()),
+                ),
+                agent_summary.clone(),
+                ui_text::t(i18n, "settings-permission-agent-detail"),
+                None,
+                Some(agent_summary),
+                Some(agent_effective_summary),
+                agent_source_rows,
+                SettingsPickerAction::OpenAgentPermissionWorkbench(agent_name.to_string()),
+            ));
         }
     }
 
     let file_summary = permission_override_summary(i18n, global_file_permission);
     let effective_summary = permission_override_summary(i18n, global_effective_permission);
-    items.push(
-        SettingsStudioItem::new(
-            ui_text::t(i18n, "settings-permission-global-label"),
-            effective_summary.clone(),
-            ui_text::t(i18n, "settings-permission-global-detail"),
-            SettingsPickerAction::OpenGlobalPermissionWorkbench,
-        )
-        .with_path("permission")
-        .with_current_value(file_summary.clone())
-        .with_effective_value(effective_summary.clone())
-        .with_source_rows(settings_source_rows_for_config_path(
-            i18n,
-            sources,
-            "permission",
-            file_summary,
-            effective_summary,
-        )),
+    let global_source_rows = settings_source_rows_for_config_path(
+        i18n,
+        sources,
+        "permission",
+        file_summary.clone(),
+        effective_summary.clone(),
     );
+    items.push(SettingsStudioItem::from_parts(
+        ui_text::t(i18n, "settings-permission-global-label"),
+        effective_summary.clone(),
+        ui_text::t(i18n, "settings-permission-global-detail"),
+        Some("permission".to_string()),
+        Some(file_summary),
+        Some(effective_summary),
+        global_source_rows,
+        SettingsPickerAction::OpenGlobalPermissionWorkbench,
+    ));
     items
 }
 
@@ -17965,7 +17942,7 @@ fn agent_studio_overview_text(
 }
 
 fn build_app_detail_text(lines: Vec<DetailTextLine<'static>>) -> Text<'static> {
-    build_detail_text(lines, &DetailTextSpec::with_label_width(14))
+    build_detail_text(lines, &DetailTextSpec::label_width(14))
 }
 
 fn app_detail_labeled_line(
@@ -19816,19 +19793,20 @@ fn settings_studio_model_catalog_items(
 }
 
 fn settings_studio_file_items(i18n: &I18n, sources: &ConfigJsonSources) -> Vec<SettingsStudioItem> {
-    vec![
-        SettingsStudioItem::new(
-            ui_text::t(i18n, "settings-files-open-config-label"),
-            if sources.config_found {
-                ui_text::t(i18n, "settings-files-open-config-present")
-            } else {
-                ui_text::t(i18n, "settings-files-open-config-create")
-            },
-            sources.config_path.display().to_string(),
-            SettingsPickerAction::OpenConfigFile,
-        )
-        .with_path(sources.config_path.display().to_string()),
-    ]
+    vec![SettingsStudioItem::from_parts(
+        ui_text::t(i18n, "settings-files-open-config-label"),
+        if sources.config_found {
+            ui_text::t(i18n, "settings-files-open-config-present")
+        } else {
+            ui_text::t(i18n, "settings-files-open-config-create")
+        },
+        sources.config_path.display().to_string(),
+        Some(sources.config_path.display().to_string()),
+        None,
+        None,
+        Vec::new(),
+        SettingsPickerAction::OpenConfigFile,
+    )]
 }
 
 fn format_setting_value_inline(value: &JsonValue) -> String {
@@ -20510,7 +20488,7 @@ impl PromptHistory {
             Err(error) => return Err(error.to_string()),
         };
 
-        let mut history = Self::default();
+        let mut items = Vec::new();
         for (index, line) in raw.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() {
@@ -20524,10 +20502,18 @@ impl PromptHistory {
                 )
             })?;
             if let Some(text) = Self::normalized_text(entry.text.as_str()) {
-                history.push(text);
+                if items.last().is_some_and(|item| item == &text) {
+                    continue;
+                }
+                items.retain(|item| item != &text);
+                items.push(text);
+                if items.len() > MAX_PROMPT_HISTORY_ENTRIES {
+                    let excess = items.len() - MAX_PROMPT_HISTORY_ENTRIES;
+                    items.drain(0..excess);
+                }
             }
         }
-        Ok(history)
+        Ok(Self { items })
     }
 
     fn persist(&self, path: &Path) -> UiResult<()> {
@@ -21928,10 +21914,8 @@ fn build_timeline_item(i18n: &I18n, record: &DomainEvent) -> TimelineItem {
     detail_lines.push(app_detail_plain_line(String::new()));
     detail_lines.extend(timeline_event_detail_lines(i18n, record));
 
-    let detail_document = build_detail_document(
-        detail_lines.as_slice(),
-        &DetailTextSpec::with_label_width(16),
-    );
+    let detail_document =
+        build_detail_document(detail_lines.as_slice(), &DetailTextSpec::label_width(16));
     let copy_text = format!("{summary}\n\n{}", detail_document.plain);
     let search_text = format!(
         "{} {} {}",
@@ -23618,19 +23602,20 @@ impl RunOptionsState {
     }
 }
 
-impl ComposerDraft {
-    fn with_text_prefix_stripped(mut self, count: usize) -> Self {
-        let mut boundary = 0;
-        let mut chars = self.text.char_indices();
-        for _ in 0..count {
-            let Some((index, ch)) = chars.next() else {
-                return self;
-            };
-            boundary = index + ch.len_utf8();
-        }
-        self.text.drain(..boundary);
-        self
+fn composer_draft_with_text_prefix_stripped(
+    mut draft: ComposerDraft,
+    count: usize,
+) -> ComposerDraft {
+    let mut boundary = 0;
+    let mut chars = draft.text.char_indices();
+    for _ in 0..count {
+        let Some((index, ch)) = chars.next() else {
+            return draft;
+        };
+        boundary = index + ch.len_utf8();
     }
+    draft.text.drain(..boundary);
+    draft
 }
 
 fn default_draft_store_path() -> PathBuf {
@@ -23721,53 +23706,82 @@ fn permission_rule_draft_from_resource(rule: &PermissionRuleResource) -> Permiss
 }
 
 fn permission_rule_draft_from_request(request: &PermissionRequest) -> PermissionRuleDraft {
-    let mut draft = PermissionRuleDraft {
-        mode: PermissionMode::Allow,
-        scope: request
-            .scope
-            .map(|scope| scope.to_string())
-            .unwrap_or_else(|| {
-                if request.session_id.is_some() {
-                    "session".to_string()
-                } else {
-                    "workspace".to_string()
-                }
-            }),
-        session_id: request
-            .session_id
-            .map(|session_id| session_id.to_string())
-            .unwrap_or_default(),
-        ..PermissionRuleDraft::default()
-    };
-    match &request.action {
+    let scope = request
+        .scope
+        .map(|scope| scope.to_string())
+        .unwrap_or_else(|| {
+            if request.session_id.is_some() {
+                "session".to_string()
+            } else {
+                "workspace".to_string()
+            }
+        });
+    let session_id = request
+        .session_id
+        .map(|session_id| session_id.to_string())
+        .unwrap_or_default();
+    let (
+        subject_kind,
+        tool_name,
+        qualifier,
+        path_access_kind,
+        workspace_root,
+        target_path,
+        network_target,
+    ) = match &request.action {
         PermissionAction::Tool {
             tool_name,
             qualifier,
-        } => {
-            draft.subject_kind = PermissionRuleSubjectKind::Tool;
-            draft.tool_name = tool_name.clone();
-            draft.qualifier = qualifier.clone().unwrap_or_default();
-        }
+        } => (
+            PermissionRuleSubjectKind::Tool,
+            tool_name.clone(),
+            qualifier.clone().unwrap_or_default(),
+            "read".to_string(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ),
         PermissionAction::PathAccess {
             access_kind,
             workspace_root,
             target_path,
-        } => {
-            draft.subject_kind = PermissionRuleSubjectKind::PathAccess;
-            draft.path_access_kind = access_kind.clone();
-            draft.workspace_root = workspace_root.clone();
-            draft.target_path = target_path.clone();
-        }
+        } => (
+            PermissionRuleSubjectKind::PathAccess,
+            String::new(),
+            String::new(),
+            access_kind.clone(),
+            workspace_root.clone(),
+            target_path.clone(),
+            String::new(),
+        ),
         PermissionAction::NetworkAccess {
             target,
             host: _,
             port: _,
-        } => {
-            draft.subject_kind = PermissionRuleSubjectKind::NetworkAccess;
-            draft.network_target = target.clone();
-        }
+        } => (
+            PermissionRuleSubjectKind::NetworkAccess,
+            String::new(),
+            String::new(),
+            "read".to_string(),
+            String::new(),
+            String::new(),
+            target.clone(),
+        ),
+    };
+    PermissionRuleDraft {
+        subject_kind,
+        tool_name,
+        qualifier,
+        path_access_kind,
+        workspace_root,
+        target_path,
+        network_target,
+        network_host: String::new(),
+        network_port: String::new(),
+        scope,
+        session_id,
+        mode: PermissionMode::Allow,
     }
-    draft
 }
 
 fn permission_rule_label(i18n: &I18n, rule: &PermissionRuleResource) -> String {
@@ -24579,18 +24593,19 @@ fn parse_permission_rule_input(
         ));
     }
     let subject = tokens[0].to_ascii_lowercase();
-    let mut draft = PermissionRuleDraft::default();
-    match subject.as_str() {
+    let draft = match subject.as_str() {
         "tool" => {
-            draft.subject_kind = PermissionRuleSubjectKind::Tool;
-            draft.tool_name = tokens[1].clone();
-            draft.mode = parse_permission_mode_token(i18n, tokens[2].as_str())?;
+            let tool_name = tokens[1].clone();
+            let mode = parse_permission_mode_token(i18n, tokens[2].as_str())?;
+            let mut qualifier = String::new();
+            let mut scope = "workspace".to_string();
+            let mut session_id = String::new();
             for token in &tokens[3..] {
                 let (key, value) = split_permission_rule_option(i18n, token)?;
                 match key {
-                    "qualifier" => draft.qualifier = value.to_string(),
-                    "scope" => draft.scope = parse_permission_scope_token(i18n, value)?.to_string(),
-                    "session" => draft.session_id = value.to_string(),
+                    "qualifier" => qualifier = value.to_string(),
+                    "scope" => scope = parse_permission_scope_token(i18n, value)?.to_string(),
+                    "session" => session_id = value.to_string(),
                     _ => {
                         return Err(i18n.text_args(
                             "permission-rule-error-unknown-option",
@@ -24599,21 +24614,37 @@ fn parse_permission_rule_input(
                     }
                 }
             }
-            if draft.tool_name.trim().is_empty() {
+            if tool_name.trim().is_empty() {
                 return Err(ui_text::t(i18n, "permission-rule-error-tool-name-required"));
+            }
+            PermissionRuleDraft {
+                subject_kind: PermissionRuleSubjectKind::Tool,
+                tool_name,
+                qualifier,
+                path_access_kind: "read".to_string(),
+                workspace_root: String::new(),
+                target_path: String::new(),
+                network_target: String::new(),
+                network_host: String::new(),
+                network_port: String::new(),
+                scope,
+                session_id,
+                mode,
             }
         }
         "path" => {
-            draft.subject_kind = PermissionRuleSubjectKind::PathAccess;
-            draft.path_access_kind = tokens[1].clone();
-            draft.target_path = tokens[2].clone();
-            draft.mode = parse_permission_mode_token(i18n, tokens[3].as_str())?;
+            let path_access_kind = tokens[1].clone();
+            let target_path = tokens[2].clone();
+            let mode = parse_permission_mode_token(i18n, tokens[3].as_str())?;
+            let mut workspace_root = String::new();
+            let mut scope = "workspace".to_string();
+            let mut session_id = String::new();
             for token in &tokens[4..] {
                 let (key, value) = split_permission_rule_option(i18n, token)?;
                 match key {
-                    "scope" => draft.scope = parse_permission_scope_token(i18n, value)?.to_string(),
-                    "session" => draft.session_id = value.to_string(),
-                    "workspace_root" => draft.workspace_root = value.to_string(),
+                    "scope" => scope = parse_permission_scope_token(i18n, value)?.to_string(),
+                    "session" => session_id = value.to_string(),
+                    "workspace_root" => workspace_root = value.to_string(),
                     _ => {
                         return Err(i18n.text_args(
                             "permission-rule-error-unknown-option",
@@ -24622,28 +24653,43 @@ fn parse_permission_rule_input(
                     }
                 }
             }
-            if draft.path_access_kind.trim().is_empty() {
+            if path_access_kind.trim().is_empty() {
                 return Err(ui_text::t(
                     i18n,
                     "permission-rule-error-path-access-kind-required",
                 ));
             }
-            if draft.target_path.trim().is_empty() {
+            if target_path.trim().is_empty() {
                 return Err(ui_text::t(
                     i18n,
                     "permission-rule-error-target-path-required",
                 ));
             }
+            PermissionRuleDraft {
+                subject_kind: PermissionRuleSubjectKind::PathAccess,
+                tool_name: String::new(),
+                qualifier: String::new(),
+                path_access_kind,
+                workspace_root,
+                target_path,
+                network_target: String::new(),
+                network_host: String::new(),
+                network_port: String::new(),
+                scope,
+                session_id,
+                mode,
+            }
         }
         "network" => {
-            draft.subject_kind = PermissionRuleSubjectKind::NetworkAccess;
-            draft.network_target = tokens[1].clone();
-            draft.mode = parse_permission_mode_token(i18n, tokens[2].as_str())?;
+            let network_target = tokens[1].clone();
+            let mode = parse_permission_mode_token(i18n, tokens[2].as_str())?;
+            let mut scope = "workspace".to_string();
+            let mut session_id = String::new();
             for token in &tokens[3..] {
                 let (key, value) = split_permission_rule_option(i18n, token)?;
                 match key {
-                    "scope" => draft.scope = parse_permission_scope_token(i18n, value)?.to_string(),
-                    "session" => draft.session_id = value.to_string(),
+                    "scope" => scope = parse_permission_scope_token(i18n, value)?.to_string(),
+                    "session" => session_id = value.to_string(),
                     _ => {
                         return Err(i18n.text_args(
                             "permission-rule-error-unknown-option",
@@ -24652,17 +24698,31 @@ fn parse_permission_rule_input(
                     }
                 }
             }
-            if draft.network_target.trim().is_empty() {
+            if network_target.trim().is_empty() {
                 return Err(ui_text::t(
                     i18n,
                     "permission-rule-error-network-target-required",
                 ));
             }
+            PermissionRuleDraft {
+                subject_kind: PermissionRuleSubjectKind::NetworkAccess,
+                tool_name: String::new(),
+                qualifier: String::new(),
+                path_access_kind: "read".to_string(),
+                workspace_root: String::new(),
+                target_path: String::new(),
+                network_target,
+                network_host: String::new(),
+                network_port: String::new(),
+                scope,
+                session_id,
+                mode,
+            }
         }
         _ => {
             return Err(ui_text::t(i18n, "permission-rule-error-invalid-subject"));
         }
-    }
+    };
     if draft.scope == "session" && draft.session_id.trim().is_empty() {
         return Err(ui_text::t(
             i18n,

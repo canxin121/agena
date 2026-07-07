@@ -177,13 +177,18 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
+        let tool_protocol = scoped_executor.model_tool_prompt_text();
         let tools = scoped_executor.available_model_tools();
+        let request_system = super::merge_system_prompt_with_tool_protocol(
+            options.system.as_deref(),
+            tool_protocol.as_deref(),
+        );
         let native_tools = state
             .processor
             .provider_registry()
             .native_tools_config(&options.model)?;
         let request = options.completion_request(
-            options.system.clone(),
+            request_system,
             active_messages,
             tools,
             native_tools,

@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::ModelMetadata;
+use crate::model::{ModelMetadata, ProviderId};
 
 pub fn catalog_definition_to_provider_definition(
     definition: &CatalogModelDefinition,
@@ -32,16 +32,16 @@ pub(crate) fn apply_catalog_definition_as_baseline(
         model
             .capabilities
             .clone()
-            .with_fallbacks_from(capability_fallback)
+            .merged_with_fallbacks_from(capability_fallback)
     };
-    model.capabilities = primary_capabilities.with_fallbacks_from(&catalog_capabilities);
+    model.capabilities = primary_capabilities.merged_with_fallbacks_from(&catalog_capabilities);
 
     let catalog_metadata = configured.metadata();
     let primary_metadata = model
         .metadata
         .clone()
-        .with_fallbacks_from(metadata_fallback);
-    model.metadata = primary_metadata.with_fallbacks_from(&catalog_metadata);
+        .merged_with_fallbacks_from(metadata_fallback);
+    model.metadata = primary_metadata.merged_with_fallbacks_from(&catalog_metadata);
 
     model.thinking_modes =
         merge_catalog_baseline_thinking_modes(model.thinking_modes, &configured.thinking_modes);
@@ -81,22 +81,22 @@ pub fn decorate_provider_models(
         }
 
         let model_id = ModelId::new(model_id.clone());
-        let base = Model::new(provider.id(), model_id.as_str())
-            .with_catalog_model_id(model_id.as_str())
-            .with_capabilities(provider.model_capabilities_for_adapter(None, &model_id))
-            .with_metadata(provider_model_metadata(provider, None, &model_id))
-            .with_thinking_modes(provider_model_thinking_modes(
+        let base = Model {
+            provider_id: ProviderId::new(provider.id()),
+            adapter_id: None,
+            id: ModelId::new(model_id.as_str()),
+            catalog_model_id: Some(model_id.clone()),
+            display_name: None,
+            capabilities: provider.model_capabilities_for_adapter(None, &model_id),
+            metadata: provider_model_metadata(provider, None, &model_id),
+            thinking_modes: provider_model_thinking_modes(
                 provider,
                 provider_record,
                 None,
                 &model_id,
-            ))
-            .with_speed_modes(provider_model_speed_modes(
-                provider,
-                provider_record,
-                None,
-                &model_id,
-            ));
+            ),
+            speed_modes: provider_model_speed_modes(provider, provider_record, None, &model_id),
+        };
         models.push(decorate_provider_model(
             provider,
             provider_record,

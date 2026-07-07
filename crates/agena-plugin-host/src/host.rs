@@ -50,19 +50,19 @@ use crate::sdk::{
     CommandAfterInput, CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome,
     CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
     HostCapability, NotificationInput, PermissionAdvice, PermissionAskDecision, PermissionAskInput,
-    PermissionDecision, PluginError, PluginErrorCode, PluginManifest, PluginStudioCommand,
-    PluginStudioControl, PluginStudioView, PluginTuiContentBlock, PluginUiAction, PostRunInput,
-    PreRunInput, ProviderListInput, ProviderListPatch, SessionEndInput, SessionStartInput,
-    SessionStartPatch, ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch,
-    ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput,
-    ToolInvokeInput, ToolInvokeOutput, ToolPermissionNetworksInput, ToolPermissionPathsInput,
-    ToolStreamChunk, ToolStreamEnd, UserPromptSubmitInput, UserPromptSubmitPatch,
+    PermissionDecision, PluginError, PluginErrorCode, PluginKey, PluginManifest,
+    PluginStudioCommand, PluginStudioControl, PluginStudioView, PluginTuiContentBlock,
+    PluginUiAction, PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch,
+    SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch,
+    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput,
+    ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolKey,
+    ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
+    UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 use crate::transport::PluginTransport;
 use crate::transport::inproc::InProcessTransport;
 
 pub struct LoadedPlugin {
-    pub id: String,
     pub kind: &'static str,
     pub configured_plugin: crate::config::ConfiguredPlugin,
     pub manifest: PluginManifest,
@@ -72,6 +72,11 @@ pub struct LoadedPlugin {
 }
 
 impl LoadedPlugin {
+    pub fn key(&self) -> PluginKey {
+        PluginKey::new(self.manifest.namespace.clone(), self.manifest.name.clone())
+            .expect("loaded plugin manifest key should be valid")
+    }
+
     pub fn transport(&self) -> Arc<dyn PluginTransport> {
         Arc::clone(&self.transport)
     }
@@ -115,7 +120,7 @@ impl LoadedPlugin {
 impl std::fmt::Debug for LoadedPlugin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LoadedPlugin")
-            .field("id", &self.id)
+            .field("key", &self.key())
             .field("kind", &self.kind)
             .field("manifest", &self.manifest)
             .finish_non_exhaustive()
@@ -124,7 +129,6 @@ impl std::fmt::Debug for LoadedPlugin {
 
 impl LoadedPlugin {
     pub fn new(
-        id: String,
         kind: &'static str,
         configured_plugin: crate::config::ConfiguredPlugin,
         transport: Arc<dyn PluginTransport>,
@@ -133,7 +137,6 @@ impl LoadedPlugin {
         provenance: Vec<String>,
     ) -> Self {
         Self {
-            id,
             kind,
             configured_plugin,
             manifest,
@@ -283,35 +286,35 @@ pub struct PluginStudioUiCatalog {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginTuiContentBlockCatalogItem {
-    pub plugin_id: String,
+    pub plugin_id: PluginKey,
     #[serde(flatten)]
     pub block: PluginTuiContentBlock,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginStudioCommandCatalogItem {
-    pub plugin_id: String,
+    pub plugin_id: PluginKey,
     #[serde(flatten)]
     pub command: PluginStudioCommand,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginStudioControlCatalogItem {
-    pub plugin_id: String,
+    pub plugin_id: PluginKey,
     #[serde(flatten)]
     pub control: PluginStudioControl,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginStudioViewCatalogItem {
-    pub plugin_id: String,
+    pub plugin_id: PluginKey,
     #[serde(flatten)]
     pub view: PluginStudioView,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PluginUiToolInvokeResponse {
-    pub plugin_id: String,
+    pub plugin_id: PluginKey,
     pub tool: String,
     pub title: String,
     pub output_text: String,
@@ -348,7 +351,7 @@ pub enum PermissionAskOutcome {
 /// `block_on` so callers from sync code (like `ToolExecutor`) can use it.
 pub struct PluginHost {
     plugins: Vec<Arc<LoadedPlugin>>,
-    plugins_by_id: HashMap<String, Arc<LoadedPlugin>>,
+    plugins_by_id: HashMap<PluginKey, Arc<LoadedPlugin>>,
     tool_registry: Arc<RwLock<PluginToolRegistry>>,
     statuses: Arc<crate::status::StatusRegistry>,
     logs: Arc<PluginLogStore>,
@@ -363,7 +366,7 @@ pub struct PluginHost {
     _host_handle: Arc<HostHandle>,
     /// Plugin ids whose transports we transferred to a successor host;
     /// `shutdown()` skips those so we don't kill what the new host is using.
-    transferred_to_successor: tokio::sync::Mutex<std::collections::HashSet<String>>,
+    transferred_to_successor: tokio::sync::Mutex<std::collections::HashSet<PluginKey>>,
 }
 
 impl PluginHost {
@@ -378,6 +381,7 @@ impl PluginHost {
             Arc::new(RwLock::new(HashMap::new())),
             Arc::clone(&statuses),
             Arc::clone(&logs),
+            None,
         ));
         Arc::new(Self {
             plugins: Vec::new(),
@@ -413,7 +417,7 @@ impl PluginHost {
         self.tool_registry
             .read()
             .ok()?
-            .lookup_tool(model_name)
+            .lookup_tool_by_model_name(model_name)
             .cloned()
     }
 
@@ -446,6 +450,14 @@ impl PluginHost {
     }
 
     pub fn plugin_status(&self, plugin_id: &str) -> Option<crate::status::PluginStatus> {
+        let plugin_key = PluginKey::parse(plugin_id).ok()?;
+        self.statuses.get(&plugin_key)
+    }
+
+    pub fn plugin_status_by_key(
+        &self,
+        plugin_id: &PluginKey,
+    ) -> Option<crate::status::PluginStatus> {
         self.statuses.get(plugin_id)
     }
 
@@ -474,7 +486,11 @@ impl PluginHost {
         message: impl Into<String>,
         fields: serde_json::Value,
     ) -> PluginLogRecord {
-        self.logs.append(plugin_id, level, source, message, fields)
+        let plugin_id = plugin_id.into();
+        let plugin_key =
+            PluginKey::parse(plugin_id.as_str()).expect("plugin log key should be valid");
+        self.logs
+            .append(&plugin_key, level, source, message, fields)
     }
 
     pub fn plugin_logs(
@@ -483,12 +499,16 @@ impl PluginHost {
         after_seq: Option<u64>,
         limit: usize,
     ) -> Vec<PluginLogRecord> {
-        self.logs.list(plugin_id, after_seq, limit)
+        let Some(plugin_key) = PluginKey::parse(plugin_id).ok() else {
+            return Vec::new();
+        };
+        self.logs.list(&plugin_key, after_seq, limit)
     }
 
     pub fn plugin_inspect(&self, plugin_id: &str) -> Option<PluginInspect> {
         let status = self.plugin_status(plugin_id)?;
-        let plugin = self.plugins_by_id.get(plugin_id);
+        let plugin_key = PluginKey::parse(plugin_id).ok()?;
+        let plugin = self.plugins_by_id.get(&plugin_key);
         let manifest = plugin.as_ref().map(|plugin| plugin.manifest.clone());
         let authority = plugin.map(|plugin| plugin.authority_summary());
         let configured_plugin = plugin
@@ -588,12 +608,12 @@ impl PluginHost {
                     .map_err(|e| PluginError::invalid_params(e.to_string()))?;
                 let context = tool_hook_context(
                     plugin,
-                    &current.tool_name,
+                    current.tool_name(),
                     Some(current.session_id),
                     Some(current.call_id),
                     Some(current.workspace_root.clone()),
                 );
-                let value = host_api::with_host_callback_context(
+                let value = host_api::run_in_host_callback_context(
                     context,
                     call_with_timeout(plugin, method::HOOK_TOOL_BEFORE, params, timeout),
                 )
@@ -632,7 +652,7 @@ impl PluginHost {
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let plugins = self.plugins.clone();
         let res = self.block_on_static(async move {
-            dispatcher::chain_patch_with_context::<ToolAfterInput, ToolAfterPatch, _, _>(
+            dispatcher::chain_patch_in_context::<ToolAfterInput, ToolAfterPatch, _, _>(
                 &plugins,
                 method::HOOK_TOOL_AFTER,
                 HookSubscription::TOOL_AFTER,
@@ -655,7 +675,7 @@ impl PluginHost {
                 |plugin, input| {
                     Some(tool_hook_context(
                         plugin,
-                        &input.tool_name,
+                        input.tool_name(),
                         Some(input.session_id),
                         Some(input.call_id),
                         Some(input.workspace_root.clone()),
@@ -674,7 +694,7 @@ impl PluginHost {
     ) -> Result<ToolInvokeOutput, PluginError> {
         let plugin = self
             .plugins_by_id
-            .get(&registered_tool.plugin_full_name())
+            .get(registered_tool.plugin_key())
             .cloned()
             .ok_or_else(|| {
                 PluginError::new(format!(
@@ -685,16 +705,16 @@ impl PluginHost {
         let timeout = self.tool_invoke_timeout(registered_tool);
         let mut input = input;
         // ensure tool name is the plugin-original name (in case caller passed model name)
-        input.tool_name = registered_tool.tool_name.clone();
+        input.tool_name = registered_tool.tool_name().to_string();
         let session_id = input.session_id;
         let call_id = input.call_id;
         let workspace_root = input.workspace_root.clone();
         let plugin_id = registered_tool.plugin_full_name().clone();
-        let tool_name = registered_tool.tool_name.clone();
+        let tool_name = registered_tool.tool_name().to_string();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
         let result = self.block_on_static(async move {
-            host_api::with_host_callback_context(
+            host_api::run_in_host_callback_context(
                 HostCallbackContext {
                     plugin_id: Some(plugin_id),
                     session_id: Some(session_id),
@@ -730,7 +750,7 @@ impl PluginHost {
     ) -> Result<Vec<crate::sdk::PathRequest>, PluginError> {
         let plugin = self
             .plugins_by_id
-            .get(&registered_tool.plugin_full_name())
+            .get(registered_tool.plugin_key())
             .cloned()
             .ok_or_else(|| {
                 PluginError::new(format!(
@@ -740,14 +760,14 @@ impl PluginHost {
             })?;
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let mut input = input;
-        input.tool_name = registered_tool.tool_name.clone();
+        input.tool_name = registered_tool.tool_name().to_string();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
         let plugin_id = registered_tool.plugin_full_name().clone();
-        let tool_name = registered_tool.tool_name.clone();
+        let tool_name = registered_tool.tool_name().to_string();
         let workspace_root = input.workspace_root.clone();
         let result = self.block_on_static(async move {
-            host_api::with_host_callback_context(
+            host_api::run_in_host_callback_context(
                 HostCallbackContext {
                     plugin_id: Some(plugin_id),
                     workspace_root: Some(workspace_root),
@@ -769,7 +789,7 @@ impl PluginHost {
     ) -> Result<Vec<crate::sdk::NetworkRequest>, PluginError> {
         let plugin = self
             .plugins_by_id
-            .get(&registered_tool.plugin_full_name())
+            .get(registered_tool.plugin_key())
             .cloned()
             .ok_or_else(|| {
                 PluginError::new(format!(
@@ -779,14 +799,14 @@ impl PluginHost {
             })?;
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let mut input = input;
-        input.tool_name = registered_tool.tool_name.clone();
+        input.tool_name = registered_tool.tool_name().to_string();
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
         let plugin_id = registered_tool.plugin_full_name().clone();
-        let tool_name = registered_tool.tool_name.clone();
+        let tool_name = registered_tool.tool_name().to_string();
         let workspace_root = input.workspace_root.clone();
         let result = self.block_on_static(async move {
-            host_api::with_host_callback_context(
+            host_api::run_in_host_callback_context(
                 HostCallbackContext {
                     plugin_id: Some(plugin_id),
                     workspace_root: Some(workspace_root),
@@ -818,7 +838,7 @@ impl PluginHost {
     ) -> Result<ToolInvokeStream, PluginError> {
         let plugin = self
             .plugins_by_id
-            .get(&registered_tool.plugin_full_name())
+            .get(registered_tool.plugin_key())
             .cloned()
             .ok_or_else(|| {
                 PluginError::new(format!(
@@ -827,7 +847,7 @@ impl PluginHost {
                 ))
             })?;
         let mut input = input;
-        input.tool_name = registered_tool.tool_name.clone();
+        input.tool_name = registered_tool.tool_name().to_string();
 
         let context = tool_hook_context(
             &plugin,
@@ -836,7 +856,7 @@ impl PluginHost {
             Some(input.call_id),
             Some(input.workspace_root.clone()),
         );
-        if let Some(stream) = host_api::with_host_callback_context(
+        if let Some(stream) = host_api::run_in_host_callback_context(
             context.clone(),
             plugin.transport.invoke_stream(input.clone()),
         )
@@ -853,7 +873,7 @@ impl PluginHost {
         let timeout = self.timeouts.tool_invoke_or(Duration::from_secs(300));
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
-        let invoke_result = host_api::with_host_callback_context(
+        let invoke_result = host_api::run_in_host_callback_context(
             context,
             call_with_timeout(&plugin, method::HOOK_TOOL_INVOKE, params, timeout),
         )
@@ -892,7 +912,8 @@ impl PluginHost {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
         let plugins = self.plugins.clone();
         let res: Result<ShellEnvPatch, TransportError> = self.block_on_static(async move {
-            let mut acc = ShellEnvPatch::default();
+            let mut set = std::collections::BTreeMap::new();
+            let mut unset = Vec::new();
             for plugin in &plugins {
                 if !plugin.subscribes(HookSubscription::SHELL_ENV) {
                     continue;
@@ -906,15 +927,15 @@ impl PluginHost {
                 let patch: Option<ShellEnvPatch> = serde_json::from_value(result)?;
                 if let Some(p) = patch {
                     for (k, v) in p.set {
-                        acc.set.insert(k, v);
+                        set.insert(k, v);
                     }
                     for k in p.unset {
-                        acc.set.remove(&k);
-                        acc.unset.push(k);
+                        set.remove(&k);
+                        unset.push(k);
                     }
                 }
             }
-            Ok(acc)
+            Ok(ShellEnvPatch { set, unset })
         });
         res.map_err(transport_to_plugin_error)
     }
@@ -1048,16 +1069,16 @@ impl PluginHost {
                     if !plugin_has_capability(plugin, HostCapability::PermissionDecision) {
                         tracing::warn!(
                             target: "agena_plugin_host::permission",
-                            plugin = %plugin.id,
+                            plugin = %plugin.key(),
                             "permission.ask_permission returned Decide without PermissionDecision capability; treating as advice"
                         );
                         return Ok(Some(PermissionAskOutcome::Advice {
-                            plugin_id: plugin.id.clone(),
+                            plugin_id: plugin.key().to_string(),
                             advice: PermissionAdvice {
                                 decision: d,
                                 reason: format!(
                                     "plugin {} requested a permission decision without PermissionDecision capability",
-                                    plugin.id
+                                    plugin.key()
                                 ),
                                 risk: crate::sdk::PermissionRiskLevel::Medium,
                                 requested_scope: None,
@@ -1066,14 +1087,14 @@ impl PluginHost {
                         }));
                     }
                     return Ok(Some(PermissionAskOutcome::Decision {
-                        plugin_id: plugin.id.clone(),
+                        plugin_id: plugin.key().to_string(),
                         decision: d,
                         authority: plugin.authority_summary(),
                     }));
                 }
                 Some(PermissionAskDecision::Advise(advice)) => {
                     return Ok(Some(PermissionAskOutcome::Advice {
-                        plugin_id: plugin.id.clone(),
+                        plugin_id: plugin.key().to_string(),
                         advice,
                         authority: plugin.authority_summary(),
                     }));
@@ -1196,7 +1217,8 @@ impl PluginHost {
         input: ProviderListInput,
     ) -> Result<ProviderListPatch, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
-        let mut acc = ProviderListPatch::default();
+        let mut add = Vec::new();
+        let mut remove = Vec::new();
         for plugin in &self.plugins {
             if !plugin.subscribes(HookSubscription::PROVIDER_LIST) {
                 continue;
@@ -1212,11 +1234,11 @@ impl PluginHost {
             let patch: Option<ProviderListPatch> = serde_json::from_value(v)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
             if let Some(p) = patch {
-                acc.add.extend(p.add);
-                acc.remove.extend(p.remove);
+                add.extend(p.add);
+                remove.extend(p.remove);
             }
         }
-        Ok(acc)
+        Ok(ProviderListPatch { add, remove })
     }
 
     pub async fn dispatch_config(&self, input: ConfigInput) -> Result<ConfigInput, PluginError> {
@@ -1282,7 +1304,8 @@ impl PluginHost {
         input: SessionStartInput,
     ) -> Result<SessionStartPatch, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(5));
-        let mut acc = SessionStartPatch::default();
+        let mut additional_context: Option<String> = None;
+        let mut initial_user_message = None;
         for plugin in &self.plugins {
             if !plugin.subscribes(HookSubscription::SESSION_START) {
                 continue;
@@ -1299,18 +1322,21 @@ impl PluginHost {
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
             if let Some(p) = patch {
                 if let Some(ctx) = p.additional_context {
-                    let existing = acc.additional_context.get_or_insert_with(String::new);
+                    let existing = additional_context.get_or_insert_with(String::new);
                     if !existing.is_empty() {
                         existing.push('\n');
                     }
                     existing.push_str(&ctx);
                 }
                 if p.initial_user_message.is_some() {
-                    acc.initial_user_message = p.initial_user_message;
+                    initial_user_message = p.initial_user_message;
                 }
             }
         }
-        Ok(acc)
+        Ok(SessionStartPatch {
+            additional_context,
+            initial_user_message,
+        })
     }
 
     // ── session.end ────────────────────────────────────────────────────────
@@ -1414,18 +1440,15 @@ impl PluginHost {
         input: ToolDefinitionInput,
     ) -> Result<ToolDefinitionInput, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
-        dispatcher::chain_patch_with_context::<ToolDefinitionInput, ToolDefinitionPatch, _, _>(
+        dispatcher::chain_patch_in_context::<ToolDefinitionInput, ToolDefinitionPatch, _, _>(
             &self.plugins,
             method::HOOK_TOOL_DEFINITION,
             HookSubscription::TOOL_DEFINITION,
             timeout,
             input,
             |inp, patch| {
-                if let Some(d) = patch.description {
-                    inp.description = d;
-                }
-                if patch.summary.is_some() {
-                    inp.summary = patch.summary;
+                if let Some(summary) = patch.summary {
+                    inp.summary = summary;
                 }
                 if patch.help.is_some() {
                     inp.help = patch.help;
@@ -1440,7 +1463,7 @@ impl PluginHost {
             |plugin, input| {
                 Some(tool_hook_context(
                     plugin,
-                    &input.tool_name,
+                    input.tool_name(),
                     None,
                     None,
                     None,
@@ -1465,7 +1488,8 @@ impl PluginHost {
         input: AgentStopInput,
     ) -> Result<AgentStopPatch, PluginError> {
         let timeout = self.timeouts.chat_or(Duration::from_secs(30));
-        let mut acc = AgentStopPatch::default();
+        let mut continue_with_message = None;
+        let mut reason = None;
         for plugin in &self.plugins {
             if !plugin.subscribes(HookSubscription::AGENT_STOP) {
                 continue;
@@ -1473,11 +1497,11 @@ impl PluginHost {
             let params = serde_json::to_value(&input)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
             let context = HostCallbackContext {
-                plugin_id: Some(plugin.id.clone()),
+                plugin_id: Some(plugin.key().to_string()),
                 session_id: Some(input.session_id),
                 ..Default::default()
             };
-            let v = host_api::with_host_callback_context(
+            let v = host_api::run_in_host_callback_context(
                 context,
                 call_with_timeout(plugin, method::HOOK_AGENT_STOP, params, timeout),
             )
@@ -1491,13 +1515,16 @@ impl PluginHost {
             if let Some(p) = patch
                 && p.continue_with_message.is_some()
             {
-                acc.continue_with_message = p.continue_with_message;
-                acc.reason = p.reason;
+                continue_with_message = p.continue_with_message;
+                reason = p.reason;
                 // First plugin that wants to block stop wins.
                 break;
             }
         }
-        Ok(acc)
+        Ok(AgentStopPatch {
+            continue_with_message,
+            reason,
+        })
     }
 
     // ── command.execute.after ──────────────────────────────────────────────
@@ -1589,7 +1616,7 @@ impl PluginHost {
     pub async fn shutdown(&self) {
         let transferred = self.transferred_to_successor.lock().await.clone();
         for plugin in &self.plugins {
-            if transferred.contains(&plugin.id) {
+            if transferred.contains(&plugin.key()) {
                 continue;
             }
             let _ = shutdown_transport(Arc::clone(&plugin.transport)).await;
@@ -1627,7 +1654,7 @@ impl PluginHost {
     }
 
     pub fn ui_catalog(&self) -> PluginUiCatalog {
-        let mut statusline_by_key = BTreeMap::<(String, String), HostStatuslineSegment>::new();
+        let mut statusline_by_key = BTreeMap::<(PluginKey, String), HostStatuslineSegment>::new();
         let mut themes_by_id = BTreeMap::<String, HostThemePalette>::new();
         let mut content_blocks = Vec::new();
         let mut studio_commands = Vec::new();
@@ -1637,7 +1664,7 @@ impl PluginHost {
         for plugin in &self.plugins {
             for segment in &plugin.manifest.ui.tui.statusline_segments {
                 let resolved = HostStatuslineSegment {
-                    plugin_id: plugin.id.clone(),
+                    plugin_id: plugin.key(),
                     segment_id: segment.id.clone(),
                     content: segment.content.clone(),
                     priority: segment.priority,
@@ -1654,7 +1681,7 @@ impl PluginHost {
                     theme.id.clone(),
                     HostThemePalette {
                         id: theme.id.clone(),
-                        plugin_id: plugin.id.clone(),
+                        plugin_id: plugin.key(),
                         display_name: theme.display_name.clone(),
                         colors: theme.colors.clone(),
                     },
@@ -1663,28 +1690,28 @@ impl PluginHost {
 
             content_blocks.extend(plugin.manifest.ui.tui.content_blocks.iter().cloned().map(
                 |block| PluginTuiContentBlockCatalogItem {
-                    plugin_id: plugin.id.clone(),
+                    plugin_id: plugin.key(),
                     block,
                 },
             ));
 
             studio_commands.extend(plugin.manifest.commands.iter().cloned().map(|command| {
                 PluginStudioCommandCatalogItem {
-                    plugin_id: plugin.id.clone(),
+                    plugin_id: plugin.key(),
                     command,
                 }
             }));
 
             studio_controls.extend(plugin.manifest.ui.studio.controls.iter().cloned().map(
                 |control| PluginStudioControlCatalogItem {
-                    plugin_id: plugin.id.clone(),
+                    plugin_id: plugin.key(),
                     control,
                 },
             ));
 
             studio_views.extend(plugin.manifest.ui.studio.views.iter().cloned().map(|view| {
                 PluginStudioViewCatalogItem {
-                    plugin_id: plugin.id.clone(),
+                    plugin_id: plugin.key(),
                     view,
                 }
             }));
@@ -1757,7 +1784,8 @@ impl PluginHost {
         plugin_id: &str,
         action_id: &str,
     ) -> Option<PluginUiAction> {
-        let plugin = self.plugins_by_id.get(plugin_id)?;
+        let plugin_key = PluginKey::parse(plugin_id).ok()?;
+        let plugin = self.plugins_by_id.get(&plugin_key)?;
         for command in &plugin.manifest.commands {
             if command.id == action_id {
                 return Some(command.action.clone());
@@ -1783,10 +1811,17 @@ impl PluginHost {
         plugin_id: &str,
         tool_name: &str,
     ) -> Option<RegisteredTool> {
-        self.registered_tools().into_iter().find(|tool| {
-            tool.plugin_full_name() == plugin_id
-                && (tool.tool_name == tool_name || tool.model_name == tool_name)
-        })
+        let plugin_key = PluginKey::parse(plugin_id).ok()?;
+        let registry = self.tool_registry.read().ok()?;
+        registry
+            .lookup_for_plugin(&plugin_key, tool_name)
+            .cloned()
+            .or_else(|| {
+                let tool_key = ToolKey::parse_model_name(tool_name).ok()?;
+                (tool_key.plugin() == &plugin_key)
+                    .then(|| registry.lookup_tool_by_key(&tool_key).cloned())
+                    .flatten()
+            })
     }
 }
 
@@ -1798,7 +1833,7 @@ fn tool_hook_context(
     workspace_root: Option<String>,
 ) -> HostCallbackContext {
     HostCallbackContext {
-        plugin_id: Some(plugin.id.clone()),
+        plugin_id: Some(plugin.key().to_string()),
         session_id,
         call_id,
         workspace_root,
@@ -1839,8 +1874,7 @@ fn hook_registration_for_plugin(plugin: &LoadedPlugin) -> HostHookRegistration {
         .collect();
 
     HostHookRegistration {
-        plugin_id: plugin.id.clone(),
-        plugin_name: plugin.manifest.name.clone(),
+        plugin_id: plugin.key(),
         trust_level: plugin.trust_level.clone(),
         trust_status,
         provenance: plugin.provenance.clone(),
@@ -1906,7 +1940,7 @@ async fn dispatch_permission_ask_transport(
     context: HostCallbackContext,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, PluginError> {
-    host_api::with_host_callback_context(
+    host_api::run_in_host_callback_context(
         context,
         transport.dispatch(method::HOOK_PERMISSION_ASK, params),
     )
@@ -1930,15 +1964,15 @@ fn merge_json(into: &mut serde_json::Value, from: serde_json::Value) {
 // ---------- host construction ----------
 
 pub struct StaticPluginRegistration {
-    pub id: String,
+    pub key: PluginKey,
     registration: StaticRegistration,
 }
 
 impl StaticPluginRegistration {
-    pub fn new<P: crate::sdk::Plugin>(id: impl Into<String>, plugin: P) -> Self {
+    pub fn new<P: crate::sdk::Plugin>(key: PluginKey, plugin: P) -> Self {
         let inproc = InProcessTransport::new(plugin);
         Self {
-            id: id.into(),
+            key,
             registration: StaticRegistration {
                 builder: Box::new(move || Arc::new(inproc) as Arc<dyn PluginTransport>),
             },
@@ -1983,9 +2017,9 @@ impl PluginHost {
         } = build;
         let host_inner = host_client.unwrap_or_else(|| Arc::new(NoopHostClient));
         let tool_registry_shared = Arc::new(RwLock::new(PluginToolRegistry::new()));
-        let plugin_indices: Arc<RwLock<HashMap<String, usize>>> =
+        let plugin_indices: Arc<RwLock<HashMap<PluginKey, usize>>> =
             Arc::new(RwLock::new(HashMap::new()));
-        let plugin_names: Arc<RwLock<HashMap<String, String>>> =
+        let plugin_names: Arc<RwLock<HashMap<PluginKey, String>>> =
             Arc::new(RwLock::new(HashMap::new()));
         let statuses_shared = Arc::new(crate::status::StatusRegistry::new());
         let logs_shared = previous
@@ -1999,10 +2033,8 @@ impl PluginHost {
             Arc::clone(&plugin_names),
             Arc::clone(&statuses_shared),
             Arc::clone(&logs_shared),
+            callback_base_url.clone(),
         );
-        if let Some(url) = callback_base_url.clone() {
-            handle = handle.with_callback_base_url(url);
-        }
         let quotas = Arc::new(crate::quota::QuotaRegistry::new(
             config.host.default_quota.clone(),
         ));
@@ -2015,12 +2047,12 @@ impl PluginHost {
         let env_lookup: Box<dyn Fn(&str) -> Option<String> + Send + Sync> =
             Box::new(|k: &str| std::env::var(k).ok());
 
-        let mut static_registry: HashMap<String, StaticRegistration> = static_plugins
+        let mut static_registry: HashMap<PluginKey, StaticRegistration> = static_plugins
             .into_iter()
-            .map(|entry| (entry.id, entry.registration))
+            .map(|entry| (entry.key, entry.registration))
             .collect();
         let mut loaded: Vec<Arc<LoadedPlugin>> = Vec::new();
-        let mut by_id: HashMap<String, Arc<LoadedPlugin>> = HashMap::new();
+        let mut by_id: HashMap<PluginKey, Arc<LoadedPlugin>> = HashMap::new();
 
         // Sort configured plugins by id for deterministic load order.
         let mut configured_plugins: Vec<(String, ConfiguredPlugin)> =
@@ -2028,23 +2060,26 @@ impl PluginHost {
         configured_plugins.sort_by(|a, b| a.0.cmp(&b.0));
 
         // Build a quick lookup of previous LoadedPlugin by id for reuse.
-        let previous_loaded: HashMap<String, Arc<LoadedPlugin>> = previous
+        let previous_loaded: HashMap<PluginKey, Arc<LoadedPlugin>> = previous
             .as_ref()
             .map(|p| {
                 p.plugins
                     .iter()
-                    .map(|lp| (lp.id.clone(), Arc::clone(lp)))
+                    .map(|lp| (lp.key(), Arc::clone(lp)))
                     .collect()
             })
             .unwrap_or_default();
 
         for (idx, (id, configured_plugin)) in configured_plugins.into_iter().enumerate() {
+            let plugin_key = PluginKey::parse(id.as_str()).map_err(|err| {
+                HostError::Config(format!("invalid plugin id `{id}` in plugins.list: {err}"))
+            })?;
             statuses_shared.set(crate::status::PluginStatus::initial(
-                id.clone(),
+                &plugin_key,
                 configured_plugin.kind_str(),
             ));
             if configured_plugin.disabled() {
-                statuses_shared.record_stopped(&id);
+                statuses_shared.record_stopped(&plugin_key);
                 tracing::info!(
                     target: "agena_plugin_host",
                     plugin = %id,
@@ -2054,13 +2089,13 @@ impl PluginHost {
                 continue;
             }
             if let Ok(mut indices) = plugin_indices.write() {
-                indices.insert(id.clone(), idx);
+                indices.insert(plugin_key.clone(), idx);
             }
             // Hot-reload: if a previous host had this id with a byte-identical
             // configured plugin, reuse the transport (no respawn).
             if let Some(previous_plugin) = previous_plugins.get(&id)
                 && previous_plugin == &configured_plugin
-                && let Some(reused) = previous_loaded.get(&id).cloned()
+                && let Some(reused) = previous_loaded.get(&plugin_key).cloned()
             {
                 tracing::info!(
                     target: "agena_plugin_host",
@@ -2072,31 +2107,30 @@ impl PluginHost {
                         .transferred_to_successor
                         .lock()
                         .await
-                        .insert(id.clone());
+                        .insert(plugin_key.clone());
                 }
                 reused
                     .transport
-                    .attach_host(host_handle.scoped_host_client(reused.id.clone()))
+                    .attach_host(host_handle.scoped_host_client(reused.key().to_string()))
                     .await
                     .map_err(|e| HostError::Load {
-                        plugin: reused.id.clone(),
+                        plugin: reused.key().to_string(),
                         message: e.to_string(),
                     })?;
                 if let Ok(mut reg) = tool_registry_shared.write() {
                     reg.extend_from_plugin(
-                        &reused.manifest.namespace,
-                        &reused.manifest.name,
+                        &reused.key(),
                         &reused.manifest.tools,
                         reused.manifest.tool_description_mode,
                         reused.manifest.ui_display_mode,
                     );
                 }
                 if let Ok(mut names) = plugin_names.write() {
-                    names.insert(reused.id.clone(), reused.manifest.name.clone());
+                    names.insert(reused.key(), reused.manifest.name.clone());
                 }
                 host_handle
                     .set_plugin_capabilities(
-                        reused.id.clone(),
+                        reused.key(),
                         effective_capabilities_for_manifest(
                             &reused.manifest.tools,
                             &reused.manifest.plugin_capabilities,
@@ -2105,20 +2139,20 @@ impl PluginHost {
                     .await;
                 host_handle
                     .set_plugin_tool_capabilities(
-                        reused.id.clone(),
+                        reused.key(),
                         crate::registry::per_tool_capabilities(&reused.manifest.tools),
                     )
                     .await;
                 host_handle.set_plugin_hook_catalog(hook_registration_for_plugin(&reused));
                 if let Some(previous_status) = previous
                     .as_ref()
-                    .and_then(|previous| previous.plugin_status(&reused.id))
+                    .and_then(|previous| previous.plugin_status_by_key(&reused.key()))
                 {
                     statuses_shared.set(previous_status);
                 }
-                by_id.insert(reused.id.clone(), Arc::clone(&reused));
+                by_id.insert(reused.key(), Arc::clone(&reused));
                 host_handle
-                    .register_plugin_transport(reused.id.clone(), reused.transport())
+                    .register_plugin_transport(reused.key(), reused.transport())
                     .await;
                 loaded.push(reused);
                 continue;
@@ -2139,19 +2173,18 @@ impl PluginHost {
                     let plugin = Arc::new(plugin);
                     if let Ok(mut reg) = tool_registry_shared.write() {
                         reg.extend_from_plugin(
-                            &plugin.manifest.namespace,
-                            &plugin.manifest.name,
+                            &plugin.key(),
                             &plugin.manifest.tools,
                             plugin.manifest.tool_description_mode,
                             plugin.manifest.ui_display_mode,
                         );
                     }
                     if let Ok(mut names) = plugin_names.write() {
-                        names.insert(plugin.id.clone(), plugin.manifest.name.clone());
+                        names.insert(plugin.key(), plugin.manifest.name.clone());
                     }
                     host_handle
                         .set_plugin_capabilities(
-                            plugin.id.clone(),
+                            plugin.key(),
                             effective_capabilities_for_manifest(
                                 &plugin.manifest.tools,
                                 &plugin.manifest.plugin_capabilities,
@@ -2160,26 +2193,25 @@ impl PluginHost {
                         .await;
                     host_handle
                         .set_plugin_tool_capabilities(
-                            plugin.id.clone(),
+                            plugin.key(),
                             crate::registry::per_tool_capabilities(&plugin.manifest.tools),
                         )
                         .await;
                     host_handle.set_plugin_hook_catalog(hook_registration_for_plugin(&plugin));
                     let status_kind = plugin.kind;
-                    let initial =
-                        crate::status::PluginStatus::initial(plugin.id.clone(), status_kind);
+                    let initial = crate::status::PluginStatus::initial(&plugin.key(), status_kind);
                     statuses_shared.set(initial);
-                    by_id.insert(plugin.id.clone(), plugin.clone());
+                    by_id.insert(plugin.key(), plugin.clone());
                     host_handle
-                        .register_plugin_transport(plugin.id.clone(), plugin.transport())
+                        .register_plugin_transport(plugin.key(), plugin.transport())
                         .await;
                     loaded.push(plugin);
                 }
                 Err(err) => {
                     let message = err.to_string();
-                    statuses_shared.record_spawn_failure(&id, message.clone());
+                    statuses_shared.record_spawn_failure(&plugin_key, message.clone());
                     logs_shared.append(
-                        id.clone(),
+                        &plugin_key,
                         "error",
                         "host",
                         format!("failed to load plugin: {message}"),
@@ -2220,24 +2252,25 @@ pub struct HostHandle {
     /// Plugin-level capability union. Used as a fallback when a host call
     /// cannot be attributed to a specific tool (e.g. hook callbacks) or
     /// when the plugin did not register per-tool capabilities.
-    capabilities: tokio::sync::RwLock<HashMap<String, Vec<HostCapability>>>,
+    capabilities: tokio::sync::RwLock<HashMap<PluginKey, Vec<HostCapability>>>,
     /// Per-tool capability map: `plugin_id -> tool_name -> capabilities`.
     /// `tool_invoke` paths look up capabilities by `tool_name` so a plugin
     /// shipping multiple tools cannot have tool A's privileges leak to
     /// callbacks coming back through tool B.
-    tool_capabilities: tokio::sync::RwLock<BTreeMap<String, BTreeMap<String, Vec<HostCapability>>>>,
+    tool_capabilities:
+        tokio::sync::RwLock<BTreeMap<PluginKey, BTreeMap<String, Vec<HostCapability>>>>,
     /// Per-plugin bearer tokens for HTTP callbacks.
-    tokens: tokio::sync::Mutex<HashMap<String, String>>,
+    tokens: tokio::sync::Mutex<HashMap<PluginKey, String>>,
     callback_base_url: Option<String>,
     tool_registry: Arc<RwLock<PluginToolRegistry>>,
-    plugin_indices: Arc<RwLock<HashMap<String, usize>>>,
-    plugin_names: Arc<RwLock<HashMap<String, String>>>,
-    hook_catalog: Arc<RwLock<BTreeMap<String, HostHookRegistration>>>,
+    plugin_indices: Arc<RwLock<HashMap<PluginKey, usize>>>,
+    plugin_names: Arc<RwLock<HashMap<PluginKey, String>>>,
+    hook_catalog: Arc<RwLock<BTreeMap<PluginKey, HostHookRegistration>>>,
     tool_registry_events: Arc<RwLock<VecDeque<ToolRegistryChangedEvent>>>,
     tool_registry_event_listener: Arc<RwLock<Option<ToolRegistryEventListener>>>,
     statuses: Arc<crate::status::StatusRegistry>,
     logs: Arc<PluginLogStore>,
-    statusline: Arc<RwLock<std::collections::BTreeMap<(String, String), HostStatuslineSegment>>>,
+    statusline: Arc<RwLock<std::collections::BTreeMap<(PluginKey, String), HostStatuslineSegment>>>,
     themes: Arc<RwLock<std::collections::BTreeMap<String, HostThemePalette>>>,
     quotas: Arc<crate::quota::QuotaRegistry>,
     /// Plugin id of the registered permission UI handler, if any. When set,
@@ -2248,7 +2281,7 @@ pub struct HostHandle {
     /// Plugin transport registry shared by the parent [`PluginHost`]. Lets
     /// the handle dispatch host->plugin calls (e.g. permission handler
     /// rendering) without holding a reference to PluginHost itself.
-    plugin_transports: tokio::sync::RwLock<HashMap<String, Arc<dyn PluginTransport>>>,
+    plugin_transports: tokio::sync::RwLock<HashMap<PluginKey, Arc<dyn PluginTransport>>>,
 }
 
 type ToolRegistryEventListener = Arc<dyn Fn(ToolRegistryChangedEvent) + Send + Sync>;
@@ -2265,7 +2298,7 @@ impl HostHandle {
     pub fn new_with_registry(
         inner: Arc<dyn HostClient>,
         tool_registry: Arc<RwLock<PluginToolRegistry>>,
-        plugin_indices: Arc<RwLock<HashMap<String, usize>>>,
+        plugin_indices: Arc<RwLock<HashMap<PluginKey, usize>>>,
     ) -> Self {
         Self::new_with_components(
             inner,
@@ -2274,23 +2307,25 @@ impl HostHandle {
             Arc::new(RwLock::new(HashMap::new())),
             Arc::new(crate::status::StatusRegistry::new()),
             Arc::new(PluginLogStore::default()),
+            None,
         )
     }
 
     pub fn new_with_components(
         inner: Arc<dyn HostClient>,
         tool_registry: Arc<RwLock<PluginToolRegistry>>,
-        plugin_indices: Arc<RwLock<HashMap<String, usize>>>,
-        plugin_names: Arc<RwLock<HashMap<String, String>>>,
+        plugin_indices: Arc<RwLock<HashMap<PluginKey, usize>>>,
+        plugin_names: Arc<RwLock<HashMap<PluginKey, String>>>,
         statuses: Arc<crate::status::StatusRegistry>,
         logs: Arc<PluginLogStore>,
+        callback_base_url: Option<String>,
     ) -> Self {
         Self {
             inner: tokio::sync::RwLock::new(inner),
             capabilities: tokio::sync::RwLock::new(HashMap::new()),
             tool_capabilities: tokio::sync::RwLock::new(BTreeMap::new()),
             tokens: tokio::sync::Mutex::new(HashMap::new()),
-            callback_base_url: None,
+            callback_base_url,
             tool_registry,
             plugin_indices,
             plugin_names,
@@ -2319,13 +2354,13 @@ impl HostHandle {
     /// host->plugin calls (currently used by the permission UI handler).
     pub async fn register_plugin_transport(
         &self,
-        plugin_id: impl Into<String>,
+        plugin_id: PluginKey,
         transport: Arc<dyn PluginTransport>,
     ) {
         self.plugin_transports
             .write()
             .await
-            .insert(plugin_id.into(), transport);
+            .insert(plugin_id, transport);
     }
 
     pub async fn ingest_stream_event_for_plugin(
@@ -2334,7 +2369,15 @@ impl HostHandle {
         method: &str,
         params: serde_json::Value,
     ) -> Result<bool, PluginError> {
-        let transport = self.plugin_transports.read().await.get(plugin_id).cloned();
+        let Some(plugin_key) = PluginKey::parse(plugin_id).ok() else {
+            return Ok(false);
+        };
+        let transport = self
+            .plugin_transports
+            .read()
+            .await
+            .get(&plugin_key)
+            .cloned();
         let Some(transport) = transport else {
             return Ok(false);
         };
@@ -2428,7 +2471,11 @@ impl HostHandle {
         message: impl Into<String>,
         fields: serde_json::Value,
     ) -> PluginLogRecord {
-        self.logs.append(plugin_id, level, source, message, fields)
+        let plugin_id = plugin_id.into();
+        let plugin_key =
+            PluginKey::parse(plugin_id.as_str()).expect("plugin log key should be valid");
+        self.logs
+            .append(&plugin_key, level, source, message, fields)
     }
 
     pub fn plugin_logs(
@@ -2437,12 +2484,10 @@ impl HostHandle {
         after_seq: Option<u64>,
         limit: usize,
     ) -> Vec<PluginLogRecord> {
-        self.logs.list(plugin_id, after_seq, limit)
-    }
-
-    pub fn with_callback_base_url(mut self, url: String) -> Self {
-        self.callback_base_url = Some(url);
-        self
+        let Some(plugin_key) = PluginKey::parse(plugin_id).ok() else {
+            return Vec::new();
+        };
+        self.logs.list(&plugin_key, after_seq, limit)
     }
 
     /// Replace the underlying [`HostClient`] live (used after the runtime is
@@ -2453,22 +2498,18 @@ impl HostHandle {
 
     pub async fn set_plugin_capabilities(
         &self,
-        plugin_id: impl Into<String>,
+        plugin_id: PluginKey,
         capabilities: Vec<HostCapability>,
     ) {
         self.capabilities
             .write()
             .await
-            .insert(plugin_id.into(), capabilities);
+            .insert(plugin_id, capabilities);
     }
 
-    pub fn set_plugin_manifest_name(
-        &self,
-        plugin_id: impl Into<String>,
-        plugin_name: impl Into<String>,
-    ) {
+    pub fn set_plugin_manifest_name(&self, plugin_id: PluginKey, plugin_name: impl Into<String>) {
         if let Ok(mut names) = self.plugin_names.write() {
-            names.insert(plugin_id.into(), plugin_name.into());
+            names.insert(plugin_id, plugin_name.into());
         }
     }
 
@@ -2477,13 +2518,13 @@ impl HostHandle {
     /// plugin-level union set via [`set_plugin_capabilities`].
     pub async fn set_plugin_tool_capabilities(
         &self,
-        plugin_id: impl Into<String>,
+        plugin_id: PluginKey,
         by_tool: BTreeMap<String, Vec<HostCapability>>,
     ) {
         self.tool_capabilities
             .write()
             .await
-            .insert(plugin_id.into(), by_tool);
+            .insert(plugin_id, by_tool);
     }
 
     async fn require_capability(
@@ -2495,6 +2536,7 @@ impl HostHandle {
         let Some(plugin_id) = plugin_id else {
             return Ok(());
         };
+        let plugin_key = PluginKey::parse(plugin_id)?;
         // Prefer per-tool scope if the active host call originates from
         // tool_invoke (`tool_name` in HostCallbackContext carries the
         // original tool name). Otherwise
@@ -2503,7 +2545,7 @@ impl HostHandle {
             host_api::current_host_callback_context().and_then(|ctx| ctx.tool_name.clone());
         if let Some(tool_name) = tool_name.as_deref() {
             let tool_caps = self.tool_capabilities.read().await;
-            if let Some(by_tool) = tool_caps.get(plugin_id)
+            if let Some(by_tool) = tool_caps.get(&plugin_key)
                 && let Some(caps) = by_tool.get(tool_name)
             {
                 if caps.contains(&capability) {
@@ -2527,7 +2569,7 @@ impl HostHandle {
         }
         let capabilities = self.capabilities.read().await;
         if capabilities
-            .get(plugin_id)
+            .get(&plugin_key)
             .is_some_and(|capabilities| capabilities.contains(&capability))
         {
             return Ok(());
@@ -2551,10 +2593,11 @@ impl HostHandle {
 
     pub async fn callback_token(&self, plugin_id: &str) -> Option<String> {
         self.callback_base_url.as_ref()?;
+        let plugin_key = PluginKey::parse(plugin_id).ok()?;
         let mut tokens = self.tokens.lock().await;
         Some(
             tokens
-                .entry(plugin_id.to_string())
+                .entry(plugin_key)
                 .or_insert_with(|| format!("cb-{}", uuid::Uuid::new_v4().simple()))
                 .clone(),
         )
@@ -2564,9 +2607,12 @@ impl HostHandle {
         let Some(token) = token else {
             return false;
         };
+        let Some(plugin_key) = PluginKey::parse(plugin_id).ok() else {
+            return false;
+        };
         let tokens = self.tokens.lock().await;
         tokens
-            .get(plugin_id)
+            .get(&plugin_key)
             .is_some_and(|expected| expected == token)
     }
 
@@ -2617,22 +2663,35 @@ impl HostHandle {
         // any plugin (i.e. handle_call without a plugin_id) since those
         // can't be attributed to a quota bucket.
         let _quota_guard = match plugin_id.as_deref() {
-            Some(pid) => Some(self.quotas.acquire(pid).map_err(|err| PluginError {
-                code: PluginErrorCode::Generic,
-                message: err.to_string(),
-                hook: Some(method.to_string()),
-                plugin: Some(pid.to_string()),
-                data: None,
-            })?),
+            Some(pid) => {
+                let plugin_key = PluginKey::parse(pid).map_err(|err| PluginError {
+                    code: PluginErrorCode::Generic,
+                    message: format!("invalid plugin id `{pid}`: {err}"),
+                    hook: Some(method.to_string()),
+                    plugin: Some(pid.to_string()),
+                    data: None,
+                })?;
+                Some(
+                    self.quotas
+                        .acquire(&plugin_key)
+                        .map_err(|err| PluginError {
+                            code: PluginErrorCode::Generic,
+                            message: err.to_string(),
+                            hook: Some(method.to_string()),
+                            plugin: Some(pid.to_string()),
+                            data: None,
+                        })?,
+                )
+            }
             None => None,
         };
-        host_api::with_host_callback_context(
+        host_api::run_in_host_callback_context(
             scoped_context(plugin_id.clone(), callback_context),
             async {
                 match method {
                     method::HOST_LOG => {
                         let p: HostLogParams = parse(params)?;
-                        host_api::with_host_callback_context(
+                        host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, None),
                             inner.log(p.level, p.message, p.fields),
                         )
@@ -2647,7 +2706,7 @@ impl HostHandle {
                         )
                         .await?;
                         let env: EventEnvelope = parse(params)?;
-                        host_api::with_host_callback_context(
+                        host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, None),
                             inner.publish_event(env),
                         )
@@ -2662,7 +2721,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostSubscribeParams = parse(params)?;
-                        let sub: EventSubscription = host_api::with_host_callback_context(
+                        let sub: EventSubscription = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, None),
                             inner.subscribe_events(p.filter),
                         )
@@ -2677,7 +2736,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostUnsubscribeParams = parse(params)?;
-                        host_api::with_host_callback_context(
+                        host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, None),
                             inner.unsubscribe_events(p.subscription_id),
                         )
@@ -2692,12 +2751,16 @@ impl HostHandle {
                         // back to the regular HostClient method.
                         let handler_id = self.permission_handler.read().await.clone();
                         let d = if let Some(handler_id) = handler_id {
-                            let transport = self
-                                .plugin_transports
-                                .read()
-                                .await
-                                .get(&handler_id)
-                                .cloned();
+                            let transport =
+                                if let Ok(handler_key) = PluginKey::parse(handler_id.as_str()) {
+                                    self.plugin_transports
+                                        .read()
+                                        .await
+                                        .get(&handler_key)
+                                        .cloned()
+                                } else {
+                                    None
+                                };
                             match transport {
                                 Some(transport) => {
                                     let params = serde_json::to_value(&req)
@@ -2729,7 +2792,7 @@ impl HostHandle {
                                         Some(AskKind::Decide(decision)) => decision,
                                         Some(AskKind::Advise(advice)) => advice.decision,
                                         _ => {
-                                            host_api::with_host_callback_context(
+                                            host_api::run_in_host_callback_context(
                                                 scoped_context(plugin_id, None),
                                                 inner.ask_permission(req),
                                             )
@@ -2741,7 +2804,7 @@ impl HostHandle {
                                     // Handler is set but transport not registered
                                     // (e.g. unloaded). Fall back rather than fail
                                     // the permission flow.
-                                    host_api::with_host_callback_context(
+                                    host_api::run_in_host_callback_context(
                                         scoped_context(plugin_id, None),
                                         inner.ask_permission(req),
                                     )
@@ -2749,7 +2812,7 @@ impl HostHandle {
                                 }
                             }
                         } else {
-                            host_api::with_host_callback_context(
+                            host_api::run_in_host_callback_context(
                                 scoped_context(plugin_id, None),
                                 inner.ask_permission(req),
                             )
@@ -2766,7 +2829,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostPermissionCheckPathParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.check_path_permission(p.request),
                         )
@@ -2782,7 +2845,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostPermissionCheckNetworkParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.check_network_permission(p.request),
                         )
@@ -2828,7 +2891,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostConfigReadParams = parse(params)?;
-                        host_api::with_host_callback_context(
+                        host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.read_config(p.path),
                         )
@@ -2842,7 +2905,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostConfigReloadParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.reload_config(),
                         )
@@ -2858,7 +2921,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostInvokeToolParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.invoke_tool(p.tool, p.input),
                         )
@@ -2874,7 +2937,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostAskUserParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.ask_user(p.request),
                         )
@@ -2890,7 +2953,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostSpawnSubtaskParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.spawn_subtask(p.request),
                         )
@@ -2906,7 +2969,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostListToolsParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.list_tools(),
                         )
@@ -2922,7 +2985,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostEnterSnapshotParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.enter_snapshot(p.request),
                         )
@@ -2938,7 +3001,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostExitSnapshotParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.exit_snapshot(p.request),
                         )
@@ -2954,7 +3017,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostMonitorStartParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.monitor_start(p.request),
                         )
@@ -2970,7 +3033,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostMonitorListParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.monitor_list(),
                         )
@@ -2986,7 +3049,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostMonitorReadParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.monitor_read(p.request),
                         )
@@ -3002,7 +3065,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostMonitorStopParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.monitor_stop(p.request),
                         )
@@ -3078,7 +3141,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostStorageGetParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.storage_get(p.request),
                         )
@@ -3094,7 +3157,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostStorageSetParams = parse(params)?;
-                        host_api::with_host_callback_context(
+                        host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.storage_set(p.request),
                         )
@@ -3109,7 +3172,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostStorageDeleteParams = parse(params)?;
-                        host_api::with_host_callback_context(
+                        host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.storage_delete(p.request),
                         )
@@ -3124,7 +3187,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostStorageListParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.storage_list(p.request),
                         )
@@ -3140,7 +3203,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostSecretGetParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.secret_get(p.request),
                         )
@@ -3156,7 +3219,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostSecretSetParams = parse(params)?;
-                        host_api::with_host_callback_context(
+                        host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.secret_set(p.request),
                         )
@@ -3171,7 +3234,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostSecretDeleteParams = parse(params)?;
-                        host_api::with_host_callback_context(
+                        host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.secret_delete(p.request),
                         )
@@ -3186,7 +3249,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostSecretListParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.secret_list(),
                         )
@@ -3225,7 +3288,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostLspListServersParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.lsp_list_servers(),
                         )
@@ -3241,7 +3304,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostLspListDiagnosticsParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.lsp_list_diagnostics(p.request),
                         )
@@ -3257,7 +3320,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostSnapshotListParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.snapshot_list(),
                         )
@@ -3273,7 +3336,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostSchedulerListParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.scheduler_list(),
                         )
@@ -3289,7 +3352,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostSchedulerCreateParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.scheduler_create(p.request),
                         )
@@ -3305,7 +3368,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostSchedulerDeleteParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.scheduler_delete(p.request),
                         )
@@ -3321,7 +3384,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostAgentRegisterParams = parse(params)?;
-                        host_api::with_host_callback_context(
+                        host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.agent_register(p.request),
                         )
@@ -3336,7 +3399,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostAgentRemoveParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.agent_remove(p.request),
                         )
@@ -3352,7 +3415,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostAgentListParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.agent_list(),
                         )
@@ -3368,7 +3431,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostAgentGetParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.agent_get(p.request),
                         )
@@ -3384,7 +3447,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostAgentSwitchParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.agent_switch(p.request),
                         )
@@ -3400,7 +3463,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostAgentRestoreParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.agent_restore(p.request),
                         )
@@ -3427,7 +3490,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostMcpListServersParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.mcp_list_servers(),
                         )
@@ -3443,7 +3506,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostMcpAddServerParams = parse(params)?;
-                        host_api::with_host_callback_context(
+                        host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.mcp_add_server(p.request),
                         )
@@ -3458,7 +3521,7 @@ impl HostHandle {
                         )
                         .await?;
                         let p: HostMcpRemoveServerParams = parse(params)?;
-                        let out = host_api::with_host_callback_context(
+                        let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.mcp_remove_server(p.request),
                         )
@@ -3554,7 +3617,7 @@ impl HostHandle {
             .plugin_indices
             .read()
             .map_err(|_| host_unavailable("plugin index lock poisoned"))?
-            .contains_key(plugin_id);
+            .contains_key(&PluginKey::parse(plugin_id)?);
         if !registered {
             return Err(host_unavailable(format!(
                 "plugin `{plugin_id}` is not registered"
@@ -3565,30 +3628,28 @@ impl HostHandle {
             .write()
             .map_err(|_| host_unavailable("tool registry lock poisoned"))?;
         let plugin_tool_name = definition.name.clone();
-        let (namespace, plugin_name) = crate::registry::split_plugin_full_name(plugin_id);
+        let plugin_key = PluginKey::parse(plugin_id)?;
         let kind = if tool_registry
-            .lookup_for_plugin(&namespace, &plugin_name, &plugin_tool_name)
+            .lookup_for_plugin(&plugin_key, &plugin_tool_name)
             .is_some()
         {
             ToolRegistryChangeKind::Updated
         } else {
             ToolRegistryChangeKind::Registered
         };
-        let tool = tool_registry.upsert_from_plugin(&namespace, &plugin_name, definition);
+        let tool = tool_registry.upsert_from_plugin(&plugin_key, definition);
         let event = ToolRegistryChangedEvent {
             kind,
             generation: tool_registry.generation(),
             timestamp_ms: unix_timestamp_ms(),
-            namespace: tool.namespace.clone(),
-            plugin_name: tool.plugin_name.clone(),
-            tool_name: tool.tool_name.clone(),
-            model_name: tool.model_name.clone(),
+            plugin: tool.plugin_key().clone(),
+            tool_key: tool.tool_key().clone(),
             tool: Some(tool.definition.clone()),
         };
         self.record_tool_registry_event(event.clone());
         Ok(HostToolMutationResponse {
             generation: tool_registry.generation(),
-            model_name: Some(tool.model_name.clone()),
+            model_name: Some(tool.model_name()),
             tool: Some(tool.definition.clone()),
             event: Some(event),
         })
@@ -3598,22 +3659,31 @@ impl HostHandle {
         &self,
         plugin_id: &str,
         name: &str,
-        _by_model_name: bool,
+        by_model_name: bool,
     ) -> Result<HostToolMutationResponse, PluginError> {
         let mut tool_registry = self
             .tool_registry
             .write()
             .map_err(|_| host_unavailable("tool registry lock poisoned"))?;
-        let (namespace, plugin_name) = crate::registry::split_plugin_full_name(plugin_id);
-        let removed = tool_registry.remove_from_plugin(&namespace, &plugin_name, name);
+        let plugin_key = PluginKey::parse(plugin_id)?;
+        let tool_name = if by_model_name {
+            let tool_key = ToolKey::parse_model_name(name)?;
+            if tool_key.plugin() != &plugin_key {
+                return Err(host_unavailable(format!(
+                    "tool `{name}` does not belong to plugin `{plugin_id}`"
+                )));
+            }
+            tool_key.name().to_string()
+        } else {
+            name.to_string()
+        };
+        let removed = tool_registry.remove_from_plugin(&plugin_key, tool_name.as_str());
         let event = removed.as_ref().map(|tool| ToolRegistryChangedEvent {
             kind: ToolRegistryChangeKind::Removed,
             generation: tool_registry.generation(),
             timestamp_ms: unix_timestamp_ms(),
-            namespace: tool.namespace.clone(),
-            plugin_name: tool.plugin_name.clone(),
-            tool_name: tool.tool_name.clone(),
-            model_name: tool.model_name.clone(),
+            plugin: tool.plugin_key().clone(),
+            tool_key: tool.tool_key().clone(),
             tool: Some(tool.definition.clone()),
         });
         if let Some(event) = event.as_ref() {
@@ -3621,7 +3691,7 @@ impl HostHandle {
         }
         Ok(HostToolMutationResponse {
             generation: tool_registry.generation(),
-            model_name: removed.as_ref().map(|tool| tool.model_name.clone()),
+            model_name: removed.as_ref().map(RegisteredTool::model_name),
             tool: removed.map(|tool| tool.definition.clone()),
             event,
         })
@@ -3637,10 +3707,8 @@ impl HostHandle {
             .tools
             .into_iter()
             .map(|tool| HostRegisteredToolDescriptor {
-                namespace: tool.namespace,
-                plugin_name: tool.plugin_name,
-                tool_name: tool.tool_name,
-                model_name: tool.model_name,
+                plugin: tool.plugin_key().clone(),
+                tool_key: tool.tool_key().clone(),
                 tool: tool.definition.clone(),
             })
             .collect();
@@ -3662,7 +3730,7 @@ impl HostHandle {
         }
     }
 
-    fn plugin_status_get_response(&self, plugin_id: &str) -> HostPluginStatusGetResponse {
+    fn plugin_status_get_response(&self, plugin_id: &PluginKey) -> HostPluginStatusGetResponse {
         HostPluginStatusGetResponse {
             status: self.statuses.get(plugin_id).map(host_status_from),
         }
@@ -3678,12 +3746,15 @@ impl HostHandle {
     }
 
     fn statusline_contribute(&self, plugin_id: &str, req: HostStatuslineContributeRequest) {
+        let Ok(plugin_id) = PluginKey::parse(plugin_id) else {
+            return;
+        };
         if let Ok(mut guard) = self.statusline.write() {
-            let key = (plugin_id.to_string(), req.segment_id.clone());
+            let key = (plugin_id.clone(), req.segment_id.clone());
             guard.insert(
                 key,
                 HostStatuslineSegment {
-                    plugin_id: plugin_id.to_string(),
+                    plugin_id,
                     segment_id: req.segment_id,
                     content: req.content,
                     priority: req.priority,
@@ -3694,10 +3765,11 @@ impl HostHandle {
     }
 
     fn statusline_remove(&self, plugin_id: &str, segment_id: &str) -> bool {
+        let Ok(plugin_id) = PluginKey::parse(plugin_id) else {
+            return false;
+        };
         if let Ok(mut guard) = self.statusline.write() {
-            return guard
-                .remove(&(plugin_id.to_string(), segment_id.to_string()))
-                .is_some();
+            return guard.remove(&(plugin_id, segment_id.to_string())).is_some();
         }
         false
     }
@@ -3718,12 +3790,15 @@ impl HostHandle {
     }
 
     fn theme_register(&self, plugin_id: &str, req: HostThemeRegisterRequest) {
+        let Ok(plugin_id) = PluginKey::parse(plugin_id) else {
+            return;
+        };
         if let Ok(mut guard) = self.themes.write() {
             guard.insert(
                 req.id.clone(),
                 HostThemePalette {
                     id: req.id,
-                    plugin_id: plugin_id.to_string(),
+                    plugin_id,
                     display_name: req.display_name,
                     colors: req.colors,
                 },
@@ -3732,6 +3807,9 @@ impl HostHandle {
     }
 
     fn theme_remove(&self, plugin_id: &str, id: &str) -> bool {
+        let Ok(plugin_id) = PluginKey::parse(plugin_id) else {
+            return false;
+        };
         if let Ok(mut guard) = self.themes.write()
             && let Some(existing) = guard.get(id)
             && existing.plugin_id == plugin_id
@@ -4156,7 +4234,7 @@ impl ScopedHostClient {
 impl HostClient for ScopedHostClient {
     async fn log(&self, level: LogLevel, message: String, fields: serde_json::Value) {
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.log(level, message, fields))
+        host_api::run_in_host_callback_context(self.context(), inner.log(level, message, fields))
             .await;
     }
 
@@ -4164,7 +4242,7 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_EVENT_PUBLISH, HostCapability::PublishEvent)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.publish_event(env)).await
+        host_api::run_in_host_callback_context(self.context(), inner.publish_event(env)).await
     }
 
     async fn subscribe_events(&self, filter: EventFilter) -> crate::sdk::Result<EventSubscription> {
@@ -4174,7 +4252,7 @@ impl HostClient for ScopedHostClient {
         )
         .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.subscribe_events(filter)).await
+        host_api::run_in_host_callback_context(self.context(), inner.subscribe_events(filter)).await
     }
 
     async fn unsubscribe_events(&self, subscription_id: String) -> crate::sdk::Result<()> {
@@ -4184,7 +4262,7 @@ impl HostClient for ScopedHostClient {
         )
         .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(
+        host_api::run_in_host_callback_context(
             self.context(),
             inner.unsubscribe_events(subscription_id),
         )
@@ -4196,7 +4274,7 @@ impl HostClient for ScopedHostClient {
         req: PermissionAskInput,
     ) -> crate::sdk::Result<PermissionDecision> {
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.ask_permission(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.ask_permission(req)).await
     }
 
     async fn check_path_permission(
@@ -4209,7 +4287,8 @@ impl HostClient for ScopedHostClient {
         )
         .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.check_path_permission(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.check_path_permission(req))
+            .await
     }
 
     async fn check_network_permission(
@@ -4222,7 +4301,7 @@ impl HostClient for ScopedHostClient {
         )
         .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.check_network_permission(req))
+        host_api::run_in_host_callback_context(self.context(), inner.check_network_permission(req))
             .await
     }
 
@@ -4230,14 +4309,14 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_CONFIG_READ, HostCapability::ReadConfig)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.read_config(path)).await
+        host_api::run_in_host_callback_context(self.context(), inner.read_config(path)).await
     }
 
     async fn reload_config(&self) -> crate::sdk::Result<HostConfigReloadResponse> {
         self.require_capability(method::HOST_CONFIG_RELOAD, HostCapability::ReloadConfig)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.reload_config()).await
+        host_api::run_in_host_callback_context(self.context(), inner.reload_config()).await
     }
 
     async fn invoke_tool(
@@ -4248,14 +4327,14 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_TOOL_INVOKE, HostCapability::InvokeTool)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.invoke_tool(tool, input)).await
+        host_api::run_in_host_callback_context(self.context(), inner.invoke_tool(tool, input)).await
     }
 
     async fn ask_user(&self, req: AskUserRequest) -> crate::sdk::Result<AskUserResponse> {
         self.require_capability(method::HOST_ASK_USER, HostCapability::AskUser)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.ask_user(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.ask_user(req)).await
     }
 
     async fn spawn_subtask(
@@ -4265,14 +4344,14 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_SUBTASK_SPAWN, HostCapability::SpawnSubtask)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.spawn_subtask(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.spawn_subtask(req)).await
     }
 
     async fn list_tools(&self) -> crate::sdk::Result<Vec<ToolDescriptor>> {
         self.require_capability(method::HOST_TOOL_LIST, HostCapability::ListTools)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.list_tools()).await
+        host_api::run_in_host_callback_context(self.context(), inner.list_tools()).await
     }
 
     async fn get_session(
@@ -4282,7 +4361,7 @@ impl HostClient for ScopedHostClient {
         self.require_capability("host/session.get", HostCapability::SessionRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.get_session(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.get_session(req)).await
     }
 
     async fn rename_session(
@@ -4292,7 +4371,7 @@ impl HostClient for ScopedHostClient {
         self.require_capability("host/session.rename", HostCapability::SessionRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.rename_session(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.rename_session(req)).await
     }
 
     async fn enter_snapshot(
@@ -4305,7 +4384,7 @@ impl HostClient for ScopedHostClient {
         )
         .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.enter_snapshot(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.enter_snapshot(req)).await
     }
 
     async fn exit_snapshot(
@@ -4315,21 +4394,21 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_SNAPSHOT_EXIT, HostCapability::SnapshotRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.exit_snapshot(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.exit_snapshot(req)).await
     }
 
     async fn monitor_start(&self, req: MonitorStartRequest) -> crate::sdk::Result<MonitorHandle> {
         self.require_capability(method::HOST_MONITOR_START, HostCapability::MonitorRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.monitor_start(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.monitor_start(req)).await
     }
 
     async fn monitor_list(&self) -> crate::sdk::Result<Vec<MonitorHandle>> {
         self.require_capability(method::HOST_MONITOR_LIST, HostCapability::MonitorRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.monitor_list()).await
+        host_api::run_in_host_callback_context(self.context(), inner.monitor_list()).await
     }
 
     async fn monitor_read(
@@ -4339,14 +4418,14 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_MONITOR_READ, HostCapability::MonitorRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.monitor_read(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.monitor_read(req)).await
     }
 
     async fn monitor_stop(&self, req: MonitorStopRequest) -> crate::sdk::Result<MonitorHandle> {
         self.require_capability(method::HOST_MONITOR_STOP, HostCapability::MonitorRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.monitor_stop(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.monitor_stop(req)).await
     }
 
     async fn register_tool(
@@ -4404,21 +4483,21 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_STORAGE_GET, HostCapability::PluginStorage)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.storage_get(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.storage_get(req)).await
     }
 
     async fn storage_set(&self, req: HostStorageSetRequest) -> crate::sdk::Result<()> {
         self.require_capability(method::HOST_STORAGE_SET, HostCapability::PluginStorage)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.storage_set(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.storage_set(req)).await
     }
 
     async fn storage_delete(&self, req: HostStorageDeleteRequest) -> crate::sdk::Result<()> {
         self.require_capability(method::HOST_STORAGE_DELETE, HostCapability::PluginStorage)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.storage_delete(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.storage_delete(req)).await
     }
 
     async fn storage_list(
@@ -4428,7 +4507,7 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_STORAGE_LIST, HostCapability::PluginStorage)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.storage_list(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.storage_list(req)).await
     }
 
     async fn secret_get(
@@ -4438,28 +4517,28 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_SECRET_GET, HostCapability::PluginSecrets)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.secret_get(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.secret_get(req)).await
     }
 
     async fn secret_set(&self, req: HostSecretSetRequest) -> crate::sdk::Result<()> {
         self.require_capability(method::HOST_SECRET_SET, HostCapability::PluginSecrets)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.secret_set(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.secret_set(req)).await
     }
 
     async fn secret_delete(&self, req: HostSecretDeleteRequest) -> crate::sdk::Result<()> {
         self.require_capability(method::HOST_SECRET_DELETE, HostCapability::PluginSecrets)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.secret_delete(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.secret_delete(req)).await
     }
 
     async fn secret_list(&self) -> crate::sdk::Result<HostSecretListResponse> {
         self.require_capability(method::HOST_SECRET_LIST, HostCapability::PluginSecrets)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.secret_list()).await
+        host_api::run_in_host_callback_context(self.context(), inner.secret_list()).await
     }
 
     async fn plugin_status_list(&self) -> crate::sdk::Result<HostPluginStatusListResponse> {
@@ -4484,7 +4563,7 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_LSP_LIST_SERVERS, HostCapability::LspRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.lsp_list_servers()).await
+        host_api::run_in_host_callback_context(self.context(), inner.lsp_list_servers()).await
     }
 
     async fn lsp_list_diagnostics(
@@ -4497,21 +4576,22 @@ impl HostClient for ScopedHostClient {
         )
         .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.lsp_list_diagnostics(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.lsp_list_diagnostics(req))
+            .await
     }
 
     async fn snapshot_list(&self) -> crate::sdk::Result<HostSnapshotListResponse> {
         self.require_capability(method::HOST_SNAPSHOT_LIST, HostCapability::SnapshotRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.snapshot_list()).await
+        host_api::run_in_host_callback_context(self.context(), inner.snapshot_list()).await
     }
 
     async fn scheduler_list(&self) -> crate::sdk::Result<HostSchedulerListResponse> {
         self.require_capability(method::HOST_SCHEDULER_LIST, HostCapability::Scheduler)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.scheduler_list()).await
+        host_api::run_in_host_callback_context(self.context(), inner.scheduler_list()).await
     }
 
     async fn scheduler_create(
@@ -4521,7 +4601,7 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_SCHEDULER_CREATE, HostCapability::Scheduler)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.scheduler_create(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.scheduler_create(req)).await
     }
 
     async fn scheduler_delete(
@@ -4531,14 +4611,14 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_SCHEDULER_DELETE, HostCapability::Scheduler)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.scheduler_delete(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.scheduler_delete(req)).await
     }
 
     async fn agent_register(&self, req: HostAgentRegisterRequest) -> crate::sdk::Result<()> {
         self.require_capability(method::HOST_AGENT_REGISTER, HostCapability::AgentRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.agent_register(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.agent_register(req)).await
     }
 
     async fn agent_remove(
@@ -4548,14 +4628,14 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_AGENT_REMOVE, HostCapability::AgentRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.agent_remove(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.agent_remove(req)).await
     }
 
     async fn agent_list(&self) -> crate::sdk::Result<HostAgentListResponse> {
         self.require_capability(method::HOST_AGENT_LIST, HostCapability::AgentRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.agent_list()).await
+        host_api::run_in_host_callback_context(self.context(), inner.agent_list()).await
     }
 
     async fn agent_get(
@@ -4565,7 +4645,7 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_AGENT_GET, HostCapability::AgentRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.agent_get(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.agent_get(req)).await
     }
 
     async fn agent_switch(
@@ -4575,7 +4655,7 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_AGENT_SWITCH, HostCapability::AgentRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.agent_switch(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.agent_switch(req)).await
     }
 
     async fn agent_restore(
@@ -4585,7 +4665,7 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_AGENT_RESTORE, HostCapability::AgentRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.agent_restore(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.agent_restore(req)).await
     }
 
     async fn hook_list(&self) -> crate::sdk::Result<HostHookListResponse> {
@@ -4598,14 +4678,14 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_MCP_LIST_SERVERS, HostCapability::McpRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.mcp_list_servers()).await
+        host_api::run_in_host_callback_context(self.context(), inner.mcp_list_servers()).await
     }
 
     async fn mcp_add_server(&self, req: HostMcpAddServerRequest) -> crate::sdk::Result<()> {
         self.require_capability(method::HOST_MCP_ADD_SERVER, HostCapability::McpRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.mcp_add_server(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.mcp_add_server(req)).await
     }
 
     async fn mcp_remove_server(
@@ -4615,7 +4695,7 @@ impl HostClient for ScopedHostClient {
         self.require_capability(method::HOST_MCP_REMOVE_SERVER, HostCapability::McpRegistry)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::with_host_callback_context(self.context(), inner.mcp_remove_server(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.mcp_remove_server(req)).await
     }
 
     async fn ui_statusline_contribute(

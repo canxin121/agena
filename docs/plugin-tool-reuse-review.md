@@ -33,7 +33,7 @@
 从当前实现看，Agena 的抽象边界已经基本正确：
 
 - `PluginHost` 是统一扩展平面，内置 static plugin 和外部 plugin 走同一路径。
-- 内置能力已经按领域收敛成稳定入口：`agena.fs`、`agena.process`、`agena.web`、`agena.catalog`、`agena.runtime`、`agena.plan`、`agena.tasks`、`agena.snapshot`、`agena.skills`、`agena.lsp`、`agena.memory`、`agena.mcp`、`agena.settings`。
+- 内置能力已经按领域收敛成稳定入口：`agena.fs`、`agena.process`、`agena.web`、`agena.tools`、`agena.runtime`、`agena.plan`、`agena.tasks`、`agena.snapshot`、`agena.skills`、`agena.lsp`、`agena.memory`、`agena.mcp`、`agena.settings`。
 - 对模型暴露的是高层 action tool，而不是零散 syscall 级工具。
 
 这意味着最合理的策略是：

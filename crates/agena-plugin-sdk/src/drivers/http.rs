@@ -115,7 +115,7 @@ impl HostClient for HttpCallbackHostClient {
         let _ = self
             .fire(
                 method::HOST_LOG,
-                with_current_context(serde_json::json!({
+                params_with_current_context(serde_json::json!({
                     "level": level,
                     "message": message,
                     "fields": fields,
@@ -127,7 +127,7 @@ impl HostClient for HttpCallbackHostClient {
     async fn publish_event(&self, env: EventEnvelope) -> crate::error::Result<()> {
         self.fire(
             method::HOST_EVENT_PUBLISH,
-            with_current_context(
+            params_with_current_context(
                 serde_json::to_value(env)
                     .map_err(|e| PluginError::invalid_params(e.to_string()))?,
             ),
@@ -142,7 +142,7 @@ impl HostClient for HttpCallbackHostClient {
         let value: serde_json::Value = self
             .call(
                 method::HOST_EVENT_SUBSCRIBE,
-                with_current_context(serde_json::json!({ "filter": filter })),
+                params_with_current_context(serde_json::json!({ "filter": filter })),
             )
             .await?;
         let id = value
@@ -157,7 +157,7 @@ impl HostClient for HttpCallbackHostClient {
         &self,
         req: PermissionAskInput,
     ) -> crate::error::Result<PermissionDecision> {
-        let params = with_current_context(
+        let params = params_with_current_context(
             serde_json::to_value(req).map_err(|e| PluginError::invalid_params(e.to_string()))?,
         );
         self.call(method::HOST_PERMISSION_ASK, params).await
@@ -169,7 +169,7 @@ impl HostClient for HttpCallbackHostClient {
     ) -> crate::error::Result<HostPermissionCheckResponse> {
         self.call(
             method::HOST_PERMISSION_CHECK_PATH,
-            with_current_context(serde_json::json!({ "request": req })),
+            params_with_current_context(serde_json::json!({ "request": req })),
         )
         .await
     }
@@ -180,7 +180,7 @@ impl HostClient for HttpCallbackHostClient {
     ) -> crate::error::Result<HostPermissionCheckResponse> {
         self.call(
             method::HOST_PERMISSION_CHECK_NETWORK,
-            with_current_context(serde_json::json!({ "request": req })),
+            params_with_current_context(serde_json::json!({ "request": req })),
         )
         .await
     }
@@ -188,7 +188,7 @@ impl HostClient for HttpCallbackHostClient {
     async fn read_config(&self, path: Option<String>) -> crate::error::Result<serde_json::Value> {
         self.call(
             method::HOST_CONFIG_READ,
-            with_current_context(serde_json::json!({ "path": path })),
+            params_with_current_context(serde_json::json!({ "path": path })),
         )
         .await
     }
@@ -196,7 +196,7 @@ impl HostClient for HttpCallbackHostClient {
     async fn reload_config(&self) -> crate::error::Result<HostConfigReloadResponse> {
         self.call(
             method::HOST_CONFIG_RELOAD,
-            with_current_context(serde_json::json!({})),
+            params_with_current_context(serde_json::json!({})),
         )
         .await
     }
@@ -208,7 +208,7 @@ impl HostClient for HttpCallbackHostClient {
     ) -> crate::error::Result<ToolInvokeOutput> {
         self.call(
             method::HOST_TOOL_INVOKE,
-            with_current_context(serde_json::json!({
+            params_with_current_context(serde_json::json!({
                 "tool": tool,
                 "input": input,
             })),
@@ -279,7 +279,7 @@ async fn handle_rpc<P: Plugin>(
                 let _ = callback_client
                     .fire(
                         method::TOOL_STREAM_CHUNK,
-                        with_context(
+                        attach_host_context(
                             serde_json::to_value(&chunk).expect("stream chunk serialize"),
                             callback_context.clone(),
                         ),
@@ -291,7 +291,7 @@ async fn handle_rpc<P: Plugin>(
                     let _ = callback_client
                         .fire(
                             method::TOOL_STREAM_END,
-                            with_context(
+                            attach_host_context(
                                 serde_json::to_value(&end).expect("stream end serialize"),
                                 callback_context,
                             ),
@@ -302,7 +302,7 @@ async fn handle_rpc<P: Plugin>(
                     let _ = callback_client
                         .fire(
                             method::TOOL_STREAM_ERROR,
-                            with_context(
+                            attach_host_context(
                                 serde_json::to_value(ToolStreamError { stream_id, error })
                                     .expect("stream error serialize"),
                                 callback_context,
@@ -314,7 +314,7 @@ async fn handle_rpc<P: Plugin>(
                     let _ = callback_client
                         .fire(
                             method::TOOL_STREAM_ERROR,
-                            with_context(
+                            attach_host_context(
                                 serde_json::to_value(ToolStreamError {
                                     stream_id,
                                     error: PluginError::new(
@@ -352,14 +352,14 @@ async fn handle_rpc<P: Plugin>(
     }
 }
 
-fn with_current_context(params: serde_json::Value) -> serde_json::Value {
-    with_context(
+fn params_with_current_context(params: serde_json::Value) -> serde_json::Value {
+    attach_host_context(
         params,
         crate::host_api::current_host_callback_context().unwrap_or_default(),
     )
 }
 
-fn with_context(
+fn attach_host_context(
     mut params: serde_json::Value,
     context: crate::host_api::HostCallbackContext,
 ) -> serde_json::Value {

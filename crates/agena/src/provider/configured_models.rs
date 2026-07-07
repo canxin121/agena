@@ -9,7 +9,9 @@ use crate::error::AppError;
 use crate::model::{
     AdapterId, CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality,
     ModelLifecycle, ModelMetadata, ModelPricing, ModelSpeedMode, ModelSpeedModeRequestOverride,
-    ModelThinkingMode,
+    ModelThinkingMode, non_empty_model_pricing, normalize_model_assistant_reasoning_field,
+    normalize_model_default_temperature, normalize_model_default_top_k,
+    normalize_model_default_top_p, normalize_model_output_modalities,
 };
 
 use super::core::{
@@ -490,69 +492,39 @@ impl ConfiguredModelDefinition {
     }
 
     pub fn metadata(&self) -> ModelMetadata {
-        let mut metadata = ModelMetadata::default();
-        if let Some(lifecycle) = self.lifecycle {
-            metadata = metadata.with_lifecycle(lifecycle);
+        let output_modalities = if self.output_modalities.is_empty() {
+            Vec::new()
+        } else {
+            normalize_model_output_modalities(self.output_modalities.clone())
+        };
+        ModelMetadata {
+            lifecycle: self.lifecycle,
+            limits: crate::model::ModelTokenLimits {
+                context_window_tokens: self.context_window_tokens,
+                max_input_tokens: self.max_input_tokens,
+                max_output_tokens: self.max_output_tokens,
+            },
+            description: self.description.clone(),
+            knowledge_cutoff: self.knowledge_cutoff.clone(),
+            release_date: self.release_date.clone(),
+            last_updated: self.last_updated.clone(),
+            open_weights: self.open_weights,
+            default_thinking_mode: self.default_thinking_mode.clone(),
+            supports_parallel_tool_calls: self.supports_parallel_tool_calls,
+            supports_verbosity: self.supports_verbosity,
+            default_verbosity: self.default_verbosity.clone(),
+            default_temperature: normalize_model_default_temperature(
+                self.default_temperature.clone(),
+            ),
+            default_top_p: normalize_model_default_top_p(self.default_top_p.clone()),
+            default_top_k: normalize_model_default_top_k(self.default_top_k),
+            assistant_reasoning_interleaved: self.assistant_reasoning_interleaved,
+            assistant_reasoning_field: normalize_model_assistant_reasoning_field(
+                self.assistant_reasoning_field.clone(),
+            ),
+            output_modalities,
+            pricing: non_empty_model_pricing(self.pricing.clone()),
         }
-        if let Some(context_window_tokens) = self.context_window_tokens {
-            metadata = metadata.with_context_window_tokens(context_window_tokens);
-        }
-        if let Some(max_input_tokens) = self.max_input_tokens {
-            metadata = metadata.with_max_input_tokens(max_input_tokens);
-        }
-        if let Some(max_output_tokens) = self.max_output_tokens {
-            metadata = metadata.with_max_output_tokens(max_output_tokens);
-        }
-        if let Some(description) = self.description.clone() {
-            metadata = metadata.with_description(description);
-        }
-        if let Some(knowledge_cutoff) = self.knowledge_cutoff.clone() {
-            metadata = metadata.with_knowledge_cutoff(knowledge_cutoff);
-        }
-        if let Some(release_date) = self.release_date.clone() {
-            metadata = metadata.with_release_date(release_date);
-        }
-        if let Some(last_updated) = self.last_updated.clone() {
-            metadata = metadata.with_last_updated(last_updated);
-        }
-        if let Some(open_weights) = self.open_weights {
-            metadata = metadata.with_open_weights(open_weights);
-        }
-        if let Some(default_thinking_mode) = self.default_thinking_mode.clone() {
-            metadata = metadata.with_default_thinking_mode(default_thinking_mode);
-        }
-        if let Some(supports_parallel_tool_calls) = self.supports_parallel_tool_calls {
-            metadata = metadata.with_supports_parallel_tool_calls(supports_parallel_tool_calls);
-        }
-        if let Some(supports_verbosity) = self.supports_verbosity {
-            metadata = metadata.with_supports_verbosity(supports_verbosity);
-        }
-        if let Some(default_verbosity) = self.default_verbosity.clone() {
-            metadata = metadata.with_default_verbosity(default_verbosity);
-        }
-        if let Some(default_temperature) = self.default_temperature.clone() {
-            metadata = metadata.with_default_temperature(default_temperature);
-        }
-        if let Some(default_top_p) = self.default_top_p.clone() {
-            metadata = metadata.with_default_top_p(default_top_p);
-        }
-        if let Some(default_top_k) = self.default_top_k {
-            metadata = metadata.with_default_top_k(default_top_k);
-        }
-        if let Some(assistant_reasoning_interleaved) = self.assistant_reasoning_interleaved {
-            metadata =
-                metadata.with_assistant_reasoning_interleaved(assistant_reasoning_interleaved);
-        }
-        if let Some(assistant_reasoning_field) = self.assistant_reasoning_field.clone() {
-            metadata = metadata.with_assistant_reasoning_field(assistant_reasoning_field);
-        }
-        if !self.output_modalities.is_empty() {
-            metadata = metadata.with_output_modalities(self.output_modalities.clone());
-        }
-        if let Some(pricing) = self.pricing.clone() {
-            metadata = metadata.with_pricing(pricing);
-        }
-        metadata
     }
 
     pub(crate) fn apply_to_model(
@@ -567,13 +539,13 @@ impl ConfiguredModelDefinition {
         let base_capabilities = model
             .capabilities
             .clone()
-            .with_fallbacks_from(capability_fallback);
+            .merged_with_fallbacks_from(capability_fallback);
         model.capabilities = self.capabilities.apply_to(base_capabilities);
         let base_metadata = model
             .metadata
             .clone()
-            .with_fallbacks_from(metadata_fallback);
-        model.metadata = self.metadata().with_fallbacks_from(&base_metadata);
+            .merged_with_fallbacks_from(metadata_fallback);
+        model.metadata = self.metadata().merged_with_fallbacks_from(&base_metadata);
         model.thinking_modes = apply_configured_modes(
             model.thinking_modes,
             self.thinking_modes.iter(),
@@ -645,7 +617,7 @@ impl ConfiguredModelsProvider {
     fn configured_metadata(&self, model: &ModelId) -> ModelMetadata {
         let base = self.target.model_metadata(model);
         self.configured_model(model)
-            .map(|configured| configured.metadata().with_fallbacks_from(&base))
+            .map(|configured| configured.metadata().merged_with_fallbacks_from(&base))
             .unwrap_or(base)
     }
 

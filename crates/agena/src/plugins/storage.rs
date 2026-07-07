@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use agena_keyring_store::{KeyringSecretStore, SecretStore, SecretStoreError};
+use agena_plugin_sdk::PluginKey;
 
 use crate::plugin::sdk::host_api::{HostStorageScope, HostStorageVisibility};
 
@@ -40,7 +41,7 @@ pub enum PluginStorageError {
 pub struct StorageLocator {
     pub scope: HostStorageScope,
     pub visibility: HostStorageVisibility,
-    pub plugin_id: String,
+    pub plugin_id: PluginKey,
     pub session_id: Option<i64>,
     pub workspace_root: Option<String>,
 }
@@ -49,12 +50,10 @@ impl StorageLocator {
     pub fn new(
         scope: HostStorageScope,
         visibility: HostStorageVisibility,
-        plugin_id: impl Into<String>,
+        plugin_id: PluginKey,
         session_id: Option<i64>,
         workspace_root: Option<String>,
     ) -> Result<Self, PluginStorageError> {
-        let plugin_id = plugin_id.into();
-        validate_plugin_id(plugin_id.as_str())?;
         match scope {
             HostStorageScope::Session => {
                 if session_id.is_none() {
@@ -116,10 +115,11 @@ pub trait PluginStorage: Send + Sync {
 }
 
 pub trait PluginSecretStore: Send + Sync {
-    fn get(&self, plugin_id: &str, name: &str) -> Result<Option<String>, PluginStorageError>;
-    fn set(&self, plugin_id: &str, name: &str, value: &str) -> Result<(), PluginStorageError>;
-    fn delete(&self, plugin_id: &str, name: &str) -> Result<(), PluginStorageError>;
-    fn list(&self, plugin_id: &str) -> Result<Vec<String>, PluginStorageError>;
+    fn get(&self, plugin_id: &PluginKey, name: &str) -> Result<Option<String>, PluginStorageError>;
+    fn set(&self, plugin_id: &PluginKey, name: &str, value: &str)
+    -> Result<(), PluginStorageError>;
+    fn delete(&self, plugin_id: &PluginKey, name: &str) -> Result<(), PluginStorageError>;
+    fn list(&self, plugin_id: &PluginKey) -> Result<Vec<String>, PluginStorageError>;
 }
 
 /// Default keyring service for plugin secrets. Kept distinct from the agena
@@ -139,14 +139,6 @@ pub fn default_storage_root() -> PathBuf {
     base.push("agena");
     base.push("plugin-storage");
     base
-}
-
-fn validate_plugin_id(plugin_id: &str) -> Result<(), PluginStorageError> {
-    if plugin_id.trim().is_empty() {
-        Err(PluginStorageError::MissingPluginId)
-    } else {
-        Ok(())
-    }
 }
 
 fn validate_namespace(namespace: &str) -> Result<(), PluginStorageError> {
@@ -237,9 +229,9 @@ fn write_index(path: &Path, names: &BTreeSet<String>) -> Result<(), PluginStorag
     write_secure_file(path, json.as_bytes())
 }
 
-fn plugin_dir(root: &Path, plugin_id: &str) -> PathBuf {
+fn plugin_dir(root: &Path, plugin_id: &PluginKey) -> PathBuf {
     let mut p = root.to_path_buf();
-    p.push(plugin_id);
+    p.push(plugin_id.to_string());
     p
 }
 
@@ -271,7 +263,7 @@ fn storage_scope_dir(root: &Path, locator: &StorageLocator) -> Result<PathBuf, P
     match locator.visibility {
         HostStorageVisibility::Private => {
             p.push("private");
-            p.push(locator.plugin_id.as_str());
+            p.push(locator.plugin_id.to_string());
         }
         HostStorageVisibility::Shared => {
             p.push("shared");
@@ -290,13 +282,13 @@ fn namespace_path(
     Ok(p)
 }
 
-fn secrets_index_path(root: &Path, plugin_id: &str) -> PathBuf {
+fn secrets_index_path(root: &Path, plugin_id: &PluginKey) -> PathBuf {
     let mut p = plugin_dir(root, plugin_id);
     p.push("secrets.json");
     p
 }
 
-fn secrets_fallback_path(root: &Path, plugin_id: &str) -> PathBuf {
+fn secrets_fallback_path(root: &Path, plugin_id: &PluginKey) -> PathBuf {
     let mut p = plugin_dir(root, plugin_id);
     p.push("secrets-store.json");
     p
@@ -472,13 +464,13 @@ impl PluginKeyringSecretStore {
         )
     }
 
-    fn keyring_key(plugin_id: &str, name: &str) -> String {
-        format!("plugin/{plugin_id}/{name}")
+    fn keyring_key(plugin_id: &PluginKey, name: &str) -> String {
+        format!("plugin/{}/{name}", plugin_id)
     }
 
     fn read_fallback(
         &self,
-        plugin_id: &str,
+        plugin_id: &PluginKey,
     ) -> Result<BTreeMap<String, String>, PluginStorageError> {
         let path = secrets_fallback_path(&self.root, plugin_id);
         if !path.exists() {
@@ -493,7 +485,7 @@ impl PluginKeyringSecretStore {
 
     fn write_fallback(
         &self,
-        plugin_id: &str,
+        plugin_id: &PluginKey,
         map: &BTreeMap<String, String>,
     ) -> Result<(), PluginStorageError> {
         let path = secrets_fallback_path(&self.root, plugin_id);
@@ -508,7 +500,7 @@ impl PluginKeyringSecretStore {
         write_secure_file(&path, json.as_bytes())
     }
 
-    fn record_name(&self, plugin_id: &str, name: &str) -> Result<(), PluginStorageError> {
+    fn record_name(&self, plugin_id: &PluginKey, name: &str) -> Result<(), PluginStorageError> {
         let path = secrets_index_path(&self.root, plugin_id);
         let mut names = read_index(&path)?;
         if names.insert(name.to_string()) {
@@ -517,7 +509,7 @@ impl PluginKeyringSecretStore {
         Ok(())
     }
 
-    fn forget_name(&self, plugin_id: &str, name: &str) -> Result<(), PluginStorageError> {
+    fn forget_name(&self, plugin_id: &PluginKey, name: &str) -> Result<(), PluginStorageError> {
         let path = secrets_index_path(&self.root, plugin_id);
         let mut names = read_index(&path)?;
         if names.remove(name) {
@@ -540,8 +532,7 @@ impl PluginKeyringSecretStore {
 }
 
 impl PluginSecretStore for PluginKeyringSecretStore {
-    fn get(&self, plugin_id: &str, name: &str) -> Result<Option<String>, PluginStorageError> {
-        validate_plugin_id(plugin_id)?;
+    fn get(&self, plugin_id: &PluginKey, name: &str) -> Result<Option<String>, PluginStorageError> {
         validate_key(name)?;
         let key = Self::keyring_key(plugin_id, name);
         match self.inner.get_secret(&key) {
@@ -557,8 +548,12 @@ impl PluginSecretStore for PluginKeyringSecretStore {
         }
     }
 
-    fn set(&self, plugin_id: &str, name: &str, value: &str) -> Result<(), PluginStorageError> {
-        validate_plugin_id(plugin_id)?;
+    fn set(
+        &self,
+        plugin_id: &PluginKey,
+        name: &str,
+        value: &str,
+    ) -> Result<(), PluginStorageError> {
         validate_key(name)?;
         let key = Self::keyring_key(plugin_id, name);
         match self.inner.set_secret(&key, value) {
@@ -581,8 +576,7 @@ impl PluginSecretStore for PluginKeyringSecretStore {
         }
     }
 
-    fn delete(&self, plugin_id: &str, name: &str) -> Result<(), PluginStorageError> {
-        validate_plugin_id(plugin_id)?;
+    fn delete(&self, plugin_id: &PluginKey, name: &str) -> Result<(), PluginStorageError> {
         validate_key(name)?;
         let key = Self::keyring_key(plugin_id, name);
         match self.inner.delete_secret(&key) {
@@ -603,8 +597,7 @@ impl PluginSecretStore for PluginKeyringSecretStore {
         Ok(())
     }
 
-    fn list(&self, plugin_id: &str) -> Result<Vec<String>, PluginStorageError> {
-        validate_plugin_id(plugin_id)?;
+    fn list(&self, plugin_id: &PluginKey) -> Result<Vec<String>, PluginStorageError> {
         let path = secrets_index_path(&self.root, plugin_id);
         Ok(read_index(&path)?.into_iter().collect())
     }

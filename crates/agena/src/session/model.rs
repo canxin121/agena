@@ -694,7 +694,7 @@ pub struct Session {
 
 impl Session {
     pub fn new(id: i64, workspace_id: i64, title: impl Into<String>, now: DateTime<Utc>) -> Self {
-        let mut session = Self {
+        Self {
             id,
             parent_id: None,
             depth: 0,
@@ -709,15 +709,7 @@ impl Session {
             runtime: SessionRuntimeState::default(),
             approx_bytes: 0,
             pending_operations: Vec::new(),
-        };
-        session.refresh_derived();
-        session
-    }
-
-    pub fn with_messages(mut self, messages: Vec<Message>) -> Self {
-        self.messages = messages;
-        self.refresh_derived();
-        self
+        }
     }
 
     pub(crate) fn replace_messages(&mut self, messages: Vec<Message>) {
@@ -747,28 +739,50 @@ impl Session {
             RunStatus::Idle
         };
 
-        let mut snapshot = RunRuntimeState {
+        let (
+            model_provider_id,
+            model_adapter_id,
+            model_id,
+            model_thinking_mode,
+            model_speed_mode,
+            model_verbosity,
+            model_parallel_tool_calls,
+            source,
+            prompt_cache_key,
+            prompt_window_generation,
+        ) = if status == RunStatus::AwaitingModel {
+            (
+                previous.model_provider_id,
+                previous.model_adapter_id,
+                previous.model_id,
+                previous.model_thinking_mode,
+                previous.model_speed_mode,
+                previous.model_verbosity,
+                previous.model_parallel_tool_calls,
+                previous.source,
+                previous.prompt_cache_key,
+                previous.prompt_window_generation,
+            )
+        } else {
+            (None, None, None, None, None, None, None, None, None, None)
+        };
+
+        RunRuntimeState {
             status,
             pending_operations: self.pending_operations.clone(),
             pending_tool_calls: self.pending_tool_runtime_snapshots(),
+            model_provider_id,
+            model_adapter_id,
+            model_id,
+            model_thinking_mode,
+            model_speed_mode,
+            model_verbosity,
+            model_parallel_tool_calls,
+            source,
+            prompt_cache_key,
+            prompt_window_generation,
             latest_event_seq: previous.latest_event_seq,
-            ..RunRuntimeState::default()
-        };
-
-        if status == RunStatus::AwaitingModel {
-            snapshot.model_provider_id = previous.model_provider_id;
-            snapshot.model_adapter_id = previous.model_adapter_id;
-            snapshot.model_id = previous.model_id;
-            snapshot.model_thinking_mode = previous.model_thinking_mode;
-            snapshot.model_speed_mode = previous.model_speed_mode;
-            snapshot.model_verbosity = previous.model_verbosity;
-            snapshot.model_parallel_tool_calls = previous.model_parallel_tool_calls;
-            snapshot.source = previous.source;
-            snapshot.prompt_cache_key = previous.prompt_cache_key;
-            snapshot.prompt_window_generation = previous.prompt_window_generation;
         }
-
-        snapshot
     }
 
     fn pending_tool_runtime_snapshots(&self) -> Vec<PendingToolCallRuntime> {

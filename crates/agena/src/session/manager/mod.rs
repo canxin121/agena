@@ -163,69 +163,6 @@ pub struct SessionAgentRestoreOutcome {
 }
 
 impl SessionRunOptions {
-    pub fn new(model: ModelRef) -> Self {
-        Self {
-            model,
-            thinking_mode: None,
-            speed_mode: None,
-            verbosity: None,
-            thinking: None,
-            request_override: Default::default(),
-            system: None,
-            temperature: None,
-            max_output_tokens: None,
-            agent_profile: None,
-        }
-    }
-
-    pub fn with_thinking_mode(mut self, thinking_mode: Option<String>) -> Self {
-        self.thinking_mode = thinking_mode;
-        self
-    }
-
-    pub fn with_speed_mode(mut self, speed_mode: Option<String>) -> Self {
-        self.speed_mode = speed_mode;
-        self
-    }
-
-    pub fn with_verbosity(mut self, verbosity: Option<String>) -> Self {
-        self.verbosity = verbosity;
-        self
-    }
-
-    pub fn with_thinking(mut self, thinking: Option<ThinkingRequest>) -> Self {
-        self.thinking = thinking;
-        self
-    }
-
-    pub fn with_request_override(
-        mut self,
-        request_override: ModelSpeedModeRequestOverride,
-    ) -> Self {
-        self.request_override = request_override;
-        self
-    }
-
-    pub fn with_system(mut self, system: Option<String>) -> Self {
-        self.system = system;
-        self
-    }
-
-    pub fn with_temperature(mut self, temperature: Option<f32>) -> Self {
-        self.temperature = temperature;
-        self
-    }
-
-    pub fn with_max_output_tokens(mut self, max_output_tokens: Option<u32>) -> Self {
-        self.max_output_tokens = max_output_tokens;
-        self
-    }
-
-    pub fn with_agent_profile(mut self, agent_profile: Option<String>) -> Self {
-        self.agent_profile = agent_profile;
-        self
-    }
-
     fn completion_request(
         &self,
         system: Option<String>,
@@ -257,6 +194,23 @@ impl SessionRunOptions {
             responses_api_metadata: None,
             request_override: self.request_override.clone(),
         }
+    }
+}
+
+pub(super) fn merge_system_prompt_with_tool_protocol(
+    system: Option<&str>,
+    tool_protocol: Option<&str>,
+) -> Option<String> {
+    match (
+        system.map(str::trim).filter(|value| !value.is_empty()),
+        tool_protocol
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+    ) {
+        (Some(system), Some(tool_protocol)) => Some(format!("{system}\n\n{tool_protocol}")),
+        (Some(system), None) => Some(system.to_string()),
+        (None, Some(tool_protocol)) => Some(tool_protocol.to_string()),
+        (None, None) => None,
     }
 }
 
@@ -482,6 +436,7 @@ impl SessionManager {
         db: sea_orm::DatabaseConnection,
         processor: SessionProcessor,
         tool_executor: ToolExecutor,
+        config: SessionManagerConfig,
     ) -> Self {
         let db_arc = Arc::new(db.clone());
         // The publisher (not the store) consults `EventKind::is_persistent`
@@ -503,8 +458,7 @@ impl SessionManager {
             tool_executor.workspace_root(),
             Arc::clone(&publisher),
         ));
-        let state =
-            SessionManagerState::new(processor, tool_executor, SessionManagerConfig::default());
+        let state = SessionManagerState::new(processor, tool_executor, config);
         Self {
             store,
             publisher,
@@ -695,13 +649,6 @@ impl SessionManager {
         })
     }
 
-    pub fn with_config(self, config: SessionManagerConfig) -> Self {
-        let mut next = (*self.execution.load_full()).clone();
-        next.config = config;
-        self.execution.store(Arc::new(next));
-        self
-    }
-
     pub(crate) fn reconfigure(
         &self,
         processor: SessionProcessor,
@@ -775,30 +722,30 @@ fn build_message(
     metadata: MessageMetadata,
 ) -> Message {
     let created_at = Utc::now();
-    let mut message = Message {
+    let parts = parts
+        .into_iter()
+        .enumerate()
+        .map(|(idx, content)| {
+            MessagePart::from_content_with_index(
+                ids.part_ids[idx],
+                ids.message_id,
+                idx as i32,
+                created_at,
+                part_status(&content),
+                content,
+            )
+        })
+        .collect();
+    Message {
         id: ids.message_id,
         role,
         state: message_state,
-        parts: Vec::with_capacity(parts.len()),
+        parts,
         created_at,
         metadata,
         provider_state: None,
         usage: None,
-    };
-
-    for content in parts {
-        let mut part = MessagePart::with_content(
-            ids.part_ids[message.parts.len()],
-            message.id,
-            created_at,
-            part_status(&content),
-            content,
-        );
-        part.part_index = message.parts.len() as i32;
-        message.parts.push(part);
     }
-
-    message
 }
 
 fn tool_call_id_for(resolved: &ResolvedPendingTool) -> HistoryToolCallId {
@@ -1042,7 +989,7 @@ fn build_request_part(
     operation_id: &str,
     request: RequestPart,
 ) -> MessagePart {
-    let mut part = MessagePart::with_content(
+    let mut part = MessagePart::from_content(
         part_id,
         message_id,
         Utc::now(),

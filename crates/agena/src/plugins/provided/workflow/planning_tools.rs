@@ -1,6 +1,6 @@
 use super::*;
 
-use agena_macros::{StaticToolSurface, ToolInputShape};
+use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
@@ -150,8 +150,8 @@ pub(crate) enum PlanGetView {
 )]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct PlanGetInput {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) view: Option<PlanGetView>,
+    #[serde(default)]
+    pub(crate) view: PlanGetView,
 }
 
 #[derive(
@@ -190,11 +190,34 @@ pub(crate) struct PlanUpdateInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    tool = "plan",
-    description = "Plan command backed by shared plugin storage. Use it to set the current plan, inspect its current state, or update plan, step, and check status.",
-    summary = "Set, get, update, or clear the current plan.",
+    tool = "get",
+    summary = "Inspect the current plan state.",
     handler_receiver = WorkflowPlugin,
-    help = "Use action `set` to create or replace the current plan and return it to planning. Use action `get` to inspect the current plan with `view = current|summary|full`. Use action `update` to change the plan phase / autorun flag, a step's status, or a check's status. Keep plan-level updates separate from step/check updates: do not send `phase` together with `step_id`, `check_id`, `status`, `wait_until_ms`, or `note`. To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`. Use action `clear` to remove the current plan. If workflow plan config disables direct approval, `plan.update` automatically requests review before moving a planning or cancelled plan into active, blocked, or completed.",
+    handle = WorkflowPlugin::invoke_plan_get,
+    handle_field = args,
+    display = brief,
+    tags(ToolTag::Planning, ToolTag::ReadOnly),
+    capabilities(
+        HostCapability::AskUser,
+        HostCapability::PluginStorage,
+        HostCapability::Statusline
+    ),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PlanGetToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: PlanGetInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "set",
+    summary = "Create or replace the current plan.",
+    handler_receiver = WorkflowPlugin,
+    handle = WorkflowPlugin::invoke_plan_set,
+    handle_field = args,
     display = brief,
     tags(ToolTag::Planning, ToolTag::Mutating),
     capabilities(
@@ -204,26 +227,61 @@ pub(crate) struct PlanUpdateInput {
     ),
     concurrency_safe = false
 )]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub(crate) enum PlanToolInput {
-    #[tool(exec = "get", handle = WorkflowPlugin::invoke_plan_get, default_when_empty = true)]
-    Get {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: PlanGetInput,
-    },
-    #[tool(exec = "set", handle = WorkflowPlugin::invoke_plan_set)]
-    Set {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: PlanSetInput,
-    },
-    #[tool(exec = "update", handle = WorkflowPlugin::invoke_plan_update)]
-    Update {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: PlanUpdateInput,
-    },
-    #[tool(exec = "clear", handle = WorkflowPlugin::invoke_plan_clear)]
-    Clear,
+#[serde(deny_unknown_fields)]
+pub(crate) struct PlanSetToolInputSurface {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: PlanSetInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "update",
+    summary = "Update the current plan.",
+    help = "Keep plan-level updates separate from step/check updates: do not send `phase` together with `step_id`, `check_id`, `status`, `wait_until_ms`, or `note`. To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`.",
+    handler_receiver = WorkflowPlugin,
+    handle = WorkflowPlugin::invoke_plan_update,
+    handle_field = args,
+    display = brief,
+    tags(ToolTag::Planning, ToolTag::Mutating),
+    capabilities(
+        HostCapability::AskUser,
+        HostCapability::PluginStorage,
+        HostCapability::Statusline
+    ),
+    concurrency_safe = false
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PlanUpdateToolInputSurface {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: PlanUpdateInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "clear",
+    summary = "Remove the current plan.",
+    handler_receiver = WorkflowPlugin,
+    handle = WorkflowPlugin::invoke_plan_clear,
+    display = brief,
+    tags(ToolTag::Planning, ToolTag::Mutating),
+    capabilities(
+        HostCapability::AskUser,
+        HostCapability::PluginStorage,
+        HostCapability::Statusline
+    ),
+    concurrency_safe = false
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PlanClearToolInput {}
+
+#[allow(dead_code)]
+#[derive(Debug, ToolSuite)]
+#[tool_suite(handler_receiver = WorkflowPlugin)]
+pub(crate) enum PlanToolSuite {
+    Get(PlanGetToolInput),
+    Set(PlanSetToolInputSurface),
+    Update(PlanUpdateToolInputSurface),
+    Clear(PlanClearToolInput),
 }

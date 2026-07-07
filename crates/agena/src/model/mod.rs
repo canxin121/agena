@@ -152,11 +152,6 @@ impl ModelRef {
             model_id: ModelId::try_new(model_id)?,
         })
     }
-
-    pub fn with_adapter_id(mut self, adapter_id: impl Into<String>) -> Self {
-        self.adapter_id = Some(AdapterId::new(adapter_id));
-        self
-    }
 }
 
 impl fmt::Display for ModelRef {
@@ -266,32 +261,14 @@ impl ModelTokenLimits {
             && self.max_output_tokens.is_none()
     }
 
-    pub fn with_context_window_tokens(mut self, context_window_tokens: u32) -> Self {
-        self.context_window_tokens = Some(context_window_tokens);
-        self
-    }
-
-    pub fn with_max_input_tokens(mut self, max_input_tokens: u32) -> Self {
-        self.max_input_tokens = Some(max_input_tokens);
-        self
-    }
-
-    pub fn with_max_output_tokens(mut self, max_output_tokens: u32) -> Self {
-        self.max_output_tokens = Some(max_output_tokens);
-        self
-    }
-
-    pub fn with_fallbacks_from(mut self, fallback: &Self) -> Self {
-        if self.context_window_tokens.is_none() {
-            self.context_window_tokens = fallback.context_window_tokens;
+    pub fn merged_with_fallbacks_from(self, fallback: &Self) -> Self {
+        Self {
+            context_window_tokens: self
+                .context_window_tokens
+                .or(fallback.context_window_tokens),
+            max_input_tokens: self.max_input_tokens.or(fallback.max_input_tokens),
+            max_output_tokens: self.max_output_tokens.or(fallback.max_output_tokens),
         }
-        if self.max_input_tokens.is_none() {
-            self.max_input_tokens = fallback.max_input_tokens;
-        }
-        if self.max_output_tokens.is_none() {
-            self.max_output_tokens = fallback.max_output_tokens;
-        }
-        self
     }
 }
 
@@ -408,135 +385,6 @@ impl ModelMetadata {
             && self.pricing.is_none()
     }
 
-    pub fn with_lifecycle(mut self, lifecycle: ModelLifecycle) -> Self {
-        self.lifecycle = Some(lifecycle);
-        self
-    }
-
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
-        self
-    }
-
-    pub fn with_knowledge_cutoff(mut self, knowledge_cutoff: impl Into<String>) -> Self {
-        self.knowledge_cutoff = Some(knowledge_cutoff.into());
-        self
-    }
-
-    pub fn with_release_date(mut self, release_date: impl Into<String>) -> Self {
-        self.release_date = Some(release_date.into());
-        self
-    }
-
-    pub fn with_last_updated(mut self, last_updated: impl Into<String>) -> Self {
-        self.last_updated = Some(last_updated.into());
-        self
-    }
-
-    pub fn with_open_weights(mut self, open_weights: bool) -> Self {
-        self.open_weights = Some(open_weights);
-        self
-    }
-
-    pub fn with_default_thinking_mode(mut self, default_thinking_mode: impl Into<String>) -> Self {
-        self.default_thinking_mode = Some(default_thinking_mode.into());
-        self
-    }
-
-    pub fn with_supports_parallel_tool_calls(mut self, supports_parallel_tool_calls: bool) -> Self {
-        self.supports_parallel_tool_calls = Some(supports_parallel_tool_calls);
-        self
-    }
-
-    pub fn with_supports_verbosity(mut self, supports_verbosity: bool) -> Self {
-        self.supports_verbosity = Some(supports_verbosity);
-        self
-    }
-
-    pub fn with_default_verbosity(mut self, default_verbosity: impl Into<String>) -> Self {
-        self.default_verbosity = Some(default_verbosity.into());
-        self
-    }
-
-    pub fn with_default_temperature(mut self, default_temperature: impl Into<String>) -> Self {
-        self.default_temperature =
-            normalize_optional_decimal(Some(default_temperature.into()), |parsed| {
-                parsed.is_finite() && parsed >= 0.0
-            });
-        self
-    }
-
-    pub fn with_default_top_p(mut self, default_top_p: impl Into<String>) -> Self {
-        self.default_top_p = normalize_optional_decimal(Some(default_top_p.into()), |parsed| {
-            parsed.is_finite() && parsed > 0.0 && parsed <= 1.0
-        });
-        self
-    }
-
-    pub fn with_default_top_k(mut self, default_top_k: u32) -> Self {
-        if default_top_k > 0 {
-            self.default_top_k = Some(default_top_k);
-        }
-        self
-    }
-
-    pub fn with_assistant_reasoning_interleaved(
-        mut self,
-        assistant_reasoning_interleaved: bool,
-    ) -> Self {
-        self.assistant_reasoning_interleaved = Some(assistant_reasoning_interleaved);
-        self
-    }
-
-    pub fn with_assistant_reasoning_field(
-        mut self,
-        assistant_reasoning_field: impl Into<String>,
-    ) -> Self {
-        self.assistant_reasoning_field =
-            normalize_assistant_reasoning_field(Some(assistant_reasoning_field.into()));
-        self
-    }
-
-    pub fn with_output_modalities(
-        mut self,
-        output_modalities: impl IntoIterator<Item = String>,
-    ) -> Self {
-        self.output_modalities = output_modalities
-            .into_iter()
-            .filter_map(|value| {
-                let trimmed = value.trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_owned())
-            })
-            .collect();
-        self
-    }
-
-    pub fn with_pricing(mut self, pricing: ModelPricing) -> Self {
-        if pricing.is_empty() {
-            self.pricing = None;
-        } else {
-            self.pricing = Some(pricing);
-        }
-        self
-    }
-
-    pub fn with_context_window_tokens(mut self, context_window_tokens: u32) -> Self {
-        self.limits = self
-            .limits
-            .with_context_window_tokens(context_window_tokens);
-        self
-    }
-
-    pub fn with_max_input_tokens(mut self, max_input_tokens: u32) -> Self {
-        self.limits = self.limits.with_max_input_tokens(max_input_tokens);
-        self
-    }
-
-    pub fn with_max_output_tokens(mut self, max_output_tokens: u32) -> Self {
-        self.limits = self.limits.with_max_output_tokens(max_output_tokens);
-        self
-    }
-
     pub fn supported_verbosity_levels_for_model(&self, model_id: &ModelId) -> Vec<String> {
         let default_verbosity = self
             .default_verbosity
@@ -584,60 +432,47 @@ impl ModelMetadata {
         })
     }
 
-    pub fn with_fallbacks_from(mut self, fallback: &Self) -> Self {
-        if self.lifecycle.is_none() {
-            self.lifecycle = fallback.lifecycle;
+    pub fn merged_with_fallbacks_from(self, fallback: &Self) -> Self {
+        Self {
+            lifecycle: self.lifecycle.or(fallback.lifecycle),
+            limits: self.limits.merged_with_fallbacks_from(&fallback.limits),
+            description: self.description.or_else(|| fallback.description.clone()),
+            knowledge_cutoff: self
+                .knowledge_cutoff
+                .or_else(|| fallback.knowledge_cutoff.clone()),
+            release_date: self.release_date.or_else(|| fallback.release_date.clone()),
+            last_updated: self.last_updated.or_else(|| fallback.last_updated.clone()),
+            open_weights: self.open_weights.or(fallback.open_weights),
+            default_thinking_mode: self
+                .default_thinking_mode
+                .or_else(|| fallback.default_thinking_mode.clone()),
+            supports_parallel_tool_calls: self
+                .supports_parallel_tool_calls
+                .or(fallback.supports_parallel_tool_calls),
+            supports_verbosity: self.supports_verbosity.or(fallback.supports_verbosity),
+            default_verbosity: self
+                .default_verbosity
+                .or_else(|| fallback.default_verbosity.clone()),
+            default_temperature: self
+                .default_temperature
+                .or_else(|| fallback.default_temperature.clone()),
+            default_top_p: self
+                .default_top_p
+                .or_else(|| fallback.default_top_p.clone()),
+            default_top_k: self.default_top_k.or(fallback.default_top_k),
+            assistant_reasoning_interleaved: self
+                .assistant_reasoning_interleaved
+                .or(fallback.assistant_reasoning_interleaved),
+            assistant_reasoning_field: self
+                .assistant_reasoning_field
+                .or_else(|| fallback.assistant_reasoning_field.clone()),
+            output_modalities: if self.output_modalities.is_empty() {
+                fallback.output_modalities.clone()
+            } else {
+                self.output_modalities
+            },
+            pricing: self.pricing.or_else(|| fallback.pricing.clone()),
         }
-        self.limits = self.limits.with_fallbacks_from(&fallback.limits);
-        if self.description.is_none() {
-            self.description = fallback.description.clone();
-        }
-        if self.knowledge_cutoff.is_none() {
-            self.knowledge_cutoff = fallback.knowledge_cutoff.clone();
-        }
-        if self.release_date.is_none() {
-            self.release_date = fallback.release_date.clone();
-        }
-        if self.last_updated.is_none() {
-            self.last_updated = fallback.last_updated.clone();
-        }
-        if self.open_weights.is_none() {
-            self.open_weights = fallback.open_weights;
-        }
-        if self.default_thinking_mode.is_none() {
-            self.default_thinking_mode = fallback.default_thinking_mode.clone();
-        }
-        if self.supports_parallel_tool_calls.is_none() {
-            self.supports_parallel_tool_calls = fallback.supports_parallel_tool_calls;
-        }
-        if self.supports_verbosity.is_none() {
-            self.supports_verbosity = fallback.supports_verbosity;
-        }
-        if self.default_verbosity.is_none() {
-            self.default_verbosity = fallback.default_verbosity.clone();
-        }
-        if self.default_temperature.is_none() {
-            self.default_temperature = fallback.default_temperature.clone();
-        }
-        if self.default_top_p.is_none() {
-            self.default_top_p = fallback.default_top_p.clone();
-        }
-        if self.default_top_k.is_none() {
-            self.default_top_k = fallback.default_top_k;
-        }
-        if self.assistant_reasoning_interleaved.is_none() {
-            self.assistant_reasoning_interleaved = fallback.assistant_reasoning_interleaved;
-        }
-        if self.assistant_reasoning_field.is_none() {
-            self.assistant_reasoning_field = fallback.assistant_reasoning_field.clone();
-        }
-        if self.output_modalities.is_empty() {
-            self.output_modalities = fallback.output_modalities.clone();
-        }
-        if self.pricing.is_none() {
-            self.pricing = fallback.pricing.clone();
-        }
-        self
     }
 }
 
@@ -661,6 +496,40 @@ fn normalize_optional_decimal(
             .filter(|parsed| predicate(*parsed))
             .map(|_| trimmed.to_owned())
     })
+}
+
+pub(crate) fn normalize_model_default_temperature(value: Option<String>) -> Option<String> {
+    normalize_optional_decimal(value, |parsed| parsed.is_finite() && parsed >= 0.0)
+}
+
+pub(crate) fn normalize_model_default_top_p(value: Option<String>) -> Option<String> {
+    normalize_optional_decimal(value, |parsed| {
+        parsed.is_finite() && parsed > 0.0 && parsed <= 1.0
+    })
+}
+
+pub(crate) fn normalize_model_default_top_k(value: Option<u32>) -> Option<u32> {
+    value.filter(|value| *value > 0)
+}
+
+pub(crate) fn normalize_model_assistant_reasoning_field(value: Option<String>) -> Option<String> {
+    normalize_assistant_reasoning_field(value)
+}
+
+pub(crate) fn normalize_model_output_modalities(
+    output_modalities: impl IntoIterator<Item = String>,
+) -> Vec<String> {
+    output_modalities
+        .into_iter()
+        .filter_map(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+        })
+        .collect()
+}
+
+pub(crate) fn non_empty_model_pricing(pricing: Option<ModelPricing>) -> Option<ModelPricing> {
+    pricing.filter(|pricing| !pricing.is_empty())
 }
 
 fn parse_optional_f32(value: Option<&str>, predicate: impl Fn(f32) -> bool) -> Option<f32> {
@@ -734,59 +603,11 @@ impl ModelCapabilities {
     }
 
     pub fn text_only() -> Self {
-        Self::default()
-            .with_tool_calling(CapabilitySupport::Unsupported)
-            .with_streaming(CapabilitySupport::Unsupported)
-    }
-
-    pub fn with_image_input(mut self, support: CapabilitySupport) -> Self {
-        self.image_input = support;
-        self
-    }
-
-    pub fn with_document_input(mut self, support: CapabilitySupport) -> Self {
-        self.document_input = support;
-        self
-    }
-
-    pub fn with_audio_input(mut self, support: CapabilitySupport) -> Self {
-        self.audio_input = support;
-        self
-    }
-
-    pub fn with_video_input(mut self, support: CapabilitySupport) -> Self {
-        self.video_input = support;
-        self
-    }
-
-    pub fn with_file_input(mut self, support: CapabilitySupport) -> Self {
-        self.file_input = support;
-        self
-    }
-
-    pub fn with_tool_calling(mut self, support: CapabilitySupport) -> Self {
-        self.tool_calling = support;
-        self
-    }
-
-    pub fn with_streaming(mut self, support: CapabilitySupport) -> Self {
-        self.streaming = support;
-        self
-    }
-
-    pub fn with_reasoning(mut self, support: CapabilitySupport) -> Self {
-        self.reasoning = support;
-        self
-    }
-
-    pub fn with_structured_output(mut self, support: CapabilitySupport) -> Self {
-        self.structured_output = support;
-        self
-    }
-
-    pub fn with_temperature_supported(mut self, support: CapabilitySupport) -> Self {
-        self.temperature_supported = support;
-        self
+        Self {
+            tool_calling: CapabilitySupport::Unsupported,
+            streaming: CapabilitySupport::Unsupported,
+            ..Self::default()
+        }
     }
 
     pub fn support_for_input_modality(&self, modality: ModelInputModality) -> CapabilitySupport {
@@ -810,41 +631,37 @@ impl ModelCapabilities {
             .then_some(required)
     }
 
-    pub fn with_fallbacks_from(mut self, fallback: &Self) -> Self {
-        if matches!(self.text_input, CapabilitySupport::Unknown) {
-            self.text_input = fallback.text_input;
+    pub fn merged_with_fallbacks_from(self, fallback: &Self) -> Self {
+        Self {
+            text_input: capability_with_fallback(self.text_input, fallback.text_input),
+            image_input: capability_with_fallback(self.image_input, fallback.image_input),
+            document_input: capability_with_fallback(self.document_input, fallback.document_input),
+            audio_input: capability_with_fallback(self.audio_input, fallback.audio_input),
+            video_input: capability_with_fallback(self.video_input, fallback.video_input),
+            file_input: capability_with_fallback(self.file_input, fallback.file_input),
+            tool_calling: capability_with_fallback(self.tool_calling, fallback.tool_calling),
+            streaming: capability_with_fallback(self.streaming, fallback.streaming),
+            reasoning: capability_with_fallback(self.reasoning, fallback.reasoning),
+            structured_output: capability_with_fallback(
+                self.structured_output,
+                fallback.structured_output,
+            ),
+            temperature_supported: capability_with_fallback(
+                self.temperature_supported,
+                fallback.temperature_supported,
+            ),
         }
-        if matches!(self.image_input, CapabilitySupport::Unknown) {
-            self.image_input = fallback.image_input;
-        }
-        if matches!(self.document_input, CapabilitySupport::Unknown) {
-            self.document_input = fallback.document_input;
-        }
-        if matches!(self.audio_input, CapabilitySupport::Unknown) {
-            self.audio_input = fallback.audio_input;
-        }
-        if matches!(self.video_input, CapabilitySupport::Unknown) {
-            self.video_input = fallback.video_input;
-        }
-        if matches!(self.file_input, CapabilitySupport::Unknown) {
-            self.file_input = fallback.file_input;
-        }
-        if matches!(self.tool_calling, CapabilitySupport::Unknown) {
-            self.tool_calling = fallback.tool_calling;
-        }
-        if matches!(self.streaming, CapabilitySupport::Unknown) {
-            self.streaming = fallback.streaming;
-        }
-        if matches!(self.reasoning, CapabilitySupport::Unknown) {
-            self.reasoning = fallback.reasoning;
-        }
-        if matches!(self.structured_output, CapabilitySupport::Unknown) {
-            self.structured_output = fallback.structured_output;
-        }
-        if matches!(self.temperature_supported, CapabilitySupport::Unknown) {
-            self.temperature_supported = fallback.temperature_supported;
-        }
-        self
+    }
+}
+
+fn capability_with_fallback(
+    primary: CapabilitySupport,
+    fallback: CapabilitySupport,
+) -> CapabilitySupport {
+    if matches!(primary, CapabilitySupport::Unknown) {
+        fallback
+    } else {
+        primary
     }
 }
 
@@ -913,8 +730,8 @@ macro_rules! define_model_mode {
             pub adapter_overrides: BTreeMap<String, ModelSpeedModeRequestOverride>,
         }
 
-        impl $name {
-            pub fn new() -> Self {
+        impl Default for $name {
+            fn default() -> Self {
                 Self {
                     display_name: None,
                     description: None,
@@ -922,42 +739,6 @@ macro_rules! define_model_mode {
                     request_override: ModelSpeedModeRequestOverride::default(),
                     adapter_overrides: BTreeMap::new(),
                 }
-            }
-
-            pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
-                self.display_name = Some(display_name.into());
-                self
-            }
-
-            pub fn with_description(mut self, description: impl Into<String>) -> Self {
-                self.description = Some(description.into());
-                self
-            }
-
-            pub fn with_request_override(
-                mut self,
-                request_override: ModelSpeedModeRequestOverride,
-            ) -> Self {
-                self.request_override = request_override;
-                self
-            }
-
-            pub fn with_adapter_override(
-                mut self,
-                adapter_id: impl Into<String>,
-                request_override: ModelSpeedModeRequestOverride,
-            ) -> Self {
-                self.adapter_overrides
-                    .insert(adapter_id.into(), request_override);
-                self
-            }
-
-            $($extra_methods)*
-        }
-
-        impl Default for $name {
-            fn default() -> Self {
-                Self::new()
             }
         }
     };
@@ -972,12 +753,7 @@ define_model_mode!(
     init {
         thinking: None,
     },
-    methods {
-        pub fn with_thinking(mut self, thinking: ThinkingRequest) -> Self {
-            self.thinking = Some(thinking);
-            self
-        }
-    }
+    methods {}
 );
 
 define_model_mode!(ModelSpeedMode, fields {}, init {}, methods {});
@@ -1054,37 +830,7 @@ impl Model {
         }
     }
 
-    pub fn with_provider_id(mut self, provider_id: impl Into<String>) -> Self {
-        self.provider_id = ProviderId::new(provider_id);
-        self
-    }
-
-    pub fn with_adapter_id(mut self, adapter_id: impl Into<String>) -> Self {
-        self.adapter_id = Some(AdapterId::new(adapter_id));
-        self
-    }
-
-    pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
-        self.display_name = Some(display_name.into());
-        self
-    }
-
-    pub fn with_catalog_model_id(mut self, catalog_model_id: impl Into<String>) -> Self {
-        self.catalog_model_id = Some(ModelId::new(catalog_model_id));
-        self
-    }
-
-    pub fn with_capabilities(mut self, capabilities: ModelCapabilities) -> Self {
-        self.capabilities = capabilities;
-        self
-    }
-
-    pub fn with_metadata(mut self, metadata: ModelMetadata) -> Self {
-        self.metadata = metadata;
-        self
-    }
-
-    pub fn with_thinking_modes(
+    pub fn using_thinking_modes(
         mut self,
         thinking_modes: BTreeMap<String, ModelThinkingMode>,
     ) -> Self {
@@ -1092,63 +838,12 @@ impl Model {
         self
     }
 
-    pub fn with_thinking_mode(
+    pub fn using_thinking_mode(
         mut self,
         name: impl Into<String>,
         thinking_mode: ModelThinkingMode,
     ) -> Self {
         self.thinking_modes.insert(name.into(), thinking_mode);
-        self
-    }
-
-    pub fn with_speed_modes(mut self, speed_modes: BTreeMap<String, ModelSpeedMode>) -> Self {
-        self.speed_modes = speed_modes;
-        self
-    }
-
-    pub fn with_speed_mode(mut self, name: impl Into<String>, speed_mode: ModelSpeedMode) -> Self {
-        self.speed_modes.insert(name.into(), speed_mode);
-        self
-    }
-
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.metadata = self.metadata.with_description(description);
-        self
-    }
-
-    pub fn with_lifecycle(mut self, lifecycle: ModelLifecycle) -> Self {
-        self.metadata = self.metadata.with_lifecycle(lifecycle);
-        self
-    }
-
-    pub fn with_context_window_tokens(mut self, context_window_tokens: u32) -> Self {
-        self.metadata = self
-            .metadata
-            .with_context_window_tokens(context_window_tokens);
-        self
-    }
-
-    pub fn with_max_input_tokens(mut self, max_input_tokens: u32) -> Self {
-        self.metadata = self.metadata.with_max_input_tokens(max_input_tokens);
-        self
-    }
-
-    pub fn with_max_output_tokens(mut self, max_output_tokens: u32) -> Self {
-        self.metadata = self.metadata.with_max_output_tokens(max_output_tokens);
-        self
-    }
-
-    pub fn with_capability_fallbacks(mut self, fallback: &ModelCapabilities) -> Self {
-        self.capabilities = if self.capabilities.is_default_placeholder() {
-            fallback.clone()
-        } else {
-            self.capabilities.with_fallbacks_from(fallback)
-        };
-        self
-    }
-
-    pub fn with_metadata_fallbacks(mut self, fallback: &ModelMetadata) -> Self {
-        self.metadata = self.metadata.with_fallbacks_from(fallback);
         self
     }
 }

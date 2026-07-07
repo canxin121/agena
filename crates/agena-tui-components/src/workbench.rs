@@ -84,48 +84,28 @@ pub type ListWorkbenchPanelState<'a> = ListPanelState<'a, BoundedListPanelHeight
 impl<'a> ListWorkbenchDialogSpec<'a> {
     pub fn new(
         title: Cow<'a, str>,
+        summary: Option<Cow<'a, str>>,
         footer: Cow<'a, str>,
         target_width: u16,
         left_panel_width: u16,
+        left_min_width: Option<u16>,
+        right_min_width: Option<u16>,
         left_panel_state: ListWorkbenchPanelState<'a>,
         right_sections: Vec<WorkbenchTextSection<'a>>,
+        overlay: Option<WorkbenchOverlayDialogSpec<'a>>,
     ) -> Self {
         Self {
             title,
-            summary: None,
+            summary,
             footer,
             target_width,
             left_panel_width,
-            left_min_width: None,
-            right_min_width: None,
+            left_min_width,
+            right_min_width,
             left_panel_state,
             right_sections,
-            overlay: None,
+            overlay,
         }
-    }
-
-    pub fn with_summary(mut self, summary: Cow<'a, str>) -> Self {
-        self.summary = Some(summary);
-        self
-    }
-
-    pub fn with_min_widths(mut self, left_min_width: u16, right_min_width: u16) -> Self {
-        self.left_min_width = Some(left_min_width);
-        self.right_min_width = Some(right_min_width);
-        self
-    }
-
-    pub fn with_overlay(mut self, overlay: WorkbenchOverlayDialogSpec<'a>) -> Self {
-        self.overlay = Some(overlay);
-        self
-    }
-
-    pub fn with_optional_overlay_source<TSource>(mut self, source: Option<&'a TSource>) -> Self
-    where
-        TSource: WorkbenchOverlaySource + ?Sized,
-    {
-        self.overlay = source.map(WorkbenchOverlayDialogSpec::from_source);
-        self
     }
 }
 
@@ -230,6 +210,7 @@ pub struct SectionedWorkbenchDialogSpec<'a> {
 impl<'a> SectionedWorkbenchDialogSpec<'a> {
     pub fn new(
         title: Cow<'a, str>,
+        summary: Option<Cow<'a, str>>,
         footer: Cow<'a, str>,
         target_width: u16,
         nav_panel_width: u16,
@@ -240,7 +221,7 @@ impl<'a> SectionedWorkbenchDialogSpec<'a> {
     ) -> Self {
         Self {
             title,
-            summary: None,
+            summary,
             footer,
             target_width,
             nav_panel_width,
@@ -249,11 +230,6 @@ impl<'a> SectionedWorkbenchDialogSpec<'a> {
             items_panel_state,
             detail_panel,
         }
-    }
-
-    pub fn with_summary(mut self, summary: Cow<'a, str>) -> Self {
-        self.summary = Some(summary);
-        self
     }
 }
 

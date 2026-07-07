@@ -291,7 +291,18 @@ fn resolve_permission_continue_options(
         default_model(runtime)?
     };
 
-    Ok(SessionRunOptions::new(model))
+    Ok(SessionRunOptions {
+        model,
+        thinking_mode: None,
+        speed_mode: None,
+        verbosity: None,
+        thinking: None,
+        request_override: Default::default(),
+        system: None,
+        temperature: None,
+        max_output_tokens: None,
+        agent_profile: None,
+    })
 }
 
 fn resolve_run_options(
@@ -308,10 +319,18 @@ fn resolve_run_options(
         default_model(runtime)?
     };
 
-    let mut options = SessionRunOptions::new(model);
-    options.temperature = temperature;
-    options.max_output_tokens = max_output_tokens;
-    Ok(options)
+    Ok(SessionRunOptions {
+        model,
+        thinking_mode: None,
+        speed_mode: None,
+        verbosity: None,
+        thinking: None,
+        request_override: Default::default(),
+        system: None,
+        temperature,
+        max_output_tokens,
+        agent_profile: None,
+    })
 }
 
 fn default_model(runtime: &AgenaRuntime) -> Result<ModelRef, AppError> {

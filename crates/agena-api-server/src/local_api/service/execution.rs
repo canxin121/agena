@@ -191,16 +191,18 @@ impl ApiService {
             .temperature
             .or_else(|| metadata.parsed_default_temperature());
 
-        Ok(agena::session::SessionRunOptions::new(model)
-            .with_thinking_mode(thinking_mode)
-            .with_speed_mode(speed_mode)
-            .with_verbosity(verbosity)
-            .with_thinking(thinking)
-            .with_request_override(request_override)
-            .with_system(non_empty(request.system.as_deref()).map(ToOwned::to_owned))
-            .with_temperature(temperature)
-            .with_max_output_tokens(request.max_output_tokens)
-            .with_agent_profile(non_empty(request.agent_profile.as_deref()).map(ToOwned::to_owned)))
+        Ok(agena::session::SessionRunOptions {
+            model,
+            thinking_mode,
+            speed_mode,
+            verbosity,
+            thinking,
+            request_override,
+            system: non_empty(request.system.as_deref()).map(ToOwned::to_owned),
+            temperature,
+            max_output_tokens: request.max_output_tokens,
+            agent_profile: non_empty(request.agent_profile.as_deref()).map(ToOwned::to_owned),
+        })
     }
 
     pub async fn session_execution_resource(

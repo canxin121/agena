@@ -3,11 +3,11 @@
 use crate::message::{ProcessShell, ProcessToolInput, ShellCommandInput};
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
-    NetworkRequest, PathRequest, Plugin, PluginManifest, Result as SdkResult, ToolInvokeOutput,
-    ToolTag, async_trait,
+    NetworkRequest, PathRequest, Plugin, PluginManifest, Result as SdkResult, ToolInvokeContext,
+    ToolInvokeOutput, ToolTag, async_trait,
 };
 use crate::plugins::provided::router;
-use agena_macros::{StaticToolSurface, ToolInputShape};
+use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -53,47 +53,100 @@ pub(crate) struct ProcessStopToolArgs {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    tool = "process",
-    description = "Run one shell process or manage background process logs for the current session. Use action `run`, `list`, `logs`, or `stop`.",
-    summary = "Run commands and manage background processes.",
-    help = "Use action `run` to execute a command. Set `background = true` to keep it attached to the session and receive a `process_id`. Use `list` to inspect active background processes, `logs` to tail buffered output, and `stop` to terminate a background process.",
+    tool = "run",
+    summary = "Run one shell process.",
+    help = "Set `background = true` to keep the process attached to the session and receive a `process_id` for later inspection.",
+    handler_receiver = ProcessPlugin,
+    handle_with_context = ProcessPlugin::invoke_run,
+    handle_field = args,
+    permission_paths_handle = ProcessPlugin::permission_run,
+    permission_networks_handle = ProcessPlugin::permission_networks_run,
+    handle_by_value = true,
     display = detailed,
     tags(ToolTag::Mutating, ToolTag::Shell),
     concurrency_safe = false
 )]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub(crate) enum ProcessToolSurfaceInput {
-    #[tool(exec = "run")]
-    Run {
-        #[serde(flatten)]
-        #[tool(flatten_shape)]
-        args: ProcessRunToolArgs,
-    },
-    #[tool(exec = "list")]
-    List,
-    #[tool(exec = "logs")]
-    Logs {
-        #[serde(flatten)]
-        #[tool(flatten_shape)]
-        args: ProcessLogsToolArgs,
-    },
-    #[tool(exec = "stop")]
-    Stop {
-        #[serde(flatten)]
-        #[tool(flatten_shape)]
-        args: ProcessStopToolArgs,
-    },
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProcessRunToolInput {
+    #[serde(flatten)]
+    #[tool(flatten_shape)]
+    args: ProcessRunToolArgs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "list",
+    summary = "List active background processes.",
+    handler_receiver = ProcessPlugin,
+    handle_with_context = ProcessPlugin::invoke_list,
+    permission_paths_handle = ProcessPlugin::permission_list,
+    permission_networks_handle = ProcessPlugin::permission_networks_list,
+    display = detailed,
+    tags(ToolTag::ReadOnly, ToolTag::Shell),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProcessListToolInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "logs",
+    summary = "Read background process logs.",
+    handler_receiver = ProcessPlugin,
+    handle_with_context = ProcessPlugin::invoke_logs,
+    handle_field = args,
+    permission_paths_handle = ProcessPlugin::permission_logs,
+    permission_networks_handle = ProcessPlugin::permission_networks_logs,
+    handle_by_value = true,
+    display = detailed,
+    tags(ToolTag::ReadOnly, ToolTag::Shell),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProcessLogsToolInput {
+    #[serde(flatten)]
+    #[tool(flatten_shape)]
+    args: ProcessLogsToolArgs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "stop",
+    summary = "Stop one background process.",
+    handler_receiver = ProcessPlugin,
+    handle_with_context = ProcessPlugin::invoke_stop,
+    handle_field = args,
+    permission_paths_handle = ProcessPlugin::permission_stop,
+    permission_networks_handle = ProcessPlugin::permission_networks_stop,
+    handle_by_value = true,
+    display = detailed,
+    tags(ToolTag::Mutating, ToolTag::Shell),
+    concurrency_safe = false
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProcessStopToolInput {
+    #[serde(flatten)]
+    #[tool(flatten_shape)]
+    args: ProcessStopToolArgs,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, ToolSuite)]
+#[tool_suite(handler_receiver = ProcessPlugin)]
+pub(crate) enum ProcessToolSuite {
+    Run(ProcessRunToolInput),
+    List(ProcessListToolInput),
+    Logs(ProcessLogsToolInput),
+    Stop(ProcessStopToolInput),
 }
 
 #[async_trait]
 impl Plugin for ProcessPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::new("agena", "process", env!("CARGO_PKG_VERSION"));
-        manifest.description = Some("Command execution and background process tools.".to_string());
+        manifest.summary = Some("Command execution and background process tools.".to_string());
         manifest.set_display(crate::plugin::sdk::ToolDisplayPreset::BriefDetailed);
-        manifest
-            .tools
-            .extend(ProcessToolSurfaceInput::tool_definitions());
+        manifest.tools.extend(ProcessToolSuite::tool_definitions());
         manifest
     }
 
@@ -101,14 +154,23 @@ impl Plugin for ProcessPlugin {
         &self,
         input: crate::plugin::sdk::ToolInvokeInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let parsed = ProcessToolSurfaceInput::parse_tool(input.tool_name.as_str(), input.input)?;
-        let process_input = into_process_tool_input(parsed);
-        router::invoke_tool(
-            "process",
-            json_input(process_input)?,
-            input.session_id,
-            input.call_id,
-        )
+        let crate::plugin::sdk::ToolInvokeInput {
+            tool_name,
+            session_id,
+            call_id,
+            workspace_root,
+            input,
+        } = input;
+        let context = ToolInvokeContext {
+            tool_name: tool_name.as_str(),
+            session_id,
+            call_id,
+            workspace_root: workspace_root.as_str(),
+        };
+        let parsed = ProcessToolSuite::parse_tool(tool_name.as_str(), input)?;
+        parsed
+            .dispatch_tool_invoke_with_context(self, &context)
+            .await
     }
 
     async fn permission_paths(
@@ -116,8 +178,8 @@ impl Plugin for ProcessPlugin {
         tool: &str,
         input: &serde_json::Value,
     ) -> SdkResult<Vec<PathRequest>> {
-        let parsed = ProcessToolSurfaceInput::parse_tool(tool, input.clone())?;
-        router::permission_paths_for("process", &json_input(into_process_tool_input(parsed))?)
+        let parsed = ProcessToolSuite::parse_tool(tool, input.clone())?;
+        parsed.dispatch_permission_paths(self).await
     }
 
     async fn permission_networks(
@@ -125,28 +187,157 @@ impl Plugin for ProcessPlugin {
         tool: &str,
         input: &serde_json::Value,
     ) -> SdkResult<Vec<NetworkRequest>> {
-        let parsed = ProcessToolSurfaceInput::parse_tool(tool, input.clone())?;
-        router::permission_networks_for("process", &json_input(into_process_tool_input(parsed))?)
+        let parsed = ProcessToolSuite::parse_tool(tool, input.clone())?;
+        parsed.dispatch_permission_networks(self).await
     }
 }
 
-fn into_process_tool_input(input: ProcessToolSurfaceInput) -> ProcessToolInput {
-    match input {
-        ProcessToolSurfaceInput::Run { args } => ProcessToolInput::Run {
-            shell: args.shell,
-            command: args.command,
-            background: args.background,
-        },
-        ProcessToolSurfaceInput::List => ProcessToolInput::List {},
-        ProcessToolSurfaceInput::Logs { args } => ProcessToolInput::Logs {
-            process_id: args.process_id,
-            since_seq: args.since_seq,
-            limit: args.limit,
-            wait_ms: args.wait_ms,
-        },
-        ProcessToolSurfaceInput::Stop { args } => ProcessToolInput::Stop {
-            process_id: args.process_id,
-        },
+impl ProcessPlugin {
+    async fn invoke_run(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: ProcessRunToolArgs,
+    ) -> SdkResult<ToolInvokeOutput> {
+        router::invoke_tool(
+            "process",
+            json_input(ProcessToolInput::Run {
+                shell: args.shell,
+                command: args.command,
+                background: args.background,
+            })?,
+            context.session_id,
+            context.call_id,
+        )
+    }
+
+    async fn invoke_list(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        _input: &ProcessListToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        router::invoke_tool(
+            "process",
+            json_input(ProcessToolInput::List {})?,
+            context.session_id,
+            context.call_id,
+        )
+    }
+
+    async fn invoke_logs(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: ProcessLogsToolArgs,
+    ) -> SdkResult<ToolInvokeOutput> {
+        router::invoke_tool(
+            "process",
+            json_input(ProcessToolInput::Logs {
+                process_id: args.process_id,
+                since_seq: args.since_seq,
+                limit: args.limit,
+                wait_ms: args.wait_ms,
+            })?,
+            context.session_id,
+            context.call_id,
+        )
+    }
+
+    async fn invoke_stop(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: ProcessStopToolArgs,
+    ) -> SdkResult<ToolInvokeOutput> {
+        router::invoke_tool(
+            "process",
+            json_input(ProcessToolInput::Stop {
+                process_id: args.process_id,
+            })?,
+            context.session_id,
+            context.call_id,
+        )
+    }
+
+    async fn permission_run(&self, args: ProcessRunToolArgs) -> SdkResult<Vec<PathRequest>> {
+        router::permission_paths_for(
+            "process",
+            &json_input(ProcessToolInput::Run {
+                shell: args.shell,
+                command: args.command,
+                background: args.background,
+            })?,
+        )
+    }
+
+    async fn permission_list(&self, _input: &ProcessListToolInput) -> SdkResult<Vec<PathRequest>> {
+        router::permission_paths_for("process", &json_input(ProcessToolInput::List {})?)
+    }
+
+    async fn permission_logs(&self, args: ProcessLogsToolArgs) -> SdkResult<Vec<PathRequest>> {
+        router::permission_paths_for(
+            "process",
+            &json_input(ProcessToolInput::Logs {
+                process_id: args.process_id,
+                since_seq: args.since_seq,
+                limit: args.limit,
+                wait_ms: args.wait_ms,
+            })?,
+        )
+    }
+
+    async fn permission_stop(&self, args: ProcessStopToolArgs) -> SdkResult<Vec<PathRequest>> {
+        router::permission_paths_for(
+            "process",
+            &json_input(ProcessToolInput::Stop {
+                process_id: args.process_id,
+            })?,
+        )
+    }
+
+    async fn permission_networks_run(
+        &self,
+        args: ProcessRunToolArgs,
+    ) -> SdkResult<Vec<NetworkRequest>> {
+        router::permission_networks_for(
+            "process",
+            &json_input(ProcessToolInput::Run {
+                shell: args.shell,
+                command: args.command,
+                background: args.background,
+            })?,
+        )
+    }
+
+    async fn permission_networks_list(
+        &self,
+        _input: &ProcessListToolInput,
+    ) -> SdkResult<Vec<NetworkRequest>> {
+        router::permission_networks_for("process", &json_input(ProcessToolInput::List {})?)
+    }
+
+    async fn permission_networks_logs(
+        &self,
+        args: ProcessLogsToolArgs,
+    ) -> SdkResult<Vec<NetworkRequest>> {
+        router::permission_networks_for(
+            "process",
+            &json_input(ProcessToolInput::Logs {
+                process_id: args.process_id,
+                since_seq: args.since_seq,
+                limit: args.limit,
+                wait_ms: args.wait_ms,
+            })?,
+        )
+    }
+
+    async fn permission_networks_stop(
+        &self,
+        args: ProcessStopToolArgs,
+    ) -> SdkResult<Vec<NetworkRequest>> {
+        router::permission_networks_for(
+            "process",
+            &json_input(ProcessToolInput::Stop {
+                process_id: args.process_id,
+            })?,
+        )
     }
 }
 

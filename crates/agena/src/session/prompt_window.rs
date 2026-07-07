@@ -329,7 +329,7 @@ fn messages_to_provider_transcript(messages: &[Message]) -> ProviderTranscript {
         let parts = project_session_parts(message);
         match message.role {
             Role::Assistant => {
-                let mut content = TranscriptContent::default();
+                let mut content_blocks = Vec::new();
                 let mut tool_calls = Vec::new();
                 let mut tool_results = Vec::new();
                 let mut had_any = false;
@@ -338,12 +338,12 @@ fn messages_to_provider_transcript(messages: &[Message]) -> ProviderTranscript {
                         ProjectedSessionPart::Text { text } => {
                             had_any = true;
                             if !text.is_empty() {
-                                content.push_text(text);
+                                content_blocks.push(TranscriptBlock::Text { text });
                             }
                         }
                         ProjectedSessionPart::Attachment { item } => {
                             had_any = true;
-                            content.blocks.push(attachment_to_transcript_block(&item));
+                            content_blocks.push(attachment_to_transcript_block(&item));
                         }
                         ProjectedSessionPart::ToolCall {
                             id,
@@ -375,13 +375,13 @@ fn messages_to_provider_transcript(messages: &[Message]) -> ProviderTranscript {
                 if !had_any {
                     let fallback = message.as_text_lossy();
                     if !fallback.trim().is_empty() {
-                        content.push_text(fallback);
+                        content_blocks.push(TranscriptBlock::Text { text: fallback });
                         had_any = true;
                     }
                 }
                 if had_any {
                     transcript.push(TranscriptFragment::Assistant {
-                        content,
+                        content: TranscriptContent::from_blocks(content_blocks),
                         tool_calls,
                     });
                 }
@@ -408,19 +408,19 @@ fn messages_to_provider_transcript(messages: &[Message]) -> ProviderTranscript {
                 }
             }
             Role::User | Role::System => {
-                let mut content = TranscriptContent::default();
+                let mut content_blocks = Vec::new();
                 let mut had_any = false;
                 for part in parts {
                     match part {
                         ProjectedSessionPart::Text { text } => {
                             had_any = true;
                             if !text.is_empty() {
-                                content.push_text(text);
+                                content_blocks.push(TranscriptBlock::Text { text });
                             }
                         }
                         ProjectedSessionPart::Attachment { item } => {
                             had_any = true;
-                            content.blocks.push(attachment_to_transcript_block(&item));
+                            content_blocks.push(attachment_to_transcript_block(&item));
                         }
                         // ToolCall / ToolResult are not produced under user/system roles
                         // by `project_session_parts`; ignore for digest stability.
@@ -430,7 +430,7 @@ fn messages_to_provider_transcript(messages: &[Message]) -> ProviderTranscript {
                 if !had_any {
                     let fallback = message.as_text_lossy();
                     if !fallback.trim().is_empty() {
-                        content.push_text(fallback);
+                        content_blocks.push(TranscriptBlock::Text { text: fallback });
                         had_any = true;
                     }
                 }
@@ -439,8 +439,7 @@ fn messages_to_provider_transcript(messages: &[Message]) -> ProviderTranscript {
                 }
                 let fragment = if matches!(message.role, Role::System) {
                     TranscriptFragment::System {
-                        text: content
-                            .blocks
+                        text: content_blocks
                             .iter()
                             .filter_map(|block| match block {
                                 TranscriptBlock::Text { text } => Some(text.as_str()),
@@ -450,7 +449,9 @@ fn messages_to_provider_transcript(messages: &[Message]) -> ProviderTranscript {
                             .join(""),
                     }
                 } else {
-                    TranscriptFragment::User { content }
+                    TranscriptFragment::User {
+                        content: TranscriptContent::from_blocks(content_blocks),
+                    }
                 };
                 transcript.push(fragment);
             }

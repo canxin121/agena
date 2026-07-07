@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-use agena_macros::StaticToolSurface;
+use agena_macros::{StaticToolSurface, ToolSuite};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -110,97 +110,98 @@ impl LspServerConfig {
 }
 
 fn lsp_config_schema() -> serde_json::Value {
-    let mut schema = crate::tool::definition::json_schema_for_with_default(LspConfig::default());
-    for (pointer, title, description) in [
-        (
-            "",
-            "LSP Plugin Config",
-            "Shared defaults and per-server settings for the agena.lsp plugin.",
-        ),
-        (
-            "/properties/defaults",
-            "Defaults",
-            "Shared runtime settings applied to language servers unless a server overrides them.",
-        ),
-        (
-            "/properties/defaults/properties/env",
-            "Environment",
-            "Environment variables injected into every configured language server process by default.",
-        ),
-        (
-            "/properties/defaults/properties/root_markers",
-            "Root Markers",
-            "Marker files used to discover project roots when a server does not define its own routing markers.",
-        ),
-        (
-            "/properties/defaults/properties/initialization_options",
-            "Initialization Options",
-            "Default JSON initialization options sent during server startup.",
-        ),
-        (
-            "/properties/servers",
-            "Servers",
-            "Named language server definitions keyed by server identifier.",
-        ),
-        (
-            "/properties/servers/additionalProperties",
-            "Server",
-            "A single named language server definition.",
-        ),
-        (
-            "/properties/servers/additionalProperties/properties/process",
-            "Process",
-            "Executable command, arguments, and environment for this language server.",
-        ),
-        (
-            "/properties/servers/additionalProperties/properties/routing",
-            "Routing",
-            "File matching and root detection rules for this server.",
-        ),
-        (
-            "/properties/servers/additionalProperties/properties/session",
-            "Session",
-            "Per-server LSP session settings such as initialization options.",
-        ),
-        (
-            "/properties/servers/additionalProperties/properties/process/properties/command",
-            "Command",
-            "Executable used to start the language server.",
-        ),
-        (
-            "/properties/servers/additionalProperties/properties/process/properties/args",
-            "Arguments",
-            "Command-line arguments passed to the language server process.",
-        ),
-        (
-            "/properties/servers/additionalProperties/properties/process/properties/env",
-            "Environment",
-            "Environment variables merged on top of the shared LSP defaults for this server.",
-        ),
-        (
-            "/properties/servers/additionalProperties/properties/routing/properties/file_extensions",
-            "File Extensions",
-            "File extensions routed to this server. Leave empty to match all files.",
-        ),
-        (
-            "/properties/servers/additionalProperties/properties/routing/properties/root_markers",
-            "Root Markers",
-            "Project-root markers used for this server. Leave empty to inherit the shared defaults.",
-        ),
-        (
-            "/properties/servers/additionalProperties/properties/session/properties/initialization_options",
-            "Initialization Options",
-            "Server-specific JSON initialization options. Leave unset to inherit the shared defaults.",
-        ),
-    ] {
-        crate::tool::definition::set_schema_metadata(
-            &mut schema,
-            pointer,
-            Some(title),
-            Some(description),
-        );
+    crate::tool::definition::json_schema_for_default_with_metadata(
+        default_lsp_config(),
+        &[
+            (
+                "",
+                "LSP Plugin Config",
+                "Shared defaults and per-server settings for the agena.lsp plugin.",
+            ),
+            (
+                "/properties/defaults",
+                "Defaults",
+                "Shared runtime settings applied to language servers unless a server overrides them.",
+            ),
+            (
+                "/properties/defaults/properties/env",
+                "Environment",
+                "Environment variables injected into every configured language server process by default.",
+            ),
+            (
+                "/properties/defaults/properties/root_markers",
+                "Root Markers",
+                "Marker files used to discover project roots when a server does not define its own routing markers.",
+            ),
+            (
+                "/properties/defaults/properties/initialization_options",
+                "Initialization Options",
+                "Default JSON initialization options sent during server startup.",
+            ),
+            (
+                "/properties/servers",
+                "Servers",
+                "Named language server definitions keyed by server identifier.",
+            ),
+            (
+                "/properties/servers/additionalProperties",
+                "Server",
+                "A single named language server definition.",
+            ),
+            (
+                "/properties/servers/additionalProperties/properties/process",
+                "Process",
+                "Executable command, arguments, and environment for this language server.",
+            ),
+            (
+                "/properties/servers/additionalProperties/properties/routing",
+                "Routing",
+                "File matching and root detection rules for this server.",
+            ),
+            (
+                "/properties/servers/additionalProperties/properties/session",
+                "Session",
+                "Per-server LSP session settings such as initialization options.",
+            ),
+            (
+                "/properties/servers/additionalProperties/properties/process/properties/command",
+                "Command",
+                "Executable used to start the language server.",
+            ),
+            (
+                "/properties/servers/additionalProperties/properties/process/properties/args",
+                "Arguments",
+                "Command-line arguments passed to the language server process.",
+            ),
+            (
+                "/properties/servers/additionalProperties/properties/process/properties/env",
+                "Environment",
+                "Environment variables merged on top of the shared LSP defaults for this server.",
+            ),
+            (
+                "/properties/servers/additionalProperties/properties/routing/properties/file_extensions",
+                "File Extensions",
+                "File extensions routed to this server. Leave empty to match all files.",
+            ),
+            (
+                "/properties/servers/additionalProperties/properties/routing/properties/root_markers",
+                "Root Markers",
+                "Project-root markers used for this server. Leave empty to inherit the shared defaults.",
+            ),
+            (
+                "/properties/servers/additionalProperties/properties/session/properties/initialization_options",
+                "Initialization Options",
+                "Server-specific JSON initialization options. Leave unset to inherit the shared defaults.",
+            ),
+        ],
+    )
+}
+
+fn default_lsp_config() -> LspConfig {
+    LspConfig {
+        defaults: LspServerDefaultsConfig::default(),
+        servers: BTreeMap::new(),
     }
-    schema
 }
 
 pub(crate) fn config_from_plugins(
@@ -253,70 +254,114 @@ impl LspPlugin {
     }
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema, StaticToolSurface)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    tool = "lsp",
-    description = "LSP command dispatcher. Set action to servers, definition, references, hover, or diagnostics.",
-    summary = "Query configured language servers.",
-    help = "Use action `servers` to list configured LSP servers, `definition` and `references` for symbol navigation, `hover` for hover text, and `diagnostics` for diagnostics.",
+    tool = "servers",
+    summary = "List configured language servers.",
     handler_receiver = LspPlugin,
+    handle_with_context = LspPlugin::dispatch_servers,
+    permission_paths_handle = LspPlugin::permission_servers,
+    display = brief,
+    tags(ToolTag::ReadOnly, ToolTag::Lsp),
+    capabilities(HostCapability::LspRegistry),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LspServersToolInput {}
+
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "definition",
+    summary = "Resolve symbol definitions.",
+    handler_receiver = LspPlugin,
+    handle_with_context = LspPlugin::dispatch_definition,
+    handle_field = args,
+    permission_paths_handle = LspPlugin::permission_definition,
+    handle_by_value = true,
     display = brief,
     tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp),
     capabilities(HostCapability::LspRegistry),
     concurrency_safe = true
 )]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub(crate) enum LspToolInput {
-    #[tool(
-        exec = "servers",
-        handle_with_context = LspPlugin::dispatch_servers,
-        permission_paths_handle = LspPlugin::permission_servers
-    )]
-    Servers,
-    #[tool(
-        exec = "definition",
-        handle_with_context = LspPlugin::dispatch_definition,
-        permission_paths_handle = LspPlugin::permission_definition,
-        handle_by_value = true
-    )]
-    Definition {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: LspDefinitionToolInput,
-    },
-    #[tool(
-        exec = "references",
-        handle_with_context = LspPlugin::dispatch_references,
-        permission_paths_handle = LspPlugin::permission_references,
-        handle_by_value = true
-    )]
-    References {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: LspReferencesToolInput,
-    },
-    #[tool(
-        exec = "hover",
-        handle_with_context = LspPlugin::dispatch_hover,
-        permission_paths_handle = LspPlugin::permission_hover,
-        handle_by_value = true
-    )]
-    Hover {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: LspHoverToolInput,
-    },
-    #[tool(
-        exec = "diagnostics",
-        handle_with_context = LspPlugin::dispatch_diagnostics,
-        permission_paths_handle = LspPlugin::permission_diagnostics,
-        handle_by_value = true
-    )]
-    Diagnostics {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: LspDiagnosticsToolInput,
-    },
+#[serde(deny_unknown_fields)]
+pub(crate) struct LspDefinitionSurfaceInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: LspDefinitionToolInput,
+}
+
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "references",
+    summary = "Find symbol references.",
+    handler_receiver = LspPlugin,
+    handle_with_context = LspPlugin::dispatch_references,
+    handle_field = args,
+    permission_paths_handle = LspPlugin::permission_references,
+    handle_by_value = true,
+    display = brief,
+    tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp),
+    capabilities(HostCapability::LspRegistry),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LspReferencesSurfaceInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: LspReferencesToolInput,
+}
+
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "hover",
+    summary = "Fetch hover text.",
+    handler_receiver = LspPlugin,
+    handle_with_context = LspPlugin::dispatch_hover,
+    handle_field = args,
+    permission_paths_handle = LspPlugin::permission_hover,
+    handle_by_value = true,
+    display = brief,
+    tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp),
+    capabilities(HostCapability::LspRegistry),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LspHoverSurfaceInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: LspHoverToolInput,
+}
+
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "diagnostics",
+    summary = "Fetch file diagnostics.",
+    handler_receiver = LspPlugin,
+    handle_with_context = LspPlugin::dispatch_diagnostics,
+    handle_field = args,
+    permission_paths_handle = LspPlugin::permission_diagnostics,
+    handle_by_value = true,
+    display = brief,
+    tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp),
+    capabilities(HostCapability::LspRegistry),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LspDiagnosticsSurfaceInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: LspDiagnosticsToolInput,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, ToolSuite)]
+#[tool_suite(handler_receiver = LspPlugin)]
+pub(crate) enum LspToolSuite {
+    Servers(LspServersToolInput),
+    Definition(LspDefinitionSurfaceInput),
+    References(LspReferencesSurfaceInput),
+    Hover(LspHoverSurfaceInput),
+    Diagnostics(LspDiagnosticsSurfaceInput),
 }
 
 #[derive(Debug, Serialize)]
@@ -333,9 +378,10 @@ struct LspServerSummary {
 }
 
 #[crate::plugin::sdk::plugin(
-    id = LSP_PLUGIN_ID,
+    namespace = "agena",
+    name = "lsp",
     version = env!("CARGO_PKG_VERSION"),
-    description = "LSP read-only observability and navigation tools.",
+    summary = "LSP read-only observability and navigation tools.",
     config_schema = lsp_config_schema(),
     display = brief
 )]
@@ -355,23 +401,26 @@ impl LspPlugin {
         ))
     }
 
-    #[tool]
+    #[tool_suite]
     async fn tool_invoke(
         &self,
-        input: LspToolInput,
+        input: LspToolSuite,
         context: &ToolInvokeContext<'_>,
     ) -> SdkResult<ToolInvokeOutput> {
         input.dispatch_tool_invoke_with_context(self, context).await
     }
 
-    #[permission(paths)]
-    async fn permission_paths(&self, input: LspToolInput) -> SdkResult<Vec<PathRequest>> {
+    #[permission(paths, suite)]
+    async fn permission_paths(&self, input: LspToolSuite) -> SdkResult<Vec<PathRequest>> {
         input.dispatch_permission_paths(self).await
     }
 }
 
 impl LspPlugin {
-    async fn permission_servers(&self) -> SdkResult<Vec<PathRequest>> {
+    async fn permission_servers(
+        &self,
+        _input: &LspServersToolInput,
+    ) -> SdkResult<Vec<PathRequest>> {
         Ok(Vec::new())
     }
 
@@ -403,6 +452,7 @@ impl LspPlugin {
     async fn dispatch_servers(
         &self,
         _context: &ToolInvokeContext<'_>,
+        _input: &LspServersToolInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let HostLspListServersResponse { servers } = self.host()?.lsp_list_servers().await?;
         let summary = LspServersOutput {

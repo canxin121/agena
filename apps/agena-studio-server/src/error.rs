@@ -11,10 +11,6 @@ pub type ApiResult<T> = Result<T, AppError>;
 #[derive(Debug, Serialize)]
 struct ErrorBody {
     error: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    locked: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    restarting: Option<bool>,
 }
 
 #[derive(Debug, Error)]
@@ -106,8 +102,6 @@ impl AppError {
             | Self::BadGateway { message }
             | Self::Internal { message } => ErrorBody {
                 error: message.clone(),
-                locked: None,
-                restarting: None,
             },
         }
     }

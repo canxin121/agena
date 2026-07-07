@@ -19,41 +19,32 @@ impl PromptCacheShape {
         }
     }
 
+    pub fn from_fields<K, V>(
+        provider_id: impl Into<String>,
+        fields: impl IntoIterator<Item = (K, V)>,
+    ) -> Self
+    where
+        K: Into<String>,
+        V: Into<String>,
+    {
+        Self {
+            provider_id: provider_id.into(),
+            fields: fields
+                .into_iter()
+                .map(|(key, value)| (key.into(), value.into()))
+                .collect(),
+        }
+    }
+
     pub fn provider_id(&self) -> &str {
         self.provider_id.as_str()
     }
 
-    pub fn with_string(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.insert_string(key, value);
-        self
-    }
-
-    pub fn with_optional_string<S>(mut self, key: impl Into<String>, value: Option<S>) -> Self
-    where
-        S: Into<String>,
-    {
-        if let Some(value) = value {
-            self.insert_string(key, value);
-        }
-        self
-    }
-
-    pub fn with_bool(mut self, key: impl Into<String>, value: bool) -> Self {
-        self.insert_bool(key, value);
-        self
-    }
-
-    pub fn with_json<T>(mut self, key: impl Into<String>, value: &T) -> Self
+    pub fn json_field_value<T>(value: &T) -> String
     where
         T: Serialize,
     {
-        self.insert_json(key, value);
-        self
-    }
-
-    pub fn with_prefixed_shape(mut self, prefix: &str, shape: &PromptCacheShape) -> Self {
-        self.extend_prefixed(prefix, shape);
-        self
+        serde_json::to_string(value).unwrap_or_default()
     }
 
     pub fn insert_string(&mut self, key: impl Into<String>, value: impl Into<String>) {

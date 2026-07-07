@@ -285,12 +285,8 @@ impl AgenaRuntime {
             return Err(RuntimeBackgroundTaskControlError::Shutdown);
         }
 
-        let mut spec = RuntimeBackgroundTaskSpec::new(kind, origin)
-            .with_title(title)
-            .with_cancellable(cancellable);
-        if let Some(dedupe_key) = dedupe_key {
-            spec = spec.with_dedupe_key(dedupe_key);
-        }
+        let spec =
+            RuntimeBackgroundTaskSpec::from_parts(kind, origin, title, dedupe_key, cancellable);
         Ok(self.inner.background_tasks.spawn(spec, work))
     }
 

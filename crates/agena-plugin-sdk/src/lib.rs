@@ -10,6 +10,7 @@ pub mod attachment;
 pub mod error;
 pub mod hooks;
 pub mod host_api;
+pub mod identity;
 #[doc(hidden)]
 pub mod macro_support;
 pub mod manifest;
@@ -35,6 +36,7 @@ pub use host_api::{
     HostClient, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
     HostPermissionCheckResponse, NoopHostClient,
 };
+pub use identity::{PluginKey, PluginKeyParseError, ToolKey, ToolKeyParseError};
 pub use macro_support::{schema_example_texts, schema_usage_text};
 pub use manifest::{
     HookSubscription, HostCapability, InputNetworkSpec, InputPathSpec, NetworkAccessSpec,

@@ -569,7 +569,7 @@ impl ToolInvocation {
         }
     }
 
-    pub fn with_plugin_name(
+    pub fn plugin_named(
         name: impl Into<String>,
         plugin_name: impl Into<String>,
         input: StructuredObject,
@@ -873,13 +873,13 @@ pub struct ToolOutput {
     pub payload: StructuredObject,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub managed_outputs: Vec<ToolManagedOutput>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub truncated: Option<bool>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub truncated: bool,
 }
 
 impl ToolOutput {
     pub fn is_empty(&self) -> bool {
-        self.payload.is_empty() && self.managed_outputs.is_empty() && self.truncated.is_none()
+        self.payload.is_empty() && self.managed_outputs.is_empty() && !self.truncated
     }
 
     pub fn from_json_payload(payload: Option<&serde_json::Value>) -> Result<Self, String> {
@@ -888,7 +888,7 @@ impl ToolOutput {
             Some(value) => Ok(Self {
                 payload: StructuredObject::try_from(value.clone())?,
                 managed_outputs: Vec::new(),
-                truncated: None,
+                truncated: false,
             }),
         }
     }
@@ -897,19 +897,13 @@ impl ToolOutput {
         (!self.payload.is_empty()).then(|| serde_json::Value::from(self.payload.clone()))
     }
 
-    pub fn with_managed_output_path(mut self, path: impl Into<String>) -> Self {
-        self.managed_outputs.push(ToolManagedOutput::new(path));
-        self.truncated = Some(true);
-        self
-    }
-
     pub fn mark_truncated(&mut self, path: impl Into<String>) {
         self.managed_outputs.push(ToolManagedOutput::new(path));
-        self.truncated = Some(true);
+        self.truncated = true;
     }
 
     pub fn is_model_truncated(&self) -> bool {
-        self.truncated.unwrap_or(false) || !self.managed_outputs.is_empty()
+        self.truncated || !self.managed_outputs.is_empty()
     }
 
     pub fn content_blocks(&self) -> Vec<OperationBlock> {
@@ -944,8 +938,12 @@ pub struct ModelVisibleOutput {
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<AttachmentItem>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub truncated: Option<bool>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub truncated: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl ModelVisibleOutput {
@@ -953,12 +951,12 @@ impl ModelVisibleOutput {
         Self {
             text: text.into(),
             attachments: Vec::new(),
-            truncated: None,
+            truncated: false,
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.text.is_empty() && self.attachments.is_empty() && self.truncated.is_none()
+        self.text.is_empty() && self.attachments.is_empty() && !self.truncated
     }
 }
 
@@ -1039,7 +1037,7 @@ impl ToolResultEnvelope {
         attachments: Vec<AttachmentItem>,
         details: &ToolOutput,
     ) -> Self {
-        let truncated = details.is_model_truncated().then_some(true);
+        let truncated = details.is_model_truncated();
         Self {
             state: ToolResultState::Completed,
             structured: details.to_json_payload(),
@@ -1068,7 +1066,7 @@ impl ToolResultEnvelope {
         attachments: Vec<AttachmentItem>,
         details: &ToolOutput,
     ) -> Self {
-        let truncated = details.is_model_truncated().then_some(true);
+        let truncated = details.is_model_truncated();
         Self {
             state: ToolResultState::Failed,
             structured: details.to_json_payload(),
@@ -1170,7 +1168,7 @@ impl OperationPart {
     ) -> Self {
         let output_text = output_text.into();
         let structured = details.to_json_payload();
-        let truncated = details.is_model_truncated().then_some(true);
+        let truncated = details.is_model_truncated();
         let result = ToolResultEnvelope::completed(
             output_text.clone(),
             blocks.clone(),
@@ -1213,7 +1211,7 @@ impl OperationPart {
         let error_message = error_message.into();
         let output_text = output_text.into();
         let structured = details.to_json_payload();
-        let truncated = details.is_model_truncated().then_some(true);
+        let truncated = details.is_model_truncated();
         let result = ToolResultEnvelope::failed(
             error_message.clone(),
             output_text.clone(),
@@ -1251,10 +1249,9 @@ impl OperationPart {
         }
     }
 
-    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+    pub fn set_title(&mut self, title: impl Into<String>) {
         self.title = title.into();
         self.result.display.title = self.title.clone();
-        self
     }
 
     pub fn set_provider_native_only(&mut self, value: bool) {

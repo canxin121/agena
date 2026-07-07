@@ -12,14 +12,14 @@ use agena_tui_components::{
     QuestionFlowDialogSpec, SearchListDialogSpec, SearchPanelsDialogSpec, SearchPanelsDialogState,
     StackedDialogSection, StackedDialogSectionHeight, StackedDialogSpec, SuggestionPopupItem,
     SuggestionPopupSpec, SurfaceMode, TextDialogLine, TextPanelSection, TextPanelSpec,
-    VerticalSectionSize, WorkbenchTextSection, WrappedTextSpec, adaptive_detail_split,
-    adaptive_modal_width, build_accented_two_line_list_item, build_detail_two_line_list_item,
-    build_wrapped_text_lines, format_key_value_segment, inset_rect, join_inline_segments,
-    layout_composer_surface, layout_header_body_footer_surface, list_panel_height,
-    pane_header_height, render_composer_editor_surface, render_dashboard_workbench_dialog,
-    render_decision_dialog, render_editor_dialog, render_editor_preview_dialog,
-    render_framed_surface, render_header_body_footer_text_surface, render_header_row,
-    render_line_text_dialog, render_list_panel, render_list_workbench_dialog,
+    VerticalSectionSize, WorkbenchOverlayDialogSpec, WorkbenchTextSection, WrappedTextSpec,
+    adaptive_detail_split, adaptive_modal_width, build_accented_two_line_list_item,
+    build_detail_two_line_list_item, build_wrapped_text_lines, format_key_value_segment,
+    inset_rect, join_inline_segments, layout_composer_surface, layout_header_body_footer_surface,
+    list_panel_height, pane_header_height, render_composer_editor_surface,
+    render_dashboard_workbench_dialog, render_decision_dialog, render_editor_dialog,
+    render_editor_preview_dialog, render_framed_surface, render_header_body_footer_text_surface,
+    render_header_row, render_line_text_dialog, render_list_panel, render_list_workbench_dialog,
     render_overlay_line_input_dialog, render_query_suggestion_popup, render_question_flow_dialog,
     render_search_list_dialog, render_search_panels_dialog, render_stacked_dialog,
     render_suggestion_popup, render_text_panel, render_wrapped_text, split_vertical_sections,
@@ -841,17 +841,18 @@ impl App {
                 82,
                 &prompt_body,
                 (1, 2),
+                Some(EditorPreviewHelpSpec::new(
+                    &help_body,
+                    (3, 6),
+                    true,
+                    Borders::BOTTOM,
+                )),
                 &dialog.state.input,
+                Borders::BOTTOM,
                 &preview_body,
                 (2, 8),
-            )
-            .with_help(
-                EditorPreviewHelpSpec::new(&help_body, (3, 6))
-                    .with_wrap(true)
-                    .with_borders(Borders::BOTTOM),
-            )
-            .with_input_borders(Borders::BOTTOM)
-            .with_cursor(true),
+                true,
+            ),
         );
         if let Some(cursor) = result.cursor {
             frame.set_cursor_position(cursor);
@@ -871,10 +872,10 @@ impl App {
             dialog,
             &SearchListDialogSpec::new(
                 ui_text::t(&self.i18n, "overlay-picker-loading").into(),
+                Some(ui_text::t(&self.i18n, "overlay-attach-matches").into()),
                 selection_highlight_style(),
                 ">> ".into(),
-            )
-            .with_list_title(ui_text::t(&self.i18n, "overlay-attach-matches").into()),
+            ),
             sanitize_display_str,
         );
     }
@@ -892,10 +893,10 @@ impl App {
             dialog,
             &SearchListDialogSpec::new(
                 ui_text::t(&self.i18n, "overlay-picker-loading").into(),
+                Some(ui_text::t(&self.i18n, "overlay-path-browser-list-title").into()),
                 selection_highlight_style(),
                 ">> ".into(),
-            )
-            .with_list_title(ui_text::t(&self.i18n, "overlay-path-browser-list-title").into()),
+            ),
             sanitize_display_str,
         );
     }
@@ -921,15 +922,18 @@ impl App {
             &DecisionDialogSpec::new(
                 ui_text::t(&self.i18n, "overlay-permission-title").into(),
                 &body,
+                (4, 14),
+                None,
                 items.as_slice(),
+                Some(dialog.selection.selected),
+                1,
+                (4, 8),
                 &footer,
+                (1, 1),
                 84,
                 selection_highlight_style(),
                 ">> ".into(),
-            )
-            .with_body_height_bounds((4, 14))
-            .with_list_state(Some(dialog.selection.selected), 1, (4, 8))
-            .with_footer_height_bounds((1, 1)),
+            ),
         );
     }
 
@@ -1013,13 +1017,13 @@ impl App {
                     title.clone().into(),
                     92,
                     ui_text::t(&self.i18n, "overlay-user-input-questions").into(),
+                    Some(&nav_body),
                     QuestionFlowDialogMode::review(
                         ui_text::t(&self.i18n, "overlay-user-input-summary").into(),
                         &review_body,
                         &footer,
                     ),
-                )
-                .with_nav_body(&nav_body),
+                ),
             );
             return;
         }
@@ -1045,6 +1049,7 @@ impl App {
                     title.clone().into(),
                     92,
                     ui_text::t(&self.i18n, "overlay-user-input-questions").into(),
+                    None,
                     QuestionFlowDialogMode::empty(
                         ui_text::t(&self.i18n, "overlay-user-input-detail").into(),
                         &detail_body,
@@ -1228,6 +1233,7 @@ impl App {
                 title.into(),
                 92,
                 ui_text::t(&self.i18n, "overlay-user-input-questions").into(),
+                Some(&nav_body),
                 QuestionFlowDialogMode::question(
                     ui_text::t(&self.i18n, "overlay-user-input-prompt-panel").into(),
                     &prompt_body,
@@ -1236,8 +1242,7 @@ impl App {
                     custom_input,
                     &footer,
                 ),
-            )
-            .with_nav_body(&nav_body),
+            ),
         );
         if let Some(cursor) = result.cursor {
             frame.set_cursor_position(cursor);
@@ -1362,12 +1367,12 @@ impl App {
         let spec = LineTextDialogSpec::new(
             sanitize_display_text(dialog.title.as_str()).into(),
             lines.as_slice(),
+            Some(sanitize_display_text(dialog.footer.as_str()).into()),
             76,
-        )
-        .with_body_wrap(true)
-        .with_body_height_bounds((2, 10))
-        .with_footer(
-            sanitize_display_text(dialog.footer.as_str()).into(),
+            true,
+            None,
+            None,
+            (2, 10),
             (1, 1),
             Some(Alignment::Right),
             Style::default(),
@@ -1404,13 +1409,12 @@ impl App {
         let spec = LineTextDialogSpec::new(
             sanitize_display_text(ui_text::t(&self.i18n, "help-title")).into(),
             lines.as_slice(),
+            Some(ui_text::t(&self.i18n, "overlay-help-footer").into()),
             132,
-        )
-        .with_body_wrap(true)
-        .with_body_height_bounds((8, 22))
-        .with_body_scroll((dialog.scroll, 0))
-        .with_footer(
-            ui_text::t(&self.i18n, "overlay-help-footer").into(),
+            true,
+            Some((dialog.scroll, 0)),
+            None,
+            (8, 22),
             (1, 2),
             Some(Alignment::Right),
             Style::default().fg(Color::DarkGray),
@@ -1432,6 +1436,7 @@ impl App {
             dialog,
             &SearchListDialogSpec::new(
                 ui_text::t(&self.i18n, "overlay-picker-loading").into(),
+                None,
                 selection_highlight_style(),
                 ">> ".into(),
             ),
@@ -1453,6 +1458,7 @@ impl App {
             dialog,
             &SearchListDialogSpec::new(
                 ui_text::t(&self.i18n, "overlay-picker-loading").into(),
+                None,
                 selection_highlight_style(),
                 ">> ".into(),
             ),
@@ -1474,10 +1480,10 @@ impl App {
             dialog,
             &SearchListDialogSpec::new(
                 ui_text::t(&self.i18n, "overlay-picker-loading").into(),
+                Some(ui_text::t(&self.i18n, "overlay-session-model-list-title").into()),
                 selection_highlight_style(),
                 ">> ".into(),
-            )
-            .with_list_title(ui_text::t(&self.i18n, "overlay-session-model-list-title").into()),
+            ),
             sanitize_display_str,
         );
     }
@@ -1490,6 +1496,7 @@ impl App {
             dialog,
             &SearchListDialogSpec::new(
                 ui_text::t(&self.i18n, "overlay-picker-loading").into(),
+                None,
                 selection_highlight_style(),
                 ">> ".into(),
             ),
@@ -1760,9 +1767,12 @@ impl App {
             .collect::<Vec<_>>();
         let spec = ListWorkbenchDialogSpec::new(
             sanitize_display_text(dialog.workbench.title.as_str()).into(),
+            Some(sanitize_display_text(title_summary.as_str()).into()),
             sanitize_display_text(dialog.workbench.footer.as_str()).into(),
             138,
             36,
+            None,
+            None,
             ListWorkbenchPanelState::items(
                 BoundedListPanelHeight {
                     lines_per_item: 2,
@@ -1789,9 +1799,12 @@ impl App {
                     10,
                 ),
             ],
-        )
-        .with_summary(sanitize_display_text(title_summary.as_str()).into());
-        let spec = spec.with_optional_overlay_source(dialog.workbench.editor.as_ref());
+            dialog
+                .workbench
+                .editor
+                .as_ref()
+                .map(WorkbenchOverlayDialogSpec::from_source),
+        );
         render_list_workbench_dialog(frame, area, surface, &spec);
     }
 
@@ -2172,7 +2185,7 @@ impl App {
                     Style::default(),
                 ),
             ],
-            &DetailTextSpec::with_label_width(14),
+            &DetailTextSpec::label_width(14),
         );
         let detail_text = dialog
             .workbench
@@ -2196,9 +2209,15 @@ impl App {
             .collect::<Vec<_>>();
         let spec = ListWorkbenchDialogSpec::new(
             sanitize_display_text(dialog.workbench.title.as_str()).into(),
+            Some(
+                sanitize_display_text(permission_rule_subject_kind_name(dialog.draft.subject_kind))
+                    .into(),
+            ),
             sanitize_display_text(dialog.workbench.footer.as_str()).into(),
             132,
             40,
+            None,
+            None,
             ListWorkbenchPanelState::items(
                 BoundedListPanelHeight {
                     lines_per_item: 2,
@@ -2225,12 +2244,12 @@ impl App {
                     14,
                 ),
             ],
-        )
-        .with_summary(
-            sanitize_display_text(permission_rule_subject_kind_name(dialog.draft.subject_kind))
-                .into(),
+            dialog
+                .workbench
+                .editor
+                .as_ref()
+                .map(WorkbenchOverlayDialogSpec::from_source),
         );
-        let spec = spec.with_optional_overlay_source(dialog.workbench.editor.as_ref());
         render_list_workbench_dialog(frame, area, surface, &spec);
     }
 
@@ -2346,10 +2365,31 @@ impl App {
         let has_models = provider_studio_selected_adapter_models(dialog)
             .map(|adapter_models| !adapter_models.models.is_empty())
             .unwrap_or(false);
+        let lead_panel = dialog.show_provider_list.then(|| {
+            DashboardLeadPanelSpec::new(
+                28,
+                54,
+                DashboardListPanelState::items(
+                    DashboardListPanelHeight::AutoBody {
+                        lines_per_item: 2,
+                        min_body_height: 4,
+                        max_body_height: 12,
+                    },
+                    Some(ui_text::t(&self.i18n, "overlay-provider-studio-providers").into()),
+                    provider_items.as_slice(),
+                    (!dialog.providers.items.is_empty()).then_some(dialog.providers.selected),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                    ">> ".into(),
+                ),
+            )
+        });
         let dashboard_spec = DashboardWorkbenchSpec::new(
             sanitize_display_text(dialog.title.as_str()).into(),
             sanitize_display_text(dialog.footer.as_str()).into(),
             122,
+            lead_panel,
             DashboardTextSection::new(
                 None,
                 draft_text,
@@ -2420,28 +2460,6 @@ impl App {
                 },
             ),
         );
-        let dashboard_spec = if dialog.show_provider_list {
-            dashboard_spec.with_lead_panel(DashboardLeadPanelSpec::new(
-                28,
-                54,
-                DashboardListPanelState::items(
-                    DashboardListPanelHeight::AutoBody {
-                        lines_per_item: 2,
-                        min_body_height: 4,
-                        max_body_height: 12,
-                    },
-                    Some(ui_text::t(&self.i18n, "overlay-provider-studio-providers").into()),
-                    provider_items.as_slice(),
-                    (!dialog.providers.items.is_empty()).then_some(dialog.providers.selected),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                    ">> ".into(),
-                ),
-            ))
-        } else {
-            dashboard_spec
-        };
 
         let detail_overlay = if let Some(model_page) = dialog.model_page.as_ref() {
             let lines = provider_model_config_fields()
@@ -2481,12 +2499,10 @@ impl App {
             Some(DashboardDetailOverlaySpec::new(
                 DetailTextDialogSpec::new(
                     sanitize_display_text(model_page.title.as_str()).into(),
+                    Some(sanitize_display_text(model_page.footer.as_str()).into()),
                     96,
-                    DetailTextSpec::with_label_width(18),
+                    DetailTextSpec::label_width(18),
                     (6, 20),
-                )
-                .with_footer(
-                    sanitize_display_text(model_page.footer.as_str()).into(),
                     (1, 2),
                     None,
                     Style::default(),
@@ -2538,12 +2554,10 @@ impl App {
             Some(DashboardDetailOverlaySpec::new(
                 DetailTextDialogSpec::new(
                     sanitize_display_text(detail_page.title.as_str()).into(),
+                    Some(sanitize_display_text(detail_page.footer.as_str()).into()),
                     92,
                     detail_text_spec,
                     (4, 20),
-                )
-                .with_footer(
-                    sanitize_display_text(detail_page.footer.as_str()).into(),
                     (1, 2),
                     None,
                     Style::default(),
@@ -2559,10 +2573,10 @@ impl App {
             area,
             surface,
             &dashboard_spec,
-            Some(
-                DashboardWorkbenchOverlaySpec::new(detail_overlay, None)
-                    .with_optional_editor_source(dialog.editor.as_ref()),
-            ),
+            Some(DashboardWorkbenchOverlaySpec::from_sources(
+                detail_overlay,
+                dialog.editor.as_ref(),
+            )),
         );
     }
 
@@ -2619,9 +2633,12 @@ impl App {
             });
         let spec = ListWorkbenchDialogSpec::new(
             sanitize_display_text(dialog.workbench.title.as_str()).into(),
+            Some(sanitize_display_text(summary.as_str()).into()),
             sanitize_display_text(dialog.workbench.footer.as_str()).into(),
             136,
             48,
+            Some(48),
+            Some(34),
             if dialog.loading {
                 ListWorkbenchPanelState::loading(
                     Some(ui_text::t(&self.i18n, "overlay-model-catalog-entries").into()),
@@ -2662,10 +2679,12 @@ impl App {
                 4,
                 30,
             )],
-        )
-        .with_summary(sanitize_display_text(summary.as_str()).into())
-        .with_min_widths(48, 34);
-        let spec = spec.with_optional_overlay_source(dialog.workbench.editor.as_ref());
+            dialog
+                .workbench
+                .editor
+                .as_ref()
+                .map(WorkbenchOverlayDialogSpec::from_source),
+        );
         render_list_workbench_dialog(frame, area, surface, &spec);
     }
 
@@ -2797,7 +2816,7 @@ fn model_catalog_detail_text(i18n: &I18n, entry: &CatalogModelResource) -> Text<
             Style::default(),
         ));
     }
-    build_detail_text(lines, &DetailTextSpec::with_label_width(14))
+    build_detail_text(lines, &DetailTextSpec::label_width(14))
 }
 
 fn model_catalog_detail_labeled_line(
@@ -3888,7 +3907,7 @@ fn provider_studio_main_field_display(
 }
 
 fn provider_studio_detail_text_spec() -> DetailTextSpec<'static> {
-    DetailTextSpec::with_label_width(16)
+    DetailTextSpec::label_width(16)
 }
 
 fn append_permission_action_lines(

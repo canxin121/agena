@@ -83,9 +83,12 @@ pub async fn git_stash_list(Query(q): Query<DirectoryQuery>) -> Response {
 #[serde(rename_all = "camelCase")]
 pub struct GitStashPushBody {
     pub message: Option<String>,
-    pub include_untracked: Option<bool>,
-    pub keep_index: Option<bool>,
-    pub staged: Option<bool>,
+    #[serde(default)]
+    pub include_untracked: bool,
+    #[serde(default)]
+    pub keep_index: bool,
+    #[serde(default)]
+    pub staged: bool,
 }
 
 pub async fn git_stash_push(
@@ -98,8 +101,7 @@ pub async fn git_stash_push(
     };
 
     let mut args: Vec<String> = vec!["stash".into(), "push".into()];
-    let staged = body.staged.unwrap_or(false);
-    if staged && (body.include_untracked.unwrap_or(false) || body.keep_index.unwrap_or(false)) {
+    if body.staged && (body.include_untracked || body.keep_index) {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
@@ -109,13 +111,13 @@ pub async fn git_stash_push(
         )
             .into_response();
     }
-    if staged {
+    if body.staged {
         args.push("--staged".into());
     }
-    if body.include_untracked.unwrap_or(false) {
+    if body.include_untracked {
         args.push("--include-untracked".into());
     }
-    if body.keep_index.unwrap_or(false) {
+    if body.keep_index {
         args.push("--keep-index".into());
     }
     if let Some(m) = body

@@ -17,7 +17,7 @@ pub struct GitPullBody {
     pub branch: Option<String>,
     // git pull --rebase
     #[serde(default)]
-    pub rebase: Option<bool>,
+    pub rebase: bool,
     // Alias for refspec.
     pub r#ref: Option<String>,
     #[serde(default)]
@@ -94,8 +94,6 @@ pub async fn git_pull(Query(q): Query<DirectoryQuery>, Json(body): Json<GitPullB
         .as_deref()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty());
-    let rebase = body.rebase.unwrap_or(false);
-
     let mut args: Vec<String> = Vec::new();
     let mut extra_env: Vec<(String, String)> = Vec::new();
     let mut _askpass: Option<TempGitAskpass> = None;
@@ -116,7 +114,7 @@ pub async fn git_pull(Query(q): Query<DirectoryQuery>, Json(body): Json<GitPullB
         }
     }
     args.push("pull".into());
-    if rebase {
+    if body.rebase {
         args.push("--rebase".into());
     }
     let spec = branch.or(rf);

@@ -11,21 +11,22 @@ pub struct ModelCatalogService {
 
 impl ModelCatalogService {
     pub async fn new(store: ModelCatalogStore) -> Result<Self, AppError> {
-        Self::with_remote_sources(store, default_remote_sources()).await
+        Self::from_remote_sources(store, default_remote_sources()).await
     }
 
-    pub(super) async fn with_remote_sources(
+    pub(super) async fn from_remote_sources(
         store: ModelCatalogStore,
         remote_sources: Vec<sources::ModelCatalogRemoteSource>,
     ) -> Result<Self, AppError> {
-        let mut snapshot = ModelCatalogSnapshot::default();
-
-        if let Some(cached) = store.read_cached_official().await? {
-            snapshot.last_successful_source = Some(cached.source);
-            snapshot.last_refresh_at =
-                DateTime::<Utc>::from_timestamp_millis(cached.fetched_at_unix_ms);
-            snapshot.official = cached.document;
-        }
+        let snapshot = match store.read_cached_official().await? {
+            Some(cached) => ModelCatalogSnapshot {
+                last_refresh_at: DateTime::<Utc>::from_timestamp_millis(cached.fetched_at_unix_ms),
+                last_successful_source: Some(cached.source),
+                last_error: None,
+                official: cached.document,
+            },
+            None => ModelCatalogSnapshot::default(),
+        };
 
         Ok(Self {
             store,
@@ -107,7 +108,7 @@ impl ModelCatalogService {
         providers: &ProviderRegistry,
         resolution: Option<&ConfigResolution>,
     ) -> Result<(ModelCatalogDocument, Option<String>), AppError> {
-        let mut merged = ModelCatalogDocument::default();
+        let mut merged_models = BTreeMap::new();
         let mut warnings = Vec::new();
         let mut succeeded = 0_usize;
         let mut has_live_provider_models = false;
@@ -125,7 +126,7 @@ impl ModelCatalogService {
                 .then_with(|| left.name.cmp(&right.name))
         });
         for fetched in remote_documents {
-            merge_public_source_catalog_document(&mut merged, fetched.document);
+            merge_public_source_catalog_document(&mut merged_models, fetched.document);
             succeeded += 1;
         }
 
@@ -134,7 +135,7 @@ impl ModelCatalogService {
             .await
         {
             Ok((Some(document), warning)) => {
-                merge_live_provider_catalog_document(&mut merged, document);
+                merge_live_provider_catalog_document(&mut merged_models, document);
                 has_live_provider_models = true;
                 succeeded += 1;
                 if let Some(warning) = warning {
@@ -165,6 +166,9 @@ impl ModelCatalogService {
             )));
         }
 
+        let merged = ModelCatalogDocument {
+            models: merged_models,
+        };
         let mut document = if has_live_provider_models {
             curate::curate_live_catalog_document(merged)
         } else {

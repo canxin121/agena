@@ -13,7 +13,7 @@ use crate::{
     db::{
         crud::{permission_rule, session, workspace},
         entities,
-        tx::with_transaction_and_effects,
+        tx::run_transaction_effects,
     },
     event::{
         DomainEvent, EventKind, EventPublisher, MessagePartUpdatedEvent, PermissionRuleEvent,
@@ -139,7 +139,7 @@ impl SessionStore {
     ) -> Result<Session, AppError> {
         let workspace_id = self.workspace_id().await?;
         let cache = Arc::clone(&self.cache);
-        let session = with_transaction_and_effects(&self.db, move |txn, effects| {
+        let session = run_transaction_effects(&self.db, move |txn, effects| {
             let title = title.clone();
             let cache = Arc::clone(&cache);
             Box::pin(async move {
@@ -155,7 +155,7 @@ impl SessionStore {
 
                 let session_for_cache = session.clone();
                 effects.push(async move {
-                    with_cache(cache.as_ref(), |guard| {
+                    access_cache(cache.as_ref(), |guard| {
                         guard.insert(session_for_cache, cache_policy);
                     });
                 });
@@ -434,7 +434,7 @@ impl SessionStore {
         session_id: i64,
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
-        if let Some(session) = with_cache(self.cache.as_ref(), |guard| {
+        if let Some(session) = access_cache(self.cache.as_ref(), |guard| {
             guard.get(session_id, cache_policy)
         })
         .flatten()
@@ -455,7 +455,7 @@ impl SessionStore {
             refreshed.runtime = projection.runtime;
             refreshed.refresh_derived();
 
-            with_cache(self.cache.as_ref(), |guard| {
+            access_cache(self.cache.as_ref(), |guard| {
                 guard.insert(refreshed.clone(), cache_policy);
             });
 
@@ -474,7 +474,7 @@ impl SessionStore {
         session.runtime = projection.runtime;
         session.refresh_derived();
 
-        with_cache(self.cache.as_ref(), |guard| {
+        access_cache(self.cache.as_ref(), |guard| {
             guard.insert(session.clone(), cache_policy);
         });
 
@@ -498,7 +498,7 @@ impl SessionStore {
         session.replace_messages(projection.messages);
         session.runtime = projection.runtime;
         session.refresh_derived();
-        with_cache(self.cache.as_ref(), |guard| {
+        access_cache(self.cache.as_ref(), |guard| {
             guard.insert(session.clone(), cache_policy);
         });
         Ok(session)
@@ -780,7 +780,7 @@ impl SessionStore {
             || !meta.runtime_state.prompt_window.is_empty()
         {
             let runtime = meta.runtime_state.clone();
-            let updated = with_transaction_and_effects(&self.db, move |txn, _effects| {
+            let updated = run_transaction_effects(&self.db, move |txn, _effects| {
                 let runtime = runtime.clone();
                 Box::pin(async move {
                     session::touch_session_updated_at(txn, new_session_id, runtime)
@@ -797,7 +797,7 @@ impl SessionStore {
             session.apply_persisted_metadata(&persisted);
             session.runtime = meta.runtime_state;
             session.refresh_derived();
-            with_cache(self.cache.as_ref(), |guard| {
+            access_cache(self.cache.as_ref(), |guard| {
                 guard.insert(session.clone(), cache_policy);
             });
         }
@@ -874,7 +874,7 @@ impl SessionStore {
         } else {
             self.history.append_items(session_id, items, now).await?;
         }
-        let updated = with_transaction_and_effects(&self.db, move |txn, _effects| {
+        let updated = run_transaction_effects(&self.db, move |txn, _effects| {
             let runtime = runtime_to_persist.clone();
             Box::pin(async move {
                 let updated = session::touch_session_updated_at(txn, session_id, runtime)
@@ -894,7 +894,7 @@ impl SessionStore {
         session.runtime = projection.runtime;
 
         let session_for_cache = session.clone();
-        with_cache(self.cache.as_ref(), |guard| {
+        access_cache(self.cache.as_ref(), |guard| {
             guard.insert(session_for_cache, cache_policy);
         });
 
@@ -939,7 +939,7 @@ impl SessionStore {
         let session_for_cache = session.clone();
         let session_runtime = session.runtime.clone();
         let (updated_session, persisted_rules_for_event) =
-            with_transaction_and_effects(&self.db, move |txn, effects| {
+            run_transaction_effects(&self.db, move |txn, effects| {
                 let cache = Arc::clone(&cache);
                 Box::pin(async move {
                     let mut persisted_rules_for_event = Vec::new();
@@ -962,7 +962,7 @@ impl SessionStore {
 
                     let updated_session_for_cache = updated_session.clone();
                     effects.push(async move {
-                        with_cache(cache.as_ref(), |guard| {
+                        access_cache(cache.as_ref(), |guard| {
                             let mut cached_session = session_for_cache;
                             cached_session.apply_persisted_metadata(&updated_session_for_cache);
                             cached_session.refresh_derived();
@@ -1033,13 +1033,13 @@ impl SessionStore {
     }
 
     pub(crate) fn prune_cache(&self, cache_policy: SessionCachePolicy) {
-        with_cache(self.cache.as_ref(), |guard| {
+        access_cache(self.cache.as_ref(), |guard| {
             guard.prune(cache_policy);
         });
     }
 
     pub(crate) fn cache_stats(&self) -> SessionCacheStats {
-        with_cache(self.cache.as_ref(), |guard| guard.stats()).unwrap_or_default()
+        access_cache(self.cache.as_ref(), |guard| guard.stats()).unwrap_or_default()
     }
 
     pub(crate) async fn reserve_message_ids(
@@ -1221,7 +1221,7 @@ pub(crate) struct ReservedProcessorIds {
     pub(crate) part_ids: ProcessorPartIdAllocator,
 }
 
-fn with_cache<T>(
+fn access_cache<T>(
     cache: &Mutex<SessionCache>,
     op: impl FnOnce(&mut SessionCache) -> T,
 ) -> Option<T> {

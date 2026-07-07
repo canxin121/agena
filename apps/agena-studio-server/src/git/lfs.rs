@@ -157,7 +157,8 @@ pub async fn git_lfs_status(Query(q): Query<DirectoryQuery>) -> Response {
 
 #[derive(Debug, Deserialize)]
 pub struct GitLfsInstallBody {
-    pub force: Option<bool>,
+    #[serde(default)]
+    pub force: bool,
 }
 
 pub async fn git_lfs_install(
@@ -165,7 +166,7 @@ pub async fn git_lfs_install(
     Json(body): Json<GitLfsInstallBody>,
 ) -> Response {
     let mut args: Vec<&str> = vec!["lfs", "install", "--local"];
-    if body.force.unwrap_or(false) {
+    if body.force {
         args.push("--force");
     }
 
@@ -330,7 +331,8 @@ pub async fn git_lfs_lock(
 #[derive(Debug, Deserialize)]
 pub struct GitLfsUnlockBody {
     pub path: Option<String>,
-    pub force: Option<bool>,
+    #[serde(default)]
+    pub force: bool,
 }
 
 pub async fn git_lfs_unlock(
@@ -351,7 +353,7 @@ pub async fn git_lfs_unlock(
     };
 
     let mut args: Vec<&str> = vec!["lfs", "unlock"];
-    if body.force.unwrap_or(false) {
+    if body.force {
         args.push("--force");
     }
     args.push(path);

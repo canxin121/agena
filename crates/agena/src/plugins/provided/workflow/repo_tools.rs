@@ -1,40 +1,53 @@
 use super::*;
 
-use agena_macros::{StaticToolSurface, ToolInputShape};
+use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    tool = "snapshot",
-    description = "Managed snapshot command. Use action `enter` or `exit`; `enter` uses `target = new|existing` to create or attach to a managed snapshot. Agena prefers Rift snapshots and falls back to git worktree when Rift cannot be used. `exit` uses enum `exit_action = keep|remove`.",
-    summary = "Enter or exit a managed repository snapshot.",
+    tool = "enter",
+    summary = "Enter a managed repository snapshot.",
     handler_receiver = WorkflowPlugin,
+    handle = WorkflowPlugin::invoke_snapshot_enter,
+    handle_field = args,
+    permission_paths_handle = WorkflowPlugin::permission_snapshot_enter,
     display = brief,
     tags(ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Snapshot),
     capabilities(HostCapability::SnapshotRegistry, HostCapability::PluginStorage),
     concurrency_safe = false
 )]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub(crate) enum SnapshotToolInput {
-    #[tool(
-        exec = "enter",
-        handle = WorkflowPlugin::invoke_snapshot_enter,
-        permission_paths_handle = WorkflowPlugin::permission_snapshot_enter
-    )]
-    Enter {
-        #[serde(flatten)]
-        #[tool(flatten_shape)]
-        args: EnterSnapshotCommandInput,
-    },
-    #[tool(
-        exec = "exit",
-        handle = WorkflowPlugin::invoke_snapshot_exit,
-        permission_paths_handle = WorkflowPlugin::permission_snapshot_exit
-    )]
-    Exit {
-        #[serde(flatten)]
-        #[tool(flatten_shape)]
-        args: ExitSnapshotCommandInput,
-    },
+#[serde(deny_unknown_fields)]
+pub(crate) struct SnapshotEnterToolInput {
+    #[serde(flatten)]
+    #[tool(flatten_shape)]
+    args: EnterSnapshotCommandInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "exit",
+    summary = "Exit a managed repository snapshot.",
+    handler_receiver = WorkflowPlugin,
+    handle = WorkflowPlugin::invoke_snapshot_exit,
+    handle_field = args,
+    permission_paths_handle = WorkflowPlugin::permission_snapshot_exit,
+    display = brief,
+    tags(ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Snapshot),
+    capabilities(HostCapability::SnapshotRegistry, HostCapability::PluginStorage),
+    concurrency_safe = false
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SnapshotExitToolInput {
+    #[serde(flatten)]
+    #[tool(flatten_shape)]
+    args: ExitSnapshotCommandInput,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, ToolSuite)]
+#[tool_suite(handler_receiver = WorkflowPlugin)]
+pub(crate) enum SnapshotToolSuite {
+    Enter(SnapshotEnterToolInput),
+    Exit(SnapshotExitToolInput),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]

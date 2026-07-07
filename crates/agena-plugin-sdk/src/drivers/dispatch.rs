@@ -51,11 +51,11 @@ impl<P: Plugin> PluginDispatcher<P> {
                     .clone()
                     .unwrap_or_else(|| Arc::new(crate::host_api::NoopHostClient));
                 let callback_context = crate::host_api::HostCallbackContext {
-                    plugin_id: Some(ctx.plugin_id.clone()),
+                    plugin_id: Some(ctx.plugin_id.to_string()),
                     workspace_root: Some(ctx.workspace_root.to_string_lossy().to_string()),
                     ..crate::host_api::HostCallbackContext::default()
                 };
-                let outcome = crate::host_api::with_host_callback_context(
+                let outcome = crate::host_api::run_in_host_callback_context(
                     callback_context,
                     plugin.init(ctx, host),
                 )
@@ -80,11 +80,11 @@ impl<P: Plugin> PluginDispatcher<P> {
                     session_id: Some(i.session_id),
                     call_id: Some(i.call_id),
                     workspace_root: Some(i.workspace_root.clone()),
-                    tool_name: Some(i.tool_name.clone()),
+                    tool_name: Some(i.tool_name().to_string()),
                     ..crate::host_api::HostCallbackContext::default()
                 };
                 ok_json(
-                    &crate::host_api::with_host_callback_context(
+                    &crate::host_api::run_in_host_callback_context(
                         ctx,
                         plugin.tool_execute_before(i),
                     )
@@ -97,12 +97,15 @@ impl<P: Plugin> PluginDispatcher<P> {
                     session_id: Some(i.session_id),
                     call_id: Some(i.call_id),
                     workspace_root: Some(i.workspace_root.clone()),
-                    tool_name: Some(i.tool_name.clone()),
+                    tool_name: Some(i.tool_name().to_string()),
                     ..crate::host_api::HostCallbackContext::default()
                 };
                 ok_json(
-                    &crate::host_api::with_host_callback_context(ctx, plugin.tool_execute_after(i))
-                        .await?,
+                    &crate::host_api::run_in_host_callback_context(
+                        ctx,
+                        plugin.tool_execute_after(i),
+                    )
+                    .await?,
                 )
             }
             method::HOOK_TOOL_INVOKE => {
@@ -115,7 +118,8 @@ impl<P: Plugin> PluginDispatcher<P> {
                     ..crate::host_api::HostCallbackContext::default()
                 };
                 let output =
-                    crate::host_api::with_host_callback_context(ctx, plugin.tool_invoke(i)).await?;
+                    crate::host_api::run_in_host_callback_context(ctx, plugin.tool_invoke(i))
+                        .await?;
                 ok_json(&output)
             }
             method::HOOK_TOOL_PERMISSION_PATHS => {
@@ -125,7 +129,7 @@ impl<P: Plugin> PluginDispatcher<P> {
                     ..crate::host_api::HostCallbackContext::default()
                 };
                 ok_json(
-                    &crate::host_api::with_host_callback_context(
+                    &crate::host_api::run_in_host_callback_context(
                         ctx,
                         plugin.permission_paths(&i.tool_name, &i.input),
                     )
@@ -139,7 +143,7 @@ impl<P: Plugin> PluginDispatcher<P> {
                     ..crate::host_api::HostCallbackContext::default()
                 };
                 ok_json(
-                    &crate::host_api::with_host_callback_context(
+                    &crate::host_api::run_in_host_callback_context(
                         ctx,
                         plugin.permission_networks(&i.tool_name, &i.input),
                     )
@@ -192,7 +196,7 @@ impl<P: Plugin> PluginDispatcher<P> {
                     ..crate::host_api::HostCallbackContext::default()
                 };
                 ok_json(
-                    &crate::host_api::with_host_callback_context(
+                    &crate::host_api::run_in_host_callback_context(
                         ctx,
                         plugin.command_execute_before(i),
                     )
@@ -236,21 +240,21 @@ impl<P: Plugin> PluginDispatcher<P> {
                     session_id: Some(i.session_id),
                     call_id: Some(i.call_id),
                     workspace_root: Some(i.workspace_root.clone()),
-                    tool_name: Some(i.tool_name.clone()),
+                    tool_name: Some(i.tool_name().to_string()),
                     ..crate::host_api::HostCallbackContext::default()
                 };
-                crate::host_api::with_host_callback_context(ctx, plugin.tool_execute_failure(i))
+                crate::host_api::run_in_host_callback_context(ctx, plugin.tool_execute_failure(i))
                     .await?;
                 Ok(Value::Object(Default::default()))
             }
             method::HOOK_TOOL_DEFINITION => {
                 let i: ToolDefinitionInput = serde_json::from_value(params)?;
                 let ctx = crate::host_api::HostCallbackContext {
-                    tool_name: Some(i.tool_name.clone()),
+                    tool_name: Some(i.tool_name().to_string()),
                     ..crate::host_api::HostCallbackContext::default()
                 };
                 ok_json(
-                    &crate::host_api::with_host_callback_context(ctx, plugin.tool_definition(i))
+                    &crate::host_api::run_in_host_callback_context(ctx, plugin.tool_definition(i))
                         .await?,
                 )
             }
@@ -261,7 +265,8 @@ impl<P: Plugin> PluginDispatcher<P> {
                     ..crate::host_api::HostCallbackContext::default()
                 };
                 ok_json(
-                    &crate::host_api::with_host_callback_context(ctx, plugin.agent_stop(i)).await?,
+                    &crate::host_api::run_in_host_callback_context(ctx, plugin.agent_stop(i))
+                        .await?,
                 )
             }
             method::HOOK_COMMAND_AFTER => {
@@ -302,7 +307,7 @@ impl<P: Plugin> PluginDispatcher<P> {
                 tool_name: Some(input.tool_name.clone()),
                 ..inherited_context.unwrap_or_default()
             };
-            let result = crate::host_api::with_host_callback_context(
+            let result = crate::host_api::run_in_host_callback_context(
                 ctx,
                 plugin.tool_invoke_stream(input, sink),
             )

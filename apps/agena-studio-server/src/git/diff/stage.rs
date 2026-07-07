@@ -26,7 +26,7 @@ fn validate_repo_paths(paths: &[String]) -> Result<(), Box<Response>> {
     Ok(())
 }
 
-fn collect_body_paths(path: Option<String>, paths: Option<Vec<String>>) -> Vec<String> {
+fn collect_body_paths(path: Option<String>, paths: Vec<String>) -> Vec<String> {
     let mut collected: Vec<String> = Vec::new();
     if let Some(path) = path {
         let path = path.trim();
@@ -34,12 +34,10 @@ fn collect_body_paths(path: Option<String>, paths: Option<Vec<String>>) -> Vec<S
             collected.push(path.to_string());
         }
     }
-    if let Some(paths) = paths {
-        for path in paths {
-            let path = path.trim();
-            if !path.is_empty() {
-                collected.push(path.to_string());
-            }
+    for path in paths {
+        let path = path.trim();
+        if !path.is_empty() {
+            collected.push(path.to_string());
         }
     }
     collected.sort();
@@ -121,8 +119,10 @@ pub async fn git_revert(
 #[derive(Debug, Deserialize)]
 pub struct GitStageBody {
     pub path: Option<String>,
-    pub paths: Option<Vec<String>>,
-    pub all: Option<bool>,
+    #[serde(default)]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub all: bool,
     // "tracked" | "untracked" | "merge" | "paths" (default)
     pub scope: Option<String>,
 }
@@ -136,7 +136,7 @@ pub async fn git_stage(
         Err(resp) => return resp,
     };
 
-    let scope = if body.all.unwrap_or(false) {
+    let scope = if body.all {
         "all".to_string()
     } else if let Some(s) = body.scope.as_deref() {
         s.trim().to_ascii_lowercase()
@@ -257,8 +257,10 @@ pub async fn git_stage(
 #[derive(Debug, Deserialize)]
 pub struct GitUnstageBody {
     pub path: Option<String>,
-    pub paths: Option<Vec<String>>,
-    pub all: Option<bool>,
+    #[serde(default)]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub all: bool,
 }
 
 pub async fn git_unstage(
@@ -270,7 +272,7 @@ pub async fn git_unstage(
         Err(resp) => return resp,
     };
 
-    if body.all.unwrap_or(false) {
+    if body.all {
         // Unstage everything while keeping worktree changes.
         if let Err(resp) = run_git_checked(&dir, &["reset"], None).await {
             return resp;
@@ -318,7 +320,8 @@ pub async fn git_unstage(
 pub struct GitCleanBody {
     // "untracked" (default) | "all" | "tracked"
     pub scope: Option<String>,
-    pub paths: Option<Vec<String>>,
+    #[serde(default)]
+    pub paths: Vec<String>,
 }
 
 pub async fn git_clean(
@@ -440,7 +443,8 @@ pub async fn git_rename(
 #[serde(rename_all = "camelCase")]
 pub struct GitDeleteBody {
     pub path: String,
-    pub force: Option<bool>,
+    #[serde(default)]
+    pub force: bool,
 }
 
 pub async fn git_delete(
@@ -465,11 +469,10 @@ pub async fn git_delete(
         .await
         .unwrap_or((1, "".to_string(), "".to_string()));
     let tracked = c_ls == 0;
-    let force = body.force.unwrap_or(false);
 
     if tracked {
         let mut args: Vec<&str> = vec!["rm"];
-        if force {
+        if body.force {
             args.push("-f");
         }
         args.push("-r");

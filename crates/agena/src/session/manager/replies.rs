@@ -434,10 +434,10 @@ impl SessionManager {
             &mut session,
             request_id.as_str(),
             crate::message::PendingInteractiveRequestKind::Permission,
-            PartContent::request(RequestPart::Permission(
-                InteractiveRequestPart::pending(permission_request.clone())
-                    .with_reply(request.request.reply.clone()),
-            )),
+            PartContent::request(RequestPart::Permission(InteractiveRequestPart::replied(
+                permission_request.clone(),
+                request.request.reply.clone(),
+            ))),
         )?;
         let replied_assistant_message = assistant_message_for_part(&session, &pending.tool.part)?;
 
@@ -565,10 +565,10 @@ impl SessionManager {
             &mut session,
             request_id.as_str(),
             crate::message::PendingInteractiveRequestKind::UserInput,
-            PartContent::request(RequestPart::UserInput(
-                InteractiveRequestPart::pending(user_input_request.clone())
-                    .with_reply(request.reply.clone()),
-            )),
+            PartContent::request(RequestPart::UserInput(InteractiveRequestPart::replied(
+                user_input_request.clone(),
+                request.reply.clone(),
+            ))),
         )?;
 
         let is_host_request = request_id.starts_with("host-input:");
@@ -920,17 +920,27 @@ impl SessionManager {
             let scoped_executor = state
                 .tool_executor
                 .for_session_context(&session.runtime.execution);
+            let tool_protocol = scoped_executor.model_tool_prompt_text();
             let tools = scoped_executor.available_model_tools();
             let request_tools = tools.clone();
-            let prompt_budget =
-                self.prompt_budget_for_run(&session, options, tools.as_slice(), state.as_ref());
+            let request_system = super::merge_system_prompt_with_tool_protocol(
+                options.system.as_deref(),
+                tool_protocol.as_deref(),
+            );
+            let prompt_budget = self.prompt_budget_for_run(
+                &session,
+                options,
+                request_system.as_deref(),
+                tools.as_slice(),
+                state.as_ref(),
+            );
             let provider_request_shape = state.processor.prompt_cache_shape(&options.model)?;
             let continuation_supported =
                 state.processor.supports_prompt_continuation(&options.model);
             let prompt_request_options = PromptRequestOptions {
                 provider_id: options.model.provider_id.as_str(),
                 model_id: options.model.model_id.as_str(),
-                system: options.system.as_deref(),
+                system: request_system.as_deref(),
                 temperature: options.temperature,
                 max_output_tokens: options.max_output_tokens,
                 tools: tools.as_slice(),
@@ -1227,6 +1237,7 @@ impl SessionManager {
         &self,
         _session: &Session,
         options: &SessionRunOptions,
+        system: Option<&str>,
         tools: &[crate::plugin::registry::RegisteredTool],
         state: &SessionManagerState,
     ) -> PromptTurnBudget {
@@ -1242,7 +1253,7 @@ impl SessionManager {
                 .max_output_tokens
                 .or(metadata.limits.max_output_tokens),
             fallback_budget,
-            options.system.as_deref(),
+            system,
             tools,
         );
 
@@ -2282,8 +2293,8 @@ impl SessionManager {
                     execution.view.attachments.clone(),
                     tool_output.clone(),
                     lifecycle.clone(),
-                )
-                .with_title(completion_title.clone());
+                );
+                operation.set_title(completion_title.clone());
                 operation.result.metadata.extend(
                     execution.view.metadata.iter().map(|(key, value)| {
                         (key.clone(), serde_json::Value::String(value.clone()))
@@ -2355,19 +2366,18 @@ impl SessionManager {
 
         let assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                tool_part.set_content(PartContent::Operation(
-                    OperationPart::failed(
-                        resolved.call_id,
-                        resolved.invocation.clone(),
-                        reason.clone(),
-                        reason.clone(),
-                        blocks.clone(),
-                        Vec::new(),
-                        ToolOutput::default(),
-                        lifecycle.clone(),
-                    )
-                    .with_title(failure_title.clone()),
-                ));
+                let mut operation = OperationPart::failed(
+                    resolved.call_id,
+                    resolved.invocation.clone(),
+                    reason.clone(),
+                    reason.clone(),
+                    blocks.clone(),
+                    Vec::new(),
+                    ToolOutput::default(),
+                    lifecycle.clone(),
+                );
+                operation.set_title(failure_title.clone());
+                tool_part.set_content(PartContent::Operation(operation));
                 tool_part.status = ExecutionStatus::Failed;
             })?;
 
@@ -2638,7 +2648,21 @@ impl SessionManager {
     ) -> Result<SessionRunOptions, AppError> {
         let model = self.model_from_session_or_default(session, &state)?;
 
-        self.apply_execution_context_to_run_options(session, SessionRunOptions::new(model))
+        self.apply_execution_context_to_run_options(
+            session,
+            SessionRunOptions {
+                model,
+                thinking_mode: None,
+                speed_mode: None,
+                verbosity: None,
+                thinking: None,
+                request_override: Default::default(),
+                system: None,
+                temperature: None,
+                max_output_tokens: None,
+                agent_profile: None,
+            },
+        )
     }
 
     pub(super) async fn clear_session_agent_profile(
@@ -2985,9 +3009,18 @@ impl SessionManager {
         } else {
             base_model
         };
-        Ok(SessionRunOptions::new(model)
-            .with_system(child.runtime.execution.system_prompt_override.clone())
-            .with_agent_profile(child.runtime.execution.selection.agent.clone()))
+        Ok(SessionRunOptions {
+            model,
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: child.runtime.execution.system_prompt_override.clone(),
+            temperature: None,
+            max_output_tokens: None,
+            agent_profile: child.runtime.execution.selection.agent.clone(),
+        })
     }
 
     fn resolve_requested_session_model_ref(

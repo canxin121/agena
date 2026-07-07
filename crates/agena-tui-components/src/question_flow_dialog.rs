@@ -102,20 +102,16 @@ impl<'a> QuestionFlowDialogSpec<'a> {
         title: Cow<'a, str>,
         target_width: u16,
         nav_title: Cow<'a, str>,
+        nav_body: Option<&'a Text<'a>>,
         mode: QuestionFlowDialogMode<'a>,
     ) -> Self {
         Self {
             title,
             target_width,
             nav_title,
-            nav_body: None,
+            nav_body,
             mode,
         }
-    }
-
-    pub fn with_nav_body(mut self, nav_body: &'a Text<'a>) -> Self {
-        self.nav_body = Some(nav_body);
-        self
     }
 }
 

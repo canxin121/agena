@@ -13,12 +13,14 @@ use crate::{
     model_catalog::ModelCatalogSnapshot,
     plugin::{PluginHost, PluginHostBuildConfig},
     provider::{
-        AmazonBedrockAdapter, AnthropicAdapter, AnthropicProfile, AuthRefreshStrategy,
-        AuthSecretSelector, CatalogedModelsProvider, GeminiAdapter, GitlabProvider,
-        GitlabProviderConfig, ManagedCredential, ModelCapabilities, ModelId, ModelMetadata,
-        ModelRuntime, ModelSpeedMode, ModelThinkingMode, MultiAdapterProvider, OllamaAdapter,
-        OpenAiAdapter, PromptCacheShape, ProviderModelRoute, ProviderRegistry, StreamResumePolicy,
-        auth::AuthData, parse_sap_ai_core_service_key,
+        AmazonBedrockAdapter, AnthropicAdapter, AnthropicAdapterOptions, AnthropicProfile,
+        AuthRefreshStrategy, AuthSecretSelector, CatalogedModelsProvider, GeminiAdapter,
+        GeminiAdapterOptions, GitlabProvider, GitlabProviderConfig, ManagedCredential,
+        ModelCapabilities, ModelId, ModelMetadata, ModelRuntime, ModelSpeedMode, ModelThinkingMode,
+        MultiAdapterProvider, OllamaAdapter, OpenAiAdapter, OpenAiAdapterOptions, PromptCacheShape,
+        ProviderModelRoute, ProviderRegistry, StreamResumePolicy, auth::AuthData,
+        default_gitlab_ai_gateway_headers, default_gitlab_feature_flags,
+        parse_sap_ai_core_service_key,
     },
 };
 
@@ -222,7 +224,7 @@ impl ResolvedConfig {
         config_path: Option<&Path>,
     ) -> Result<ProviderRegistry, ConfigError> {
         let client = self.build_provider_http_client()?;
-        let mut registry = ProviderRegistry::with_runtime_config(self.provider_runtime_config());
+        let mut registry = ProviderRegistry::from_runtime_config(self.provider_runtime_config());
 
         for (provider_id, resolved) in &self.providers {
             if !resolved.enabled {
@@ -330,20 +332,19 @@ impl super::ConfigResolution {
             None => self.build_mcp_manager_from_plugin_config().await?,
         };
         let static_plugins = crate::plugins::sources::static_plugin_registrations(mcp_manager);
-        let mut build_config = PluginHostBuildConfig {
+        let previous_plugins = previous_config
+            .map(PluginHostBuildConfig::previous_plugins)
+            .unwrap_or_default();
+        let build_config = PluginHostBuildConfig {
             static_plugins,
             config: plugin_config,
             workspace_root,
             agena_version,
             callback_base_url: None,
             host_client: None,
-            previous: None,
-            previous_plugins: HashMap::new(),
+            previous: previous_host,
+            previous_plugins,
         };
-        if let (Some(prev_host), Some(prev_cfg)) = (previous_host, previous_config) {
-            build_config.previous_plugins = PluginHostBuildConfig::previous_plugins(prev_cfg);
-            build_config.previous = Some(prev_host);
-        }
         PluginHost::new(build_config)
             .await
             .map_err(|e| ConfigError::Validation(format!("plugin host: {e}")))
@@ -352,10 +353,12 @@ impl super::ConfigResolution {
     async fn build_mcp_manager_from_plugin_config(
         &self,
     ) -> Result<Option<Arc<agena_mcp_client::McpConnectionManager>>, ConfigError> {
-        if !crate::plugins::provided::mcp::static_bridge_enabled(&self.config.plugins) {
+        let resolved_plugins =
+            crate::plugins::sources::resolve_plugin_config(self.config.plugins.clone());
+        if !crate::plugins::provided::mcp::static_bridge_enabled(&resolved_plugins) {
             return Ok(None);
         }
-        let config = crate::plugins::provided::mcp::config_from_plugins(&self.config.plugins)
+        let config = crate::plugins::provided::mcp::config_from_plugins(&resolved_plugins)
             .map_err(ConfigError::Validation)?;
         Ok(Some(
             crate::plugins::provided::mcp::build_manager(&config).await,
@@ -432,29 +435,27 @@ fn build_provider(
         .map(|(adapter_id, _)| adapter_id.clone())
         .collect();
 
-    let provider: Arc<dyn ModelRuntime> = Arc::new(
-        MultiAdapterProvider::new(
-            provider_id,
-            resolved
-                .defaults
-                .adapter
-                .clone()
-                .expect("resolved provider default adapter"),
-            adapter_defaults
-                .get(
-                    resolved
-                        .defaults
-                        .adapter
-                        .as_deref()
-                        .expect("resolved provider default adapter"),
-                )
-                .cloned()
-                .unwrap_or_else(|| LIST_MODELS_DEFAULT_MODEL_ID.to_owned()),
-            adapters,
-            routes,
-        )
-        .with_configured_only_adapters(configured_only_adapters),
-    );
+    let provider: Arc<dyn ModelRuntime> = Arc::new(MultiAdapterProvider::new(
+        provider_id,
+        resolved
+            .defaults
+            .adapter
+            .clone()
+            .expect("resolved provider default adapter"),
+        adapter_defaults
+            .get(
+                resolved
+                    .defaults
+                    .adapter
+                    .as_deref()
+                    .expect("resolved provider default adapter"),
+            )
+            .cloned()
+            .unwrap_or_else(|| LIST_MODELS_DEFAULT_MODEL_ID.to_owned()),
+        adapters,
+        routes,
+        configured_only_adapters,
+    ));
 
     if let Some(provider_record) = catalog.map(|snapshot| snapshot.merged_models()) {
         Ok(CatalogedModelsProvider::new(provider, provider_record))
@@ -530,41 +531,40 @@ fn build_adapter_provider(
                     adapter.options.capability_family,
                     env,
                 )?;
-                let mut provider = OpenAiAdapter::new_managed_with_id(
+                let provider = OpenAiAdapter::new_managed_with_options(
                     runtime_provider_id.as_str(),
                     client,
                     credential.credential,
                     resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::OpenAi)?,
                     adapter_default_model.to_owned(),
-                )
-                .with_backend(adapter.options.backend.into())
-                .with_auth_header(
-                    adapter.options.auth_header.clone(),
-                    adapter.options.auth_scheme.clone(),
-                )
-                .with_extra_headers(http_adapter_extra_headers(
-                    adapter,
-                    Some(http_adapter_default_user_agent(
-                        auth,
-                        HttpAdapterKind::OpenAi,
-                        adapter_default_model,
-                    )),
-                ))
-                .with_api_mode(adapter.options.api_mode.into())
-                .with_stream_mode(adapter.options.stream_mode.into())
-                .with_realtime_ws_url(adapter.options.realtime_ws_url.clone())
-                .with_models_url(adapter.options.models_url.clone());
-
-                if let Some(family) =
-                    openai_adapter_capability_family(provider_id, auth, &adapter.options)
-                {
-                    provider = provider.with_capability_family(family);
-                }
-
-                if let Some(auth_data) = credential.auth_data {
-                    provider = provider.with_auth_data(auth_data);
-                }
-
+                    OpenAiAdapterOptions {
+                        backend: adapter.options.backend.into(),
+                        auth_data: credential.auth_data,
+                        api_mode: adapter.options.api_mode.into(),
+                        api_mode_explicit: false,
+                        profile: crate::provider::OpenAiProfile::Standard,
+                        models_url: adapter.options.models_url.clone(),
+                        auth_header: adapter.options.auth_header.clone(),
+                        auth_scheme: adapter.options.auth_scheme.clone(),
+                        capability_family: openai_adapter_capability_family(
+                            provider_id,
+                            auth,
+                            &adapter.options,
+                        )
+                        .unwrap_or(crate::provider::CapabilityFamily::OpenAi),
+                        extra_headers: http_adapter_extra_headers(
+                            adapter,
+                            Some(http_adapter_default_user_agent(
+                                auth,
+                                HttpAdapterKind::OpenAi,
+                                adapter_default_model,
+                            )),
+                        ),
+                        stream_mode: adapter.options.stream_mode.into(),
+                        realtime_ws_url: adapter.options.realtime_ws_url.clone(),
+                        top_level_prompt_cache_override: None,
+                    },
+                );
                 Arc::new(provider)
             }
             ProviderAuthConfig::Credential(credential_auth) => match credential_auth.issuer() {
@@ -578,35 +578,35 @@ fn build_adapter_provider(
                         env,
                         config_path,
                     )?;
-                    let mut provider = OpenAiAdapter::new_managed_with_id(
+                    let provider = OpenAiAdapter::new_managed_with_options(
                         runtime_provider_id.as_str(),
                         client,
                         credential.credential,
                         "https://chatgpt.com/backend-api/codex".to_owned(),
                         adapter_default_model.to_owned(),
-                    )
-                    .with_backend(adapter.options.backend.into())
-                    .with_auth_header(
-                        adapter.options.auth_header.clone(),
-                        adapter.options.auth_scheme.clone(),
-                    )
-                    .with_extra_headers(http_adapter_extra_headers(
-                        adapter,
-                        Some(http_adapter_default_user_agent(
-                            auth,
-                            HttpAdapterKind::OpenAi,
-                            adapter_default_model,
-                        )),
-                    ))
-                    .with_api_mode(adapter.options.api_mode.into())
-                    .with_stream_mode(adapter.options.stream_mode.into())
-                    .with_models_url(adapter.options.models_url.clone())
-                    .with_realtime_ws_url(adapter.options.realtime_ws_url.clone());
-
-                    if let Some(auth_data) = credential.auth_data {
-                        provider = provider.with_auth_data(auth_data);
-                    }
-
+                        OpenAiAdapterOptions {
+                            backend: adapter.options.backend.into(),
+                            auth_data: credential.auth_data,
+                            api_mode: adapter.options.api_mode.into(),
+                            api_mode_explicit: false,
+                            profile: crate::provider::OpenAiProfile::Standard,
+                            models_url: adapter.options.models_url.clone(),
+                            auth_header: adapter.options.auth_header.clone(),
+                            auth_scheme: adapter.options.auth_scheme.clone(),
+                            capability_family: crate::provider::CapabilityFamily::OpenAi,
+                            extra_headers: http_adapter_extra_headers(
+                                adapter,
+                                Some(http_adapter_default_user_agent(
+                                    auth,
+                                    HttpAdapterKind::OpenAi,
+                                    adapter_default_model,
+                                )),
+                            ),
+                            stream_mode: adapter.options.stream_mode.into(),
+                            realtime_ws_url: adapter.options.realtime_ws_url.clone(),
+                            top_level_prompt_cache_override: None,
+                        },
+                    );
                     Arc::new(provider)
                 }
                 crate::provider::auth::CredentialIssuer::GithubCopilot => {
@@ -619,35 +619,35 @@ fn build_adapter_provider(
                         env,
                         config_path,
                     )?;
-                    let mut provider = OpenAiAdapter::new_managed_with_id(
+                    let provider = OpenAiAdapter::new_managed_with_options(
                         runtime_provider_id.as_str(),
                         client,
                         credential.credential,
                         "https://api.githubcopilot.com".to_owned(),
                         adapter_default_model.to_owned(),
-                    )
-                    .with_profile(crate::provider::OpenAiProfile::GithubCopilot)
-                    .with_backend(adapter.options.backend.into())
-                    .with_auth_header(
-                        adapter.options.auth_header.clone(),
-                        adapter.options.auth_scheme.clone(),
-                    )
-                    .with_api_mode(adapter.options.api_mode.into())
-                    .with_api_mode_explicit(adapter.options.api_mode_explicit)
-                    .with_stream_mode(adapter.options.stream_mode.into())
-                    .with_models_url(adapter.options.models_url.clone())
-                    .with_realtime_ws_url(adapter.options.realtime_ws_url.clone())
-                    .with_extra_headers(http_adapter_extra_headers(
-                        adapter,
-                        Some(http_adapter_default_user_agent(
-                            auth,
-                            HttpAdapterKind::OpenAi,
-                            adapter_default_model,
-                        )),
-                    ));
-                    if let Some(auth_data) = credential.auth_data {
-                        provider = provider.with_auth_data(auth_data);
-                    }
+                        OpenAiAdapterOptions {
+                            backend: adapter.options.backend.into(),
+                            auth_data: credential.auth_data,
+                            api_mode: adapter.options.api_mode.into(),
+                            api_mode_explicit: adapter.options.api_mode_explicit,
+                            profile: crate::provider::OpenAiProfile::GithubCopilot,
+                            models_url: adapter.options.models_url.clone(),
+                            auth_header: adapter.options.auth_header.clone(),
+                            auth_scheme: adapter.options.auth_scheme.clone(),
+                            capability_family: crate::provider::CapabilityFamily::OpenAi,
+                            extra_headers: http_adapter_extra_headers(
+                                adapter,
+                                Some(http_adapter_default_user_agent(
+                                    auth,
+                                    HttpAdapterKind::OpenAi,
+                                    adapter_default_model,
+                                )),
+                            ),
+                            stream_mode: adapter.options.stream_mode.into(),
+                            realtime_ws_url: adapter.options.realtime_ws_url.clone(),
+                            top_level_prompt_cache_override: None,
+                        },
+                    );
                     Arc::new(provider)
                 }
                 crate::provider::auth::CredentialIssuer::GoogleAdc
@@ -659,41 +659,40 @@ fn build_adapter_provider(
                         adapter.options.capability_family,
                         env,
                     )?;
-                    let mut provider = OpenAiAdapter::new_managed_with_id(
+                    let provider = OpenAiAdapter::new_managed_with_options(
                         runtime_provider_id.as_str(),
                         client,
                         credential.credential,
                         resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::OpenAi)?,
                         adapter_default_model.to_owned(),
-                    )
-                    .with_backend(adapter.options.backend.into())
-                    .with_auth_header(
-                        adapter.options.auth_header.clone(),
-                        adapter.options.auth_scheme.clone(),
-                    )
-                    .with_extra_headers(http_adapter_extra_headers(
-                        adapter,
-                        Some(http_adapter_default_user_agent(
-                            auth,
-                            HttpAdapterKind::OpenAi,
-                            adapter_default_model,
-                        )),
-                    ))
-                    .with_api_mode(adapter.options.api_mode.into())
-                    .with_stream_mode(adapter.options.stream_mode.into())
-                    .with_realtime_ws_url(adapter.options.realtime_ws_url.clone())
-                    .with_models_url(adapter.options.models_url.clone());
-
-                    if let Some(family) =
-                        openai_adapter_capability_family(provider_id, auth, &adapter.options)
-                    {
-                        provider = provider.with_capability_family(family);
-                    }
-
-                    if let Some(auth_data) = credential.auth_data {
-                        provider = provider.with_auth_data(auth_data);
-                    }
-
+                        OpenAiAdapterOptions {
+                            backend: adapter.options.backend.into(),
+                            auth_data: credential.auth_data,
+                            api_mode: adapter.options.api_mode.into(),
+                            api_mode_explicit: false,
+                            profile: crate::provider::OpenAiProfile::Standard,
+                            models_url: adapter.options.models_url.clone(),
+                            auth_header: adapter.options.auth_header.clone(),
+                            auth_scheme: adapter.options.auth_scheme.clone(),
+                            capability_family: openai_adapter_capability_family(
+                                provider_id,
+                                auth,
+                                &adapter.options,
+                            )
+                            .unwrap_or(crate::provider::CapabilityFamily::OpenAi),
+                            extra_headers: http_adapter_extra_headers(
+                                adapter,
+                                Some(http_adapter_default_user_agent(
+                                    auth,
+                                    HttpAdapterKind::OpenAi,
+                                    adapter_default_model,
+                                )),
+                            ),
+                            stream_mode: adapter.options.stream_mode.into(),
+                            realtime_ws_url: adapter.options.realtime_ws_url.clone(),
+                            top_level_prompt_cache_override: None,
+                        },
+                    );
                     Arc::new(provider)
                 }
                 _ => {
@@ -766,74 +765,72 @@ fn build_adapter_provider(
                 let base_url = copilot_base_url(credential.auth_data.as_ref(), None)
                     .unwrap_or_else(|| "https://api.githubcopilot.com".to_owned());
 
-                let mut provider = AnthropicAdapter::new_managed_with_id(
+                let provider = AnthropicAdapter::new_managed_with_options(
                     runtime_provider_id.as_str(),
                     client,
                     credential.credential,
                     base_url,
                     adapter_default_model.to_owned(),
-                )
-                .with_auth_header(
-                    adapter.options.auth_header.clone(),
-                    adapter.options.auth_scheme.clone(),
-                )
-                .with_profile(AnthropicProfile::GithubCopilot)
-                .with_models_url(adapter.options.models_url.clone())
-                .with_messages_url(adapter.options.messages_url.clone())
-                .with_beta_header(adapter.options.extra_beta_header.clone())
-                .with_eager_input_streaming_override(adapter.options.eager_input_streaming)
-                .with_extra_headers(http_adapter_extra_headers(
-                    adapter,
-                    Some(http_adapter_default_user_agent(
-                        auth,
-                        HttpAdapterKind::Anthropic,
-                        adapter_default_model,
-                    )),
-                ));
-
-                if let Some(auth_data) = credential.auth_data {
-                    provider = provider.with_auth_data(auth_data);
-                }
-
+                    AnthropicAdapterOptions {
+                        auth_data: credential.auth_data,
+                        auth_header: adapter.options.auth_header.clone(),
+                        auth_scheme: adapter.options.auth_scheme.clone(),
+                        models_url: adapter.options.models_url.clone(),
+                        messages_url: adapter.options.messages_url.clone(),
+                        profile: AnthropicProfile::GithubCopilot,
+                        extra_beta_header: adapter.options.extra_beta_header.clone(),
+                        override_beta_header: true,
+                        extra_headers: http_adapter_extra_headers(
+                            adapter,
+                            Some(http_adapter_default_user_agent(
+                                auth,
+                                HttpAdapterKind::Anthropic,
+                                adapter_default_model,
+                            )),
+                        ),
+                        eager_input_streaming_override: adapter.options.eager_input_streaming,
+                    },
+                );
                 Arc::new(provider)
             }
-            _ => Arc::new(
-                AnthropicAdapter::new_managed_with_id(
-                    runtime_provider_id.as_str(),
-                    client,
-                    api_auth_managed_credential(
-                        provider_id,
-                        "api_key",
-                        auth,
-                        AuthSecretSelector::AccessOrApiKey,
-                        AuthRefreshStrategy::ReloadFromStore,
-                        env,
-                        true,
-                    )?
-                    .credential,
-                    resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::Anthropic)?,
-                    adapter_default_model.to_owned(),
-                )
-                .with_models_url(adapter.options.models_url.clone())
-                .with_messages_url(adapter.options.messages_url.clone())
-                .with_auth_header(
-                    adapter.options.auth_header.clone(),
-                    adapter.options.auth_scheme.clone(),
-                )
-                .with_beta_header(adapter.options.extra_beta_header.clone())
-                .with_eager_input_streaming_override(adapter.options.eager_input_streaming)
-                .with_extra_headers(http_adapter_extra_headers(
-                    adapter,
-                    Some(http_adapter_default_user_agent(
-                        auth,
-                        HttpAdapterKind::Anthropic,
-                        adapter_default_model,
-                    )),
-                )),
-            ),
+            _ => Arc::new(AnthropicAdapter::new_managed_with_options(
+                runtime_provider_id.as_str(),
+                client,
+                api_auth_managed_credential(
+                    provider_id,
+                    "api_key",
+                    auth,
+                    AuthSecretSelector::AccessOrApiKey,
+                    AuthRefreshStrategy::ReloadFromStore,
+                    env,
+                    true,
+                )?
+                .credential,
+                resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::Anthropic)?,
+                adapter_default_model.to_owned(),
+                AnthropicAdapterOptions {
+                    auth_data: None,
+                    auth_header: adapter.options.auth_header.clone(),
+                    auth_scheme: adapter.options.auth_scheme.clone(),
+                    models_url: adapter.options.models_url.clone(),
+                    messages_url: adapter.options.messages_url.clone(),
+                    profile: AnthropicProfile::Standard,
+                    extra_beta_header: adapter.options.extra_beta_header.clone(),
+                    override_beta_header: true,
+                    extra_headers: http_adapter_extra_headers(
+                        adapter,
+                        Some(http_adapter_default_user_agent(
+                            auth,
+                            HttpAdapterKind::Anthropic,
+                            adapter_default_model,
+                        )),
+                    ),
+                    eager_input_streaming_override: adapter.options.eager_input_streaming,
+                },
+            )),
         },
         ProviderAdapterDefinition::Gemini(adapter) => Arc::new({
-            let mut provider = GeminiAdapter::new_managed(
+            let provider = GeminiAdapter::new_managed_with_options(
                 client,
                 api_auth_managed_credential(
                     provider_id,
@@ -847,20 +844,25 @@ fn build_adapter_provider(
                 .credential,
                 resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::Gemini)?,
                 adapter_default_model.to_owned(),
-            )
-            .with_extra_headers(http_adapter_extra_headers(
-                adapter,
-                Some(http_adapter_default_user_agent(
-                    auth,
-                    HttpAdapterKind::Gemini,
-                    adapter_default_model,
-                )),
-            ))
-            .with_stream_mode(adapter.options.stream_mode.into())
-            .with_realtime_ws_url(adapter.options.realtime_ws_url.clone());
-            if let Some(header) = adapter.options.auth_header.clone() {
-                provider = provider.with_auth_header(header, adapter.options.auth_scheme.clone());
-            }
+                GeminiAdapterOptions {
+                    auth_header: adapter
+                        .options
+                        .auth_header
+                        .clone()
+                        .map(|header| (header, adapter.options.auth_scheme.clone())),
+                    auth_query_parameter: None,
+                    extra_headers: http_adapter_extra_headers(
+                        adapter,
+                        Some(http_adapter_default_user_agent(
+                            auth,
+                            HttpAdapterKind::Gemini,
+                            adapter_default_model,
+                        )),
+                    ),
+                    stream_mode: adapter.options.stream_mode.into(),
+                    realtime_ws_url: adapter.options.realtime_ws_url.clone(),
+                },
+            );
             provider
         }),
         ProviderAdapterDefinition::Gitlab(adapter) => {
@@ -1011,12 +1013,15 @@ pub async fn list_provider_adapter_models(
                         model.catalog_model_id = Some(crate::model::ModelId::new(catalog_model_id));
                     }
                     let fallback = provider.model_capabilities_for_adapter(None, &model.id);
-                    model.capabilities = model.capabilities.clone().with_fallbacks_from(&fallback);
+                    model.capabilities = model
+                        .capabilities
+                        .clone()
+                        .merged_with_fallbacks_from(&fallback);
                     let metadata_fallback = provider.model_metadata_for_adapter(None, &model.id);
                     model.metadata = model
                         .metadata
                         .clone()
-                        .with_fallbacks_from(&metadata_fallback);
+                        .merged_with_fallbacks_from(&metadata_fallback);
                     if model.thinking_modes.is_empty() {
                         model.thinking_modes =
                             provider.model_thinking_modes_for_adapter(None, &model.id);
@@ -1412,18 +1417,17 @@ fn gitlab_runtime_config(
     config: &super::ProviderGitlabAuthConfig,
     default_model: &str,
 ) -> GitlabProviderConfig {
-    let defaults = GitlabProviderConfig::default();
     GitlabProviderConfig {
         instance_url: gitlab_instance_url(config),
         ai_gateway_url: gitlab_ai_gateway_url(config),
         default_model: default_model.to_owned(),
         ai_gateway_headers: if config.ai_gateway_headers.is_empty() {
-            defaults.ai_gateway_headers
+            default_gitlab_ai_gateway_headers()
         } else {
             to_hash_map(&config.ai_gateway_headers)
         },
         feature_flags: if config.feature_flags.is_empty() {
-            defaults.feature_flags
+            default_gitlab_feature_flags()
         } else {
             to_hash_map(&config.feature_flags)
         },
@@ -1554,7 +1558,6 @@ fn gitlab_credential_runtime_config(
     config: &ProviderCredentialAuthConfig,
     default_model: &str,
 ) -> GitlabProviderConfig {
-    let defaults = GitlabProviderConfig::default();
     let gitlab = config
         .gitlab()
         .expect("gitlab credential runtime config requires gitlab credential auth");
@@ -1563,12 +1566,12 @@ fn gitlab_credential_runtime_config(
         ai_gateway_url: gitlab_credential_ai_gateway_url(config),
         default_model: default_model.to_owned(),
         ai_gateway_headers: if gitlab.ai_gateway_headers.is_empty() {
-            defaults.ai_gateway_headers
+            default_gitlab_ai_gateway_headers()
         } else {
             to_hash_map(&gitlab.ai_gateway_headers)
         },
         feature_flags: if gitlab.feature_flags.is_empty() {
-            defaults.feature_flags
+            default_gitlab_feature_flags()
         } else {
             to_hash_map(&gitlab.feature_flags)
         },

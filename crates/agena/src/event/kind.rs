@@ -5,6 +5,7 @@
 //! (see [`ALL_KINDS`]).
 
 use crate::event::filter::{EventKindTag, KindMatcher, KindPersistence};
+use agena_plugin_sdk::PluginKey;
 use serde::{Deserialize, Serialize};
 
 use crate::event::client::{
@@ -58,7 +59,7 @@ pub enum EventKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginEventPayload {
-    pub plugin_id: String,
+    pub plugin_id: PluginKey,
     pub kind_label: String,
     pub payload: serde_json::Value,
 }

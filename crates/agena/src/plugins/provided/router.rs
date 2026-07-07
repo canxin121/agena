@@ -110,28 +110,35 @@ fn current_executor(
 
 fn routed_tool_name(tool_name: &str) -> Option<&'static str> {
     match tool_name {
-        "read" | "glob" | "grep" | "apply_patch" => Some("fs"),
-        "cron_list" => Some("schedule.list"),
-        "cron_create" => Some("schedule.create"),
-        "cron_delete" => Some("schedule.delete"),
-        "schedule_wakeup" => Some("schedule.wakeup"),
-        "process" => Some("run"),
-        "lsp_servers" | "lsp_definition" | "lsp_references" | "lsp_hover" | "lsp_diagnostics" => {
-            Some("servers")
-        }
+        "task" => Some("run"),
+        "tool_search" => Some("search"),
+        "ask_user" => Some("request_input"),
+        "enter_snapshot" => Some("enter"),
+        "exit_snapshot" => Some("exit"),
+        "cron_list" => Some("list"),
+        "cron_create" => Some("create"),
+        "cron_delete" => Some("delete"),
+        "schedule_wakeup" => Some("wakeup"),
+        "lsp_definition" => Some("definition"),
+        "lsp_references" => Some("references"),
+        "lsp_hover" => Some("hover"),
+        "lsp_diagnostics" => Some("diagnostics"),
         _ => None,
     }
 }
 
 fn routed_internal_tool_names(tool_name: &str) -> &'static [&'static str] {
     match tool_name {
-        "schedule" => &["cron_list", "cron_create", "cron_delete", "schedule_wakeup"],
-        "schedule.list" => &["cron_list"],
-        "schedule.create" => &["cron_create"],
-        "schedule.delete" => &["cron_delete"],
-        "schedule.wakeup" => &["schedule_wakeup"],
-        "run" | "list" | "logs" | "stop" => &["process"],
-        "servers" => &["lsp_servers"],
+        "run" => &["process", "task"],
+        "list" => &["process", "cron_list"],
+        "logs" | "stop" => &["process"],
+        "search" => &["tool_search"],
+        "request_input" => &["ask_user"],
+        "enter" => &["enter_snapshot"],
+        "exit" => &["exit_snapshot"],
+        "create" => &["cron_create"],
+        "delete" => &["cron_delete"],
+        "wakeup" => &["schedule_wakeup"],
         "definition" => &["lsp_definition"],
         "references" => &["lsp_references"],
         "hover" => &["lsp_hover"],

@@ -373,7 +373,7 @@ pub struct GitCloneBody {
     pub url: Option<String>,
     pub path: Option<String>,
     #[serde(default)]
-    pub recursive: Option<bool>,
+    pub recursive: bool,
     pub r#ref: Option<String>,
     pub depth: Option<u32>,
 }
@@ -508,7 +508,7 @@ pub async fn git_clone(
 
     let target_str = target.to_string_lossy().to_string();
     let mut args: Vec<String> = vec!["clone".to_string()];
-    if body.recursive.unwrap_or(false) {
+    if body.recursive {
         args.push("--recursive".to_string());
     }
     if let Some(rf) = clone_ref {

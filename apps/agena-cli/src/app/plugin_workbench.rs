@@ -1135,14 +1135,20 @@ impl App {
             .collect::<Vec<_>>();
         plugins.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
 
-        let mut dialog = PluginWorkbenchOverlay {
+        let visible_plugins = filtered_plugin_indices(
+            plugins.as_slice(),
+            query,
+            PluginTransportFilter::All,
+            PluginConfigFilter::All,
+        );
+        Ok(PluginWorkbenchOverlay {
             title: "Plugins".to_owned(),
             query: Editor::from_text(query.to_owned()),
             mode: PluginWorkbenchMode::List,
             transport_filter: PluginTransportFilter::All,
             config_filter: PluginConfigFilter::All,
             plugins,
-            visible_plugins: Vec::new(),
+            visible_plugins,
             selected_plugin: 0,
             detail_tab: PluginDetailTab::Config,
             config_view: PluginConfigView::Effective,
@@ -1160,9 +1166,7 @@ impl App {
             actions: None,
             selection: None,
             editor: None,
-        };
-        refresh_plugin_workbench_filter(&mut dialog);
-        Ok(dialog)
+        })
     }
 
     pub(super) fn refresh_plugin_workbench(&mut self, dialog: &mut PluginWorkbenchOverlay) {
@@ -6297,6 +6301,21 @@ fn drilldown_selected_row_cell(
     normalize_config_row_cell(row, layout, preferred)
 }
 
+fn drilldown_selected_row_cell_for_groups(
+    groups: &[ConfigGroupView],
+    view: PluginConfigView,
+    index: usize,
+    preferred: ConfigRowCell,
+) -> ConfigRowCell {
+    let Some(row) = drilldown_row_at_groups(groups, view, index) else {
+        return ConfigRowCell::Value;
+    };
+    let layout = drilldown_group_for_row_in_groups(groups, view, index)
+        .map(|group| group.layout)
+        .unwrap_or(ConfigGroupLayout::Standard);
+    normalize_config_row_cell(row, layout, preferred)
+}
+
 #[derive(Debug, Clone)]
 struct SelectedConfigRowContext {
     plugin_id: String,
@@ -6379,8 +6398,16 @@ fn drilldown_group_for_row(
     view: PluginConfigView,
     index: usize,
 ) -> Option<&ConfigGroupView> {
+    drilldown_group_for_row_in_groups(&overlay.groups, view, index)
+}
+
+fn drilldown_group_for_row_in_groups(
+    groups: &[ConfigGroupView],
+    view: PluginConfigView,
+    index: usize,
+) -> Option<&ConfigGroupView> {
     let mut visible_index = 0usize;
-    for group in &overlay.groups {
+    for group in groups {
         for row in &group.rows {
             if !row_visible(row, view) {
                 continue;
@@ -6445,8 +6472,16 @@ fn drilldown_row_at(
     view: PluginConfigView,
     index: usize,
 ) -> Option<&ConfigRowView> {
+    drilldown_row_at_groups(&overlay.groups, view, index)
+}
+
+fn drilldown_row_at_groups(
+    groups: &[ConfigGroupView],
+    view: PluginConfigView,
+    index: usize,
+) -> Option<&ConfigRowView> {
     let mut visible_index = 0usize;
-    for group in &overlay.groups {
+    for group in groups {
         for row in &group.rows {
             if !row_visible(row, view) {
                 continue;
@@ -6469,24 +6504,35 @@ fn rebuild_drilldown_overlay(
         .iter()
         .find(|plugin| plugin.plugin_id == previous.plugin_id)?;
     let groups = build_drilldown_groups(plugin, &previous.path, previous.title.as_str());
-    let mut overlay = PluginConfigDrilldownOverlay {
+    let row_count = groups
+        .iter()
+        .map(|group| {
+            group
+                .rows
+                .iter()
+                .filter(|row| row_visible(row, dialog.config_view))
+                .count()
+        })
+        .sum::<usize>();
+    let selected_row = if row_count == 0 {
+        0
+    } else {
+        previous.selected_row.min(row_count.saturating_sub(1))
+    };
+    let selected_cell = drilldown_selected_row_cell_for_groups(
+        &groups,
+        dialog.config_view,
+        selected_row,
+        previous.selected_cell,
+    );
+    Some(PluginConfigDrilldownOverlay {
         plugin_id: previous.plugin_id.clone(),
         path: previous.path.clone(),
         title: previous.title.clone(),
         groups,
-        selected_row: previous.selected_row,
-        selected_cell: previous.selected_cell,
-    };
-    if drilldown_row_count(&overlay, dialog.config_view) == 0 {
-        overlay.selected_row = 0;
-    } else {
-        overlay.selected_row = overlay
-            .selected_row
-            .min(drilldown_row_count(&overlay, dialog.config_view).saturating_sub(1));
-    }
-    overlay.selected_cell =
-        drilldown_selected_row_cell(&overlay, dialog.config_view, overlay.selected_cell);
-    Some(overlay)
+        selected_row,
+        selected_cell,
+    })
 }
 
 fn rebuild_drilldown_stack(
@@ -8224,9 +8270,23 @@ fn runtime_diagnostics(status: &agena::plugin::status::PluginStatus) -> Vec<Conf
 }
 
 fn refresh_plugin_workbench_filter(dialog: &mut PluginWorkbenchOverlay) {
-    let query = dialog.query.text().trim().to_ascii_lowercase();
-    dialog.visible_plugins = dialog
-        .plugins
+    dialog.visible_plugins = filtered_plugin_indices(
+        dialog.plugins.as_slice(),
+        dialog.query.text(),
+        dialog.transport_filter,
+        dialog.config_filter,
+    );
+    dialog.clamp_selection();
+}
+
+fn filtered_plugin_indices(
+    plugins: &[PluginWorkbenchPlugin],
+    query: &str,
+    transport_filter: PluginTransportFilter,
+    config_filter: PluginConfigFilter,
+) -> Vec<usize> {
+    let query = query.trim().to_ascii_lowercase();
+    plugins
         .iter()
         .enumerate()
         .filter_map(|(index, plugin)| {
@@ -8248,12 +8308,11 @@ fn refresh_plugin_workbench_filter(dialog: &mut PluginWorkbenchOverlay) {
                     .label
                     .to_ascii_lowercase()
                     .contains(query.as_str());
-            let matches_transport = dialog.transport_filter.matches(plugin.transport.as_str());
-            let matches_config = dialog.config_filter.matches(plugin.config_status.kind);
+            let matches_transport = transport_filter.matches(plugin.transport.as_str());
+            let matches_config = config_filter.matches(plugin.config_status.kind);
             (matches_query && matches_transport && matches_config).then_some(index)
         })
-        .collect();
-    dialog.clamp_selection();
+        .collect()
 }
 
 impl PluginTransportFilter {
@@ -10578,17 +10637,16 @@ fn apply_reset_paths(
     root_schema: Option<&JsonValue>,
     paths: &[ConfigPath],
 ) -> ResetPathsOutcome {
-    let mut outcome = ResetPathsOutcome::default();
+    let mut changed = false;
+    let mut blocked = Vec::new();
     for path in normalized_reset_paths(paths) {
         if let Some(reason) = reset_path_block_reason(root_schema, default_root, value, &path) {
-            outcome
-                .blocked
-                .push(format!("{}: {reason}", path_display(&path)));
+            blocked.push(format!("{}: {reason}", path_display(&path)));
             continue;
         }
-        outcome.changed |= reset_effective_value_at_path(value, default_root, path.as_slice());
+        changed |= reset_effective_value_at_path(value, default_root, path.as_slice());
     }
-    outcome
+    ResetPathsOutcome { changed, blocked }
 }
 
 fn reset_paths_warning_message(blocked: &[String]) -> Option<String> {

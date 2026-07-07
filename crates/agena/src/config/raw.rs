@@ -343,128 +343,126 @@ impl RawConfig {
     }
 
     pub(crate) fn from_env(env: &dyn ConfigEnvironment) -> Result<Self, ConfigError> {
-        let mut config = Self::default();
+        let tracing = {
+            let filter = env.var("AGENA_LOG");
+            let database = env.var("AGENA_DATABASE_LOG");
+            let adapter = env.var("AGENA_ADAPTER_LOG");
+            (filter.is_some() || database.is_some() || adapter.is_some()).then_some(
+                RawTracingConfig {
+                    filter,
+                    database,
+                    adapter,
+                },
+            )
+        };
 
-        if let Some(filter) = env.var("AGENA_LOG") {
-            config
-                .tracing
-                .get_or_insert_with(RawTracingConfig::default)
-                .filter = Some(filter);
-        }
-        if let Some(level) = env.var("AGENA_DATABASE_LOG") {
-            config
-                .tracing
-                .get_or_insert_with(RawTracingConfig::default)
-                .database = Some(level);
-        }
-        if let Some(level) = env.var("AGENA_ADAPTER_LOG") {
-            config
-                .tracing
-                .get_or_insert_with(RawTracingConfig::default)
-                .adapter = Some(level);
-        }
-        if let Some(locale) = env.var("AGENA_LOCALE") {
-            config.ui.get_or_insert_with(RawUiConfig::default).locale = Some(locale);
-        }
+        let ui = env.var("AGENA_LOCALE").map(|locale| RawUiConfig {
+            locale: Some(locale),
+        });
+
+        let mut timeout_secs = None;
+        let mut connect_timeout_secs = None;
+        let mut max_retries = None;
+        let mut base_delay_ms = None;
+        let mut max_delay_ms = None;
+        let mut max_retries_after_output = None;
+        let mut max_tracked_events = None;
+        let mut model_catalog_cache_max_age_secs = None;
+        let mut session_compaction_auto = None;
+        let mut session_compaction_reserved_tokens = None;
+
         apply_env_number(env, "AGENA_PROVIDER_HTTP_TIMEOUT_SECS", |value| {
-            config
-                .runtime
-                .get_or_insert_with(RawRuntimeConfig::default)
-                .providers
-                .get_or_insert_with(RawRuntimeProvidersConfig::default)
-                .http
-                .get_or_insert_with(RawProviderHttpConfig::default)
-                .timeout_secs = Some(value);
+            timeout_secs = Some(value);
         })?;
         apply_env_number(env, "AGENA_PROVIDER_CONNECT_TIMEOUT_SECS", |value| {
-            config
-                .runtime
-                .get_or_insert_with(RawRuntimeConfig::default)
-                .providers
-                .get_or_insert_with(RawRuntimeProvidersConfig::default)
-                .http
-                .get_or_insert_with(RawProviderHttpConfig::default)
-                .connect_timeout_secs = Some(value);
+            connect_timeout_secs = Some(value);
         })?;
         apply_env_number(env, "AGENA_PROVIDER_REQUEST_MAX_RETRIES", |value| {
-            config
-                .runtime
-                .get_or_insert_with(RawRuntimeConfig::default)
-                .providers
-                .get_or_insert_with(RawRuntimeProvidersConfig::default)
-                .retry
-                .get_or_insert_with(RawRequestRetryConfig::default)
-                .max_retries = Some(value);
+            max_retries = Some(value);
         })?;
         apply_env_number(env, "AGENA_PROVIDER_RETRY_BASE_DELAY_MS", |value| {
-            config
-                .runtime
-                .get_or_insert_with(RawRuntimeConfig::default)
-                .providers
-                .get_or_insert_with(RawRuntimeProvidersConfig::default)
-                .retry
-                .get_or_insert_with(RawRequestRetryConfig::default)
-                .base_delay_ms = Some(value);
+            base_delay_ms = Some(value);
         })?;
         apply_env_number(env, "AGENA_PROVIDER_RETRY_MAX_DELAY_MS", |value| {
-            config
-                .runtime
-                .get_or_insert_with(RawRuntimeConfig::default)
-                .providers
-                .get_or_insert_with(RawRuntimeProvidersConfig::default)
-                .retry
-                .get_or_insert_with(RawRequestRetryConfig::default)
-                .max_delay_ms = Some(value);
+            max_delay_ms = Some(value);
         })?;
         apply_env_number(env, "AGENA_PROVIDER_STREAM_REPLAY_MAX_RETRIES", |value| {
-            config
-                .runtime
-                .get_or_insert_with(RawRuntimeConfig::default)
-                .providers
-                .get_or_insert_with(RawRuntimeProvidersConfig::default)
-                .stream_replay
-                .get_or_insert_with(RawStreamReplayConfig::default)
-                .max_retries_after_output = Some(value);
+            max_retries_after_output = Some(value);
         })?;
         apply_env_number(env, "AGENA_PROVIDER_STREAM_REPLAY_MAX_EVENTS", |value| {
-            config
-                .runtime
-                .get_or_insert_with(RawRuntimeConfig::default)
-                .providers
-                .get_or_insert_with(RawRuntimeProvidersConfig::default)
-                .stream_replay
-                .get_or_insert_with(RawStreamReplayConfig::default)
-                .max_tracked_events = Some(value);
+            max_tracked_events = Some(value);
         })?;
         apply_env_number(env, "AGENA_MODEL_CATALOG_CACHE_MAX_AGE_SECS", |value| {
-            config
-                .runtime
-                .get_or_insert_with(RawRuntimeConfig::default)
-                .model_catalog
-                .get_or_insert_with(RawRuntimeModelCatalogConfig::default)
-                .cache_max_age_secs = Some(value);
+            model_catalog_cache_max_age_secs = Some(value);
         })?;
         if let Some(enabled) = env.var("AGENA_SESSION_COMPACTION_AUTO") {
-            config
-                .session
-                .get_or_insert_with(RawSessionConfig::default)
-                .compaction
-                .get_or_insert_with(RawSessionCompactionConfig::default)
-                .auto = Some(parse_bool(
+            session_compaction_auto = Some(parse_bool(
                 "AGENA_SESSION_COMPACTION_AUTO",
                 enabled.as_str(),
             )?);
         }
         apply_env_number(env, "AGENA_SESSION_COMPACTION_RESERVED_TOKENS", |value| {
-            config
-                .session
-                .get_or_insert_with(RawSessionConfig::default)
-                .compaction
-                .get_or_insert_with(RawSessionCompactionConfig::default)
-                .reserved_tokens = Some(value);
+            session_compaction_reserved_tokens = Some(value);
         })?;
 
-        Ok(config)
+        let http = (timeout_secs.is_some() || connect_timeout_secs.is_some()).then_some(
+            RawProviderHttpConfig {
+                timeout_secs,
+                connect_timeout_secs,
+            },
+        );
+        let retry = (max_retries.is_some() || base_delay_ms.is_some() || max_delay_ms.is_some())
+            .then_some(RawRequestRetryConfig {
+                max_retries,
+                base_delay_ms,
+                max_delay_ms,
+            });
+        let stream_replay = (max_retries_after_output.is_some() || max_tracked_events.is_some())
+            .then_some(RawStreamReplayConfig {
+                max_retries_after_output,
+                max_tracked_events,
+            });
+        let providers = (http.is_some() || retry.is_some() || stream_replay.is_some()).then_some(
+            RawRuntimeProvidersConfig {
+                http,
+                retry,
+                stream_replay,
+            },
+        );
+        let model_catalog = model_catalog_cache_max_age_secs.map(|cache_max_age_secs| {
+            RawRuntimeModelCatalogConfig {
+                cache_max_age_secs: Some(cache_max_age_secs),
+            }
+        });
+        let runtime =
+            (providers.is_some() || model_catalog.is_some()).then_some(RawRuntimeConfig {
+                providers,
+                model_catalog,
+                reload: None,
+                session: None,
+            });
+
+        let session = (session_compaction_auto.is_some()
+            || session_compaction_reserved_tokens.is_some())
+        .then_some(RawSessionConfig {
+            compaction: Some(RawSessionCompactionConfig {
+                auto: session_compaction_auto,
+                reserved_tokens: session_compaction_reserved_tokens,
+            }),
+        });
+
+        Ok(Self {
+            tracing,
+            ui,
+            desktop: None,
+            runtime,
+            session,
+            permission: None,
+            agents: RawAgentsConfig::default(),
+            plugins: None,
+            harnesses: None,
+            providers: RawProvidersConfig::default(),
+        })
     }
 
     pub(crate) fn resolve_with_env(
@@ -847,7 +845,8 @@ pub(crate) struct RawDesktopBackendConfig {
 impl crate::config::types::DesktopConfig {
     pub(crate) fn from_raw(raw: RawDesktopConfig) -> Self {
         let backend = raw.backend.unwrap_or_default();
-        let mut config = Self {
+        let ui_password = Some(backend.ui_password.unwrap_or_default().trim().to_string());
+        Self {
             autostart_on_boot: raw.autostart_on_boot.unwrap_or(true),
             backend: crate::config::types::DesktopBackendConfig {
                 host: normalize_host(backend.host.as_deref()),
@@ -856,23 +855,13 @@ impl crate::config::types::DesktopConfig {
                 cors_origins: normalize_cors_origins(backend.cors_origins.unwrap_or_default()),
                 cors_allow_all: backend.cors_allow_all.unwrap_or(false),
                 backend_log_level: normalize_log_level(backend.backend_log_level),
-                ui_password: backend.ui_password.or_else(|| Some(String::new())),
+                ui_password,
                 ui_cookie_samesite: normalize_ui_cookie_samesite(backend.ui_cookie_samesite),
                 workspace_root: normalize_optional_text(backend.workspace_root),
                 database_path: normalize_optional_text(backend.database_path),
                 database_url: normalize_optional_text(backend.database_url),
             },
-        };
-        config.backend.ui_password = Some(
-            config
-                .backend
-                .ui_password
-                .take()
-                .unwrap_or_default()
-                .trim()
-                .to_string(),
-        );
-        config
+        }
     }
 }
 
@@ -2025,7 +2014,7 @@ fn resolve_gitlab_api_access(raw: ProviderGitlabApiAccessOverlay) -> ProviderGit
         }
         ProviderGitlabApiAccessOverlay::Credential { credential } => {
             ProviderGitlabApiAccessConfig::Credential {
-                credential: credential.with_issuer(CredentialIssuer::Gitlab),
+                credential: credential.for_issuer(CredentialIssuer::Gitlab),
             }
         }
     }
@@ -2039,7 +2028,7 @@ fn resolve_credential_auth(
     let credential = raw_auth
         .credential
         .clone()
-        .map(|credential| credential.with_issuer(issuer));
+        .map(|credential| credential.for_issuer(issuer));
     let base_url = normalize_optional(raw_auth.base_url.clone());
     let api_key = raw_auth.api_key.as_ref().and_then(|value| {
         resolve_secret_source(value.clone())
@@ -2565,8 +2554,9 @@ fn validate_permission_config(
     crate::agent::Agent::new(
         "__validate__",
         crate::permission::PermissionPolicy::allow_all(),
+        crate::permission::ToolPermissionPolicy::allow_all(),
     )
-    .try_with_permission_config(permission)
+    .try_apply_permission_config(permission)
     .map(|_| ())
     .map_err(|err| ConfigError::Validation(format!("{label} is invalid: {err}")))
 }

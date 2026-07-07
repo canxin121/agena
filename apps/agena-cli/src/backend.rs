@@ -35,7 +35,7 @@ use agena::{
         AttachmentItem, AttachmentKind, AttachmentSource, EnterSnapshotToolInput,
         ExitSnapshotToolInput, PartContent, ToolInvocation, UserInputReply,
     },
-    model::ModelRef,
+    model::{ModelCapabilities, ModelId, ModelMetadata, ModelRef, ProviderId},
     model_catalog::{
         CatalogModelDefinition, ModelCatalogProviderRecord, catalog_definition_from_model,
         decorate_provider_models,
@@ -1017,132 +1017,154 @@ impl ProviderConfigDraft {
         }
     }
 
-    pub fn normalize_shape(&mut self) {
-        self.credential_drafts.normalize_shape();
-        self.auth.credential_issuer = self
-            .auth_kind
+    fn normalized_shape(
+        auth_kind: &ProviderDraftAuthKind,
+        mut auth: ProviderDraftAuthDetails,
+        mut credential_drafts: ProviderCredentialDraftBundle,
+        mut default_adapter: String,
+        mut default_model: String,
+    ) -> (
+        ProviderDraftAuthDetails,
+        ProviderCredentialDraftBundle,
+        String,
+        String,
+    ) {
+        credential_drafts.normalize_shape();
+        auth.credential_issuer = auth_kind
             .credential_issuer()
             .map(credential_issuer_label)
             .unwrap_or_default()
             .to_owned();
 
-        match self.auth_kind {
+        match auth_kind {
             ProviderDraftAuthKind::Unset => {
-                self.auth.base_url.clear();
-                self.auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
-                self.auth.secret_source_value.clear();
-                self.auth.region.clear();
-                self.auth.profile.clear();
-                self.auth.access_key_id.clear();
-                self.auth.secret_access_key.clear();
-                self.auth.session_token.clear();
-                self.auth.service_key_env.clear();
+                auth.base_url.clear();
+                auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
+                auth.secret_source_value.clear();
+                auth.region.clear();
+                auth.profile.clear();
+                auth.access_key_id.clear();
+                auth.secret_access_key.clear();
+                auth.session_token.clear();
+                auth.service_key_env.clear();
             }
             ProviderDraftAuthKind::None => {
-                self.auth.base_url.clear();
-                self.auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
-                self.auth.secret_source_value.clear();
-                self.auth.region.clear();
-                self.auth.profile.clear();
-                self.auth.access_key_id.clear();
-                self.auth.secret_access_key.clear();
-                self.auth.session_token.clear();
-                self.auth.service_key_env.clear();
+                auth.base_url.clear();
+                auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
+                auth.secret_source_value.clear();
+                auth.region.clear();
+                auth.profile.clear();
+                auth.access_key_id.clear();
+                auth.secret_access_key.clear();
+                auth.session_token.clear();
+                auth.service_key_env.clear();
             }
             ProviderDraftAuthKind::ApiPending => {
-                self.auth.region.clear();
-                self.auth.profile.clear();
-                self.auth.access_key_id.clear();
-                self.auth.secret_access_key.clear();
-                self.auth.session_token.clear();
-                self.auth.service_key_env.clear();
+                auth.region.clear();
+                auth.profile.clear();
+                auth.access_key_id.clear();
+                auth.secret_access_key.clear();
+                auth.session_token.clear();
+                auth.service_key_env.clear();
             }
             ProviderDraftAuthKind::Api => {
-                self.auth.region.clear();
-                self.auth.profile.clear();
-                self.auth.access_key_id.clear();
-                self.auth.secret_access_key.clear();
-                self.auth.session_token.clear();
-                self.auth.service_key_env.clear();
+                auth.region.clear();
+                auth.profile.clear();
+                auth.access_key_id.clear();
+                auth.secret_access_key.clear();
+                auth.session_token.clear();
+                auth.service_key_env.clear();
             }
             ProviderDraftAuthKind::ClineApi => {
-                self.auth.base_url.clear();
-                self.auth.region.clear();
-                self.auth.profile.clear();
-                self.auth.access_key_id.clear();
-                self.auth.secret_access_key.clear();
-                self.auth.session_token.clear();
-                self.auth.service_key_env.clear();
+                auth.base_url.clear();
+                auth.region.clear();
+                auth.profile.clear();
+                auth.access_key_id.clear();
+                auth.secret_access_key.clear();
+                auth.session_token.clear();
+                auth.service_key_env.clear();
             }
             ProviderDraftAuthKind::Gitlab => {
-                self.auth.base_url.clear();
-                self.auth.region.clear();
-                self.auth.profile.clear();
-                self.auth.access_key_id.clear();
-                self.auth.secret_access_key.clear();
-                self.auth.session_token.clear();
-                self.auth.service_key_env.clear();
-                if self.auth.instance_url.trim().is_empty() {
-                    self.auth.instance_url = DEFAULT_GITLAB_INSTANCE_URL.to_owned();
+                auth.base_url.clear();
+                auth.region.clear();
+                auth.profile.clear();
+                auth.access_key_id.clear();
+                auth.secret_access_key.clear();
+                auth.session_token.clear();
+                auth.service_key_env.clear();
+                if auth.instance_url.trim().is_empty() {
+                    auth.instance_url = DEFAULT_GITLAB_INSTANCE_URL.to_owned();
                 }
             }
             ProviderDraftAuthKind::Credential(None) => {
-                self.auth.base_url.clear();
-                self.auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
-                self.auth.secret_source_value.clear();
-                self.auth.region.clear();
-                self.auth.profile.clear();
-                self.auth.access_key_id.clear();
-                self.auth.secret_access_key.clear();
-                self.auth.session_token.clear();
-                self.auth.service_key_env.clear();
+                auth.base_url.clear();
+                auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
+                auth.secret_source_value.clear();
+                auth.region.clear();
+                auth.profile.clear();
+                auth.access_key_id.clear();
+                auth.secret_access_key.clear();
+                auth.session_token.clear();
+                auth.service_key_env.clear();
             }
             ProviderDraftAuthKind::Credential(Some(issuer)) => {
-                self.auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
-                self.auth.secret_source_value.clear();
-                self.auth.region.clear();
-                self.auth.profile.clear();
-                self.auth.access_key_id.clear();
-                self.auth.secret_access_key.clear();
-                self.auth.session_token.clear();
+                auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
+                auth.secret_source_value.clear();
+                auth.region.clear();
+                auth.profile.clear();
+                auth.access_key_id.clear();
+                auth.secret_access_key.clear();
+                auth.session_token.clear();
                 if !issuer.uses_http_endpoint() {
-                    self.auth.base_url.clear();
+                    auth.base_url.clear();
                 }
-                if issuer == CredentialIssuer::Gitlab && self.auth.instance_url.trim().is_empty() {
-                    self.auth.instance_url = DEFAULT_GITLAB_INSTANCE_URL.to_owned();
+                if *issuer == CredentialIssuer::Gitlab && auth.instance_url.trim().is_empty() {
+                    auth.instance_url = DEFAULT_GITLAB_INSTANCE_URL.to_owned();
                 }
                 if issuer.requires_service_key_env() {
-                    if self.auth.service_key_env.trim().is_empty() {
-                        self.auth.service_key_env = "AICORE_SERVICE_KEY".to_owned();
+                    if auth.service_key_env.trim().is_empty() {
+                        auth.service_key_env = "AICORE_SERVICE_KEY".to_owned();
                     }
                 } else {
-                    self.auth.service_key_env.clear();
+                    auth.service_key_env.clear();
                 }
             }
             ProviderDraftAuthKind::BedrockSigv4 => {
-                self.auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
-                self.auth.secret_source_value.clear();
-                self.auth.service_key_env.clear();
+                auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
+                auth.secret_source_value.clear();
+                auth.service_key_env.clear();
             }
         }
 
-        if !self.default_adapter.trim().is_empty()
-            && !self
-                .auth_kind
-                .supports_adapter(self.default_adapter.as_str())
+        if !default_adapter.trim().is_empty()
+            && !auth_kind.supports_adapter(default_adapter.as_str())
         {
-            self.default_adapter.clear();
+            default_adapter.clear();
         }
-        if self.default_adapter.trim().is_empty() {
-            self.default_model.clear();
+        if default_adapter.trim().is_empty() {
+            default_model.clear();
         }
+        (auth, credential_drafts, default_adapter, default_model)
+    }
+
+    pub fn normalize_shape(&mut self) {
+        let (auth, credential_drafts, default_adapter, default_model) = Self::normalized_shape(
+            &self.auth_kind,
+            std::mem::take(&mut self.auth),
+            std::mem::take(&mut self.credential_drafts),
+            std::mem::take(&mut self.default_adapter),
+            std::mem::take(&mut self.default_model),
+        );
+        self.auth = auth;
+        self.credential_drafts = credential_drafts;
+        self.default_adapter = default_adapter;
+        self.default_model = default_model;
     }
 
     pub fn from_resolved(
         provider_id: &str,
         provider: &agena::config::ResolvedProviderConfig,
     ) -> Self {
-        let mut credential_drafts = ProviderCredentialDraftBundle::default();
         let (
             auth_kind,
             base_url,
@@ -1156,6 +1178,7 @@ impl ProviderConfigDraft {
             secret_access_key,
             session_token,
             service_key_env,
+            credential_drafts,
         ) = match &provider.auth {
             ProviderAuthConfig::Api(api) => match api {
                 agena::config::ProviderApiAuthConfig::Custom { .. } => (
@@ -1171,6 +1194,7 @@ impl ProviderConfigDraft {
                     String::new(),
                     String::new(),
                     String::new(),
+                    ProviderCredentialDraftBundle::default(),
                 ),
                 agena::config::ProviderApiAuthConfig::ClineApi { api_key } => (
                     ProviderDraftAuthKind::ClineApi,
@@ -1185,6 +1209,7 @@ impl ProviderConfigDraft {
                     String::new(),
                     String::new(),
                     String::new(),
+                    ProviderCredentialDraftBundle::default(),
                 ),
                 agena::config::ProviderApiAuthConfig::Gitlab {
                     access,
@@ -1203,6 +1228,7 @@ impl ProviderConfigDraft {
                     String::new(),
                     String::new(),
                     String::new(),
+                    ProviderCredentialDraftBundle::default(),
                 ),
                 agena::config::ProviderApiAuthConfig::BedrockSigv4 {
                     base_url,
@@ -1224,6 +1250,7 @@ impl ProviderConfigDraft {
                     secret_access_key.clone().unwrap_or_default(),
                     session_token.clone().unwrap_or_default(),
                     String::new(),
+                    ProviderCredentialDraftBundle::default(),
                 ),
             },
             ProviderAuthConfig::None => (
@@ -1239,14 +1266,10 @@ impl ProviderConfigDraft {
                 String::new(),
                 String::new(),
                 String::new(),
+                ProviderCredentialDraftBundle::default(),
             ),
             ProviderAuthConfig::Credential(config) => {
                 let issuer = config.issuer();
-                populate_provider_credential_drafts(
-                    &mut credential_drafts,
-                    issuer,
-                    config.credential(),
-                );
                 let instance_url = config
                     .gitlab()
                     .and_then(|gitlab| gitlab.instance_url.clone())
@@ -1264,15 +1287,14 @@ impl ProviderConfigDraft {
                     String::new(),
                     String::new(),
                     config.service_key_env().unwrap_or_default().to_owned(),
+                    provider_credential_drafts(issuer, config.credential()),
                 )
             }
         };
 
-        let mut draft = Self {
-            source_provider_id: Some(provider_id.to_owned()),
-            provider_id: provider_id.to_owned(),
-            auth_kind,
-            auth: ProviderDraftAuthDetails {
+        let (auth, credential_drafts, default_adapter, default_model) = Self::normalized_shape(
+            &auth_kind,
+            ProviderDraftAuthDetails {
                 base_url,
                 instance_url,
                 secret_source_kind,
@@ -1286,11 +1308,19 @@ impl ProviderConfigDraft {
                 service_key_env,
             },
             credential_drafts,
-            default_adapter: provider.defaults.adapter.clone().unwrap_or_default(),
-            default_model: provider.defaults.model.clone().unwrap_or_default(),
-        };
-        draft.normalize_shape();
-        draft
+            provider.defaults.adapter.clone().unwrap_or_default(),
+            provider.defaults.model.clone().unwrap_or_default(),
+        );
+
+        Self {
+            source_provider_id: Some(provider_id.to_owned()),
+            provider_id: provider_id.to_owned(),
+            auth_kind,
+            auth,
+            credential_drafts,
+            default_adapter,
+            default_model,
+        }
     }
 
     fn to_provider_overlay_for_save(
@@ -1318,12 +1348,23 @@ impl ProviderConfigDraft {
         let credential = self
             .oauth_auth_data()
             .map_err(ProviderStudioSaveError::other)?;
-        let mut overlay = ProviderAuthOverlay {
-            mode: Some(self.to_provider_auth_mode_for_save()?),
-            ..ProviderAuthOverlay::default()
-        };
+        let mode = Some(self.to_provider_auth_mode_for_save()?);
 
-        match self.auth_kind {
+        let (
+            subtype,
+            base_url,
+            api_key,
+            access,
+            instance_url,
+            issuer,
+            credential,
+            profile,
+            access_key_id,
+            secret_access_key,
+            session_token,
+            region,
+            service_key_env,
+        ) = match self.auth_kind {
             ProviderDraftAuthKind::Unset => {
                 return Err(ProviderStudioSaveError::Validation(
                     ProviderStudioSaveValidationError::FieldRequired(
@@ -1331,7 +1372,9 @@ impl ProviderConfigDraft {
                     ),
                 ));
             }
-            ProviderDraftAuthKind::None => {}
+            ProviderDraftAuthKind::None => (
+                None, None, None, None, None, None, None, None, None, None, None, None, None,
+            ),
             ProviderDraftAuthKind::ApiPending => {
                 return Err(ProviderStudioSaveError::Validation(
                     ProviderStudioSaveValidationError::FieldRequired(
@@ -1339,22 +1382,52 @@ impl ProviderConfigDraft {
                     ),
                 ));
             }
-            ProviderDraftAuthKind::Api => {
-                overlay.subtype = Some(ProviderApiSubtype::Custom);
-                overlay.base_url = trimmed_owned(self.auth.base_url.as_str());
-                overlay.api_key = self.secret_source_overlay();
-            }
-            ProviderDraftAuthKind::ClineApi => {
-                overlay.subtype = Some(ProviderApiSubtype::ClineApi);
-                overlay.api_key = self.secret_source_overlay();
-            }
-            ProviderDraftAuthKind::Gitlab => {
-                overlay.subtype = Some(ProviderApiSubtype::Gitlab);
-                overlay.instance_url = trimmed_owned(self.auth.instance_url.as_str());
-                overlay.access = self
-                    .secret_source_overlay()
-                    .map(|source| agena::config::ProviderGitlabApiAccessOverlay::ApiKey { source });
-            }
+            ProviderDraftAuthKind::Api => (
+                Some(ProviderApiSubtype::Custom),
+                trimmed_owned(self.auth.base_url.as_str()),
+                self.secret_source_overlay(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            ProviderDraftAuthKind::ClineApi => (
+                Some(ProviderApiSubtype::ClineApi),
+                None,
+                self.secret_source_overlay(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            ProviderDraftAuthKind::Gitlab => (
+                Some(ProviderApiSubtype::Gitlab),
+                None,
+                None,
+                self.secret_source_overlay()
+                    .map(|source| agena::config::ProviderGitlabApiAccessOverlay::ApiKey { source }),
+                trimmed_owned(self.auth.instance_url.as_str()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
             ProviderDraftAuthKind::Credential(None) => {
                 return Err(ProviderStudioSaveError::Validation(
                     ProviderStudioSaveValidationError::FieldRequired(
@@ -1365,30 +1438,67 @@ impl ProviderConfigDraft {
             ProviderDraftAuthKind::Credential(Some(_)) => {
                 let issuer = parse_credential_issuer(self.auth.credential_issuer.as_str())
                     .map_err(ProviderStudioSaveError::other)?;
-                overlay.issuer = Some(issuer);
-                if issuer == CredentialIssuer::Gitlab {
-                    overlay.instance_url = trimmed_owned(self.auth.instance_url.as_str());
-                }
-                if issuer.uses_http_endpoint() {
-                    overlay.base_url = trimmed_owned(self.auth.base_url.as_str());
-                }
-                if issuer.requires_service_key_env() {
-                    overlay.service_key_env = trimmed_owned(self.auth.service_key_env.as_str());
-                }
-                overlay.credential = credential;
+                (
+                    None,
+                    issuer
+                        .uses_http_endpoint()
+                        .then(|| trimmed_owned(self.auth.base_url.as_str()))
+                        .flatten(),
+                    None,
+                    None,
+                    (issuer == CredentialIssuer::Gitlab)
+                        .then(|| trimmed_owned(self.auth.instance_url.as_str()))
+                        .flatten(),
+                    Some(issuer),
+                    credential,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    issuer
+                        .requires_service_key_env()
+                        .then(|| trimmed_owned(self.auth.service_key_env.as_str()))
+                        .flatten(),
+                )
             }
-            ProviderDraftAuthKind::BedrockSigv4 => {
-                overlay.subtype = Some(ProviderApiSubtype::BedrockSigv4);
-                overlay.base_url = trimmed_owned(self.auth.base_url.as_str());
-                overlay.region = trimmed_owned(self.auth.region.as_str());
-                overlay.profile = trimmed_owned(self.auth.profile.as_str());
-                overlay.access_key_id = trimmed_owned(self.auth.access_key_id.as_str());
-                overlay.secret_access_key = trimmed_owned(self.auth.secret_access_key.as_str());
-                overlay.session_token = trimmed_owned(self.auth.session_token.as_str());
-            }
-        }
+            ProviderDraftAuthKind::BedrockSigv4 => (
+                Some(ProviderApiSubtype::BedrockSigv4),
+                trimmed_owned(self.auth.base_url.as_str()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                trimmed_owned(self.auth.profile.as_str()),
+                trimmed_owned(self.auth.access_key_id.as_str()),
+                trimmed_owned(self.auth.secret_access_key.as_str()),
+                trimmed_owned(self.auth.session_token.as_str()),
+                trimmed_owned(self.auth.region.as_str()),
+                None,
+            ),
+        };
 
-        Ok(overlay)
+        Ok(ProviderAuthOverlay {
+            mode,
+            subtype,
+            base_url,
+            protocol_paths: None,
+            api_key,
+            access,
+            instance_url,
+            ai_gateway_url: None,
+            ai_gateway_headers: std::collections::BTreeMap::new(),
+            feature_flags: std::collections::BTreeMap::new(),
+            issuer,
+            credential,
+            profile,
+            access_key_id,
+            secret_access_key,
+            session_token,
+            region,
+            service_key_env,
+        })
     }
 
     fn to_provider_auth_mode_for_save(
@@ -2856,7 +2966,17 @@ impl Backend {
                 continue;
             }
             if seen.insert((adapter_id.to_owned(), model_id.to_owned())) {
-                models.push(ProviderModel::new(provider_id, model_id).with_adapter_id(adapter_id));
+                models.push(ProviderModel {
+                    provider_id: ProviderId::new(provider_id),
+                    adapter_id: Some(agena::model::AdapterId::new(adapter_id)),
+                    id: ModelId::new(model_id),
+                    catalog_model_id: None,
+                    display_name: None,
+                    capabilities: ModelCapabilities::default(),
+                    metadata: ModelMetadata::default(),
+                    thinking_modes: std::collections::BTreeMap::new(),
+                    speed_modes: std::collections::BTreeMap::new(),
+                });
             }
         }
 
@@ -2874,8 +2994,16 @@ impl Backend {
             if seen.insert(default_key) {
                 let model = default_adapter
                     .as_deref()
-                    .map(|adapter_id| {
-                        ProviderModel::new(provider_id, default_model).with_adapter_id(adapter_id)
+                    .map(|adapter_id| ProviderModel {
+                        provider_id: ProviderId::new(provider_id),
+                        adapter_id: Some(agena::model::AdapterId::new(adapter_id)),
+                        id: ModelId::new(default_model),
+                        catalog_model_id: None,
+                        display_name: None,
+                        capabilities: ModelCapabilities::default(),
+                        metadata: ModelMetadata::default(),
+                        thinking_modes: std::collections::BTreeMap::new(),
+                        speed_modes: std::collections::BTreeMap::new(),
                     })
                     .unwrap_or_else(|| ProviderModel::new(provider_id, default_model));
                 models.push(model);
@@ -5063,11 +5191,10 @@ fn required_trimmed<'a>(value: &'a str, field: &str) -> Result<&'a str> {
     optional_non_empty(value).ok_or_else(|| anyhow!("{field} is required"))
 }
 
-fn populate_provider_credential_drafts(
-    drafts: &mut ProviderCredentialDraftBundle,
+fn provider_credential_drafts(
     issuer: CredentialIssuer,
     credential: Option<&AuthData>,
-) {
+) -> ProviderCredentialDraftBundle {
     let Some(AuthData::OAuth {
         refresh,
         access,
@@ -5078,7 +5205,7 @@ fn populate_provider_credential_drafts(
         ..
     }) = credential
     else {
-        return;
+        return ProviderCredentialDraftBundle::default();
     };
 
     let tokens = ProviderOAuthTokensDraft {
@@ -5087,18 +5214,35 @@ fn populate_provider_credential_drafts(
         expires_at_ms: (*expires_at_ms).to_string(),
     };
     match issuer {
-        CredentialIssuer::OpenaiChatgpt => {
-            drafts.openai_chatgpt.tokens = tokens;
-            drafts.openai_chatgpt.account_id = account_id.clone().unwrap_or_default();
+        CredentialIssuer::OpenaiChatgpt => ProviderCredentialDraftBundle {
+            openai_chatgpt: OpenAiChatgptCredentialDraft {
+                tokens,
+                account_id: account_id.clone().unwrap_or_default(),
+                ..OpenAiChatgptCredentialDraft::default()
+            },
+            github_copilot: GithubCopilotCredentialDraft::default(),
+            gitlab: GitlabCredentialDraft::default(),
+        },
+        CredentialIssuer::GithubCopilot => ProviderCredentialDraftBundle {
+            openai_chatgpt: OpenAiChatgptCredentialDraft::default(),
+            github_copilot: GithubCopilotCredentialDraft {
+                enterprise_domain: enterprise_url.clone().unwrap_or_default(),
+                tokens,
+                device: None,
+            },
+            gitlab: GitlabCredentialDraft::default(),
+        },
+        CredentialIssuer::Gitlab => ProviderCredentialDraftBundle {
+            openai_chatgpt: OpenAiChatgptCredentialDraft::default(),
+            github_copilot: GithubCopilotCredentialDraft::default(),
+            gitlab: GitlabCredentialDraft {
+                tokens,
+                ..GitlabCredentialDraft::default()
+            },
+        },
+        CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore => {
+            ProviderCredentialDraftBundle::default()
         }
-        CredentialIssuer::GithubCopilot => {
-            drafts.github_copilot.tokens = tokens;
-            drafts.github_copilot.enterprise_domain = enterprise_url.clone().unwrap_or_default();
-        }
-        CredentialIssuer::Gitlab => {
-            drafts.gitlab.tokens = tokens;
-        }
-        CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore => {}
     }
 }
 
@@ -5595,33 +5739,33 @@ fn catalog_model_to_provider_model_overlay(model: &CatalogModelResource) -> Prov
 }
 
 fn catalog_model_to_catalog_definition(model: &CatalogModelResource) -> CatalogModelDefinition {
-    let mut definition = CatalogModelDefinition::default();
-    definition.lifecycle = model.lifecycle;
-    definition.context_window_tokens = model.context_window_tokens;
-    definition.max_input_tokens = model.max_input_tokens;
-    definition.max_output_tokens = model.max_output_tokens;
-    definition.description = model.description.clone();
-    definition.knowledge_cutoff = model.knowledge_cutoff.clone();
-    definition.release_date = model.release_date.clone();
-    definition.last_updated = model.last_updated.clone();
-    definition.open_weights = model.open_weights;
-    definition.default_thinking_mode = model.default_thinking_mode.clone();
-    definition.supports_parallel_tool_calls = model.supports_parallel_tool_calls;
-    definition.supports_verbosity = model.supports_verbosity;
-    definition.default_verbosity = model.default_verbosity.clone();
-    definition.default_temperature = model.default_temperature.clone();
-    definition.default_top_p = model.default_top_p.clone();
-    definition.default_top_k = model.default_top_k;
-    definition.assistant_reasoning_interleaved = model.assistant_reasoning_interleaved;
-    definition.assistant_reasoning_field = model.assistant_reasoning_field.clone();
-    definition.output_modalities = model.output_modalities.clone();
-    definition.pricing = model.pricing.clone();
-    definition.display_name = model.display_name.clone();
-    definition.origin = model.origin.clone();
-    definition.thinking_modes = model.thinking_modes.clone();
-    definition.speed_modes = model.speed_modes.clone();
-    definition.capabilities = sanitized_catalog_capability_patch(&model.capabilities);
-    definition
+    CatalogModelDefinition::from_fields(
+        model.lifecycle,
+        model.context_window_tokens,
+        model.max_input_tokens,
+        model.max_output_tokens,
+        model.description.clone(),
+        model.knowledge_cutoff.clone(),
+        model.release_date.clone(),
+        model.last_updated.clone(),
+        model.open_weights,
+        model.default_thinking_mode.clone(),
+        model.supports_parallel_tool_calls,
+        model.supports_verbosity,
+        model.default_verbosity.clone(),
+        model.default_temperature.clone(),
+        model.default_top_p.clone(),
+        model.default_top_k,
+        model.assistant_reasoning_interleaved,
+        model.assistant_reasoning_field.clone(),
+        model.output_modalities.clone(),
+        model.pricing.clone(),
+        model.display_name.clone(),
+        model.origin.clone(),
+        model.thinking_modes.clone(),
+        model.speed_modes.clone(),
+        sanitized_catalog_capability_patch(&model.capabilities),
+    )
 }
 
 fn sanitized_catalog_capability_patch(

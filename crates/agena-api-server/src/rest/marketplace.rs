@@ -342,7 +342,7 @@ fn normalize_registry_url(registry_url: &str) -> Result<String, ServerError> {
 
 fn marketplace_client()
 -> agena_plugin_marketplace::MarketplaceClient<agena_plugin_marketplace::ReqwestFetcher> {
-    agena_plugin_marketplace::MarketplaceClient::with_default_fetcher(
+    agena_plugin_marketplace::MarketplaceClient::new(
         agena_plugin_marketplace::MarketplaceCache::new(
             agena_plugin_marketplace::default_cache_root(),
         ),

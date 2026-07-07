@@ -83,11 +83,6 @@ impl ApiError {
             details: None,
         }
     }
-
-    pub fn with_details(mut self, details: serde_json::Value) -> Self {
-        self.details = Some(details);
-        self
-    }
 }
 
 impl std::fmt::Display for ApiError {

@@ -28,7 +28,7 @@ use std::{
 use crate::{
     error::AppError,
     message::{AttachmentItem, AttachmentKind, Message, MessageUsage},
-    model::{ModelId, ProviderId},
+    model::{ModelId, ModelMetadata, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ModelRuntime, ProviderModel, StreamResumePolicy,
@@ -136,7 +136,7 @@ impl AmazonBedrockAdapter {
         credentials: &Credentials,
     ) -> crate::provider::PromptCacheShape {
         let mut shape =
-            crate::provider::PromptCacheShape::new(PROVIDER_ID).with_bool("configured", true);
+            crate::provider::PromptCacheShape::from_fields(PROVIDER_ID, [("configured", "true")]);
 
         if let Some(account_id) = credentials
             .account_id()
@@ -166,8 +166,10 @@ impl AmazonBedrockAdapter {
             .map(|value| value.as_str().trim().to_owned())
             .filter(|value| !value.is_empty())
             .map(|account_id| {
-                crate::provider::PromptCacheShape::new(PROVIDER_ID)
-                    .with_string("account_id", account_id)
+                crate::provider::PromptCacheShape::from_fields(
+                    PROVIDER_ID,
+                    [("account_id", account_id)],
+                )
             })
     }
 
@@ -369,11 +371,19 @@ impl AmazonBedrockAdapter {
         Ok(models
             .into_iter()
             .map(|model| {
-                let mut entry = ProviderModel::new(PROVIDER_ID, model.id);
-                let capabilities = self.model_capabilities(&entry.id);
-                entry = entry.with_capabilities(capabilities);
-                entry.display_name = model.display_name.or(model.name);
-                entry
+                let model_id = ModelId::new(model.id);
+                let capabilities = self.model_capabilities(&model_id);
+                ProviderModel {
+                    provider_id: ProviderId::new(PROVIDER_ID),
+                    adapter_id: None,
+                    id: model_id,
+                    catalog_model_id: None,
+                    display_name: model.display_name.or(model.name),
+                    capabilities,
+                    metadata: ModelMetadata::default(),
+                    thinking_modes: std::collections::BTreeMap::new(),
+                    speed_modes: std::collections::BTreeMap::new(),
+                }
             })
             .collect())
     }
@@ -1561,14 +1571,19 @@ impl ModelRuntime for AmazonBedrockAdapter {
     }
 
     fn prompt_cache_shape(&self, model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
-        let mut shape = crate::provider::PromptCacheShape::new(PROVIDER_ID)
-            .with_string("base_url", self.base_url.clone())
-            .with_string("region", self.region.clone())
-            .with_bool(
-                "native_anthropic_transport",
-                matches!(&self.auth_mode, BedrockAuthMode::SigV4 { .. })
-                    && Self::is_native_anthropic_model(model.as_str()),
-            );
+        let mut shape = crate::provider::PromptCacheShape::from_fields(
+            PROVIDER_ID,
+            [
+                ("base_url", self.base_url.clone()),
+                ("region", self.region.clone()),
+                (
+                    "native_anthropic_transport",
+                    (matches!(&self.auth_mode, BedrockAuthMode::SigV4 { .. })
+                        && Self::is_native_anthropic_model(model.as_str()))
+                    .to_string(),
+                ),
+            ],
+        );
 
         match &self.auth_mode {
             BedrockAuthMode::SigV4 {

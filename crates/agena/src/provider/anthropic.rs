@@ -50,6 +50,37 @@ pub struct AnthropicAdapter {
     eager_input_streaming_override: Option<bool>,
 }
 
+#[derive(Clone)]
+pub struct AnthropicAdapterOptions {
+    pub auth_data: Option<Arc<Mutex<AuthData>>>,
+    pub auth_header: String,
+    pub auth_scheme: Option<String>,
+    pub models_url: Option<String>,
+    pub messages_url: Option<String>,
+    pub profile: AnthropicProfile,
+    pub extra_beta_header: Option<String>,
+    pub override_beta_header: bool,
+    pub extra_headers: HashMap<String, String>,
+    pub eager_input_streaming_override: Option<bool>,
+}
+
+impl Default for AnthropicAdapterOptions {
+    fn default() -> Self {
+        Self {
+            auth_data: None,
+            auth_header: "x-api-key".to_owned(),
+            auth_scheme: None,
+            models_url: None,
+            messages_url: None,
+            profile: AnthropicProfile::Standard,
+            extra_beta_header: None,
+            override_beta_header: false,
+            extra_headers: HashMap::new(),
+            eager_input_streaming_override: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnthropicProfile {
     Standard,
@@ -87,6 +118,24 @@ impl AnthropicAdapter {
         base_url: impl Into<String>,
         default_model: impl Into<String>,
     ) -> Self {
+        Self::new_managed_with_options(
+            id,
+            client,
+            api_key,
+            base_url,
+            default_model,
+            AnthropicAdapterOptions::default(),
+        )
+    }
+
+    pub fn new_managed_with_options(
+        id: impl Into<String>,
+        client: reqwest::Client,
+        api_key: ManagedCredential,
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+        options: AnthropicAdapterOptions,
+    ) -> Self {
         let id = id.into();
         let base_url = utils::normalize_base_url(base_url.into().as_str());
         let mut extra_headers = HashMap::new();
@@ -100,6 +149,34 @@ impl AnthropicAdapter {
             reqwest::header::USER_AGENT.as_str().to_owned(),
             crate::provider::claude_code_api_user_agent(),
         );
+        if options
+            .extra_headers
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()))
+        {
+            extra_headers
+                .retain(|key, _| !key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()));
+        }
+        if options.override_beta_header {
+            match options
+                .extra_beta_header
+                .and_then(|header| utils::normalize_optional_text(Some(header)))
+            {
+                Some(value) => {
+                    extra_headers.insert("anthropic-beta".to_owned(), value);
+                }
+                None => {
+                    extra_headers.remove("anthropic-beta");
+                }
+            }
+        }
+        if options.profile == AnthropicProfile::GithubCopilot {
+            extra_headers.insert(
+                "anthropic-beta".to_owned(),
+                DEFAULT_COPILOT_ANTHROPIC_BETA_HEADER.to_owned(),
+            );
+        }
+        extra_headers.extend(options.extra_headers);
 
         Self {
             id,
@@ -107,87 +184,27 @@ impl AnthropicAdapter {
             api_key,
             base_url,
             default_model: ModelId::new(default_model),
-            auth_data: None,
-            auth_header: "x-api-key".to_owned(),
-            auth_scheme: None,
-            models_url: None,
-            messages_url: None,
-            profile: AnthropicProfile::Standard,
+            auth_data: options.auth_data,
+            auth_header: if options.profile == AnthropicProfile::GithubCopilot {
+                "authorization".to_owned()
+            } else {
+                options.auth_header
+            },
+            auth_scheme: if options.profile == AnthropicProfile::GithubCopilot {
+                Some("Bearer".to_owned())
+            } else {
+                options.auth_scheme
+            },
+            models_url: options
+                .models_url
+                .and_then(|value| utils::normalize_optional_text(Some(value))),
+            messages_url: options
+                .messages_url
+                .and_then(|value| utils::normalize_optional_text(Some(value))),
+            profile: options.profile,
             extra_headers,
-            eager_input_streaming_override: None,
+            eager_input_streaming_override: options.eager_input_streaming_override,
         }
-    }
-
-    pub fn with_auth_data(mut self, auth_data: Arc<Mutex<AuthData>>) -> Self {
-        self.auth_data = Some(auth_data);
-        self
-    }
-
-    pub fn with_auth_header(
-        mut self,
-        header: impl Into<String>,
-        scheme: Option<impl Into<String>>,
-    ) -> Self {
-        self.auth_header = header.into();
-        self.auth_scheme = scheme.map(|v| v.into());
-        self
-    }
-
-    pub fn with_extra_headers(mut self, headers: HashMap<String, String>) -> Self {
-        if headers
-            .keys()
-            .any(|key| key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()))
-        {
-            self.extra_headers
-                .retain(|key, _| !key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()));
-        }
-        self.extra_headers.extend(headers);
-        self
-    }
-
-    pub fn with_models_url(mut self, models_url: Option<String>) -> Self {
-        self.models_url = models_url.and_then(|value| utils::normalize_optional_text(Some(value)));
-        self
-    }
-
-    pub fn with_messages_url(mut self, messages_url: Option<String>) -> Self {
-        self.messages_url =
-            messages_url.and_then(|value| utils::normalize_optional_text(Some(value)));
-        self
-    }
-
-    pub fn with_profile(mut self, profile: AnthropicProfile) -> Self {
-        self.profile = profile;
-        match profile {
-            AnthropicProfile::Standard => {}
-            AnthropicProfile::GithubCopilot => {
-                self.auth_header = "authorization".to_owned();
-                self.auth_scheme = Some("Bearer".to_owned());
-                self.extra_headers.insert(
-                    "anthropic-beta".to_owned(),
-                    DEFAULT_COPILOT_ANTHROPIC_BETA_HEADER.to_owned(),
-                );
-            }
-        }
-        self
-    }
-
-    pub fn with_beta_header(mut self, value: Option<String>) -> Self {
-        match value.and_then(|header| utils::normalize_optional_text(Some(header))) {
-            Some(value) => {
-                self.extra_headers
-                    .insert("anthropic-beta".to_owned(), value);
-            }
-            None => {
-                self.extra_headers.remove("anthropic-beta");
-            }
-        }
-        self
-    }
-
-    pub fn with_eager_input_streaming_override(mut self, value: Option<bool>) -> Self {
-        self.eager_input_streaming_override = value;
-        self
     }
 
     fn configured_public_copilot_base_url(&self) -> bool {
@@ -811,34 +828,46 @@ impl ModelRuntime for AnthropicAdapter {
     }
 
     fn prompt_cache_shape(&self, _model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
-        Some(
-            crate::provider::PromptCacheShape::new(self.id.as_str())
-                .with_string("auth_scope", self.api_key.prompt_cache_scope())
-                .with_string("base_url", self.prompt_cache_base_url().as_str())
-                .with_optional_string("models_url", self.models_url.as_deref())
-                .with_optional_string("messages_url", self.messages_url.as_deref())
-                .with_string(
-                    "profile",
-                    match self.profile {
-                        AnthropicProfile::Standard => "standard",
-                        AnthropicProfile::GithubCopilot => "github_copilot",
-                    },
-                )
-                .with_string("auth_header", self.auth_header.as_str())
-                .with_optional_string("auth_scheme", self.auth_scheme.as_deref())
-                .with_bool(
-                    "bundled_base_url",
-                    Self::is_bundled_base_url(self.base_url.as_str()),
-                )
-                .with_bool(
-                    "eager_input_streaming",
-                    self.supports_eager_input_streaming(),
-                )
-                .with_json(
-                    "extra_headers",
+        let mut fields = vec![
+            ("auth_scope", self.api_key.prompt_cache_scope()),
+            ("base_url", self.prompt_cache_base_url().to_owned()),
+            (
+                "profile",
+                match self.profile {
+                    AnthropicProfile::Standard => "standard",
+                    AnthropicProfile::GithubCopilot => "github_copilot",
+                }
+                .to_owned(),
+            ),
+            ("auth_header", self.auth_header.clone()),
+            (
+                "bundled_base_url",
+                Self::is_bundled_base_url(self.base_url.as_str()).to_string(),
+            ),
+            (
+                "eager_input_streaming",
+                self.supports_eager_input_streaming().to_string(),
+            ),
+            (
+                "extra_headers",
+                crate::provider::PromptCacheShape::json_field_value(
                     &utils::prompt_cache_header_entries(&self.extra_headers),
                 ),
-        )
+            ),
+        ];
+        if let Some(models_url) = self.models_url.as_deref() {
+            fields.push(("models_url", models_url.to_owned()));
+        }
+        if let Some(messages_url) = self.messages_url.as_deref() {
+            fields.push(("messages_url", messages_url.to_owned()));
+        }
+        if let Some(auth_scheme) = self.auth_scheme.as_deref() {
+            fields.push(("auth_scheme", auth_scheme.to_owned()));
+        }
+        Some(crate::provider::PromptCacheShape::from_fields(
+            self.id.as_str(),
+            fields,
+        ))
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
@@ -875,17 +904,25 @@ impl ModelRuntime for AnthropicAdapter {
             })
             .map(|m| {
                 let metadata = m.copilot.metadata(m.id.as_str());
-                let mut model = ProviderModel::new(PROVIDER_ID, m.id);
-                let mut capabilities = self.model_capabilities(&model.id);
+                let model_id = ModelId::new(m.id);
+                let mut capabilities = self.model_capabilities(&model_id);
                 if self.profile == AnthropicProfile::GithubCopilot {
-                    capabilities = m.copilot.capabilities().with_fallbacks_from(&capabilities);
+                    capabilities = m
+                        .copilot
+                        .capabilities()
+                        .merged_with_fallbacks_from(&capabilities);
                 }
-                model = model.with_capabilities(capabilities);
-                if !metadata.is_empty() {
-                    model = model.with_metadata(metadata);
+                ProviderModel {
+                    provider_id: ProviderId::new(PROVIDER_ID),
+                    adapter_id: None,
+                    id: model_id,
+                    catalog_model_id: None,
+                    display_name: m.display_name.or(m.name),
+                    capabilities,
+                    metadata,
+                    thinking_modes: BTreeMap::new(),
+                    speed_modes: BTreeMap::new(),
                 }
-                model.display_name = m.display_name.or(m.name);
-                model
             })
             .collect())
     }

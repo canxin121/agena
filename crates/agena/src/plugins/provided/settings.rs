@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, OnceLock, RwLock},
 };
 
-use agena_macros::{StaticToolSurface, ToolInputShape};
+use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -78,7 +78,7 @@ impl Default for SettingsEditDefaultsConfig {
 
 fn settings_config_schema() -> JsonValue {
     let mut schema =
-        crate::tool::definition::json_schema_for_with_default(SettingsPluginConfig::default());
+        crate::tool::definition::json_schema_for_default(SettingsPluginConfig::default());
     for (pointer, title, description) in [
         (
             "",
@@ -195,95 +195,161 @@ struct SettingsPatchToolInput {
     reload: Option<bool>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    tool = "settings",
-    description = "Settings command. Set action to get, list, validate, set, delete, or patch. Edits validate agena.json and reload by default.",
-    summary = "Read, validate, or edit runtime settings.",
-    help = "Use action `get` to inspect one setting path, `list` to enumerate settings, `validate` to validate config text without applying it, and `set`, `delete`, or `patch` to mutate agena.json. For effective reads, prefer explicit `scope = config|meta` with a relative `path` instead of relying on prefixed paths like `config.foo`.",
+    tool = "get",
+    summary = "Read one settings path.",
+    help = "For effective reads, prefer explicit `scope = config|meta` with a relative `path` instead of relying on prefixed paths like `config.foo`.",
     handler_receiver = SettingsPlugin,
+    handle = SettingsPlugin::get,
+    handle_field = args,
+    permission_paths_handle = SettingsPlugin::permission_get,
+    handle_by_value = true,
     display = brief,
-    tags(
-        ToolTag::ReadOnly,
-        ToolTag::Mutating,
-        ToolTag::FilesystemWrite,
-        ToolTag::Discovery,
-        settings_tag()
+    tags(ToolTag::ReadOnly, ToolTag::Discovery, settings_tag()),
+    capabilities(
+        crate::plugin::sdk::HostCapability::ReadConfig,
+        crate::plugin::sdk::HostCapability::ReloadConfig
     ),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+struct SettingsGetSurfaceInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: SettingsGetToolInput,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "list",
+    summary = "List settings paths.",
+    handler_receiver = SettingsPlugin,
+    handle = SettingsPlugin::list,
+    handle_field = args,
+    permission_paths_handle = SettingsPlugin::permission_list,
+    handle_by_value = true,
+    display = brief,
+    tags(ToolTag::ReadOnly, ToolTag::Discovery, settings_tag()),
+    capabilities(
+        crate::plugin::sdk::HostCapability::ReadConfig,
+        crate::plugin::sdk::HostCapability::ReloadConfig
+    ),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+struct SettingsListSurfaceInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: SettingsListToolInput,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "validate",
+    summary = "Validate agena.json.",
+    handler_receiver = SettingsPlugin,
+    handle = SettingsPlugin::validate,
+    handle_field = args,
+    permission_paths_handle = SettingsPlugin::permission_validate,
+    handle_by_value = true,
+    display = brief,
+    tags(ToolTag::ReadOnly, settings_tag()),
+    capabilities(
+        crate::plugin::sdk::HostCapability::ReadConfig,
+        crate::plugin::sdk::HostCapability::ReloadConfig
+    ),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+struct SettingsValidateSurfaceInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: SettingsValidateToolInput,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "set",
+    summary = "Set one settings value.",
+    handler_receiver = SettingsPlugin,
+    handle = SettingsPlugin::set,
+    handle_field = args,
+    permission_paths_handle = SettingsPlugin::permission_set,
+    handle_by_value = true,
+    display = brief,
+    tags(ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()),
     capabilities(
         crate::plugin::sdk::HostCapability::ReadConfig,
         crate::plugin::sdk::HostCapability::ReloadConfig
     ),
     concurrency_safe = false
 )]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum SettingsToolInput {
-    #[tool(
-        exec = "get",
-        handle = SettingsPlugin::get,
-        permission_paths_handle = SettingsPlugin::permission_get,
-        handle_by_value = true
-    )]
-    Get {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: SettingsGetToolInput,
-    },
-    #[tool(
-        exec = "list",
-        handle = SettingsPlugin::list,
-        permission_paths_handle = SettingsPlugin::permission_list,
-        handle_by_value = true
-    )]
-    List {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: SettingsListToolInput,
-    },
-    #[tool(
-        exec = "validate",
-        handle = SettingsPlugin::validate,
-        permission_paths_handle = SettingsPlugin::permission_validate,
-        handle_by_value = true
-    )]
-    Validate {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: SettingsValidateToolInput,
-    },
-    #[tool(
-        exec = "set",
-        handle = SettingsPlugin::set,
-        permission_paths_handle = SettingsPlugin::permission_set,
-        handle_by_value = true
-    )]
-    Set {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: SettingsSetToolInput,
-    },
-    #[tool(
-        exec = "delete",
-        handle = SettingsPlugin::delete,
-        permission_paths_handle = SettingsPlugin::permission_delete,
-        handle_by_value = true
-    )]
-    Delete {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: SettingsDeleteToolInput,
-    },
-    #[tool(
-        exec = "patch",
-        handle = SettingsPlugin::patch,
-        permission_paths_handle = SettingsPlugin::permission_patch,
-        handle_by_value = true
-    )]
-    Patch {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: SettingsPatchToolInput,
-    },
+#[serde(deny_unknown_fields)]
+struct SettingsSetSurfaceInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: SettingsSetToolInput,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "delete",
+    summary = "Delete one settings value.",
+    handler_receiver = SettingsPlugin,
+    handle = SettingsPlugin::delete,
+    handle_field = args,
+    permission_paths_handle = SettingsPlugin::permission_delete,
+    handle_by_value = true,
+    display = brief,
+    tags(ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()),
+    capabilities(
+        crate::plugin::sdk::HostCapability::ReadConfig,
+        crate::plugin::sdk::HostCapability::ReloadConfig
+    ),
+    concurrency_safe = false
+)]
+#[serde(deny_unknown_fields)]
+struct SettingsDeleteSurfaceInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: SettingsDeleteToolInput,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "patch",
+    summary = "Patch settings in agena.json.",
+    handler_receiver = SettingsPlugin,
+    handle = SettingsPlugin::patch,
+    handle_field = args,
+    permission_paths_handle = SettingsPlugin::permission_patch,
+    handle_by_value = true,
+    display = brief,
+    tags(ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()),
+    capabilities(
+        crate::plugin::sdk::HostCapability::ReadConfig,
+        crate::plugin::sdk::HostCapability::ReloadConfig
+    ),
+    concurrency_safe = false
+)]
+#[serde(deny_unknown_fields)]
+struct SettingsPatchSurfaceInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: SettingsPatchToolInput,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, ToolSuite)]
+#[tool_suite(handler_receiver = SettingsPlugin)]
+enum SettingsToolSuite {
+    Get(SettingsGetSurfaceInput),
+    List(SettingsListSurfaceInput),
+    Validate(SettingsValidateSurfaceInput),
+    Set(SettingsSetSurfaceInput),
+    Delete(SettingsDeleteSurfaceInput),
+    Patch(SettingsPatchSurfaceInput),
 }
 
 impl SettingsPlugin {
@@ -586,17 +652,21 @@ impl SettingsPlugin {
         if let Some(report) = reload_report {
             insert_reload_report(&mut payload, report);
         }
-        Ok(ToolInvokeOutput::text(text)
-            .with_title(title)
-            .with_payload(payload)
-            .with_metadata("agena.effect", "settings"))
+        Ok(ToolInvokeOutput::from_parts(
+            title,
+            text,
+            Some(payload),
+            std::collections::BTreeMap::from([("agena.effect".to_string(), "config".to_string())]),
+            Vec::new(),
+        ))
     }
 }
 
 #[crate::plugin::sdk::plugin(
-    id = SETTINGS_PLUGIN_ID,
+    namespace = "agena",
+    name = "settings",
     version = env!("CARGO_PKG_VERSION"),
-    description = "Read and edit Agena runtime settings in agena.json.",
+    summary = "Read and edit Agena runtime settings in agena.json.",
     config_schema = settings_config_schema(),
     display = brief
 )]
@@ -623,13 +693,13 @@ impl SettingsPlugin {
         ))
     }
 
-    #[tool]
-    async fn tool_invoke(&self, input: SettingsToolInput) -> SdkResult<ToolInvokeOutput> {
+    #[tool_suite]
+    async fn tool_invoke(&self, input: SettingsToolSuite) -> SdkResult<ToolInvokeOutput> {
         input.dispatch_tool_invoke(self).await
     }
 
-    #[permission(paths)]
-    async fn permission_paths(&self, input: SettingsToolInput) -> SdkResult<Vec<PathRequest>> {
+    #[permission(paths, suite)]
+    async fn permission_paths(&self, input: SettingsToolSuite) -> SdkResult<Vec<PathRequest>> {
         input.dispatch_permission_paths(self).await
     }
 }
@@ -696,12 +766,13 @@ fn output<T>(title: &str, text: impl Into<String>, payload: &T) -> SdkResult<Too
 where
     T: Serialize,
 {
-    Ok(ToolInvokeOutput::text(text)
-        .with_title(title)
-        .with_payload(
-            serde_json::to_value(payload).map_err(|err| PluginError::new(err.to_string()))?,
-        )
-        .with_metadata("agena.effect", "settings"))
+    Ok(ToolInvokeOutput::from_parts(
+        title,
+        text,
+        Some(serde_json::to_value(payload).map_err(|err| PluginError::new(err.to_string()))?),
+        std::collections::BTreeMap::from([("agena.effect".to_string(), "settings".to_string())]),
+        Vec::new(),
+    ))
 }
 
 fn map_err(error: ConfigError) -> PluginError {

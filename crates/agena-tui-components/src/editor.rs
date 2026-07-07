@@ -74,9 +74,15 @@ struct RetroGrab {
 
 impl Editor {
     pub fn from_text(text: String) -> Self {
-        let mut editor = Self::default();
-        editor.set_text(text);
-        editor
+        let cursor = text.len();
+        Self {
+            text,
+            cursor,
+            preferred_column: None,
+            kill_buffer: String::new(),
+            elements: Vec::new(),
+            paste_burst: PasteBurst::default(),
+        }
     }
 
     pub fn text(&self) -> &str {
@@ -1041,7 +1047,7 @@ fn slice_display_window_styled(
     let end_column = start_column.saturating_add(width);
     let line_text = &text[range.clone()];
     let mut current_column = 0_usize;
-    let mut current_style = Style::default();
+    let mut current_style: Option<Style> = None;
     let mut current_segment = String::new();
     let mut spans = Vec::new();
 
@@ -1069,19 +1075,22 @@ fn slice_display_window_styled(
             Style::default()
         };
 
-        if !current_segment.is_empty() && style != current_style {
+        if !current_segment.is_empty() && current_style.is_some_and(|current| style != current) {
             spans.push(Span::styled(
                 std::mem::take(&mut current_segment),
-                current_style,
+                current_style.unwrap_or_default(),
             ));
         }
-        current_style = style;
+        current_style = Some(style);
         current_segment.push_str(grapheme);
         current_column = next_column;
     }
 
     if !current_segment.is_empty() {
-        spans.push(Span::styled(current_segment, current_style));
+        spans.push(Span::styled(
+            current_segment,
+            current_style.unwrap_or_default(),
+        ));
     }
 
     if spans.is_empty() {

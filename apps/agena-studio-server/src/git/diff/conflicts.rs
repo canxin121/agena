@@ -215,10 +215,15 @@ pub struct GitConflictResolveBody {
     pub path: Option<String>,
     // "ours" | "theirs" | "base" | "both" | "manual"
     pub strategy: Option<String>,
-    #[serde(default)]
-    pub stage: Option<bool>,
+    #[serde(default = "default_stage_conflict_resolution")]
+    pub stage: bool,
     // For "manual": list of (block id -> choice)
-    pub choices: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    pub choices: Vec<serde_json::Value>,
+}
+
+fn default_stage_conflict_resolution() -> bool {
+    true
 }
 
 fn apply_conflict_choices(
@@ -317,8 +322,6 @@ pub async fn git_conflict_resolve(
         .unwrap_or("manual")
         .trim()
         .to_ascii_lowercase();
-    let stage = body.stage.unwrap_or(true);
-
     if strategy == "ours" || strategy == "theirs" {
         let flag = if strategy == "ours" {
             "--ours"
@@ -350,18 +353,16 @@ pub async fn git_conflict_resolve(
         }
 
         let mut map: HashMap<usize, String> = HashMap::new();
-        if let Some(list) = body.choices {
-            for item in list {
-                let Some(id) = item.get("id").and_then(|v| v.as_u64()) else {
-                    continue;
-                };
-                let Some(choice) = item.get("choice").and_then(|v| v.as_str()) else {
-                    continue;
-                };
-                let c = choice.trim().to_ascii_lowercase();
-                if c == "ours" || c == "theirs" || c == "base" || c == "both" {
-                    map.insert(id as usize, c);
-                }
+        for item in body.choices {
+            let Some(id) = item.get("id").and_then(|v| v.as_u64()) else {
+                continue;
+            };
+            let Some(choice) = item.get("choice").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let c = choice.trim().to_ascii_lowercase();
+            if c == "ours" || c == "theirs" || c == "base" || c == "both" {
+                map.insert(id as usize, c);
             }
         }
 
@@ -382,7 +383,7 @@ pub async fn git_conflict_resolve(
         }
     }
 
-    if stage
+    if body.stage
         && let Err(resp) = run_git_checked_with_status(
             &dir,
             &["add", "--", path],

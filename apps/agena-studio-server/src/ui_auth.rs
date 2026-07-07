@@ -51,8 +51,8 @@ struct LoginAttemptRecord {
 #[derive(Debug, Serialize)]
 struct AuthStatusOk {
     authenticated: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    disabled: Option<bool>,
+    #[serde(skip_serializing_if = "is_false")]
+    disabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     token: Option<String>,
 }
@@ -72,12 +72,16 @@ pub(crate) struct CreateSessionBody {
 #[serde(rename_all = "camelCase")]
 struct AuthErrorBody {
     error: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    locked: Option<bool>,
+    #[serde(skip_serializing_if = "is_false")]
+    locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     retry_after_seconds: Option<i64>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn normalize_password(candidate: Option<&str>) -> String {
@@ -481,7 +485,7 @@ pub(crate) async fn auth_session_status(
     match &state.ui_auth {
         UiAuth::Disabled => Json(AuthStatusOk {
             authenticated: true,
-            disabled: Some(true),
+            disabled: true,
             token: None,
         })
         .into_response(),
@@ -493,7 +497,7 @@ pub(crate) async fn auth_session_status(
             {
                 return Json(AuthStatusOk {
                     authenticated: true,
-                    disabled: None,
+                    disabled: false,
                     token: None,
                 })
                 .into_response();
@@ -504,7 +508,7 @@ pub(crate) async fn auth_session_status(
             {
                 return Json(AuthStatusOk {
                     authenticated: true,
-                    disabled: None,
+                    disabled: false,
                     token: None,
                 })
                 .into_response();
@@ -537,7 +541,7 @@ pub(crate) async fn auth_session_create(
             StatusCode::BAD_REQUEST,
             Json(AuthErrorBody {
                 error: "UI password not configured".to_string(),
-                locked: None,
+                locked: false,
                 code: Some("auth_disabled".to_string()),
                 retry_after_seconds: None,
             }),
@@ -560,7 +564,7 @@ pub(crate) async fn auth_session_create(
                             "Too many failed login attempts. Try again in {} seconds",
                             retry_after_seconds
                         ),
-                        locked: Some(true),
+                        locked: true,
                         code: Some("auth_rate_limited".to_string()),
                         retry_after_seconds: Some(retry_after_seconds),
                     }),
@@ -581,7 +585,7 @@ pub(crate) async fn auth_session_create(
                                 "Too many failed login attempts. Try again in {} seconds",
                                 retry_after_seconds
                             ),
-                            locked: Some(true),
+                            locked: true,
                             code: Some("auth_rate_limited".to_string()),
                             retry_after_seconds: Some(retry_after_seconds),
                         }),
@@ -594,7 +598,7 @@ pub(crate) async fn auth_session_create(
                     jar,
                     Json(AuthErrorBody {
                         error: "Invalid password".to_string(),
-                        locked: Some(true),
+                        locked: true,
                         code: Some("auth_invalid_password".to_string()),
                         retry_after_seconds: None,
                     }),
@@ -623,7 +627,7 @@ pub(crate) async fn auth_session_create(
                 jar,
                 Json(AuthStatusOk {
                     authenticated: true,
-                    disabled: None,
+                    disabled: false,
                     token: Some(token),
                 }),
             )
@@ -687,7 +691,7 @@ pub(crate) async fn require_ui_auth(
                         StatusCode::FORBIDDEN,
                         Json(AuthErrorBody {
                             error: "Request origin not allowed".to_string(),
-                            locked: None,
+                            locked: false,
                             code: Some("csrf_origin_forbidden".to_string()),
                             retry_after_seconds: None,
                         }),
@@ -704,7 +708,7 @@ pub(crate) async fn require_ui_auth(
                 jar,
                 Json(AuthErrorBody {
                     error: "UI authentication required".to_string(),
-                    locked: Some(true),
+                    locked: true,
                     code: Some("auth_required".to_string()),
                     retry_after_seconds: None,
                 }),

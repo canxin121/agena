@@ -1,60 +1,135 @@
 use super::*;
 
-use agena_macros::{StaticToolSurface, ToolInputShape};
+use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    tool = "tools",
-    description = "Tool catalog command. Use action `usage` for examples, `list` to enumerate tools, `search` to find tools, or `help` to fetch detailed usage for a tool. This tool does not execute the target tool for you.",
+    tool = "usage",
+    summary = "Show quick examples for browsing the registered tool catalog.",
     before_help = "Quick reference for browsing the registered tool catalog.",
-    summary = "Show usage examples, list tools, search tools, or fetch detailed tool help.",
-    help = "Use action `usage` or pass `{}` to see quick examples. Use action `list` to enumerate the current model-visible tools. Use action `search` with `query` and optional `limit` to discover tools. Use action `help` with `tool` to retrieve the full registered help text and input schema for any model-visible tool.",
-    after_help = "To actually run a tool, call that tool directly after reading its help.",
+    summary = "Show quick tool-catalog examples.",
+    after_help = "To run a tool, read agena.tools/help first and then execute it through agena.tools/call.",
     handler_receiver = WorkflowPlugin,
-    trim("query", "tool"),
+    handle = WorkflowPlugin::invoke_tools_usage,
+    ui_display = detailed,
+    tags(ToolTag::ReadOnly, ToolTag::Discovery),
+    capabilities(HostCapability::ListTools, HostCapability::ToolRegistry),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CatalogUsageToolInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "list",
+    summary = "Enumerate current tools.",
+    handler_receiver = WorkflowPlugin,
+    handle = WorkflowPlugin::invoke_tool_list,
+    handle_field = args,
+    ui_display = detailed,
+    tags(ToolTag::ReadOnly, ToolTag::Discovery),
+    capabilities(HostCapability::ListTools, HostCapability::ToolRegistry),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CatalogListToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: ToolListInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "search",
+    summary = "Search the current tool catalog.",
+    handler_receiver = WorkflowPlugin,
+    handle = WorkflowPlugin::invoke_tool_search,
+    handle_field = args,
+    trim("query"),
+    non_empty("query"),
+    ui_display = detailed,
+    tags(ToolTag::ReadOnly, ToolTag::Discovery),
+    capabilities(HostCapability::ListTools, HostCapability::ToolRegistry),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CatalogSearchToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: CatalogSearchInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "help",
+    summary = "Fetch detailed tool help.",
+    handler_receiver = WorkflowPlugin,
+    handle = WorkflowPlugin::invoke_tool_help,
+    handle_field = args,
+    trim("tool"),
+    non_empty("tool"),
     ui_display = detailed,
     tags(ToolTag::ReadOnly, ToolTag::Discovery),
     capabilities(HostCapability::ListTools),
     concurrency_safe = true
 )]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum ToolsToolInput {
-    #[tool(
-        exec = "usage",
-        handle = WorkflowPlugin::invoke_tools_usage,
-        default_when_empty = true
-    )]
-    Usage,
-    #[tool(exec = "list", handle = WorkflowPlugin::invoke_tool_list)]
-    List {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: ToolListInput,
-    },
-    #[tool(
-        exec = "search",
-        handle = WorkflowPlugin::invoke_tool_search,
-        non_empty("query"),
-        infer_when_present("query"),
-        drop_keys("include_schema", "tool", "verbose")
-    )]
-    Search {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: ToolSearchToolInput,
-    },
-    #[tool(
-        exec = "help",
-        handle = WorkflowPlugin::invoke_tool_help,
-        non_empty("tool"),
-        infer_when_present("tool"),
-        drop_keys("query", "limit")
-    )]
-    Help {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: ToolsHelpInput,
-    },
+#[serde(deny_unknown_fields)]
+pub(crate) struct CatalogHelpToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: ToolsHelpInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "tags",
+    summary = "List tool tags with pagination.",
+    handler_receiver = WorkflowPlugin,
+    handle = WorkflowPlugin::invoke_tool_tags,
+    handle_field = args,
+    ui_display = detailed,
+    tags(ToolTag::ReadOnly, ToolTag::Discovery),
+    capabilities(HostCapability::ListTools, HostCapability::ToolRegistry),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CatalogTagsToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: ToolTagsInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "call",
+    summary = "Invoke a tool after reading its help.",
+    handler_receiver = WorkflowPlugin,
+    handle = WorkflowPlugin::invoke_tool_call,
+    handle_field = args,
+    trim("tool"),
+    non_empty("tool"),
+    ui_display = detailed,
+    tags(ToolTag::Discovery),
+    capabilities(HostCapability::InvokeTool),
+    concurrency_safe = false
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CatalogCallToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: ToolCallInput,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, ToolSuite)]
+#[tool_suite(handler_receiver = WorkflowPlugin)]
+pub(crate) enum CatalogToolSuite {
+    Usage(CatalogUsageToolInput),
+    List(CatalogListToolInput),
+    Search(CatalogSearchToolInput),
+    Help(CatalogHelpToolInput),
+    Tags(CatalogTagsToolInput),
+    Call(CatalogCallToolInput),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
@@ -63,19 +138,76 @@ pub(crate) enum ToolsToolInput {
 pub(crate) struct ToolsHelpInput {
     /// Registered model-visible tool name to inspect.
     pub tool: String,
-    /// Include the sanitized JSON input schema in the response.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include_schema: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("tool"), non_empty("tool"))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ToolCallInput {
+    /// Registered model-visible tool name to invoke.
+    pub tool: String,
+    /// Tool input object passed through verbatim to the target tool.
+    #[schemars(schema_with = "tool_call_input_schema")]
+    pub input: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
 #[tool_input()]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ToolListInput {
-    /// Maximum number of tools to return. Omit to return every current model-visible tool.
+    /// Number of tools to skip before returning results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+    /// Maximum number of tools to return.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
-    /// Include one-line summaries next to each tool name.
+    /// Optional tag filter such as `read_only` or `network`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verbose: Option<bool>,
+    pub tag: Option<String>,
+    /// Include one-line summaries next to each tool name.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub verbose: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input(trim("query"), non_empty("query"))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CatalogSearchInput {
+    /// Search text used to rank matching tool names and summaries.
+    #[serde(default)]
+    pub query: String,
+    /// Number of matching tools to skip before returning results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+    /// Maximum number of search results to return.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Optional tag filter such as `read_only` or `network`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[tool_input()]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ToolTagsInput {
+    /// Number of tags to skip before returning results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+    /// Maximum number of tags to return.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn tool_call_input_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    serde_json::json!({
+        "type": "object",
+        "description": "Arguments for the target tool. Read agena.tools/help for the exact schema before calling."
+    })
+    .try_into()
+    .expect("valid schema")
 }

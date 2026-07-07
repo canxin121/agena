@@ -501,7 +501,7 @@ async fn parse_official_html_source_document(
             continue;
         };
         for alias in aliases {
-            merge_document_entry(&mut document, alias, definition.clone());
+            merge_document_entry(&mut document.models, alias, definition.clone());
         }
     }
 
@@ -517,7 +517,7 @@ fn parse_models_dev_document(body: &str) -> Result<ModelCatalogDocument, AppErro
             .then_with(|| left_key.cmp(right_key))
     });
 
-    let mut document = ModelCatalogDocument::default();
+    let mut document_models = BTreeMap::new();
 
     for (provider_key, provider) in providers {
         let origin = models_dev_origin(provider_key.as_str(), &provider);
@@ -591,16 +591,18 @@ fn parse_models_dev_document(body: &str) -> Result<ModelCatalogDocument, AppErro
                 source_priority: CatalogDefinitionSourcePriority::default(),
             };
 
-            merge_document_entry(&mut document, model_id, definition);
+            merge_document_entry(&mut document_models, model_id, definition);
         }
     }
 
-    Ok(document)
+    Ok(ModelCatalogDocument {
+        models: document_models,
+    })
 }
 
 fn parse_router_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
     let sections: BTreeMap<String, Vec<RouterModel>> = serde_json::from_str(body)?;
-    let mut document = ModelCatalogDocument::default();
+    let mut document_models = BTreeMap::new();
 
     for (section, models) in sections {
         for model in models {
@@ -677,16 +679,18 @@ fn parse_router_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
                 source_priority: CatalogDefinitionSourcePriority::default(),
             };
 
-            merge_document_entry(&mut document, model_id, definition);
+            merge_document_entry(&mut document_models, model_id, definition);
         }
     }
 
-    Ok(document)
+    Ok(ModelCatalogDocument {
+        models: document_models,
+    })
 }
 
 fn parse_openai_codex_models_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
     let payload: OpenAiCodexModelsDocument = serde_json::from_str(body)?;
-    let mut document = ModelCatalogDocument::default();
+    let mut document_models = BTreeMap::new();
 
     for model in payload.models {
         let model_id = normalize_optional_string(model.slug).unwrap_or_default();
@@ -756,15 +760,17 @@ fn parse_openai_codex_models_document(body: &str) -> Result<ModelCatalogDocument
             source_priority: CatalogDefinitionSourcePriority::default(),
         };
 
-        merge_document_entry(&mut document, model_id, definition);
+        merge_document_entry(&mut document_models, model_id, definition);
     }
 
-    Ok(document)
+    Ok(ModelCatalogDocument {
+        models: document_models,
+    })
 }
 
 fn parse_hugging_face_official_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
     let payload: Vec<HuggingFaceHubModel> = serde_json::from_str(body)?;
-    let mut document = ModelCatalogDocument::default();
+    let mut document_models = BTreeMap::new();
 
     for model in payload {
         let repo_id = normalize_optional_string(model.id.or(model.model_id)).unwrap_or_default();
@@ -818,11 +824,13 @@ fn parse_hugging_face_official_document(body: &str) -> Result<ModelCatalogDocume
         };
 
         for alias in hugging_face_model_aliases(repo_name) {
-            merge_document_entry(&mut document, alias, definition.clone());
+            merge_document_entry(&mut document_models, alias, definition.clone());
         }
     }
 
-    Ok(document)
+    Ok(ModelCatalogDocument {
+        models: document_models,
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -952,7 +960,7 @@ const OFFICIAL_HTML_MODEL_SIGNALS: &[OfficialHtmlModelSignal] = &[
 
 fn parse_official_html_signals_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
     let normalized = body.trim().to_ascii_lowercase();
-    let mut document = ModelCatalogDocument::default();
+    let mut document_models = BTreeMap::new();
 
     for signal in OFFICIAL_HTML_MODEL_SIGNALS {
         if !signal
@@ -1000,11 +1008,17 @@ fn parse_official_html_signals_document(body: &str) -> Result<ModelCatalogDocume
         };
 
         for model_id in signal.model_ids {
-            merge_document_entry(&mut document, (*model_id).to_owned(), definition.clone());
+            merge_document_entry(
+                &mut document_models,
+                (*model_id).to_owned(),
+                definition.clone(),
+            );
         }
     }
 
-    Ok(document)
+    Ok(ModelCatalogDocument {
+        models: document_models,
+    })
 }
 
 fn is_nvidia_reference_index_url(url: &str) -> bool {
@@ -1513,12 +1527,11 @@ pub(crate) fn definition_has_mode_fields(definition: &CatalogModelDefinition) ->
 }
 
 fn merge_document_entry(
-    document: &mut ModelCatalogDocument,
+    models: &mut BTreeMap<String, CatalogModelDefinition>,
     model_id: String,
     definition: CatalogModelDefinition,
 ) {
-    document
-        .models
+    models
         .entry(model_id)
         .and_modify(|existing| merge_catalog_definition(existing, &definition))
         .or_insert(definition);
@@ -1617,14 +1630,16 @@ fn models_dev_speed_modes(
             .as_ref()
             .map(models_dev_request_override)
             .unwrap_or_default();
-        let mut adapter_overrides = BTreeMap::new();
-        let mut default_request_override = ModelSpeedModeRequestOverride::default();
-        if request_override.is_empty() {
+        let (default_request_override, adapter_overrides) = if request_override.is_empty() {
+            (ModelSpeedModeRequestOverride::default(), BTreeMap::new())
         } else if let Some(adapter_id) = adapter_id {
-            adapter_overrides.insert(adapter_id.to_owned(), request_override);
+            (
+                ModelSpeedModeRequestOverride::default(),
+                BTreeMap::from([(adapter_id.to_owned(), request_override)]),
+            )
         } else {
-            default_request_override = request_override;
-        }
+            (request_override, BTreeMap::new())
+        };
         modes.insert(
             normalized.to_owned(),
             ConfiguredModelSpeedMode {
@@ -1936,39 +1951,46 @@ fn models_dev_output_modalities(modalities: Option<&ModelsDevModalities>) -> Vec
 
 fn models_dev_pricing(cost: Option<&ModelsDevCost>) -> Option<ModelPricing> {
     let cost = cost?;
-    let mut pricing = ModelPricing {
+    let mut tiers = cost
+        .tiers
+        .iter()
+        .filter_map(models_dev_pricing_tier)
+        .collect::<Vec<_>>();
+
+    let context_over_200k_tier = cost
+        .context_over_200k
+        .as_ref()
+        .and_then(|context_over_200k| {
+            let tier = ModelPricingTier {
+                tier_type: Some("context".to_owned()),
+                size_tokens: Some(200_000),
+                input_usd_per_million_tokens: pricing_value(context_over_200k.input.as_ref()),
+                output_usd_per_million_tokens: pricing_value(context_over_200k.output.as_ref()),
+                cache_read_usd_per_million_tokens: pricing_value(
+                    context_over_200k.cache_read.as_ref(),
+                ),
+                cache_write_usd_per_million_tokens: pricing_value(
+                    context_over_200k.cache_write.as_ref(),
+                ),
+            };
+            (!tier.is_empty()).then_some(tier)
+        });
+    if let Some(tier) = context_over_200k_tier
+        && !tiers.iter().any(|existing| {
+            existing.tier_type.as_deref() == Some("context")
+                && existing.size_tokens == Some(200_000)
+        })
+    {
+        tiers.push(tier);
+    }
+
+    let pricing = ModelPricing {
         input_usd_per_million_tokens: pricing_value(cost.input.as_ref()),
         output_usd_per_million_tokens: pricing_value(cost.output.as_ref()),
         cache_read_usd_per_million_tokens: pricing_value(cost.cache_read.as_ref()),
         cache_write_usd_per_million_tokens: pricing_value(cost.cache_write.as_ref()),
-        tiers: cost
-            .tiers
-            .iter()
-            .filter_map(models_dev_pricing_tier)
-            .collect(),
+        tiers,
     };
-
-    if let Some(context_over_200k) = cost.context_over_200k.as_ref() {
-        let tier = ModelPricingTier {
-            tier_type: Some("context".to_owned()),
-            size_tokens: Some(200_000),
-            input_usd_per_million_tokens: pricing_value(context_over_200k.input.as_ref()),
-            output_usd_per_million_tokens: pricing_value(context_over_200k.output.as_ref()),
-            cache_read_usd_per_million_tokens: pricing_value(context_over_200k.cache_read.as_ref()),
-            cache_write_usd_per_million_tokens: pricing_value(
-                context_over_200k.cache_write.as_ref(),
-            ),
-        };
-        if !tier.is_empty()
-            && !pricing.tiers.iter().any(|existing| {
-                existing.tier_type.as_deref() == Some("context")
-                    && existing.size_tokens == Some(200_000)
-            })
-        {
-            pricing.tiers.push(tier);
-        }
-    }
-
     (!pricing.is_empty()).then_some(pricing)
 }
 

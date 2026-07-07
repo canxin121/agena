@@ -26,7 +26,7 @@ pub(super) fn execute_create(
     )
     .map_err(|e| ToolError::Plugin(format!("cron_create: {e}")))?;
     if let Some(session_id) = session_id {
-        job = job.with_owner(session_id);
+        job.set_owner(session_id);
     }
     let id = job.id;
     let next = job.next_fire_at.map(|t| t.to_rfc3339());
@@ -107,7 +107,7 @@ pub(super) fn execute_wakeup(
     let when = chrono::Utc::now() + chrono::Duration::seconds(input.delay_seconds as i64);
     let mut job = ScheduledJob::new_once(when, input.prompt.trim());
     if let Some(session_id) = session_id {
-        job = job.with_owner(session_id);
+        job.set_owner(session_id);
     }
     let id = job.id;
     let next = job.next_fire_at.map(|t| t.to_rfc3339()).unwrap_or_default();

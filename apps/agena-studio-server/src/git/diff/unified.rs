@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use super::super::is_safe_repo_rel_path;
 
-#[derive(Debug, Default, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PatchSummary {
     pub files: usize,
@@ -200,7 +200,11 @@ pub(crate) fn parse_unified_diff_meta(diff: &str) -> UnifiedDiffMeta {
             file_header: Vec::new(),
             has_patch_header: false,
             hunks: Vec::new(),
-            summary: PatchSummary::default(),
+            summary: PatchSummary {
+                files: 0,
+                hunks: 0,
+                changed_lines: 0,
+            },
         };
     }
 
@@ -210,7 +214,11 @@ pub(crate) fn parse_unified_diff_meta(diff: &str) -> UnifiedDiffMeta {
             file_header: Vec::new(),
             has_patch_header: false,
             hunks: Vec::new(),
-            summary: PatchSummary::default(),
+            summary: PatchSummary {
+                files: 0,
+                hunks: 0,
+                changed_lines: 0,
+            },
         };
     }
 
@@ -336,7 +344,7 @@ pub(crate) fn parse_unified_diff_meta(diff: &str) -> UnifiedDiffMeta {
 }
 
 fn finalize_hunk(
-    summary: &mut PatchSummary,
+    hunk_count: &mut usize,
     active_hunk: &mut Option<(usize, usize, usize, usize)>,
 ) -> Result<(), &'static str> {
     let Some((expected_old, expected_new, seen_old, seen_new)) = *active_hunk else {
@@ -345,13 +353,15 @@ fn finalize_hunk(
     if expected_old != seen_old || expected_new != seen_new {
         return Err("invalid_patch_hunk_counts");
     }
-    summary.hunks += 1;
+    *hunk_count += 1;
     *active_hunk = None;
     Ok(())
 }
 
 pub(crate) fn validate_unified_patch_hunks(patch: &str) -> Result<PatchSummary, &'static str> {
-    let mut summary = PatchSummary::default();
+    let mut files = 0;
+    let mut hunks = 0;
+    let mut changed_lines = 0;
     let mut active_hunk: Option<(usize, usize, usize, usize)> = None;
     let mut saw_old_header = false;
     let mut saw_new_header = false;
@@ -360,8 +370,8 @@ pub(crate) fn validate_unified_patch_hunks(patch: &str) -> Result<PatchSummary, 
         let line = raw_line.trim_end_matches('\r');
 
         if line.starts_with("diff --git ") {
-            finalize_hunk(&mut summary, &mut active_hunk)?;
-            summary.files += 1;
+            finalize_hunk(&mut hunks, &mut active_hunk)?;
+            files += 1;
             continue;
         }
 
@@ -375,7 +385,7 @@ pub(crate) fn validate_unified_patch_hunks(patch: &str) -> Result<PatchSummary, 
         }
 
         if let Some((old_count, new_count)) = parse_hunk_counts(line) {
-            finalize_hunk(&mut summary, &mut active_hunk)?;
+            finalize_hunk(&mut hunks, &mut active_hunk)?;
             active_hunk = Some((old_count, new_count, 0, 0));
             continue;
         }
@@ -388,12 +398,12 @@ pub(crate) fn validate_unified_patch_hunks(patch: &str) -> Result<PatchSummary, 
             }
             if line.starts_with('+') {
                 *seen_new += 1;
-                summary.changed_lines += 1;
+                changed_lines += 1;
                 continue;
             }
             if line.starts_with('-') {
                 *seen_old += 1;
-                summary.changed_lines += 1;
+                changed_lines += 1;
                 continue;
             }
             if line.starts_with("\\ No newline at end of file") {
@@ -422,22 +432,26 @@ pub(crate) fn validate_unified_patch_hunks(patch: &str) -> Result<PatchSummary, 
         return Err("invalid_patch_format");
     }
 
-    finalize_hunk(&mut summary, &mut active_hunk)?;
+    finalize_hunk(&mut hunks, &mut active_hunk)?;
 
-    if summary.files == 0 && saw_old_header && saw_new_header {
-        summary.files = 1;
+    if files == 0 && saw_old_header && saw_new_header {
+        files = 1;
     }
-    if summary.files == 0 {
+    if files == 0 {
         return Err("invalid_patch_missing_file");
     }
-    if summary.hunks == 0 {
+    if hunks == 0 {
         return Err("invalid_patch_missing_hunks");
     }
-    if summary.changed_lines == 0 {
+    if changed_lines == 0 {
         return Err("invalid_patch_no_changes");
     }
 
-    Ok(summary)
+    Ok(PatchSummary {
+        files,
+        hunks,
+        changed_lines,
+    })
 }
 
 pub(crate) fn patch_paths_are_safe(patch: &str) -> bool {

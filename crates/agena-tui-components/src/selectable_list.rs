@@ -1,8 +1,8 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::selection::{
-    clamp_selected_index, move_selected_index, move_selected_index_end, move_selected_index_home,
-    move_selected_index_page,
+    clamp_selected_index, clamped_selected_index, move_selected_index, move_selected_index_end,
+    move_selected_index_home, move_selected_index_page,
 };
 
 #[derive(Debug, Clone)]
@@ -22,9 +22,8 @@ impl<T> Default for SelectableListState<T> {
 
 impl<T> SelectableListState<T> {
     pub fn new(items: Vec<T>, selected: usize) -> Self {
-        let mut state = Self { items, selected };
-        state.clamp_selection();
-        state
+        let selected = clamped_selected_index(selected, items.len());
+        Self { items, selected }
     }
 
     pub fn selected_item(&self) -> Option<&T> {

@@ -52,8 +52,8 @@ pub struct AuthProviderResource {
     pub key_preview: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expired: Option<bool>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub expired: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -74,6 +74,10 @@ pub struct AuthProviderResource {
     pub browser_login_instance_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_login_kind: Option<AuthLoginKindResource>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Deserialize)]

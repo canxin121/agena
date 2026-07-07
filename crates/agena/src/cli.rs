@@ -1159,6 +1159,8 @@ struct PluginValidationMessage {
     path: Option<String>,
 }
 
+type PluginValidationMessages = (Vec<PluginValidationMessage>, Vec<PluginValidationMessage>);
+
 impl AgenaCli {
     pub fn resolved_tracing_config(&self) -> TracingConfig {
         ConfigLoader::default()
@@ -1248,8 +1250,7 @@ impl AgenaCli {
         };
 
         let cache = MarketplaceCache::new(default_cache_root());
-        let client =
-            MarketplaceClient::with_default_fetcher(cache, std::collections::BTreeMap::new());
+        let client = MarketplaceClient::new(cache, std::collections::BTreeMap::new());
 
         match command.command {
             PluginSubcommand::Status(args) => {
@@ -1843,10 +1844,18 @@ impl AgenaCli {
             crate::tool::default_tool_host(workspace.clone()).map_err(AppError::Config)?;
         let executor = ToolExecutor::new(
             workspace,
-            Agent::new("cli", PermissionPolicy::allow_all())
-                .with_tool_policy(ToolPermissionPolicy::allow_all()),
-        )
-        .with_plugin_manager(plugins);
+            Agent::new(
+                "cli",
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            crate::agents::SubagentRegistry::default(),
+            plugins,
+            None,
+            None,
+            None,
+            crate::plugin::ToolPresentationConfig::default(),
+        );
         let input = ToolPayloadInput::ApplyPatch(ApplyPatchToolInput { patch }).into_invocation();
         let execution = executor
             .execute_invocation_detailed_bypassing_permissions(&input, -1, -1)
@@ -2016,13 +2025,24 @@ impl AgenaCli {
             .ok_or_else(session_storage_error)?;
         let session_id = selected_session_id(&manager, args.session_id, args.last).await?;
         let session = if args.agent.is_some() {
-            let mut options = SessionRunOptions::new(default_model(&runtime)?);
-            options.agent_profile = args
+            let agent_profile = args
                 .agent
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned);
+            let options = SessionRunOptions {
+                model: default_model(&runtime)?,
+                thinking_mode: None,
+                speed_mode: None,
+                verbosity: None,
+                thinking: None,
+                request_override: Default::default(),
+                system: None,
+                temperature: None,
+                max_output_tokens: None,
+                agent_profile,
+            };
             manager
                 .continue_session(SessionExecutionRequest::new(session_id, options))
                 .await?
@@ -2803,10 +2823,21 @@ impl AgenaCli {
         let session_manager = runtime.session_manager();
         let executor = session_manager.as_ref().map_or_else(
             || {
-                let agent = Agent::new("mcp-server", PermissionPolicy::allow_all())
-                    .with_tool_policy(ToolPermissionPolicy::allow_all());
-                ToolExecutor::new(runtime.workspace_root().to_path_buf(), agent)
-                    .with_plugin_manager(Arc::clone(&plugins))
+                let agent = Agent::new(
+                    "mcp-server",
+                    PermissionPolicy::allow_all(),
+                    ToolPermissionPolicy::allow_all(),
+                );
+                ToolExecutor::new(
+                    runtime.workspace_root().to_path_buf(),
+                    agent,
+                    crate::agents::SubagentRegistry::default(),
+                    Arc::clone(&plugins),
+                    None,
+                    None,
+                    None,
+                    crate::plugin::ToolPresentationConfig::default(),
+                )
             },
             |manager| manager.tool_executor(),
         );
@@ -2844,14 +2875,14 @@ impl McpServerBackend for AgenaMcpBackend {
             .available_tools()
             .into_iter()
             .map(|tool| {
-                let description = tool.description_text().to_string();
+                let summary = tool.summary_text().map(ToString::to_string);
                 let before_help = tool.before_help_text().map(ToString::to_string);
                 let after_help = tool.after_help_text().map(ToString::to_string);
                 let input_schema = tool.sanitized_input_schema();
                 ToolDescriptor {
-                    name: tool.model_name,
+                    name: tool.model_name(),
                     aliases: Vec::new(),
-                    description: Some(description),
+                    description: summary,
                     before_help,
                     after_help,
                     input_schema: Some(input_schema),
@@ -2952,10 +2983,10 @@ impl McpServerBackend for AgenaMcpBackend {
             .plugins
             .registered_tools()
             .into_iter()
-            .filter(|entry| matches!(entry.plugin_name.as_str(), "agena.skills"))
+            .filter(|entry| matches!(entry.plugin_full_name().as_str(), "agena.skills"))
             .map(|entry| PromptDescriptor {
-                name: entry.model_name,
-                description: entry.definition.model.description,
+                name: entry.model_name(),
+                description: entry.summary_text().map(ToString::to_string),
                 arguments: Vec::new(),
             })
             .collect::<Vec<_>>();
@@ -2968,7 +2999,7 @@ impl McpServerBackend for AgenaMcpBackend {
             .plugins
             .lookup_tool(params.name.as_str())
             .ok_or_else(|| McpServerError::NotFound(params.name.clone()))?;
-        if !matches!(entry.plugin_name.as_str(), "agena.skills") {
+        if !matches!(entry.plugin_full_name().as_str(), "agena.skills") {
             return Err(McpServerError::NotFound(params.name));
         }
 
@@ -2986,7 +3017,7 @@ impl McpServerBackend for AgenaMcpBackend {
             }
         });
         let invocation = ToolInvocation::new(
-            entry.model_name.clone(),
+            entry.model_name(),
             StructuredObject::try_from(serde_json::json!({ "args": args }))
                 .map_err(McpServerError::InvalidParams)?,
         );
@@ -2995,7 +3026,7 @@ impl McpServerBackend for AgenaMcpBackend {
             .execute_invocation_detailed(&invocation, -1, -1)
             .map_err(|err| McpServerError::Backend(err.to_string()))?;
         Ok(GetPromptResult {
-            description: entry.definition.model.description,
+            description: entry.summary_text().map(ToString::to_string),
             messages: vec![PromptMessage {
                 role: "user".to_owned(),
                 content: ContentBlock::Text {
@@ -3028,7 +3059,8 @@ impl AgenaMcpBackend {
             .publish(
                 Default::default(),
                 crate::event::EventKind::PluginEvent(crate::event::PluginEventPayload {
-                    plugin_id: "agena.mcp_server".to_owned(),
+                    plugin_id: crate::plugin::PluginKey::parse("agena.mcp_server")
+                        .expect("static plugin key"),
                     kind_label: "mcp_tool_call".to_owned(),
                     payload,
                 }),
@@ -3379,24 +3411,19 @@ fn validate_plugin_target(path: &Path, strict: bool) -> Result<PluginValidateOut
     let path = resolve_plugin_validate_path(path)?;
     let raw = fs::read_to_string(&path)?;
     let value: serde_json::Value = serde_json::from_str(&raw)?;
-    let mut output = PluginValidateOutput {
-        path: path.display().to_string(),
-        target_kind: "unknown".to_string(),
-        ok: false,
-        manifest_hash: None,
-        errors: Vec::new(),
-        warnings: Vec::new(),
-    };
+    let mut target_kind = "unknown".to_string();
+    let mut manifest_hash = None;
+    let mut messages: PluginValidationMessages = (Vec::new(), Vec::new());
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
 
     if looks_like_plugin_manifest(&value) {
-        output.target_kind = "manifest".to_string();
-        validate_plugin_manifest_value("$", &value, &mut output);
+        target_kind = "manifest".to_string();
+        validate_plugin_manifest_value("$", &value, &mut manifest_hash, &mut messages);
     } else if value.get("package").is_some() {
-        output.target_kind = "configured_plugin".to_string();
-        validate_configured_plugin_value("$", &value, base_dir, &BTreeMap::new(), &mut output);
+        target_kind = "configured_plugin".to_string();
+        validate_configured_plugin_value("$", &value, base_dir, &BTreeMap::new(), &mut messages);
     } else if let Some(plugin_list) = value.pointer("/plugins/list").and_then(|v| v.as_object()) {
-        output.target_kind = "agena_config".to_string();
+        target_kind = "agena_config".to_string();
         let trusted_keys = value
             .pointer("/plugins/host/trusted_keys")
             .cloned()
@@ -3404,7 +3431,7 @@ fn validate_plugin_target(path: &Path, strict: bool) -> Result<PluginValidateOut
             .unwrap_or_default();
         if plugin_list.is_empty() {
             push_warning(
-                &mut output,
+                &mut messages,
                 "config.plugins.empty",
                 "plugins.list is empty",
                 Some("$.plugins.list"),
@@ -3416,29 +3443,37 @@ fn validate_plugin_target(path: &Path, strict: bool) -> Result<PluginValidateOut
                 plugin_value,
                 base_dir,
                 &trusted_keys,
-                &mut output,
+                &mut messages,
             );
         }
     } else {
         push_error(
-            &mut output,
+            &mut messages,
             "target.unsupported",
             "expected a plugin manifest, configured plugin object, or agena config with plugins.list",
             Some("$"),
         );
     }
 
-    if strict && !output.warnings.is_empty() {
-        for warning in output.warnings.clone() {
-            output.errors.push(PluginValidationMessage {
+    if strict && !messages.1.is_empty() {
+        for warning in messages.1.clone() {
+            messages.0.push(PluginValidationMessage {
                 code: format!("strict.{}", warning.code),
                 message: format!("warning treated as error: {}", warning.message),
                 path: warning.path,
             });
         }
     }
-    output.ok = output.errors.is_empty();
-    Ok(output)
+    let errors = messages.0;
+    let warnings = messages.1;
+    Ok(PluginValidateOutput {
+        path: path.display().to_string(),
+        target_kind,
+        ok: errors.is_empty(),
+        manifest_hash,
+        errors,
+        warnings,
+    })
 }
 
 fn resolve_plugin_validate_path(path: &Path) -> Result<PathBuf, AppError> {
@@ -3472,7 +3507,8 @@ fn looks_like_plugin_manifest(value: &serde_json::Value) -> bool {
 fn validate_plugin_manifest_value(
     path: &str,
     value: &serde_json::Value,
-    output: &mut PluginValidateOutput,
+    manifest_hash: &mut Option<String>,
+    output: &mut PluginValidationMessages,
 ) {
     check_object_keys(
         value,
@@ -3515,7 +3551,7 @@ fn validate_plugin_manifest_value(
         }
     };
 
-    output.manifest_hash = serde_json::to_vec(&manifest)
+    *manifest_hash = serde_json::to_vec(&manifest)
         .ok()
         .map(|bytes| blake3::hash(&bytes).to_hex().to_string());
 
@@ -3600,7 +3636,7 @@ fn validate_tool_manifest_value(
     parsed_tool: &Option<&crate::plugin::ToolDefinition>,
     value: &serde_json::Value,
     path: &str,
-    output: &mut PluginValidateOutput,
+    output: &mut PluginValidationMessages,
 ) {
     check_object_keys(
         value,
@@ -3714,7 +3750,7 @@ fn validate_tool_segment(
     plugin_name: &str,
     tool_name: &str,
     path: &str,
-    output: &mut PluginValidateOutput,
+    output: &mut PluginValidationMessages,
 ) {
     if tool_name.trim().is_empty() {
         push_error(
@@ -3746,7 +3782,7 @@ fn validate_tool_segment(
 fn validate_tool_name_collisions(
     manifest: &crate::plugin::PluginManifest,
     path: &str,
-    output: &mut PluginValidateOutput,
+    output: &mut PluginValidationMessages,
 ) {
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
     for (idx, tool) in manifest.tools.iter().enumerate() {
@@ -3769,7 +3805,7 @@ fn validate_tool_name_collisions(
 fn validate_manifest_ui_actions(
     manifest: &crate::plugin::PluginManifest,
     path: &str,
-    output: &mut PluginValidateOutput,
+    output: &mut PluginValidationMessages,
 ) {
     let known_tools = manifest
         .tools
@@ -3798,7 +3834,7 @@ fn validate_ui_action_tool(
     action: &crate::plugin::PluginUiAction,
     known_tools: &HashSet<&str>,
     path: &str,
-    output: &mut PluginValidateOutput,
+    output: &mut PluginValidationMessages,
 ) {
     if let crate::plugin::PluginUiAction::InvokeTool { tool, .. } = action {
         if tool.contains('/') {
@@ -3825,7 +3861,7 @@ fn validate_configured_plugin_value(
     value: &serde_json::Value,
     base_dir: &Path,
     trusted_keys: &BTreeMap<String, String>,
-    output: &mut PluginValidateOutput,
+    output: &mut PluginValidationMessages,
 ) {
     let configured: crate::plugin::ConfiguredPlugin = match serde_json::from_value(value.clone()) {
         Ok(configured) => configured,
@@ -3945,7 +3981,7 @@ fn validate_configured_plugin_value(
 fn validate_raw_hook_array(
     hooks: Option<&serde_json::Value>,
     path: &str,
-    output: &mut PluginValidateOutput,
+    output: &mut PluginValidationMessages,
 ) {
     let Some(hooks) = hooks else {
         return;
@@ -3984,7 +4020,7 @@ fn validate_raw_hook_array(
 fn validate_schema_defaults(
     path: &str,
     schema: &serde_json::Value,
-    output: &mut PluginValidateOutput,
+    output: &mut PluginValidationMessages,
 ) {
     let Some(object) = schema.as_object() else {
         return;
@@ -4015,7 +4051,7 @@ fn validate_default_matches_schema(
     path: &str,
     schema: &serde_json::Value,
     default_value: &serde_json::Value,
-    output: &mut PluginValidateOutput,
+    output: &mut PluginValidationMessages,
 ) {
     if let Some(enum_values) = schema.get("enum").and_then(|v| v.as_array())
         && !enum_values.iter().any(|value| value == default_value)
@@ -4100,7 +4136,7 @@ fn json_value_matches_type(value: &serde_json::Value, type_name: &str) -> bool {
     }
 }
 
-fn validate_no_parent_path(path_value: &str, path: &str, output: &mut PluginValidateOutput) {
+fn validate_no_parent_path(path_value: &str, path: &str, output: &mut PluginValidationMessages) {
     if Path::new(path_value)
         .components()
         .any(|component| matches!(component, std::path::Component::ParentDir))
@@ -4114,7 +4150,7 @@ fn validate_no_parent_path(path_value: &str, path: &str, output: &mut PluginVali
     }
 }
 
-fn validate_existing_file(path: &Path, json_path: &str, output: &mut PluginValidateOutput) {
+fn validate_existing_file(path: &Path, json_path: &str, output: &mut PluginValidationMessages) {
     if !path.is_file() {
         push_error(
             output,
@@ -4129,7 +4165,7 @@ fn validate_sha256_if_present(
     path: &Path,
     expected: Option<&str>,
     json_path: &str,
-    output: &mut PluginValidateOutput,
+    output: &mut PluginValidationMessages,
 ) {
     let Some(expected) = expected else {
         push_warning(
@@ -4165,7 +4201,7 @@ fn validate_signature_if_present(
     signature: Option<&crate::plugin::PluginSignature>,
     trusted_keys: &BTreeMap<String, String>,
     json_path: &str,
-    output: &mut PluginValidateOutput,
+    output: &mut PluginValidationMessages,
 ) {
     let Some(signature) = signature else {
         push_warning(
@@ -4265,7 +4301,7 @@ fn check_object_keys(
     path: &str,
     allowed: &[&str],
     code: &str,
-    output: &mut PluginValidateOutput,
+    output: &mut PluginValidationMessages,
 ) {
     let Some(object) = value.as_object() else {
         return;
@@ -4285,7 +4321,7 @@ fn check_object_keys(
 fn warn_marketplace_fields(
     value: &serde_json::Value,
     path: &str,
-    output: &mut PluginValidateOutput,
+    output: &mut PluginValidationMessages,
 ) {
     const MARKETPLACE_FIELDS: &[&str] = &[
         "id",
@@ -4324,17 +4360,21 @@ fn safe_model_tool_name(plugin_name: &str, tool_name: &str) -> String {
     if plugin_name.contains('/') || tool_name.contains('/') {
         return "tool".to_string();
     }
-    let (namespace, plugin_name) = crate::plugin::registry::split_plugin_full_name(plugin_name);
-    crate::plugin::registry::model_tool_name(&namespace, &plugin_name, tool_name)
+    let Ok(plugin_key) = crate::plugin::PluginKey::parse(plugin_name) else {
+        return "tool".to_string();
+    };
+    crate::plugin::ToolKey::new(plugin_key, tool_name.to_string())
+        .map(|tool_key| tool_key.to_model_string())
+        .unwrap_or_else(|_| "tool".to_string())
 }
 
 fn push_error(
-    output: &mut PluginValidateOutput,
+    output: &mut PluginValidationMessages,
     code: impl Into<String>,
     message: impl Into<String>,
     path: Option<impl Into<String>>,
 ) {
-    output.errors.push(PluginValidationMessage {
+    output.0.push(PluginValidationMessage {
         code: code.into(),
         message: message.into(),
         path: path.map(Into::into),
@@ -4342,12 +4382,12 @@ fn push_error(
 }
 
 fn push_warning(
-    output: &mut PluginValidateOutput,
+    output: &mut PluginValidationMessages,
     code: impl Into<String>,
     message: impl Into<String>,
     path: Option<impl Into<String>>,
 ) {
-    output.warnings.push(PluginValidationMessage {
+    output.1.push(PluginValidationMessage {
         code: code.into(),
         message: message.into(),
         path: path.map(Into::into),
@@ -4814,16 +4854,24 @@ fn resolve_continue_options(
         default_model(runtime)?
     };
 
-    let mut options = SessionRunOptions::new(model);
-    options.temperature = args.temperature;
-    options.max_output_tokens = args.max_output_tokens;
-    options.agent_profile = args
+    let agent_profile = args
         .agent
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    Ok(options)
+    Ok(SessionRunOptions {
+        model,
+        thinking_mode: None,
+        speed_mode: None,
+        verbosity: None,
+        thinking: None,
+        request_override: Default::default(),
+        system: None,
+        temperature: args.temperature,
+        max_output_tokens: args.max_output_tokens,
+        agent_profile,
+    })
 }
 
 fn resolve_run_options(
@@ -4841,14 +4889,22 @@ fn resolve_run_options(
         default_model(runtime)?
     };
 
-    let mut options = SessionRunOptions::new(model);
-    options.temperature = temperature;
-    options.max_output_tokens = max_output_tokens;
-    options.agent_profile = agent_profile
+    let agent_profile = agent_profile
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    Ok(options)
+    Ok(SessionRunOptions {
+        model,
+        thinking_mode: None,
+        speed_mode: None,
+        verbosity: None,
+        thinking: None,
+        request_override: Default::default(),
+        system: None,
+        temperature,
+        max_output_tokens,
+        agent_profile,
+    })
 }
 
 fn default_model(runtime: &AgenaRuntime) -> Result<ModelRef, AppError> {

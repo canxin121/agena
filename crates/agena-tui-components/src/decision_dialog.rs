@@ -27,8 +27,14 @@ impl<'a> DecisionDialogSpec<'a> {
     pub fn new(
         title: Cow<'a, str>,
         body: &'a Text<'a>,
+        body_height_bounds: (u16, u16),
+        list_title: Option<Cow<'a, str>>,
         items: &'a [ListItem<'a>],
+        selected: Option<usize>,
+        lines_per_item: u16,
+        list_height_bounds: (u16, u16),
         footer: &'a Text<'a>,
+        footer_height_bounds: (u16, u16),
         target_width: u16,
         highlight_style: Style,
         highlight_symbol: Cow<'a, str>,
@@ -36,45 +42,18 @@ impl<'a> DecisionDialogSpec<'a> {
         Self {
             title,
             body,
-            body_height_bounds: (1, 1),
-            list_title: None,
+            body_height_bounds,
+            list_title,
             items,
-            selected: None,
-            lines_per_item: 1,
-            list_height_bounds: (1, 1),
+            selected,
+            lines_per_item,
+            list_height_bounds,
             highlight_style,
             highlight_symbol,
             footer,
-            footer_height_bounds: (0, 0),
+            footer_height_bounds,
             target_width,
         }
-    }
-
-    pub fn with_body_height_bounds(mut self, body_height_bounds: (u16, u16)) -> Self {
-        self.body_height_bounds = body_height_bounds;
-        self
-    }
-
-    pub fn with_list_title(mut self, list_title: Cow<'a, str>) -> Self {
-        self.list_title = Some(list_title);
-        self
-    }
-
-    pub fn with_list_state(
-        mut self,
-        selected: Option<usize>,
-        lines_per_item: u16,
-        list_height_bounds: (u16, u16),
-    ) -> Self {
-        self.selected = selected;
-        self.lines_per_item = lines_per_item;
-        self.list_height_bounds = list_height_bounds;
-        self
-    }
-
-    pub fn with_footer_height_bounds(mut self, footer_height_bounds: (u16, u16)) -> Self {
-        self.footer_height_bounds = footer_height_bounds;
-        self
     }
 }
 

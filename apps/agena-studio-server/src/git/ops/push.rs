@@ -20,13 +20,13 @@ pub struct GitPushBody {
     pub branch: Option<String>,
     pub r#ref: Option<String>,
     #[serde(default)]
-    pub tags: Option<bool>,
+    pub tags: bool,
     #[serde(default, rename = "followTags")]
-    pub follow_tags: Option<bool>,
+    pub follow_tags: bool,
     // "" | "force" | "force-with-lease"
     pub force: Option<String>,
     #[serde(default, rename = "setUpstream")]
-    pub set_upstream: Option<bool>,
+    pub set_upstream: bool,
     #[serde(default)]
     pub auth: Option<GitAuthInput>,
 }
@@ -98,8 +98,6 @@ pub async fn git_push(
         .as_deref()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty());
-    let tags = body.tags.unwrap_or(false);
-    let follow_tags = body.follow_tags.unwrap_or(false);
     let force = body
         .force
         .as_deref()
@@ -119,11 +117,9 @@ pub async fn git_push(
             .into_response();
     }
 
-    let set_upstream = body.set_upstream.unwrap_or(false);
-
     // Guard protected branches when policy requires creating a new branch.
     // This complements the client-side prompt and protects direct API usage.
-    let branch_for_policy = if tags && !follow_tags && branch.is_none() && rf.is_none() {
+    let branch_for_policy = if body.tags && !body.follow_tags && branch.is_none() && rf.is_none() {
         None
     } else {
         let from_spec = rf.or(branch).and_then(parse_local_branch_from_refspec);
@@ -181,7 +177,7 @@ pub async fn git_push(
     }
 
     // If caller explicitly asked for -u, we require both remote + branch unless we can infer branch.
-    if set_upstream && remote.is_none() {
+    if body.set_upstream && remote.is_none() {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "remote is required when setUpstream is true"})),
@@ -205,13 +201,13 @@ pub async fn git_push(
         )
             .into_response();
     }
-    if tags {
+    if body.tags {
         args.push("--tags".into());
     }
-    if follow_tags {
+    if body.follow_tags {
         args.push("--follow-tags".into());
     }
-    if set_upstream {
+    if body.set_upstream {
         args.push("--set-upstream".into());
     }
 
@@ -220,7 +216,7 @@ pub async fn git_push(
     }
     if let Some(spec) = rf.or(branch) {
         args.push(spec.into());
-    } else if set_upstream {
+    } else if body.set_upstream {
         // Infer current branch for publish.
         let Some(cur) = git_current_branch(&dir).await else {
             return (

@@ -36,30 +36,30 @@ impl Message {
 
     pub fn prompt_parts(role: Role, parts: Vec<PartContent>) -> Self {
         let created_at = Utc::now();
-        let mut message = Self {
+        let parts = parts
+            .into_iter()
+            .enumerate()
+            .map(|(idx, content)| {
+                MessagePart::from_content_with_index(
+                    idx as i64 + 1,
+                    0,
+                    idx as i32,
+                    created_at,
+                    ExecutionStatus::Completed,
+                    content,
+                )
+            })
+            .collect();
+        Self {
             id: 0,
             role,
             state: MessageStatus::Completed,
-            parts: Vec::new(),
+            parts,
             created_at,
             metadata: MessageMetadata::default(),
             provider_state: None,
             usage: None,
-        };
-
-        for (idx, content) in parts.into_iter().enumerate() {
-            let mut part = MessagePart::with_content(
-                idx as i64 + 1,
-                message.id,
-                created_at,
-                ExecutionStatus::Completed,
-                content,
-            );
-            part.part_index = idx as i32;
-            message.parts.push(part);
         }
-
-        message
     }
 
     pub fn prompt_tool_result(tool_call_id: impl Into<String>, output: impl Into<String>) -> Self {

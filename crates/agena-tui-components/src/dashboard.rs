@@ -166,6 +166,7 @@ impl<'a> DashboardWorkbenchSpec<'a> {
         title: Cow<'a, str>,
         footer: Cow<'a, str>,
         target_width: u16,
+        lead_panel: Option<DashboardLeadPanelSpec<'a>>,
         top_panel: DashboardTextSection<'a>,
         bottom_panels: DashboardSplitPanelsSpec<'a>,
     ) -> Self {
@@ -173,15 +174,10 @@ impl<'a> DashboardWorkbenchSpec<'a> {
             title,
             footer,
             target_width,
-            lead_panel: None,
+            lead_panel,
             top_panel,
             bottom_panels,
         }
-    }
-
-    pub fn with_lead_panel(mut self, lead_panel: DashboardLeadPanelSpec<'a>) -> Self {
-        self.lead_panel = Some(lead_panel);
-        self
     }
 }
 
@@ -211,12 +207,17 @@ impl<'a> DashboardWorkbenchOverlaySpec<'a> {
         Self { detail, editor }
     }
 
-    pub fn with_optional_editor_source<TSource>(mut self, source: Option<&'a TSource>) -> Self
+    pub fn from_sources<TSource>(
+        detail: Option<DashboardDetailOverlaySpec<'a>>,
+        editor_source: Option<&'a TSource>,
+    ) -> Self
     where
         TSource: WorkbenchOverlaySource + ?Sized,
     {
-        self.editor = source.map(WorkbenchOverlayDialogSpec::from_source);
-        self
+        Self {
+            detail,
+            editor: editor_source.map(WorkbenchOverlayDialogSpec::from_source),
+        }
     }
 }
 

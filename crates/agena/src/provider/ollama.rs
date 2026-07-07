@@ -75,13 +75,24 @@ impl OllamaAdapter {
                 let model_id = ModelId::new(id.clone());
                 let metadata = self.model_metadata(&model_id);
                 let capabilities = self.model_capabilities(&model_id);
-                let mut entry = ProviderModel::new(self.id.clone(), id)
-                    .with_capabilities(capabilities)
-                    .with_metadata(metadata);
+                let entry = ProviderModel {
+                    provider_id: ProviderId::new(self.id.clone()),
+                    adapter_id: None,
+                    id: ModelId::new(id),
+                    catalog_model_id: None,
+                    display_name: None,
+                    capabilities,
+                    metadata,
+                    thinking_modes: std::collections::BTreeMap::new(),
+                    speed_modes: std::collections::BTreeMap::new(),
+                };
                 if let Some(details) = model.details
                     && let Some(family) = details.family.filter(|value| !value.trim().is_empty())
                 {
-                    entry.display_name = Some(family);
+                    return Some(ProviderModel {
+                        display_name: Some(family),
+                        ..entry
+                    });
                 }
                 Some(entry)
             })

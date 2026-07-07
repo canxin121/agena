@@ -110,7 +110,11 @@ pub(crate) fn execute_tool(
             view.metadata
                 .insert("changed_files".to_string(), result.files.len().to_string());
 
-            Ok(ToolPayloadExecution::new(output, view).with_apply_patch(result.clone()))
+            Ok(ToolPayloadExecution {
+                output,
+                view,
+                apply_patch: Some(result.clone()),
+            })
         }
         "read" => read::execute(executor, &parse_shape_input(input)?),
         "glob" => glob::execute(executor, &parse_shape_input(input)?),

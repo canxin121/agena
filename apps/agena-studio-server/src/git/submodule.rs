@@ -188,8 +188,10 @@ pub async fn git_submodule_init(
 #[serde(rename_all = "camelCase")]
 pub struct GitSubmoduleUpdateBody {
     pub path: Option<String>,
-    pub init: Option<bool>,
-    pub recursive: Option<bool>,
+    #[serde(default)]
+    pub init: bool,
+    #[serde(default)]
+    pub recursive: bool,
 }
 
 pub async fn git_submodule_update(
@@ -197,10 +199,10 @@ pub async fn git_submodule_update(
     Json(body): Json<GitSubmoduleUpdateBody>,
 ) -> Response {
     let mut args: Vec<&str> = vec!["submodule", "update"];
-    if body.init.unwrap_or(false) {
+    if body.init {
         args.push("--init");
     }
-    if body.recursive.unwrap_or(false) {
+    if body.recursive {
         args.push("--recursive");
     }
     if let Some(path) = body

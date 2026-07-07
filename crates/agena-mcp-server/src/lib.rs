@@ -97,18 +97,17 @@ where
 {
     fn get_info(&self) -> RmcpServerInfo {
         let capabilities = ServerCapabilities::builder()
-            .enable_tools()
-            .enable_resources()
             .enable_prompts()
+            .enable_resources()
+            .enable_tools()
             .build();
         let info = RmcpServerInfo::new(capabilities).with_server_info(Implementation::new(
             self.info.name.clone(),
             self.info.version.clone(),
         ));
-        if let Some(instructions) = self.info.instructions.clone() {
-            info.with_instructions(instructions)
-        } else {
-            info
+        match &self.info.instructions {
+            Some(instructions) => info.with_instructions(instructions.clone()),
+            None => info,
         }
     }
 
@@ -120,13 +119,16 @@ where
         let backend = Arc::clone(&self.backend);
         async move {
             let tools = backend.list_tools().await.map_err(to_rmcp_error)?;
-            let mut result = ListToolsResult::default();
-            result.tools = tools
+            let tools = tools
                 .into_iter()
                 .map(convert_tool_descriptor)
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(to_rmcp_error)?;
-            Ok(result)
+            Ok(ListToolsResult {
+                meta: None,
+                next_cursor: None,
+                tools,
+            })
         }
     }
 
@@ -155,12 +157,15 @@ where
         let backend = Arc::clone(&self.backend);
         async move {
             let resources = backend.list_resources().await.map_err(to_rmcp_error)?;
-            let mut result = ListResourcesResult::default();
-            result.resources = resources
+            let resources = resources
                 .into_iter()
                 .map(convert_resource_descriptor)
                 .collect();
-            Ok(result)
+            Ok(ListResourcesResult {
+                meta: None,
+                next_cursor: None,
+                resources,
+            })
         }
     }
 
@@ -194,9 +199,12 @@ where
         let backend = Arc::clone(&self.backend);
         async move {
             let prompts = backend.list_prompts().await.map_err(to_rmcp_error)?;
-            let mut result = ListPromptsResult::default();
-            result.prompts = prompts.into_iter().map(convert_prompt_descriptor).collect();
-            Ok(result)
+            let prompts = prompts.into_iter().map(convert_prompt_descriptor).collect();
+            Ok(ListPromptsResult {
+                meta: None,
+                next_cursor: None,
+                prompts,
+            })
         }
     }
 
@@ -234,14 +242,14 @@ where
 pub fn text_result(text: impl Into<String>) -> CallToolResult {
     CallToolResult {
         content: vec![ContentBlock::Text { text: text.into() }],
-        is_error: Some(false),
+        is_error: false,
     }
 }
 
 pub fn text_error(text: impl Into<String>) -> CallToolResult {
     CallToolResult {
         content: vec![ContentBlock::Text { text: text.into() }],
-        is_error: Some(true),
+        is_error: true,
     }
 }
 
@@ -282,26 +290,26 @@ fn convert_call_tool_result(
             ContentBlock::Other => {}
         }
     }
-    let mut output = if matches!(result.is_error, Some(true)) {
+    let mut output = if result.is_error {
         rmcp::model::CallToolResult::error(content)
     } else {
         rmcp::model::CallToolResult::success(content)
     };
-    output.is_error = result.is_error;
+    output.is_error = result.is_error.then_some(true);
     Ok(output)
 }
 
 fn convert_resource_descriptor(resource: ResourceDescriptor) -> rmcp::model::Resource {
-    let mut raw = RawResource::new(
-        resource.uri.clone(),
-        resource.name.unwrap_or_else(|| resource.uri.clone()),
-    );
-    if let Some(description) = resource.description {
-        raw = raw.with_description(description);
-    }
-    if let Some(mime_type) = resource.mime_type {
-        raw = raw.with_mime_type(mime_type);
-    }
+    let raw = RawResource {
+        uri: resource.uri.clone(),
+        name: resource.name.unwrap_or_else(|| resource.uri.clone()),
+        title: None,
+        description: resource.description,
+        mime_type: resource.mime_type,
+        size: None,
+        icons: None,
+        meta: None,
+    };
     raw.no_annotation()
 }
 
@@ -332,12 +340,8 @@ fn convert_prompt_descriptor(prompt: PromptDescriptor) -> RmcpPrompt {
                 .into_iter()
                 .map(|argument| {
                     let mut output = RmcpPromptArgument::new(argument.name);
-                    if let Some(description) = argument.description {
-                        output = output.with_description(description);
-                    }
-                    if let Some(required) = argument.required {
-                        output = output.with_required(required);
-                    }
+                    output.description = argument.description;
+                    output.required = argument.required.then_some(true);
                     output
                 })
                 .collect(),

@@ -204,10 +204,12 @@ pub fn render_stacked_dialog(
                     paragraph = paragraph.alignment(alignment);
                 }
                 if section.borders != Borders::NONE || section.title.is_some() {
-                    let mut block = Block::default().borders(section.borders);
-                    if let Some(title) = section.title.as_ref() {
-                        block = block.title(format!(" {} ", title));
-                    }
+                    let block = match section.title.as_ref() {
+                        Some(title) => Block::default()
+                            .borders(section.borders)
+                            .title(format!(" {} ", title)),
+                        None => Block::default().borders(section.borders),
+                    };
                     paragraph = paragraph.block(block);
                 }
                 frame.render_widget(paragraph, section_area);

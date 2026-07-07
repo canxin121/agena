@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use crate::model::{CapabilitySupport, ModelCapabilities, ModelMetadata};
+use crate::model::{CapabilitySupport, ModelCapabilities, ModelMetadata, ModelTokenLimits};
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct CopilotModelExtension {
@@ -33,37 +33,28 @@ impl CopilotModelExtension {
     }
 
     pub(crate) fn metadata(&self, model_id: &str) -> ModelMetadata {
-        let mut metadata = ModelMetadata::default();
         let Some(capabilities) = self.capabilities.as_ref() else {
-            return self.apply_release_date(metadata, model_id);
+            return self.metadata_with_limits(ModelTokenLimits::default(), model_id);
         };
-        if let Some(limits) = capabilities.limits.as_ref() {
-            if let Some(value) = limits.max_context_window_tokens {
-                metadata = metadata.with_context_window_tokens(clamp_u64_to_u32(value));
-            }
-            if let Some(value) = limits.max_prompt_tokens {
-                metadata = metadata.with_max_input_tokens(clamp_u64_to_u32(value));
-            }
-            if let Some(value) = limits.max_output_tokens {
-                metadata = metadata.with_max_output_tokens(clamp_u64_to_u32(value));
-            }
-        }
-        self.apply_release_date(metadata, model_id)
+        let limits = capabilities
+            .limits
+            .as_ref()
+            .map(|limits| ModelTokenLimits {
+                context_window_tokens: limits.max_context_window_tokens.map(clamp_u64_to_u32),
+                max_input_tokens: limits.max_prompt_tokens.map(clamp_u64_to_u32),
+                max_output_tokens: limits.max_output_tokens.map(clamp_u64_to_u32),
+            })
+            .unwrap_or_default();
+        self.metadata_with_limits(limits, model_id)
     }
 
     pub(crate) fn capabilities(&self) -> ModelCapabilities {
-        let mut result = ModelCapabilities::default();
         let Some(capabilities) = self.capabilities.as_ref() else {
-            return result;
+            return ModelCapabilities::default();
         };
         let Some(supports) = capabilities.supports.as_ref() else {
-            return result;
+            return ModelCapabilities::default();
         };
-
-        result = result
-            .with_streaming(support_bool(supports.streaming))
-            .with_tool_calling(support_bool(supports.tool_calls))
-            .with_structured_output(support_bool(supports.structured_outputs));
 
         let image = supports.vision.unwrap_or(false)
             || capabilities
@@ -76,11 +67,6 @@ impl CopilotModelExtension {
                         .iter()
                         .any(|media_type| media_type.starts_with("image/"))
                 });
-        result = result.with_image_input(if image {
-            CapabilitySupport::Supported
-        } else {
-            CapabilitySupport::Unsupported
-        });
 
         let reasoning = supports.adaptive_thinking.unwrap_or(false)
             || supports
@@ -89,22 +75,52 @@ impl CopilotModelExtension {
                 .is_some_and(|efforts| !efforts.is_empty())
             || supports.max_thinking_budget.is_some()
             || supports.min_thinking_budget.is_some();
-        result.with_reasoning(if reasoning {
-            CapabilitySupport::Supported
-        } else {
-            CapabilitySupport::Unsupported
-        })
+        ModelCapabilities {
+            streaming: support_bool(supports.streaming),
+            tool_calling: support_bool(supports.tool_calls),
+            structured_output: support_bool(supports.structured_outputs),
+            image_input: if image {
+                CapabilitySupport::Supported
+            } else {
+                CapabilitySupport::Unsupported
+            },
+            reasoning: if reasoning {
+                CapabilitySupport::Supported
+            } else {
+                CapabilitySupport::Unsupported
+            },
+            ..ModelCapabilities::default()
+        }
     }
 
-    fn apply_release_date(&self, metadata: ModelMetadata, model_id: &str) -> ModelMetadata {
-        let Some(version) = self.version.as_ref().map(String::as_str) else {
-            return metadata;
-        };
-        let release_date = version
-            .strip_prefix(model_id)
-            .and_then(|suffix| suffix.strip_prefix('-'))
-            .unwrap_or(version);
-        metadata.with_release_date(release_date)
+    fn metadata_with_limits(&self, limits: ModelTokenLimits, model_id: &str) -> ModelMetadata {
+        let release_date = self.version.as_ref().map(String::as_str).map(|version| {
+            version
+                .strip_prefix(model_id)
+                .and_then(|suffix| suffix.strip_prefix('-'))
+                .unwrap_or(version)
+                .to_owned()
+        });
+        ModelMetadata {
+            lifecycle: None,
+            limits,
+            description: None,
+            knowledge_cutoff: None,
+            release_date,
+            last_updated: None,
+            open_weights: None,
+            default_thinking_mode: None,
+            supports_parallel_tool_calls: None,
+            supports_verbosity: None,
+            default_verbosity: None,
+            default_temperature: None,
+            default_top_p: None,
+            default_top_k: None,
+            assistant_reasoning_interleaved: None,
+            assistant_reasoning_field: None,
+            output_modalities: Vec::new(),
+            pricing: None,
+        }
     }
 }
 

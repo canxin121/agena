@@ -55,7 +55,7 @@ pub struct DetailTextSpec<'a> {
 }
 
 impl<'a> DetailTextSpec<'a> {
-    pub fn with_label_width(label_width: usize) -> Self {
+    pub fn label_width(label_width: usize) -> Self {
         Self {
             label_width,
             separator: Cow::Borrowed("  "),
@@ -65,7 +65,7 @@ impl<'a> DetailTextSpec<'a> {
 
 impl Default for DetailTextSpec<'_> {
     fn default() -> Self {
-        Self::with_label_width(16)
+        Self::label_width(16)
     }
 }
 

@@ -23,7 +23,7 @@ use crate::{
     },
     model::{
         CapabilitySupport, ModelCapabilities, ModelId, ModelInputModality, ModelMetadata,
-        ModelThinkingMode, ProviderId,
+        ModelThinkingMode, ModelTokenLimits, ProviderId,
     },
     provider::{
         CapabilityFamily, CompletionFinishReason, CompletionRequest, CompletionResponse,
@@ -62,7 +62,44 @@ pub struct OpenAiAdapter {
     top_level_prompt_cache_override: Option<bool>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone)]
+pub struct OpenAiAdapterOptions {
+    pub backend: OpenAiBackend,
+    pub auth_data: Option<Arc<Mutex<AuthData>>>,
+    pub api_mode: OpenAiApiMode,
+    pub api_mode_explicit: bool,
+    pub profile: OpenAiProfile,
+    pub models_url: Option<String>,
+    pub auth_header: String,
+    pub auth_scheme: Option<String>,
+    pub capability_family: CapabilityFamily,
+    pub extra_headers: HashMap<String, String>,
+    pub stream_mode: OpenAiStreamMode,
+    pub realtime_ws_url: Option<String>,
+    pub top_level_prompt_cache_override: Option<bool>,
+}
+
+impl Default for OpenAiAdapterOptions {
+    fn default() -> Self {
+        Self {
+            backend: OpenAiBackend::Api,
+            auth_data: None,
+            api_mode: OpenAiApiMode::Responses,
+            api_mode_explicit: false,
+            profile: OpenAiProfile::Standard,
+            models_url: None,
+            auth_header: "authorization".to_owned(),
+            auth_scheme: Some("Bearer".to_owned()),
+            capability_family: CapabilityFamily::OpenAi,
+            extra_headers: HashMap::new(),
+            stream_mode: OpenAiStreamMode::Sse,
+            realtime_ws_url: None,
+            top_level_prompt_cache_override: None,
+        }
+    }
+}
+
+#[derive(Debug)]
 struct OpenAiResponsesToolPlan {
     tools: Vec<serde_json::Value>,
     include: Vec<String>,
@@ -140,112 +177,72 @@ impl OpenAiAdapter {
         base_url: impl Into<String>,
         default_model: impl Into<String>,
     ) -> Self {
+        Self::new_managed_with_options(
+            id,
+            client,
+            api_key,
+            base_url,
+            default_model,
+            OpenAiAdapterOptions::default(),
+        )
+    }
+
+    pub fn new_managed_with_options(
+        id: impl Into<String>,
+        client: reqwest::Client,
+        api_key: ManagedCredential,
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+        options: OpenAiAdapterOptions,
+    ) -> Self {
         let id = id.into();
+        let mut extra_headers = HashMap::from([
+            (
+                reqwest::header::USER_AGENT.as_str().to_owned(),
+                crate::provider::codex_user_agent(),
+            ),
+            ("originator".to_owned(), CHATGPT_CODEX_ORIGINATOR.to_owned()),
+        ]);
+        if options
+            .extra_headers
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()))
+        {
+            extra_headers
+                .retain(|key, _| !key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()));
+        }
+        if options
+            .extra_headers
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case("originator"))
+        {
+            extra_headers.retain(|key, _| !key.eq_ignore_ascii_case("originator"));
+        }
+        extra_headers.extend(options.extra_headers);
         Self {
             id,
             client,
             api_key,
             base_url: utils::normalize_base_url(base_url.into().as_str()),
             default_model: ModelId::new(default_model),
-            backend: OpenAiBackend::Api,
-            auth_data: None,
-            api_mode: OpenAiApiMode::Responses,
-            api_mode_explicit: false,
-            profile: OpenAiProfile::Standard,
-            models_url: None,
-            auth_header: "authorization".to_owned(),
-            auth_scheme: Some("Bearer".to_owned()),
-            capability_family: CapabilityFamily::OpenAi,
-            extra_headers: HashMap::from([
-                (
-                    reqwest::header::USER_AGENT.as_str().to_owned(),
-                    crate::provider::codex_user_agent(),
-                ),
-                ("originator".to_owned(), CHATGPT_CODEX_ORIGINATOR.to_owned()),
-            ]),
-            stream_mode: OpenAiStreamMode::Sse,
-            realtime_ws_url: None,
-            top_level_prompt_cache_override: None,
+            backend: options.backend,
+            auth_data: options.auth_data,
+            api_mode: options.api_mode,
+            api_mode_explicit: options.api_mode_explicit,
+            profile: options.profile,
+            models_url: options
+                .models_url
+                .and_then(|value| utils::normalize_optional_text(Some(value))),
+            auth_header: options.auth_header,
+            auth_scheme: options.auth_scheme,
+            capability_family: options.capability_family,
+            extra_headers,
+            stream_mode: options.stream_mode,
+            realtime_ws_url: options
+                .realtime_ws_url
+                .and_then(|value| utils::normalize_optional_text(Some(value))),
+            top_level_prompt_cache_override: options.top_level_prompt_cache_override,
         }
-    }
-
-    pub fn with_extra_headers(mut self, headers: HashMap<String, String>) -> Self {
-        if headers
-            .keys()
-            .any(|key| key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()))
-        {
-            self.extra_headers
-                .retain(|key, _| !key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()));
-        }
-        if headers
-            .keys()
-            .any(|key| key.eq_ignore_ascii_case("originator"))
-        {
-            self.extra_headers
-                .retain(|key, _| !key.eq_ignore_ascii_case("originator"));
-        }
-        self.extra_headers.extend(headers);
-        self
-    }
-
-    pub fn with_backend(mut self, backend: OpenAiBackend) -> Self {
-        self.backend = backend;
-        self
-    }
-
-    pub fn with_auth_data(mut self, auth_data: Arc<Mutex<AuthData>>) -> Self {
-        self.auth_data = Some(auth_data);
-        self
-    }
-
-    pub fn with_api_mode(mut self, mode: OpenAiApiMode) -> Self {
-        self.api_mode = mode;
-        self
-    }
-
-    pub fn with_api_mode_explicit(mut self, explicit: bool) -> Self {
-        self.api_mode_explicit = explicit;
-        self
-    }
-
-    pub fn with_profile(mut self, profile: OpenAiProfile) -> Self {
-        self.profile = profile;
-        self
-    }
-
-    pub fn with_models_url(mut self, models_url: Option<String>) -> Self {
-        self.models_url = models_url.and_then(|value| utils::normalize_optional_text(Some(value)));
-        self
-    }
-
-    pub fn with_auth_header(
-        mut self,
-        header: impl Into<String>,
-        scheme: Option<impl Into<String>>,
-    ) -> Self {
-        self.auth_header = header.into();
-        self.auth_scheme = scheme.map(|value| value.into());
-        self
-    }
-
-    pub fn with_capability_family(mut self, family: CapabilityFamily) -> Self {
-        self.capability_family = family;
-        self
-    }
-
-    pub fn with_stream_mode(mut self, mode: OpenAiStreamMode) -> Self {
-        self.stream_mode = mode;
-        self
-    }
-
-    pub fn with_realtime_ws_url(mut self, ws_url: Option<String>) -> Self {
-        self.realtime_ws_url = ws_url.and_then(|value| utils::normalize_optional_text(Some(value)));
-        self
-    }
-
-    pub fn with_top_level_prompt_cache(mut self, enabled: bool) -> Self {
-        self.top_level_prompt_cache_override = Some(enabled);
-        self
     }
 
     fn configured_public_copilot_base_url(&self) -> bool {
@@ -434,41 +431,56 @@ impl OpenAiAdapter {
         let mut modes = BTreeMap::new();
         match Self::dashscope_reasoning_profile(model.as_str()) {
             Some(DashscopeReasoningProfile::Toggleable) => {
-                let mut disabled_override = crate::model::ModelSpeedModeRequestOverride::default();
-                disabled_override
-                    .body_patch
-                    .insert("enable_thinking".to_owned(), serde_json::Value::Bool(false));
                 modes.insert(
                     "no-thinking".to_owned(),
-                    ModelThinkingMode::new()
-                        .with_display_name("Off")
-                        .with_thinking(crate::provider::ThinkingRequest::Disabled)
-                        .with_request_override(disabled_override),
+                    ModelThinkingMode {
+                        display_name: Some("Off".to_string()),
+                        description: None,
+                        thinking: Some(crate::provider::ThinkingRequest::Disabled),
+                        request_override: crate::model::ModelSpeedModeRequestOverride {
+                            headers: BTreeMap::new(),
+                            body_patch: BTreeMap::from([(
+                                "enable_thinking".to_owned(),
+                                serde_json::Value::Bool(false),
+                            )]),
+                        },
+                        adapter_overrides: BTreeMap::new(),
+                    },
                 );
 
-                let mut enabled_override = crate::model::ModelSpeedModeRequestOverride::default();
-                enabled_override
-                    .body_patch
-                    .insert("enable_thinking".to_owned(), serde_json::Value::Bool(true));
                 modes.insert(
                     "thinking-enabled".to_owned(),
-                    ModelThinkingMode::new()
-                        .with_display_name("Think")
-                        .with_description("Enable DashScope reasoning output")
-                        .with_request_override(enabled_override),
+                    ModelThinkingMode {
+                        display_name: Some("Think".to_string()),
+                        description: Some("Enable DashScope reasoning output".to_string()),
+                        thinking: None,
+                        request_override: crate::model::ModelSpeedModeRequestOverride {
+                            headers: BTreeMap::new(),
+                            body_patch: BTreeMap::from([(
+                                "enable_thinking".to_owned(),
+                                serde_json::Value::Bool(true),
+                            )]),
+                        },
+                        adapter_overrides: BTreeMap::new(),
+                    },
                 );
             }
             Some(DashscopeReasoningProfile::AlwaysOn) => {
-                let mut enabled_override = crate::model::ModelSpeedModeRequestOverride::default();
-                enabled_override
-                    .body_patch
-                    .insert("enable_thinking".to_owned(), serde_json::Value::Bool(true));
                 modes.insert(
                     "thinking-enabled".to_owned(),
-                    ModelThinkingMode::new()
-                        .with_display_name("Think")
-                        .with_description("Use the model's built-in reasoning output")
-                        .with_request_override(enabled_override),
+                    ModelThinkingMode {
+                        display_name: Some("Think".to_string()),
+                        description: Some("Use the model's built-in reasoning output".to_string()),
+                        thinking: None,
+                        request_override: crate::model::ModelSpeedModeRequestOverride {
+                            headers: BTreeMap::new(),
+                            body_patch: BTreeMap::from([(
+                                "enable_thinking".to_owned(),
+                                serde_json::Value::Bool(true),
+                            )]),
+                        },
+                        adapter_overrides: BTreeMap::new(),
+                    },
                 );
             }
             None => {}
@@ -1222,7 +1234,7 @@ impl OpenAiAdapter {
                     ))
                 })?;
 
-            let mut tool_stream = ToolStreamAccumulator::default();
+            let mut tool_stream = ToolStreamAccumulator::new();
             let mut stream_usage: Option<CompletionUsage> = None;
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_has_content = false;
@@ -1458,7 +1470,8 @@ impl OpenAiAdapter {
         &self,
         request: &CompletionRequest,
     ) -> Result<OpenAiResponsesToolPlan, AppError> {
-        let mut plan = OpenAiResponsesToolPlan::default();
+        let mut tools = Vec::new();
+        let mut include = Vec::new();
         let mut namespace_tools: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
         for tool in crate::tool::model_tool_specs(request.tools.as_slice()) {
             let wire_name = responses_wire_tool_name(tool.model_name.as_str());
@@ -1482,14 +1495,14 @@ impl OpenAiAdapter {
                     .or_default()
                     .push(serde_json::Value::Object(map));
             } else {
-                plan.tools.push(serde_json::Value::Object(map));
+                tools.push(serde_json::Value::Object(map));
             }
         }
-        for (namespace, tools) in namespace_tools {
-            plan.tools.push(serde_json::json!({
+        for (namespace, namespace_tools) in namespace_tools {
+            tools.push(serde_json::json!({
                 "type": "namespace",
                 "name": namespace,
-                "tools": tools,
+                "tools": namespace_tools,
             }));
         }
 
@@ -1604,9 +1617,8 @@ impl OpenAiAdapter {
                         config.provider_options.as_ref(),
                         "web_search",
                     )?;
-                    plan.tools.push(serde_json::Value::Object(map));
-                    plan.include
-                        .push("web_search_call.action.sources".to_owned());
+                    tools.push(serde_json::Value::Object(map));
+                    include.push("web_search_call.action.sources".to_owned());
                 }
                 ProviderNativeToolKind::FileSearch => {
                     let config = &request.native_tools.hosted.file_search;
@@ -1642,9 +1654,9 @@ impl OpenAiAdapter {
                         config.provider_options.as_ref(),
                         "file_search",
                     )?;
-                    plan.tools.push(serde_json::Value::Object(map));
+                    tools.push(serde_json::Value::Object(map));
                     if config.include_results.unwrap_or(false) {
-                        plan.include.push("file_search_call.results".to_owned());
+                        include.push("file_search_call.results".to_owned());
                     }
                 }
                 ProviderNativeToolKind::CodeExecution => {
@@ -1712,9 +1724,8 @@ impl OpenAiAdapter {
                         config.provider_options.as_ref(),
                         "code_execution",
                     )?;
-                    plan.tools.push(serde_json::Value::Object(map));
-                    plan.include
-                        .push("code_interpreter_call.outputs".to_owned());
+                    tools.push(serde_json::Value::Object(map));
+                    include.push("code_interpreter_call.outputs".to_owned());
                 }
                 ProviderNativeToolKind::ImageGeneration => {
                     let config = &request.native_tools.hosted.image_generation;
@@ -1753,7 +1764,7 @@ impl OpenAiAdapter {
                         config.provider_options.as_ref(),
                         "image_generation",
                     )?;
-                    plan.tools.push(serde_json::Value::Object(map));
+                    tools.push(serde_json::Value::Object(map));
                 }
                 other => {
                     return Err(AppError::Config(format!(
@@ -1764,7 +1775,7 @@ impl OpenAiAdapter {
             }
         }
 
-        Ok(plan)
+        Ok(OpenAiResponsesToolPlan { tools, include })
     }
 
     fn native_tools_request_requires_responses(request: &CompletionRequest) -> bool {
@@ -2501,26 +2512,29 @@ impl OpenAiAdapter {
                 }
 
                 let metadata = model.metadata();
-                let mut provider_model = ProviderModel::new(self.id.as_str(), model.id);
-                let mut capabilities = self.model_capabilities(&provider_model.id);
+                let model_id = ModelId::new(model.id);
+                let mut capabilities = self.model_capabilities(&model_id);
                 if self.profile == OpenAiProfile::GithubCopilot {
                     capabilities = model
                         .copilot
                         .capabilities()
-                        .with_fallbacks_from(&capabilities);
-                }
-                provider_model = provider_model.with_capabilities(capabilities);
-                if !metadata.is_empty() {
-                    provider_model = provider_model.with_metadata(metadata);
+                        .merged_with_fallbacks_from(&capabilities);
                 }
 
                 let display_name = model
                     .display_name
                     .or(model.name)
                     .and_then(|value| utils::normalize_optional_text(Some(value)));
-                Some(match display_name {
-                    Some(display_name) => provider_model.with_display_name(display_name),
-                    None => provider_model,
+                Some(ProviderModel {
+                    provider_id: ProviderId::new(self.id.as_str()),
+                    adapter_id: None,
+                    id: model_id,
+                    catalog_model_id: None,
+                    display_name,
+                    capabilities,
+                    metadata,
+                    thinking_modes: BTreeMap::new(),
+                    speed_modes: BTreeMap::new(),
                 })
             }
             OpenAiListedModel::Recommended(model) => {
@@ -2530,15 +2544,18 @@ impl OpenAiAdapter {
                     .or(model.name)
                     .and_then(|value| utils::normalize_optional_text(Some(value)));
                 let model_id = utils::normalize_optional_text(Some(model.id))?;
-                let capabilities = self.model_capabilities(&ModelId::new(model_id.clone()));
-                let mut provider_model =
-                    ProviderModel::new(self.id.as_str(), model_id).with_capabilities(capabilities);
-                if !metadata.is_empty() {
-                    provider_model = provider_model.with_metadata(metadata);
-                }
-                Some(match display_name {
-                    Some(display_name) => provider_model.with_display_name(display_name),
-                    None => provider_model,
+                let model_id = ModelId::new(model_id);
+                let capabilities = self.model_capabilities(&model_id);
+                Some(ProviderModel {
+                    provider_id: ProviderId::new(self.id.as_str()),
+                    adapter_id: None,
+                    id: model_id,
+                    catalog_model_id: None,
+                    display_name,
+                    capabilities,
+                    metadata,
+                    thinking_modes: BTreeMap::new(),
+                    speed_modes: BTreeMap::new(),
                 })
             }
             OpenAiListedModel::Codex(model) => {
@@ -2547,17 +2564,19 @@ impl OpenAiAdapter {
                 let display_name =
                     utils::normalize_optional_text(model.display_name.or(model.name));
                 let slug = utils::normalize_optional_text(Some(model.slug))?;
-                let mut provider_model = ProviderModel::new(self.id.as_str(), slug);
+                let model_id = ModelId::new(slug);
                 let capabilities =
-                    capabilities.with_fallbacks_from(&self.model_capabilities(&provider_model.id));
-                provider_model = provider_model.with_capabilities(capabilities);
-                if !metadata.is_empty() {
-                    provider_model = provider_model.with_metadata(metadata);
-                }
-
-                Some(match display_name {
-                    Some(display_name) => provider_model.with_display_name(display_name),
-                    None => provider_model,
+                    capabilities.merged_with_fallbacks_from(&self.model_capabilities(&model_id));
+                Some(ProviderModel {
+                    provider_id: ProviderId::new(self.id.as_str()),
+                    adapter_id: None,
+                    id: model_id,
+                    catalog_model_id: None,
+                    display_name,
+                    capabilities,
+                    metadata,
+                    thinking_modes: BTreeMap::new(),
+                    speed_modes: BTreeMap::new(),
                 })
             }
         }
@@ -2695,46 +2714,64 @@ impl ModelRuntime for OpenAiAdapter {
     }
 
     fn prompt_cache_shape(&self, model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
-        Some(
-            crate::provider::PromptCacheShape::new(self.id.as_str())
-                .with_string("auth_scope", self.api_key.prompt_cache_scope())
-                .with_string("backend", self.backend_key())
-                .with_string("base_url", self.prompt_cache_base_url().as_str())
-                .with_string("api_mode", self.api_mode_key())
-                .with_string("stream_mode", self.stream_mode_key())
-                .with_optional_string("models_url", self.models_url.as_deref())
-                .with_string("auth_header", self.auth_header.as_str())
-                .with_optional_string("auth_scheme", self.auth_scheme.as_deref())
-                .with_string(
-                    "profile",
-                    match self.profile {
-                        OpenAiProfile::Standard => "standard",
-                        OpenAiProfile::GithubCopilot => "github_copilot",
-                    },
-                )
-                .with_string(
-                    "capability_family",
-                    match self.capability_family {
-                        CapabilityFamily::OpenAi => "openai",
-                        CapabilityFamily::OpenAiCompatible => "openai_compatible",
-                        CapabilityFamily::Anthropic => "anthropic",
-                        CapabilityFamily::Gemini => "gemini",
-                        CapabilityFamily::Bedrock => "bedrock",
-                        CapabilityFamily::Gitlab => "gitlab",
-                    },
-                )
-                .with_optional_string("auth_account_id", self.chatgpt_account_id())
-                .with_bool("uses_responses", self.should_use_responses(model.as_str()))
-                .with_optional_string("realtime_ws_url", self.realtime_ws_url.as_deref())
-                .with_bool(
-                    "supports_top_level_prompt_cache",
-                    self.supports_top_level_prompt_cache(),
-                )
-                .with_json(
-                    "extra_headers",
+        let mut fields = vec![
+            ("auth_scope", self.api_key.prompt_cache_scope()),
+            ("backend", self.backend_key().to_owned()),
+            ("base_url", self.prompt_cache_base_url().to_owned()),
+            ("api_mode", self.api_mode_key().to_owned()),
+            ("stream_mode", self.stream_mode_key().to_owned()),
+            ("auth_header", self.auth_header.clone()),
+            (
+                "profile",
+                match self.profile {
+                    OpenAiProfile::Standard => "standard",
+                    OpenAiProfile::GithubCopilot => "github_copilot",
+                }
+                .to_owned(),
+            ),
+            (
+                "capability_family",
+                match self.capability_family {
+                    CapabilityFamily::OpenAi => "openai",
+                    CapabilityFamily::OpenAiCompatible => "openai_compatible",
+                    CapabilityFamily::Anthropic => "anthropic",
+                    CapabilityFamily::Gemini => "gemini",
+                    CapabilityFamily::Bedrock => "bedrock",
+                    CapabilityFamily::Gitlab => "gitlab",
+                }
+                .to_owned(),
+            ),
+            (
+                "uses_responses",
+                self.should_use_responses(model.as_str()).to_string(),
+            ),
+            (
+                "supports_top_level_prompt_cache",
+                self.supports_top_level_prompt_cache().to_string(),
+            ),
+            (
+                "extra_headers",
+                crate::provider::PromptCacheShape::json_field_value(
                     &utils::prompt_cache_header_entries(&self.extra_headers),
                 ),
-        )
+            ),
+        ];
+        if let Some(models_url) = self.models_url.as_deref() {
+            fields.push(("models_url", models_url.to_owned()));
+        }
+        if let Some(auth_scheme) = self.auth_scheme.as_deref() {
+            fields.push(("auth_scheme", auth_scheme.to_owned()));
+        }
+        if let Some(auth_account_id) = self.chatgpt_account_id() {
+            fields.push(("auth_account_id", auth_account_id));
+        }
+        if let Some(realtime_ws_url) = self.realtime_ws_url.as_deref() {
+            fields.push(("realtime_ws_url", realtime_ws_url.to_owned()));
+        }
+        Some(crate::provider::PromptCacheShape::from_fields(
+            self.id.as_str(),
+            fields,
+        ))
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
@@ -3048,7 +3085,7 @@ impl ModelRuntime for OpenAiAdapter {
         let model_name = model;
 
         let stream = async_stream::try_stream! {
-            let mut tool_stream = ToolStreamAccumulator::default();
+            let mut tool_stream = ToolStreamAccumulator::new();
             let mut stream_usage: Option<CompletionUsage> = None;
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_has_content = false;
@@ -4459,19 +4496,34 @@ struct OpenAiCompatibleModel {
 
 impl OpenAiCompatibleModel {
     fn metadata(&self) -> ModelMetadata {
-        let mut metadata = ModelMetadata::default();
-
-        if let Some(context_window_tokens) = self.context_window_tokens.or(self.max_input_tokens) {
-            metadata = metadata.with_context_window_tokens(clamp_u64_to_u32(context_window_tokens));
-        }
-        if let Some(max_input_tokens) = self.max_input_tokens {
-            metadata = metadata.with_max_input_tokens(clamp_u64_to_u32(max_input_tokens));
-        }
-        if let Some(max_output_tokens) = self.max_output_tokens {
-            metadata = metadata.with_max_output_tokens(clamp_u64_to_u32(max_output_tokens));
-        }
-
-        metadata.with_fallbacks_from(&self.copilot.metadata(self.id.as_str()))
+        let metadata = ModelMetadata {
+            lifecycle: None,
+            limits: ModelTokenLimits {
+                context_window_tokens: self
+                    .context_window_tokens
+                    .or(self.max_input_tokens)
+                    .map(clamp_u64_to_u32),
+                max_input_tokens: self.max_input_tokens.map(clamp_u64_to_u32),
+                max_output_tokens: self.max_output_tokens.map(clamp_u64_to_u32),
+            },
+            description: None,
+            knowledge_cutoff: None,
+            release_date: None,
+            last_updated: None,
+            open_weights: None,
+            default_thinking_mode: None,
+            supports_parallel_tool_calls: None,
+            supports_verbosity: None,
+            default_verbosity: None,
+            default_temperature: None,
+            default_top_p: None,
+            default_top_k: None,
+            assistant_reasoning_interleaved: None,
+            assistant_reasoning_field: None,
+            output_modalities: Vec::new(),
+            pricing: None,
+        };
+        metadata.merged_with_fallbacks_from(&self.copilot.metadata(self.id.as_str()))
     }
 }
 
@@ -4488,15 +4540,29 @@ struct OpenAiRecommendedModel {
 
 impl OpenAiRecommendedModel {
     fn metadata(&self) -> ModelMetadata {
-        let mut metadata = ModelMetadata::default();
-        if let Some(description) = self
-            .description
-            .clone()
-            .and_then(|value| utils::normalize_optional_text(Some(value)))
-        {
-            metadata = metadata.with_description(description);
+        ModelMetadata {
+            lifecycle: None,
+            limits: ModelTokenLimits::default(),
+            description: self
+                .description
+                .clone()
+                .and_then(|value| utils::normalize_optional_text(Some(value))),
+            knowledge_cutoff: None,
+            release_date: None,
+            last_updated: None,
+            open_weights: None,
+            default_thinking_mode: None,
+            supports_parallel_tool_calls: None,
+            supports_verbosity: None,
+            default_verbosity: None,
+            default_temperature: None,
+            default_top_p: None,
+            default_top_k: None,
+            assistant_reasoning_interleaved: None,
+            assistant_reasoning_field: None,
+            output_modalities: Vec::new(),
+            pricing: None,
         }
-        metadata
     }
 }
 
@@ -4566,79 +4632,83 @@ struct OpenAiCodexModel {
 
 impl OpenAiCodexModel {
     fn metadata(&self) -> ModelMetadata {
-        let mut metadata = ModelMetadata::default();
-
-        if let Some(description) = self
+        let description = self
             .description
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-        {
-            metadata = metadata.with_description(description);
-        }
-
-        if let Some(context_window_tokens) = self.context_window.or(self.max_context_window) {
-            metadata = metadata.with_context_window_tokens(clamp_u64_to_u32(context_window_tokens));
-        }
-
-        if let Some(default_thinking_mode) = self.default_thinking_mode_key() {
-            metadata = metadata.with_default_thinking_mode(default_thinking_mode);
-        }
-
-        if let Some(supports_parallel_tool_calls) = self.supports_parallel_tool_calls {
-            metadata = metadata.with_supports_parallel_tool_calls(supports_parallel_tool_calls);
-        }
-
-        if let Some(supports_verbosity) = self.support_verbosity {
-            metadata = metadata.with_supports_verbosity(supports_verbosity);
-        }
-
-        if let Some(default_verbosity) = self
+            .map(ToOwned::to_owned);
+        let default_verbosity = self
             .default_verbosity
             .as_ref()
-            .and_then(|value| utils::normalize_optional_text(Some(value.clone())))
-        {
-            metadata = metadata.with_default_verbosity(default_verbosity);
+            .and_then(|value| utils::normalize_optional_text(Some(value.clone())));
+        ModelMetadata {
+            lifecycle: None,
+            limits: ModelTokenLimits {
+                context_window_tokens: self
+                    .context_window
+                    .or(self.max_context_window)
+                    .map(clamp_u64_to_u32),
+                max_input_tokens: None,
+                max_output_tokens: None,
+            },
+            description,
+            knowledge_cutoff: None,
+            release_date: None,
+            last_updated: None,
+            open_weights: None,
+            default_thinking_mode: self.default_thinking_mode_key(),
+            supports_parallel_tool_calls: self.supports_parallel_tool_calls,
+            supports_verbosity: self.support_verbosity,
+            default_verbosity,
+            default_temperature: None,
+            default_top_p: None,
+            default_top_k: None,
+            assistant_reasoning_interleaved: None,
+            assistant_reasoning_field: None,
+            output_modalities: Vec::new(),
+            pricing: None,
         }
-
-        metadata
     }
 
     fn capabilities(&self) -> ModelCapabilities {
-        let mut capabilities = ModelCapabilities::default();
-
-        if !self.input_modalities.is_empty() {
-            let supports = |modality: ModelInputModality| {
-                if self
-                    .input_modalities
-                    .iter()
-                    .any(|value| model_supports_input_modality(value.as_str(), modality))
-                {
-                    CapabilitySupport::Supported
-                } else {
-                    CapabilitySupport::Unsupported
-                }
-            };
-            capabilities = capabilities
-                .with_image_input(supports(ModelInputModality::Image))
-                .with_document_input(supports(ModelInputModality::Document))
-                .with_audio_input(supports(ModelInputModality::Audio))
-                .with_video_input(supports(ModelInputModality::Video))
-                .with_file_input(supports(ModelInputModality::File));
-            if supports(ModelInputModality::Text).is_unsupported() {
-                capabilities.text_input = CapabilitySupport::Unsupported;
+        let supports = |modality: ModelInputModality| {
+            if self.input_modalities.is_empty() {
+                return CapabilitySupport::Unknown;
             }
+            if self
+                .input_modalities
+                .iter()
+                .any(|value| model_supports_input_modality(value.as_str(), modality))
+            {
+                CapabilitySupport::Supported
+            } else {
+                CapabilitySupport::Unsupported
+            }
+        };
+        let text_input = match supports(ModelInputModality::Text) {
+            CapabilitySupport::Unsupported => CapabilitySupport::Unsupported,
+            _ => CapabilitySupport::Supported,
+        };
+        ModelCapabilities {
+            text_input,
+            image_input: supports(ModelInputModality::Image),
+            document_input: supports(ModelInputModality::Document),
+            audio_input: supports(ModelInputModality::Audio),
+            video_input: supports(ModelInputModality::Video),
+            file_input: supports(ModelInputModality::File),
+            tool_calling: if self.supports_parallel_tool_calls == Some(true) {
+                CapabilitySupport::Supported
+            } else {
+                CapabilitySupport::Unknown
+            },
+            reasoning: if self.supported_reasoning_levels.is_empty() {
+                CapabilitySupport::Unknown
+            } else {
+                CapabilitySupport::Supported
+            },
+            ..ModelCapabilities::default()
         }
-
-        if !self.supported_reasoning_levels.is_empty() {
-            capabilities = capabilities.with_reasoning(CapabilitySupport::Supported);
-        }
-
-        if self.supports_parallel_tool_calls == Some(true) {
-            capabilities = capabilities.with_tool_calling(CapabilitySupport::Supported);
-        }
-
-        capabilities
     }
 
     fn default_thinking_mode_key(&self) -> Option<String> {

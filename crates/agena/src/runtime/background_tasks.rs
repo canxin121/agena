@@ -126,32 +126,20 @@ pub(crate) struct RuntimeBackgroundTaskSpec {
 }
 
 impl RuntimeBackgroundTaskSpec {
-    pub(crate) fn new(
+    pub(crate) fn from_parts(
         kind: RuntimeBackgroundTaskKind,
         origin: RuntimeBackgroundTaskOrigin,
+        title: impl Into<String>,
+        dedupe_key: Option<String>,
+        cancellable: bool,
     ) -> Self {
         Self {
             kind,
             origin,
-            title: kind.title().to_owned(),
-            dedupe_key: None,
-            cancellable: true,
+            title: title.into(),
+            dedupe_key,
+            cancellable,
         }
-    }
-
-    pub(crate) fn with_title(mut self, title: impl Into<String>) -> Self {
-        self.title = title.into();
-        self
-    }
-
-    pub(crate) fn with_dedupe_key(mut self, dedupe_key: impl Into<String>) -> Self {
-        self.dedupe_key = Some(dedupe_key.into());
-        self
-    }
-
-    pub(crate) fn with_cancellable(mut self, cancellable: bool) -> Self {
-        self.cancellable = cancellable;
-        self
     }
 }
 

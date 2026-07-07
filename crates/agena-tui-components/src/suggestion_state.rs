@@ -1,3 +1,5 @@
+use crate::selection::clamped_selected_index;
+
 #[derive(Debug, Clone)]
 pub struct SuggestionPopupState<TItem, TMeta> {
     pub query: String,
@@ -15,15 +17,14 @@ impl<TItem, TMeta> SuggestionPopupState<TItem, TMeta> {
         selected: usize,
         meta: TMeta,
     ) -> Self {
-        let mut state = Self {
+        let selected = clamped_selected_index(selected, items.len());
+        Self {
             query,
             fingerprint,
             items,
             selected,
             meta,
-        };
-        state.clamp_selection();
-        state
+        }
     }
 
     pub fn selected_item(&self) -> Option<&TItem> {

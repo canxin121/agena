@@ -53,7 +53,8 @@ pub struct GitFileDiffQuery {
     pub directory: Option<String>,
     pub path: Option<String>,
     // If true, compare HEAD -> index; else compare index -> workdir.
-    pub staged: Option<bool>,
+    #[serde(default)]
+    pub staged: bool,
 }
 
 pub async fn git_file_diff(Query(q): Query<GitFileDiffQuery>) -> Response {
@@ -89,7 +90,7 @@ pub async fn git_file_diff(Query(q): Query<GitFileDiffQuery>) -> Response {
     // Git panel needs different bases depending on whether we're previewing staged or unstaged.
     // - staged=true:  original=HEAD,  modified=index
     // - staged=false: original=index, modified=workdir
-    let staged = q.staged.unwrap_or(false);
+    let staged = q.staged;
 
     let mut original = String::new();
     let mut modified = String::new();

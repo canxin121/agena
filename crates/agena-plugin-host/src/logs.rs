@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
+use crate::sdk::PluginKey;
 use crate::status::now_ms;
 
 const DEFAULT_MAX_ENTRIES_PER_PLUGIN: usize = 256;
@@ -12,7 +13,7 @@ const DEFAULT_MAX_ENTRIES_PER_PLUGIN: usize = 256;
 pub struct PluginLogRecord {
     pub seq: u64,
     pub timestamp_ms: i64,
-    pub plugin_id: String,
+    pub plugin_id: PluginKey,
     pub level: String,
     pub source: String,
     pub message: String,
@@ -23,7 +24,7 @@ pub struct PluginLogRecord {
 pub struct PluginLogStore {
     max_entries_per_plugin: usize,
     next_seq: AtomicU64,
-    inner: RwLock<HashMap<String, VecDeque<PluginLogRecord>>>,
+    inner: RwLock<HashMap<PluginKey, VecDeque<PluginLogRecord>>>,
 }
 
 impl Default for PluginLogStore {
@@ -43,13 +44,12 @@ impl PluginLogStore {
 
     pub fn append(
         &self,
-        plugin_id: impl Into<String>,
+        plugin_id: &PluginKey,
         level: impl Into<String>,
         source: impl Into<String>,
         message: impl Into<String>,
         fields: serde_json::Value,
     ) -> PluginLogRecord {
-        let plugin_id = plugin_id.into();
         let record = PluginLogRecord {
             seq: self.next_seq.fetch_add(1, Ordering::SeqCst),
             timestamp_ms: now_ms(),
@@ -60,7 +60,7 @@ impl PluginLogStore {
             fields,
         };
         if let Ok(mut guard) = self.inner.write() {
-            let bucket = guard.entry(plugin_id).or_default();
+            let bucket = guard.entry(plugin_id.clone()).or_default();
             bucket.push_back(record.clone());
             while bucket.len() > self.max_entries_per_plugin {
                 bucket.pop_front();
@@ -71,7 +71,7 @@ impl PluginLogStore {
 
     pub fn list(
         &self,
-        plugin_id: &str,
+        plugin_id: &PluginKey,
         after_seq: Option<u64>,
         limit: usize,
     ) -> Vec<PluginLogRecord> {

@@ -131,20 +131,16 @@ pub struct SearchListDialogSpec<'a> {
 impl<'a> SearchListDialogSpec<'a> {
     pub fn new(
         loading_message: std::borrow::Cow<'a, str>,
+        list_title: Option<std::borrow::Cow<'a, str>>,
         highlight_style: Style,
         highlight_symbol: std::borrow::Cow<'a, str>,
     ) -> Self {
         Self {
             loading_message,
-            list_title: None,
+            list_title,
             highlight_style,
             highlight_symbol,
         }
-    }
-
-    pub fn with_list_title(mut self, list_title: std::borrow::Cow<'a, str>) -> Self {
-        self.list_title = Some(list_title);
-        self
     }
 }
 
@@ -523,10 +519,12 @@ fn render_search_list_overlay<TItem, TCustom, TMeta, F>(
     section_index += 1;
     match panel_content {
         SearchListPanelContent::Empty { message } => {
-            let mut list_block = ratatui::widgets::Block::default().borders(Borders::ALL);
-            if let Some(title) = spec.list_title.as_ref() {
-                list_block = list_block.title(normalize_text(title.as_ref()));
-            }
+            let list_block = match spec.list_title.as_ref() {
+                Some(title) => ratatui::widgets::Block::default()
+                    .borders(Borders::ALL)
+                    .title(normalize_text(title.as_ref())),
+                None => ratatui::widgets::Block::default().borders(Borders::ALL),
+            };
             frame.render_widget(
                 Paragraph::new(normalize_text(message.as_str()))
                     .style(Style::default().fg(Color::DarkGray))

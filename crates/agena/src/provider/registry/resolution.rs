@@ -27,7 +27,7 @@ impl ProviderRegistry {
     }
 
     pub fn supports_prompt_continuation(&self, model: &ModelRef) -> Result<bool, AppError> {
-        self.with_model_ref_provider(model, |provider, adapter_id, model_id| {
+        self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
             provider.supports_prompt_continuation_for_adapter(adapter_id, model_id)
         })
     }
@@ -45,7 +45,7 @@ impl ProviderRegistry {
         &self,
         model: &ModelRef,
     ) -> Result<Option<crate::provider::PromptCacheShape>, AppError> {
-        self.with_model_ref_provider(model, |provider, adapter_id, model_id| {
+        self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
             provider.prompt_cache_shape_for_adapter(adapter_id, model_id)
         })
     }

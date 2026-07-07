@@ -37,7 +37,6 @@ struct SchemaLabEchoArgs {
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "schema_lab",
-    description = "No-op inspection tool for the built-in schema lab fixture plugin.",
     summary = "Inspect the schema lab fixture without mutating external state.",
     help = "Use action `inspect` to summarize one config section or `echo` to round-trip a payload into the tool result. The tool is intentionally inert and exists only to populate the Tools tab for the schema lab demo plugin.",
     handler_receiver = SchemaLabPlugin,
@@ -76,36 +75,43 @@ impl SchemaLabPlugin {
             include_defaults,
         } = args;
         let target = section.unwrap_or_else(|| "all sections".to_owned());
-        Ok(ToolInvokeOutput::text(format!(
-            "agena.schema_lab is a no-op fixture plugin.\nRequested section: {target}\nInclude defaults: {include_defaults}"
+        Ok(ToolInvokeOutput::from_parts(
+            "Schema Lab",
+            format!(
+                "agena.schema_lab is a no-op fixture plugin.\nRequested section: {target}\nInclude defaults: {include_defaults}"
+            ),
+            Some(json!({
+                "section": target,
+                "include_defaults": include_defaults,
+                "mode": "inspect"
+            })),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
         ))
-        .with_title("Schema Lab")
-        .with_payload(json!({
-            "section": target,
-            "include_defaults": include_defaults,
-            "mode": "inspect"
-        })))
     }
 
     async fn echo(&self, args: SchemaLabEchoArgs) -> SdkResult<ToolInvokeOutput> {
         let SchemaLabEchoArgs { label, payload } = args;
         let label = label.unwrap_or_else(|| "schema-lab".to_owned());
-        Ok(ToolInvokeOutput::text(format!(
-            "Schema lab echo for `{label}` completed without side effects."
+        Ok(ToolInvokeOutput::from_parts(
+            "Schema Lab",
+            format!("Schema lab echo for `{label}` completed without side effects."),
+            Some(json!({
+                "label": label,
+                "payload": payload,
+                "mode": "echo"
+            })),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
         ))
-        .with_title("Schema Lab")
-        .with_payload(json!({
-            "label": label,
-            "payload": payload,
-            "mode": "echo"
-        })))
     }
 }
 
 #[crate::plugin::sdk::plugin(
-    id = SCHEMA_LAB_PLUGIN_ID,
+    namespace = "agena",
+    name = "schema_lab",
     version = env!("CARGO_PKG_VERSION"),
-    description = "Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor.",
+    summary = "Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor.",
     config_schema = schema_lab_config_schema(),
     display = brief,
     commands = schema_lab_commands()

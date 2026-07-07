@@ -19,23 +19,24 @@ use super::{
 #[derive(Debug, Deserialize)]
 pub struct GitCommitBody {
     pub message: Option<String>,
-    #[serde(rename = "addAll")]
-    pub add_all: Option<bool>,
-    pub files: Option<Vec<String>>,
+    #[serde(default, rename = "addAll")]
+    pub add_all: bool,
+    #[serde(default)]
+    pub files: Vec<String>,
     #[serde(rename = "gpgPassphrase")]
     pub gpg_passphrase: Option<String>,
 
     // VS Code-like options.
     #[serde(default, rename = "noVerify")]
-    pub no_verify: Option<bool>,
+    pub no_verify: bool,
     #[serde(default)]
-    pub signoff: Option<bool>,
+    pub signoff: bool,
     #[serde(default)]
-    pub amend: Option<bool>,
+    pub amend: bool,
     #[serde(default, rename = "allowEmpty")]
-    pub allow_empty: Option<bool>,
+    pub allow_empty: bool,
     #[serde(default, rename = "noGpgSign")]
-    pub no_gpg_sign: Option<bool>,
+    pub no_gpg_sign: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -344,10 +345,7 @@ pub async fn git_commit(
             .into_response();
     };
 
-    let add_all = body.add_all.unwrap_or(false);
-    let files = body.files.unwrap_or_default();
-
-    if body.no_verify.unwrap_or(false) && !git_allow_no_verify_commit(&state).await {
+    if body.no_verify && !git_allow_no_verify_commit(&state).await {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({
@@ -435,7 +433,7 @@ pub async fn git_commit(
         }
     }
 
-    if add_all {
+    if body.add_all {
         let (c, o, e) =
             run_git(&dir, &["add", "-A"])
                 .await
@@ -455,9 +453,9 @@ pub async fn git_commit(
             )
                 .into_response();
         }
-    } else if !files.is_empty() {
+    } else if !body.files.is_empty() {
         let mut args: Vec<&str> = vec!["add", "--"];
-        for f in &files {
+        for f in &body.files {
             args.push(f);
         }
         let (c, o, e) = run_git(&dir, &args)
@@ -477,25 +475,25 @@ pub async fn git_commit(
 
     // Commit.
     let mut commit_args: Vec<&str> = vec!["commit"];
-    if body.no_verify.unwrap_or(false) {
+    if body.no_verify {
         commit_args.push("--no-verify");
     }
-    if body.signoff.unwrap_or(false) {
+    if body.signoff {
         commit_args.push("--signoff");
     }
-    if body.amend.unwrap_or(false) {
+    if body.amend {
         commit_args.push("--amend");
     }
-    if body.allow_empty.unwrap_or(false) {
+    if body.allow_empty {
         commit_args.push("--allow-empty");
     }
-    if body.no_gpg_sign.unwrap_or(false) {
+    if body.no_gpg_sign {
         commit_args.push("--no-gpg-sign");
     }
     commit_args.extend(["-m", message]);
-    if !add_all && !files.is_empty() {
+    if !body.add_all && !body.files.is_empty() {
         commit_args.push("--");
-        for f in &files {
+        for f in &body.files {
             commit_args.push(f);
         }
     }

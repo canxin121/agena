@@ -67,10 +67,14 @@ impl SelectionCursor {
 }
 
 pub fn clamp_selected_index(selected: &mut usize, item_count: usize) {
+    *selected = clamped_selected_index(*selected, item_count);
+}
+
+pub fn clamped_selected_index(selected: usize, item_count: usize) -> usize {
     if item_count == 0 {
-        *selected = 0;
+        0
     } else {
-        *selected = (*selected).min(item_count.saturating_sub(1));
+        selected.min(item_count.saturating_sub(1))
     }
 }
 

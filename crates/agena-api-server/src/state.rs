@@ -31,14 +31,17 @@ impl AppState {
         }
     }
 
-    pub fn with_manager_override(mut self, manager: Arc<SessionManager>) -> Self {
-        self.service = ApiService::new(
-            self.service().clone_db(),
-            self.runtime.workspace_root().display().to_string(),
-            Some(manager.event_publisher()),
-        );
-        self.manager_override = Some(manager);
-        self
+    pub fn new_with_manager(
+        runtime: AgenaRuntime,
+        db: Arc<DatabaseConnection>,
+        manager: Arc<SessionManager>,
+    ) -> Self {
+        let workspace_root = runtime.workspace_root().display().to_string();
+        Self {
+            runtime,
+            service: ApiService::new(db, workspace_root, Some(manager.event_publisher())),
+            manager_override: Some(manager),
+        }
     }
 
     pub fn runtime(&self) -> &AgenaRuntime {

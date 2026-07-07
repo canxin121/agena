@@ -653,7 +653,7 @@ fn projected_message_needs_part_repair(
         || (loaded_part_count == 0 && matches!(row.role, Role::Assistant | Role::User))
 }
 
-fn with_source_if_missing(
+fn source_if_missing(
     mut metadata: crate::message::MessageMetadata,
     source: MessageSource,
 ) -> crate::message::MessageMetadata {
@@ -823,7 +823,7 @@ where
 }
 
 fn project_system_notice_part(payload: &super::SystemNoticeAppended) -> MessagePart {
-    let mut part = MessagePart::with_content(
+    let mut part = MessagePart::from_content(
         payload.message_id.raw(),
         payload.message_id.raw(),
         payload.created_at,
@@ -858,7 +858,7 @@ where
         input: crate::message::StructuredObject::try_from(payload.arguments.clone())
             .unwrap_or_default(),
     };
-    let mut part = MessagePart::with_content(
+    let mut part = MessagePart::from_content(
         part_id,
         payload.message_id.raw(),
         payload.created_at,
@@ -994,7 +994,7 @@ where
         }
     };
 
-    let mut part = MessagePart::with_content(
+    let mut part = MessagePart::from_content(
         part_id,
         payload.message_id.raw(),
         payload.completed_at,
@@ -1217,8 +1217,7 @@ where
     for event in events {
         match &event.kind {
             EventKind::UserMessageAppended(payload) => {
-                let metadata =
-                    with_source_if_missing(payload.metadata.clone(), MessageSource::User);
+                let metadata = source_if_missing(payload.metadata.clone(), MessageSource::User);
                 upsert_message_projection(
                     db,
                     activity_message::Model {
@@ -1255,7 +1254,7 @@ where
             }
             EventKind::AssistantMessageCompleted(payload) => {
                 let metadata =
-                    with_source_if_missing(payload.metadata.clone(), MessageSource::Assistant);
+                    source_if_missing(payload.metadata.clone(), MessageSource::Assistant);
                 upsert_message_projection(
                     db,
                     activity_message::Model {
@@ -1387,7 +1386,7 @@ where
                 state: update.message_state,
                 created_at_ms: update.message_created_at.timestamp_millis(),
                 updated_at_ms: update.ts_ms,
-                metadata: with_source_if_missing(
+                metadata: source_if_missing(
                     crate::message::MessageMetadata::default(),
                     role_default_source(update.message_role),
                 ),

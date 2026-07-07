@@ -53,7 +53,8 @@ pub struct GitBranchesQuery {
     pub page: Option<usize>,
     pub page_size: Option<usize>,
     pub search: Option<String>,
-    pub local_only: Option<bool>,
+    #[serde(default)]
+    pub local_only: bool,
 }
 
 fn parse_track_counts(track: &str) -> (Option<i32>, Option<i32>) {
@@ -123,7 +124,7 @@ pub async fn git_branches(Query(q): Query<GitBranchesQuery>) -> Response {
     let search = q.search.as_deref().map(str::trim).unwrap_or("").to_string();
     let normalized_search = search.to_lowercase();
     let page_size = q.page_size.unwrap_or(40).clamp(1, 200);
-    let local_only = q.local_only.unwrap_or(false);
+    let local_only = q.local_only;
     let page_requested = q.page.is_some() || q.page_size.is_some() || !normalized_search.is_empty();
 
     // Determine current branch.
@@ -352,7 +353,8 @@ pub async fn git_create_branch(
 #[derive(Debug, Deserialize)]
 pub struct DeleteBranchBody {
     pub branch: Option<String>,
-    pub force: Option<bool>,
+    #[serde(default)]
+    pub force: bool,
 }
 
 pub async fn git_delete_branch(
@@ -372,11 +374,7 @@ pub async fn git_delete_branch(
             .into_response();
     };
     let branch = branch.strip_prefix("refs/heads/").unwrap_or(branch);
-    let flag = if body.force.unwrap_or(false) {
-        "-D"
-    } else {
-        "-d"
-    };
+    let flag = if body.force { "-D" } else { "-d" };
     if let Err(resp) =
         run_locked_git_checked(&q, &["branch", flag, branch], Some("delete_branch_failed")).await
     {
@@ -389,7 +387,8 @@ pub async fn git_delete_branch(
 pub struct RenameBranchBody {
     pub from: Option<String>,
     pub to: Option<String>,
-    pub force: Option<bool>,
+    #[serde(default)]
+    pub force: bool,
 }
 
 pub async fn git_rename_branch(
@@ -438,11 +437,7 @@ pub async fn git_rename_branch(
             .into_response();
     }
 
-    let flag = if body.force.unwrap_or(false) {
-        "-M"
-    } else {
-        "-m"
-    };
+    let flag = if body.force { "-M" } else { "-m" };
     if let Err(resp) = run_locked_git_checked(
         &q,
         &["branch", flag, from, to],
@@ -871,7 +866,8 @@ pub async fn git_checkout_detached(
 pub struct GitCreateBranchFromBody {
     pub name: Option<String>,
     pub start_point: Option<String>,
-    pub checkout: Option<bool>,
+    #[serde(default)]
+    pub checkout: bool,
 }
 
 pub async fn git_create_branch_from(
@@ -910,8 +906,7 @@ pub async fn git_create_branch_from(
             .into_response();
     }
 
-    let checkout = body.checkout.unwrap_or(false);
-    let args: Vec<&str> = if checkout {
+    let args: Vec<&str> = if body.checkout {
         vec!["checkout", "-b", name, start]
     } else {
         vec!["branch", name, start]

@@ -25,7 +25,8 @@ use crate::sdk::rpc::{
     ResponsePayload, method,
 };
 use crate::sdk::{
-    ToolInvokeInput, ToolInvokeStreamHandle, ToolStreamChunk, ToolStreamEnd, ToolStreamError,
+    PluginKey, ToolInvokeInput, ToolInvokeStreamHandle, ToolStreamChunk, ToolStreamEnd,
+    ToolStreamError,
 };
 use crate::status::StatusRegistry;
 use crate::transport::PluginTransport;
@@ -64,7 +65,7 @@ struct Inner {
     host_handler: Mutex<Option<HostHandler>>,
     closed: std::sync::atomic::AtomicBool,
     restart_attempts: AtomicU32,
-    plugin_id: Option<String>,
+    plugin_id: Option<PluginKey>,
     status_sink: Option<Arc<StatusRegistry>>,
     log_sink: Option<Arc<PluginLogStore>>,
 }
@@ -138,7 +139,7 @@ impl StdioTransport {
         cwd: Option<&PathBuf>,
         host_handler: Option<HostHandler>,
         restart_policy: RestartPolicy,
-        plugin_id: Option<String>,
+        plugin_id: Option<PluginKey>,
         status_sink: Option<Arc<StatusRegistry>>,
         log_sink: Option<Arc<PluginLogStore>>,
     ) -> Result<Self, TransportError> {
@@ -292,8 +293,7 @@ impl Inner {
                 let mut reader = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
                     tracing::info!(target: "agena_plugin_host::stdio_err", "{line}");
-                    if let (Some(sink), Some(plugin_id)) = (log_sink.as_ref(), plugin_id.as_deref())
-                    {
+                    if let (Some(sink), Some(plugin_id)) = (log_sink.as_ref(), plugin_id.as_ref()) {
                         sink.append(
                             plugin_id,
                             "info",
@@ -488,11 +488,11 @@ impl Inner {
 
     fn record_status<F>(&self, mutate: F)
     where
-        F: FnOnce(&StatusRegistry, &str),
+        F: FnOnce(&StatusRegistry, &PluginKey),
     {
         if let (Some(sink), Some(plugin_id)) = (self.status_sink.as_ref(), self.plugin_id.as_ref())
         {
-            mutate(sink.as_ref(), plugin_id.as_str());
+            mutate(sink.as_ref(), plugin_id);
         }
     }
 
@@ -505,7 +505,7 @@ impl Inner {
     ) {
         if let (Some(sink), Some(plugin_id)) = (self.log_sink.as_ref(), self.plugin_id.as_ref()) {
             sink.append(
-                plugin_id.clone(),
+                plugin_id,
                 level.into(),
                 source.into(),
                 message.into(),

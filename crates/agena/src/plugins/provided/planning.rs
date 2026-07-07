@@ -7,7 +7,7 @@ use crate::plugin::sdk::{
     ToolInvokeInput, ToolInvokeOutput, async_trait,
 };
 use crate::plugins::provided::workflow::{
-    PlanToolInput, WorkflowPlugin, WorkflowPluginConfig, planning_plugin_config_schema,
+    PlanToolSuite, WorkflowPlugin, WorkflowPluginConfig, planning_plugin_config_schema,
 };
 
 pub(crate) const PLAN_PLUGIN_ID: &str = "agena.plan";
@@ -28,7 +28,7 @@ impl PlanPlugin {
 impl Plugin for PlanPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::new("agena", "plan", env!("CARGO_PKG_VERSION"));
-        manifest.description = Some("Plan orchestration and plan-autorun tools.".to_string());
+        manifest.summary = Some("Plan orchestration and plan-autorun tools.".to_string());
         manifest.config_schema = Some(planning_plugin_config_schema());
         manifest.set_display(crate::plugin::sdk::ToolDisplayPreset::BriefDetailed);
         manifest.hooks |= HookSubscription::TOOL_INVOKE
@@ -37,7 +37,7 @@ impl Plugin for PlanPlugin {
             | HookSubscription::AGENT_STOP;
         manifest
             .add_plugin_capabilities([HostCapability::PluginStorage, HostCapability::Statusline]);
-        manifest.tools.extend(PlanToolInput::tool_definitions());
+        manifest.tools.extend(PlanToolSuite::tool_definitions());
         manifest
     }
 
@@ -58,7 +58,7 @@ impl Plugin for PlanPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        let parsed = PlanToolInput::parse_tool(input.tool_name.as_str(), input.input)?;
+        let parsed = PlanToolSuite::parse_tool(input.tool_name.as_str(), input.input)?;
         parsed.dispatch_tool_invoke(&self.inner).await
     }
 

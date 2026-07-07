@@ -1879,46 +1879,66 @@ pub(super) fn provider_model_config_draft_to_model_value(
         return Err("model id is required".to_owned());
     }
 
-    let mut overlay = agena::config::ProviderModelOverlay {
+    let input = (!draft.input_modalities.is_empty()).then(|| {
+        agena::provider::CapabilitySelectionPatch::Supported(
+            draft
+                .input_modalities
+                .iter()
+                .filter_map(|value| parse_model_input_modality(value.as_str()))
+                .collect(),
+        )
+    });
+    let features = (!draft.features.is_empty()).then(|| {
+        agena::provider::CapabilitySelectionPatch::Supported(
+            draft
+                .features
+                .iter()
+                .filter_map(|value| parse_model_capability_feature(value.as_str()))
+                .collect(),
+        )
+    });
+    let overlay = agena::config::ProviderModelOverlay {
         enabled: draft.enabled,
-        ..Default::default()
+        native_tools: provider_native_tools_config_for_preset(
+            draft.native_tools_preset,
+            &draft.native_tools_custom,
+        ),
+        definition: agena::provider::ConfiguredModelDefinition {
+            lifecycle: parse_optional_model_lifecycle(draft.lifecycle.as_str())?,
+            context_window_tokens: parse_optional_u32_field(
+                draft.context_window_tokens.as_str(),
+                "context_window_tokens",
+            )?,
+            max_input_tokens: parse_optional_u32_field(
+                draft.max_input_tokens.as_str(),
+                "max_input_tokens",
+            )?,
+            max_output_tokens: parse_optional_u32_field(
+                draft.max_output_tokens.as_str(),
+                "max_output_tokens",
+            )?,
+            display_name: trimmed_owned_local(draft.display_name.as_str()),
+            description: trimmed_owned_local(draft.description.as_str()),
+            knowledge_cutoff: None,
+            release_date: None,
+            last_updated: None,
+            open_weights: None,
+            default_thinking_mode: None,
+            supports_parallel_tool_calls: None,
+            supports_verbosity: None,
+            default_verbosity: None,
+            default_temperature: None,
+            default_top_p: None,
+            default_top_k: None,
+            assistant_reasoning_interleaved: None,
+            assistant_reasoning_field: None,
+            output_modalities: split_csv_tokens(draft.output_modalities.as_str()),
+            pricing: None,
+            thinking_modes: std::collections::BTreeMap::new(),
+            speed_modes: std::collections::BTreeMap::new(),
+            capabilities: agena::provider::ModelCapabilityPatch { input, features },
+        },
     };
-    overlay.native_tools = provider_native_tools_config_for_preset(
-        draft.native_tools_preset,
-        &draft.native_tools_custom,
-    );
-    overlay.definition.display_name = trimmed_owned_local(draft.display_name.as_str());
-    overlay.definition.lifecycle = parse_optional_model_lifecycle(draft.lifecycle.as_str())?;
-    overlay.definition.context_window_tokens = parse_optional_u32_field(
-        draft.context_window_tokens.as_str(),
-        "context_window_tokens",
-    )?;
-    overlay.definition.max_input_tokens =
-        parse_optional_u32_field(draft.max_input_tokens.as_str(), "max_input_tokens")?;
-    overlay.definition.max_output_tokens =
-        parse_optional_u32_field(draft.max_output_tokens.as_str(), "max_output_tokens")?;
-    overlay.definition.output_modalities = split_csv_tokens(draft.output_modalities.as_str());
-    overlay.definition.description = trimmed_owned_local(draft.description.as_str());
-    if !draft.input_modalities.is_empty() {
-        overlay.definition.capabilities.input =
-            Some(agena::provider::CapabilitySelectionPatch::Supported(
-                draft
-                    .input_modalities
-                    .iter()
-                    .filter_map(|value| parse_model_input_modality(value.as_str()))
-                    .collect(),
-            ));
-    }
-    if !draft.features.is_empty() {
-        overlay.definition.capabilities.features =
-            Some(agena::provider::CapabilitySelectionPatch::Supported(
-                draft
-                    .features
-                    .iter()
-                    .filter_map(|value| parse_model_capability_feature(value.as_str()))
-                    .collect(),
-            ));
-    }
 
     let value = provider_model_overlay_to_json_local(overlay)?;
     Ok((model_id.to_owned(), value))

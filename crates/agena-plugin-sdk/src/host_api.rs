@@ -14,7 +14,8 @@ use crate::error::{PluginError, Result};
 use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
 };
-use crate::manifest::{PathKind, ToolDefinition, ToolDescriptionMode, ToolTag};
+use crate::identity::{PluginKey, ToolKey};
+use crate::manifest::{PathKind, ToolDefinition};
 
 #[async_trait]
 pub trait HostClient: Send + Sync + 'static {
@@ -384,7 +385,7 @@ tokio::task_local! {
     static HOST_CALLBACK_CONTEXT: HostCallbackContext;
 }
 
-pub async fn with_host_callback_context<F>(patch: HostCallbackContext, fut: F) -> F::Output
+pub async fn run_in_host_callback_context<F>(patch: HostCallbackContext, fut: F) -> F::Output
 where
     F: Future,
 {
@@ -567,14 +568,6 @@ pub struct SpawnSubtaskResponse {
 pub struct ToolDescriptor {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Optional text shown before the main help block.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub before_help: Option<String>,
-    /// Optional text shown after the main help block.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub after_help: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
@@ -582,12 +575,6 @@ pub struct ToolDescriptor {
     pub examples: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description_mode: Option<ToolDescriptionMode>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<ToolTag>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -782,20 +769,16 @@ pub struct ToolRegistryChangedEvent {
     pub kind: ToolRegistryChangeKind,
     pub generation: u64,
     pub timestamp_ms: i64,
-    pub namespace: String,
-    pub plugin_name: String,
-    pub tool_name: String,
-    pub model_name: String,
+    pub plugin: PluginKey,
+    pub tool_key: ToolKey,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<ToolDefinition>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostRegisteredToolDescriptor {
-    pub namespace: String,
-    pub plugin_name: String,
-    pub tool_name: String,
-    pub model_name: String,
+    pub plugin: PluginKey,
+    pub tool_key: ToolKey,
     pub tool: ToolDefinition,
 }
 
@@ -922,7 +905,7 @@ pub struct HostSecretListResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostPluginStatus {
-    pub plugin_id: String,
+    pub plugin_id: PluginKey,
     pub kind: String,
     pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -945,7 +928,7 @@ pub struct HostPluginStatusListResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostPluginStatusGetRequest {
-    pub plugin_id: String,
+    pub plugin_id: PluginKey,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1301,8 +1284,7 @@ pub struct HostHookListResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostHookRegistration {
-    pub plugin_id: String,
-    pub plugin_name: String,
+    pub plugin_id: PluginKey,
     pub trust_level: String,
     pub trust_status: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1379,7 +1361,7 @@ pub struct HostMcpRemoveServerResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostStatuslineSegment {
-    pub plugin_id: String,
+    pub plugin_id: PluginKey,
     pub segment_id: String,
     pub content: String,
     #[serde(default)]
@@ -1424,7 +1406,7 @@ pub struct HostConfigReloadResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostThemePalette {
     pub id: String,
-    pub plugin_id: String,
+    pub plugin_id: PluginKey,
     pub display_name: String,
     pub colors: BTreeMap<String, String>,
 }

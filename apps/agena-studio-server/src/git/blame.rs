@@ -45,7 +45,7 @@ fn is_hash(s: &str) -> bool {
     s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct BlameMeta {
     author: String,
     author_email: String,
@@ -86,7 +86,10 @@ fn parse_blame_porcelain(output: &str) -> Vec<GitBlameLine> {
     let mut meta_by_hash: HashMap<String, BlameMeta> = HashMap::new();
 
     let mut current_hash = String::new();
-    let mut current_meta = BlameMeta::default();
+    let mut current_author = String::new();
+    let mut current_author_email = String::new();
+    let mut current_author_time = 0_i64;
+    let mut current_summary = String::new();
 
     let mut remaining: usize = 0;
     let mut next_line: usize = 0;
@@ -102,10 +105,24 @@ fn parse_blame_porcelain(output: &str) -> Vec<GitBlameLine> {
                 continue;
             }
 
-            let meta = if has_meta(&current_meta) {
-                current_meta.clone()
+            let meta = if !current_author.is_empty()
+                || !current_author_email.is_empty()
+                || current_author_time != 0
+                || !current_summary.is_empty()
+            {
+                BlameMeta {
+                    author: current_author.clone(),
+                    author_email: current_author_email.clone(),
+                    author_time: current_author_time,
+                    summary: current_summary.clone(),
+                }
             } else {
-                meta_by_hash.get(&current_hash).cloned().unwrap_or_default()
+                BlameMeta {
+                    author: String::new(),
+                    author_email: String::new(),
+                    author_time: 0,
+                    summary: String::new(),
+                }
             };
 
             lines.push(GitBlameLine {
@@ -129,16 +146,26 @@ fn parse_blame_porcelain(output: &str) -> Vec<GitBlameLine> {
             current_hash = hash;
             next_line = final_line;
             remaining = group_count;
-            current_meta = meta_by_hash.get(&current_hash).cloned().unwrap_or_default();
+            if let Some(meta) = meta_by_hash.get(&current_hash) {
+                current_author = meta.author.clone();
+                current_author_email = meta.author_email.clone();
+                current_author_time = meta.author_time;
+                current_summary = meta.summary.clone();
+            } else {
+                current_author.clear();
+                current_author_email.clear();
+                current_author_time = 0;
+                current_summary.clear();
+            }
             continue;
         }
 
         if let Some(rest) = trimmed.strip_prefix("author ") {
-            current_meta.author = rest.to_string();
+            current_author = rest.to_string();
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix("author-mail ") {
-            current_meta.author_email = rest
+            current_author_email = rest
                 .trim()
                 .trim_start_matches('<')
                 .trim_end_matches('>')
@@ -146,11 +173,11 @@ fn parse_blame_porcelain(output: &str) -> Vec<GitBlameLine> {
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix("author-time ") {
-            current_meta.author_time = rest.trim().parse::<i64>().unwrap_or(0);
+            current_author_time = rest.trim().parse::<i64>().unwrap_or(0);
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix("summary ") {
-            current_meta.summary = rest.to_string();
+            current_summary = rest.to_string();
             continue;
         }
     }

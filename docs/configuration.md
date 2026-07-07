@@ -1305,7 +1305,7 @@ Network target 会先分到三类默认策略：`loopback` 匹配 `localhost`、
       },
       "names": {
         "shell": "ask",
-        "fs": "ask",
+        "agena.fs/read": "ask",
         "my-plugin.echo": "ask"
       },
       "rules": {
@@ -1364,11 +1364,11 @@ Network target 会先分到三类默认策略：`loopback` 匹配 `localhost`、
 - `retrieval.limit`: 自动回忆最多注入多少条命中。
 - `retrieval.min_query_chars`: 用户消息短于这个长度时跳过自动回忆。
 
-`plugins.list."agena.memory".config` 会驱动 `agena.memory` 插件；模型可见 tool 名是 `memory`，支持 `search`、`get`、`list`、`write`、`delete` 五个 action。检索索引是工作区本地的 Tantivy 索引，不需要单独配置服务地址。`search` 和自动回忆会按需从 memory 文件重建索引，因此始终以磁盘上的 memory 文件为准。
+`plugins.list."agena.memory".config` 会驱动 `agena.memory` 插件；模型可见 tools 是 `search`、`get`、`list`、`write`、`delete`。检索索引是工作区本地的 Tantivy 索引，不需要单独配置服务地址。`search` 和自动回忆会按需从 memory 文件重建索引，因此始终以磁盘上的 memory 文件为准。
 
 ## Workflow Tool Search
 
-`agena.catalog/tools` 的 `search` action 现在使用进程内 Tantivy 索引。每次搜索都会基于当前已注册的 tool catalog 在本地重建索引，因此不依赖 Meilisearch 或其他外部服务。
+`agena.tools/search` 现在使用进程内 Tantivy 索引。每次搜索都会基于当前已注册的 tools catalog 在本地重建索引，因此不依赖 Meilisearch 或其他外部服务。
 
 旧的 external search backend 配置已经移除。当前版本不会读取 `tool_search.url`、`tool_search.api_key`、`tool_search.index` 这些字段。
 
@@ -1461,7 +1461,7 @@ Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力
 Tool presentation 支持全局、按 plugin、按 tool 覆盖。模式值：
 
 - `detailed`: 使用 tool manifest / `tool.definition` hook 给出的完整 `description`。
-- `help`: 只发送短说明和 help 引导，完整用法通过 `tools` tool 的 `help` action 读取。
+- `help`: 只发送短说明和 help 引导，完整用法通过 `help` tool 读取。
 
 ```json
 {
@@ -1474,8 +1474,8 @@ Tool presentation 支持全局、按 plugin、按 tool 覆盖。模式值：
           "agena.mcp": "help"
         },
         "tools": {
-          "fs": "detailed",
-          "agena.catalog/tools": "detailed"
+          "agena.fs/read": "detailed",
+          "agena.tools/help": "detailed"
         }
       }
     }
@@ -1483,7 +1483,7 @@ Tool presentation 支持全局、按 plugin、按 tool 覆盖。模式值：
 }
 ```
 
-按 tool 覆盖可以使用模型可见名（如 `fs`）、`plugin_id/tool_name`（如 `agena.catalog/tools`），或无冲突的原始 tool 名。具体 tool 覆盖优先于 plugin 覆盖；plugin 覆盖优先于 manifest 的 `description_mode`；最后才使用 `default_mode`。
+按 tool 覆盖可以使用模型可见名（如 `agena.fs/read`）、`plugin_id/tool_name`（如 `agena.tools/help`），或无冲突的原始 tool 名。具体 tool 覆盖优先于 plugin 覆盖；plugin 覆盖优先于 manifest 的 `description_mode`；最后才使用 `default_mode`。
 
 Plugin transport kind：
 
@@ -1499,7 +1499,7 @@ Plugin transport kind：
 {
   "plugins": {
     "list": {
-      "agena.catalog": {
+      "agena.tools": {
         "package": {
           "kind": "static"
         },

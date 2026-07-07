@@ -16,23 +16,18 @@ pub struct EditorPreviewHelpSpec<'a> {
 }
 
 impl<'a> EditorPreviewHelpSpec<'a> {
-    pub fn new(body: &'a Text<'a>, height_bounds: (u16, u16)) -> Self {
+    pub fn new(
+        body: &'a Text<'a>,
+        height_bounds: (u16, u16),
+        wrap: bool,
+        borders: Borders,
+    ) -> Self {
         Self {
             body,
             height_bounds,
-            wrap: true,
-            borders: Borders::NONE,
+            wrap,
+            borders,
         }
-    }
-
-    pub fn with_wrap(mut self, wrap: bool) -> Self {
-        self.wrap = wrap;
-        self
-    }
-
-    pub fn with_borders(mut self, borders: Borders) -> Self {
-        self.borders = borders;
-        self
     }
 }
 
@@ -55,37 +50,25 @@ impl<'a> EditorPreviewDialogSpec<'a> {
         target_width: u16,
         prompt: &'a Text<'a>,
         prompt_height_bounds: (u16, u16),
+        help: Option<EditorPreviewHelpSpec<'a>>,
         input: &'a Editor,
+        input_borders: Borders,
         preview: &'a Text<'a>,
         preview_height_bounds: (u16, u16),
+        set_cursor: bool,
     ) -> Self {
         Self {
             title,
             target_width,
             prompt,
             prompt_height_bounds,
-            help: None,
+            help,
             input,
-            input_borders: Borders::ALL,
+            input_borders,
             preview,
             preview_height_bounds,
-            set_cursor: false,
+            set_cursor,
         }
-    }
-
-    pub fn with_help(mut self, help: EditorPreviewHelpSpec<'a>) -> Self {
-        self.help = Some(help);
-        self
-    }
-
-    pub fn with_input_borders(mut self, input_borders: Borders) -> Self {
-        self.input_borders = input_borders;
-        self
-    }
-
-    pub fn with_cursor(mut self, set_cursor: bool) -> Self {
-        self.set_cursor = set_cursor;
-        self
     }
 }
 

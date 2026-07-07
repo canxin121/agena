@@ -159,42 +159,36 @@ pub async fn update_check(Query(query): Query<UpdateCheckQuery>) -> Json<UpdateC
     let checked_at = now_rfc3339();
     let service_current_version = current_service_version();
     let installer_runtime = InstallerRuntime::from_query(query);
-
-    let mut response = UpdateCheckResponse {
-        source: SOURCE_KIND,
-        repo: repo.clone(),
-        checked_at,
-        release: None,
-        service: ServiceUpdateStatus {
-            current_version: service_current_version.clone(),
-            latest_version: None,
-            available: false,
-            target: preferred_service_target_triple(),
-            asset_name: None,
-            asset_url: None,
-            update_command: None,
-        },
-        installer: installer_runtime
-            .as_ref()
-            .map(|runtime| InstallerUpdateStatus {
-                current_version: runtime.current_version.clone(),
-                latest_version: None,
-                available: false,
-                target: runtime.target.clone(),
-                channel: runtime.channel.clone(),
-                assets: Vec::new(),
-                primary_asset_name: None,
-                primary_asset_url: None,
-                selection_error: None,
-            }),
-        error: None,
-    };
-
     let release = match fetch_latest_release(&repo).await {
         Ok(value) => value,
         Err(err) => {
-            response.error = Some(err);
-            return Json(response);
+            return Json(UpdateCheckResponse {
+                source: SOURCE_KIND,
+                repo,
+                checked_at,
+                release: None,
+                service: ServiceUpdateStatus {
+                    current_version: service_current_version,
+                    latest_version: None,
+                    available: false,
+                    target: preferred_service_target_triple(),
+                    asset_name: None,
+                    asset_url: None,
+                    update_command: None,
+                },
+                installer: installer_runtime.map(|runtime| InstallerUpdateStatus {
+                    current_version: runtime.current_version,
+                    latest_version: None,
+                    available: false,
+                    target: runtime.target,
+                    channel: runtime.channel,
+                    assets: Vec::new(),
+                    primary_asset_name: None,
+                    primary_asset_url: None,
+                    selection_error: None,
+                }),
+                error: Some(err),
+            });
         }
     };
 
@@ -210,62 +204,70 @@ pub async fn update_check(Query(query): Query<UpdateCheckQuery>) -> Json<UpdateC
         .clone()
         .unwrap_or_else(|| normalize_release_tag(&release.tag_name));
 
-    response.release = Some(ReleaseSummary {
+    let release_summary = ReleaseSummary {
         tag: release.tag_name.clone(),
         version: summary_version,
         url: release_url,
         body: nonempty(release.body.as_deref()),
         published_at: nonempty(release.published_at.as_deref()),
-    });
-
-    let service_target = response.service.target.clone();
-    response.service.latest_version = latest_version.clone();
-    response.service.available = latest_version
+    };
+    let service_target = preferred_service_target_triple();
+    let (service_target, service_asset_name, service_asset_url) =
+        if let Some(target) = service_target.as_deref() {
+            let release_tag = release.tag_name.trim();
+            let (asset_name, asset_url) = resolve_release_asset_url(
+                &release.assets,
+                &repo,
+                release_tag,
+                service_asset_candidates(target, release_tag).as_slice(),
+            );
+            let target = asset_name
+                .as_deref()
+                .and_then(|asset_name| service_asset_target_from_name(asset_name, release_tag))
+                .or_else(|| service_target.clone());
+            (target, asset_name, asset_url)
+        } else {
+            (service_target, None, None)
+        };
+    let service_available = latest_version
         .as_deref()
         .map(|latest| is_newer_version(&service_current_version, latest))
         .unwrap_or(false);
+    let service_update_command =
+        build_service_update_command(service_asset_url.as_deref(), service_asset_name.as_deref());
 
-    if let Some(target) = service_target.as_deref() {
-        let release_tag = release.tag_name.trim();
-        let (asset_name, asset_url) = resolve_release_asset_url(
-            &release.assets,
-            &repo,
-            release_tag,
-            service_asset_candidates(target, release_tag).as_slice(),
-        );
-        if let Some(asset_name) = asset_name.as_deref() {
-            response.service.target = service_asset_target_from_name(asset_name, release_tag)
-                .or_else(|| response.service.target.clone());
-        }
-        response.service.asset_name = asset_name;
-        response.service.asset_url = asset_url.clone();
-        response.service.update_command = build_service_update_command(
-            asset_url.as_deref(),
-            response.service.asset_name.as_deref(),
-        );
-    }
-
-    if let (Some(installer), Some(runtime)) =
-        (response.installer.as_mut(), installer_runtime.as_ref())
-    {
-        installer.latest_version = latest_version.clone();
+    let installer = installer_runtime.map(|runtime| {
         let version_available = latest_version
             .as_deref()
             .map(|latest| is_newer_version(&runtime.current_version, latest))
             .unwrap_or(false);
-        installer.available = false;
-
         let Some(target_raw) = runtime.target.as_deref() else {
-            installer.selection_error = Some(missing_target_error());
-            return Json(response);
+            return InstallerUpdateStatus {
+                current_version: runtime.current_version,
+                latest_version: latest_version.clone(),
+                available: false,
+                target: runtime.target,
+                channel: runtime.channel,
+                assets: Vec::new(),
+                primary_asset_name: None,
+                primary_asset_url: None,
+                selection_error: Some(missing_target_error()),
+            };
         };
-
         let Some(target) = normalize_installer_target(target_raw) else {
-            installer.selection_error = Some(unsupported_target_error(target_raw));
-            return Json(response);
+            let selection_error = unsupported_target_error(target_raw);
+            return InstallerUpdateStatus {
+                current_version: runtime.current_version,
+                latest_version: latest_version.clone(),
+                available: false,
+                target: runtime.target,
+                channel: runtime.channel,
+                assets: Vec::new(),
+                primary_asset_name: None,
+                primary_asset_url: None,
+                selection_error: Some(selection_error),
+            };
         };
-
-        installer.target = Some(target.to_string());
         let mut assets = installer_assets_for_target(
             &release.assets,
             &repo,
@@ -274,17 +276,47 @@ pub async fn update_check(Query(query): Query<UpdateCheckQuery>) -> Json<UpdateC
             release.tag_name.trim(),
         );
         assets.sort_by(|a, b| a.name.cmp(&b.name));
-        installer.assets = assets;
-        let selected = select_primary_installer_asset(runtime, installer.assets.as_slice());
-        installer.selection_error = selected.selection_error;
-        if let Some(primary) = selected.primary_asset {
-            installer.primary_asset_name = Some(primary.name.clone());
-            installer.primary_asset_url = Some(primary.url.clone());
-            installer.available = version_available;
+        let selected = select_primary_installer_asset(&runtime, assets.as_slice());
+        let (primary_asset_name, primary_asset_url, available) =
+            if let Some(primary) = selected.primary_asset {
+                (
+                    Some(primary.name.clone()),
+                    Some(primary.url.clone()),
+                    version_available,
+                )
+            } else {
+                (None, None, false)
+            };
+        InstallerUpdateStatus {
+            current_version: runtime.current_version,
+            latest_version: latest_version.clone(),
+            available,
+            target: Some(target.to_string()),
+            channel: runtime.channel,
+            assets,
+            primary_asset_name,
+            primary_asset_url,
+            selection_error: selected.selection_error,
         }
-    }
+    });
 
-    Json(response)
+    Json(UpdateCheckResponse {
+        source: SOURCE_KIND,
+        repo,
+        checked_at,
+        release: Some(release_summary),
+        service: ServiceUpdateStatus {
+            current_version: service_current_version,
+            latest_version,
+            available: service_available,
+            target: service_target,
+            asset_name: service_asset_name,
+            asset_url: service_asset_url,
+            update_command: service_update_command,
+        },
+        installer,
+        error: None,
+    })
 }
 
 #[derive(Debug)]

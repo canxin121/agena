@@ -73,21 +73,27 @@ impl ComposerQueue {
         if drafts.is_empty() {
             return None;
         }
-        let mut combined = ComposerDraft::default();
+        let mut text = String::new();
+        let mut elements = Vec::new();
+        let mut items = Vec::new();
         for (idx, draft) in drafts.into_iter().enumerate() {
             if idx > 0 {
-                combined.text.push_str("\n\n");
+                text.push_str("\n\n");
             }
-            let prev_len = combined.text.len();
-            combined.text.push_str(draft.text.as_str());
+            let prev_len = text.len();
+            text.push_str(draft.text.as_str());
             // shift element / item ranges by prev_len
             for mut element in draft.elements {
                 element.range = (element.range.start + prev_len)..(element.range.end + prev_len);
-                combined.elements.push(element);
+                elements.push(element);
             }
-            combined.items.extend(draft.items);
+            items.extend(draft.items);
         }
-        Some(combined)
+        Some(ComposerDraft {
+            text,
+            items,
+            elements,
+        })
     }
 
     pub fn len(&self) -> usize {

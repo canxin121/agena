@@ -2182,32 +2182,39 @@ fn apply_patch_details(details: &agena::message::ToolOutput) -> Option<ApplyPatc
 }
 
 fn diff_stats(diff: &str, changes: Option<&[agena::message::FileChangeRecord]>) -> DiffStats {
-    let mut stats = DiffStats {
-        file_count: diff
-            .lines()
-            .filter(|line| line.starts_with("diff --git "))
-            .count(),
-        line_count: diff.lines().count(),
-        ..DiffStats::default()
-    };
+    let mut file_count = diff
+        .lines()
+        .filter(|line| line.starts_with("diff --git "))
+        .count();
+    let line_count = diff.lines().count();
+    let mut additions = 0usize;
+    let mut deletions = 0usize;
     for line in diff.lines() {
         if line.starts_with("+++ ") || line.starts_with("--- ") {
             continue;
         }
         if line.starts_with('+') {
-            stats.additions += 1;
+            additions += 1;
         } else if line.starts_with('-') {
-            stats.deletions += 1;
+            deletions += 1;
         }
     }
-    if let Some(changes) = changes {
-        stats.file_count = stats.file_count.max(changes.len());
-        stats.renames = changes
+    let renames = if let Some(changes) = changes {
+        file_count = file_count.max(changes.len());
+        changes
             .iter()
             .filter(|change| change.kind == FileChangeKind::Moved)
-            .count();
+            .count()
+    } else {
+        0
+    };
+    DiffStats {
+        file_count,
+        additions,
+        deletions,
+        renames,
+        line_count,
     }
-    stats
 }
 
 fn summarize_change_paths(

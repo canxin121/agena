@@ -604,13 +604,13 @@ async fn response_from_upstream_for_session(
         let mut response = Response::new(Body::from(rewritten));
         *response.status_mut() = status;
         *response.headers_mut() = response_headers;
-        return Ok(with_preview_frame_headers(response));
+        return Ok(add_preview_frame_headers(response));
     }
 
     let mut response = Response::new(Body::from_stream(upstream.bytes_stream()));
     *response.status_mut() = status;
     *response.headers_mut() = response_headers;
-    Ok(with_preview_frame_headers(response))
+    Ok(add_preview_frame_headers(response))
 }
 
 async fn proxy_preview_session_websocket(
@@ -650,7 +650,7 @@ async fn proxy_preview_session_websocket(
         websocket
     };
 
-    Ok(with_preview_frame_headers(websocket.on_upgrade(
+    Ok(add_preview_frame_headers(websocket.on_upgrade(
         move |socket| async move {
             bridge_websocket(socket, upstream_socket).await;
         },
@@ -834,7 +834,7 @@ async fn response_from_upstream(upstream: reqwest::Response) -> ApiResult<Respon
     let mut response = Response::new(Body::from_stream(upstream.bytes_stream()));
     *response.status_mut() = status;
     *response.headers_mut() = response_headers;
-    Ok(with_preview_frame_headers(response))
+    Ok(add_preview_frame_headers(response))
 }
 
 fn preview_proxy_client() -> ApiResult<reqwest::Client> {
@@ -844,7 +844,7 @@ fn preview_proxy_client() -> ApiResult<reqwest::Client> {
         .map_err(|err| AppError::internal(format!("failed to build preview proxy client: {err}")))
 }
 
-fn with_preview_frame_headers(mut response: Response) -> Response {
+fn add_preview_frame_headers(mut response: Response) -> Response {
     response.headers_mut().insert(
         header::X_FRAME_OPTIONS,
         HeaderValue::from_static("SAMEORIGIN"),

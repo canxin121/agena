@@ -128,6 +128,10 @@ pub struct TranscriptContent {
 }
 
 impl TranscriptContent {
+    pub fn from_blocks(blocks: Vec<TranscriptBlock>) -> Self {
+        Self { blocks }
+    }
+
     pub fn from_text(text: impl Into<String>) -> Self {
         Self {
             blocks: vec![TranscriptBlock::Text { text: text.into() }],
@@ -149,13 +153,13 @@ impl TranscriptContent {
     /// transcript shape simply does not model.
     pub fn from_message_lossy(message: &crate::message::Message) -> Self {
         use crate::message::{AttachmentKind, PartContent};
-        let mut content = Self::default();
+        let mut blocks = Vec::new();
         let mut had_any = false;
         for part in &message.parts {
             match part.content.as_ref() {
                 Some(PartContent::Text(text)) => {
                     if !text.text.is_empty() {
-                        content.blocks.push(TranscriptBlock::Text {
+                        blocks.push(TranscriptBlock::Text {
                             text: text.text.clone(),
                         });
                         had_any = true;
@@ -164,9 +168,7 @@ impl TranscriptContent {
                 Some(PartContent::Reasoning(reasoning)) => {
                     let joined = reasoning.preferred_text();
                     if !joined.is_empty() {
-                        content
-                            .blocks
-                            .push(TranscriptBlock::Reasoning { text: joined });
+                        blocks.push(TranscriptBlock::Reasoning { text: joined });
                         had_any = true;
                     }
                 }
@@ -183,7 +185,7 @@ impl TranscriptContent {
                                 media_type: Some(media_type),
                             },
                         };
-                        content.blocks.push(block);
+                        blocks.push(block);
                         had_any = true;
                     }
                 }
@@ -193,12 +195,10 @@ impl TranscriptContent {
         if !had_any {
             let fallback = message.as_text_lossy();
             if !fallback.is_empty() {
-                content
-                    .blocks
-                    .push(TranscriptBlock::Text { text: fallback });
+                blocks.push(TranscriptBlock::Text { text: fallback });
             }
         }
-        content
+        Self { blocks }
     }
 
     fn hash_into(&self, hasher: &mut blake3::Hasher) {
@@ -261,7 +261,7 @@ impl TranscriptBlock {
 pub struct TranscriptToolCall {
     pub call_id: ToolCallId,
     pub name: SmolStr,
-    pub arguments: String, // canonical JSON string — see ProviderTranscriptBuilder
+    pub arguments: String, // canonical JSON string
 }
 
 impl TranscriptToolCall {

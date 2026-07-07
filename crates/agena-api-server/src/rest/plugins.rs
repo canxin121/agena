@@ -173,6 +173,40 @@ fn invoke_plugin_tool_for_ui(
     .ok_or_else(|| {
         let visible_name = plugin_id
             .and_then(|plugin_id| {
+                let normalize = |value: &str| {
+                    let trimmed = value.trim();
+                    if trimmed.is_empty() {
+                        return "tool".to_string();
+                    }
+                    let mut out = String::with_capacity(trimmed.len());
+                    let mut previous_was_separator = false;
+                    for ch in trimmed.chars() {
+                        if ch.is_ascii_alphanumeric() || ch == '_' {
+                            out.push(ch);
+                            previous_was_separator = false;
+                        } else if !previous_was_separator {
+                            out.push('_');
+                            previous_was_separator = true;
+                        }
+                    }
+                    while out.ends_with('_') {
+                        out.pop();
+                    }
+                    while out.starts_with('_') {
+                        out.remove(0);
+                    }
+                    if out.is_empty() {
+                        out.push_str("tool");
+                    }
+                    if out
+                        .bytes()
+                        .next()
+                        .is_some_and(|byte| !byte.is_ascii_alphabetic() && byte != b'_')
+                    {
+                        out.insert(0, '_');
+                    }
+                    out
+                };
                 state
                     .runtime()
                     .current_snapshot()
@@ -182,10 +216,8 @@ fn invoke_plugin_tool_for_ui(
                     .map(|manifest| {
                         format!(
                             "{}__{}",
-                            agena::plugin::registry::model_tool_name_segment(
-                                manifest.name.as_str()
-                            ),
-                            agena::plugin::registry::model_tool_name_segment(tool_name),
+                            normalize(manifest.name.as_str()),
+                            normalize(tool_name)
                         )
                     })
             })
@@ -204,8 +236,8 @@ fn invoke_plugin_tool_for_ui(
     };
     let structured =
         agena::message::StructuredObject::try_from(input).map_err(ServerError::BadRequest)?;
-    let invocation = agena::message::ToolInvocation::with_plugin_name(
-        entry.model_name.clone(),
+    let invocation = agena::message::ToolInvocation::plugin_named(
+        entry.model_name(),
         entry.plugin_full_name(),
         structured,
     );
@@ -234,8 +266,8 @@ fn invoke_plugin_tool_for_ui(
         .execute_invocation_detailed(&invocation, session_id.unwrap_or(-1), -1)
         .map_err(|error| ServerError::Internal(error.to_string()))?;
     Ok(agena::plugin::PluginUiToolInvokeResponse {
-        plugin_id: entry.plugin_full_name(),
-        tool: entry.model_name,
+        plugin_id: entry.plugin_key().clone(),
+        tool: entry.model_name(),
         title: execution.view.title,
         output_text: execution.view.output_text,
         payload: execution.output.to_json_payload(),

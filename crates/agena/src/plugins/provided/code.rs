@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use agena_macros::{StaticToolSurface, ToolInputShape};
+use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
 use ast_grep_core::Pattern;
 use ast_grep_language::{Language as AstGrepLanguage, LanguageExt, SupportLang};
 use schemars::JsonSchema;
@@ -165,39 +165,52 @@ impl CodeLanguage {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    tool = "code",
-    description = "Structured code inspection command. Use action `search_ast` for AST-aware pattern matching or `syntax_tree` to inspect the parsed syntax tree of a supported source file.",
-    summary = "Search code structurally with ast-grep and inspect syntax trees.",
-    help = "Supported languages: bash, c, cpp, csharp, css, dart, elixir, go, haskell, hcl, html, java, javascript, json, lua, markdown, nix, php, python, ruby, rust, solidity, swift, tsx, typescript, yaml. Use action `search_ast` with a language-specific pattern like `if $COND { $BODY }`, `def $NAME($ARGS): $$$`, or `function $NAME($ARGS) { $$$ }`. Use action `syntax_tree` to inspect the named syntax nodes for a supported file. When `language` is omitted for a file path, Agena infers it from the extension. Directory searches require `language` explicitly.",
+    tool = "search_ast",
+    summary = "Search code structurally with ast-grep.",
+    help = "Supported languages: bash, c, cpp, csharp, css, dart, elixir, go, haskell, hcl, html, java, javascript, json, lua, markdown, nix, php, python, ruby, rust, solidity, swift, tsx, typescript, yaml. Use patterns like `if $COND { $BODY }`, `def $NAME($ARGS): $$$`, or `function $NAME($ARGS) { $$$ }`. When `language` is omitted for a file path, Agena infers it from the extension. Directory searches require `language` explicitly.",
     handler_receiver = CodePlugin,
+    handle_with_context = CodePlugin::dispatch_search_ast,
+    handle_field = args,
+    permission_paths_handle = CodePlugin::permission_search_ast,
+    handle_by_value = true,
     display = brief,
     tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Discovery),
     concurrency_safe = true
 )]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-enum CodeToolInput {
-    #[tool(
-        exec = "search_ast",
-        handle_with_context = CodePlugin::dispatch_search_ast,
-        permission_paths_handle = CodePlugin::permission_search_ast,
-        handle_by_value = true
-    )]
-    SearchAst {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: CodeSearchAstInput,
-    },
-    #[tool(
-        exec = "syntax_tree",
-        handle_with_context = CodePlugin::dispatch_syntax_tree,
-        permission_paths_handle = CodePlugin::permission_syntax_tree,
-        handle_by_value = true
-    )]
-    SyntaxTree {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: CodeSyntaxTreeInput,
-    },
+#[serde(deny_unknown_fields)]
+struct CodeSearchAstToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: CodeSearchAstInput,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "syntax_tree",
+    summary = "Inspect a parsed syntax tree.",
+    help = "Use `syntax_tree` to inspect named syntax nodes for a supported file. When `language` is omitted, Agena infers it from the file extension.",
+    handler_receiver = CodePlugin,
+    handle_with_context = CodePlugin::dispatch_syntax_tree,
+    handle_field = args,
+    permission_paths_handle = CodePlugin::permission_syntax_tree,
+    handle_by_value = true,
+    display = brief,
+    tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Discovery),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+struct CodeSyntaxTreeToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: CodeSyntaxTreeInput,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, ToolSuite)]
+#[tool_suite(handler_receiver = CodePlugin)]
+enum CodeToolSuite {
+    SearchAst(CodeSearchAstToolInput),
+    SyntaxTree(CodeSyntaxTreeToolInput),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
@@ -261,23 +274,24 @@ struct SyntaxNodeView {
 }
 
 #[crate::plugin::sdk::plugin(
-    id = CODE_PLUGIN_ID,
+    namespace = "agena",
+    name = "code",
     version = env!("CARGO_PKG_VERSION"),
-    description = "Structured code search and syntax inspection tools.",
+    summary = "Structured code search and syntax inspection tools.",
     display = brief
 )]
 impl CodePlugin {
-    #[tool]
+    #[tool_suite]
     async fn tool_invoke(
         &self,
-        input: CodeToolInput,
+        input: CodeToolSuite,
         context: &ToolInvokeContext<'_>,
     ) -> SdkResult<ToolInvokeOutput> {
         input.dispatch_tool_invoke_with_context(self, context).await
     }
 
-    #[permission(paths)]
-    async fn permission_paths(&self, input: CodeToolInput) -> SdkResult<Vec<PathRequest>> {
+    #[permission(paths, suite)]
+    async fn permission_paths(&self, input: CodeToolSuite) -> SdkResult<Vec<PathRequest>> {
         input.dispatch_permission_paths(self).await
     }
 }
@@ -359,9 +373,13 @@ impl CodePlugin {
         })
         .map_err(|err| PluginError::new(err.to_string()))?;
         let output = format_search_output(&payload);
-        Ok(ToolInvokeOutput::text(output)
-            .with_title("code search_ast")
-            .with_payload(payload))
+        Ok(ToolInvokeOutput::from_parts(
+            "code search_ast",
+            output,
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
     }
 
     fn invoke_syntax_tree(
@@ -399,9 +417,13 @@ impl CodePlugin {
         .map_err(|err| PluginError::new(err.to_string()))?;
         let output = serde_json::to_string_pretty(&payload)
             .map_err(|err| PluginError::new(err.to_string()))?;
-        Ok(ToolInvokeOutput::text(output)
-            .with_title("code syntax_tree")
-            .with_payload(payload))
+        Ok(ToolInvokeOutput::from_parts(
+            "code syntax_tree",
+            output,
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
     }
 }
 

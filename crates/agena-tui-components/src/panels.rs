@@ -158,17 +158,23 @@ impl<'a, H> ListPanelState<'a, H> {
 }
 
 pub fn render_list_panel(frame: &mut Frame, area: Rect, spec: &ListPanelSpec<'_>) {
-    let mut block = Block::default().borders(Borders::ALL);
-    if let Some(title) = spec.title.as_ref() {
-        block = block.title(format!(" {} ", title));
-    }
+    let block = match spec.title.as_ref() {
+        Some(title) => Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {} ", title)),
+        None => Block::default().borders(Borders::ALL),
+    };
     let list = List::new(spec.items.iter().cloned())
         .block(block)
         .highlight_style(spec.highlight_style)
         .highlight_symbol(spec.highlight_symbol.as_ref());
-    let mut state = ListState::default();
+    let mut state = empty_list_state();
     state.select(spec.selected);
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn empty_list_state() -> ListState {
+    ListState::default()
 }
 
 pub fn render_text_panel(frame: &mut Frame, area: Rect, spec: &TextPanelSpec<'_>) {
@@ -182,10 +188,12 @@ pub fn render_text_panel(frame: &mut Frame, area: Rect, spec: &TextPanelSpec<'_>
     if let Some(alignment) = spec.alignment {
         paragraph = paragraph.alignment(alignment);
     }
-    let mut block = Block::default().borders(Borders::ALL);
-    if let Some(title) = spec.title.as_ref() {
-        block = block.title(format!(" {} ", title));
-    }
+    let block = match spec.title.as_ref() {
+        Some(title) => Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {} ", title)),
+        None => Block::default().borders(Borders::ALL),
+    };
     frame.render_widget(paragraph.block(block), area);
 }
 

@@ -1,31 +1,41 @@
 use super::*;
 
-use agena_macros::{StaticToolSurface, ToolInputShape};
+use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    tool = "agent",
-    description = "Runtime agent profile command. Use action `switch` to change the current session's active agent profile or `restore` to bring back a saved profile. This tool does not spawn delegated subagent work; use `task` for that.",
-    summary = "Switch or restore the current runtime agent profile.",
+    tool = "switch",
+    summary = "Switch the current runtime agent profile.",
     handler_receiver = WorkflowPlugin,
+    handle = WorkflowPlugin::invoke_agent_switch,
+    handle_field = args,
     display = brief,
     capabilities(HostCapability::AgentRegistry),
     concurrency_safe = false
 )]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub(crate) enum AgentToolInput {
-    #[tool(exec = "agent.switch", handle = WorkflowPlugin::invoke_agent_switch)]
-    Switch {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: AgentSwitchToolInput,
-    },
-    #[tool(exec = "agent.restore", handle = WorkflowPlugin::invoke_agent_restore)]
-    Restore {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: AgentRestoreToolInput,
-    },
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeSwitchToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: AgentSwitchToolInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "restore",
+    summary = "Restore the previous runtime agent profile.",
+    handler_receiver = WorkflowPlugin,
+    handle = WorkflowPlugin::invoke_agent_restore,
+    handle_field = args,
+    display = brief,
+    capabilities(HostCapability::AgentRegistry),
+    concurrency_safe = false
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeRestoreToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: AgentRestoreToolInput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
@@ -37,58 +47,76 @@ pub(crate) struct SessionRenameToolInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    tool = "session",
-    description = "Session metadata command. Use action `get` to inspect the current session metadata or `rename` to update the session title. This tool does not read chat history or execute workflow actions.",
-    summary = "Inspect or rename the current session.",
+    tool = "get",
+    summary = "Inspect the current session metadata.",
     handler_receiver = WorkflowPlugin,
+    handle = WorkflowPlugin::invoke_get_session,
     display = brief,
-    tags(ToolTag::ReadOnly, ToolTag::Mutating),
+    tags(ToolTag::ReadOnly),
+    capabilities(HostCapability::SessionRegistry),
+    concurrency_safe = true
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeGetToolInput {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "rename",
+    summary = "Rename the current session.",
+    handler_receiver = WorkflowPlugin,
+    handle = WorkflowPlugin::invoke_rename_session,
+    handle_field = args,
+    display = brief,
+    tags(ToolTag::Mutating),
     capabilities(HostCapability::SessionRegistry),
     concurrency_safe = false
 )]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub(crate) enum SessionToolInput {
-    #[tool(exec = "session.get", handle = WorkflowPlugin::invoke_get_session)]
-    Get,
-    #[tool(exec = "session.rename", handle = WorkflowPlugin::invoke_rename_session)]
-    Rename {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: SessionRenameToolInput,
-    },
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeRenameToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: SessionRenameToolInput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    tool = "user",
-    description = "User interaction command. Use action `request_input` to request structured short answers.",
+    tool = "request_input",
     summary = "Request short structured input from the user.",
     handler_receiver = WorkflowPlugin,
+    handle = WorkflowPlugin::invoke_ask_user,
+    handle_field = args,
     display = brief,
-    tags(ToolTag::ReadOnly, ToolTag::Interactive),
+    tags(ToolTag::Interactive),
     capabilities(HostCapability::AskUser),
     concurrency_safe = false
 )]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub(crate) enum UserToolInput {
-    #[tool(
-        exec = "user.request_input",
-        handle = WorkflowPlugin::invoke_ask_user,
-        min_items("questions", 1),
-        max_items("questions", 3),
-        max_items("questions[].options", 8),
-        max_chars("questions[].header", 12),
-        non_empty("questions[].id", "questions[].question"),
-        non_empty_if_present("questions[].options[].label"),
-        required_unless_present("questions[].allow_custom", "questions[].options"),
-        distinct_trimmed("questions[].id"),
-        distinct_trimmed_within("questions[].options[].label", "questions[]")
-    )]
-    RequestInput {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: AskUserToolInput,
-    },
+#[tool(
+    min_items("questions", 1),
+    max_items("questions", 3),
+    max_items("questions[].options", 8),
+    max_chars("questions[].header", 12),
+    non_empty("questions[].id", "questions[].question"),
+    non_empty_if_present("questions[].options[].label"),
+    required_unless_present("questions[].allow_custom", "questions[].options"),
+    distinct_trimmed("questions[].id"),
+    distinct_trimmed_within("questions[].options[].label", "questions[]")
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeRequestInputToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: AskUserToolInput,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, ToolSuite)]
+#[tool_suite(handler_receiver = WorkflowPlugin)]
+pub(crate) enum RuntimeToolSuite {
+    Switch(RuntimeSwitchToolInput),
+    Restore(RuntimeRestoreToolInput),
+    Get(RuntimeGetToolInput),
+    Rename(RuntimeRenameToolInput),
+    RequestInput(RuntimeRequestInputToolInput),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

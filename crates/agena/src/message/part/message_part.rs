@@ -37,28 +37,40 @@ pub struct MessagePart {
 }
 
 impl MessagePart {
-    pub fn with_content(
+    pub fn from_content(
         id: i64,
         message_id: i64,
         created_at: DateTime<Utc>,
         status: ExecutionStatus,
         content: PartContent,
     ) -> Self {
-        let mut part = Self {
+        Self::from_content_with_index(id, message_id, 0, created_at, status, content)
+    }
+
+    pub fn from_content_with_index(
+        id: i64,
+        message_id: i64,
+        part_index: i32,
+        created_at: DateTime<Utc>,
+        status: ExecutionStatus,
+        content: PartContent,
+    ) -> Self {
+        let kind = content.kind();
+        let name = name_from_content(&content);
+        let summary = summary_from_content(&content);
+        Self {
             id,
             message_id,
-            part_index: 0,
+            part_index,
             status,
-            kind: content.kind(),
-            name: None,
-            summary: None,
+            kind,
+            name,
+            summary,
             has_detail: true,
             operation_id: None,
             created_at,
             content: Some(content),
-        };
-        part.refresh_summary_from_content();
-        part
+        }
     }
 
     pub fn without_detail(&self) -> Self {

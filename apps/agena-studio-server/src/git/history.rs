@@ -49,7 +49,8 @@ pub struct GitLogQuery {
     pub author: Option<String>,
     pub message: Option<String>,
     pub r#ref: Option<String>,
-    pub graph: Option<bool>,
+    #[serde(default)]
+    pub graph: bool,
 }
 
 fn parse_git_log_records(out: &str) -> Vec<GitLogCommit> {
@@ -156,8 +157,6 @@ pub async fn git_log(Query(q): Query<GitLogQuery>) -> Response {
         .as_deref()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty());
-    let include_graph = q.graph.unwrap_or(false);
-
     if let Some(p) = path
         && !is_safe_repo_rel_path(p)
     {
@@ -174,7 +173,7 @@ pub async fn git_log(Query(q): Query<GitLogQuery>) -> Response {
         "--date=iso-strict".into(),
         format!("--pretty=format:{}", format),
     ];
-    if include_graph {
+    if q.graph {
         base_args.push("--graph".into());
     }
     if let Some(r) = ref_name {

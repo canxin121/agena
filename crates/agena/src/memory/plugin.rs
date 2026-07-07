@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use agena_macros::{StaticToolSurface, ToolInputShape};
+use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -63,57 +63,58 @@ impl Default for MemoryRetrievalConfig {
 }
 
 fn memory_config_schema() -> serde_json::Value {
-    let mut schema = crate::tool::definition::json_schema_for_with_default(MemoryConfig::default());
-    for (pointer, title, description) in [
-        (
-            "",
-            "Memory Plugin Config",
-            "Controls project instruction injection and memory retrieval defaults for agena.memory.",
-        ),
-        (
-            "/properties/project_instructions",
-            "Project Instructions",
-            "Controls whether project instruction memories are injected into the chat system prompt.",
-        ),
-        (
-            "/properties/project_instructions/properties/enabled",
-            "Enabled",
-            "Allows project instruction memories to be injected into conversations.",
-        ),
-        (
-            "/properties/project_instructions/properties/include_global",
-            "Include Global",
-            "Also includes global instruction memories when building the project instruction prompt.",
-        ),
-        (
-            "/properties/retrieval",
-            "Retrieval",
-            "Defaults for memory search behavior.",
-        ),
-        (
-            "/properties/retrieval/properties/enabled",
-            "Enabled",
-            "Allows memory search results to be retrieved automatically.",
-        ),
-        (
-            "/properties/retrieval/properties/limit",
-            "Default Limit",
-            "Default number of memory results returned when a search call omits limit.",
-        ),
-        (
-            "/properties/retrieval/properties/min_query_chars",
-            "Minimum Query Characters",
-            "Shortest query length required before automatic retrieval runs.",
-        ),
-    ] {
-        crate::tool::definition::set_schema_metadata(
-            &mut schema,
-            pointer,
-            Some(title),
-            Some(description),
-        );
+    crate::tool::definition::json_schema_for_default_with_metadata(
+        default_memory_config(),
+        &[
+            (
+                "",
+                "Memory Plugin Config",
+                "Controls project instruction injection and memory retrieval defaults for agena.memory.",
+            ),
+            (
+                "/properties/project_instructions",
+                "Project Instructions",
+                "Controls whether project instruction memories are injected into the chat system prompt.",
+            ),
+            (
+                "/properties/project_instructions/properties/enabled",
+                "Enabled",
+                "Allows project instruction memories to be injected into conversations.",
+            ),
+            (
+                "/properties/project_instructions/properties/include_global",
+                "Include Global",
+                "Also includes global instruction memories when building the project instruction prompt.",
+            ),
+            (
+                "/properties/retrieval",
+                "Retrieval",
+                "Defaults for memory search behavior.",
+            ),
+            (
+                "/properties/retrieval/properties/enabled",
+                "Enabled",
+                "Allows memory search results to be retrieved automatically.",
+            ),
+            (
+                "/properties/retrieval/properties/limit",
+                "Default Limit",
+                "Default number of memory results returned when a search call omits limit.",
+            ),
+            (
+                "/properties/retrieval/properties/min_query_chars",
+                "Minimum Query Characters",
+                "Shortest query length required before automatic retrieval runs.",
+            ),
+        ],
+    )
+}
+
+fn default_memory_config() -> MemoryConfig {
+    MemoryConfig {
+        project_instructions: ProjectInstructionsConfig::default(),
+        retrieval: MemoryRetrievalConfig::default(),
     }
-    schema
 }
 
 pub struct MemoryPlugin {
@@ -124,67 +125,108 @@ pub struct MemoryPlugin {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
-    tool = "memory",
-    description = "Persistent memory command. Use action `search`, `get`, `list`, `write`, or `delete` to manage durable user/project memory.",
-    summary = "Search, inspect, and update durable memory records.",
-    help = "Use action `search` to find relevant memories, `get` to read one record, `list` to inspect the catalog, `write` to create or replace a memory file, and `delete` to remove an obsolete memory.",
+    tool = "search",
+    summary = "Search durable memory records.",
     handler_receiver = MemoryPlugin,
+    handle = MemoryPlugin::invoke_search,
+    handle_field = args,
+    permission_paths_handle = MemoryPlugin::permission_search,
     display = brief,
-    tags(ToolTag::ReadOnly, ToolTag::Mutating),
+    tags(ToolTag::ReadOnly),
     concurrency_safe = false
 )]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-enum MemoryToolInput {
-    #[tool(
-        exec = "search",
-        handle = MemoryPlugin::invoke_search,
-        permission_paths_handle = MemoryPlugin::permission_search
-    )]
-    Search {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: MemorySearchInput,
-    },
-    #[tool(
-        exec = "get",
-        handle = MemoryPlugin::invoke_get,
-        permission_paths_handle = MemoryPlugin::permission_get
-    )]
-    Get {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: MemoryGetInput,
-    },
-    #[tool(
-        exec = "list",
-        handle = MemoryPlugin::invoke_list,
-        permission_paths_handle = MemoryPlugin::permission_list
-    )]
-    List {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: MemoryListInput,
-    },
-    #[tool(
-        exec = "write",
-        handle = MemoryPlugin::invoke_write,
-        permission_paths_handle = MemoryPlugin::permission_write
-    )]
-    Write {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: MemoryWriteInput,
-    },
-    #[tool(
-        exec = "delete",
-        handle = MemoryPlugin::invoke_delete,
-        permission_paths_handle = MemoryPlugin::permission_delete
-    )]
-    Delete {
-        #[tool(flatten_shape)]
-        #[serde(flatten)]
-        args: MemoryDeleteInput,
-    },
+#[serde(deny_unknown_fields)]
+struct MemorySearchToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: MemorySearchInput,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "get",
+    summary = "Read one durable memory record.",
+    handler_receiver = MemoryPlugin,
+    handle = MemoryPlugin::invoke_get,
+    handle_field = args,
+    permission_paths_handle = MemoryPlugin::permission_get,
+    display = brief,
+    tags(ToolTag::ReadOnly),
+    concurrency_safe = false
+)]
+#[serde(deny_unknown_fields)]
+struct MemoryGetToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: MemoryGetInput,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "list",
+    summary = "List durable memory records.",
+    handler_receiver = MemoryPlugin,
+    handle = MemoryPlugin::invoke_list,
+    handle_field = args,
+    permission_paths_handle = MemoryPlugin::permission_list,
+    display = brief,
+    tags(ToolTag::ReadOnly),
+    concurrency_safe = false
+)]
+#[serde(deny_unknown_fields)]
+struct MemoryListToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: MemoryListInput,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "write",
+    summary = "Write one durable memory record.",
+    handler_receiver = MemoryPlugin,
+    handle = MemoryPlugin::invoke_write,
+    handle_field = args,
+    permission_paths_handle = MemoryPlugin::permission_write,
+    display = brief,
+    tags(ToolTag::Mutating),
+    concurrency_safe = false
+)]
+#[serde(deny_unknown_fields)]
+struct MemoryWriteToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: MemoryWriteInput,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    tool = "delete",
+    summary = "Delete one durable memory record.",
+    handler_receiver = MemoryPlugin,
+    handle = MemoryPlugin::invoke_delete,
+    handle_field = args,
+    permission_paths_handle = MemoryPlugin::permission_delete,
+    display = brief,
+    tags(ToolTag::Mutating),
+    concurrency_safe = false
+)]
+#[serde(deny_unknown_fields)]
+struct MemoryDeleteToolInput {
+    #[tool(flatten_shape)]
+    #[serde(flatten)]
+    args: MemoryDeleteInput,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, ToolSuite)]
+#[tool_suite(handler_receiver = MemoryPlugin)]
+enum MemoryToolSuite {
+    Search(MemorySearchToolInput),
+    Get(MemoryGetToolInput),
+    List(MemoryListToolInput),
+    Write(MemoryWriteToolInput),
+    Delete(MemoryDeleteToolInput),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
@@ -357,9 +399,13 @@ impl MemoryPlugin {
             "limit": limit,
             "results": results,
         });
-        Ok(ToolInvokeOutput::text(lines.join("\n"))
-            .with_title("memory search")
-            .with_payload(payload))
+        Ok(ToolInvokeOutput::from_parts(
+            "memory search",
+            lines.join("\n"),
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
     }
 
     async fn invoke_get(&self, input: &MemoryGetInput) -> SdkResult<ToolInvokeOutput> {
@@ -369,9 +415,13 @@ impl MemoryPlugin {
             .map_err(memory_error_to_plugin)?;
         let payload = serde_json::to_value(memory_record_output(&entry))
             .map_err(|err| PluginError::new(err.to_string()))?;
-        Ok(ToolInvokeOutput::text(format_memory_entry(&entry))
-            .with_title("memory get")
-            .with_payload(payload))
+        Ok(ToolInvokeOutput::from_parts(
+            "memory get",
+            format_memory_entry(&entry),
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
     }
 
     async fn invoke_list(&self, input: &MemoryListInput) -> SdkResult<ToolInvokeOutput> {
@@ -408,9 +458,13 @@ impl MemoryPlugin {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
-        Ok(ToolInvokeOutput::text(text)
-            .with_title("memory list")
-            .with_payload(payload))
+        Ok(ToolInvokeOutput::from_parts(
+            "memory list",
+            text,
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
     }
 
     async fn invoke_write(&self, input: &MemoryWriteInput) -> SdkResult<ToolInvokeOutput> {
@@ -433,11 +487,13 @@ impl MemoryPlugin {
             .map_err(memory_error_to_plugin)?;
         let payload = serde_json::to_value(memory_record_output(&entry))
             .map_err(|err| PluginError::new(err.to_string()))?;
-        Ok(
-            ToolInvokeOutput::text(format!("Saved memory '{}'.", memory_name(&entry)))
-                .with_title("memory write")
-                .with_payload(payload),
-        )
+        Ok(ToolInvokeOutput::from_parts(
+            "memory write",
+            format!("Saved memory '{}'.", memory_name(&entry)),
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
     }
 
     async fn invoke_delete(&self, input: &MemoryDeleteInput) -> SdkResult<ToolInvokeOutput> {
@@ -446,10 +502,13 @@ impl MemoryPlugin {
         store
             .forget(name.as_str())
             .map_err(memory_error_to_plugin)?;
-        Ok(
-            ToolInvokeOutput::text(format!("Deleted memory '{}'.", name))
-                .with_title("memory delete"),
-        )
+        Ok(ToolInvokeOutput::from_parts(
+            "memory delete",
+            format!("Deleted memory '{}'.", name),
+            None,
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
     }
 
     fn store_dir_request(&self, request: fn(String) -> PathRequest) -> SdkResult<Vec<PathRequest>> {
@@ -502,9 +561,10 @@ impl MemoryPlugin {
 }
 
 #[crate::plugin::sdk::plugin(
-    id = MEMORY_PLUGIN_ID,
+    namespace = "agena",
+    name = "memory",
     version = env!("CARGO_PKG_VERSION"),
-    description = "Persistent memory with searchable retrieval and write tools.",
+    summary = "Persistent memory with searchable retrieval and write tools.",
     config_schema = memory_config_schema(),
     display = brief
 )]
@@ -526,13 +586,13 @@ impl MemoryPlugin {
         ))
     }
 
-    #[tool]
-    async fn tool_invoke(&self, input: MemoryToolInput) -> SdkResult<ToolInvokeOutput> {
+    #[tool_suite]
+    async fn tool_invoke(&self, input: MemoryToolSuite) -> SdkResult<ToolInvokeOutput> {
         input.dispatch_tool_invoke(self).await
     }
 
-    #[permission(paths)]
-    async fn permission_paths(&self, input: MemoryToolInput) -> SdkResult<Vec<PathRequest>> {
+    #[permission(paths, suite)]
+    async fn permission_paths(&self, input: MemoryToolSuite) -> SdkResult<Vec<PathRequest>> {
         input.dispatch_permission_paths(self).await
     }
 

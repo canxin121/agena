@@ -24,13 +24,13 @@ impl ProviderRegistry {
     }
 
     pub fn model_capabilities(&self, model: &ModelRef) -> Result<ModelCapabilities, AppError> {
-        self.with_model_ref_provider(model, |provider, adapter_id, model_id| {
+        self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
             provider.model_capabilities_for_adapter(adapter_id, model_id)
         })
     }
 
     pub fn model_metadata(&self, model: &ModelRef) -> Result<ModelMetadata, AppError> {
-        self.with_model_ref_provider(model, |provider, adapter_id, model_id| {
+        self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
             provider.model_metadata_for_adapter(adapter_id, model_id)
         })
     }
@@ -39,7 +39,7 @@ impl ProviderRegistry {
         &self,
         model: &ModelRef,
     ) -> Result<ProviderNativeToolsConfig, AppError> {
-        self.with_model_ref_provider(model, |provider, adapter_id, model_id| {
+        self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
             provider.native_tools_config_for_adapter(adapter_id, model_id)
         })
     }
@@ -48,7 +48,7 @@ impl ProviderRegistry {
         &self,
         model: &ModelRef,
     ) -> Result<BTreeMap<String, ModelThinkingMode>, AppError> {
-        self.with_model_ref_provider(model, |provider, adapter_id, model_id| {
+        self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
             provider.model_thinking_modes_for_adapter(adapter_id, model_id)
         })
     }
@@ -57,7 +57,7 @@ impl ProviderRegistry {
         &self,
         model: &ModelRef,
     ) -> Result<BTreeMap<String, ModelSpeedMode>, AppError> {
-        self.with_model_ref_provider(model, |provider, adapter_id, model_id| {
+        self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
             provider.model_speed_modes_for_adapter(adapter_id, model_id)
         })
     }
@@ -74,29 +74,29 @@ impl ProviderRegistry {
                     .map(|adapter_id| entry.adapter_id.as_ref() == Some(adapter_id))
                     .unwrap_or(true)
         }) {
-            let mut resolved = entry;
-            hydrate_model_from_provider(
+            return Ok(hydrated_model_from_provider(
                 provider.as_ref(),
-                &mut resolved,
+                entry,
                 model.adapter_id.as_ref(),
                 ModeHydration::OverrideIfPresent,
-            );
-            return Ok(resolved);
+            ));
         }
 
-        let mut fallback_model = {
-            let mut fallback_model =
-                Model::new(model.provider_id.as_str(), model.model_id.as_str());
-            fallback_model.adapter_id = model.adapter_id.clone();
-            assign_catalog_model_id(&mut fallback_model);
-            fallback_model
-        };
-        hydrate_model_from_provider(
+        Ok(hydrated_model_from_provider(
             provider.as_ref(),
-            &mut fallback_model,
+            Model {
+                provider_id: model.provider_id.clone(),
+                adapter_id: model.adapter_id.clone(),
+                id: model.model_id.clone(),
+                catalog_model_id: catalog_model_id_for(&model.model_id),
+                display_name: None,
+                capabilities: ModelCapabilities::default(),
+                metadata: ModelMetadata::default(),
+                thinking_modes: std::collections::BTreeMap::new(),
+                speed_modes: std::collections::BTreeMap::new(),
+            },
             model.adapter_id.as_ref(),
             ModeHydration::FillEmpty,
-        );
-        Ok(fallback_model)
+        ))
     }
 }

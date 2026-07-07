@@ -97,27 +97,25 @@ pub(super) fn parse_subagent_type(value: &str) -> Result<TaskSubagentType, Plugi
 pub(super) fn render_tool_descriptor(
     tool: crate::plugin::registry::RegisteredTool,
 ) -> ToolDescriptor {
-    let description = tool.description_text().trim().to_string();
-    let before_help = tool.before_help_text().map(ToString::to_string);
-    let after_help = tool.after_help_text().map(ToString::to_string);
     let summary = tool.summary_text().map(ToString::to_string);
-    let help = tool.help_text().map(ToString::to_string);
+    let mut help_parts = Vec::new();
+    if let Some(before_help) = tool.before_help_text() {
+        help_parts.push(before_help.to_string());
+    }
+    if let Some(help) = tool.help_text() {
+        help_parts.push(help.to_string());
+    }
+    if let Some(after_help) = tool.after_help_text() {
+        help_parts.push(after_help.to_string());
+    }
+    let help = (!help_parts.is_empty()).then(|| help_parts.join("\n\n"));
     let input_schema = Some(tool.sanitized_input_schema());
-    let description_mode = tool.definition.display.description_mode;
-    let tags = tool.effective_tags();
-    let plugin_id = tool.plugin_full_name();
     ToolDescriptor {
-        name: tool.model_name,
-        description: (!description.is_empty()).then_some(description),
-        before_help,
-        after_help,
+        name: tool.model_name(),
         summary,
         help,
         examples: tool.definition.model.examples.clone(),
         input_schema,
-        description_mode,
-        tags,
-        plugin_id: (!plugin_id.trim().is_empty()).then_some(plugin_id),
     }
 }
 

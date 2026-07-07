@@ -34,10 +34,12 @@ pub(super) fn build_or_reconfigure_session_manager(
         resolution,
         None,
     );
-    let manager = Arc::new(
-        SessionManager::new(db.as_ref().clone(), processor.clone(), bootstrap_executor)
-            .with_config(config.clone()),
-    );
+    let manager = Arc::new(SessionManager::new(
+        db.as_ref().clone(),
+        processor.clone(),
+        bootstrap_executor,
+        config.clone(),
+    ));
     let executor = build_tool_executor(
         plugins,
         agents,
@@ -55,9 +57,12 @@ pub(super) fn build_session_processor(
     plugins: Arc<PluginHost>,
     workspace_root: &Path,
 ) -> SessionProcessor {
-    SessionProcessor::new(providers, ContextGovernor::new(ContextPolicy::default()))
-        .with_plugin_host(plugins)
-        .with_workspace_root(workspace_root)
+    SessionProcessor::new(
+        providers,
+        ContextGovernor::new(ContextPolicy::default()),
+        plugins,
+        workspace_root,
+    )
 }
 
 pub(super) fn build_tool_executor(
@@ -88,21 +93,17 @@ pub(super) fn build_tool_executor(
         );
     }
 
-    let mut executor = ToolExecutor::new(workspace_root.to_path_buf(), agent)
-        .with_plugin_manager(plugins)
-        .with_tool_presentation(resolution.config.plugins.policy.tool_presentation.clone())
-        .with_subagent_registry(agents)
-        .with_snapshot_registry(snapshot_registry);
-
-    if let Some(manager) = session_manager {
-        executor = executor.with_scheduler(build_scheduler(manager));
-    }
-
-    if let Some(registry) = lsp_registry {
-        executor = executor.with_lsp_registry(registry);
-    }
-
-    executor
+    let scheduler = session_manager.map(build_scheduler);
+    ToolExecutor::new(
+        workspace_root.to_path_buf(),
+        agent,
+        agents,
+        plugins,
+        Some(snapshot_registry),
+        scheduler,
+        lsp_registry,
+        resolution.config.plugins.policy.tool_presentation.clone(),
+    )
 }
 
 pub(super) fn build_lsp_registry(
@@ -140,12 +141,11 @@ pub(super) fn build_lsp_registry(
 }
 
 pub(super) fn session_manager_config(resolution: &ConfigResolution) -> SessionManagerConfig {
-    let defaults = SessionManagerConfig::default();
     SessionManagerConfig {
         cache_max_sessions: resolution.config.runtime.session.cache.max_sessions,
         cache_ttl: Duration::from_secs(resolution.config.runtime.session.cache.ttl_secs),
         cache_max_bytes: resolution.config.runtime.session.cache.max_bytes,
-        doom_loop: defaults.doom_loop,
+        doom_loop: crate::session::DoomLoopPolicy::default(),
         default_selection: resolution.config.default_selection.clone(),
         default_agent: resolution.config.default_agent.clone(),
         permission: resolution.config.permission.clone(),
@@ -184,15 +184,23 @@ pub(super) fn build_profile_agent(
     permission: crate::agent::PermissionConfig,
     _: &ConfigResolution,
 ) -> Agent {
-    let agent = Agent::new(name, crate::permission::PermissionPolicy::allow_all());
-    match agent.try_with_permission_config(&permission) {
+    let agent = Agent::new(
+        name,
+        crate::permission::PermissionPolicy::allow_all(),
+        crate::permission::ToolPermissionPolicy::allow_all(),
+    );
+    match agent.try_apply_permission_config(&permission) {
         Ok(agent) => agent,
         Err(err) => {
             tracing::warn!(
                 target: "agena::config::permission",
                 "ignoring invalid agent permission config: {err}; falling back to allow_all"
             );
-            Agent::new("build", crate::permission::PermissionPolicy::allow_all())
+            Agent::new(
+                "build",
+                crate::permission::PermissionPolicy::allow_all(),
+                crate::permission::ToolPermissionPolicy::allow_all(),
+            )
         }
     }
 }

@@ -42,7 +42,7 @@ pub(crate) enum ToolStreamUpdate {
     },
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ToolStreamAccumulator {
     aliases: BTreeMap<String, ProviderStreamKey>,
     pending: BTreeMap<ProviderStreamKey, ToolStreamState>,
@@ -58,6 +58,13 @@ struct ToolStreamState {
 }
 
 impl ToolStreamAccumulator {
+    pub(crate) fn new() -> Self {
+        Self {
+            aliases: BTreeMap::new(),
+            pending: BTreeMap::new(),
+        }
+    }
+
     pub(crate) fn ingest(
         &mut self,
         provider_id: &str,

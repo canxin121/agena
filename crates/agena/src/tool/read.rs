@@ -41,7 +41,7 @@ pub(super) fn execute(
         let (preview, truncated, count) = read_directory_listing(&target, offset, limit)?;
         let output = ToolPayloadOutput::Read {
             preview: Some(preview.clone()),
-            truncated: Some(truncated),
+            truncated,
             loaded_paths: vec![display_path.clone()],
             attachment: None,
         };
@@ -75,7 +75,7 @@ pub(super) fn execute(
         render_file_preview(&text, offset, limit)?;
     let output = ToolPayloadOutput::Read {
         preview: Some(preview.clone()),
-        truncated: Some(truncated),
+        truncated,
         loaded_paths: vec![display_path.clone()],
         attachment: None,
     };

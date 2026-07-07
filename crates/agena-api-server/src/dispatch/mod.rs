@@ -277,7 +277,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
                     }
                     _ => None,
                 })
-                .unwrap_or_else(|| entry.tool_name.clone())
+                .unwrap_or_else(|| entry.tool_name().to_string())
         };
         let has_custom_tag = |entry: &agena::plugin::registry::RegisteredTool, expected: &str| {
             entry
@@ -298,7 +298,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             aliases_by_skill
                 .entry(skill_key_for(entry))
                 .or_default()
-                .push(entry.model_name.clone());
+                .push(entry.model_name());
         }
         for entry in entries {
             if has_custom_tag(&entry, "alias") {
@@ -307,7 +307,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             let skill_key = skill_key_for(&entry);
             let is_command = has_custom_tag(&entry, "command");
             let item = RuntimeSkillResource {
-                name: entry.model_name,
+                name: entry.model_name(),
                 description: entry.definition.description_text().to_owned(),
                 aliases: aliases_by_skill.remove(&skill_key).unwrap_or_default(),
                 source_path: None,

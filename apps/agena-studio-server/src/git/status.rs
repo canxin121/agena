@@ -154,10 +154,11 @@ pub struct GitStatusQuery {
     // "all" (default) | "staged" | "unstaged" | "merge" | "untracked"
     pub scope: Option<String>,
     // If true, return counts/branch info only (no file list).
-    pub summary: Option<bool>,
+    #[serde(default)]
+    pub summary: bool,
     // If true, include per-file diff stats (can be expensive for large repos).
-    #[serde(rename = "includeDiffStats")]
-    pub include_diff_stats: Option<bool>,
+    #[serde(default, rename = "includeDiffStats")]
+    pub include_diff_stats: bool,
 }
 
 pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
@@ -327,7 +328,7 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
     let untracked_count = files.iter().filter(|f| is_untracked(f)).count();
     let merge_count = files.iter().filter(|f| is_merge(f)).count();
 
-    let summary = q.summary.unwrap_or(false);
+    let summary = q.summary;
     let scope = q
         .scope
         .as_deref()
@@ -359,7 +360,7 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
     };
 
     let mut diff_stats: Option<HashMap<String, DiffStat>> = None;
-    let include_diff_stats = q.include_diff_stats.unwrap_or(false);
+    let include_diff_stats = q.include_diff_stats;
 
     if include_diff_stats && !summary && !page_files.is_empty() {
         let mut map: HashMap<String, DiffStat> = HashMap::new();

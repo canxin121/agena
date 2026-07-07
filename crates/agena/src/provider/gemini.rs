@@ -8,7 +8,7 @@ use crate::{
     config::{ProviderNativeToolKind, ProviderNativeToolRoute},
     error::AppError,
     message::{AttachmentItem, Message, MessageUsage},
-    model::{ModelId, ModelMetadata, ProviderId},
+    model::{ModelId, ModelMetadata, ModelTokenLimits, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         ManagedCredential, ModelRuntime, ProviderModel, ReasoningEffort, ResponseFormat,
@@ -49,6 +49,27 @@ pub enum GeminiStreamMode {
     RealtimeWebSocket,
 }
 
+#[derive(Clone)]
+pub struct GeminiAdapterOptions {
+    pub auth_header: Option<(String, Option<String>)>,
+    pub auth_query_parameter: Option<String>,
+    pub extra_headers: HashMap<String, String>,
+    pub stream_mode: GeminiStreamMode,
+    pub realtime_ws_url: Option<String>,
+}
+
+impl Default for GeminiAdapterOptions {
+    fn default() -> Self {
+        Self {
+            auth_header: None,
+            auth_query_parameter: None,
+            extra_headers: HashMap::new(),
+            stream_mode: GeminiStreamMode::Sse,
+            realtime_ws_url: None,
+        }
+    }
+}
+
 impl GeminiAdapter {
     pub fn new(
         client: reqwest::Client,
@@ -70,63 +91,57 @@ impl GeminiAdapter {
         base_url: impl Into<String>,
         default_model: impl Into<String>,
     ) -> Self {
+        Self::new_managed_with_options(
+            client,
+            api_key,
+            base_url,
+            default_model,
+            GeminiAdapterOptions::default(),
+        )
+    }
+
+    pub fn new_managed_with_options(
+        client: reqwest::Client,
+        api_key: ManagedCredential,
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+        options: GeminiAdapterOptions,
+    ) -> Self {
         let default_model = ModelId::new(default_model);
         let user_agent = crate::provider::gemini_cli_user_agent(default_model.as_str());
+        let mut extra_headers =
+            HashMap::from([(reqwest::header::USER_AGENT.as_str().to_owned(), user_agent)]);
+        if options
+            .extra_headers
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()))
+        {
+            extra_headers
+                .retain(|key, _| !key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()));
+        }
+        extra_headers.extend(options.extra_headers);
+        let auth_mode = if let Some(name) = options.auth_query_parameter {
+            GeminiAuthMode::QueryParameter { name }
+        } else if let Some((name, scheme)) = options.auth_header {
+            GeminiAuthMode::Header { name, scheme }
+        } else {
+            GeminiAuthMode::Header {
+                name: "x-goog-api-key".to_owned(),
+                scheme: None,
+            }
+        };
         Self {
             client,
             api_key,
             base_url: utils::normalize_base_url(base_url.into().as_str()),
             default_model,
-            auth_mode: GeminiAuthMode::Header {
-                name: "x-goog-api-key".to_owned(),
-                scheme: None,
-            },
-            extra_headers: HashMap::from([(
-                reqwest::header::USER_AGENT.as_str().to_owned(),
-                user_agent,
-            )]),
-            stream_mode: GeminiStreamMode::Sse,
-            realtime_ws_url: None,
+            auth_mode,
+            extra_headers,
+            stream_mode: options.stream_mode,
+            realtime_ws_url: options
+                .realtime_ws_url
+                .and_then(|value| utils::normalize_optional_text(Some(value))),
         }
-    }
-
-    pub fn with_auth_header(
-        mut self,
-        header: impl Into<String>,
-        scheme: Option<impl Into<String>>,
-    ) -> Self {
-        self.auth_mode = GeminiAuthMode::Header {
-            name: header.into(),
-            scheme: scheme.map(|value| value.into()),
-        };
-        self
-    }
-
-    pub fn with_auth_query_parameter(mut self, name: impl Into<String>) -> Self {
-        self.auth_mode = GeminiAuthMode::QueryParameter { name: name.into() };
-        self
-    }
-
-    pub fn with_extra_headers(mut self, headers: HashMap<String, String>) -> Self {
-        if headers
-            .keys()
-            .any(|key| key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()))
-        {
-            self.extra_headers
-                .retain(|key, _| !key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()));
-        }
-        self.extra_headers.extend(headers);
-        self
-    }
-
-    pub fn with_stream_mode(mut self, mode: GeminiStreamMode) -> Self {
-        self.stream_mode = mode;
-        self
-    }
-
-    pub fn with_realtime_ws_url(mut self, ws_url: Option<String>) -> Self {
-        self.realtime_ws_url = ws_url.and_then(|value| utils::normalize_optional_text(Some(value)));
-        self
     }
 
     fn list_models_endpoint(&self) -> String {
@@ -932,40 +947,37 @@ impl ModelRuntime for GeminiAdapter {
     }
 
     fn prompt_cache_shape(&self, _model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
-        Some(
-            crate::provider::PromptCacheShape::new(PROVIDER_ID)
-                .with_string("auth_scope", self.api_key.prompt_cache_scope())
-                .with_string("base_url", self.base_url.as_str())
-                .with_string("default_model", self.default_model.as_str())
-                .with_string("auth_transport", self.auth_transport_key())
-                .with_string("stream_mode", self.stream_mode_key())
-                .with_optional_string(
-                    "auth_query_param",
-                    match &self.auth_mode {
-                        GeminiAuthMode::QueryParameter { name } => Some(name.as_str()),
-                        GeminiAuthMode::Header { .. } => None,
-                    },
-                )
-                .with_optional_string(
-                    "auth_header",
-                    match &self.auth_mode {
-                        GeminiAuthMode::Header { name, .. } => Some(name.as_str()),
-                        GeminiAuthMode::QueryParameter { .. } => None,
-                    },
-                )
-                .with_optional_string(
-                    "auth_scheme",
-                    match &self.auth_mode {
-                        GeminiAuthMode::Header { scheme, .. } => scheme.as_deref(),
-                        GeminiAuthMode::QueryParameter { .. } => None,
-                    },
-                )
-                .with_optional_string("realtime_ws_url", self.realtime_ws_url.as_deref())
-                .with_json(
-                    "extra_headers",
+        let mut fields = vec![
+            ("auth_scope", self.api_key.prompt_cache_scope()),
+            ("base_url", self.base_url.clone()),
+            ("default_model", self.default_model.to_string()),
+            ("auth_transport", self.auth_transport_key().to_owned()),
+            ("stream_mode", self.stream_mode_key().to_owned()),
+            (
+                "extra_headers",
+                crate::provider::PromptCacheShape::json_field_value(
                     &utils::prompt_cache_header_entries(&self.extra_headers),
                 ),
-        )
+            ),
+        ];
+        match &self.auth_mode {
+            GeminiAuthMode::QueryParameter { name } => {
+                fields.push(("auth_query_param", name.clone()));
+            }
+            GeminiAuthMode::Header { name, scheme } => {
+                fields.push(("auth_header", name.clone()));
+                if let Some(scheme) = scheme.as_deref() {
+                    fields.push(("auth_scheme", scheme.to_owned()));
+                }
+            }
+        }
+        if let Some(realtime_ws_url) = self.realtime_ws_url.as_deref() {
+            fields.push(("realtime_ws_url", realtime_ws_url.to_owned()));
+        }
+        Some(crate::provider::PromptCacheShape::from_fields(
+            PROVIDER_ID,
+            fields,
+        ))
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
@@ -1002,14 +1014,19 @@ impl ModelRuntime for GeminiAdapter {
             .map(|m| {
                 let metadata = m.metadata();
                 let id = m.name.trim_start_matches("models/").to_owned();
-                let mut model = ProviderModel::new(PROVIDER_ID, id);
-                let capabilities = self.model_capabilities(&model.id);
-                model = model.with_capabilities(capabilities);
-                if !metadata.is_empty() {
-                    model = model.with_metadata(metadata);
+                let model_id = ModelId::new(id);
+                let capabilities = self.model_capabilities(&model_id);
+                ProviderModel {
+                    provider_id: ProviderId::new(PROVIDER_ID),
+                    adapter_id: None,
+                    id: model_id,
+                    catalog_model_id: None,
+                    display_name: m.display_name,
+                    capabilities,
+                    metadata,
+                    thinking_modes: std::collections::BTreeMap::new(),
+                    speed_modes: std::collections::BTreeMap::new(),
                 }
-                model.display_name = m.display_name;
-                model
             })
             .collect())
     }
@@ -1611,22 +1628,34 @@ struct GeminiModel {
 
 impl GeminiModel {
     fn metadata(&self) -> ModelMetadata {
-        let mut metadata = ModelMetadata::default();
-
-        if let Some(input_token_limit) = self.input_token_limit {
-            let limit = clamp_u64_to_u32(input_token_limit);
-            // Gemini exposes input/output limits rather than a separate
-            // context window field, so use the input ceiling as the best
-            // available prompt-window budget.
-            metadata = metadata
-                .with_context_window_tokens(limit)
-                .with_max_input_tokens(limit);
+        // Gemini exposes input/output limits rather than a separate context
+        // window field, so use the input ceiling as the best available
+        // prompt-window budget.
+        let input_limit = self.input_token_limit.map(clamp_u64_to_u32);
+        ModelMetadata {
+            lifecycle: None,
+            limits: ModelTokenLimits {
+                context_window_tokens: input_limit,
+                max_input_tokens: input_limit,
+                max_output_tokens: self.output_token_limit.map(clamp_u64_to_u32),
+            },
+            description: None,
+            knowledge_cutoff: None,
+            release_date: None,
+            last_updated: None,
+            open_weights: None,
+            default_thinking_mode: None,
+            supports_parallel_tool_calls: None,
+            supports_verbosity: None,
+            default_verbosity: None,
+            default_temperature: None,
+            default_top_p: None,
+            default_top_k: None,
+            assistant_reasoning_interleaved: None,
+            assistant_reasoning_field: None,
+            output_modalities: Vec::new(),
+            pricing: None,
         }
-        if let Some(output_token_limit) = self.output_token_limit {
-            metadata = metadata.with_max_output_tokens(clamp_u64_to_u32(output_token_limit));
-        }
-
-        metadata
     }
 }
 

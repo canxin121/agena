@@ -311,14 +311,9 @@ fn read_workspace_entries(
         };
         *remaining -= 1;
         let children = if kind == WorkspaceFileKind::Directory && depth > 0 {
-            Some(read_workspace_entries(
-                root,
-                path.as_path(),
-                depth - 1,
-                remaining,
-            )?)
+            read_workspace_entries(root, path.as_path(), depth - 1, remaining)?
         } else {
-            None
+            Vec::new()
         };
         nodes.push(WorkspaceFileNode {
             name: entry.file_name().to_string_lossy().to_string(),

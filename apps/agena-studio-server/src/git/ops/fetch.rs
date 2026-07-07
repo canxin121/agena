@@ -16,9 +16,9 @@ pub struct GitFetchBody {
     pub remote: Option<String>,
     pub branch: Option<String>,
     #[serde(default)]
-    pub prune: Option<bool>,
+    pub prune: bool,
     #[serde(default)]
-    pub all: Option<bool>,
+    pub all: bool,
     // Alias for refspec/branch name.
     pub r#ref: Option<String>,
     #[serde(default)]
@@ -45,9 +45,6 @@ pub async fn git_fetch(
         .as_deref()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty());
-    let prune = body.prune.unwrap_or(false);
-    let fetch_all = body.all.unwrap_or(false);
-
     let mut args: Vec<String> = Vec::new();
     let mut extra_env: Vec<(String, String)> = Vec::new();
     let mut _askpass: Option<TempGitAskpass> = None;
@@ -69,10 +66,10 @@ pub async fn git_fetch(
     }
 
     args.push("fetch".into());
-    if prune {
+    if body.prune {
         args.push("--prune".into());
     }
-    if fetch_all {
+    if body.all {
         if remote.is_some() || branch.is_some() || rf.is_some() {
             return (
                 StatusCode::BAD_REQUEST,

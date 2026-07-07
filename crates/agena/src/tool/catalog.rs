@@ -6,9 +6,10 @@ use crate::plugin::sdk::Plugin;
 use crate::plugins::provided::catalog as provided_catalog;
 use crate::plugins::provided::code as provided_code;
 use crate::plugins::provided::{
-    cron as provided_cron, fs as provided_fs, lsp as provided_lsp, planning as provided_planning,
-    process as provided_process, repo as provided_repo, runtime as provided_runtime,
-    schema_lab as provided_schema_lab, settings as provided_settings, tasks as provided_tasks,
+    cron as provided_cron, fs as provided_fs, lsp as provided_lsp, mcp as provided_mcp,
+    planning as provided_planning, process as provided_process, repo as provided_repo,
+    runtime as provided_runtime, schema_lab as provided_schema_lab, settings as provided_settings,
+    skills as provided_skills, tasks as provided_tasks,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,16 +65,18 @@ impl ToolCatalog {
         } else if enabled {
             format!(
                 "tool '{}' enabled for {:?} profile",
-                tool.model_name, self.profile
+                tool.model_name(),
+                self.profile
             )
         } else {
             format!(
                 "tool '{}' disabled for {:?} profile",
-                tool.model_name, self.profile
+                tool.model_name(),
+                self.profile
             )
         };
         ToolAvailability {
-            tool_name: tool.model_name.clone(),
+            tool_name: tool.model_name(),
             enabled: enabled && !agent.disable,
             reason,
         }
@@ -101,6 +104,10 @@ impl ToolCatalog {
 
 fn tool_entries() -> Vec<RegisteredTool> {
     let mut entries = Vec::new();
+    extend_manifest_entries(
+        &mut entries,
+        provided_skills::SkillsPlugin::new().manifest(),
+    );
     extend_manifest_entries(&mut entries, provided_code::new_plugin().manifest());
     extend_manifest_entries(&mut entries, provided_lsp::LspPlugin::new().manifest());
     extend_manifest_entries(&mut entries, provided_cron::CronPlugin::new().manifest());
@@ -112,7 +119,7 @@ fn tool_entries() -> Vec<RegisteredTool> {
     extend_manifest_entries(&mut entries, provided_process::new_plugin().manifest());
     extend_manifest_entries(
         &mut entries,
-        provided_catalog::CatalogPlugin::new().manifest(),
+        provided_catalog::ToolsPlugin::new().manifest(),
     );
     extend_manifest_entries(
         &mut entries,
@@ -129,6 +136,7 @@ fn tool_entries() -> Vec<RegisteredTool> {
     );
     extend_manifest_entries(&mut entries, crate::web::new_web_plugin().manifest());
     extend_manifest_entries(&mut entries, crate::memory::new_memory_plugin().manifest());
+    extend_manifest_entries(&mut entries, provided_mcp::static_manifest());
     if crate::tool::schema_lab_builtin_enabled() {
         extend_manifest_entries(
             &mut entries,
@@ -139,11 +147,12 @@ fn tool_entries() -> Vec<RegisteredTool> {
 }
 
 fn extend_manifest_entries(entries: &mut Vec<RegisteredTool>, manifest: PluginManifest) {
-    let plugin_name = manifest.name;
+    let plugin_key = crate::plugin::PluginKey::new(manifest.namespace, manifest.name)
+        .expect("built-in plugin manifest key should be valid");
     entries.extend(
         manifest
             .tools
             .into_iter()
-            .map(|definition| RegisteredTool::new(plugin_name.clone(), definition)),
+            .map(|definition| RegisteredTool::new(plugin_key.clone(), definition)),
     );
 }

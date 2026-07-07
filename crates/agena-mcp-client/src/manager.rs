@@ -5,8 +5,9 @@ use std::sync::Arc;
 use http::{HeaderName, HeaderValue};
 use rmcp::ServiceExt;
 use rmcp::model::{
-    ClientInfo, Content, GetPromptRequestParams, PromptMessageContent, PromptMessageRole,
-    ReadResourceRequestParams, ResourceContents as RmcpResourceContents, Tool,
+    ClientCapabilities, ClientInfo, Content, GetPromptRequestParams, Implementation,
+    PromptMessageContent, PromptMessageRole, ReadResourceRequestParams,
+    ResourceContents as RmcpResourceContents, Tool,
 };
 use rmcp::service::{Peer, RoleClient, RunningService};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -305,10 +306,10 @@ impl McpConnectionManager {
     }
 
     fn client_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
-        info.client_info.name = self.client_name.clone();
-        info.client_info.version = self.client_version.clone();
-        info
+        ClientInfo::new(
+            ClientCapabilities::default(),
+            Implementation::new(self.client_name.clone(), self.client_version.clone()),
+        )
     }
 }
 
@@ -356,12 +357,13 @@ async fn connect_http(
         custom_headers.insert(parse_header_name(&key)?, parse_header_value(&value)?);
     }
 
-    let mut config = StreamableHttpClientTransportConfig::with_uri(url.to_string())
+    let config = StreamableHttpClientTransportConfig::with_uri(url.to_string())
         .custom_headers(custom_headers)
         .reinit_on_expired_session(true);
-    if let Some(token) = bearer {
-        config = config.auth_header(token);
-    }
+    let config = match bearer {
+        Some(token) => config.auth_header(token),
+        None => config,
+    };
     let transport = StreamableHttpClientTransport::from_config(config);
     Ok(client_info.serve(transport).await?)
 }
@@ -470,7 +472,7 @@ fn convert_call_tool_result(result: rmcp::model::CallToolResult) -> CallToolResu
             .into_iter()
             .map(convert_content_block)
             .collect(),
-        is_error: result.is_error,
+        is_error: result.is_error.unwrap_or(false),
     }
 }
 
@@ -543,7 +545,7 @@ fn convert_prompt_descriptor(prompt: rmcp::model::Prompt) -> crate::protocol::Pr
             .map(|argument| crate::protocol::PromptArgument {
                 name: argument.name,
                 description: argument.description,
-                required: argument.required,
+                required: argument.required.unwrap_or(false),
             })
             .collect(),
     }

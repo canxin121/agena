@@ -19,11 +19,11 @@ impl SearchableTool {
     pub(crate) fn from_registered_tool(registered_tool: RegisteredTool) -> Self {
         let description = registered_tool
             .summary_text()
-            .unwrap_or_else(|| registered_tool.description_text())
+            .unwrap_or_default()
             .to_string();
         let tags = registered_tool.effective_tags();
         Self {
-            name: registered_tool.model_name,
+            name: registered_tool.model_name(),
             description,
             tags,
         }
@@ -87,8 +87,7 @@ pub(crate) fn execute_with_tools(
         }
         if !results.is_empty() {
             lines.push(
-                "Call `tools` with command `help` and an exact tool name for detailed usage."
-                    .to_string(),
+                "Read `agena.tools/help` with an exact tool name for detailed usage.".to_string(),
             );
         }
     }

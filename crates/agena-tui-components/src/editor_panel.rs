@@ -41,10 +41,12 @@ pub fn render_editor_panel(
 
     let mut paragraph = Paragraph::new(Text::from(input_view.lines.clone()));
     if spec.borders != Borders::NONE || spec.title.is_some() {
-        let mut block = Block::default().borders(spec.borders);
-        if let Some(title) = spec.title.as_ref() {
-            block = block.title(format!(" {} ", title));
-        }
+        let block = match spec.title.as_ref() {
+            Some(title) => Block::default()
+                .borders(spec.borders)
+                .title(format!(" {} ", title)),
+            None => Block::default().borders(spec.borders),
+        };
         paragraph = paragraph.block(block);
     }
     frame.render_widget(paragraph, area);

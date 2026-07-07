@@ -131,9 +131,8 @@ impl ScheduledJob {
         }
     }
 
-    pub fn with_owner(mut self, session_id: i64) -> Self {
+    pub fn set_owner(&mut self, session_id: i64) {
         self.owner_session_id = Some(session_id);
-        self
     }
 
     /// Update `next_fire_at` after a successful fire.  Returns

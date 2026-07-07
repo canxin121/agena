@@ -179,7 +179,7 @@ impl MonitorRegistry {
         Self::default()
     }
 
-    pub fn with_handle(handle: Handle) -> Self {
+    pub fn from_handle(handle: Handle) -> Self {
         Self {
             handle: Some(handle),
             monitors: Mutex::new(HashMap::new()),
@@ -202,7 +202,7 @@ impl MonitorRegistry {
 pub(super) fn default_registry() -> Option<Arc<dyn MonitorService>> {
     Handle::try_current()
         .ok()
-        .map(|handle| Arc::new(MonitorRegistry::with_handle(handle)) as Arc<dyn MonitorService>)
+        .map(|handle| Arc::new(MonitorRegistry::from_handle(handle)) as Arc<dyn MonitorService>)
 }
 
 impl MonitorService for MonitorRegistry {

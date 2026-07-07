@@ -226,9 +226,9 @@ impl RuntimeSnapshot {
         // Make the active host visible to provider request builders for the
         // `chat.headers` hook (no constructor threading required).
         super::plugin_slot::install(Arc::clone(&plugins));
-        let mut model_catalog_config = ModelCatalogConfig::default();
-        model_catalog_config.cache_max_age_secs =
-            resolution.config.runtime.model_catalog.cache_max_age_secs;
+        let model_catalog_config = ModelCatalogConfig {
+            cache_max_age_secs: resolution.config.runtime.model_catalog.cache_max_age_secs,
+        };
         let catalog_source_providers = Arc::new(
             resolution
                 .build_provider_registry_with_plugins_and_catalog(plugins.as_ref(), None)

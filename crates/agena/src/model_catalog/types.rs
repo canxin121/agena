@@ -75,6 +75,64 @@ pub struct CatalogModelDefinition {
 }
 
 impl CatalogModelDefinition {
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_fields(
+        lifecycle: Option<ModelLifecycle>,
+        context_window_tokens: Option<u32>,
+        max_input_tokens: Option<u32>,
+        max_output_tokens: Option<u32>,
+        description: Option<String>,
+        knowledge_cutoff: Option<String>,
+        release_date: Option<String>,
+        last_updated: Option<String>,
+        open_weights: Option<bool>,
+        default_thinking_mode: Option<String>,
+        supports_parallel_tool_calls: Option<bool>,
+        supports_verbosity: Option<bool>,
+        default_verbosity: Option<String>,
+        default_temperature: Option<String>,
+        default_top_p: Option<String>,
+        default_top_k: Option<u32>,
+        assistant_reasoning_interleaved: Option<bool>,
+        assistant_reasoning_field: Option<String>,
+        output_modalities: Vec<String>,
+        pricing: Option<ModelPricing>,
+        display_name: Option<String>,
+        origin: Option<String>,
+        thinking_modes: BTreeMap<String, ConfiguredModelThinkingMode>,
+        speed_modes: BTreeMap<String, ConfiguredModelSpeedMode>,
+        capabilities: ModelCapabilityPatch,
+    ) -> Self {
+        Self {
+            lifecycle,
+            context_window_tokens,
+            max_input_tokens,
+            max_output_tokens,
+            description,
+            knowledge_cutoff,
+            release_date,
+            last_updated,
+            open_weights,
+            default_thinking_mode,
+            supports_parallel_tool_calls,
+            supports_verbosity,
+            default_verbosity,
+            default_temperature,
+            default_top_p,
+            default_top_k,
+            assistant_reasoning_interleaved,
+            assistant_reasoning_field,
+            output_modalities,
+            pricing,
+            display_name,
+            origin,
+            thinking_modes,
+            speed_modes,
+            capabilities,
+            source_priority: CatalogDefinitionSourcePriority::default(),
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.lifecycle.is_none()
             && self.context_window_tokens.is_none()

@@ -413,12 +413,16 @@ fn adaptive_modes_with_display(
     for effort in efforts {
         modes.insert(
             format!("thinking-{}", effort.as_str()),
-            ModelThinkingMode::new()
-                .with_display_name(format!("Think {}", title_case(effort.as_str())))
-                .with_thinking(ThinkingRequest::Adaptive {
+            ModelThinkingMode {
+                display_name: Some(format!("Think {}", title_case(effort.as_str()))),
+                description: None,
+                thinking: Some(ThinkingRequest::Adaptive {
                     effort: Some(*effort),
                     display,
                 }),
+                request_override: ModelSpeedModeRequestOverride::default(),
+                adapter_overrides: BTreeMap::new(),
+            },
         );
     }
     modes
@@ -463,17 +467,25 @@ fn effort_modes(
     if include_disabled {
         modes.insert(
             "no-thinking".to_owned(),
-            ModelThinkingMode::new()
-                .with_display_name("Off")
-                .with_thinking(ThinkingRequest::Disabled),
+            ModelThinkingMode {
+                display_name: Some("Off".to_string()),
+                description: None,
+                thinking: Some(ThinkingRequest::Disabled),
+                request_override: ModelSpeedModeRequestOverride::default(),
+                adapter_overrides: BTreeMap::new(),
+            },
         );
     }
     for effort in efforts {
         modes.insert(
             format!("thinking-{}", effort.as_str()),
-            ModelThinkingMode::new()
-                .with_display_name(format!("Think {}", title_case(effort.as_str())))
-                .with_thinking(ThinkingRequest::Effort { effort: *effort }),
+            ModelThinkingMode {
+                display_name: Some(format!("Think {}", title_case(effort.as_str()))),
+                description: None,
+                thinking: Some(ThinkingRequest::Effort { effort: *effort }),
+                request_override: ModelSpeedModeRequestOverride::default(),
+                adapter_overrides: BTreeMap::new(),
+            },
         );
     }
     modes

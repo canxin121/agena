@@ -724,7 +724,8 @@ pub async fn fs_download(
 pub struct UploadQuery {
     pub directory: Option<String>,
     pub path: Option<String>,
-    pub overwrite: Option<bool>,
+    #[serde(default)]
+    pub overwrite: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -752,8 +753,6 @@ pub async fn fs_upload(
         return Err(AppError::payload_too_large("File too large"));
     }
 
-    let overwrite = q.overwrite.unwrap_or(false);
-
     let (base, resolved) = resolve_workspace_path_from_context(
         state.as_ref(),
         &headers,
@@ -762,7 +761,7 @@ pub async fn fs_upload(
     )
     .await?;
 
-    if !overwrite {
+    if !q.overwrite {
         match tokio::fs::symlink_metadata(&resolved).await {
             Ok(meta) => {
                 if meta.is_dir() {
@@ -1017,8 +1016,8 @@ pub async fn fs_rename(
 #[derive(Debug, Deserialize)]
 pub struct ListQuery {
     pub path: Option<String>,
-    #[serde(rename = "respectGitignore")]
-    pub respect_gitignore: Option<bool>,
+    #[serde(default, rename = "respectGitignore")]
+    pub respect_gitignore: bool,
     pub offset: Option<usize>,
     pub limit: Option<usize>,
 }
@@ -1084,8 +1083,6 @@ pub async fn fs_list(Query(q): Query<ListQuery>) -> ApiResult<Json<ListResponse>
         .filter(|v| !v.is_empty())
         .map(|v| v.to_string())
         .unwrap_or_else(|| home_dir_env().unwrap_or_default());
-    let respect_gitignore = q.respect_gitignore.unwrap_or(false);
-
     let resolved = resolve_path(&raw_path);
     let abs = if resolved.is_absolute() {
         resolved
@@ -1120,7 +1117,7 @@ pub async fn fs_list(Query(q): Query<ListQuery>) -> ApiResult<Json<ListResponse>
         raw_entries.push(entry);
     }
 
-    let ignored = if respect_gitignore {
+    let ignored = if q.respect_gitignore {
         git_check_ignore(&abs, &names).await
     } else {
         HashSet::new()
@@ -1129,7 +1126,7 @@ pub async fn fs_list(Query(q): Query<ListQuery>) -> ApiResult<Json<ListResponse>
     let mut entries = Vec::new();
     for entry in raw_entries {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if respect_gitignore && ignored.contains(&name) {
+        if q.respect_gitignore && ignored.contains(&name) {
             continue;
         }
 
@@ -1196,10 +1193,10 @@ pub struct SearchQuery {
     pub root: Option<String>,
     pub directory: Option<String>,
     pub q: Option<String>,
-    #[serde(rename = "includeHidden")]
-    pub include_hidden: Option<bool>,
-    #[serde(rename = "respectGitignore")]
-    pub respect_gitignore: Option<bool>,
+    #[serde(default, rename = "includeHidden")]
+    pub include_hidden: bool,
+    #[serde(default = "default_respect_gitignore", rename = "respectGitignore")]
+    pub respect_gitignore: bool,
     pub limit: Option<usize>,
 }
 
@@ -1218,6 +1215,10 @@ pub struct SearchResponse {
     pub root: String,
     pub count: usize,
     pub files: Vec<SearchFile>,
+}
+
+fn default_respect_gitignore() -> bool {
+    true
 }
 
 fn normalize_relative_search_path(root: &Path, target: &Path) -> String {
@@ -1310,9 +1311,6 @@ pub async fn fs_search(Query(q): Query<SearchQuery>) -> ApiResult<Json<SearchRes
         .or(q.directory)
         .unwrap_or_else(|| home_dir_env().unwrap_or_default());
     let raw_query = q.q.unwrap_or_default();
-    let include_hidden = q.include_hidden.unwrap_or(false);
-    let respect_gitignore = q.respect_gitignore.unwrap_or(true);
-
     let limit = q
         .limit
         .unwrap_or(DEFAULT_FILE_SEARCH_LIMIT)
@@ -1353,8 +1351,8 @@ pub async fn fs_search(Query(q): Query<SearchQuery>) -> ApiResult<Json<SearchRes
 
     let abs_root_for_filter = abs_root.clone();
     let mut builder = WalkBuilder::new(&abs_root);
-    builder.hidden(!include_hidden);
-    if !respect_gitignore {
+    builder.hidden(!q.include_hidden);
+    if !q.respect_gitignore {
         builder.git_ignore(false);
         builder.git_global(false);
         builder.git_exclude(false);
@@ -1378,7 +1376,7 @@ pub async fn fs_search(Query(q): Query<SearchQuery>) -> ApiResult<Json<SearchRes
             if excluded.contains(lower.as_str()) {
                 return false;
             }
-            if !include_hidden && name.starts_with('.') {
+            if !q.include_hidden && name.starts_with('.') {
                 return false;
             }
             true
@@ -1467,12 +1465,18 @@ pub async fn fs_search(Query(q): Query<SearchQuery>) -> ApiResult<Json<SearchRes
 #[serde(rename_all = "camelCase")]
 pub struct ContentSearchBody {
     pub query: Option<String>,
-    pub paths: Option<Vec<String>>,
-    pub include_hidden: Option<bool>,
-    pub respect_gitignore: Option<bool>,
-    pub is_regex: Option<bool>,
-    pub case_sensitive: Option<bool>,
-    pub whole_word: Option<bool>,
+    #[serde(default)]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub include_hidden: bool,
+    #[serde(default = "default_respect_gitignore")]
+    pub respect_gitignore: bool,
+    #[serde(default)]
+    pub is_regex: bool,
+    #[serde(default)]
+    pub case_sensitive: bool,
+    #[serde(default)]
+    pub whole_word: bool,
     pub max_results: Option<usize>,
     pub max_matches_per_file: Option<usize>,
     pub context_chars: Option<usize>,
@@ -1525,12 +1529,18 @@ pub struct ContentReplaceMatchRef {
 pub struct ContentReplaceBody {
     pub query: Option<String>,
     pub replace: Option<String>,
-    pub include_hidden: Option<bool>,
-    pub respect_gitignore: Option<bool>,
-    pub is_regex: Option<bool>,
-    pub case_sensitive: Option<bool>,
-    pub whole_word: Option<bool>,
-    pub paths: Option<Vec<String>>,
+    #[serde(default)]
+    pub include_hidden: bool,
+    #[serde(default = "default_respect_gitignore")]
+    pub respect_gitignore: bool,
+    #[serde(default)]
+    pub is_regex: bool,
+    #[serde(default)]
+    pub case_sensitive: bool,
+    #[serde(default)]
+    pub whole_word: bool,
+    #[serde(default)]
+    pub paths: Vec<String>,
     pub r#match: Option<ContentReplaceMatchRef>,
 }
 
@@ -1874,11 +1884,6 @@ pub async fn fs_content_search(
         .ok_or_else(|| AppError::bad_request("Search query is required"))?
         .to_string();
 
-    let include_hidden = body.include_hidden.unwrap_or(false);
-    let respect_gitignore = body.respect_gitignore.unwrap_or(true);
-    let is_regex = body.is_regex.unwrap_or(false);
-    let case_sensitive = body.case_sensitive.unwrap_or(false);
-    let whole_word = body.whole_word.unwrap_or(false);
     let max_results = body
         .max_results
         .unwrap_or(DEFAULT_CONTENT_SEARCH_MAX_RESULTS)
@@ -1892,18 +1897,24 @@ pub async fn fs_content_search(
         .unwrap_or(DEFAULT_CONTENT_SEARCH_CONTEXT_CHARS)
         .clamp(0, MAX_CONTENT_SEARCH_CONTEXT_CHARS);
 
-    let regex = build_content_regex(&query, is_regex, case_sensitive, whole_word)?;
+    let regex = build_content_regex(&query, body.is_regex, body.case_sensitive, body.whole_word)?;
     let started = Instant::now();
 
-    let candidates = if let Some(paths) = body.paths.as_deref() {
-        normalize_content_scope_paths(&root, paths, include_hidden, respect_gitignore).await?
-    } else {
+    let candidates = if body.paths.is_empty() {
         walk_workspace_files(
             &root,
-            include_hidden,
-            respect_gitignore,
+            body.include_hidden,
+            body.respect_gitignore,
             MAX_CONTENT_REPLACE_PATHS,
         )
+    } else {
+        normalize_content_scope_paths(
+            &root,
+            &body.paths,
+            body.include_hidden,
+            body.respect_gitignore,
+        )
+        .await?
     };
 
     let mut files = Vec::new();
@@ -2061,24 +2072,18 @@ pub async fn fs_content_replace(
         .filter(|q| !q.is_empty())
         .ok_or_else(|| AppError::bad_request("Search query is required"))?;
 
-    let include_hidden = body.include_hidden.unwrap_or(false);
-    let respect_gitignore = body.respect_gitignore.unwrap_or(true);
-    let is_regex = body.is_regex.unwrap_or(false);
-    let case_sensitive = body.case_sensitive.unwrap_or(false);
-    let whole_word = body.whole_word.unwrap_or(false);
-
-    let regex = build_content_regex(query, is_regex, case_sensitive, whole_word)?;
+    let regex = build_content_regex(query, body.is_regex, body.case_sensitive, body.whole_word)?;
     let started = Instant::now();
 
-    let candidates = if let Some(paths) = body.paths.as_deref() {
-        normalize_content_scope_paths(&root, paths, true, false).await?
-    } else {
+    let candidates = if body.paths.is_empty() {
         walk_workspace_files(
             &root,
-            include_hidden,
-            respect_gitignore,
+            body.include_hidden,
+            body.respect_gitignore,
             MAX_CONTENT_REPLACE_PATHS,
         )
+    } else {
+        normalize_content_scope_paths(&root, &body.paths, true, false).await?
     };
 
     let mut files = Vec::new();

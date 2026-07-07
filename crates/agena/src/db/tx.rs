@@ -5,12 +5,17 @@ use sea_orm::{DatabaseConnection, DatabaseTransaction, DbErr, TransactionTrait};
 
 type DbEffectFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
-#[derive(Default)]
 pub struct DbTxEffects {
     effects: Vec<DbEffectFuture>,
 }
 
 impl DbTxEffects {
+    fn new() -> Self {
+        Self {
+            effects: Vec::new(),
+        }
+    }
+
     pub fn push<F>(&mut self, effect: F)
     where
         F: Future<Output = ()> + Send + 'static,
@@ -25,7 +30,7 @@ impl DbTxEffects {
     }
 }
 
-pub async fn with_transaction_and_effects<T, O>(db: &DatabaseConnection, op: O) -> Result<T, DbErr>
+pub async fn run_transaction_effects<T, O>(db: &DatabaseConnection, op: O) -> Result<T, DbErr>
 where
     O: for<'a> FnOnce(
         &'a DatabaseTransaction,
@@ -33,7 +38,7 @@ where
     ) -> Pin<Box<dyn Future<Output = Result<T, DbErr>> + Send + 'a>>,
 {
     let txn = db.begin().await?;
-    let mut effects = DbTxEffects::default();
+    let mut effects = DbTxEffects::new();
 
     let result = op(&txn, &mut effects).await;
     match result {
@@ -49,10 +54,7 @@ where
     }
 }
 
-pub async fn with_transaction_and_app_effects<T, E, O>(
-    db: &DatabaseConnection,
-    op: O,
-) -> Result<T, E>
+pub async fn run_transaction_app_effects<T, E, O>(db: &DatabaseConnection, op: O) -> Result<T, E>
 where
     E: From<DbErr>,
     O: for<'a> FnOnce(
@@ -61,7 +63,7 @@ where
     ) -> Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>,
 {
     let txn = db.begin().await.map_err(E::from)?;
-    let mut effects = DbTxEffects::default();
+    let mut effects = DbTxEffects::new();
 
     let result = op(&txn, &mut effects).await;
     match result {

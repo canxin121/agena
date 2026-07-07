@@ -22,7 +22,7 @@ where
     sanitize_schema_json(value)
 }
 
-pub fn json_schema_for_with_default<T>(default: T) -> Value
+pub fn json_schema_for_default<T>(default: T) -> Value
 where
     T: JsonSchema + Serialize,
 {

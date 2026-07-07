@@ -3,14 +3,14 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::attachment::AttachmentItem;
+use crate::identity::{PluginKey, ToolKey};
 use crate::manifest::ToolTag;
 
 // ── tool.execute.before ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolBeforeInput {
-    pub tool_name: String,
-    pub plugin_name: String,
+    pub tool: ToolKey,
     pub session_id: i64,
     pub call_id: i64,
     pub workspace_root: String,
@@ -23,6 +23,16 @@ pub struct ToolBeforeInput {
     /// Carry-through: accumulated metadata from prior plugins in the chain.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, String>,
+}
+
+impl ToolBeforeInput {
+    pub fn tool_name(&self) -> &str {
+        self.tool.name()
+    }
+
+    pub fn plugin_key(&self) -> &PluginKey {
+        self.tool.plugin()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -45,8 +55,7 @@ pub struct ToolBeforePatch {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolAfterInput {
-    pub tool_name: String,
-    pub plugin_name: String,
+    pub tool: ToolKey,
     pub session_id: i64,
     pub call_id: i64,
     pub workspace_root: String,
@@ -56,6 +65,16 @@ pub struct ToolAfterInput {
     pub payload: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, String>,
+}
+
+impl ToolAfterInput {
+    pub fn tool_name(&self) -> &str {
+        self.tool.name()
+    }
+
+    pub fn plugin_key(&self) -> &PluginKey {
+        self.tool.plugin()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -75,8 +94,7 @@ pub struct ToolAfterPatch {
 /// Fired when a tool execution fails. Notification — no patch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolFailureInput {
-    pub tool_name: String,
-    pub plugin_name: String,
+    pub tool: ToolKey,
     pub session_id: i64,
     pub call_id: i64,
     pub workspace_root: String,
@@ -87,17 +105,24 @@ pub struct ToolFailureInput {
     pub is_interrupt: bool,
 }
 
+impl ToolFailureInput {
+    pub fn tool_name(&self) -> &str {
+        self.tool.name()
+    }
+
+    pub fn plugin_key(&self) -> &PluginKey {
+        self.tool.plugin()
+    }
+}
+
 // ── tool.definition ────────────────────────────────────────────────────────
 
 /// Sent once per tool before it is listed to the LLM. Plugins can override
-/// the description and/or parameter schema.
+/// the summary and/or parameter schema.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinitionInput {
-    pub tool_name: String,
-    pub plugin_name: String,
-    pub description: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
+    pub tool: ToolKey,
+    pub summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -105,10 +130,18 @@ pub struct ToolDefinitionInput {
     pub input_schema: serde_json::Value,
 }
 
+impl ToolDefinitionInput {
+    pub fn tool_name(&self) -> &str {
+        self.tool.name()
+    }
+
+    pub fn plugin_key(&self) -> &PluginKey {
+        self.tool.plugin()
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolDefinitionPatch {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -187,29 +220,20 @@ impl ToolInvokeOutput {
         }
     }
 
-    pub fn with_title(mut self, title: impl Into<String>) -> Self {
-        self.title = title.into();
-        self
-    }
-
-    pub fn with_payload(mut self, payload: serde_json::Value) -> Self {
-        self.payload = Some(payload);
-        self
-    }
-
-    pub fn with_metadata(mut self, k: impl Into<String>, v: impl Into<String>) -> Self {
-        self.metadata.insert(k.into(), v.into());
-        self
-    }
-
-    pub fn with_attachment(mut self, att: AttachmentItem) -> Self {
-        self.attachments.push(att);
-        self
-    }
-
-    pub fn with_attachments(mut self, atts: impl IntoIterator<Item = AttachmentItem>) -> Self {
-        self.attachments.extend(atts);
-        self
+    pub fn from_parts(
+        title: impl Into<String>,
+        output_text: impl Into<String>,
+        payload: Option<serde_json::Value>,
+        metadata: BTreeMap<String, String>,
+        attachments: Vec<AttachmentItem>,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            output_text: output_text.into(),
+            payload,
+            metadata,
+            attachments,
+        }
     }
 }
 
@@ -242,7 +266,13 @@ impl IntoToolInvokeOutput for serde_json::Value {
             serde_json::Value::String(value) => value.clone(),
             _ => self.to_string(),
         };
-        Ok(ToolInvokeOutput::text(output_text).with_payload(self))
+        Ok(ToolInvokeOutput::from_parts(
+            String::new(),
+            output_text,
+            Some(self),
+            BTreeMap::new(),
+            Vec::new(),
+        ))
     }
 }
 
@@ -324,29 +354,22 @@ impl ToolStreamEnd {
         }
     }
 
-    pub fn with_title(mut self, title: impl Into<String>) -> Self {
-        self.title = title.into();
-        self
-    }
-
-    pub fn with_payload(mut self, payload: serde_json::Value) -> Self {
-        self.payload = Some(payload);
-        self
-    }
-
-    pub fn with_metadata(mut self, k: impl Into<String>, v: impl Into<String>) -> Self {
-        self.metadata.insert(k.into(), v.into());
-        self
-    }
-
-    pub fn with_attachment(mut self, att: AttachmentItem) -> Self {
-        self.attachments.push(att);
-        self
-    }
-
-    pub fn with_attachments(mut self, atts: impl IntoIterator<Item = AttachmentItem>) -> Self {
-        self.attachments.extend(atts);
-        self
+    pub fn from_parts(
+        stream_id: impl Into<String>,
+        title: impl Into<String>,
+        output_text: impl Into<String>,
+        payload: Option<serde_json::Value>,
+        metadata: BTreeMap<String, String>,
+        attachments: Vec<AttachmentItem>,
+    ) -> Self {
+        Self {
+            stream_id: stream_id.into(),
+            title: title.into(),
+            output_text: output_text.into(),
+            payload,
+            metadata,
+            attachments,
+        }
     }
 }
 

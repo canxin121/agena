@@ -276,9 +276,11 @@ impl<Request, Reply> InteractiveRequestPart<Request, Reply> {
         }
     }
 
-    pub fn with_reply(mut self, reply: Reply) -> Self {
-        self.reply = Some(reply);
-        self
+    pub fn replied(request: Request, reply: Reply) -> Self {
+        Self {
+            request,
+            reply: Some(reply),
+        }
     }
 
     pub const fn status(&self) -> ExecutionStatus {

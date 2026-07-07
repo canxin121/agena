@@ -74,8 +74,8 @@ pub struct ResourceContents {
 pub struct CallToolResult {
     #[serde(default)]
     pub content: Vec<ContentBlock>,
-    #[serde(default, rename = "isError", skip_serializing_if = "Option::is_none")]
-    pub is_error: Option<bool>,
+    #[serde(default, rename = "isError", skip_serializing_if = "is_false")]
+    pub is_error: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,8 +117,12 @@ pub struct PromptArgument {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub required: Option<bool>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub required: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

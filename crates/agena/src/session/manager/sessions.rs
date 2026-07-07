@@ -130,7 +130,15 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
+        let tool_protocol = scoped_executor.model_tool_prompt_text();
         let tools = scoped_executor.available_model_tools();
+        let request_system = super::merge_system_prompt_with_tool_protocol(
+            options
+                .as_ref()
+                .and_then(|options| options.system.as_deref())
+                .or(session.runtime.execution.system_prompt_override.as_deref()),
+            tool_protocol.as_deref(),
+        );
         let metadata = options
             .as_ref()
             .and_then(|options| state.processor.model_metadata(&options.model).ok())
@@ -167,10 +175,7 @@ impl SessionManager {
             projected_tokens.unwrap_or_else(|| {
                 prompt_window::approximate_total_request_tokens(
                     active_messages.as_slice(),
-                    options
-                        .as_ref()
-                        .and_then(|options| options.system.as_deref())
-                        .or(session.runtime.execution.system_prompt_override.as_deref()),
+                    request_system.as_deref(),
                     tools.as_slice(),
                 )
             })
@@ -327,7 +332,21 @@ impl SessionManager {
         let session = self.get_session(session_id).await?;
         let state = self.execution_state();
         let model = self.model_from_session_or_default(&session, &state)?;
-        self.apply_execution_context_to_run_options(&session, SessionRunOptions::new(model))
+        self.apply_execution_context_to_run_options(
+            &session,
+            SessionRunOptions {
+                model,
+                thinking_mode: None,
+                speed_mode: None,
+                verbosity: None,
+                thinking: None,
+                request_override: Default::default(),
+                system: None,
+                temperature: None,
+                max_output_tokens: None,
+                agent_profile: None,
+            },
+        )
     }
 
     pub async fn workspace_session_ids(&self) -> Result<Vec<i64>, AppError> {

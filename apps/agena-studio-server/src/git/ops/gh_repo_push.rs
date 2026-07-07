@@ -20,8 +20,12 @@ const GH_TIMEOUT: Duration = Duration::from_secs(45);
 pub struct GitCreateGithubRepoAndPushBody {
     pub name: Option<String>,
     pub remote: Option<String>,
-    #[serde(rename = "private")]
-    pub private_repo: Option<bool>,
+    #[serde(default = "default_private_repo", rename = "private")]
+    pub private_repo: bool,
+}
+
+fn default_private_repo() -> bool {
+    true
 }
 
 #[derive(Debug, Serialize)]
@@ -291,7 +295,7 @@ pub async fn git_create_github_repo_and_push(
             .into_response();
     }
 
-    let is_private = body.private_repo.unwrap_or(true);
+    let is_private = body.private_repo;
     let private_value = if is_private { "true" } else { "false" };
     let (create_code, create_out, create_err) = match run_gh(
         &dir,

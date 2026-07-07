@@ -1,12 +1,11 @@
 //! Shared implementation for the catalog/runtime/planning/tasks/repo plugins.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::message::{
     AgentRestoreToolInput, AgentSwitchToolInput, AskUserToolInput, TaskToolInput,
-    ToolSearchToolInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{
@@ -68,15 +67,11 @@ impl Default for WorkflowToolCatalogSearchConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-pub(crate) struct WorkflowToolCatalogHelpConfig {
-    pub(crate) include_schema_by_default: bool,
-}
+pub(crate) struct WorkflowToolCatalogHelpConfig {}
 
 impl Default for WorkflowToolCatalogHelpConfig {
     fn default() -> Self {
-        Self {
-            include_schema_by_default: true,
-        }
+        Self {}
     }
 }
 
@@ -98,7 +93,7 @@ impl Default for WorkflowPlanConfig {
 
 pub(crate) fn tool_catalog_plugin_config_schema() -> serde_json::Value {
     let mut schema =
-        crate::tool::definition::json_schema_for_with_default(WorkflowToolCatalogConfig::default());
+        crate::tool::definition::json_schema_for_default(WorkflowToolCatalogConfig::default());
     for (pointer, title, description) in [
         (
             "",
@@ -108,7 +103,7 @@ pub(crate) fn tool_catalog_plugin_config_schema() -> serde_json::Value {
         (
             "/properties/search",
             "Search",
-            "Default search behavior for tools with action=search.",
+            "Default behavior for the catalog search tool.",
         ),
         (
             "/properties/search/properties/default_limit",
@@ -123,12 +118,7 @@ pub(crate) fn tool_catalog_plugin_config_schema() -> serde_json::Value {
         (
             "/properties/help",
             "Help",
-            "Defaults for tools with action=help.",
-        ),
-        (
-            "/properties/help/properties/include_schema_by_default",
-            "Include Schema by Default",
-            "When enabled, tool help includes the registered input schema unless the caller opts out.",
+            "Default behavior for the catalog help tool.",
         ),
     ] {
         crate::tool::definition::set_schema_metadata(
@@ -143,7 +133,7 @@ pub(crate) fn tool_catalog_plugin_config_schema() -> serde_json::Value {
 
 pub(crate) fn planning_plugin_config_schema() -> serde_json::Value {
     let mut schema =
-        crate::tool::definition::json_schema_for_with_default(WorkflowPlanConfig::default());
+        crate::tool::definition::json_schema_for_default(WorkflowPlanConfig::default());
     for (pointer, title, description) in [
         (
             "",
@@ -177,20 +167,21 @@ mod repo_tools;
 mod runtime_tools;
 mod task_tools;
 
-pub(crate) use catalog_tools::{ToolListInput, ToolsHelpInput, ToolsToolInput};
+pub(crate) use catalog_tools::{
+    CatalogSearchInput, CatalogToolSuite, ToolCallInput, ToolListInput, ToolTagsInput,
+    ToolsHelpInput,
+};
 pub(crate) use planning_tools::{
-    PlanGetInput, PlanGetView, PlanSetInput, PlanToolInput, PlanUpdateInput, WorkflowPlan,
+    PlanGetInput, PlanGetView, PlanSetInput, PlanToolSuite, PlanUpdateInput, WorkflowPlan,
     WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase, WorkflowPlanStep,
     WorkflowPlanStepInput, WorkflowPlanStepStatus,
 };
 pub(crate) use repo_tools::{
-    EnterSnapshotCommandInput, ExitSnapshotCommandInput, SnapshotToolInput,
+    EnterSnapshotCommandInput, ExitSnapshotCommandInput, SnapshotToolSuite,
     snapshot_enter_permission_paths,
 };
-pub(crate) use runtime_tools::{
-    AgentToolInput, SessionRenameToolInput, SessionToolInput, SessionToolResponse, UserToolInput,
-};
-pub(crate) use task_tools::TaskToolActionInput;
+pub(crate) use runtime_tools::{RuntimeToolSuite, SessionRenameToolInput, SessionToolResponse};
+pub(crate) use task_tools::TaskToolSuite;
 
 const PLAN_NAMESPACE: &str = "workflow_plan";
 const PLAN_KEY_ACTIVE: &str = "active";
@@ -223,6 +214,19 @@ pub(crate) struct WorkflowPlugin {
     workspace_root: OnceLock<PathBuf>,
 }
 
+#[derive(Debug, Clone)]
+struct CatalogToolRecord {
+    name: String,
+    summary: String,
+    tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CatalogTagRecord {
+    tag: String,
+    tool_count: usize,
+}
+
 impl WorkflowPlugin {
     pub(crate) fn new() -> Self {
         Self {
@@ -238,7 +242,10 @@ impl WorkflowPlugin {
             .ok_or_else(|| PluginError::new("workflow plugin invoked before init"))
     }
 
-    async fn invoke_tools_usage(&self) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_tools_usage(
+        &self,
+        _input: &catalog_tools::CatalogUsageToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         Ok(Self::invoke_tool_catalog_usage())
     }
 
@@ -299,19 +306,102 @@ impl WorkflowPlugin {
             .collect()
     }
 
-    fn tool_search_document_from_descriptor(descriptor: ToolDescriptor) -> ToolCatalogDocument {
-        let name = descriptor.name;
-        let description = descriptor
-            .summary
-            .or(descriptor.description)
-            .unwrap_or_default();
-        let tags = descriptor
-            .tags
+    fn tool_search_document(record: &CatalogToolRecord) -> ToolCatalogDocument {
+        ToolCatalogDocument::new(
+            record.name.clone(),
+            record.summary.clone(),
+            record.tags.clone(),
+            None,
+        )
+    }
+
+    fn normalized_tag_filter(tag: Option<&str>) -> Option<String> {
+        tag.map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_ascii_lowercase())
+    }
+
+    fn paginate<T: Clone>(
+        items: &[T],
+        offset: Option<u32>,
+        limit: Option<u32>,
+    ) -> (Vec<T>, usize, usize) {
+        let total = items.len();
+        let offset = offset.unwrap_or(0) as usize;
+        if offset >= total {
+            return (Vec::new(), total, offset);
+        }
+        let limit = limit
+            .map(|value| value as usize)
+            .unwrap_or(total.saturating_sub(offset));
+        let end = offset.saturating_add(limit).min(total);
+        (items[offset..end].to_vec(), total, offset)
+    }
+
+    async fn catalog_tool_records(&self) -> SdkResult<Vec<CatalogToolRecord>> {
+        let host = self.host()?;
+        let tools = host.list_tools().await?;
+        let visible = tools
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect::<HashSet<_>>();
+        let registered = host.list_registered_tools().await?;
+        let mut tags_by_name = HashMap::<String, Vec<String>>::new();
+        for entry in registered.tools {
+            let model_name = entry.tool_key.to_model_string();
+            if !visible.contains(&model_name) {
+                continue;
+            }
+            let mut tags = entry
+                .tool
+                .effective_tags()
+                .into_iter()
+                .map(|tag| tag.to_string())
+                .collect::<Vec<_>>();
+            tags.sort();
+            tags.dedup();
+            tags_by_name.insert(model_name, tags);
+        }
+
+        let mut records = tools
             .into_iter()
-            .map(|tag| tag.to_string())
+            .map(|tool| CatalogToolRecord {
+                tags: tags_by_name.remove(&tool.name).unwrap_or_default(),
+                name: tool.name,
+                summary: tool.summary.unwrap_or_default(),
+            })
             .collect::<Vec<_>>();
-        let plugin_id = descriptor.plugin_id;
-        ToolCatalogDocument::new(name, description, tags, plugin_id)
+        records.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(records)
+    }
+
+    fn filter_catalog_records_by_tag(
+        mut records: Vec<CatalogToolRecord>,
+        tag: Option<&str>,
+    ) -> Vec<CatalogToolRecord> {
+        let Some(tag) = Self::normalized_tag_filter(tag) else {
+            return records;
+        };
+        records.retain(|record| {
+            record
+                .tags
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(tag.as_str()))
+        });
+        records
+    }
+
+    fn catalog_tag_records(records: &[CatalogToolRecord]) -> Vec<CatalogTagRecord> {
+        let mut counts = BTreeMap::<String, usize>::new();
+        for record in records {
+            for tag in &record.tags {
+                *counts.entry(tag.clone()).or_default() += 1;
+            }
+        }
+        counts
+            .into_iter()
+            .map(|(tag, tool_count)| CatalogTagRecord { tag, tool_count })
+            .collect()
     }
 
     fn pretty_json_text(payload: &serde_json::Value) -> String {
@@ -337,19 +427,26 @@ impl WorkflowPlugin {
         parts.join(" | ")
     }
 
-    async fn invoke_get_session(&self) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_get_session(
+        &self,
+        _input: &runtime_tools::RuntimeGetToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let response = self
             .host()?
             .get_session(HostGetSessionRequest::default())
             .await?;
         let payload = Self::session_tool_payload(response.session.clone())?;
-        Ok(ToolInvokeOutput::text(format!(
-            "{}\n\n{}",
-            Self::session_summary(&response.session),
-            Self::pretty_json_text(&payload)
+        Ok(ToolInvokeOutput::from_parts(
+            "session",
+            format!(
+                "{}\n\n{}",
+                Self::session_summary(&response.session),
+                Self::pretty_json_text(&payload)
+            ),
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
         ))
-        .with_title("session")
-        .with_payload(payload))
     }
 
     async fn invoke_rename_session(
@@ -364,14 +461,18 @@ impl WorkflowPlugin {
             })
             .await?;
         let payload = Self::session_tool_payload(response.session.clone())?;
-        Ok(ToolInvokeOutput::text(format!(
-            "Renamed session #{} to {}.\n\n{}",
-            response.session.id,
-            response.session.title,
-            Self::pretty_json_text(&payload)
+        Ok(ToolInvokeOutput::from_parts(
+            "session",
+            format!(
+                "Renamed session #{} to {}.\n\n{}",
+                response.session.id,
+                response.session.title,
+                Self::pretty_json_text(&payload)
+            ),
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
         ))
-        .with_title("session")
-        .with_payload(payload))
     }
 
     async fn load_active_plan(&self) -> SdkResult<Option<WorkflowPlan>> {
@@ -1370,9 +1471,13 @@ impl WorkflowPlugin {
             "plan": plan,
             "decision": decision,
         });
-        Ok(ToolInvokeOutput::text(output_text)
-            .with_title("plan review")
-            .with_payload(payload))
+        Ok(ToolInvokeOutput::from_parts(
+            "plan review",
+            output_text,
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
     }
 
     fn plan_lock_active(plan: &WorkflowPlan) -> bool {
@@ -1380,27 +1485,30 @@ impl WorkflowPlugin {
     }
 
     fn tool_allowed_during_planning(input: &ToolBeforeInput) -> bool {
-        if input.tool_name == "plan"
-            || input.tool_name == "user"
-            || input.tool_name == "tools"
-            || input.tool_name == "session"
-            || input.tool_name == "agent"
-        {
-            return true;
-        }
-        if input.tool_name == "task" {
-            return TaskToolActionInput::parse_input(input.input.clone()).is_ok_and(|task| {
-                matches!(
-                    task,
-                    TaskToolActionInput::Run {
-                        args: TaskToolInput {
-                            subagent_type: crate::message::TaskSubagentType::Explore
-                                | crate::message::TaskSubagentType::Verify,
-                            ..
-                        }
-                    }
-                )
-            });
+        match input.plugin_key().to_string().as_str() {
+            "agena.plan" => return matches!(input.tool_name(), "get" | "set" | "update" | "clear"),
+            "agena.runtime" => {
+                return matches!(
+                    input.tool_name(),
+                    "switch" | "restore" | "get" | "rename" | "request_input"
+                );
+            }
+            "agena.tools" => {
+                return matches!(
+                    input.tool_name(),
+                    "usage" | "list" | "search" | "tags" | "help" | "call"
+                );
+            }
+            "agena.tasks" if input.tool_name() == "run" => {
+                return TaskToolInput::parse_input(input.input.clone()).is_ok_and(|task| {
+                    matches!(
+                        task.subagent_type,
+                        crate::message::TaskSubagentType::Explore
+                            | crate::message::TaskSubagentType::Verify
+                    )
+                });
+            }
+            _ => {}
         }
         if input.tags.iter().any(|tag| matches!(tag, ToolTag::Shell)) {
             return true;
@@ -1515,7 +1623,7 @@ impl WorkflowPlugin {
     }
 
     async fn invoke_plan_get(&self, input: &PlanGetInput) -> SdkResult<ToolInvokeOutput> {
-        let view = input.view.unwrap_or_default();
+        let view = input.view;
         let Some(plan) = self.load_active_plan().await? else {
             let payload = serde_json::json!({
                 "plan": serde_json::Value::Null,
@@ -1523,14 +1631,22 @@ impl WorkflowPlugin {
                 "current_step": serde_json::Value::Null,
                 "current_step_goal": serde_json::Value::Null,
             });
-            return Ok(ToolInvokeOutput::text("No plan.")
-                .with_title("plan")
-                .with_payload(payload));
+            return Ok(ToolInvokeOutput::from_parts(
+                "plan",
+                "No plan.",
+                Some(payload),
+                std::collections::BTreeMap::new(),
+                Vec::new(),
+            ));
         };
         let payload = Self::plan_get_payload(&plan, view);
-        Ok(ToolInvokeOutput::text(Self::plan_get_text(&plan, view))
-            .with_title("plan")
-            .with_payload(payload))
+        Ok(ToolInvokeOutput::from_parts(
+            "plan",
+            Self::plan_get_text(&plan, view),
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
     }
 
     async fn invoke_plan_set(&self, input: &PlanSetInput) -> SdkResult<ToolInvokeOutput> {
@@ -1545,11 +1661,13 @@ impl WorkflowPlugin {
         )?;
         self.save_active_plan(&plan).await?;
         let payload = Self::plan_payload(&plan)?;
-        Ok(
-            ToolInvokeOutput::text(Self::plan_output_text("Saved the plan.", &plan))
-                .with_title("plan")
-                .with_payload(payload),
-        )
+        Ok(ToolInvokeOutput::from_parts(
+            "plan",
+            Self::plan_output_text("Saved the plan.", &plan),
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
     }
 
     async fn invoke_plan_update(&self, input: &PlanUpdateInput) -> SdkResult<ToolInvokeOutput> {
@@ -1671,14 +1789,19 @@ impl WorkflowPlugin {
         };
         self.save_active_plan(&plan).await?;
         let payload = Self::plan_payload(&plan)?;
-        Ok(
-            ToolInvokeOutput::text(Self::plan_output_text(message.as_str(), &plan))
-                .with_title("plan")
-                .with_payload(payload),
-        )
+        Ok(ToolInvokeOutput::from_parts(
+            "plan",
+            Self::plan_output_text(message.as_str(), &plan),
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
     }
 
-    async fn invoke_plan_clear(&self) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_plan_clear(
+        &self,
+        _input: &planning_tools::PlanClearToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let existing = self.load_active_plan().await?;
         self.clear_active_plan().await?;
         let payload = serde_json::json!({
@@ -1689,9 +1812,13 @@ impl WorkflowPlugin {
         } else {
             "No active plan to clear."
         };
-        Ok(ToolInvokeOutput::text(text)
-            .with_title("plan")
-            .with_payload(payload))
+        Ok(ToolInvokeOutput::from_parts(
+            "plan",
+            text,
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
     }
 
     async fn invoke_snapshot_enter(
@@ -1856,12 +1983,16 @@ impl WorkflowPlugin {
             .as_deref()
             .unwrap_or("default runtime context");
         let previous = response.previous_agent.as_deref().unwrap_or("none");
-        Ok(ToolInvokeOutput::text(format!(
-            "Switched session {} agent to {current}. Previous agent: {previous}.",
-            response.session_id
+        Ok(ToolInvokeOutput::from_parts(
+            "agent switch",
+            format!(
+                "Switched session {} agent to {current}. Previous agent: {previous}.",
+                response.session_id
+            ),
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
         ))
-        .with_title("agent switch")
-        .with_payload(payload))
     }
 
     async fn invoke_agent_restore(
@@ -1887,34 +2018,42 @@ impl WorkflowPlugin {
                 response.session_id
             )
         };
-        Ok(ToolInvokeOutput::text(text)
-            .with_title("agent restore")
-            .with_payload(payload))
+        Ok(ToolInvokeOutput::from_parts(
+            "agent restore",
+            text,
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
     }
 
-    async fn invoke_tool_search(&self, input: &ToolSearchToolInput) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_tool_search(&self, input: &CatalogSearchInput) -> SdkResult<ToolInvokeOutput> {
         let query = input.query.as_str();
         let config = self.config()?;
         let limit = input
             .limit
             .unwrap_or(config.tool_catalog.search.default_limit)
-            .clamp(1, config.tool_catalog.search.max_limit) as usize;
-        let host = self.host()?;
-        let catalog = host
-            .list_tools()
-            .await?
-            .into_iter()
-            .map(Self::tool_search_document_from_descriptor)
+            .clamp(1, config.tool_catalog.search.max_limit);
+        let records = Self::filter_catalog_records_by_tag(
+            self.catalog_tool_records().await?,
+            input.tag.as_deref(),
+        );
+        let catalog = records
+            .iter()
+            .map(Self::tool_search_document)
             .collect::<Vec<_>>();
-        let results = search_tool_catalog(&catalog, query, limit)
+        let results = search_tool_catalog(&catalog, query, catalog.len())
             .map_err(|err| PluginError::new(format!("tool search failed: {err}")))?;
+        let (results, total, offset) = Self::paginate(&results, input.offset, Some(limit));
         let names = results
             .iter()
             .map(|tool| tool.name.clone())
             .collect::<Vec<_>>();
         let mut lines = vec![format!(
-            "Found {} tool(s) matching '{}'.",
+            "Found {} matching tool(s); returned {} starting at offset {} for '{}'.",
+            total,
             names.len(),
+            offset,
             query
         )];
         for tool in &results {
@@ -1927,40 +2066,64 @@ impl WorkflowPlugin {
         }
         if !names.is_empty() {
             lines.push(
-                "Call `tools` with action `help` and an exact tool name for detailed usage."
-                    .to_string(),
+                "Call `agena.tools/help` with an exact tool name for detailed usage.".to_string(),
             );
         }
-        let payload = serde_json::json!({ "results": names });
-        Ok(ToolInvokeOutput::text(lines.join("\n"))
-            .with_title("Tool search")
-            .with_payload(payload)
-            .with_metadata("query", query)
-            .with_metadata("matched_tools", results.len().to_string()))
+        let payload = serde_json::json!({
+            "results": names,
+            "query": query,
+            "tag": input.tag.as_deref(),
+            "total": total,
+            "offset": offset,
+            "returned": results.len(),
+        });
+        Ok(ToolInvokeOutput::from_parts(
+            "Tool search",
+            lines.join("\n"),
+            Some(payload),
+            BTreeMap::from([
+                ("query".to_string(), query.to_string()),
+                ("matched_tools".to_string(), total.to_string()),
+                ("returned_tools".to_string(), results.len().to_string()),
+                ("offset".to_string(), offset.to_string()),
+            ]),
+            Vec::new(),
+        ))
     }
 
     async fn invoke_tool_list(&self, input: &ToolListInput) -> SdkResult<ToolInvokeOutput> {
-        let mut tools = self.host()?.list_tools().await?;
-        tools.sort_by(|left, right| left.name.cmp(&right.name));
-        let total = tools.len();
-        if let Some(limit) = input.limit {
-            tools.truncate(limit.max(1) as usize);
-        }
-        let verbose = input.verbose.unwrap_or(false);
-
-        let mut lines = vec![format!("Available tool(s): {}/{}.", tools.len(), total)];
+        let config = self.config()?;
+        let limit = input
+            .limit
+            .unwrap_or(config.tool_catalog.search.default_limit)
+            .clamp(1, config.tool_catalog.search.max_limit);
+        let records = Self::filter_catalog_records_by_tag(
+            self.catalog_tool_records().await?,
+            input.tag.as_deref(),
+        );
+        let (tools, total, offset) = Self::paginate(&records, input.offset, Some(limit));
+        let mut lines = vec![format!(
+            "Available tool(s): returned {}/{} starting at offset {}.",
+            tools.len(),
+            total,
+            offset
+        )];
         for tool in &tools {
-            if verbose {
-                let summary = tool
-                    .summary
-                    .as_deref()
-                    .or(tool.description.as_deref())
-                    .unwrap_or_default()
-                    .trim();
+            if input.verbose {
+                let summary = tool.summary.trim();
                 if summary.is_empty() {
-                    lines.push(format!("- {}", tool.name));
+                    lines.push(format!(
+                        "- {} [{}]",
+                        tool.name,
+                        tags_summary(tool.tags.as_slice())
+                    ));
                 } else {
-                    lines.push(format!("- {}: {}", tool.name, summary));
+                    lines.push(format!(
+                        "- {} [{}]: {}",
+                        tool.name,
+                        tags_summary(tool.tags.as_slice()),
+                        summary
+                    ));
                 }
             } else {
                 lines.push(format!("- {}", tool.name));
@@ -1968,21 +2131,74 @@ impl WorkflowPlugin {
         }
 
         let payload = serde_json::json!({
-            "tools": tools.iter().map(|tool| tool.name.clone()).collect::<Vec<_>>(),
+            "tools": tools.iter().map(|tool| serde_json::json!({
+                "name": tool.name,
+                "summary": tool.summary,
+                "tags": tool.tags,
+            })).collect::<Vec<_>>(),
             "total": total,
+            "offset": offset,
             "returned": tools.len(),
+            "tag": input.tag.as_deref(),
         });
-        Ok(ToolInvokeOutput::text(lines.join("\n"))
-            .with_title("Tool list")
-            .with_payload(payload)
-            .with_metadata("total_tools", total.to_string())
-            .with_metadata("returned_tools", tools.len().to_string()))
+        Ok(ToolInvokeOutput::from_parts(
+            "Tool list",
+            lines.join("\n"),
+            Some(payload),
+            BTreeMap::from([
+                ("total_tools".to_string(), total.to_string()),
+                ("returned_tools".to_string(), tools.len().to_string()),
+                ("offset".to_string(), offset.to_string()),
+            ]),
+            Vec::new(),
+        ))
+    }
+
+    async fn invoke_tool_tags(&self, input: &ToolTagsInput) -> SdkResult<ToolInvokeOutput> {
+        let config = self.config()?;
+        let limit = input
+            .limit
+            .unwrap_or(config.tool_catalog.search.default_limit)
+            .clamp(1, config.tool_catalog.search.max_limit);
+        let tags = Self::catalog_tag_records(self.catalog_tool_records().await?.as_slice());
+        let (tags, total, offset) = Self::paginate(&tags, input.offset, Some(limit));
+        let mut lines = vec![format!(
+            "Available tool tag(s): returned {}/{} starting at offset {}.",
+            tags.len(),
+            total,
+            offset
+        )];
+        for tag in &tags {
+            lines.push(format!("- {}: {}", tag.tag, tag.tool_count));
+        }
+        let payload = serde_json::json!({
+            "tags": tags,
+            "total": total,
+            "offset": offset,
+            "returned": tags.len(),
+        });
+        Ok(ToolInvokeOutput::from_parts(
+            "Tool tags",
+            lines.join("\n"),
+            Some(payload),
+            BTreeMap::from([
+                ("total_tags".to_string(), total.to_string()),
+                ("returned_tags".to_string(), tags.len().to_string()),
+                ("offset".to_string(), offset.to_string()),
+            ]),
+            Vec::new(),
+        ))
     }
 
     async fn invoke_tool_help(&self, input: &ToolsHelpInput) -> SdkResult<ToolInvokeOutput> {
         let requested = input.tool.as_str();
-        let config = self.config()?;
         let tools = self.host()?.list_tools().await?;
+        let tag_index = self
+            .catalog_tool_records()
+            .await?
+            .into_iter()
+            .map(|record| (record.name, record.tags))
+            .collect::<HashMap<_, _>>();
         let mut exact: Option<&ToolDescriptor> = None;
         let mut case_insensitive: Option<&ToolDescriptor> = None;
         for tool in &tools {
@@ -2012,13 +2228,10 @@ impl WorkflowPlugin {
         };
 
         let mut lines = vec![format!("Tool: {}", descriptor.name)];
-        if let Some(before_help) = descriptor
-            .before_help
-            .as_deref()
-            .filter(|value| !value.is_empty())
+        if let Some(tags) = tag_index.get(descriptor.name.as_str())
+            && !tags.is_empty()
         {
-            lines.push("Before help:".to_string());
-            lines.push(before_help.to_string());
+            lines.push(format!("Tags: {}", tags.join(", ")));
         }
         lines.push("Usage:".to_string());
         if let Some(schema) = descriptor.input_schema.as_ref() {
@@ -2029,32 +2242,6 @@ impl WorkflowPlugin {
             }
         } else {
             lines.push("- No input arguments.".to_string());
-        }
-        if let Some(plugin_id) = descriptor.plugin_id.as_deref() {
-            lines.push(format!("Plugin: {plugin_id}"));
-        }
-        if !descriptor.tags.is_empty() {
-            let tags = descriptor
-                .tags
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            lines.push(format!("Tags: {tags}"));
-        }
-        if let Some(summary) = descriptor
-            .summary
-            .as_deref()
-            .filter(|value| !value.is_empty())
-        {
-            lines.push(format!("Summary: {summary}"));
-        }
-        if let Some(description) = descriptor
-            .description
-            .as_deref()
-            .filter(|value| !value.is_empty())
-        {
-            lines.push(format!("Description: {description}"));
         }
         let declared_examples = descriptor.examples.clone();
         let generated_examples = descriptor
@@ -2086,30 +2273,33 @@ impl WorkflowPlugin {
             lines.push("Help:".to_string());
             lines.push(help.to_string());
         }
-        if input
-            .include_schema
-            .unwrap_or(config.tool_catalog.help.include_schema_by_default)
-            && let Some(schema) = descriptor.input_schema.as_ref()
-        {
+        if let Some(schema) = descriptor.input_schema.as_ref() {
             lines.push("Input schema:".to_string());
             lines.push(
                 serde_json::to_string_pretty(schema)
                     .map_err(|err| PluginError::new(err.to_string()))?,
             );
         }
-        if let Some(after_help) = descriptor
-            .after_help
-            .as_deref()
-            .filter(|value| !value.is_empty())
-        {
-            lines.push("After help:".to_string());
-            lines.push(after_help.to_string());
-        }
 
-        Ok(
-            ToolInvokeOutput::text(lines.join("\n"))
-                .with_title(format!("{} help", descriptor.name)),
-        )
+        Ok(ToolInvokeOutput::from_parts(
+            format!("{} help", descriptor.name),
+            lines.join("\n"),
+            None,
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
+    }
+
+    async fn invoke_tool_call(&self, input: &ToolCallInput) -> SdkResult<ToolInvokeOutput> {
+        let requested = input.tool.trim();
+        if requested.eq_ignore_ascii_case("agena.tools/call") {
+            return Err(PluginError::invalid_params(
+                "agena.tools/call cannot invoke itself".to_string(),
+            ));
+        }
+        self.host()?
+            .invoke_tool(requested.to_string(), input.input.clone())
+            .await
     }
 
     fn suggest_tool_names(requested: &str, tools: &[ToolDescriptor]) -> Vec<String> {
@@ -2121,8 +2311,12 @@ impl WorkflowPlugin {
         if suggestions.is_empty() {
             let catalog = tools
                 .iter()
-                .cloned()
-                .map(Self::tool_search_document_from_descriptor)
+                .map(|tool| CatalogToolRecord {
+                    name: tool.name.clone(),
+                    summary: tool.summary.clone().unwrap_or_default(),
+                    tags: Vec::new(),
+                })
+                .map(|record| Self::tool_search_document(&record))
                 .collect::<Vec<_>>();
             if let Ok(results) = search_tool_catalog(&catalog, requested, 3) {
                 for tool in results {
@@ -2141,21 +2335,27 @@ impl WorkflowPlugin {
     }
 
     fn invoke_tool_catalog_usage() -> ToolInvokeOutput {
-        ToolInvokeOutput::text(
+        ToolInvokeOutput::from_parts(
+            "Tool catalog usage",
             [
                 "Tool catalog usage:",
                 "Usage:",
-                r#"- {"action":"usage"} or {}"#,
+                r#"- {}"#,
                 "Examples:",
-                r#"- List: {"action":"list"}"#,
-                r#"- Search: {"action":"search","query":"web","limit":8}"#,
-                r#"- Help: {"action":"help","tool":"web.search"}"#,
+                r#"- List: {"offset":0,"limit":50,"verbose":true}"#,
+                r#"- Search: {"query":"web","offset":0,"limit":8}"#,
+                r#"- Tags: {"offset":0,"limit":20}"#,
+                r#"- Help: {"tool":"agena.web/search"}"#,
+                r#"- Call: {"tool":"agena.web/search","input":{"query":"rust docs","limit":5}}"#,
                 "Notes:",
-                "This command only inspects tool help; call the target tool directly to execute it.",
+                "Read agena.tools/help first when you need the target tool's input schema.",
+                "Execute tools through agena.tools/call.",
             ]
             .join("\n"),
+            None,
+            std::collections::BTreeMap::new(),
+            Vec::new(),
         )
-        .with_title("Tool catalog usage")
     }
 }
 

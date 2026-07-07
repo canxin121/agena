@@ -73,7 +73,7 @@ pub(crate) fn search_tool_catalog(
     register_tokenizers(&index)?;
     let mut writer = index.writer(15_000_000)?;
     for document in documents {
-        let mut stored = TantivyDocument::default();
+        let mut stored = TantivyDocument::new();
         stored.add_text(fields.id, document.id.clone());
         stored.add_text(fields.name, document.name.clone());
         stored.add_text(fields.description, document.description.clone());

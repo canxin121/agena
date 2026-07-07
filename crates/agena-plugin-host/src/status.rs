@@ -12,6 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::sdk::PluginKey;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginRunState {
@@ -34,7 +36,7 @@ impl PluginRunState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginStatus {
-    pub plugin_id: String,
+    pub plugin_id: PluginKey,
     pub kind: &'static str,
     pub state: PluginRunState,
     pub pid: Option<u32>,
@@ -45,9 +47,9 @@ pub struct PluginStatus {
 }
 
 impl PluginStatus {
-    pub fn initial(plugin_id: impl Into<String>, kind: &'static str) -> Self {
+    pub fn initial(plugin_id: &PluginKey, kind: &'static str) -> Self {
         Self {
-            plugin_id: plugin_id.into(),
+            plugin_id: plugin_id.clone(),
             kind,
             state: PluginRunState::Running,
             pid: None,
@@ -56,6 +58,10 @@ impl PluginStatus {
             last_restart_at_ms: None,
             last_error: None,
         }
+    }
+
+    pub fn key(&self) -> PluginKey {
+        self.plugin_id.clone()
     }
 }
 
@@ -70,7 +76,7 @@ pub fn now_ms() -> i64 {
 /// transports that update lifecycle state.
 #[derive(Debug, Default)]
 pub struct StatusRegistry {
-    inner: RwLock<HashMap<String, PluginStatus>>,
+    inner: RwLock<HashMap<PluginKey, PluginStatus>>,
 }
 
 impl StatusRegistry {
@@ -82,17 +88,17 @@ impl StatusRegistry {
 
     pub fn set(&self, status: PluginStatus) {
         if let Ok(mut guard) = self.inner.write() {
-            guard.insert(status.plugin_id.clone(), status);
+            guard.insert(status.key(), status);
         }
     }
 
-    pub fn remove(&self, plugin_id: &str) {
+    pub fn remove(&self, plugin_id: &PluginKey) {
         if let Ok(mut guard) = self.inner.write() {
             guard.remove(plugin_id);
         }
     }
 
-    pub fn get(&self, plugin_id: &str) -> Option<PluginStatus> {
+    pub fn get(&self, plugin_id: &PluginKey) -> Option<PluginStatus> {
         self.inner
             .read()
             .ok()
@@ -109,7 +115,7 @@ impl StatusRegistry {
         entries
     }
 
-    pub fn update<F>(&self, plugin_id: &str, mutator: F)
+    pub fn update<F>(&self, plugin_id: &PluginKey, mutator: F)
     where
         F: FnOnce(&mut PluginStatus),
     {
@@ -120,7 +126,7 @@ impl StatusRegistry {
         }
     }
 
-    pub fn record_started(&self, plugin_id: &str, pid: Option<u32>, is_restart: bool) {
+    pub fn record_started(&self, plugin_id: &PluginKey, pid: Option<u32>, is_restart: bool) {
         self.update(plugin_id, |status| {
             status.state = PluginRunState::Running;
             status.pid = pid;
@@ -132,7 +138,7 @@ impl StatusRegistry {
         });
     }
 
-    pub fn record_spawn_failure(&self, plugin_id: &str, message: impl Into<String>) {
+    pub fn record_spawn_failure(&self, plugin_id: &PluginKey, message: impl Into<String>) {
         self.update(plugin_id, |status| {
             status.state = PluginRunState::Failed;
             status.last_error = Some(message.into());
@@ -142,7 +148,7 @@ impl StatusRegistry {
 
     pub fn record_exit(
         &self,
-        plugin_id: &str,
+        plugin_id: &PluginKey,
         will_restart: bool,
         exit_code: Option<i32>,
         message: Option<String>,
@@ -163,7 +169,7 @@ impl StatusRegistry {
         });
     }
 
-    pub fn record_stopped(&self, plugin_id: &str) {
+    pub fn record_stopped(&self, plugin_id: &PluginKey) {
         self.update(plugin_id, |status| {
             status.state = PluginRunState::Stopped;
             status.pid = None;

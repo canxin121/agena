@@ -14,6 +14,8 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
+use crate::sdk::PluginKey;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct QuotaConfig {
     /// Sustained host-call rate. `0` means unlimited.
@@ -121,7 +123,7 @@ impl PluginQuotaState {
 #[derive(Debug, Default)]
 pub struct QuotaRegistry {
     default: QuotaConfig,
-    plugins: Mutex<HashMap<String, PluginQuotaState>>,
+    plugins: Mutex<HashMap<PluginKey, PluginQuotaState>>,
 }
 
 impl QuotaRegistry {
@@ -132,8 +134,7 @@ impl QuotaRegistry {
         }
     }
 
-    pub fn set_plugin(&self, plugin_id: impl Into<String>, config: QuotaConfig) {
-        let plugin_id = plugin_id.into();
+    pub fn set_plugin(&self, plugin_id: PluginKey, config: QuotaConfig) {
         let mut plugins = self.plugins.lock().expect("plugins poisoned");
         plugins.insert(plugin_id, PluginQuotaState::new(config));
     }
@@ -141,18 +142,18 @@ impl QuotaRegistry {
     /// Acquire a quota slot for `plugin_id`. The returned guard releases the
     /// concurrency slot on drop. Plugins without a registered config use the
     /// global default; plugins with `is_unlimited()` skip all checks.
-    pub fn acquire<'a>(&'a self, plugin_id: &str) -> Result<QuotaGuard<'a>, QuotaError> {
+    pub fn acquire<'a>(&'a self, plugin_id: &PluginKey) -> Result<QuotaGuard<'a>, QuotaError> {
         let mut plugins = self.plugins.lock().expect("plugins poisoned");
         if !plugins.contains_key(plugin_id) {
             if self.default.is_unlimited() {
                 return Ok(QuotaGuard {
                     registry: self,
-                    plugin_id: plugin_id.to_string(),
+                    plugin_id: plugin_id.clone(),
                     armed: false,
                 });
             }
             plugins.insert(
-                plugin_id.to_string(),
+                plugin_id.clone(),
                 PluginQuotaState::new(self.default.clone()),
             );
         }
@@ -160,19 +161,19 @@ impl QuotaRegistry {
         if state.config.is_unlimited() {
             return Ok(QuotaGuard {
                 registry: self,
-                plugin_id: plugin_id.to_string(),
+                plugin_id: plugin_id.clone(),
                 armed: false,
             });
         }
         state.try_acquire()?;
         Ok(QuotaGuard {
             registry: self,
-            plugin_id: plugin_id.to_string(),
+            plugin_id: plugin_id.clone(),
             armed: true,
         })
     }
 
-    fn release(&self, plugin_id: &str) {
+    fn release(&self, plugin_id: &PluginKey) {
         let plugins = self.plugins.lock().expect("plugins poisoned");
         if let Some(state) = plugins.get(plugin_id) {
             state.release();
@@ -183,7 +184,7 @@ impl QuotaRegistry {
 #[derive(Debug)]
 pub struct QuotaGuard<'a> {
     registry: &'a QuotaRegistry,
-    plugin_id: String,
+    plugin_id: PluginKey,
     armed: bool,
 }
 

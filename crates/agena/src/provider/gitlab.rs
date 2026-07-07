@@ -14,9 +14,10 @@ use crate::{
     model::{ModelId, ProviderId},
     model_catalog::canonical_model_catalog_id,
     provider::{
-        AnthropicAdapter, CapabilityFamily, CompletionRequest, CompletionResponse,
-        CompletionStreamEvent, ManagedCredential, ModelRuntime, OpenAiAdapter, OpenAiApiMode,
-        ProviderModel, auth::AuthData, should_retry_credential, utils,
+        AnthropicAdapter, AnthropicAdapterOptions, CapabilityFamily, CompletionRequest,
+        CompletionResponse, CompletionStreamEvent, ManagedCredential, ModelRuntime, OpenAiAdapter,
+        OpenAiAdapterOptions, OpenAiApiMode, ProviderModel, auth::AuthData,
+        should_retry_credential, utils,
     },
 };
 
@@ -42,22 +43,30 @@ impl Default for GitlabProviderConfig {
             instance_url: DEFAULT_INSTANCE_URL.to_owned(),
             ai_gateway_url: DEFAULT_AI_GATEWAY_URL.to_owned(),
             default_model: DEFAULT_MODEL.to_owned(),
-            ai_gateway_headers: HashMap::from([
-                (
-                    "User-Agent".to_owned(),
-                    crate::provider::claude_code_api_user_agent(),
-                ),
-                (
-                    "anthropic-beta".to_owned(),
-                    "context-1m-2025-08-07".to_owned(),
-                ),
-            ]),
-            feature_flags: HashMap::from([
-                ("duo_agent_platform_agentic_chat".to_owned(), true),
-                ("duo_agent_platform".to_owned(), true),
-            ]),
+            ai_gateway_headers: default_ai_gateway_headers(),
+            feature_flags: default_feature_flags(),
         }
     }
+}
+
+pub(crate) fn default_ai_gateway_headers() -> HashMap<String, String> {
+    HashMap::from([
+        (
+            "User-Agent".to_owned(),
+            crate::provider::claude_code_api_user_agent(),
+        ),
+        (
+            "anthropic-beta".to_owned(),
+            "context-1m-2025-08-07".to_owned(),
+        ),
+    ])
+}
+
+pub(crate) fn default_feature_flags() -> HashMap<String, bool> {
+    HashMap::from([
+        ("duo_agent_platform_agentic_chat".to_owned(), true),
+        ("duo_agent_platform".to_owned(), true),
+    ])
 }
 
 pub struct GitlabProvider {
@@ -81,10 +90,13 @@ impl GitlabProvider {
         auth: &AuthData,
         instance_url: Option<String>,
     ) -> Result<Self, AppError> {
-        let mut config = GitlabProviderConfig::default();
-        if let Some(instance_url) = instance_url {
-            config.instance_url = instance_url;
-        }
+        let config = GitlabProviderConfig {
+            instance_url: instance_url.unwrap_or_else(|| DEFAULT_INSTANCE_URL.to_owned()),
+            ai_gateway_url: DEFAULT_AI_GATEWAY_URL.to_owned(),
+            default_model: DEFAULT_MODEL.to_owned(),
+            ai_gateway_headers: default_ai_gateway_headers(),
+            feature_flags: default_feature_flags(),
+        };
         Self::from_auth_with_config(client, auth, config)
     }
 
@@ -107,10 +119,13 @@ impl GitlabProvider {
         token: impl Into<String>,
         instance_url: Option<String>,
     ) -> Result<Self, AppError> {
-        let mut config = GitlabProviderConfig::default();
-        if let Some(instance_url) = instance_url {
-            config.instance_url = instance_url;
-        }
+        let config = GitlabProviderConfig {
+            instance_url: instance_url.unwrap_or_else(|| DEFAULT_INSTANCE_URL.to_owned()),
+            ai_gateway_url: DEFAULT_AI_GATEWAY_URL.to_owned(),
+            default_model: DEFAULT_MODEL.to_owned(),
+            ai_gateway_headers: default_ai_gateway_headers(),
+            feature_flags: default_feature_flags(),
+        };
         Self::from_token_with_config(client, token, config)
     }
 
@@ -120,13 +135,13 @@ impl GitlabProvider {
         instance_url: Option<String>,
         ai_gateway_url: Option<String>,
     ) -> Result<Self, AppError> {
-        let mut config = GitlabProviderConfig::default();
-        if let Some(instance_url) = instance_url {
-            config.instance_url = instance_url;
-        }
-        if let Some(ai_gateway_url) = ai_gateway_url {
-            config.ai_gateway_url = ai_gateway_url;
-        }
+        let config = GitlabProviderConfig {
+            instance_url: instance_url.unwrap_or_else(|| DEFAULT_INSTANCE_URL.to_owned()),
+            ai_gateway_url: ai_gateway_url.unwrap_or_else(|| DEFAULT_AI_GATEWAY_URL.to_owned()),
+            default_model: DEFAULT_MODEL.to_owned(),
+            ai_gateway_headers: default_ai_gateway_headers(),
+            feature_flags: default_feature_flags(),
+        };
         Self::from_token_with_config(client, token, config)
     }
 
@@ -216,12 +231,18 @@ impl GitlabProvider {
         let model_id = ModelId::new(model_id);
         let capabilities = self.model_capabilities(&model_id);
         let metadata = self.model_metadata(&model_id);
-        let mut model = ProviderModel::new(PROVIDER_ID, model_id.clone())
-            .with_capabilities(capabilities)
-            .with_metadata(metadata);
-        if let Some(display_name) = display_name.filter(|value| !value.trim().is_empty()) {
-            model.display_name = Some(display_name);
-        }
+        let display_name = display_name.filter(|value| !value.trim().is_empty());
+        let model = ProviderModel {
+            provider_id: ProviderId::new(PROVIDER_ID),
+            adapter_id: None,
+            id: model_id.clone(),
+            catalog_model_id: None,
+            display_name,
+            capabilities,
+            metadata,
+            thinking_modes: std::collections::BTreeMap::new(),
+            speed_modes: std::collections::BTreeMap::new(),
+        };
         models.entry(model_id.to_string()).or_insert(model);
     }
 
@@ -474,40 +495,53 @@ impl GitlabProvider {
 
         if Self::use_openai_backend(model.as_str()) {
             if Self::use_responses_api(model.as_str()) {
-                let provider = OpenAiAdapter::new(
+                let provider = OpenAiAdapter::new_managed_with_options(
+                    "openai",
                     self.client.clone(),
-                    token.token,
+                    ManagedCredential::static_value("openai api key", token.token),
                     self.openai_proxy_base_url(),
                     model,
-                )
-                .with_extra_headers(token.headers);
+                    OpenAiAdapterOptions {
+                        extra_headers: token.headers,
+                        ..OpenAiAdapterOptions::default()
+                    },
+                );
                 let mut result = provider.complete(request).await?;
                 result.provider_id = ProviderId::new(PROVIDER_ID);
                 return Ok(result);
             }
 
-            let provider = OpenAiAdapter::new_with_id(
+            let provider = OpenAiAdapter::new_managed_with_options(
                 PROVIDER_ID,
                 self.client.clone(),
-                token.token,
+                ManagedCredential::static_value("openai api key", token.token),
                 self.openai_proxy_base_url(),
                 model,
-            )
-            .with_api_mode(OpenAiApiMode::Chat)
-            .with_capability_family(CapabilityFamily::OpenAiCompatible)
-            .with_auth_header("authorization", Some("Bearer"))
-            .with_extra_headers(token.headers);
+                OpenAiAdapterOptions {
+                    api_mode: OpenAiApiMode::Chat,
+                    capability_family: CapabilityFamily::OpenAiCompatible,
+                    auth_header: "authorization".to_owned(),
+                    auth_scheme: Some("Bearer".to_owned()),
+                    extra_headers: token.headers,
+                    ..OpenAiAdapterOptions::default()
+                },
+            );
             return provider.complete(request).await;
         }
 
-        let provider = AnthropicAdapter::new(
+        let provider = AnthropicAdapter::new_managed_with_options(
+            "anthropic",
             self.client.clone(),
-            token.token,
+            ManagedCredential::static_value("anthropic api key", token.token),
             self.anthropic_proxy_base_url(),
             model,
-        )
-        .with_auth_header("authorization", Some("Bearer"))
-        .with_extra_headers(token.headers);
+            AnthropicAdapterOptions {
+                auth_header: "authorization".to_owned(),
+                auth_scheme: Some("Bearer".to_owned()),
+                extra_headers: token.headers,
+                ..AnthropicAdapterOptions::default()
+            },
+        );
 
         let mut result = provider.complete(request).await?;
         result.provider_id = ProviderId::new(PROVIDER_ID);
@@ -547,13 +581,17 @@ impl GitlabProvider {
 
         if Self::use_openai_backend(model.as_str()) {
             if Self::use_responses_api(model.as_str()) {
-                let provider = OpenAiAdapter::new(
+                let provider = OpenAiAdapter::new_managed_with_options(
+                    "openai",
                     self.client.clone(),
-                    token.token,
+                    ManagedCredential::static_value("openai api key", token.token),
                     self.openai_proxy_base_url(),
                     model,
-                )
-                .with_extra_headers(token.headers);
+                    OpenAiAdapterOptions {
+                        extra_headers: token.headers,
+                        ..OpenAiAdapterOptions::default()
+                    },
+                );
                 let stream = provider.complete_stream(request).await?;
                 let provider_id = ProviderId::new(PROVIDER_ID);
                 let mapped = stream.map(move |item| {
@@ -563,28 +601,37 @@ impl GitlabProvider {
                 return Ok(Box::pin(mapped));
             }
 
-            let provider = OpenAiAdapter::new_with_id(
+            let provider = OpenAiAdapter::new_managed_with_options(
                 PROVIDER_ID,
                 self.client.clone(),
-                token.token,
+                ManagedCredential::static_value("openai api key", token.token),
                 self.openai_proxy_base_url(),
                 model,
-            )
-            .with_api_mode(OpenAiApiMode::Chat)
-            .with_capability_family(CapabilityFamily::OpenAiCompatible)
-            .with_auth_header("authorization", Some("Bearer"))
-            .with_extra_headers(token.headers);
+                OpenAiAdapterOptions {
+                    api_mode: OpenAiApiMode::Chat,
+                    capability_family: CapabilityFamily::OpenAiCompatible,
+                    auth_header: "authorization".to_owned(),
+                    auth_scheme: Some("Bearer".to_owned()),
+                    extra_headers: token.headers,
+                    ..OpenAiAdapterOptions::default()
+                },
+            );
             return provider.complete_stream(request).await;
         }
 
-        let provider = AnthropicAdapter::new(
+        let provider = AnthropicAdapter::new_managed_with_options(
+            "anthropic",
             self.client.clone(),
-            token.token,
+            ManagedCredential::static_value("anthropic api key", token.token),
             self.anthropic_proxy_base_url(),
             model,
-        )
-        .with_auth_header("authorization", Some("Bearer"))
-        .with_extra_headers(token.headers);
+            AnthropicAdapterOptions {
+                auth_header: "authorization".to_owned(),
+                auth_scheme: Some("Bearer".to_owned()),
+                extra_headers: token.headers,
+                ..AnthropicAdapterOptions::default()
+            },
+        );
 
         let stream = provider.complete_stream(request).await?;
         let provider_id = ProviderId::new(PROVIDER_ID);
@@ -609,11 +656,16 @@ impl GitlabProvider {
         }
 
         let route_headers = utils::prompt_cache_header_entries(&cached.headers);
-        let mut shape = crate::provider::PromptCacheShape::new(PROVIDER_ID);
-        if !route_headers.is_empty() {
-            shape = shape.with_json("direct_access_route_headers", &route_headers);
-        }
-        Some(shape)
+        let fields = (!route_headers.is_empty()).then(|| {
+            (
+                "direct_access_route_headers",
+                crate::provider::PromptCacheShape::json_field_value(&route_headers),
+            )
+        });
+        Some(crate::provider::PromptCacheShape::from_fields(
+            PROVIDER_ID,
+            fields,
+        ))
     }
 }
 
@@ -646,25 +698,34 @@ impl ModelRuntime for GitlabProvider {
         feature_flags.sort_unstable_by(|left, right| left.0.cmp(&right.0));
 
         let runtime_shape = self.prompt_cache_direct_access_shape();
-        let mut shape = crate::provider::PromptCacheShape::new(PROVIDER_ID)
-            .with_string("auth_scope", self.api_key.prompt_cache_scope())
-            .with_string("instance_url", self.instance_url.clone())
-            .with_string("ai_gateway_url", self.ai_gateway_url.clone())
-            .with_json(
-                "ai_gateway_headers",
-                &utils::prompt_cache_header_entries(&self.ai_gateway_headers),
-            )
-            .with_json("feature_flags", &feature_flags)
-            .with_string("mapped_model", mapped_model.as_str())
-            .with_bool(
-                "openai_backend",
-                Self::use_openai_backend(mapped_model.as_str()),
-            )
-            .with_bool(
-                "responses_api",
-                Self::use_responses_api(mapped_model.as_str()),
-            )
-            .with_bool("direct_access_cached", runtime_shape.is_some());
+        let mut shape = crate::provider::PromptCacheShape::from_fields(
+            PROVIDER_ID,
+            [
+                ("auth_scope", self.api_key.prompt_cache_scope()),
+                ("instance_url", self.instance_url.clone()),
+                ("ai_gateway_url", self.ai_gateway_url.clone()),
+                (
+                    "ai_gateway_headers",
+                    crate::provider::PromptCacheShape::json_field_value(
+                        &utils::prompt_cache_header_entries(&self.ai_gateway_headers),
+                    ),
+                ),
+                (
+                    "feature_flags",
+                    crate::provider::PromptCacheShape::json_field_value(&feature_flags),
+                ),
+                ("mapped_model", mapped_model.as_str().to_owned()),
+                (
+                    "openai_backend",
+                    Self::use_openai_backend(mapped_model.as_str()).to_string(),
+                ),
+                (
+                    "responses_api",
+                    Self::use_responses_api(mapped_model.as_str()).to_string(),
+                ),
+                ("direct_access_cached", runtime_shape.is_some().to_string()),
+            ],
+        );
         if let Some(runtime_shape) = runtime_shape {
             shape.extend_prefixed("runtime", &runtime_shape);
         }

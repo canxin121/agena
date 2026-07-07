@@ -1,6 +1,9 @@
 use std::sync::LazyLock;
 
-use crate::model::{ModelLifecycle, ModelMetadata};
+use crate::model::{
+    ModelLifecycle, ModelMetadata, ModelTokenLimits, normalize_model_default_temperature,
+    normalize_model_default_top_k, normalize_model_default_top_p,
+};
 
 use super::CapabilityFamily;
 
@@ -10,26 +13,36 @@ pub struct ModelMetadataRegistry;
 impl ModelMetadataRegistry {
     pub fn metadata_for_family(&self, _family: CapabilityFamily, model: &str) -> ModelMetadata {
         let normalized_model = normalize_model(model);
-        let mut metadata = ModelMetadata::default();
-
-        if let Some(lifecycle) = detect_model_lifecycle(normalized_model.as_str()) {
-            metadata = metadata.with_lifecycle(lifecycle);
+        ModelMetadata {
+            lifecycle: detect_model_lifecycle(normalized_model.as_str()),
+            limits: ModelTokenLimits {
+                context_window_tokens: detect_context_window_tokens(normalized_model.as_str()),
+                max_input_tokens: None,
+                max_output_tokens: None,
+            },
+            description: None,
+            knowledge_cutoff: None,
+            release_date: None,
+            last_updated: None,
+            open_weights: None,
+            default_thinking_mode: None,
+            supports_parallel_tool_calls: None,
+            supports_verbosity: None,
+            default_verbosity: None,
+            default_temperature: normalize_model_default_temperature(
+                detect_default_temperature(normalized_model.as_str()).map(ToOwned::to_owned),
+            ),
+            default_top_p: normalize_model_default_top_p(
+                detect_default_top_p(normalized_model.as_str()).map(ToOwned::to_owned),
+            ),
+            default_top_k: normalize_model_default_top_k(detect_default_top_k(
+                normalized_model.as_str(),
+            )),
+            assistant_reasoning_interleaved: None,
+            assistant_reasoning_field: None,
+            output_modalities: Vec::new(),
+            pricing: None,
         }
-        if let Some(context_window_tokens) = detect_context_window_tokens(normalized_model.as_str())
-        {
-            metadata = metadata.with_context_window_tokens(context_window_tokens);
-        }
-        if let Some(default_temperature) = detect_default_temperature(normalized_model.as_str()) {
-            metadata = metadata.with_default_temperature(default_temperature);
-        }
-        if let Some(default_top_p) = detect_default_top_p(normalized_model.as_str()) {
-            metadata = metadata.with_default_top_p(default_top_p);
-        }
-        if let Some(default_top_k) = detect_default_top_k(normalized_model.as_str()) {
-            metadata = metadata.with_default_top_k(default_top_k);
-        }
-
-        metadata
     }
 }
 

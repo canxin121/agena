@@ -519,33 +519,30 @@ fn auth_provider_resource(
     let (browser_login_kind, browser_login_instance_url) =
         auth_provider_browser_login_details(resolved)?;
     let device_login_kind = auth_provider_device_login_kind(resolved)?;
-    let mut resource = AuthProviderResource {
-        provider_id,
-        configured,
-        credential_present: auth.is_some(),
-        credential_type: None,
-        credential_issuer: None,
-        key_preview: None,
-        expires_at: None,
-        expired: None,
-        account_id: None,
-        enterprise_url: None,
-        username: None,
-        display_name: None,
-        email: None,
-        avatar_url: None,
-        api_key_write_supported: provider_supports_api_key_write(resolved),
-        refresh_supported: browser_login_kind.is_some(),
-        browser_login_kind,
-        browser_login_instance_url,
-        device_login_kind,
-    };
-
-    match auth {
-        Some(agena::provider::auth::AuthData::Api { key }) => {
-            resource.credential_type = Some(AuthCredentialType::Api);
-            resource.key_preview = secret_preview(key);
-        }
+    let (
+        credential_type,
+        credential_issuer,
+        key_preview,
+        expires_at,
+        account_id,
+        enterprise_url,
+        username,
+        display_name,
+        email,
+        avatar_url,
+    ) = match auth {
+        Some(agena::provider::auth::AuthData::Api { key }) => (
+            Some(AuthCredentialType::Api),
+            None,
+            secret_preview(key),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
         Some(agena::provider::auth::AuthData::OAuth {
             issuer,
             expires_at_ms,
@@ -554,9 +551,7 @@ fn auth_provider_resource(
             user,
             ..
         }) => {
-            resource.credential_type = Some(AuthCredentialType::Oauth);
-            resource.credential_issuer = issuer.map(AuthCredentialIssuerResource::from);
-            resource.expires_at = if *expires_at_ms > 0 {
+            let expires_at = if *expires_at_ms > 0 {
                 Some(
                     chrono::DateTime::from_timestamp_millis(*expires_at_ms).ok_or_else(|| {
                         ServerError::Internal(format!(
@@ -567,28 +562,67 @@ fn auth_provider_resource(
             } else {
                 None
             };
-            resource.expired = resource
-                .expires_at
-                .map(|expires_at| expires_at <= chrono::Utc::now());
-            resource.enterprise_url = enterprise_url.clone();
-            if let Some(user) = user {
-                resource.account_id = account_id.clone().or_else(|| Some(user.id.clone()));
-                resource.username = Some(user.username.clone());
-                resource.display_name = user.name.clone();
-                resource.email = user.email.clone();
-                resource.avatar_url = user.avatar_url.clone();
+            let (account_id, username, display_name, email, avatar_url) = if let Some(user) = user {
+                (
+                    account_id.clone().or_else(|| Some(user.id.clone())),
+                    Some(user.username.clone()),
+                    user.name.clone(),
+                    user.email.clone(),
+                    user.avatar_url.clone(),
+                )
             } else {
-                resource.account_id = account_id.clone();
-            }
+                (account_id.clone(), None, None, None, None)
+            };
+            (
+                Some(AuthCredentialType::Oauth),
+                issuer.map(AuthCredentialIssuerResource::from),
+                None,
+                expires_at,
+                account_id,
+                enterprise_url.clone(),
+                username,
+                display_name,
+                email,
+                avatar_url,
+            )
         }
-        Some(agena::provider::auth::AuthData::WellKnown { key, .. }) => {
-            resource.credential_type = Some(AuthCredentialType::WellKnown);
-            resource.key_preview = Some(key.clone());
-        }
-        None => {}
-    }
+        Some(agena::provider::auth::AuthData::WellKnown { key, .. }) => (
+            Some(AuthCredentialType::WellKnown),
+            None,
+            Some(key.clone()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        None => (None, None, None, None, None, None, None, None, None, None),
+    };
+    let expired = expires_at.is_some_and(|expires_at| expires_at <= chrono::Utc::now());
 
-    Ok(resource)
+    Ok(AuthProviderResource {
+        provider_id,
+        configured,
+        credential_present: auth.is_some(),
+        credential_type,
+        credential_issuer,
+        key_preview,
+        expires_at,
+        expired,
+        account_id,
+        enterprise_url,
+        username,
+        display_name,
+        email,
+        avatar_url,
+        api_key_write_supported: provider_supports_api_key_write(resolved),
+        refresh_supported: browser_login_kind.is_some(),
+        browser_login_kind,
+        browser_login_instance_url,
+        device_login_kind,
+    })
 }
 
 fn auth_provider_browser_login_details(

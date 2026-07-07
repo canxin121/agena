@@ -83,14 +83,14 @@ Plugin tool registry 现在有三条统一观测路径，分别面向快照、�
 - `name`: plugin 内部 tool 名称。
 - `aliases`: plugin 内部别名。
 - `contract`: 调用契约，包含 `input_schema`、`output_schema`、`strict`。
-- `model`: 给模型看的内容，包含 `description`、`examples`。
+- `model`: 给模型看的内容，只保留 `examples`。
 - `docs`: 给 help/catalog/UI 使用的文档，包含 `summary`、`help`、`before_help`、`after_help`。
 - `display`: 展示策略，包含 `description_mode`、`ui_display_mode`。运行时配置可以覆盖它。
 - `permissions`: 权限声明，包含 `input_paths`、`input_networks`、`path_access`、`network_access`、`tags`。
 - `runtime`: 运行策略，包含 `concurrency_safe`、`streaming`、`result_policy`。
 - `capabilities`: 这个 tool 调用 host callback 时需要的能力声明。
 
-Rust SDK 的 builder 仍然保留 `.description()`、`.summary()`、`.input_path()`、`.capability()` 这类快捷方法，但序列化后的 manifest 统一落到上面的分组字段里。
+Rust SDK / 宏定义只保留 `summary` 作为 tool 的短描述；详细说明统一进入 `help`。
 
 Tool 的模型可见名称由 tool registry 决定：
 
@@ -102,15 +102,12 @@ Tool 的模型可见名称由 tool registry 决定：
 
 ## Tool 说明模式和 Help
 
-Tool 的模型可见说明有两种模式：
-
-- `detailed`: 默认行为。Provider tool definition 使用 tool 的 `description`。
-- `help`: Provider tool definition 只使用短说明，并提示模型调用 `tools` 的 `help` action 获取完整帮助。
+Tool 的模型可见说明默认只给短 `summary`，并提示模型在需要时调用 `help` tool 获取完整帮助。
 
 详细帮助不随 provider 请求一起发送，避免把大量 tool、MCP server 或 skill 的长说明塞进每次模型调用。需要完整用法时，模型可以调用：
 
 ```json
-{"action": "help", "tool": "fs", "include_schema": true}
+{"tool": "agena.fs/read", "include_schema": true}
 ```
 
 其中 `tool` 是模型可见 tool 名称；如果有重名冲突，使用 registry 暴露出来的 `plugin_id/tool_name` 名称。`include_schema` 默认为 `true`，会把注册后的 input schema 一并返回。
@@ -135,8 +132,8 @@ Tool 的模型可见说明有两种模式：
           "agena.mcp": "help"
         },
         "tools": {
-          "fs": "detailed",
-          "agena.catalog/tools": "detailed"
+          "agena.fs/read": "detailed",
+          "agena.tools/help": "detailed"
         }
       }
     }
@@ -144,7 +141,7 @@ Tool 的模型可见说明有两种模式：
 }
 ```
 
-`tools` 的 `search` action 用于发现已注册 tools；`help` action 用于拿到任意已注册 tool 的详细说明。Plugin 作者可以在 manifest 中设置 `docs.summary` 和 `docs.help`，也可以通过 `tool.definition` hook 改写 `model.description`、`docs.summary`、`docs.help`、`display.description_mode` 和 `contract.input_schema`。
+`search` tool 用于发现已注册 tools；`help` tool 用于拿到任意已注册 tool 的详细说明。Plugin 作者可以在 manifest 中设置 `docs.summary` 和 `docs.help`，也可以通过 `tool.definition` hook 改写 `docs.summary`、`docs.help`、`display.description_mode` 和 `contract.input_schema`。
 
 ## Provided Static Plugins
 
@@ -158,7 +155,7 @@ Runtime build 注册：
 | `agena.process` | 前台命令执行和后台进程管理 tools |
 | `agena.web` | 本地 Spider/CRW web search/fetch/crawl、嵌入式 crawl cache、去重、进程内 cache 和可选 Agena 托管浏览器渲染 tools |
 | `agena.code` | `ast-grep` / `tree-sitter` 驱动的多语言结构化代码搜索和语法树检查 tools |
-| `agena.catalog` | tool catalog discovery/help tools |
+| `agena.tools` | tool discovery/help/gateway tools |
 | `agena.runtime` | agent、session 和 user input 等 runtime control tools |
 | `agena.plan` | plan 和 plan autorun 等 planning tools |
 | `agena.tasks` | delegated subtask orchestration tools |
@@ -170,27 +167,23 @@ Runtime build 注册：
 | `agena.mcp` | 已配置 MCP server 的 tool/resource/prompt tools |
 | `agena.settings` | 读取、列出、校验和编辑当前 `agena.json` 的 settings tools |
 
-内置 static plugin 使用少量领域级入口承载 action，避免把每个动作都展开成独立 tool。常见入口：
+内置 static plugin 现在直接把动作拆成独立 tool。常见模型可见 tool：
 
-| Tool | Action |
+| Plugin | Tools |
 | --- | --- |
-| `agena.fs/fs` | `read`, `glob`, `grep`, `apply_patch` |
-| `agena.process/process` | `run`, `list`, `logs`, `stop` |
-| `agena.web/fetch`, `agena.web/search`, `agena.web/crawl` | Direct live web fetch/search/crawl actions |
-| `agena.code/code` | `search_ast`, `syntax_tree` |
-| `agena.lsp/lsp` | `servers`, `definition`, `references`, `hover`, `diagnostics` |
-| `agena.memory/memory` | `search`, `get`, `list`, `write`, `delete` |
-| `agena.settings/settings` | `get`, `list`, `validate`, `set`, `delete`, `patch` |
-| `agena.cron/schedule` | `list`, `create`, `delete`, `wakeup` |
-| `agena.catalog/tools` | `usage`, `search`, `help` |
-| `agena.runtime/agent` | `switch`, `restore` |
-| `agena.runtime/session` | `get`, `rename` |
-| `agena.runtime/user` | `request_input` |
-| `agena.plan/plan` | `get`, `set`, `update`, `clear` |
-| `agena.tasks/task` | `run` |
-| `agena.snapshot/snapshot` | `enter`, `exit` |
-
-这些入口现在统一使用扁平 `{"action": "...", ...}` 形状。当前内置 static plugin 倾向把同域动作尽量收进一个顶层 tool，再通过 action 区分读、写、调度或交互行为。
+| `agena.fs` | `read`, `glob`, `grep`, `apply_patch` |
+| `agena.process` | `run`, `list`, `logs`, `stop` |
+| `agena.web` | `fetch`, `search`, `crawl` |
+| `agena.code` | `search_ast`, `syntax_tree` |
+| `agena.lsp` | `servers`, `definition`, `references`, `hover`, `diagnostics` |
+| `agena.memory` | `search`, `get`, `list`, `write`, `delete` |
+| `agena.settings` | `get`, `list`, `validate`, `set`, `delete`, `patch` |
+| `agena.cron` | `list`, `create`, `delete`, `wakeup` |
+| `agena.tools` | `usage`, `list`, `search`, `tags`, `help`, `call` |
+| `agena.runtime` | `switch`, `restore`, `get`, `rename`, `request_input` |
+| `agena.plan` | `get`, `set`, `update`, `clear` |
+| `agena.tasks` | `run` |
+| `agena.snapshot` | `enter`, `exit` |
 
 `agena.mcp` 读取 MCP server snapshot，但不再把每个 MCP capability 展开成一个模型可见 tool：
 
@@ -897,7 +890,7 @@ Tool 权限配置分为 tag、tool name 和 tool-specific rules：
       },
       "names": {
         "shell": "ask",
-        "fs": "ask",
+        "agena.fs/read": "ask",
         "my-plugin.echo": "allow"
       }
     }

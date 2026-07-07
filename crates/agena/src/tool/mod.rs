@@ -49,7 +49,7 @@ use crate::plugin::{
     sdk::{
         InputNetworkSpec as SdkInputNetworkSpec, InputPathSpec as SdkInputPathSpec,
         NetworkAccessSpec as SdkNetworkAccessSpec, PathAccessSpec as SdkPathAccessSpec,
-        PathKind as SdkPathKind, ShellEnvInput as PluginShellEnvInput,
+        PathKind as SdkPathKind, ShellEnvInput as PluginShellEnvInput, ToolKey,
         ToolResultPolicy as SdkToolResultPolicy, ToolStreamingMode as SdkToolStreamingMode,
     },
 };
@@ -63,6 +63,8 @@ use crate::plugins::provided::{
 
 const TOOL_MODEL_OUTPUT_MAX_LINES: usize = 2_000;
 const TOOL_MODEL_OUTPUT_MAX_BYTES: usize = 50 * 1024;
+const MODEL_CATALOG_HELP_TOOL: &str = "agena.tools/help";
+const MODEL_CATALOG_CALL_TOOL: &str = "agena.tools/call";
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
 pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
@@ -99,7 +101,36 @@ pub(crate) fn model_safe_tool_name(name: &str) -> String {
         return trimmed.to_owned();
     }
 
-    crate::plugin::registry::model_tool_name_segment(trimmed)
+    let mut out = String::with_capacity(trimmed.len());
+    let mut previous_was_separator = false;
+
+    for ch in trimmed.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            out.push(ch);
+            previous_was_separator = false;
+        } else if !previous_was_separator {
+            out.push('_');
+            previous_was_separator = true;
+        }
+    }
+
+    while out.ends_with('_') {
+        out.pop();
+    }
+    while out.starts_with('_') {
+        out.remove(0);
+    }
+    if out.is_empty() {
+        out.push_str("tool");
+    }
+    if out
+        .bytes()
+        .next()
+        .is_some_and(|byte| !byte.is_ascii_alphabetic() && byte != b'_')
+    {
+        out.insert(0, '_');
+    }
+    out
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -122,12 +153,12 @@ pub enum ModelToolExecution {
 
 impl ModelToolSpec {
     pub fn from_registered_tool(tool: &RegisteredTool) -> Self {
-        let model_name = tool.model_name.clone();
+        let model_name = tool.model_name();
         Self {
-            canonical_name: tool.model_name.clone(),
+            canonical_name: model_name.clone(),
             provider_safe_name: model_safe_tool_name(model_name.as_str()),
             model_name,
-            description: tool.description_text().to_string(),
+            description: compact_tool_description(tool),
             input_schema: model_safe_tool_schema(&tool.sanitized_input_schema()),
             output_schema: tool.sanitized_output_schema(),
             strict: tool.definition.contract.strict,
@@ -233,8 +264,8 @@ fn normalized_tool_name_distance(left: &str, right: &str) -> usize {
 
 pub(crate) fn tool_matches_model_name(registered_tool: &RegisteredTool, name: &str) -> bool {
     let trimmed = name.trim();
-    registered_tool.model_name == trimmed
-        || model_safe_tool_name(registered_tool.model_name.as_str()) == trimmed
+    registered_tool.model_name() == trimmed
+        || model_safe_tool_name(registered_tool.model_name().as_str()) == trimmed
 }
 
 pub(crate) fn model_safe_tool_schema(schema: &serde_json::Value) -> serde_json::Value {
@@ -456,11 +487,11 @@ pub fn new_process_plugin() -> impl crate::plugin::sdk::Plugin {
 }
 
 pub fn catalog_plugin_id() -> &'static str {
-    provided_catalog::CATALOG_PLUGIN_ID
+    provided_catalog::TOOLS_PLUGIN_ID
 }
 
 pub fn new_catalog_plugin() -> impl crate::plugin::sdk::Plugin {
-    provided_catalog::CatalogPlugin::new()
+    provided_catalog::ToolsPlugin::new()
 }
 
 pub fn runtime_plugin_id() -> &'static str {
@@ -628,18 +659,8 @@ pub enum ToolError {
 
 fn present_registered_tool(
     mut registered_tool: RegisteredTool,
-    presentation: &crate::plugin::ToolPresentationConfig,
+    _presentation: &crate::plugin::ToolPresentationConfig,
 ) -> RegisteredTool {
-    let mode = presentation.mode_for(
-        registered_tool.plugin_full_name().as_str(),
-        registered_tool.tool_name.as_str(),
-        registered_tool.model_name.as_str(),
-        registered_tool.definition.preferred_description_mode(),
-    );
-    if mode == crate::plugin::ToolDescriptionMode::Brief {
-        registered_tool.definition.model.description =
-            Some(compact_tool_description(&registered_tool));
-    }
     registered_tool.definition.docs.help = None;
     registered_tool
 }
@@ -647,8 +668,8 @@ fn present_registered_tool(
 fn compact_tool_description(registered_tool: &RegisteredTool) -> String {
     let summary = tool_summary_sentence(registered_tool);
     format!(
-        "{summary} See `tools.help` for `{}`.",
-        registered_tool.model_name
+        "{summary} See `agena.tools/help` for `{}`.",
+        registered_tool.model_name()
     )
 }
 
@@ -664,13 +685,22 @@ fn tool_summary(registered_tool: &RegisteredTool) -> String {
     if let Some(summary) = registered_tool.summary_text() {
         return summary.to_string();
     }
-    registered_tool
-        .description_text()
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| format!("Tool `{}`.", registered_tool.model_name))
+    format!("Tool `{}`.", registered_tool.model_name())
+}
+
+fn provider_gateway_model_tool_names() -> [&'static str; 2] {
+    [MODEL_CATALOG_HELP_TOOL, MODEL_CATALOG_CALL_TOOL]
+}
+
+fn is_provider_gateway_tool(name: &str) -> bool {
+    provider_gateway_model_tool_names()
+        .iter()
+        .any(|candidate| *candidate == name)
+}
+
+fn render_model_tool_index_entry(tool: &RegisteredTool) -> String {
+    let summary = tool_summary(tool);
+    format!("- {}: {}", tool.model_name(), summary.trim())
 }
 
 #[derive(Clone)]
@@ -690,90 +720,46 @@ pub struct ToolExecutor {
 }
 
 impl ToolExecutor {
-    pub fn new(workspace_root: impl Into<PathBuf>, agent: Agent) -> Self {
+    pub fn new(
+        workspace_root: impl Into<PathBuf>,
+        agent: Agent,
+        subagent_registry: crate::agents::SubagentRegistry,
+        plugins: Arc<PluginHost>,
+        snapshot_registry: Option<snapshot::SnapshotRegistry>,
+        scheduler: Option<Arc<agena_scheduler::Scheduler>>,
+        lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
+        tool_presentation: crate::plugin::ToolPresentationConfig,
+    ) -> Self {
         Self {
             workspace_root: workspace_root.into(),
             agent,
             model_id: None,
-            subagent_registry: crate::agents::SubagentRegistry::empty(),
+            subagent_registry,
             monitor_registry: monitor::default_registry(),
             truncator: ToolOutputTruncator::default(),
-            plugins: PluginHost::new_empty(),
-            snapshot_registry: None,
-            scheduler: None,
-            lsp_registry: None,
+            plugins,
+            snapshot_registry,
+            scheduler,
+            lsp_registry,
             permission_mode: PermissionEnforcementMode::Enforced,
-            tool_presentation: crate::plugin::ToolPresentationConfig::default(),
+            tool_presentation,
         }
-    }
-
-    pub fn with_monitor_registry(mut self, registry: Arc<dyn MonitorService>) -> Self {
-        self.monitor_registry = Some(registry);
-        self
-    }
-
-    pub fn without_monitor_registry(mut self) -> Self {
-        self.monitor_registry = None;
-        self
-    }
-
-    pub fn with_model_id(mut self, model_id: impl Into<String>) -> Self {
-        self.model_id = Some(model_id.into());
-        self
-    }
-
-    pub fn with_subagent_registry(mut self, registry: crate::agents::SubagentRegistry) -> Self {
-        self.subagent_registry = registry;
-        self
     }
 
     pub fn subagent_registry(&self) -> &crate::agents::SubagentRegistry {
         &self.subagent_registry
     }
 
-    pub fn with_plugin_manager(mut self, manager: Arc<PluginHost>) -> Self {
-        self.plugins = manager;
-        self
-    }
-
-    pub fn with_tool_presentation(
-        mut self,
-        presentation: crate::plugin::ToolPresentationConfig,
-    ) -> Self {
-        self.tool_presentation = presentation;
-        self
-    }
-
-    pub fn with_snapshot_registry(mut self, reg: snapshot::SnapshotRegistry) -> Self {
-        self.snapshot_registry = Some(reg);
-        self
-    }
-
     pub fn snapshot_registry(&self) -> Option<&snapshot::SnapshotRegistry> {
         self.snapshot_registry.as_ref()
-    }
-
-    pub fn with_scheduler(mut self, scheduler: Arc<agena_scheduler::Scheduler>) -> Self {
-        self.scheduler = Some(scheduler);
-        self
     }
 
     pub fn scheduler(&self) -> Option<&Arc<agena_scheduler::Scheduler>> {
         self.scheduler.as_ref()
     }
 
-    pub fn with_lsp_registry(mut self, registry: Arc<agena_lsp::LspRegistry>) -> Self {
-        self.lsp_registry = Some(registry);
-        self
-    }
-
     pub fn lsp_registry(&self) -> Option<&Arc<agena_lsp::LspRegistry>> {
         self.lsp_registry.as_ref()
-    }
-
-    pub fn with_truncation_policy(mut self, policy: ToolOutputTruncationPolicy) -> Self {
-        self.truncator = ToolOutputTruncator::new(policy);
-        self
     }
 
     pub fn workspace_root(&self) -> &Path {
@@ -792,13 +778,12 @@ impl ToolExecutor {
             scoped.agent = scoped
                 .agent
                 .clone()
-                .with_permission_config(&session_context.effective_permission);
+                .apply_permission_config_or_self(&session_context.effective_permission);
         }
         if !session_context.allowed_tools.is_empty() {
-            scoped.agent = scoped
-                .agent
-                .clone()
-                .with_allowed_tools(session_context.allowed_tools.iter().map(String::as_str));
+            scoped.agent = scoped.agent.clone().restricted_to_allowed_tools(
+                session_context.allowed_tools.iter().map(String::as_str),
+            );
         }
         if let Some(model_id) = session_context.selection.model.as_ref() {
             scoped.model_id = Some(model_id.clone());
@@ -830,30 +815,27 @@ impl ToolExecutor {
             .collect::<Vec<_>>();
 
         tools.sort_by(|left, right| {
-            left.model_name
-                .cmp(&right.model_name)
-                .then_with(|| left.description_text().cmp(right.description_text()))
+            left.model_name()
+                .cmp(&right.model_name())
+                .then_with(|| left.summary_text().cmp(&right.summary_text()))
         });
 
-        // Plugin chain: tool.definition. Let plugins rewrite descriptions /
+        // Plugin chain: tool.definition. Let plugins rewrite summaries /
         // input schemas before the list reaches the LLM.
         if !self.plugins.is_empty() {
             tools = tools
                 .into_iter()
                 .map(|mut entry| {
                     let input = PluginToolDefinitionInput {
-                        tool_name: entry.tool_name.clone(),
-                        plugin_name: entry.plugin_full_name(),
-                        description: entry.description_text().to_string(),
-                        summary: entry.definition.docs.summary.clone(),
+                        tool: entry.tool_key().clone(),
+                        summary: tool_summary(&entry),
                         help: entry.definition.docs.help.clone(),
                         description_mode: entry.definition.display.description_mode,
                         input_schema: entry.sanitized_input_schema(),
                     };
                     match self.plugins.dispatch_tool_definition_blocking(input) {
                         Ok(patched) => {
-                            entry.definition.model.description = Some(patched.description);
-                            entry.definition.docs.summary = patched.summary;
+                            entry.definition.docs.summary = Some(patched.summary);
                             entry.definition.docs.help = patched.help;
                             entry.definition.display.description_mode = patched.description_mode;
                             entry.definition.contract.input_schema = patched.input_schema;
@@ -862,7 +844,7 @@ impl ToolExecutor {
                         Err(err) => {
                             tracing::warn!(
                                 target: "agena_plugin_host::tool_definition",
-                                tool = %entry.model_name,
+                                tool = %entry.model_name(),
                                 "tool.definition hook failed (keeping original): {err}"
                             );
                             entry
@@ -893,20 +875,18 @@ impl ToolExecutor {
         expanded.retain(|entry| catalog.is_tool_enabled(entry));
         expanded.retain(|entry| self.is_tool_visible_to_agent(entry));
         expanded.sort_by(|left, right| {
-            left.model_name
-                .cmp(&right.model_name)
-                .then_with(|| left.description_text().cmp(right.description_text()))
+            left.model_name()
+                .cmp(&right.model_name())
+                .then_with(|| left.summary_text().cmp(&right.summary_text()))
         });
         expanded
     }
 
     fn is_tool_visible_to_agent(&self, entry: &RegisteredTool) -> bool {
+        let model_name = entry.model_name();
         !matches!(
-            self.agent.authorize_tool_names(
-                &[entry.model_name.as_str()],
-                None,
-                &entry.effective_tags()
-            ),
+            self.agent
+                .authorize_tool_names(&[model_name.as_str()], None, &entry.effective_tags()),
             PermissionDecision::Deny { .. }
         )
     }
@@ -942,19 +922,44 @@ impl ToolExecutor {
     }
 
     pub fn available_model_tools(&self) -> Vec<RegisteredTool> {
+        let gateway_names = provider_gateway_model_tool_names();
         self.catalogued_model_tools()
+            .into_iter()
+            .filter(|tool| gateway_names.iter().any(|name| *name == tool.model_name()))
+            .collect()
+    }
+
+    pub fn model_tool_prompt_text(&self) -> Option<String> {
+        let tools = self
+            .detailed_model_tools()
+            .into_iter()
+            .filter(|tool| !is_provider_gateway_tool(tool.model_name().as_str()))
+            .collect::<Vec<_>>();
+        if tools.is_empty() {
+            return None;
+        }
+
+        let mut lines = vec![
+            "Tool protocol: only `agena.tools/help` and `agena.tools/call` are callable function tools.".to_string(),
+            "Read `agena.tools/help` first to inspect a tool's exact input schema, examples, and usage notes.".to_string(),
+            "Execute the real tool through `agena.tools/call` with `{ \"tool\": \"...\", \"input\": { ... } }`.".to_string(),
+            "Do not invent arguments when unsure; inspect help first.".to_string(),
+            "Available tools:".to_string(),
+        ];
+        lines.extend(tools.iter().map(render_model_tool_index_entry));
+        Some(lines.join("\n"))
     }
 
     fn suggested_tool_names(&self, requested: &str) -> Vec<String> {
         let mut candidates = self
             .catalogued_tools_raw()
             .into_iter()
-            .map(|tool| tool.model_name)
+            .map(|tool| tool.model_name())
             .collect::<Vec<_>>();
         candidates.extend(
             self.catalogued_model_tools_raw()
                 .into_iter()
-                .map(|tool| tool.model_name),
+                .map(|tool| tool.model_name()),
         );
         candidates.sort();
         candidates.dedup();
@@ -1087,10 +1092,10 @@ impl ToolExecutor {
         let resolution = self.plugin_resolution_for_invocation(invocation);
         let mut tool_name_aliases = vec![tool_name.as_str()];
         if let Some(resolution) = resolution.as_ref()
-            && resolution.tool_name != tool_name
-            && self.plugin_tool_name_is_unambiguous(resolution.tool_name.as_str())
+            && resolution.tool_name() != tool_name
+            && self.plugin_tool_name_is_unambiguous(resolution.tool_name())
         {
-            tool_name_aliases.push(resolution.tool_name.as_str());
+            tool_name_aliases.push(resolution.tool_name());
         }
         Ok((
             tool_name.clone(),
@@ -1103,7 +1108,7 @@ impl ToolExecutor {
         self.plugins
             .registered_tools()
             .into_iter()
-            .filter(|tool| tool.tool_name == plugin_tool_name)
+            .filter(|tool| tool.tool_name() == plugin_tool_name)
             .take(2)
             .count()
             == 1
@@ -1166,7 +1171,7 @@ impl ToolExecutor {
         let result = self.plugins.dispatch_tool_permission_paths(
             registered_tool,
             PluginToolPermissionPathsInput {
-                tool_name: registered_tool.tool_name.clone(),
+                tool_name: registered_tool.tool_name().to_string(),
                 workspace_root: self.workspace_root.to_string_lossy().to_string(),
                 input: input.clone(),
             },
@@ -1218,7 +1223,7 @@ impl ToolExecutor {
         let result = self.plugins.dispatch_tool_permission_networks(
             registered_tool,
             PluginToolPermissionNetworksInput {
-                tool_name: registered_tool.tool_name.clone(),
+                tool_name: registered_tool.tool_name().to_string(),
                 workspace_root: self.workspace_root.to_string_lossy().to_string(),
                 input: input.clone(),
             },
@@ -1514,8 +1519,15 @@ impl ToolExecutor {
         }
         let hook_tool_name = self
             .plugin_resolution_for_invocation(invocation)
-            .map(|entry| entry.tool_name)
+            .map(|entry| entry.tool_name().to_string())
             .unwrap_or_else(|| model_tool_name.clone());
+        let hook_tool = self
+            .plugin_resolution_for_invocation(invocation)
+            .map(|entry| entry.tool_key().clone())
+            .or_else(|| ToolKey::parse_model_name(hook_tool_name.as_str()).ok())
+            .ok_or_else(|| ToolError::UnknownTool {
+                tool: hook_tool_name.clone(),
+            })?;
         let input_json = invocation_input_json(invocation)?;
         let parsed_input_value: serde_json::Value = serde_json::from_str(&input_json)
             .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
@@ -1529,8 +1541,7 @@ impl ToolExecutor {
         let hooked = self
             .plugins
             .dispatch_tool_before(PluginToolBeforeInput {
-                tool_name: hook_tool_name,
-                plugin_name: plugin_name.clone(),
+                tool: hook_tool,
                 session_id,
                 call_id,
                 workspace_root: self.workspace_root.to_string_lossy().to_string(),
@@ -1624,14 +1635,14 @@ impl ToolExecutor {
             self,
             session_id,
             call_id,
-            resolution.tool_name.clone(),
+            resolution.tool_name().to_string(),
         );
         let stream = self
             .plugins
             .invoke_tool_stream(
                 &resolution,
                 PluginToolInvokeInput {
-                    tool_name: resolution.tool_name.clone(),
+                    tool_name: resolution.tool_name().to_string(),
                     session_id,
                     call_id,
                     workspace_root: self.workspace_root.to_string_lossy().to_string(),
@@ -1644,7 +1655,7 @@ impl ToolExecutor {
         let chunks = stream.chunks;
         let end = stream.end;
         let result_policy = resolution.definition.runtime.result_policy.clone();
-        let model_tool_name = resolution.model_name.clone();
+        let model_tool_name = resolution.model_name();
         let executor = self.clone();
         let invocation = invocation.clone();
         let (end_tx, end_rx) = tokio::sync::oneshot::channel();
@@ -1659,21 +1670,19 @@ impl ToolExecutor {
                     };
                     let output = ToolOutput::from_json_payload(end.payload.as_ref())
                         .map_err(ToolError::InvalidInput)?;
-                    let mut execution = ToolInvocationExecution::new(output.clone(), view)
-                        .with_apply_patch_option(apply_patch_execution_from_tool_output(&output));
-                    executor.apply_after_hooks(&invocation, session_id, call_id, &mut execution)?;
-                    executor.apply_result_policy(
+                    let execution = ToolInvocationExecution {
+                        output: output.clone(),
+                        view,
+                        apply_patch: apply_patch_execution_from_tool_output(&output),
+                    };
+                    executor.finalize_execution(
+                        &invocation,
+                        session_id,
                         model_tool_name.as_str(),
                         &result_policy,
                         call_id,
-                        &mut execution,
-                    )?;
-                    executor.apply_model_output_boundary(
-                        model_tool_name.as_str(),
-                        call_id,
-                        &mut execution,
-                    )?;
-                    Ok(execution)
+                        execution,
+                    )
                 })(),
                 Ok(Err(err)) => Err(ToolError::Plugin(err.message)),
                 Err(_) => Err(ToolError::Plugin(
@@ -1735,7 +1744,7 @@ impl ToolExecutor {
             self,
             session_id,
             call_id,
-            resolution.tool_name.clone(),
+            resolution.tool_name().to_string(),
         );
 
         let response = self
@@ -1743,7 +1752,7 @@ impl ToolExecutor {
             .invoke_tool(
                 &resolution,
                 PluginToolInvokeInput {
-                    tool_name: resolution.tool_name.clone(),
+                    tool_name: resolution.tool_name().to_string(),
                     session_id,
                     call_id,
                     workspace_root: self.workspace_root.to_string_lossy().to_string(),
@@ -1760,17 +1769,19 @@ impl ToolExecutor {
         };
         let output = ToolOutput::from_json_payload(response.payload.as_ref())
             .map_err(ToolError::InvalidInput)?;
-        let mut execution = ToolInvocationExecution::new(output.clone(), view)
-            .with_apply_patch_option(apply_patch_execution_from_tool_output(&output));
-        self.apply_after_hooks(invocation, session_id, call_id, &mut execution)?;
-        self.apply_result_policy(
-            resolution.model_name.as_str(),
+        let execution = ToolInvocationExecution {
+            output: output.clone(),
+            view,
+            apply_patch: apply_patch_execution_from_tool_output(&output),
+        };
+        self.finalize_execution(
+            invocation,
+            session_id,
+            resolution.model_name().as_str(),
             &resolution.definition.runtime.result_policy,
             call_id,
-            &mut execution,
-        )?;
-        self.apply_model_output_boundary(resolution.model_name.as_str(), call_id, &mut execution)?;
-        Ok(execution)
+            execution,
+        )
     }
 
     pub fn execute_invocation_detailed_bypassing_permissions(
@@ -1826,6 +1837,21 @@ impl ToolExecutor {
         Ok((execution.output, execution.apply_patch))
     }
 
+    fn finalize_execution(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: i64,
+        model_tool_name: &str,
+        result_policy: &SdkToolResultPolicy,
+        call_id: i64,
+        mut execution: ToolInvocationExecution,
+    ) -> Result<ToolInvocationExecution, ToolError> {
+        self.apply_after_hooks(invocation, session_id, call_id, &mut execution)?;
+        self.apply_result_policy(model_tool_name, result_policy, call_id, &mut execution)?;
+        self.apply_model_output_boundary(model_tool_name, call_id, &mut execution)?;
+        Ok(execution)
+    }
+
     fn apply_after_hooks(
         &self,
         invocation: &ToolInvocation,
@@ -1836,12 +1862,17 @@ impl ToolExecutor {
         let model_tool_name = invocation_name(invocation).to_owned();
         let hook_tool_name = self
             .plugin_resolution_for_invocation(invocation)
-            .map(|entry| entry.tool_name)
+            .map(|entry| entry.tool_name().to_string())
             .unwrap_or(model_tool_name);
-        let plugin_name = self.invocation_plugin_name_for(invocation);
+        let hook_tool = self
+            .plugin_resolution_for_invocation(invocation)
+            .map(|entry| entry.tool_key().clone())
+            .or_else(|| ToolKey::parse_model_name(hook_tool_name.as_str()).ok())
+            .ok_or_else(|| ToolError::UnknownTool {
+                tool: hook_tool_name.clone(),
+            })?;
         let after_in = PluginToolAfterInput {
-            tool_name: hook_tool_name,
-            plugin_name: plugin_name.clone(),
+            tool: hook_tool,
             session_id,
             call_id,
             workspace_root: self.workspace_root.to_string_lossy().to_string(),
@@ -2038,16 +2069,21 @@ impl ToolExecutor {
         let model_tool_name = invocation_name(invocation).to_owned();
         let hook_tool_name = self
             .plugin_resolution_for_invocation(invocation)
-            .map(|entry| entry.tool_name)
+            .map(|entry| entry.tool_name().to_string())
             .unwrap_or(model_tool_name);
-        let plugin_name = self.invocation_plugin_name_for(invocation);
+        let Some(hook_tool) = self
+            .plugin_resolution_for_invocation(invocation)
+            .map(|entry| entry.tool_key().clone())
+            .or_else(|| ToolKey::parse_model_name(hook_tool_name.as_str()).ok())
+        else {
+            return;
+        };
         let input_value = invocation_input_json(invocation)
             .ok()
             .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
             .unwrap_or(serde_json::Value::Null);
         let failure_input = PluginToolFailureInput {
-            tool_name: hook_tool_name,
-            plugin_name,
+            tool: hook_tool,
             session_id,
             call_id,
             workspace_root: self.workspace_root.to_string_lossy().to_string(),
@@ -2451,10 +2487,6 @@ fn canonical_tool_name(name: &str) -> &str {
     name
 }
 
-fn command_from_input_value(input: &serde_json::Value) -> Option<&str> {
-    input.get("action").and_then(serde_json::Value::as_str)
-}
-
 fn resolved_tool_input_value(
     _registered_tool: &RegisteredTool,
     invocation: &ToolInvocation,
@@ -2483,111 +2515,16 @@ fn resolve_managed_project_path_alias(raw_path: &str, workspace_root: &Path) -> 
 
 fn invocation_effective_tags(
     definition: &RegisteredTool,
-    invocation: &ToolInvocation,
+    _invocation: &ToolInvocation,
 ) -> Vec<crate::plugin::sdk::ToolTag> {
-    let mut tags = definition.effective_tags();
-    let input = resolved_tool_input_value(definition, invocation);
-    let Some(command) = command_from_input_value(&input) else {
-        return tags;
-    };
-
-    let behavior_model_name = definition.tool_name.as_str();
-    match (behavior_model_name, command) {
-        ("fs" | "agena_fs__fs", "read" | "glob" | "grep") => {
-            set_invocation_access_tags(&mut tags, true, false, true, false)
-        }
-        ("fs" | "agena_fs__fs", "apply_patch") => {
-            set_invocation_access_tags(&mut tags, false, true, false, true)
-        }
-        ("settings", "get" | "list" | "validate") => {
-            set_invocation_access_tags(&mut tags, true, false, false, false)
-        }
-        ("settings", "set" | "delete" | "patch") => {
-            set_invocation_access_tags(&mut tags, false, true, false, true)
-        }
-        ("schedule", "list") => set_invocation_access_tags(&mut tags, true, false, false, false),
-        ("schedule", "create" | "delete" | "wakeup") => {
-            set_invocation_access_tags(&mut tags, false, true, false, false)
-        }
-        ("process", "list" | "logs") => {
-            set_invocation_access_tags(&mut tags, true, false, false, false)
-        }
-        ("process", "run" | "stop") => {
-            set_invocation_access_tags(&mut tags, false, true, false, false)
-        }
-        ("session", "get") => set_invocation_access_tags(&mut tags, true, false, false, false),
-        ("session", "rename") => set_invocation_access_tags(&mut tags, false, true, false, false),
-        (
-            "resources.list" | "resources.read" | "prompts.list" | "prompts.get" | "agena_mcp__mcp",
-            "list_resources" | "read_resource" | "list_prompts" | "get_prompt",
-        ) => set_invocation_access_tags(&mut tags, true, false, false, false),
-        ("tools.call" | "agena_mcp__mcp", "call") => {
-            set_invocation_access_tags(&mut tags, false, true, false, false)
-        }
-        _ => {}
-    }
-
-    tags
-}
-
-fn set_invocation_access_tags(
-    tags: &mut Vec<crate::plugin::sdk::ToolTag>,
-    read_only: bool,
-    mutating: bool,
-    filesystem_read: bool,
-    filesystem_write: bool,
-) {
-    tags.retain(|tag| {
-        !matches!(
-            tag,
-            crate::plugin::sdk::ToolTag::ReadOnly
-                | crate::plugin::sdk::ToolTag::Mutating
-                | crate::plugin::sdk::ToolTag::FilesystemRead
-                | crate::plugin::sdk::ToolTag::FilesystemWrite
-        )
-    });
-    if read_only {
-        tags.push(crate::plugin::sdk::ToolTag::ReadOnly);
-    }
-    if mutating {
-        tags.push(crate::plugin::sdk::ToolTag::Mutating);
-    }
-    if filesystem_read {
-        tags.push(crate::plugin::sdk::ToolTag::FilesystemRead);
-    }
-    if filesystem_write {
-        tags.push(crate::plugin::sdk::ToolTag::FilesystemWrite);
-    }
+    definition.effective_tags()
 }
 
 fn is_concurrency_safe_tool_invocation(
     registered_tool: &RegisteredTool,
-    invocation: &PluginInvocation,
+    _invocation: &PluginInvocation,
 ) -> bool {
-    let input = resolved_plugin_invocation_input_value(registered_tool, invocation);
-    let Some(command) = command_from_input_value(&input) else {
-        return registered_tool.definition.runtime.concurrency_safe;
-    };
-
-    let behavior_model_name = registered_tool.tool_name.as_str();
-    match (behavior_model_name, command) {
-        ("fs" | "agena_fs__fs", "read" | "glob" | "grep") => true,
-        ("fs" | "agena_fs__fs", "apply_patch") => false,
-        ("process", "list" | "logs") => true,
-        ("process", "run" | "stop") => false,
-        ("settings", "get" | "list" | "validate") => true,
-        ("settings", "set" | "delete" | "patch") => false,
-        ("schedule", "list") => true,
-        ("schedule", "create" | "delete" | "wakeup") => false,
-        ("session", "get") => true,
-        ("session", "rename") => false,
-        (
-            "resources.list" | "resources.read" | "prompts.list" | "prompts.get" | "agena_mcp__mcp",
-            "list_resources" | "read_resource" | "list_prompts" | "get_prompt",
-        ) => true,
-        ("tools.call" | "agena_mcp__mcp", "call") => false,
-        _ => registered_tool.definition.runtime.concurrency_safe,
-    }
+    registered_tool.definition.runtime.concurrency_safe
 }
 
 fn apply_patch_execution_from_tool_output(output: &ToolOutput) -> Option<ApplyPatchExecution> {

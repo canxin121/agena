@@ -7,13 +7,14 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::error::{PluginError, Result};
 use crate::hooks::*;
 use crate::host_api::HostClient;
+use crate::identity::PluginKey;
 use crate::manifest::PluginManifest;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InitContext {
     pub agena_version: String,
     pub workspace_root: PathBuf,
-    pub plugin_id: String,
+    pub plugin_id: PluginKey,
     /// Optional callback URL for HTTP plugins (host's bidirectional endpoint).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_callback_url: Option<String>,

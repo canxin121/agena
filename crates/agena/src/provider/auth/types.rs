@@ -96,7 +96,7 @@ impl AuthData {
         }
     }
 
-    pub fn with_issuer(self, issuer: CredentialIssuer) -> Self {
+    pub fn for_issuer(self, issuer: CredentialIssuer) -> Self {
         match self {
             Self::OAuth {
                 refresh,

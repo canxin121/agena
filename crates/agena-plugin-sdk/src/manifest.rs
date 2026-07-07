@@ -13,8 +13,6 @@ pub struct PluginManifest {
     pub namespace: String,
     pub name: String,
     pub version: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
     /// Short plugin summary used when hosts only need a compact overview.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
@@ -229,8 +227,6 @@ pub struct ToolContract {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ToolModelSurface {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub examples: Vec<String>,
 }
@@ -360,10 +356,6 @@ pub trait ToolInputShape: Sized {
 }
 
 impl ToolDefinition {
-    pub fn description_text(&self) -> &str {
-        self.model.description.as_deref().unwrap_or("")
-    }
-
     pub fn summary_text(&self) -> Option<&str> {
         self.docs
             .summary
@@ -977,17 +969,15 @@ impl Serialize for HookSubscription {
 impl<'de> Deserialize<'de> for HookSubscription {
     fn deserialize<D: serde::Deserializer<'de>>(de: D) -> std::result::Result<Self, D::Error> {
         let names = Vec::<String>::deserialize(de)?;
-        let mut out = HookSubscription::empty();
-        for n in &names {
+        names.iter().try_fold(HookSubscription::empty(), |out, n| {
             if let Some(flag) = hook_subscription_for_name(n.as_str()) {
-                out |= flag;
+                Ok(out | flag)
             } else {
-                return Err(serde::de::Error::custom(format!(
+                Err(serde::de::Error::custom(format!(
                     "unknown hook subscription `{n}`"
-                )));
+                )))
             }
-        }
-        Ok(out)
+        })
     }
 }
 
@@ -1048,7 +1038,6 @@ impl PluginManifest {
             namespace: namespace.into(),
             name: name.into(),
             version: version.into(),
-            description: None,
             summary: None,
             help: None,
             tool_description_mode: None,
@@ -1063,16 +1052,6 @@ impl PluginManifest {
             config_schema: None,
             config_schema_i18n: BTreeMap::new(),
         }
-    }
-
-    pub fn from_full_name(full_name: impl AsRef<str>, version: impl Into<String>) -> Self {
-        let full_name = full_name.as_ref().trim();
-        let (namespace, name) = full_name
-            .split_once('.')
-            .filter(|(namespace, name)| !namespace.is_empty() && !name.is_empty())
-            .map(|(namespace, name)| (namespace.to_string(), name.to_string()))
-            .unwrap_or_else(|| ("local".to_string(), full_name.to_string()));
-        Self::new(namespace, name, version)
     }
 
     pub fn set_display(&mut self, preset: ToolDisplayPreset) {
@@ -1095,10 +1074,6 @@ impl PluginManifest {
         }
     }
 
-    pub fn description_text(&self) -> &str {
-        self.description.as_deref().unwrap_or("")
-    }
-
     pub fn summary_text(&self) -> Option<&str> {
         self.summary
             .as_deref()
@@ -1111,211 +1086,6 @@ impl PluginManifest {
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-    }
-}
-
-impl ToolDefinition {
-    pub fn new(name: impl Into<String>, schema: serde_json::Value) -> Self {
-        Self {
-            name: name.into(),
-            contract: ToolContract {
-                input_schema: schema,
-                ..ToolContract::default()
-            },
-            model: ToolModelSurface::default(),
-            docs: ToolDocs::default(),
-            runtime: ToolRuntimePolicy::default(),
-            permissions: ToolPermissionContract::default(),
-            display: ToolDisplay::default(),
-            capabilities: Vec::new(),
-        }
-    }
-
-    pub fn compact(self) -> Self {
-        self.display(ToolDisplayPreset::Compact)
-    }
-
-    pub fn brief(self) -> Self {
-        self.display(ToolDisplayPreset::Compact)
-    }
-
-    pub fn brief_detailed(self) -> Self {
-        self.display(ToolDisplayPreset::BriefDetailed)
-    }
-
-    pub fn detailed(self) -> Self {
-        self.display(ToolDisplayPreset::Detailed)
-    }
-
-    pub fn description(mut self, d: impl Into<String>) -> Self {
-        self.model.description = Some(d.into());
-        self
-    }
-
-    pub fn long_about(self, description: impl Into<String>) -> Self {
-        self.description(description)
-    }
-
-    pub fn summary(mut self, summary: impl Into<String>) -> Self {
-        self.docs.summary = Some(summary.into());
-        self
-    }
-
-    pub fn about(self, summary: impl Into<String>) -> Self {
-        self.summary(summary)
-    }
-
-    pub fn help(mut self, help: impl Into<String>) -> Self {
-        self.docs.help = Some(help.into());
-        self
-    }
-
-    pub fn long_help(self, help: impl Into<String>) -> Self {
-        self.help(help)
-    }
-
-    pub fn after_help(self, help: impl Into<String>) -> Self {
-        let mut this = self;
-        this.docs.after_help = Some(help.into());
-        this
-    }
-
-    pub fn after_long_help(self, help: impl Into<String>) -> Self {
-        let mut this = self;
-        this.docs.after_help = Some(help.into());
-        this
-    }
-
-    pub fn before_help(self, description: impl Into<String>) -> Self {
-        let mut this = self;
-        this.docs.before_help = Some(description.into());
-        this
-    }
-
-    pub fn before_long_help(self, description: impl Into<String>) -> Self {
-        let mut this = self;
-        this.docs.before_help = Some(description.into());
-        this
-    }
-
-    pub fn display(mut self, preset: ToolDisplayPreset) -> Self {
-        self.display.description_mode = Some(preset.tool_description_mode());
-        self.display.ui_display_mode = Some(preset.ui_display_mode());
-        self
-    }
-
-    pub fn example(mut self, example: impl Into<String>) -> Self {
-        self.model.examples.push(example.into());
-        self
-    }
-
-    pub fn examples<I, S>(mut self, examples: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.model
-            .examples
-            .extend(examples.into_iter().map(Into::into));
-        self
-    }
-
-    pub fn description_mode(mut self, mode: ToolDescriptionMode) -> Self {
-        self.display.description_mode = Some(mode);
-        self
-    }
-
-    pub fn ui_display_mode(mut self, mode: UiTextDisplayMode) -> Self {
-        self.display.ui_display_mode = Some(mode);
-        self
-    }
-
-    pub fn input_path(mut self, spec: InputPathSpec) -> Self {
-        self.permissions.input_paths.push(spec);
-        self
-    }
-
-    pub fn output_schema(mut self, schema: serde_json::Value) -> Self {
-        self.contract.output_schema = schema;
-        self
-    }
-
-    pub fn input_network(mut self, spec: InputNetworkSpec) -> Self {
-        self.permissions.input_networks.push(spec);
-        self
-    }
-
-    pub fn path_access(mut self, spec: PathAccessSpec) -> Self {
-        self.permissions.path_access.push(spec);
-        self
-    }
-
-    pub fn network_access(mut self, spec: NetworkAccessSpec) -> Self {
-        self.permissions.network_access.push(spec);
-        self
-    }
-
-    pub fn tag(mut self, tag: ToolTag) -> Self {
-        self.permissions.tags.push(tag);
-        self
-    }
-
-    pub fn tags<I>(mut self, tags: I) -> Self
-    where
-        I: IntoIterator<Item = ToolTag>,
-    {
-        self.permissions.tags = tags.into_iter().collect();
-        self
-    }
-
-    pub fn concurrency_safe(mut self, concurrency_safe: bool) -> Self {
-        self.runtime.concurrency_safe = concurrency_safe;
-        self
-    }
-
-    pub fn strict(mut self, strict: bool) -> Self {
-        self.contract.strict = strict;
-        self
-    }
-
-    pub fn streaming(mut self, streaming: ToolStreamingMode) -> Self {
-        self.runtime.streaming = streaming;
-        self
-    }
-
-    pub fn result_policy(mut self, policy: ToolResultPolicy) -> Self {
-        self.runtime.result_policy = policy;
-        self
-    }
-
-    pub fn max_model_chars(mut self, max_model_chars: usize) -> Self {
-        self.runtime.result_policy.max_model_chars = Some(max_model_chars);
-        self
-    }
-
-    pub fn preview_lines(mut self, preview_lines: usize) -> Self {
-        self.runtime.result_policy.preview_lines = Some(preview_lines);
-        self
-    }
-
-    pub fn persist_large_output(mut self, persist: bool) -> Self {
-        self.runtime.result_policy.persist_large_output = persist;
-        self
-    }
-
-    pub fn ui_render_kind(mut self, kind: ToolResultRenderKind) -> Self {
-        self.runtime.result_policy.ui_render_kind = kind;
-        self
-    }
-
-    pub fn capability(mut self, capability: HostCapability) -> Self {
-        self.capabilities.push(capability);
-        self
-    }
-
-    pub fn capabilities(mut self, capabilities: impl IntoIterator<Item = HostCapability>) -> Self {
-        self.capabilities.extend(capabilities);
-        self
     }
 }
 

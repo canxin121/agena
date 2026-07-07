@@ -412,12 +412,11 @@ pub(super) fn merge_catalog_speed_mode_fill_missing(
 }
 
 pub(super) fn merge_live_provider_catalog_document(
-    current: &mut ModelCatalogDocument,
+    current: &mut BTreeMap<String, CatalogModelDefinition>,
     next: ModelCatalogDocument,
 ) {
     for (model_id, definition) in next.models {
         current
-            .models
             .entry(model_id)
             .and_modify(|existing| {
                 let mut merged = definition.clone();
@@ -429,12 +428,11 @@ pub(super) fn merge_live_provider_catalog_document(
 }
 
 pub(super) fn merge_public_source_catalog_document(
-    current: &mut ModelCatalogDocument,
+    current: &mut BTreeMap<String, CatalogModelDefinition>,
     next: ModelCatalogDocument,
 ) {
     for (model_id, definition) in next.models {
         current
-            .models
             .entry(model_id)
             .and_modify(|existing| merge_public_source_catalog_definition(existing, &definition))
             .or_insert(definition);

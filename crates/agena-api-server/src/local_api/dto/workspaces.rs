@@ -57,8 +57,8 @@ pub struct WorkspaceFileNode {
     pub kind: WorkspaceFileKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub children: Option<Vec<WorkspaceFileNode>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<WorkspaceFileNode>,
 }
 
 #[derive(Debug, Clone, Serialize)]

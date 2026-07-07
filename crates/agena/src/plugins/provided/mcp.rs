@@ -8,7 +8,7 @@ use std::sync::{Arc, LazyLock};
 use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
 use agena_mcp_client::protocol::{
     CallToolResult, ContentBlock, GetPromptResult, ListPromptsResult, ListResourcesResult,
-    ReadResourceResult, ResourceContents, ToolDescriptor,
+    ReadResourceResult, ResourceContents,
 };
 use agena_mcp_client::{FileTokenStore, McpConnectionManager, ServerSpec, TokenStore};
 use schemars::JsonSchema;
@@ -19,10 +19,20 @@ use crate::message::{AttachmentItem, OperationBlock};
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
     HookSubscription, InitOutcome, NetworkAccessSpec, NetworkRequest, PluginManifest,
-    Result as SdkResult, ToolDefinition, ToolInvokeOutput, ToolTag,
+    Result as SdkResult, ToolDefinitionInput, ToolDefinitionPatch, ToolInvokeOutput, ToolTag,
 };
 
 pub(crate) const MCP_PLUGIN_ID: &str = "agena.mcp";
+
+pub(crate) fn static_manifest() -> PluginManifest {
+    let mut manifest = PluginManifest::new("agena", "mcp", env!("CARGO_PKG_VERSION"));
+    manifest.summary = Some("MCP discovery and bridge tools.".to_string());
+    manifest.hooks |= HookSubscription::TOOL_INVOKE | HookSubscription::TOOL_DEFINITION;
+    manifest.config_schema = Some(mcp_config_schema());
+    manifest.set_display(crate::plugin::sdk::ToolDisplayPreset::Compact);
+    manifest.tools = McpToolSuite::tool_definitions();
+    manifest
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
@@ -246,116 +256,108 @@ pub(crate) struct McpPlugin {
 }
 
 fn mcp_config_schema() -> Value {
-    let mut schema = crate::tool::definition::json_schema_for_with_default(McpConfig::default());
-    for (pointer, title, description) in [
-        (
-            "",
-            "MCP Plugin Config",
-            "Runtime settings and named server definitions for the agena.mcp bridge.",
-        ),
-        (
-            "/properties/runtime",
-            "Runtime",
-            "Bridge-level settings that apply to all MCP servers.",
-        ),
-        (
-            "/properties/runtime/properties/token_store",
-            "Token Store",
-            "Controls whether the default MCP token store is available for bearer-from-store authentication.",
-        ),
-        (
-            "/properties/runtime/properties/token_store/properties/enabled",
-            "Enabled",
-            "Opens the default token store so MCP HTTP servers can resolve tokens at connect time.",
-        ),
-        (
-            "/properties/servers",
-            "Servers",
-            "Named MCP server definitions keyed by server identifier.",
-        ),
-        (
-            "/properties/servers/additionalProperties",
-            "Server",
-            "A single MCP server transport definition.",
-        ),
-        (
-            "/properties/servers/additionalProperties/oneOf/0",
-            "Stdio Server",
-            "Launches an MCP server as a child process and communicates over stdio.",
-        ),
-        (
-            "/properties/servers/additionalProperties/oneOf/0/properties/process",
-            "Process",
-            "Command, arguments, environment, and working directory for the stdio MCP server.",
-        ),
-        (
-            "/properties/servers/additionalProperties/oneOf/0/properties/process/properties/command",
-            "Command",
-            "Executable used to launch the stdio MCP server.",
-        ),
-        (
-            "/properties/servers/additionalProperties/oneOf/0/properties/process/properties/args",
-            "Arguments",
-            "Command-line arguments passed to the stdio MCP server.",
-        ),
-        (
-            "/properties/servers/additionalProperties/oneOf/0/properties/process/properties/env",
-            "Environment",
-            "Environment variables injected into the stdio MCP server process.",
-        ),
-        (
-            "/properties/servers/additionalProperties/oneOf/0/properties/process/properties/cwd",
-            "Working Directory",
-            "Working directory used when starting the stdio MCP server process.",
-        ),
-        (
-            "/properties/servers/additionalProperties/oneOf/1",
-            "HTTP Server",
-            "Connects to a streamable HTTP MCP server.",
-        ),
-        (
-            "/properties/servers/additionalProperties/oneOf/1/properties/endpoint",
-            "Endpoint",
-            "HTTP endpoint and headers used to connect to the MCP server.",
-        ),
-        (
-            "/properties/servers/additionalProperties/oneOf/1/properties/endpoint/properties/url",
-            "URL",
-            "Base URL for the HTTP MCP server.",
-        ),
-        (
-            "/properties/servers/additionalProperties/oneOf/1/properties/endpoint/properties/headers",
-            "Headers",
-            "Static HTTP headers attached to each request to this MCP server.",
-        ),
-        (
-            "/properties/servers/additionalProperties/oneOf/1/properties/auth",
-            "Authentication",
-            "Optional authentication strategy used for the HTTP MCP server.",
-        ),
-    ] {
-        crate::tool::definition::set_schema_metadata(
-            &mut schema,
-            pointer,
-            Some(title),
-            Some(description),
-        );
+    crate::tool::definition::json_schema_for_default_with_metadata(
+        default_mcp_config(),
+        &[
+            (
+                "",
+                "MCP Plugin Config",
+                "Runtime settings and named server definitions for the agena.mcp bridge.",
+            ),
+            (
+                "/properties/runtime",
+                "Runtime",
+                "Bridge-level settings that apply to all MCP servers.",
+            ),
+            (
+                "/properties/runtime/properties/token_store",
+                "Token Store",
+                "Controls whether the default MCP token store is available for bearer-from-store authentication.",
+            ),
+            (
+                "/properties/runtime/properties/token_store/properties/enabled",
+                "Enabled",
+                "Opens the default token store so MCP HTTP servers can resolve tokens at connect time.",
+            ),
+            (
+                "/properties/servers",
+                "Servers",
+                "Named MCP server definitions keyed by server identifier.",
+            ),
+            (
+                "/properties/servers/additionalProperties",
+                "Server",
+                "A single MCP server transport definition.",
+            ),
+            (
+                "/properties/servers/additionalProperties/oneOf/0",
+                "Stdio Server",
+                "Launches an MCP server as a child process and communicates over stdio.",
+            ),
+            (
+                "/properties/servers/additionalProperties/oneOf/0/properties/process",
+                "Process",
+                "Command, arguments, environment, and working directory for the stdio MCP server.",
+            ),
+            (
+                "/properties/servers/additionalProperties/oneOf/0/properties/process/properties/command",
+                "Command",
+                "Executable used to launch the stdio MCP server.",
+            ),
+            (
+                "/properties/servers/additionalProperties/oneOf/0/properties/process/properties/args",
+                "Arguments",
+                "Command-line arguments passed to the stdio MCP server.",
+            ),
+            (
+                "/properties/servers/additionalProperties/oneOf/0/properties/process/properties/env",
+                "Environment",
+                "Environment variables injected into the stdio MCP server process.",
+            ),
+            (
+                "/properties/servers/additionalProperties/oneOf/0/properties/process/properties/cwd",
+                "Working Directory",
+                "Working directory used when starting the stdio MCP server process.",
+            ),
+            (
+                "/properties/servers/additionalProperties/oneOf/1",
+                "HTTP Server",
+                "Connects to a streamable HTTP MCP server.",
+            ),
+            (
+                "/properties/servers/additionalProperties/oneOf/1/properties/endpoint",
+                "Endpoint",
+                "HTTP endpoint and headers used to connect to the MCP server.",
+            ),
+            (
+                "/properties/servers/additionalProperties/oneOf/1/properties/endpoint/properties/url",
+                "URL",
+                "Base URL for the HTTP MCP server.",
+            ),
+            (
+                "/properties/servers/additionalProperties/oneOf/1/properties/endpoint/properties/headers",
+                "Headers",
+                "Static HTTP headers attached to each request to this MCP server.",
+            ),
+            (
+                "/properties/servers/additionalProperties/oneOf/1/properties/auth",
+                "Authentication",
+                "Optional authentication strategy used for the HTTP MCP server.",
+            ),
+        ],
+    )
+}
+
+fn default_mcp_config() -> McpConfig {
+    McpConfig {
+        runtime: McpRuntimeConfig::default(),
+        servers: BTreeMap::new(),
     }
-    schema
 }
 
 impl McpPlugin {
     pub(crate) fn new(manager: Arc<McpConnectionManager>) -> Self {
         Self { manager }
-    }
-
-    fn manifest_from_snapshot(
-        &self,
-        servers: Vec<String>,
-        tools: Vec<(String, ToolDescriptor)>,
-        network_access: BTreeMap<String, NetworkAccessSpec>,
-    ) -> PluginManifest {
-        manifest_from_snapshot(servers, tools, &network_access)
     }
 
     async fn invoke_resources_list(&self, input: &McpServerInput) -> SdkResult<ToolInvokeOutput> {
@@ -468,19 +470,66 @@ impl McpPlugin {
     ) -> SdkResult<Vec<NetworkRequest>> {
         self.permission_networks_for_server(&input.server).await
     }
+
+    async fn tool_definition_patch(
+        &self,
+        input: ToolDefinitionInput,
+    ) -> SdkResult<Option<ToolDefinitionPatch>> {
+        if input.plugin_key().to_model_string() != MCP_PLUGIN_ID {
+            return Ok(None);
+        }
+        let servers = self.manager.server_names().await;
+        let tools = self.manager.all_tools().await;
+        let server_count = servers.len();
+        let tool_count = tools.len();
+        let mut lines = vec![
+            "Use `resources.list` to list resources, `resources.read` to read a resource URI, `prompts.list` to list prompt templates, `prompts.get` to fetch a prompt template, and `tools.call` with `server`, `name`, and optional `arguments` to call a discovered MCP tool.".to_string(),
+            format!("Currently configured servers: {server_count}."),
+        ];
+        if servers.is_empty() {
+            lines.push("- none".to_string());
+        } else {
+            for server in &servers {
+                lines.push(format!("- {server}"));
+            }
+        }
+        lines.push(format!("Currently discovered MCP tools: {tool_count}."));
+        if tools.is_empty() {
+            lines.push("- none".to_string());
+        } else {
+            for (server, tool) in tools.iter().take(24) {
+                let description = tool.description.as_deref().unwrap_or("").trim();
+                if description.is_empty() {
+                    lines.push(format!("- {server}/{}", tool.name));
+                } else {
+                    lines.push(format!("- {server}/{}: {description}", tool.name));
+                }
+            }
+        }
+
+        let summary = match input.tool_name() {
+            "resources.list" => Some(format!(
+                "List MCP resources from one server. {server_count} server(s) currently available."
+            )),
+            "tools.call" => Some(format!(
+                "Call one discovered MCP tool. {tool_count} MCP tool(s) currently available."
+            )),
+            _ => None,
+        };
+
+        Ok(Some(ToolDefinitionPatch {
+            summary,
+            help: Some(lines.join("\n")),
+            description_mode: None,
+            input_schema: None,
+        }))
+    }
 }
 
 #[crate::plugin::sdk::async_trait]
 impl crate::plugin::sdk::Plugin for McpPlugin {
     fn manifest(&self) -> PluginManifest {
-        let manager = Arc::clone(&self.manager);
-        let (servers, tools, network_access) = block_on(async move {
-            let servers = manager.server_names().await;
-            let tools = manager.all_tools().await;
-            let network_access = network_access_by_server(&manager).await;
-            (servers, tools, network_access)
-        });
-        self.manifest_from_snapshot(servers, tools, network_access)
+        static_manifest()
     }
 
     async fn init(
@@ -488,14 +537,7 @@ impl crate::plugin::sdk::Plugin for McpPlugin {
         _ctx: crate::plugin::sdk::InitContext,
         _host: Arc<dyn crate::plugin::sdk::HostClient>,
     ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
-        let servers = self.manager.server_names().await;
-        let tools = self.manager.all_tools().await;
-        let network_access = network_access_by_server(&self.manager).await;
-        Ok(InitOutcome::ack(self.manifest_from_snapshot(
-            servers,
-            tools,
-            network_access,
-        )))
+        Ok(InitOutcome::ack(self.manifest()))
     }
 
     async fn tool_invoke(
@@ -513,6 +555,13 @@ impl crate::plugin::sdk::Plugin for McpPlugin {
     ) -> SdkResult<Vec<NetworkRequest>> {
         let suite = McpToolSuite::parse_tool(tool, input.clone())?;
         suite.dispatch_permission_networks(self).await
+    }
+
+    async fn tool_definition(
+        &self,
+        input: ToolDefinitionInput,
+    ) -> SdkResult<Option<ToolDefinitionPatch>> {
+        self.tool_definition_patch(input).await
     }
 }
 
@@ -536,7 +585,6 @@ struct CallToolInput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "resources.list",
-    description = "List resource descriptors from one configured MCP server.",
     summary = "List MCP resources from one server.",
     handler_receiver = McpPlugin,
     handle = McpPlugin::invoke_resources_list,
@@ -556,7 +604,6 @@ struct McpResourcesListToolInput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "resources.read",
-    description = "Read one MCP resource by URI from one configured server.",
     summary = "Read one MCP resource by URI.",
     handler_receiver = McpPlugin,
     handle = McpPlugin::invoke_resources_read,
@@ -576,7 +623,6 @@ struct McpResourcesReadToolInput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "prompts.list",
-    description = "List server-provided MCP prompt templates from one configured server.",
     summary = "List MCP prompt templates from one server.",
     handler_receiver = McpPlugin,
     handle = McpPlugin::invoke_prompts_list,
@@ -596,7 +642,6 @@ struct McpPromptsListToolInput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "prompts.get",
-    description = "Fetch one server-provided MCP prompt template by name.",
     summary = "Fetch one MCP prompt template.",
     handler_receiver = McpPlugin,
     handle = McpPlugin::invoke_prompts_get,
@@ -616,7 +661,6 @@ struct McpPromptsGetToolInput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     tool = "tools.call",
-    description = "Call one discovered MCP tool on one configured server.",
     summary = "Call one discovered MCP tool.",
     handler_receiver = McpPlugin,
     handle = McpPlugin::invoke_tools_call,
@@ -644,26 +688,6 @@ enum McpToolSuite {
     ToolsCall(McpToolsCallToolInput),
 }
 
-fn manifest_from_snapshot(
-    servers: Vec<String>,
-    tools: Vec<(String, ToolDescriptor)>,
-    network_access: &BTreeMap<String, NetworkAccessSpec>,
-) -> PluginManifest {
-    let tool_definitions = if servers.is_empty() && tools.is_empty() {
-        Vec::new()
-    } else {
-        mcp_definitions(&servers, &tools, !network_access.is_empty())
-    };
-    let mut manifest = PluginManifest::new("agena", "mcp", env!("CARGO_PKG_VERSION"));
-    manifest.description =
-        Some("Agena MCP bridge published as hierarchical plugin commands.".to_string());
-    manifest.hooks |= HookSubscription::TOOL_INVOKE;
-    manifest.config_schema = Some(mcp_config_schema());
-    manifest.set_display(crate::plugin::sdk::ToolDisplayPreset::Compact);
-    manifest.tools = tool_definitions;
-    manifest
-}
-
 async fn network_access_by_server(
     manager: &McpConnectionManager,
 ) -> BTreeMap<String, NetworkAccessSpec> {
@@ -683,81 +707,6 @@ fn network_requests_for_server(
         .get(server)
         .map(|spec| vec![NetworkRequest::connect(spec.target.clone())])
         .unwrap_or_default()
-}
-
-fn mcp_definitions(
-    servers: &[String],
-    tools: &[(String, ToolDescriptor)],
-    has_network_servers: bool,
-) -> Vec<ToolDefinition> {
-    let server_count = servers.len();
-    let tool_count = tools.len();
-    let common_help = mcp_help(servers, tools);
-    McpToolSuite::tool_definitions()
-        .into_iter()
-        .map(|definition| {
-            let definition =
-                decorate_mcp_definition(definition, server_count, tool_count, common_help.as_str());
-            maybe_network_tag(definition, has_network_servers)
-        })
-        .collect()
-}
-
-fn decorate_mcp_definition(
-    tool_definition: ToolDefinition,
-    server_count: usize,
-    tool_count: usize,
-    common_help: &str,
-) -> ToolDefinition {
-    match tool_definition.name.as_str() {
-        "resources.list" => tool_definition
-            .description(format!(
-                "List resource descriptors from one configured MCP server. {server_count} server(s) are currently configured."
-            ))
-            .help(common_help.to_string()),
-        "resources.read" => tool_definition.help(common_help.to_string()),
-        "prompts.list" => tool_definition.help(common_help.to_string()),
-        "prompts.get" => tool_definition.help(common_help.to_string()),
-        "tools.call" => tool_definition
-            .description(format!(
-                "Call one discovered MCP tool on one configured server. {tool_count} discovered tool(s) are currently available across {server_count} server(s)."
-            ))
-            .help(common_help.to_string()),
-        _ => tool_definition,
-    }
-}
-
-fn mcp_help(servers: &[String], tools: &[(String, ToolDescriptor)]) -> String {
-    let mut lines = vec![
-        "Use `resources.list` to list resources, `resources.read` to read a resource URI, `prompts.list` to list prompt templates, `prompts.get` to fetch a prompt template, and `tools.call` with `server`, `name`, and optional `arguments` to call a discovered MCP tool.".to_string(),
-        "Configured servers:".to_string(),
-    ];
-    for server in servers {
-        lines.push(format!("- {server}"));
-    }
-    lines.push("Discovered MCP tools:".to_string());
-    for (server, tool) in tools {
-        let description = tool.description.as_deref().unwrap_or("").trim();
-        if description.is_empty() {
-            lines.push(format!("- {server}/{}", tool.name));
-        } else {
-            lines.push(format!("- {server}/{}: {description}", tool.name));
-        }
-        if let Some(schema) = tool.input_schema.as_ref()
-            && let Ok(schema) = serde_json::to_string_pretty(schema)
-        {
-            lines.push(format!("  inputSchema: {schema}"));
-        }
-    }
-    lines.join("\n")
-}
-
-fn maybe_network_tag(tool_definition: ToolDefinition, has_network_servers: bool) -> ToolDefinition {
-    if has_network_servers {
-        tool_definition.tag(ToolTag::Network)
-    } else {
-        tool_definition
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ToolInputShape, PartialEq, Eq)]
@@ -791,7 +740,7 @@ fn invoke_tool_output(
     tool: &str,
     result: CallToolResult,
 ) -> SdkResult<ToolInvokeOutput> {
-    if matches!(result.is_error, Some(true)) {
+    if result.is_error {
         let combined = result
             .content
             .iter()
@@ -937,7 +886,7 @@ fn list_prompts_output(server: &str, result: ListPromptsResult) -> SdkResult<Too
                     .arguments
                     .iter()
                     .map(|arg| {
-                        if arg.required.unwrap_or(false) {
+                        if arg.required {
                             format!("{}*", arg.name)
                         } else {
                             arg.name.clone()

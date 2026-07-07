@@ -7,6 +7,7 @@ use url::Url;
 
 use crate::sdk::ToolDescriptionMode;
 pub use crate::sdk::manifest::UiTextDisplayMode;
+use crate::sdk::{PluginKey, ToolKey};
 
 pub use crate::quota::QuotaConfig;
 
@@ -47,7 +48,7 @@ pub struct PluginHostConfig {
     /// Optional per-plugin overrides, keyed by plugin id. A plugin without an
     /// override here uses `default_quota`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub quotas: BTreeMap<String, QuotaConfig>,
+    pub quotas: BTreeMap<PluginKey, QuotaConfig>,
     /// `key_id -> hex-encoded ed25519 public key`. Signed package/artifact
     /// entries reference one of these keys.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -104,9 +105,9 @@ impl PluginPolicyConfig {
 pub struct ToolPresentationConfig {
     pub default_mode: ToolDescriptionMode,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub plugins: BTreeMap<String, ToolDescriptionOverride>,
+    pub plugins: BTreeMap<PluginKey, ToolDescriptionOverride>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub tools: BTreeMap<String, ToolDescriptionOverride>,
+    pub tools: BTreeMap<ToolKey, ToolDescriptionOverride>,
 }
 
 impl Default for ToolPresentationConfig {
@@ -126,17 +127,14 @@ impl ToolPresentationConfig {
 
     pub fn mode_for(
         &self,
-        plugin_name: &str,
-        plugin_tool_name: &str,
-        model_name: &str,
+        plugin_key: &PluginKey,
+        tool_key: &ToolKey,
         tool_default: Option<ToolDescriptionMode>,
     ) -> ToolDescriptionMode {
-        for key in [model_name, plugin_tool_name] {
-            if let Some(mode) = self.tools.get(key).copied() {
-                return resolve_tool_description_override(mode, tool_default, self.default_mode);
-            }
+        if let Some(mode) = self.tools.get(tool_key).copied() {
+            return resolve_tool_description_override(mode, tool_default, self.default_mode);
         }
-        if let Some(mode) = self.plugins.get(plugin_name).copied() {
+        if let Some(mode) = self.plugins.get(plugin_key).copied() {
             return resolve_tool_description_override(mode, tool_default, self.default_mode);
         }
         tool_default.unwrap_or(self.default_mode)
@@ -169,9 +167,9 @@ fn resolve_tool_description_override(
 pub struct UiPresentationConfig {
     pub default_mode: UiTextDisplayMode,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub plugins: BTreeMap<String, UiPresentationOverride>,
+    pub plugins: BTreeMap<PluginKey, UiPresentationOverride>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub tools: BTreeMap<String, UiPresentationOverride>,
+    pub tools: BTreeMap<ToolKey, UiPresentationOverride>,
 }
 
 impl Default for UiPresentationConfig {
@@ -191,17 +189,14 @@ impl UiPresentationConfig {
 
     pub fn mode_for(
         &self,
-        plugin_name: &str,
-        plugin_tool_name: &str,
-        model_name: &str,
+        plugin_key: &PluginKey,
+        tool_key: &ToolKey,
         tool_default: Option<UiTextDisplayMode>,
     ) -> UiTextDisplayMode {
-        for key in [model_name, plugin_tool_name] {
-            if let Some(mode) = self.tools.get(key).copied() {
-                return resolve_ui_presentation_override(mode, tool_default, self.default_mode);
-            }
+        if let Some(mode) = self.tools.get(tool_key).copied() {
+            return resolve_ui_presentation_override(mode, tool_default, self.default_mode);
         }
-        if let Some(mode) = self.plugins.get(plugin_name).copied() {
+        if let Some(mode) = self.plugins.get(plugin_key).copied() {
             return resolve_ui_presentation_override(mode, tool_default, self.default_mode);
         }
         tool_default.unwrap_or(self.default_mode)

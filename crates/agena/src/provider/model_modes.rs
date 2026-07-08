@@ -56,7 +56,7 @@ fn protocol_for_model(
     adapter_id: Option<&AdapterId>,
     model: &str,
 ) -> ThinkingProtocol {
-    match adapter_id.map(AdapterId::as_str) {
+    match adapter_id.map(AsRef::<str>::as_ref) {
         Some("anthropic") => return ThinkingProtocol::Anthropic,
         Some("gemini") => return ThinkingProtocol::Gemini,
         Some("openai") => {
@@ -412,9 +412,9 @@ fn adaptive_modes_with_display(
     let mut modes = BTreeMap::new();
     for effort in efforts {
         modes.insert(
-            format!("thinking-{}", effort.as_str()),
+            format!("thinking-{effort}"),
             ModelThinkingMode {
-                display_name: Some(format!("Think {}", title_case(effort.as_str()))),
+                display_name: Some(format!("Think {}", title_case(effort.as_ref()))),
                 description: None,
                 thinking: Some(ThinkingRequest::Adaptive {
                     effort: Some(*effort),
@@ -478,9 +478,9 @@ fn effort_modes(
     }
     for effort in efforts {
         modes.insert(
-            format!("thinking-{}", effort.as_str()),
+            format!("thinking-{effort}"),
             ModelThinkingMode {
-                display_name: Some(format!("Think {}", title_case(effort.as_str()))),
+                display_name: Some(format!("Think {}", title_case(effort.as_ref()))),
                 description: None,
                 thinking: Some(ThinkingRequest::Effort { effort: *effort }),
                 request_override: ModelSpeedModeRequestOverride::default(),

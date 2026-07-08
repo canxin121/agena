@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::plugin::{ConfiguredPlugin, PluginsConfig, StaticPluginRegistration};
 
 fn plugin_key(value: &str) -> crate::plugin::PluginKey {
-    crate::plugin::PluginKey::parse(value).expect("static plugin key")
+    value.parse().expect("static plugin key")
 }
 
 fn static_entry(config: serde_json::Value) -> ConfiguredPlugin {

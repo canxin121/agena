@@ -383,7 +383,7 @@ impl ToolPermissionConfig {
         }
         for (tag, mode) in &self.tags {
             if let Some(tag) = ToolTag::from_tag(tag) {
-                base.tag_modes.insert(tag.as_str().to_string(), *mode);
+                base.tag_modes.insert(tag.as_ref().to_string(), *mode);
             }
         }
         for (tool_name, mode) in self.names.iter().chain(self.plugin.iter()) {

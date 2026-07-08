@@ -122,8 +122,8 @@ impl SessionManager {
             EventKind::RunStarted(RunStarted {
                 run_id: user_run_id,
                 source: RunSource::User,
-                model_id: options.model.model_id.as_str().into(),
-                provider_id: options.model.provider_id.as_str().into(),
+                model_id: options.model.model_id.as_ref().into(),
+                provider_id: options.model.provider_id.as_ref().into(),
                 request_digest: None,
             }),
             EventKind::UserMessageAppended(UserMessageAppended {

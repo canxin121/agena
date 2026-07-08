@@ -108,7 +108,7 @@ impl MultiAdapterProvider {
             ));
         }
 
-        self.adapter(adapter_id.as_str())?;
+        self.adapter(adapter_id.as_ref())?;
         Ok((
             adapter_id,
             target_model,
@@ -133,7 +133,7 @@ impl MultiAdapterProvider {
     > {
         let (adapter_id, target_model, native_tools, definition) =
             self.resolve_route(adapter_id, model)?;
-        let adapter = self.adapter(adapter_id.as_str())?;
+        let adapter = self.adapter(adapter_id.as_ref())?;
         Ok((adapter_id, target_model, native_tools, definition, adapter))
     }
 
@@ -373,7 +373,7 @@ impl ModelRuntime for MultiAdapterProvider {
 
         for (adapter_id, adapter) in &self.adapters {
             let adapter_id = AdapterId::new(adapter_id.clone());
-            let listed = if self.configured_only_adapters.contains(adapter_id.as_str()) {
+            let listed = if self.configured_only_adapters.contains(adapter_id.as_ref()) {
                 Vec::new()
             } else {
                 match adapter.list_models().await {
@@ -412,7 +412,7 @@ impl ModelRuntime for MultiAdapterProvider {
 
             let adapter_id = AdapterId::new(adapter_id.clone());
             let target_model = ModelId::new(target_model.clone());
-            let adapter = self.adapter(adapter_id.as_str())?;
+            let adapter = self.adapter(adapter_id.as_ref())?;
             visible.push(self.synthesize_model(
                 &target_model,
                 &adapter_id,

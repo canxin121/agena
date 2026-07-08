@@ -357,7 +357,10 @@ fn fallback_score(
         } else if compact_name.contains(compact_token.as_str()) {
             score += 6;
         }
-        if compact_tags.iter().any(|tag| tag.contains(compact_token.as_str())) {
+        if compact_tags
+            .iter()
+            .any(|tag| tag.contains(compact_token.as_str()))
+        {
             score += 5;
         }
         if is_subsequence(compact_token.as_str(), compact_name.as_str()) {
@@ -447,14 +450,21 @@ mod tests {
     #[test]
     fn search_matches_compact_tool_names() {
         let docs = vec![
-            doc("agena.fs/apply_patch", "Apply a patch to files", &["mutating"]),
+            doc(
+                "agena.fs/apply_patch",
+                "Apply a patch to files",
+                &["mutating"],
+            ),
             doc("agena.fs/read", "Read a file", &["read_only"]),
         ];
 
         let results =
             search_tool_catalog(&docs, "applypatch", 5).expect("compact search should succeed");
 
-        assert_eq!(results.first().map(|doc| doc.name.as_str()), Some("agena.fs/apply_patch"));
+        assert_eq!(
+            results.first().map(|doc| doc.name.as_str()),
+            Some("agena.fs/apply_patch")
+        );
     }
 
     #[test]
@@ -464,9 +474,11 @@ mod tests {
             doc("agena.process/logs", "Read process logs", &["read_only"]),
         ];
 
-        let results =
-            search_tool_catalog(&docs, "rn", 5).expect("fuzzy search should succeed");
+        let results = search_tool_catalog(&docs, "rn", 5).expect("fuzzy search should succeed");
 
-        assert_eq!(results.first().map(|doc| doc.name.as_str()), Some("agena.process/run"));
+        assert_eq!(
+            results.first().map(|doc| doc.name.as_str()),
+            Some("agena.process/run")
+        );
     }
 }

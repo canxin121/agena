@@ -1354,15 +1354,13 @@ impl AgenaCli {
                         "DRY-RUN: would install {} v{} ({}) into {}",
                         outcome.plugin_id,
                         outcome.version,
-                        outcome.kind.as_str(),
+                        outcome.kind,
                         outcome.config_path.display()
                     );
                 } else {
                     println!(
                         "Installed {} v{} ({}); restart agena to load.",
-                        outcome.plugin_id,
-                        outcome.version,
-                        outcome.kind.as_str()
+                        outcome.plugin_id, outcome.version, outcome.kind
                     );
                 }
                 Ok(())
@@ -1393,7 +1391,7 @@ impl AgenaCli {
                             "{} v{} ({}) -> {}",
                             record.plugin_id,
                             record.version,
-                            record.kind.as_str(),
+                            record.kind,
                             record.binary_path.display()
                         );
                     }
@@ -2275,7 +2273,7 @@ impl AgenaCli {
                 session_id: entry.session_id,
                 path: entry.path.display().to_string(),
                 branch: entry.branch,
-                backend: entry.backend.as_str().to_string(),
+                backend: entry.backend.to_string(),
                 created_here: entry.created_here,
             })
             .collect::<Vec<_>>();
@@ -2289,7 +2287,7 @@ impl AgenaCli {
                     branch: entry.branch,
                     backend: entry
                         .backend
-                        .map(|backend: crate::tool::SnapshotBackend| backend.as_str().to_string()),
+                        .map(|backend: crate::tool::SnapshotBackend| backend.to_string()),
                     registered_with_git: entry.registered_with_git,
                     registered_with_rift: entry.registered_with_rift,
                     stale,
@@ -2303,7 +2301,7 @@ impl AgenaCli {
                 capabilities: SnapshotCapabilitiesOutput {
                     preferred_backend: capabilities
                         .preferred_backend
-                        .map(|backend: crate::tool::SnapshotBackend| backend.as_str().to_string()),
+                        .map(|backend: crate::tool::SnapshotBackend| backend.to_string()),
                     git: SnapshotBackendSupportOutput {
                         available: capabilities.git.available,
                         detail: capabilities.git.detail,
@@ -2878,9 +2876,9 @@ impl McpServerBackend for AgenaMcpBackend {
                 let summary = tool.summary_text().map(ToString::to_string);
                 let before_help = tool.before_help_text().map(ToString::to_string);
                 let after_help = tool.after_help_text().map(ToString::to_string);
-                let input_schema = tool.sanitized_input_schema();
+                let input_schema = tool.input_schema();
                 ToolDescriptor {
-                    name: tool.model_name(),
+                    name: crate::tool::tool_value_name(tool.model_name().as_str()),
                     aliases: Vec::new(),
                     description: summary,
                     before_help,
@@ -3059,7 +3057,8 @@ impl AgenaMcpBackend {
             .publish(
                 Default::default(),
                 crate::event::EventKind::PluginEvent(crate::event::PluginEventPayload {
-                    plugin_id: crate::plugin::PluginKey::parse("agena.mcp_server")
+                    plugin_id: "agena.mcp_server"
+                        .parse::<crate::plugin::PluginKey>()
                         .expect("static plugin key"),
                     kind_label: "mcp_tool_call".to_owned(),
                     payload,
@@ -3207,7 +3206,8 @@ fn permission_action_from_args(
             .network_port
             .map(|port| format!("{target}:{port}"))
             .unwrap_or_else(|| target.to_string());
-        let parsed = crate::permission::NetworkTarget::parse(&parse_target)
+        let parsed: crate::permission::NetworkTarget = parse_target
+            .parse()
             .map_err(|err| AppError::Config(format!("invalid network target: {err}")))?;
         return Ok(PermissionAction::NetworkAccess {
             target: target.to_string(),
@@ -3566,19 +3566,19 @@ fn validate_plugin_manifest_value(
             Some(format!("{path}.schema_version")),
         );
     }
+    if manifest.namespace.trim().is_empty() {
+        push_error(
+            output,
+            "manifest.namespace.empty",
+            "manifest namespace must not be empty",
+            Some(format!("{path}.namespace")),
+        );
+    }
     if manifest.name.trim().is_empty() {
         push_error(
             output,
             "manifest.name.empty",
             "manifest name must not be empty",
-            Some(format!("{path}.name")),
-        );
-    }
-    if manifest.name.contains('/') {
-        push_error(
-            output,
-            "manifest.name.invalid",
-            "manifest name must not contain `/`; model-visible tool names use dotted segments",
             Some(format!("{path}.name")),
         );
     }
@@ -3594,6 +3594,7 @@ fn validate_plugin_manifest_value(
     if let Some(tools) = value.get("tools").and_then(|v| v.as_array()) {
         for (idx, tool_value) in tools.iter().enumerate() {
             validate_tool_manifest_value(
+                &manifest.namespace,
                 &manifest.name,
                 &manifest.tools.get(idx),
                 tool_value,
@@ -3632,6 +3633,7 @@ fn validate_plugin_manifest_value(
 }
 
 fn validate_tool_manifest_value(
+    plugin_namespace: &str,
     plugin_name: &str,
     parsed_tool: &Option<&crate::plugin::ToolDefinition>,
     value: &serde_json::Value,
@@ -3731,6 +3733,7 @@ fn validate_tool_manifest_value(
     }
     if let Some(tool) = parsed_tool.as_ref() {
         validate_tool_segment(
+            plugin_namespace,
             plugin_name,
             tool.name.as_str(),
             &format!("{path}.name"),
@@ -3747,7 +3750,8 @@ fn validate_tool_manifest_value(
 }
 
 fn validate_tool_segment(
-    plugin_name: &str,
+    _plugin_namespace: &str,
+    _plugin_name: &str,
     tool_name: &str,
     path: &str,
     output: &mut PluginValidationMessages,
@@ -3757,23 +3761,6 @@ fn validate_tool_segment(
             output,
             "tool.name.empty",
             "tool name must not be empty",
-            Some(path),
-        );
-    }
-    if tool_name.contains('/') {
-        push_error(
-            output,
-            "tool.name.invalid",
-            "tool name must not contain `/`; model-visible tool names use dotted segments",
-            Some(path),
-        );
-    }
-    let model_name = safe_model_tool_name(plugin_name, tool_name);
-    if model_name == "tool" || model_name.ends_with(".tool") {
-        push_warning(
-            output,
-            "tool.name.normalized_empty",
-            "tool name normalizes to a generic model-visible name",
             Some(path),
         );
     }
@@ -3787,15 +3774,12 @@ fn validate_tool_name_collisions(
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
     for (idx, tool) in manifest.tools.iter().enumerate() {
         let raw_name = tool.name.as_str();
-        let model_name = safe_model_tool_name(manifest.name.as_str(), raw_name);
         let location = format!("{path}.tools[{idx}].name");
-        if let Some(existing) = seen.insert(model_name.clone(), location.clone()) {
+        if let Some(existing) = seen.insert(raw_name.to_string(), location.clone()) {
             push_error(
                 output,
                 "tool.name.collision",
-                format!(
-                    "`{raw_name}` normalizes to model-visible name `{model_name}`, colliding with {existing}"
-                ),
+                format!("duplicate tool name `{raw_name}`, colliding with {existing}"),
                 Some(location),
             );
         }
@@ -4351,21 +4335,6 @@ fn warn_marketplace_fields(
             );
         }
     }
-}
-
-fn safe_model_tool_name(plugin_name: &str, tool_name: &str) -> String {
-    if plugin_name.trim().is_empty() || tool_name.trim().is_empty() {
-        return "tool".to_string();
-    }
-    if plugin_name.contains('/') || tool_name.contains('/') {
-        return "tool".to_string();
-    }
-    let Ok(plugin_key) = crate::plugin::PluginKey::parse(plugin_name) else {
-        return "tool".to_string();
-    };
-    crate::plugin::ToolKey::new(plugin_key, tool_name.to_string())
-        .map(|tool_key| tool_key.to_model_string())
-        .unwrap_or_else(|_| "tool".to_string())
 }
 
 fn push_error(

@@ -847,18 +847,18 @@ impl WebPlugin {
         let mut results = Vec::new();
 
         for engine in engines {
-            attempted_engines.push(engine.as_str().to_string());
+            attempted_engines.push(engine.to_string());
             match self.search_with_engine(query, limit, engine, input).await {
                 Ok(engine_results) => {
                     if explicit_engine || !engine_results.is_empty() {
-                        selected_engine = engine.as_str().to_string();
+                        selected_engine = engine.to_string();
                         results = engine_results;
                         break;
                     }
                 }
                 Err(err) if explicit_engine => return Err(err),
                 Err(err) => {
-                    last_error = Some(format!("{}: {}", engine.as_str(), err));
+                    last_error = Some(format!("{engine}: {err}"));
                 }
             }
         }

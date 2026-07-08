@@ -1,3 +1,5 @@
+use std::fmt;
+
 use super::*;
 
 use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
@@ -72,12 +74,18 @@ pub(crate) enum ExitSnapshotAction {
     Remove,
 }
 
-impl ExitSnapshotAction {
-    pub(crate) fn as_str(self) -> &'static str {
+impl AsRef<str> for ExitSnapshotAction {
+    fn as_ref(&self) -> &str {
         match self {
             Self::Keep => "keep",
             Self::Remove => "remove",
         }
+    }
+}
+
+impl fmt::Display for ExitSnapshotAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())
     }
 }
 

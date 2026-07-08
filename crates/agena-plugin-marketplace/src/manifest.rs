@@ -1,7 +1,7 @@
 //! Marketplace registry index + per-version manifest. Static JSON shape that
 //! a plugin author publishes, and a host downloads to decide what to install.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt};
 
 use agena_plugin_host::PluginSignature;
 use serde::{Deserialize, Serialize};
@@ -95,8 +95,8 @@ pub enum PluginKind {
     Wasm,
 }
 
-impl PluginKind {
-    pub fn as_str(self) -> &'static str {
+impl AsRef<str> for PluginKind {
+    fn as_ref(&self) -> &str {
         match self {
             Self::Cdylib => "cdylib",
             Self::Stdio => "stdio",
@@ -104,7 +104,15 @@ impl PluginKind {
             Self::Wasm => "wasm",
         }
     }
+}
 
+impl fmt::Display for PluginKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())
+    }
+}
+
+impl PluginKind {
     pub fn artifact_extension(self) -> &'static str {
         match self {
             Self::Cdylib => {

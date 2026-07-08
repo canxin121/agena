@@ -4,9 +4,9 @@
 //! Packaged skills from `agena-skills` are also projected here so a fresh
 //! install has workflow-like tools before any user-defined content exists.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use std::{collections::BTreeMap, fmt};
 
 use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
 use agena_skills::discovery::{default_command_roots, default_roots, scan, scan_commands};
@@ -28,12 +28,18 @@ enum DiscoveredToolKind {
     Command,
 }
 
-impl DiscoveredToolKind {
-    fn as_str(self) -> &'static str {
+impl AsRef<str> for DiscoveredToolKind {
+    fn as_ref(&self) -> &str {
         match self {
             Self::Skill => "skill",
             Self::Command => "command",
         }
+    }
+}
+
+impl fmt::Display for DiscoveredToolKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())
     }
 }
 
@@ -248,7 +254,7 @@ impl SkillsPlugin {
     }
 
     fn tool_description(discovered_tool: &DiscoveredTool) -> String {
-        let category = discovered_tool.kind.as_str();
+        let category = discovered_tool.kind.as_ref();
         if discovered_tool
             .skill
             .frontmatter
@@ -284,7 +290,7 @@ impl SkillsPlugin {
         &self,
         input: ToolDefinitionInput,
     ) -> SdkResult<Option<ToolDefinitionPatch>> {
-        if input.plugin_key().to_model_string() != SKILLS_PLUGIN_ID {
+        if input.plugin_key().to_string() != SKILLS_PLUGIN_ID {
             return Ok(None);
         }
         let tools = self.discovered_tools()?;
@@ -303,7 +309,7 @@ impl SkillsPlugin {
                 format!(
                     "- {} [{}]: {}",
                     name,
-                    tool.kind.as_str(),
+                    tool.kind,
                     Self::tool_description(tool)
                 )
             })
@@ -358,23 +364,23 @@ impl SkillsPlugin {
                 lines.push(format!(
                     "- {} [{}]: {}",
                     name,
-                    tool.kind.as_str(),
+                    tool.kind,
                     Self::tool_description(tool)
                 ));
             } else {
-                lines.push(format!("- {} [{}]", name, tool.kind.as_str()));
+                lines.push(format!("- {} [{}]", name, tool.kind));
             }
         }
         let payload = serde_json::json!({
             "tools": entries.iter().map(|(name, tool)| serde_json::json!({
                 "name": name,
-                "kind": tool.kind.as_str(),
+                "kind": tool.kind.to_string(),
                 "summary": Self::tool_description(tool),
             })).collect::<Vec<_>>(),
             "total": total,
             "offset": offset,
             "returned": entries.len(),
-            "kind": kind_filter.map(DiscoveredToolKind::as_str),
+            "kind": kind_filter.map(|kind| kind.to_string()),
         });
         Ok(ToolInvokeOutput::from_parts(
             "skills list",
@@ -396,13 +402,11 @@ impl SkillsPlugin {
         let body = discovered_tool.skill.body.trim();
         let text = format!(
             "Name: {name}\nKind: {}\nSummary: {}\n\nBody:\n{}",
-            discovered_tool.kind.as_str(),
-            summary,
-            body
+            discovered_tool.kind, summary, body
         );
         let payload = serde_json::json!({
             "name": name,
-            "kind": discovered_tool.kind.as_str(),
+            "kind": discovered_tool.kind.to_string(),
             "summary": summary,
             "body": body,
         });
@@ -412,10 +416,7 @@ impl SkillsPlugin {
             Some(payload),
             std::collections::BTreeMap::from([
                 ("name".to_string(), name.to_string()),
-                (
-                    "kind".to_string(),
-                    discovered_tool.kind.as_str().to_string(),
-                ),
+                ("kind".to_string(), discovered_tool.kind.to_string()),
             ]),
             Vec::new(),
         ))
@@ -436,7 +437,7 @@ impl SkillsPlugin {
                 ("workflow".to_string(), name.to_string()),
                 (
                     "skill_tool_kind".to_string(),
-                    discovered_tool.kind.as_str().to_string(),
+                    discovered_tool.kind.to_string(),
                 ),
             ]),
             Vec::new(),

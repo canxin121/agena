@@ -2,9 +2,9 @@
 //!
 //! User-defined subagents are configured in the shared `~/agena/agena.json`.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::{collections::BTreeMap, fmt};
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -18,13 +18,19 @@ pub enum AgentScope {
     Default,
 }
 
-impl AgentScope {
-    pub const fn as_str(self) -> &'static str {
+impl AsRef<str> for AgentScope {
+    fn as_ref(&self) -> &str {
         match self {
             Self::Project => "project",
             Self::User => "user",
             Self::Default => "default",
         }
+    }
+}
+
+impl fmt::Display for AgentScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())
     }
 }
 
@@ -480,7 +486,7 @@ fn default_profile(
             defaults: AgentSelectionConfig::default(),
         },
         prompt: format!(
-            "{prompt} When the user asks what tools are available, whether a tool exists, or how to inspect tool usage, do not answer from memory. Inspect the live tools gateway first. Use `agena.tools/help` for exact tool schemas and `agena.tools/call` to execute tools through the tools gateway."
+            "{prompt} When the user asks what tools are available, whether a tool exists, or how to inspect tool usage, do not answer from memory. Inspect the live tools gateway first. Use `tools_help` for exact tool schemas and `tools_call` to execute tools through the tools gateway."
         ),
         source_path: None,
         scope: AgentScope::Default,

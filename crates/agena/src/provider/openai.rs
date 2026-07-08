@@ -9,7 +9,7 @@ use std::{
 use tokio::sync::Mutex;
 
 use super::copilot_models::CopilotModelExtension;
-use super::protocol_ids::{self, ProviderItemId, ProviderStreamKey};
+use super::protocol_ids;
 use super::tool_stream::{
     ToolStreamAccumulator, ToolStreamInput, ToolStreamInputKind, ToolStreamUpdate,
 };
@@ -374,7 +374,7 @@ impl OpenAiAdapter {
     fn is_dashscope_reasoning_model(&self, model: &ModelId) -> bool {
         self.is_openai_compatible_family()
             && self.is_dashscope_compatible()
-            && Self::dashscope_reasoning_profile(model.as_str()).is_some()
+            && Self::dashscope_reasoning_profile(model.as_ref()).is_some()
     }
 
     fn assistant_reasoning_field_for_model(&self, model: &ModelId) -> Option<&'static str> {
@@ -392,7 +392,7 @@ impl OpenAiAdapter {
             return;
         }
 
-        let Some(profile) = Self::dashscope_reasoning_profile(model.as_str()) else {
+        let Some(profile) = Self::dashscope_reasoning_profile(model.as_ref()) else {
             return;
         };
 
@@ -429,7 +429,7 @@ impl OpenAiAdapter {
 
     fn dashscope_thinking_modes(model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
         let mut modes = BTreeMap::new();
-        match Self::dashscope_reasoning_profile(model.as_str()) {
+        match Self::dashscope_reasoning_profile(model.as_ref()) {
             Some(DashscopeReasoningProfile::Toggleable) => {
                 modes.insert(
                     "no-thinking".to_owned(),
@@ -2204,7 +2204,7 @@ impl OpenAiAdapter {
                                 Self::flush_assistant_responses_text(input, &mut text_chunks);
                                 Self::flush_responses_function_output(input, &mut pending_output);
                                 if let Some(call_id) =
-                                    responses_input_call_id(tool_call_id.as_str())
+                                    responses_input_call_id(tool_call_id.as_ref())
                                 {
                                     pending_output = Some((call_id, output_json, Vec::new()));
                                 }
@@ -2222,7 +2222,7 @@ impl OpenAiAdapter {
                         output_json,
                         ..
                     } = part
-                        && let Some(call_id) = responses_input_call_id(tool_call_id.as_str())
+                        && let Some(call_id) = responses_input_call_id(tool_call_id.as_ref())
                     {
                         input.push(OpenAiResponsesInputItem::FunctionCallOutput(
                             OpenAiFunctionCallOutputItem {
@@ -2677,7 +2677,7 @@ impl ModelRuntime for OpenAiAdapter {
         model: &ModelId,
     ) -> ModelCapabilities {
         let mut capabilities = crate::provider::default_capability_registry()
-            .capabilities_for_family(self.capability_family, model.as_str());
+            .capabilities_for_family(self.capability_family, model.as_ref());
         let _ = adapter_id;
         if self.is_dashscope_reasoning_model(model) {
             capabilities.reasoning = CapabilitySupport::Supported;
@@ -2693,7 +2693,7 @@ impl ModelRuntime for OpenAiAdapter {
         let modes = crate::provider::default_model_mode_registry().thinking_modes_for_family(
             self.capability_family,
             adapter_id,
-            model.as_str(),
+            model.as_ref(),
             &self.model_metadata_for_adapter(adapter_id, model),
         );
         if modes.is_empty() && self.is_dashscope_reasoning_model(model) {
@@ -2743,7 +2743,7 @@ impl ModelRuntime for OpenAiAdapter {
             ),
             (
                 "uses_responses",
-                self.should_use_responses(model.as_str()).to_string(),
+                self.should_use_responses(model.as_ref()).to_string(),
             ),
             (
                 "supports_top_level_prompt_cache",
@@ -2815,7 +2815,7 @@ impl ModelRuntime for OpenAiAdapter {
         let native_tools_require_responses =
             Self::native_tools_request_requires_responses(&request);
 
-        if !self.should_use_responses(model.as_str()) {
+        if !self.should_use_responses(model.as_ref()) {
             if native_tools_require_responses {
                 return Err(AppError::Config(format!(
                     "provider `{}` model `{}` configures native hosted tools, but the selected OpenAI API mode resolves to chat; switch this provider/model to Responses mode",
@@ -2829,7 +2829,7 @@ impl ModelRuntime for OpenAiAdapter {
 
         let input = self.responses_input_for_request(&request)?;
         let tool_plan = self.responses_tool_plan_for_request(&request)?;
-        let reasoning = Self::responses_reasoning_config(&request, model.as_str());
+        let reasoning = Self::responses_reasoning_config(&request, model.as_ref());
 
         let body = OpenAiResponsesRequest {
             model: model.to_string(),
@@ -2915,7 +2915,7 @@ impl ModelRuntime for OpenAiAdapter {
         if self.backend != OpenAiBackend::Api
             || self.profile != OpenAiProfile::Standard
             || self.is_openai_compatible_family()
-            || !self.should_use_responses(model.as_str())
+            || !self.should_use_responses(model.as_ref())
         {
             return Ok(None);
         }
@@ -2933,7 +2933,7 @@ impl ModelRuntime for OpenAiAdapter {
             include: (!tool_plan.include.is_empty()).then_some(tool_plan.include),
             parallel_tool_calls: Self::responses_parallel_tool_calls(&request),
             prompt_cache_key: request.prompt_cache_key.clone(),
-            reasoning: Self::responses_reasoning_config(&request, model.as_str()),
+            reasoning: Self::responses_reasoning_config(&request, model.as_ref()),
             service_tier: Self::responses_service_tier(&request),
             text: Self::responses_text_config(&request),
         };
@@ -2980,7 +2980,7 @@ impl ModelRuntime for OpenAiAdapter {
                 .await;
         }
 
-        if !self.should_use_responses(model.as_str()) {
+        if !self.should_use_responses(model.as_ref()) {
             if native_tools_require_responses {
                 return Err(AppError::Config(format!(
                     "provider `{}` model `{}` configures native hosted tools, but the selected OpenAI API mode resolves to chat; switch this provider/model to Responses mode",
@@ -2994,7 +2994,7 @@ impl ModelRuntime for OpenAiAdapter {
 
         let input = self.responses_input_for_request(&request)?;
         let tool_plan = self.responses_tool_plan_for_request(&request)?;
-        let reasoning = Self::responses_reasoning_config(&request, model.as_str());
+        let reasoning = Self::responses_reasoning_config(&request, model.as_ref());
 
         let body = OpenAiResponsesRequest {
             model: model.to_string(),
@@ -3357,7 +3357,7 @@ fn validate_responses_input(input: &[OpenAiResponsesInputItem]) -> Result<(), Ap
                 validate_responses_message(index, message)?;
             }
             OpenAiResponsesInputItem::FunctionCall(item) => {
-                if !protocol_ids::valid_openai_responses_call_id(item.call_id.as_str()) {
+                if !protocol_ids::valid_openai_responses_call_id(item.call_id.as_ref()) {
                     return Err(AppError::Internal(format!(
                         "invalid OpenAI Responses function_call call_id at input[{index}]"
                     )));
@@ -3370,12 +3370,12 @@ fn validate_responses_input(input: &[OpenAiResponsesInputItem]) -> Result<(), Ap
                 seen_tool_calls.insert(item.call_id.clone());
             }
             OpenAiResponsesInputItem::FunctionCallOutput(item) => {
-                if !protocol_ids::valid_openai_responses_call_id(item.call_id.as_str()) {
+                if !protocol_ids::valid_openai_responses_call_id(item.call_id.as_ref()) {
                     return Err(AppError::Internal(format!(
                         "invalid OpenAI Responses function_call_output call_id at input[{index}]"
                     )));
                 }
-                if !seen_tool_calls.contains(item.call_id.as_str()) {
+                if !seen_tool_calls.contains::<str>(item.call_id.as_ref()) {
                     return Err(AppError::Internal(format!(
                         "OpenAI Responses function_call_output at input[{index}] references unknown call_id `{}`",
                         item.call_id
@@ -3491,12 +3491,12 @@ struct OpenAiResponsesWireToolName {
 fn responses_wire_tool_name(name: &str) -> OpenAiResponsesWireToolName {
     responses_native_tool_name(name).unwrap_or_else(|| OpenAiResponsesWireToolName {
         namespace: None,
-        name: crate::tool::model_safe_tool_name(name),
+        name: name.trim().to_string(),
     })
 }
 
 fn openai_chat_tool_name(name: &str) -> String {
-    crate::tool::model_safe_tool_name(name)
+    name.trim().to_string()
 }
 
 fn responses_native_tool_name(name: &str) -> Option<OpenAiResponsesWireToolName> {
@@ -3549,7 +3549,7 @@ fn responses_tool_stream_input(
     let stream_key_candidates = event
         .stream_key_candidates(provider_id)?
         .into_iter()
-        .filter_map(ProviderStreamKey::new)
+        .filter_map(|value| value.parse().ok())
         .collect::<Vec<_>>();
     if stream_key_candidates.is_empty() {
         return Err(AppError::Provider(format!(
@@ -3580,7 +3580,7 @@ fn responses_tool_stream_input(
             utils::ResponsesToolEventKind::Done => ToolStreamInputKind::Finish,
         },
         stream_key_candidates,
-        provider_item_id: event.item_id.and_then(ProviderItemId::new),
+        provider_item_id: event.item_id.and_then(|value| value.parse().ok()),
         model_call_id,
         name,
         arguments: event.arguments,
@@ -4393,12 +4393,12 @@ fn responses_finish_reason_with_tool_calls(
 fn responses_output_call_id(call_id: Option<&str>, item_id: Option<&str>) -> Option<String> {
     call_id
         .and_then(protocol_ids::openai_responses_call_id)
-        .map(|id| id.into_string())
+        .map(String::from)
         .or_else(|| item_id.and_then(responses_input_call_id))
 }
 
 fn responses_input_call_id(raw: &str) -> Option<String> {
-    protocol_ids::openai_responses_call_id(raw).map(|id| id.into_string())
+    protocol_ids::openai_responses_call_id(raw).map(String::from)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

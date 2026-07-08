@@ -1,38 +1,50 @@
-use std::fmt;
+use std::{fmt, str::FromStr};
 
 const OPENAI_RESPONSES_CALL_ID_MAX_CHARS: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct ProviderStreamKey(String);
 
-impl ProviderStreamKey {
-    pub(crate) fn new(value: impl Into<String>) -> Option<Self> {
-        let value = value.into();
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| Self(trimmed.to_owned()))
-    }
-
-    pub(crate) fn as_str(&self) -> &str {
+impl AsRef<str> for ProviderStreamKey {
+    fn as_ref(&self) -> &str {
         self.0.as_str()
+    }
+}
+
+impl FromStr for ProviderStreamKey {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let trimmed = value.trim();
+        (!trimmed.is_empty())
+            .then(|| Self(trimmed.to_owned()))
+            .ok_or(())
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct ModelToolCallId(String);
 
-impl ModelToolCallId {
-    pub(crate) fn new(value: impl Into<String>) -> Option<Self> {
-        let value = value.into();
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| Self(trimmed.to_owned()))
-    }
-
-    pub(crate) fn as_str(&self) -> &str {
+impl AsRef<str> for ModelToolCallId {
+    fn as_ref(&self) -> &str {
         self.0.as_str()
     }
+}
 
-    pub(crate) fn into_string(self) -> String {
-        self.0
+impl From<ModelToolCallId> for String {
+    fn from(value: ModelToolCallId) -> Self {
+        value.0
+    }
+}
+
+impl FromStr for ModelToolCallId {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let trimmed = value.trim();
+        (!trimmed.is_empty())
+            .then(|| Self(trimmed.to_owned()))
+            .ok_or(())
     }
 }
 
@@ -45,11 +57,20 @@ impl fmt::Display for ModelToolCallId {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct ProviderItemId(String);
 
-impl ProviderItemId {
-    pub(crate) fn new(value: impl Into<String>) -> Option<Self> {
-        let value = value.into();
+impl AsRef<str> for ProviderItemId {
+    fn as_ref(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl FromStr for ProviderItemId {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
         let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| Self(trimmed.to_owned()))
+        (!trimmed.is_empty())
+            .then(|| Self(trimmed.to_owned()))
+            .ok_or(())
     }
 }
 
@@ -65,12 +86,12 @@ pub(crate) fn openai_responses_call_id(raw: &str) -> Option<ModelToolCallId> {
         return None;
     }
     if trimmed.chars().count() <= OPENAI_RESPONSES_CALL_ID_MAX_CHARS {
-        return ModelToolCallId::new(trimmed);
+        return trimmed.parse().ok();
     }
 
     let hash = blake3::hash(trimmed.as_bytes());
     let hex = hash.to_hex().to_string();
-    ModelToolCallId::new(format!("call_{}", &hex[..32]))
+    format!("call_{}", &hex[..32]).parse().ok()
 }
 
 pub(crate) fn valid_openai_responses_call_id(raw: &str) -> bool {

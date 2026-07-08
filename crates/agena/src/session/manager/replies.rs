@@ -200,7 +200,7 @@ fn mode_request_override_for_adapter(
     resolved_adapter_id: Option<&crate::model::AdapterId>,
 ) -> ModelSpeedModeRequestOverride {
     let mut merged = request_override.clone();
-    if let Some(adapter_id) = resolved_adapter_id.map(crate::model::AdapterId::as_str)
+    if let Some(adapter_id) = resolved_adapter_id.map(AsRef::<str>::as_ref)
         && let Some(adapter_override) = adapter_overrides.get(adapter_id)
     {
         merged = merged.merged_with(adapter_override);
@@ -368,7 +368,7 @@ impl SessionManager {
             .iter()
             .find(|part| {
                 part.kind == crate::message::PartKind::Operation
-                    && part.operation_id.as_deref() == Some(tool_call_id.as_str())
+                    && part.operation_id.as_deref() == Some(tool_call_id.as_ref())
             })
             .cloned();
         let session = self
@@ -938,8 +938,8 @@ impl SessionManager {
             let continuation_supported =
                 state.processor.supports_prompt_continuation(&options.model);
             let prompt_request_options = PromptRequestOptions {
-                provider_id: options.model.provider_id.as_str(),
-                model_id: options.model.model_id.as_str(),
+                provider_id: options.model.provider_id.as_ref(),
+                model_id: options.model.model_id.as_ref(),
                 system: request_system.as_deref(),
                 temperature: options.temperature,
                 max_output_tokens: options.max_output_tokens,
@@ -986,7 +986,7 @@ impl SessionManager {
                 prompt_window_generation = prepared.prompt_window_generation,
                 prompt_cache_key = %prepared.prompt_cache_key,
                 previous_response_id_present = prepared.previous_response_id.is_some(),
-                continuation_reason = prepared.continuation_reason.as_str(),
+                continuation_reason = prepared.continuation_reason.as_ref(),
                 provider_request_shape_fingerprint = provider_request_shape_fingerprint
                     .as_deref()
                     .unwrap_or(""),
@@ -1114,8 +1114,8 @@ impl SessionManager {
                         }
                     };
                     let anchored_prompt_request_options = PromptRequestOptions {
-                        provider_id: options.model.provider_id.as_str(),
-                        model_id: options.model.model_id.as_str(),
+                        provider_id: options.model.provider_id.as_ref(),
+                        model_id: options.model.model_id.as_ref(),
                         system: options.system.as_deref(),
                         temperature: options.temperature,
                         max_output_tokens: options.max_output_tokens,
@@ -1154,8 +1154,8 @@ impl SessionManager {
                         });
                     } else {
                         session.runtime.clear_provider_anchor(
-                            options.model.provider_id.as_str(),
-                            options.model.model_id.as_str(),
+                            options.model.provider_id.as_ref(),
+                            options.model.model_id.as_ref(),
                         );
                     }
                     drop(request_tools);
@@ -1177,8 +1177,8 @@ impl SessionManager {
                     run_events.push(EventKind::RunStarted(RunStarted {
                         run_id,
                         source: run_source,
-                        model_id: options.model.model_id.as_str().into(),
-                        provider_id: options.model.provider_id.as_str().into(),
+                        model_id: options.model.model_id.as_ref().into(),
+                        provider_id: options.model.provider_id.as_ref().into(),
                         request_digest: None,
                     }));
                     run_events.extend(result.history_items);
@@ -2537,7 +2537,7 @@ impl SessionManager {
         let provider_registry = execution.processor.provider_registry();
         let resolved_adapter_id = options.model.adapter_id.clone().or_else(|| {
             provider_registry
-                .get(options.model.provider_id.as_str())
+                .get(options.model.provider_id.as_ref())
                 .and_then(|provider| provider.default_adapter().cloned())
         });
 
@@ -2858,14 +2858,14 @@ impl SessionManager {
             .map(str::trim)
             .filter(|value| !value.is_empty());
         let provider_changed =
-            requested_provider.is_some_and(|provider| provider != base_model.provider_id.as_str());
-        let provider_id = requested_provider.unwrap_or(base_model.provider_id.as_str());
+            requested_provider.is_some_and(|provider| provider != base_model.provider_id.as_ref());
+        let provider_id = requested_provider.unwrap_or(base_model.provider_id.as_ref());
         let base_adapter = (!provider_changed)
-            .then(|| base_model.adapter_id.as_ref().map(|value| value.as_str()))
+            .then(|| base_model.adapter_id.as_ref().map(AsRef::<str>::as_ref))
             .flatten();
         let adapter_id = requested_adapter.or(base_adapter);
         let base_model_id = (!provider_changed && requested_adapter.is_none())
-            .then(|| base_model.model_id.as_str());
+            .then(|| base_model.model_id.as_ref());
         let model_id = requested_model.or(base_model_id);
         provider_registry.resolve_model_selection(provider_id, adapter_id, model_id)
     }

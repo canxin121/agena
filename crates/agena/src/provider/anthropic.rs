@@ -273,7 +273,7 @@ impl AnthropicAdapter {
     ) -> Result<CompletionResponse, AppError> {
         let fallback_model = request.model.clone();
         let stream = ModelRuntime::complete_stream(self, request).await?;
-        utils::aggregate_stream(self.id.as_str(), fallback_model, stream).await
+        utils::aggregate_stream(self.id.as_ref(), fallback_model, stream).await
     }
 
     fn content_to_blocks(message: &Message) -> Vec<AnthropicTextBlock> {
@@ -933,7 +933,7 @@ impl ModelRuntime for AnthropicAdapter {
         let model = request.model.clone();
         let stream_fallback_request = request.clone();
 
-        let thinking_parts = anthropic_thinking_parts(model.as_str(), request.thinking.as_ref());
+        let thinking_parts = anthropic_thinking_parts(model.as_ref(), request.thinking.as_ref());
         let include_thinking = thinking_parts.include_thinking();
 
         let mut system_chunks = Vec::new();
@@ -1104,7 +1104,7 @@ impl ModelRuntime for AnthropicAdapter {
             messages.as_mut_slice(),
         );
 
-        let thinking_parts = anthropic_thinking_parts(model.as_str(), request.thinking.as_ref());
+        let thinking_parts = anthropic_thinking_parts(model.as_ref(), request.thinking.as_ref());
         let body = AnthropicMessagesRequest {
             model: model.to_string(),
             max_tokens: request.max_output_tokens.unwrap_or(4096),
@@ -1167,7 +1167,7 @@ impl ModelRuntime for AnthropicAdapter {
         let provider_id = ProviderId::new(self.id.as_str());
         let model_name = model;
         let include_thinking =
-            anthropic_thinking_parts(model_name.as_str(), request.thinking.as_ref())
+            anthropic_thinking_parts(model_name.as_ref(), request.thinking.as_ref())
                 .include_thinking();
 
         let stream = async_stream::try_stream! {
@@ -1179,13 +1179,13 @@ impl ModelRuntime for AnthropicAdapter {
             while let Some(event) = events.next().await {
                 let event = event?;
                 utils::adapter_log_stream_event(
-                    provider_id.as_str(),
+                    provider_id.as_ref(),
                     ADAPTER_KIND,
                     "complete_stream.messages",
                     &event,
                 );
                 let parsed: AnthropicSseEvent =
-                    utils::parse_json_value(provider_id.as_str(), "stream event", event)?;
+                    utils::parse_json_value(provider_id.as_ref(), "stream event", event)?;
 
                 match parsed {
                     AnthropicSseEvent::MessageStart { message } => {
@@ -1619,14 +1619,21 @@ fn anthropic_adaptive_parts(
     if let Some(display) = display {
         thinking.insert(
             "display".to_owned(),
-            serde_json::Value::String(display.as_str().to_owned()),
+            serde_json::Value::String(display.to_string()),
         );
     }
 
     AnthropicThinkingParts {
         thinking: Some(serde_json::Value::Object(thinking)),
         output_config: effort.map(|effort| AnthropicOutputConfig {
-            effort: Some(effort.as_str()),
+            effort: Some(match effort {
+                crate::provider::ReasoningEffort::Minimal => "minimal",
+                crate::provider::ReasoningEffort::Low => "low",
+                crate::provider::ReasoningEffort::Medium => "medium",
+                crate::provider::ReasoningEffort::High => "high",
+                crate::provider::ReasoningEffort::Xhigh => "xhigh",
+                crate::provider::ReasoningEffort::Max => "max",
+            }),
         }),
     }
 }
@@ -1724,7 +1731,7 @@ fn json_value_to_string(value: &Value) -> String {
 }
 
 fn anthropic_wire_tool_name(name: &str) -> String {
-    crate::tool::model_safe_tool_name(name)
+    name.trim().to_string()
 }
 
 #[derive(Debug, Deserialize)]

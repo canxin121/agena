@@ -2338,21 +2338,20 @@ impl App {
                         let selected = if provider_studio_model_selected(
                             dialog,
                             adapter_models.adapter_id.as_str(),
-                            model.id.as_str(),
+                            model.id.as_ref(),
                         ) {
                             "[x]"
                         } else {
                             "[ ]"
                         };
                         build_detail_two_line_list_item(
-                            sanitize_display_text(format!("{selected} {}", model.id.as_str()))
-                                .into(),
+                            sanitize_display_text(format!("{selected} {}", model.id)).into(),
                             Some(
                                 sanitize_display_text(provider_studio_model_list_detail(
                                     &self.i18n,
                                     dialog,
                                     adapter_models.adapter_id.as_str(),
-                                    model.id.as_str(),
+                                    model.id.as_ref(),
                                 ))
                                 .into(),
                             ),
@@ -2932,10 +2931,10 @@ fn model_catalog_input_capability_summary(
     ] {
         match capabilities.input_support(modality) {
             Some(agena::model::CapabilitySupport::Supported) => {
-                supported.push(modality.as_str().to_owned())
+                supported.push(modality.to_string())
             }
             Some(agena::model::CapabilitySupport::Unsupported) => {
-                unsupported.push(modality.as_str().to_owned())
+                unsupported.push(modality.to_string())
             }
             Some(agena::model::CapabilitySupport::Unknown) | None => {}
         }

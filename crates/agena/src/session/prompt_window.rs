@@ -98,8 +98,8 @@ pub(crate) enum PromptContinuationReason {
     ProviderContinuation,
 }
 
-impl PromptContinuationReason {
-    pub(crate) fn as_str(self) -> &'static str {
+impl AsRef<str> for PromptContinuationReason {
+    fn as_ref(&self) -> &str {
         match self {
             Self::Unsupported => "unsupported",
             Self::MissingProviderAnchor => "missing_provider_anchor",
@@ -476,7 +476,7 @@ fn attachment_to_transcript_block(item: &crate::message::AttachmentItem) -> Tran
     TranscriptBlock::Attachment {
         file_id: SmolStr::from(format!(
             "{}|{}|{}|{}",
-            item.kind.as_str(),
+            item.kind,
             item.mime.trim(),
             item.summary_label(),
             source_marker

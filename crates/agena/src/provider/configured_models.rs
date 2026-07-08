@@ -100,8 +100,8 @@ pub enum ModelCapabilityFeature {
     Temperature,
 }
 
-impl ModelCapabilityFeature {
-    pub const fn as_str(self) -> &'static str {
+impl AsRef<str> for ModelCapabilityFeature {
+    fn as_ref(&self) -> &str {
         match self {
             Self::ToolCalling => "tool_calling",
             Self::Streaming => "streaming",
@@ -109,6 +109,12 @@ impl ModelCapabilityFeature {
             Self::StructuredOutput => "structured_output",
             Self::Temperature => "temperature",
         }
+    }
+}
+
+impl std::fmt::Display for ModelCapabilityFeature {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_ref())
     }
 }
 
@@ -151,11 +157,26 @@ impl ModelCapabilityPatch {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        validate_capability_selection_patch("input", self.input.as_ref(), |modality| {
-            modality.as_str()
-        })?;
+        validate_capability_selection_patch(
+            "input",
+            self.input.as_ref(),
+            |modality| match modality {
+                ModelInputModality::Text => "text",
+                ModelInputModality::Image => "image",
+                ModelInputModality::Document => "document",
+                ModelInputModality::Audio => "audio",
+                ModelInputModality::Video => "video",
+                ModelInputModality::File => "file",
+            },
+        )?;
         validate_capability_selection_patch("features", self.features.as_ref(), |feature| {
-            feature.as_str()
+            match feature {
+                ModelCapabilityFeature::ToolCalling => "tool_calling",
+                ModelCapabilityFeature::Streaming => "streaming",
+                ModelCapabilityFeature::Reasoning => "reasoning",
+                ModelCapabilityFeature::StructuredOutput => "structured_output",
+                ModelCapabilityFeature::Temperature => "temperature",
+            }
         })?;
         Ok(())
     }
@@ -604,7 +625,7 @@ impl ConfiguredModelsProvider {
     }
 
     fn configured_model(&self, model: &ModelId) -> Option<&ConfiguredModelDefinition> {
-        self.models.get(model.as_str())
+        self.models.get(model.as_ref())
     }
 
     fn configured_capabilities(&self, model: &ModelId) -> ModelCapabilities {
@@ -632,7 +653,7 @@ impl ConfiguredModelsProvider {
         if let Some(family) = self.target.capability_family() {
             let metadata = self.model_metadata_for_adapter(adapter_id, model);
             for (name, mode) in crate::provider::default_model_mode_registry()
-                .thinking_modes_for_family(family, adapter_id, model.as_str(), &metadata)
+                .thinking_modes_for_family(family, adapter_id, model.as_ref(), &metadata)
             {
                 base.entry(name).or_insert(mode);
             }
@@ -725,7 +746,7 @@ impl ModelRuntime for ConfiguredModelsProvider {
 
         for model in &mut models {
             listed_ids.insert(model.id.to_string());
-            if let Some(configured) = self.models.get(model.id.as_str()) {
+            if let Some(configured) = self.models.get(model.id.as_ref()) {
                 let capability_fallback = self.target.model_capabilities(&model.id);
                 let metadata_fallback = self.target.model_metadata(&model.id);
                 *model = configured.apply_to_model(

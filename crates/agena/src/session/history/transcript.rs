@@ -114,7 +114,7 @@ impl TranscriptFragment {
                 }
             }
             Self::ToolResult { call_id, output } => {
-                hash_str(hasher, call_id.as_str());
+                hash_str(hasher, call_id.as_ref());
                 output.hash_into(hasher);
             }
         }
@@ -266,7 +266,7 @@ pub struct TranscriptToolCall {
 
 impl TranscriptToolCall {
     fn hash_into(&self, hasher: &mut blake3::Hasher) {
-        hash_str(hasher, self.call_id.as_str());
+        hash_str(hasher, self.call_id.as_ref());
         hash_str(hasher, &self.name);
         hash_str(hasher, &self.arguments);
     }

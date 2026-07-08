@@ -4,8 +4,8 @@
 //! crates.io library, so Agena keeps the no-API-key engine functions in-process
 //! here instead of spawning or connecting to a separate search service.
 
-use std::str::FromStr;
 use std::time::Duration;
+use std::{fmt, str::FromStr};
 
 use reqwest::header::{
     ACCEPT, ACCEPT_LANGUAGE, CACHE_CONTROL, CONNECTION, HeaderMap, HeaderValue, PRAGMA, REFERER,
@@ -29,15 +29,23 @@ pub enum WebSearchEngine {
     Baidu,
 }
 
-impl WebSearchEngine {
-    pub fn as_str(self) -> &'static str {
+impl AsRef<str> for WebSearchEngine {
+    fn as_ref(&self) -> &str {
         match self {
             Self::Bing => "bing",
             Self::DuckDuckGo => "duckduckgo",
             Self::Baidu => "baidu",
         }
     }
+}
 
+impl fmt::Display for WebSearchEngine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())
+    }
+}
+
+impl WebSearchEngine {
     pub fn permission_url(self) -> &'static str {
         match self {
             Self::Bing => BING_BASE,
@@ -116,7 +124,7 @@ pub async fn search_web(
     tracing::debug!(
         target: "agena::web",
         query,
-        engine = options.engine.as_str(),
+        engine = %options.engine,
         limit,
         "searching web"
     );
@@ -343,7 +351,7 @@ fn parse_bing_results(html: &str, limit: usize) -> Vec<WebSearchResult> {
             url,
             description,
             source,
-            engine: WebSearchEngine::Bing.as_str().to_string(),
+            engine: WebSearchEngine::Bing.to_string(),
         });
     }
 
@@ -392,7 +400,7 @@ fn parse_duckduckgo_results(html: &str, limit: usize) -> Vec<WebSearchResult> {
             url,
             description,
             source,
-            engine: WebSearchEngine::DuckDuckGo.as_str().to_string(),
+            engine: WebSearchEngine::DuckDuckGo.to_string(),
         });
     }
 
@@ -440,7 +448,7 @@ fn parse_baidu_results(html: &str, limit: usize) -> Vec<WebSearchResult> {
             url,
             description,
             source,
-            engine: WebSearchEngine::Baidu.as_str().to_string(),
+            engine: WebSearchEngine::Baidu.to_string(),
         });
     }
 

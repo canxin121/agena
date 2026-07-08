@@ -60,8 +60,8 @@ impl CatalogedModelsProvider {
         &self,
         model: &ModelId,
     ) -> Option<&crate::model_catalog::CatalogModelDefinition> {
-        self.provider.models.get(model.as_str()).or_else(|| {
-            catalog_model_id_for_raw(model.as_str())
+        self.provider.models.get(model.as_ref()).or_else(|| {
+            catalog_model_id_for_raw(model.as_ref())
                 .as_deref()
                 .and_then(|catalog_model_id| self.provider.models.get(catalog_model_id))
         })
@@ -80,7 +80,7 @@ impl CatalogedModelsProvider {
     }
 
     fn apply_catalog_model_id(&self, model_id: &ModelId, model: &mut Model) -> Option<String> {
-        let catalog_model_id = catalog_model_id_for_raw(model_id.as_str())?;
+        let catalog_model_id = catalog_model_id_for_raw(model_id.as_ref())?;
         model.catalog_model_id = Some(ModelId::new(catalog_model_id.clone()));
         Some(catalog_model_id)
     }
@@ -117,7 +117,7 @@ impl CatalogedModelsProvider {
         crate::provider::default_model_mode_registry().thinking_modes_for_family(
             family,
             adapter_id,
-            model.as_str(),
+            model.as_ref(),
             &self.model_metadata_for_adapter(adapter_id, model),
         )
     }
@@ -260,9 +260,9 @@ impl ModelRuntime for CatalogedModelsProvider {
             if listed.contains(model_id.as_str())
                 || listed_catalog_ids.contains(model_id.as_str())
                 || models.iter().any(|model| {
-                    model.id.as_str() == model_id.as_str()
-                        || model.catalog_model_id.as_ref().map(ModelId::as_str)
-                            == Some(model_id.as_str())
+                    model.id.as_ref() == AsRef::<str>::as_ref(model_id)
+                        || model.catalog_model_id.as_ref().map(AsRef::<str>::as_ref)
+                            == Some(AsRef::<str>::as_ref(model_id))
                 })
             {
                 continue;
@@ -271,7 +271,7 @@ impl ModelRuntime for CatalogedModelsProvider {
             let base = Model {
                 provider_id: ProviderId::new(self.target.id()),
                 adapter_id: None,
-                id: ModelId::new(model_id.as_str()),
+                id: ModelId::new(model_id.as_ref()),
                 catalog_model_id: Some(model_id.clone()),
                 display_name: None,
                 capabilities: self.model_capabilities(&model_id),

@@ -386,7 +386,7 @@ impl WorkflowPlugin {
         let registered = host.list_registered_tools().await?;
         let mut tags_by_name = HashMap::<String, Vec<String>>::new();
         for entry in registered.tools {
-            let model_name = entry.tool_key.to_model_string();
+            let model_name = crate::tool::tool_value_name(entry.tool_key.to_string().as_str());
             if !visible.contains(&model_name) {
                 continue;
             }
@@ -1582,7 +1582,10 @@ impl WorkflowPlugin {
                 );
             }
             "agena.tools" => {
-                return matches!(input.tool_name(), "list" | "search" | "tags" | "help" | "call");
+                return matches!(
+                    input.tool_name(),
+                    "list" | "search" | "tags" | "help" | "call"
+                );
             }
             "agena.tasks" if input.tool_name() == "run" => {
                 return TaskToolInput::parse_input(input.input.clone()).is_ok_and(|task| {
@@ -1929,7 +1932,7 @@ impl WorkflowPlugin {
     ) -> SdkResult<ToolInvokeOutput> {
         self.host()?
             .exit_snapshot(HostExitSnapshotRequest {
-                action: args.exit_action.as_str().to_string(),
+                action: args.exit_action.to_string(),
                 discard_changes: args.discard_changes,
             })
             .await
@@ -2159,9 +2162,10 @@ impl WorkflowPlugin {
             ));
         }
         if !names.is_empty() {
-            lines.push(
-                "Call `agena.tools/help` with an exact tool name for detailed usage.".to_string(),
-            );
+            lines.push(format!(
+                "Call `{}` with an exact tool name for detailed usage.",
+                crate::tool::gateway_help_tool_name()
+            ));
         }
         let payload = serde_json::json!({
             "results": names,
@@ -2360,19 +2364,20 @@ impl WorkflowPlugin {
 
     async fn invoke_tool_call(&self, input: &ToolCallInput) -> SdkResult<ToolInvokeOutput> {
         let requested = input.tool.trim();
-        if requested.eq_ignore_ascii_case("agena.tools/call") {
-            return Err(PluginError::invalid_params(
-                "agena.tools/call cannot invoke itself".to_string(),
-            ));
+        if requested.eq_ignore_ascii_case(crate::tool::gateway_call_tool_name()) {
+            return Err(PluginError::invalid_params(format!(
+                "{} cannot invoke itself",
+                crate::tool::gateway_call_tool_name()
+            )));
         }
         let tools = self.host()?.list_tools().await?;
         let descriptor = Self::resolve_tool_descriptor(requested, &tools)?;
-        if !descriptor.name.eq_ignore_ascii_case("agena.tools/help")
-            && !self.has_help_for_tool(descriptor.name.as_str()).await?
-        {
+        if !self.has_help_for_tool(descriptor.name.as_str()).await? {
             return Err(PluginError::invalid_params(format!(
-                "read agena.tools/help for `{}` before invoking it through agena.tools/call",
-                descriptor.name
+                "read {} for `{}` before invoking it through {}",
+                crate::tool::gateway_help_tool_name(),
+                descriptor.name,
+                crate::tool::gateway_call_tool_name()
             )));
         }
         self.host()?

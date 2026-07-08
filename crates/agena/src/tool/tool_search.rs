@@ -23,7 +23,7 @@ impl SearchableTool {
             .to_string();
         let tags = registered_tool.effective_tags();
         Self {
-            name: registered_tool.model_name(),
+            name: crate::tool::tool_value_name(registered_tool.model_name().as_str()),
             description,
             tags,
         }
@@ -86,9 +86,10 @@ pub(crate) fn execute_with_tools(
             ));
         }
         if !results.is_empty() {
-            lines.push(
-                "Read `agena.tools/help` with an exact tool name for detailed usage.".to_string(),
-            );
+            lines.push(format!(
+                "Use `{}` with an exact tool name for detailed usage.",
+                crate::tool::gateway_help_tool_name()
+            ));
         }
     }
 

@@ -308,7 +308,11 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             let is_command = has_custom_tag(&entry, "command");
             let item = RuntimeSkillResource {
                 name: entry.model_name(),
-                description: entry.definition.description_text().to_owned(),
+                description: entry
+                    .definition
+                    .summary_text()
+                    .unwrap_or_default()
+                    .to_owned(),
                 aliases: aliases_by_skill.remove(&skill_key).unwrap_or_default(),
                 source_path: None,
             };

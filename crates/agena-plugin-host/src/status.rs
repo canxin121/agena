@@ -6,9 +6,9 @@
 //! transports (`inproc`, `cdylib`, `http`, `wasm`) report `Running` with no
 //! pid/restart fields populated.
 
-use std::collections::HashMap;
 use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{collections::HashMap, fmt};
 
 use serde::{Deserialize, Serialize};
 
@@ -23,14 +23,20 @@ pub enum PluginRunState {
     Stopped,
 }
 
-impl PluginRunState {
-    pub fn as_str(self) -> &'static str {
+impl AsRef<str> for PluginRunState {
+    fn as_ref(&self) -> &str {
         match self {
             Self::Running => "running",
             Self::Restarting => "restarting",
             Self::Failed => "failed",
             Self::Stopped => "stopped",
         }
+    }
+}
+
+impl fmt::Display for PluginRunState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())
     }
 }
 

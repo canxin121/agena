@@ -32,7 +32,7 @@ pub async fn load_entry(
 ) -> Result<LoadedPlugin, HostError> {
     let transport: Arc<dyn PluginTransport> = match &configured_plugin.package {
         PluginPackage::Static { .. } => {
-            let plugin_key = PluginKey::parse(plugin_id).map_err(|err| HostError::Load {
+            let plugin_key: PluginKey = plugin_id.parse().map_err(|err| HostError::Load {
                 plugin: plugin_id.to_string(),
                 message: format!("invalid plugin id `{plugin_id}`: {err}"),
             })?;
@@ -127,7 +127,7 @@ pub async fn load_entry(
             let host_handler = host_handle.host_handler_for(plugin_id.to_string());
             let status_sink = host_handle.status_registry();
             let log_sink = host_handle.log_store();
-            let plugin_key = PluginKey::parse(plugin_id).map_err(|err| HostError::Load {
+            let plugin_key: PluginKey = plugin_id.parse().map_err(|err| HostError::Load {
                 plugin: plugin_id.to_string(),
                 message: format!("invalid plugin id `{plugin_id}`: {err}"),
             })?;
@@ -212,7 +212,7 @@ pub async fn load_entry(
             plugin: plugin_id.to_string(),
             message: e.to_string(),
         })?;
-    let plugin_key = PluginKey::parse(plugin_id).map_err(|err| HostError::Init {
+    let plugin_key: PluginKey = plugin_id.parse().map_err(|err| HostError::Init {
         plugin: plugin_id.to_string(),
         message: format!("invalid plugin id `{plugin_id}`: {err}"),
     })?;

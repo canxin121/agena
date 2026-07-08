@@ -1820,7 +1820,7 @@ fn codex_thinking_modes(
         let Some(effort) = effort_for_variant_name(level.effort.as_str()) else {
             continue;
         };
-        let effort_name = effort.as_str();
+        let effort_name = effort.as_ref();
         modes.insert(
             format!("thinking-{effort_name}"),
             ConfiguredModelThinkingMode {
@@ -1887,7 +1887,7 @@ fn codex_speed_modes(
 
 fn codex_default_thinking_mode(default_reasoning_level: Option<&str>) -> Option<String> {
     let effort = default_reasoning_level.and_then(effort_for_variant_name)?;
-    Some(format!("thinking-{}", effort.as_str()))
+    Some(format!("thinking-{effort}"))
 }
 
 fn router_high_budget(thinking: &RouterThinking) -> Option<u32> {
@@ -2431,7 +2431,7 @@ fn insert_effort_mode(
     modes: &mut BTreeMap<String, ConfiguredModelThinkingMode>,
     effort: ReasoningEffort,
 ) {
-    let effort_name = effort.as_str();
+    let effort_name = effort.as_ref();
     modes
         .entry(format!("thinking-{effort_name}"))
         .or_insert_with(|| ConfiguredModelThinkingMode {

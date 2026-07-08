@@ -108,7 +108,7 @@ impl GeminiAdapter {
         options: GeminiAdapterOptions,
     ) -> Self {
         let default_model = ModelId::new(default_model);
-        let user_agent = crate::provider::gemini_cli_user_agent(default_model.as_str());
+        let user_agent = crate::provider::gemini_cli_user_agent(default_model.as_ref());
         let mut extra_headers =
             HashMap::from([(reqwest::header::USER_AGENT.as_str().to_owned(), user_agent)]);
         if options
@@ -268,7 +268,7 @@ impl GeminiAdapter {
                 parts: vec![GeminiPart::text(system_chunks.join("\n\n"))],
             }),
             contents,
-            generation_config: Self::generation_config(request.model.as_str(), request, None),
+            generation_config: Self::generation_config(request.model.as_ref(), request, None),
             stream,
             tools: build_gemini_tools(request)?,
             tool_config: None,
@@ -583,13 +583,13 @@ impl GeminiAdapter {
         let (system_chunks, contents) = Self::request_system_and_contents(request);
         let live_request = GeminiLiveConversationRequest {
             setup: GeminiLiveSetup {
-                model: if model.as_str().starts_with("models/") {
+                model: if model.as_ref().starts_with("models/") {
                     model.to_string()
                 } else {
                     format!("models/{model}")
                 },
                 generation_config: Self::generation_config(
-                    model.as_str(),
+                    model.as_ref(),
                     request,
                     Some(vec!["TEXT".to_owned()]),
                 ),
@@ -1044,7 +1044,7 @@ impl ModelRuntime for GeminiAdapter {
         let response = self
             .send_request(|api_key| {
                 let endpoint =
-                    self.endpoint_with_auth(self.generate_endpoint(model.as_str()), api_key);
+                    self.endpoint_with_auth(self.generate_endpoint(model.as_ref()), api_key);
                 let mut headers = utils::resolved_request_headers(PROVIDER_ID, &request_headers);
                 if let GeminiAuthMode::Header { name, scheme } = &self.auth_mode {
                     headers.insert(
@@ -1136,7 +1136,7 @@ impl ModelRuntime for GeminiAdapter {
         let response = self
             .send_request(|api_key| {
                 let endpoint =
-                    self.endpoint_with_auth(self.stream_generate_endpoint(model.as_str()), api_key);
+                    self.endpoint_with_auth(self.stream_generate_endpoint(model.as_ref()), api_key);
                 let mut headers = utils::resolved_request_headers(PROVIDER_ID, &request_headers);
                 if let GeminiAuthMode::Header { name, scheme } = &self.auth_mode {
                     headers.insert(
@@ -1196,14 +1196,14 @@ impl ModelRuntime for GeminiAdapter {
             while let Some(event) = events.next().await {
                 let event = event?;
                 utils::adapter_log_stream_event(
-                    provider_id.as_str(),
+                    provider_id.as_ref(),
                     ADAPTER_KIND,
                     "complete_stream.generate_content",
                     &event,
                 );
 
                 let chunk: GeminiGenerateResponse =
-                    utils::parse_json_value(provider_id.as_str(), "stream chunk", event)?;
+                    utils::parse_json_value(provider_id.as_ref(), "stream chunk", event)?;
                 if let Some(usage) = chunk.usage_metadata.as_ref().cloned().map(map_gemini_usage) {
                     fallback_usage = Some(usage);
                 }
@@ -1312,24 +1312,7 @@ fn gemini_tool_response_name(tool_name: &str) -> String {
 }
 
 fn gemini_wire_tool_name(tool_name: &str) -> String {
-    if gemini_native_tool_name_is_exact(tool_name) {
-        tool_name.trim().to_owned()
-    } else {
-        crate::tool::model_safe_tool_name(tool_name)
-    }
-}
-
-fn gemini_native_tool_name_is_exact(name: &str) -> bool {
-    let trimmed = name.trim();
-    if trimmed.is_empty() || trimmed.len() > 64 {
-        return false;
-    }
-    let mut bytes = trimmed.bytes();
-    let Some(first) = bytes.next() else {
-        return false;
-    };
-    (first.is_ascii_alphabetic() || first == b'_')
-        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    tool_name.trim().to_owned()
 }
 
 fn gemini_thinking_config(

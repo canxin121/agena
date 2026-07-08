@@ -60,8 +60,8 @@ impl GitlabRoutedBackend {
     }
 
     fn matches_model(self, model: &ModelId) -> bool {
-        let mapped = GitlabProvider::mapped_model(model.as_str());
-        GitlabProvider::use_openai_backend(mapped.as_str()) == matches!(self, Self::OpenAi)
+        let mapped = GitlabProvider::mapped_model(model.as_ref());
+        GitlabProvider::use_openai_backend(mapped.as_ref()) == matches!(self, Self::OpenAi)
     }
 }
 
@@ -232,7 +232,7 @@ impl ResolvedConfig {
             }
 
             let provider = build_provider(
-                provider_id.as_str(),
+                provider_id.as_ref(),
                 resolved,
                 client.clone(),
                 env,
@@ -287,7 +287,7 @@ impl super::ConfigResolution {
             .await
             .map_err(|err| ConfigError::Validation(format!("plugin provider.list: {err}")))?;
         for provider_id in patch.remove {
-            registry.remove(provider_id.as_str());
+            registry.remove(provider_id.as_ref());
         }
         for descriptor in patch.add {
             registry.register_plugin_provider(descriptor)?;
@@ -384,12 +384,12 @@ fn build_provider(
                 adapter_id.clone(),
                 build_adapter_provider(
                     provider_id,
-                    adapter_id.as_str(),
+                    adapter_id.as_ref(),
                     adapter,
                     adapter_defaults
                         .get(adapter_id.as_str())
                         .expect("adapter default should exist")
-                        .as_str(),
+                        .as_ref(),
                     &resolved.auth,
                     client.clone(),
                     env,
@@ -981,7 +981,7 @@ pub async fn list_provider_adapter_models(
 
         let provider = match build_adapter_provider(
             provider_id,
-            adapter_id.as_str(),
+            adapter_id.as_ref(),
             adapter,
             LIST_MODELS_DEFAULT_MODEL_ID,
             auth,
@@ -1008,7 +1008,7 @@ pub async fn list_provider_adapter_models(
                     model.provider_id = ProviderId::new(provider_id.to_owned());
                     model.adapter_id = Some(AdapterId::new(adapter_id.clone()));
                     let catalog_model_id =
-                        crate::model_catalog::canonical_model_catalog_id(model.id.as_str());
+                        crate::model_catalog::canonical_model_catalog_id(model.id.as_ref());
                     if !catalog_model_id.is_empty() {
                         model.catalog_model_id = Some(crate::model::ModelId::new(catalog_model_id));
                     }

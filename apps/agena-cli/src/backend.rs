@@ -3287,13 +3287,13 @@ impl Backend {
                     provider_model_selection_contains(
                         selected_model_keys,
                         adapter_id,
-                        model.id.as_str(),
+                        model.id.as_ref(),
                     )
                 })
                 .map(|model| {
                     let mut model_value = provider_model_json_for_model_id(
                         &catalog_entries,
-                        model.id.as_str(),
+                        model.id.as_ref(),
                         Some(model),
                     );
                     apply_provider_native_tools_defaults_to_model_value(
@@ -3325,7 +3325,7 @@ impl Backend {
                     adapter_models
                         .models
                         .iter()
-                        .find(|model| model.id.as_str() == default_model)
+                        .find(|model| model.id.as_ref() == default_model)
                         .cloned()
                 });
             let default_model_value = provider_model_json_for_model_id(
@@ -3412,7 +3412,7 @@ impl Backend {
             .map(|model| {
                 let mut model_value = provider_model_json_for_model_id(
                     &catalog_entries,
-                    model.id.as_str(),
+                    model.id.as_ref(),
                     Some(model),
                 );
                 apply_provider_native_tools_defaults_to_model_value(
@@ -4641,10 +4641,14 @@ impl Backend {
                 let detail = format!(
                     "{} | {}",
                     entry.plugin_full_name(),
-                    entry.definition.description_text()
+                    entry
+                        .definition
+                        .summary_text()
+                        .or_else(|| entry.definition.help_text())
+                        .unwrap_or("")
                 );
                 InspectorRow {
-                    label: entry.model_name,
+                    label: entry.model_name(),
                     detail,
                 }
             })
@@ -4749,7 +4753,7 @@ impl Backend {
                 label: "preferred_backend".to_string(),
                 detail: capabilities
                     .preferred_backend
-                    .map(|backend| backend.as_str().to_string())
+                    .map(|backend| backend.to_string())
                     .unwrap_or_else(|| "none".to_string()),
             },
             InspectorRow {
@@ -4780,7 +4784,7 @@ impl Backend {
             detail: format!(
                 "{} | backend={} | branch={} | created_here={}",
                 entry.path.display(),
-                entry.backend.as_str(),
+                entry.backend,
                 entry.branch,
                 entry.created_here
             ),
@@ -4800,7 +4804,9 @@ impl Backend {
                 detail: format!(
                     "session={} | backend={} | branch={} | git_registered={} | rift_registered={} | stale={}",
                     session_id,
-                    entry.backend.map(|backend| backend.as_str()).unwrap_or("unknown"),
+                    entry.backend
+                        .map(|backend| backend.to_string())
+                        .unwrap_or_else(|| "unknown".to_string()),
                     branch,
                     entry.registered_with_git,
                     entry.registered_with_rift,
@@ -5679,7 +5685,7 @@ fn catalog_lookup_id_for_provider_model(provider_model: &ProviderModel) -> Strin
         .as_ref()
         .map(ToString::to_string)
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| catalog_lookup_id_for_model_id(provider_model.id.as_str()))
+        .unwrap_or_else(|| catalog_lookup_id_for_model_id(provider_model.id.as_ref()))
 }
 
 fn provider_model_json_for_model_id(

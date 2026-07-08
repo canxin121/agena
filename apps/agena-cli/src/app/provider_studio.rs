@@ -207,7 +207,7 @@ pub(super) fn provider_studio_selected_adapter_models_for_save(
     let selected_models = models
         .into_iter()
         .filter(|model| {
-            provider_studio_model_selected(dialog, adapter_id.as_str(), model.id.as_str())
+            provider_studio_model_selected(dialog, adapter_id.as_str(), model.id.as_ref())
         })
         .collect::<Vec<_>>();
     Some(ProviderAdapterModelsResource {
@@ -235,7 +235,7 @@ pub(super) fn provider_studio_restore_model_selection(dialog: &mut ProviderStudi
         .iter()
         .flat_map(|adapter_models| {
             adapter_models.models.iter().map(|model| {
-                provider_studio_model_key(adapter_models.adapter_id.as_str(), model.id.as_str())
+                provider_studio_model_key(adapter_models.adapter_id.as_str(), model.id.as_ref())
             })
         })
         .collect::<BTreeSet<_>>();
@@ -253,14 +253,14 @@ pub(super) fn provider_studio_restore_model_selection(dialog: &mut ProviderStudi
             provider_studio_model_selected(
                 dialog,
                 adapter_models.adapter_id.as_str(),
-                model.id.as_str(),
+                model.id.as_ref(),
             )
         });
         if !has_any {
             for model in &adapter_models.models {
                 dialog.selected_model_keys.insert(provider_studio_model_key(
                     adapter_models.adapter_id.as_str(),
-                    model.id.as_str(),
+                    model.id.as_ref(),
                 ));
             }
         }
@@ -279,7 +279,7 @@ pub(super) fn provider_studio_first_selected_model<'a>(
             adapter_models
                 .models
                 .iter()
-                .find(|model| provider_studio_model_selected(dialog, adapter_id, model.id.as_str()))
+                .find(|model| provider_studio_model_selected(dialog, adapter_id, model.id.as_ref()))
         })
 }
 
@@ -298,7 +298,7 @@ pub(super) fn provider_studio_ensure_default_selection(dialog: &mut ProviderStud
 
     let default_model_valid =
         provider_studio_first_selected_model(dialog, dialog.draft.default_adapter.as_str())
-            .is_some_and(|model| model.id.as_str() == dialog.draft.default_model.as_str());
+            .is_some_and(|model| model.id.as_ref() == dialog.draft.default_model.as_str());
     if !default_model_valid {
         dialog.draft.default_model.clear();
     }
@@ -1714,7 +1714,7 @@ pub(super) fn remove_provider_studio_model_from_dialog(
     {
         adapter_models
             .models
-            .retain(|model| model.id.as_str() != model_id);
+            .retain(|model| model.id.as_ref() != model_id);
     }
     dialog
         .selected_model_keys
@@ -1843,26 +1843,14 @@ pub(super) fn provider_model_config_draft_from_overlay(
             .capabilities
             .input
             .as_ref()
-            .map(|patch| {
-                patch
-                    .supported()
-                    .iter()
-                    .map(|modality| modality.as_str().to_owned())
-                    .collect()
-            })
+            .map(|patch| patch.supported().iter().map(ToString::to_string).collect())
             .unwrap_or_default(),
         features: overlay
             .definition
             .capabilities
             .features
             .as_ref()
-            .map(|patch| {
-                patch
-                    .supported()
-                    .iter()
-                    .map(|feature| feature.as_str().to_owned())
-                    .collect()
-            })
+            .map(|patch| patch.supported().iter().map(ToString::to_string).collect())
             .unwrap_or_default(),
         output_modalities: overlay.definition.output_modalities.join(", "),
         description: overlay.definition.description.unwrap_or_default(),

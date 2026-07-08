@@ -41,6 +41,7 @@ ops/
 examples/
   echo_plugin/               # cdylib 插件示例
   echo_plugin_stdio/         # stdio 插件示例
+  multi_tool_plugin_stdio/   # 多 tool stdio 插件示例
 ```
 
 ## 环境要求

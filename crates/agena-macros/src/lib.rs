@@ -1655,10 +1655,7 @@ fn expand_plugin_layer_tool_invoke_branch(binding: &PluginToolBinding) -> proc_m
     match binding.kind {
         PluginToolBindingKind::Surface => quote! {
             {
-                let __definitions = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definitions();
-                if __definitions.iter().any(|__definition| {
-                    __definition.name.as_str() == __tool_name.as_str()
-                }) {
+                if <#ty as ::agena_plugin_sdk::ToolSurface>::has_tool(__tool_name.as_str()) {
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(
                         __tool_name.as_str(),
                         input.input.clone(),
@@ -1669,10 +1666,7 @@ fn expand_plugin_layer_tool_invoke_branch(binding: &PluginToolBinding) -> proc_m
         },
         PluginToolBindingKind::Suite => quote! {
             {
-                let __definitions = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::tool_definitions();
-                if __definitions.iter().any(|__definition| {
-                    __definition.name.as_str() == __tool_name.as_str()
-                }) {
+                if <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::has_tool(__tool_name.as_str()) {
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::parse_tool(
                         __tool_name.as_str(),
                         input.input.clone(),
@@ -1729,10 +1723,7 @@ fn expand_plugin_layer_tool_stream_branch(
     match binding.kind {
         PluginToolBindingKind::Surface => quote! {
             {
-                let __definitions = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definitions();
-                if __definitions.iter().any(|__definition| {
-                    __definition.name.as_str() == __tool_name.as_str()
-                }) {
+                if <#ty as ::agena_plugin_sdk::ToolSurface>::has_tool(__tool_name.as_str()) {
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(
                         __tool_name.as_str(),
                         input.input,
@@ -1743,10 +1734,7 @@ fn expand_plugin_layer_tool_stream_branch(
         },
         PluginToolBindingKind::Suite => quote! {
             {
-                let __definitions = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::tool_definitions();
-                if __definitions.iter().any(|__definition| {
-                    __definition.name.as_str() == __tool_name.as_str()
-                }) {
+                if <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::has_tool(__tool_name.as_str()) {
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::parse_tool(
                         __tool_name.as_str(),
                         input.input,
@@ -1814,10 +1802,7 @@ fn expand_plugin_layer_permission_branch(
     match binding.kind {
         PluginToolBindingKind::Surface => quote! {
             {
-                let __definitions = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definitions();
-                if __definitions.iter().any(|__definition| {
-                    __definition.name.as_str() == tool
-                }) {
+                if <#ty as ::agena_plugin_sdk::ToolSurface>::has_tool(tool) {
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(
                         tool,
                         input.clone(),
@@ -1828,10 +1813,7 @@ fn expand_plugin_layer_permission_branch(
         },
         PluginToolBindingKind::Suite => quote! {
             {
-                let __definitions = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::tool_definitions();
-                if __definitions.iter().any(|__definition| {
-                    __definition.name.as_str() == tool
-                }) {
+                if <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::has_tool(tool) {
                     let __parsed = <#ty as ::agena_plugin_sdk::ToolSuiteSurface>::parse_tool(
                         tool,
                         input.clone(),
@@ -2194,7 +2176,6 @@ fn plugin_layer_permission_method_call(
 #[derive(Clone)]
 struct SurfaceConfig {
     tool: Option<LitStr>,
-    aliases: Vec<LitStr>,
     before_help: Option<LitStr>,
     after_help: Option<LitStr>,
     summary: Option<LitStr>,
@@ -2273,13 +2254,6 @@ struct ToolVariantConfig {
     default_when_empty: bool,
     infer_when_present: Vec<LitStr>,
     drop_keys: Vec<LitStr>,
-    action_aliases: Vec<LitStr>,
-    action_alias_defaults: Vec<ActionAliasDefaultConfig>,
-}
-
-struct ActionAliasDefaultConfig {
-    alias: LitStr,
-    defaults: Vec<(LitStr, Expr)>,
 }
 
 #[derive(Clone)]
@@ -2789,11 +2763,6 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
     let dispatch_tool_invoke_fn =
         expand_static_surface_dispatch_fn(&input.data, &surface_for_dispatch)?;
     let flatten_shape_post_parse_expr = expand_flatten_shape_post_parse_tokens(&input.data)?;
-    let tool_alias_match_arms = surface
-        .aliases
-        .iter()
-        .map(|alias| quote! { | #alias })
-        .collect::<Vec<_>>();
     let resolve_tool_exec_match_arms = match &input.data {
         Data::Enum(data_enum) => data_enum
             .variants
@@ -2807,6 +2776,25 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
             })
             .collect::<Vec<_>>(),
         _ => Vec::new(),
+    };
+    let exec_tool_names = match &input.data {
+        Data::Enum(data_enum) => data_enum
+            .variants
+            .iter()
+            .filter_map(|variant| {
+                let config = parse_tool_variant_config(variant).ok()?;
+                let VariantMapping::Exec(tool_name) = config.mapping else {
+                    return None;
+                };
+                Some(tool_name)
+            })
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+    let registered_tool_names = if exec_tool_names.is_empty() {
+        vec![tool.clone()]
+    } else {
+        exec_tool_names
     };
 
     let mut enum_helper_fn = quote! {};
@@ -2856,6 +2844,16 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
     let tool_definitions_fn = quote! {
         pub(crate) fn tool_definitions() -> Vec<::agena_plugin_sdk::ToolDefinition> {
             #tool_definitions_body
+        }
+    };
+    let tool_names_fn = quote! {
+        pub(crate) fn tool_names() -> &'static [&'static str] {
+            &[#(#registered_tool_names),*]
+        }
+    };
+    let has_tool_fn = quote! {
+        pub(crate) fn has_tool(tool: &str) -> bool {
+            matches!(tool, #(#registered_tool_names)|*)
         }
     };
 
@@ -2931,7 +2929,7 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
                 },
                 quote! {
                     match tool {
-                        #tool #(#tool_alias_match_arms)* => Self::parse_input(input),
+                        #tool => Self::parse_input(input),
                         #(#parse_tool_exec_arms,)*
                         other => Err(::agena_plugin_sdk::PluginError::invalid_params(format!(
                             "unknown {} tool '{other}'",
@@ -2967,7 +2965,7 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
             },
             quote! {
                 match tool {
-                    #tool #(#tool_alias_match_arms)* => Self::parse_input(input),
+                    #tool => Self::parse_input(input),
                     other => Err(::agena_plugin_sdk::PluginError::invalid_params(format!(
                         "unknown {} tool '{other}'",
                         #tool
@@ -3014,6 +3012,10 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
 
             #tool_name_fn
 
+            #tool_names_fn
+
+            #has_tool_fn
+
             #input_schema_fn
 
             #parse_input_fn
@@ -3035,7 +3037,7 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
                 input: serde_json::Value,
             ) -> ::agena_plugin_sdk::Result<(String, serde_json::Value)> {
                 match tool {
-                    #tool #(#tool_alias_match_arms)* => {}
+                    #tool => {}
                     #(#resolve_tool_exec_match_arms,)*
                     other => {
                         return Err(::agena_plugin_sdk::PluginError::invalid_params(format!(
@@ -3060,6 +3062,14 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
         impl ::agena_plugin_sdk::ToolSurface for #name {
             fn tool_name() -> &'static str {
                 Self::tool_name()
+            }
+
+            fn tool_names() -> &'static [&'static str] {
+                Self::tool_names()
+            }
+
+            fn has_tool(tool: &str) -> bool {
+                Self::has_tool(tool)
             }
 
             fn tool_definition() -> ::agena_plugin_sdk::ToolDefinition {
@@ -3150,8 +3160,7 @@ fn expand_tool_suite(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
                 || quote! { <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(tool, input) },
             );
         quote! {
-            let __definitions = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definitions();
-            if __definitions.iter().any(|__definition| tool == __definition.name) {
+            if <#ty as ::agena_plugin_sdk::ToolSurface>::has_tool(tool) {
                 return Ok(Self::#ident(#parse_expr?));
             }
         }
@@ -3230,8 +3239,7 @@ fn expand_tool_suite(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
             quote! { <#ty as ::agena_plugin_sdk::ToolSurface>::resolve_tool(tool, input) }
         };
         Ok(quote! {
-            let __definitions = <#ty as ::agena_plugin_sdk::ToolSurface>::tool_definitions();
-            if __definitions.iter().any(|__definition| tool == __definition.name) {
+            if <#ty as ::agena_plugin_sdk::ToolSurface>::has_tool(tool) {
                 return #resolve_expr;
             }
         })
@@ -3355,9 +3363,17 @@ fn expand_tool_suite(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
     } else {
         quote! {}
     };
+    let variant_tys = variants
+        .iter()
+        .map(|variant| variant.ty.clone())
+        .collect::<Vec<_>>();
 
     Ok(quote! {
         impl #name {
+            pub(crate) fn has_tool(tool: &str) -> bool {
+                false #( || <#variant_tys as ::agena_plugin_sdk::ToolSurface>::has_tool(tool))*
+            }
+
             pub(crate) fn tool_definitions() -> Vec<::agena_plugin_sdk::ToolDefinition> {
                 let mut definitions = Vec::new();
                 #(#definition_pushes)*
@@ -3404,6 +3420,10 @@ fn expand_tool_suite(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
         }
 
         impl ::agena_plugin_sdk::ToolSuiteSurface for #name {
+            fn has_tool(tool: &str) -> bool {
+                Self::has_tool(tool)
+            }
+
             fn tool_definitions() -> Vec<::agena_plugin_sdk::ToolDefinition> {
                 Self::tool_definitions()
             }
@@ -4273,25 +4293,6 @@ where
                         });
                     }
                 }
-                let action_aliases = variant_action_aliases(variant)?;
-                if !action_aliases.is_empty() {
-                    let alias_values = action_aliases
-                        .iter()
-                        .map(|alias| LitStr::new(alias, variant.ident.span()))
-                        .collect::<Vec<_>>();
-                    for group in ["oneOf", "anyOf", "allOf"] {
-                        let pointer =
-                            LitStr::new(format!("/{group}/{index}").as_str(), variant.ident.span());
-                        metadata_calls.push(quote! {
-                            ::agena_plugin_sdk::macro_support::set_schema_string_list_metadata(
-                                schema,
-                                #pointer,
-                                "x-agena-aliases",
-                                &[#(#alias_values),*],
-                            );
-                        });
-                    }
-                }
                 for group in ["oneOf", "anyOf", "allOf"] {
                     let prefix = format!("/{group}/{index}");
                     metadata_calls.extend(struct_field_schema_metadata_calls(
@@ -4666,37 +4667,6 @@ where
         .collect()
 }
 
-fn variant_action_aliases(variant: &Variant) -> Result<Vec<String>> {
-    let mut aliases = Vec::new();
-    for attr in &variant.attrs {
-        if !attr.path().is_ident("tool") {
-            continue;
-        }
-        let metas = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
-        for meta in metas {
-            if let Meta::List(list) = meta {
-                let Some(ident) = list.path.get_ident() else {
-                    continue;
-                };
-                match ident.to_string().as_str() {
-                    "action_alias" => {
-                        aliases.extend(
-                            parse_lit_str_list(list.tokens)?
-                                .into_iter()
-                                .map(|alias| alias.value()),
-                        );
-                    }
-                    "action_alias_default" => {
-                        aliases.push(parse_action_alias_default(list.tokens)?.alias.value());
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-    Ok(aliases)
-}
-
 fn flatten_shape_type(field: &Field) -> Result<Option<syn::Type>> {
     if !field_is_flatten(field)? {
         return Ok(None);
@@ -4920,8 +4890,6 @@ struct ToolInputVariantConfig {
     default_when_empty: bool,
     infer_when_present: Vec<LitStr>,
     drop_keys: Vec<LitStr>,
-    action_aliases: Vec<LitStr>,
-    action_alias_defaults: Vec<ActionAliasDefaultConfig>,
 }
 
 struct ToolInputShapeConfig {
@@ -5169,8 +5137,6 @@ fn expand_input_shape_enum_normalize_fn(
         default_when_empty: bool,
         infer_when_present: Vec<LitStr>,
         drop_keys: Vec<LitStr>,
-        action_aliases: Vec<LitStr>,
-        action_alias_defaults: Vec<ActionAliasDefaultConfig>,
     }
 
     let mut normalize_variants = Vec::new();
@@ -5179,24 +5145,15 @@ fn expand_input_shape_enum_normalize_fn(
         let config = parse_tool_input_variant_config(variant)?;
         let action = tool_input_variant_action_name(variant, &config);
         action_candidates.push(action.clone());
-        action_candidates.extend(
-            variant_action_aliases(variant)?
-                .into_iter()
-                .map(|alias| LitStr::new(alias.as_str(), variant.ident.span())),
-        );
         if config.default_when_empty
             || !config.infer_when_present.is_empty()
             || !config.drop_keys.is_empty()
-            || !config.action_aliases.is_empty()
-            || !config.action_alias_defaults.is_empty()
         {
             normalize_variants.push(EnumNormalizeVariant {
                 action: tool_input_variant_action_name(variant, &config),
                 default_when_empty: config.default_when_empty,
                 infer_when_present: config.infer_when_present,
                 drop_keys: config.drop_keys,
-                action_aliases: config.action_aliases,
-                action_alias_defaults: config.action_alias_defaults,
             });
         }
     }
@@ -5242,42 +5199,6 @@ fn expand_input_shape_enum_normalize_fn(
         })
         .unwrap_or_default();
 
-    let action_alias_match_arms = normalize_variants.iter().flat_map(|variant| {
-        let action = &variant.action;
-        let simple_aliases = variant.action_aliases.iter().map(|alias| {
-            quote! {
-                #alias => {
-                    object.insert(
-                        "action".to_string(),
-                        serde_json::Value::String(#action.to_string()),
-                    );
-                    #action.to_string()
-                }
-            }
-        });
-        let alias_defaults = variant.action_alias_defaults.iter().map(|alias_default| {
-            let alias = &alias_default.alias;
-            let defaults = alias_default.defaults.iter().map(|(field, value)| {
-                quote! {
-                    if !object.contains_key(#field) {
-                        object.insert(#field.to_string(), serde_json::json!(#value));
-                    }
-                }
-            });
-            quote! {
-                #alias => {
-                    object.insert(
-                        "action".to_string(),
-                        serde_json::Value::String(#action.to_string()),
-                    );
-                    #(#defaults)*
-                    #action.to_string()
-                }
-            }
-        });
-        simple_aliases.chain(alias_defaults).collect::<Vec<_>>()
-    });
-
     let infer_match_exprs = normalize_variants
         .iter()
         .filter(|variant| !variant.infer_when_present.is_empty())
@@ -5320,7 +5241,6 @@ fn expand_input_shape_enum_normalize_fn(
 
             let action = match object.get("action").and_then(serde_json::Value::as_str) {
                 Some(action) => match action {
-                    #(#action_alias_match_arms,)*
                     other if action_candidates.iter().any(|candidate| *candidate == other) => other.to_string(),
                     other => {
                         let suggestions = ::agena_plugin_sdk::macro_support::suggest_name_candidates(
@@ -5506,8 +5426,6 @@ fn parse_tool_input_variant_config(variant: &Variant) -> Result<ToolInputVariant
     let mut default_when_empty = false;
     let mut infer_when_present = Vec::new();
     let mut drop_keys = Vec::new();
-    let mut action_aliases = Vec::new();
-    let mut action_alias_defaults = Vec::new();
     for attr in &variant.attrs {
         if !attr.path().is_ident("tool") {
             continue;
@@ -5605,10 +5523,6 @@ fn parse_tool_input_variant_config(variant: &Variant) -> Result<ToolInputVariant
                             infer_when_present.extend(parse_lit_str_list(list.tokens)?)
                         }
                         "drop_keys" => drop_keys.extend(parse_lit_str_list(list.tokens)?),
-                        "action_alias" => action_aliases.extend(parse_lit_str_list(list.tokens)?),
-                        "action_alias_default" => {
-                            action_alias_defaults.push(parse_action_alias_default(list.tokens)?)
-                        }
                         other => {
                             return Err(syn::Error::new_spanned(
                                 ident,
@@ -5654,8 +5568,6 @@ fn parse_tool_input_variant_config(variant: &Variant) -> Result<ToolInputVariant
         default_when_empty,
         infer_when_present,
         drop_keys,
-        action_aliases,
-        action_alias_defaults,
     })
 }
 
@@ -5853,8 +5765,6 @@ fn expand_enum_input_normalize_fn(
         default_when_empty: bool,
         infer_when_present: Vec<LitStr>,
         drop_keys: Vec<LitStr>,
-        action_aliases: Vec<LitStr>,
-        action_alias_defaults: Vec<ActionAliasDefaultConfig>,
     }
 
     let mut normalize_variants = Vec::new();
@@ -5865,21 +5775,14 @@ fn expand_enum_input_normalize_fn(
             &ident_to_snake_case(&variant.ident),
             variant.ident.span(),
         ));
-        action_candidates.extend(
-            variant_action_aliases(variant)?
-                .into_iter()
-                .map(|alias| LitStr::new(alias.as_str(), variant.ident.span())),
-        );
         if config.default_when_empty
             || !config.infer_when_present.is_empty()
             || !config.drop_keys.is_empty()
-            || !config.action_aliases.is_empty()
-            || !config.action_alias_defaults.is_empty()
         {
             let VariantMapping::Exec(action) = config.mapping else {
                 return Err(syn::Error::new_spanned(
                     &variant.ident,
-                    "default_when_empty, infer_when_present, drop_keys, and action aliases require #[tool(exec = \"...\")]",
+                    "default_when_empty, infer_when_present, and drop_keys require #[tool(exec = \"...\")]",
                 ));
             };
             normalize_variants.push(EnumNormalizeVariant {
@@ -5887,8 +5790,6 @@ fn expand_enum_input_normalize_fn(
                 default_when_empty: config.default_when_empty,
                 infer_when_present: config.infer_when_present,
                 drop_keys: config.drop_keys,
-                action_aliases: config.action_aliases,
-                action_alias_defaults: config.action_alias_defaults,
             });
         }
     }
@@ -5934,42 +5835,6 @@ fn expand_enum_input_normalize_fn(
         })
         .unwrap_or_default();
 
-    let action_alias_match_arms = normalize_variants.iter().flat_map(|variant| {
-        let action = &variant.action;
-        let simple_aliases = variant.action_aliases.iter().map(|alias| {
-            quote! {
-                #alias => {
-                    object.insert(
-                        "action".to_string(),
-                        serde_json::Value::String(#action.to_string()),
-                    );
-                    #action.to_string()
-                }
-            }
-        });
-        let alias_defaults = variant.action_alias_defaults.iter().map(|alias_default| {
-            let alias = &alias_default.alias;
-            let defaults = alias_default.defaults.iter().map(|(field, value)| {
-                quote! {
-                    if !object.contains_key(#field) {
-                        object.insert(#field.to_string(), serde_json::json!(#value));
-                    }
-                }
-            });
-            quote! {
-                #alias => {
-                    object.insert(
-                        "action".to_string(),
-                        serde_json::Value::String(#action.to_string()),
-                    );
-                    #(#defaults)*
-                    #action.to_string()
-                }
-            }
-        });
-        simple_aliases.chain(alias_defaults).collect::<Vec<_>>()
-    });
-
     let infer_match_exprs = normalize_variants
         .iter()
         .filter(|variant| !variant.infer_when_present.is_empty())
@@ -6012,7 +5877,6 @@ fn expand_enum_input_normalize_fn(
 
             let action = match object.get("action").and_then(serde_json::Value::as_str) {
                 Some(action) => match action {
-                    #(#action_alias_match_arms,)*
                     other if action_candidates.iter().any(|candidate| *candidate == other) => other.to_string(),
                     other => {
                         let suggestions = ::agena_plugin_sdk::macro_support::suggest_name_candidates(
@@ -6813,7 +6677,6 @@ fn expand_static_surface_dispatch_fn(
 
 fn parse_surface_config(attrs: &[Attribute]) -> Result<SurfaceConfig> {
     let mut tool = None;
-    let aliases = Vec::new();
     let mut before_help = None;
     let mut after_help = None;
     let mut summary = None;
@@ -6867,18 +6730,6 @@ fn parse_surface_config(attrs: &[Attribute]) -> Result<SurfaceConfig> {
                     };
                     match ident.to_string().as_str() {
                         "tool" => tool = Some(expr_lit_str(&value.value, "tool")?),
-                        "alias" => {
-                            return Err(syn::Error::new_spanned(
-                                value.path,
-                                "tool aliases were removed; use the canonical tool name",
-                            ));
-                        }
-                        "visible_alias" => {
-                            return Err(syn::Error::new_spanned(
-                                value.path,
-                                "tool aliases were removed; use the canonical tool name",
-                            ));
-                        }
                         "summary" => summary = Some(expr_lit_str(&value.value, "summary")?),
                         "about" => summary = Some(expr_lit_str(&value.value, "about")?),
                         "help" => help = Some(expr_lit_str(&value.value, "help")?),
@@ -6968,12 +6819,6 @@ fn parse_surface_config(attrs: &[Attribute]) -> Result<SurfaceConfig> {
                         "exactly_one_of" => exactly_one_of.push(parse_lit_str_list(list.tokens)?),
                         "at_least_one_of" => at_least_one_of.push(parse_lit_str_list(list.tokens)?),
                         "examples" => examples.extend(parse_lit_str_list(list.tokens)?),
-                        "aliases" | "visible_aliases" => {
-                            return Err(syn::Error::new_spanned(
-                                list.path,
-                                "tool aliases were removed; use the canonical tool name",
-                            ));
-                        }
                         "requires" => {
                             requires.push(parse_path_pair_constraint(list.tokens, "requires")?)
                         }
@@ -7021,7 +6866,6 @@ fn parse_surface_config(attrs: &[Attribute]) -> Result<SurfaceConfig> {
     }
     Ok(SurfaceConfig {
         tool,
-        aliases,
         before_help,
         after_help,
         summary,
@@ -7096,8 +6940,6 @@ fn parse_tool_variant_config(variant: &Variant) -> Result<ToolVariantConfig> {
     let mut default_when_empty = false;
     let mut infer_when_present = Vec::new();
     let mut drop_keys = Vec::new();
-    let mut action_aliases = Vec::new();
-    let mut action_alias_defaults = Vec::new();
     for attr in &variant.attrs {
         if !attr.path().is_ident("tool") {
             continue;
@@ -7200,10 +7042,6 @@ fn parse_tool_variant_config(variant: &Variant) -> Result<ToolVariantConfig> {
                             infer_when_present.extend(parse_lit_str_list(list.tokens)?)
                         }
                         "drop_keys" => drop_keys.extend(parse_lit_str_list(list.tokens)?),
-                        "action_alias" => action_aliases.extend(parse_lit_str_list(list.tokens)?),
-                        "action_alias_default" => {
-                            action_alias_defaults.push(parse_action_alias_default(list.tokens)?)
-                        }
                         other => {
                             return Err(syn::Error::new_spanned(
                                 ident,
@@ -7290,50 +7128,7 @@ fn parse_tool_variant_config(variant: &Variant) -> Result<ToolVariantConfig> {
         default_when_empty,
         infer_when_present,
         drop_keys,
-        action_aliases,
-        action_alias_defaults,
     })
-}
-
-fn parse_action_alias_default(
-    tokens: proc_macro2::TokenStream,
-) -> Result<ActionAliasDefaultConfig> {
-    let items = Punctuated::<Expr, Token![,]>::parse_terminated.parse2(tokens)?;
-    let mut iter = items.into_iter();
-    let Some(first) = iter.next() else {
-        return Err(syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "action_alias_default requires at least one alias string",
-        ));
-    };
-    let alias = expr_lit_str(&first, "action alias")?;
-    let mut defaults = Vec::new();
-    for expr in iter {
-        let Expr::Assign(assign) = expr else {
-            return Err(syn::Error::new_spanned(
-                expr,
-                "action_alias_default defaults must use field = value syntax",
-            ));
-        };
-        let left = assign.left.as_ref();
-        let Expr::Path(path) = left else {
-            return Err(syn::Error::new_spanned(
-                left,
-                "action_alias_default field must be an identifier",
-            ));
-        };
-        let Some(field_ident) = path.path.get_ident() else {
-            return Err(syn::Error::new_spanned(
-                &path.path,
-                "action_alias_default field must be an identifier",
-            ));
-        };
-        defaults.push((
-            LitStr::new(&field_ident.to_string(), field_ident.span()),
-            *assign.right,
-        ));
-    }
-    Ok(ActionAliasDefaultConfig { alias, defaults })
 }
 
 fn tool_input_variant_action_name(variant: &Variant, config: &ToolInputVariantConfig) -> LitStr {

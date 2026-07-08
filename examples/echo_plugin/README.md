@@ -11,7 +11,7 @@
 示例使用新的插件层聚合宏写法：
 
 - `#[agena_plugin(...)] impl EchoPlugin { ... }` 汇集插件元数据、tool handler、hook handler 和导出方式。
-- `#[tool(...)]` 直接描述工具名、help、约束、展示策略和 handler；宏会生成隐藏 tool surface。
+- `#[tool(...)]` 直接描述工具名、help、约束、展示策略和 handler；宏会生成隐藏 schema 与 dispatch glue。
 - `#[arg(...)]` 可以写在方法参数上，宏会生成隐藏 input struct，并把 JSON 输入解析成结构化参数后再调用方法。
 - `#[stream(...)]` 和 `permission(paths = ...)` 可以挂回目标 tool，宏会自动生成 stream / permission 分发。
 - `#[hook]` 从标准方法名推断 hook；返回 patch、`Option<Patch>`、`()`, `Result<_>` 都会自动适配。

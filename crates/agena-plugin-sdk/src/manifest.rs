@@ -301,6 +301,7 @@ impl Default for ToolRuntimePolicy {
     }
 }
 
+#[doc(hidden)]
 pub trait ToolSurface: Sized {
     fn tool_name() -> &'static str;
     fn tool_names() -> &'static [&'static str];

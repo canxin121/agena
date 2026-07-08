@@ -660,7 +660,7 @@ impl NotesPlugin {
     #[tool(
         name = "format",
         summary = "Format text.",
-        output = FormatOutput,
+        output(FormatOutput),
         read_only,
         streaming,
         concurrency_safe
@@ -679,7 +679,7 @@ impl NotesPlugin {
     #[tool(
         name = "write",
         summary = "Write text.",
-        output = WriteOutput,
+        output(WriteOutput),
         mutating,
         filesystem_write,
         permission(paths = write_permission_paths)
@@ -698,7 +698,7 @@ impl NotesPlugin {
 }
 ```
 
-方法只有一个输入 struct 参数时，`#[agena_plugin]` 会通过该类型的 `ToolInput` 解析输入；因此该类型应派生 `ToolInput`。schema、trim、non-empty、items/chars 约束和校验逻辑都来自输入类型本身，不需要在 `#[tool]` 上重复声明。方法声明 `output = OutputType` 后，manifest 会包含该输出类型的 JSON schema，handler 可以直接返回 `OutputType` 或 `Result<OutputType, E>`；泛型输出类型使用 `output(Vec<OutputItem>)` 这种列表写法。
+方法只有一个输入 struct 参数时，`#[agena_plugin]` 会通过该类型的 `ToolInput` 解析输入；因此该类型应派生 `ToolInput`。schema、trim、non-empty、items/chars 约束和校验逻辑都来自输入类型本身，不需要在 `#[tool]` 上重复声明。方法声明 `output(OutputType)` 后，manifest 会包含该输出类型的 JSON schema，handler 可以直接返回 `OutputType` 或 `Result<OutputType, E>`；泛型输出类型同样使用 `output(Vec<OutputItem>)`。
 
 简单 tool 可以省掉 input struct，由方法参数直接生成隐藏输入类型：
 
@@ -712,7 +712,7 @@ impl EchoPlugin {
 }
 ```
 
-旧的聚合 enum/suite 写法已经移除。插件应统一使用 `#[agena_plugin]` 的方法级写法：每个模型可见 tool 对应一个 `#[tool(...)]` 方法，宏生成隐藏 surface、manifest、静态分发、stream fallback 和 permission 分发。完整可运行版本见 `examples/multi_tool_plugin_stdio`。
+旧的聚合 enum/suite 写法已经移除。插件应统一使用 `#[agena_plugin]` 的方法级写法：每个模型可见 tool 对应一个 `#[tool(...)]` 方法，宏生成隐藏 schema、manifest、静态分发、stream fallback 和 permission 分发。完整可运行版本见 `examples/multi_tool_plugin_stdio`。
 
 ## Plugin UI
 

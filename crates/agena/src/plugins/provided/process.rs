@@ -24,7 +24,7 @@ pub(crate) struct ProcessRunInput {
     #[serde(default)]
     shell: ProcessShell,
     #[serde(flatten)]
-    #[tool(flatten_shape)]
+    #[input(flatten_shape)]
     command: ShellCommandInput,
     #[serde(default)]
     background: bool,

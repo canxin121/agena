@@ -1,0 +1,5 @@
+error: cannot find attribute `tool` in this scope
+ --> tests/ui/fail/old_tool_input_attr.rs:7:7
+  |
+7 |     #[tool(default_when_empty = true)]
+  |       ^^^^

@@ -21,7 +21,7 @@ pub fn agena_plugin(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-#[proc_macro_derive(ToolInput, attributes(input, tool, arg))]
+#[proc_macro_derive(ToolInput, attributes(input, arg))]
 pub fn derive_input(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match expand_input(input) {
@@ -1127,7 +1127,12 @@ fn parse_plugin_inline_tool_config(
                     "ui_display" => {
                         surface.ui_display = Some(expr_string_like(&value.value, "ui_display")?)
                     }
-                    "output" => surface.output_ty = Some(expr_as_type(value.value)?),
+                    "output" => {
+                        return Err(syn::Error::new_spanned(
+                            ident,
+                            "use `output(Type)` instead of `output = Type`",
+                        ));
+                    }
                     "description_mode" => {
                         surface.description_mode =
                             Some(expr_string_like(&value.value, "description_mode")?)
@@ -2436,7 +2441,7 @@ fn expand_plugin_layer_manifest(
     let surface_types = unique_manifest_tool_types(tools, streams);
     let surface_assignments = surface_types
         .iter()
-        .map(|ty| quote! { manifest.tools.extend(<#ty as ::agena_plugin_sdk::ToolSurface>::tool_definitions()); })
+        .map(|ty| quote! { manifest.tools.extend(<#ty as ::agena_plugin_sdk::manifest::ToolSurface>::tool_definitions()); })
         .collect::<Vec<_>>();
 
     let build_manifest = quote! {{
@@ -2697,7 +2702,7 @@ fn expand_plugin_layer_tool_invoke_direct_branch(
         binding.output_is_result,
     );
     let parse = quote! {
-        let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_input(__input)?;
+        let __parsed = <#ty as ::agena_plugin_sdk::manifest::ToolSurface>::parse_input(__input)?;
     };
     quote! {
         #tool => {
@@ -2719,8 +2724,8 @@ fn expand_plugin_layer_tool_invoke_branch(binding: &PluginToolBinding) -> proc_m
     );
     quote! {
         {
-            if <#ty as ::agena_plugin_sdk::ToolSurface>::has_tool(__tool_name.as_str()) {
-                let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(
+            if <#ty as ::agena_plugin_sdk::manifest::ToolSurface>::has_tool(__tool_name.as_str()) {
+                let __parsed = <#ty as ::agena_plugin_sdk::manifest::ToolSurface>::parse_tool(
                     __tool_name.as_str(),
                     __input.clone(),
                 )?;
@@ -2796,7 +2801,7 @@ fn expand_plugin_layer_tool_stream_direct_branch(
     };
     let call = plugin_layer_stream_method_call(&binding.method, binding.is_async, &args);
     let parse = quote! {
-        let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_input(input.input)?;
+        let __parsed = <#ty as ::agena_plugin_sdk::manifest::ToolSurface>::parse_input(input.input)?;
     };
     quote! {
         #tool => {
@@ -2823,8 +2828,8 @@ fn expand_plugin_layer_tool_stream_branch(
     let call = plugin_layer_stream_method_call(&binding.method, binding.is_async, &args);
     quote! {
         {
-            if <#ty as ::agena_plugin_sdk::ToolSurface>::has_tool(__tool_name.as_str()) {
-                let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(
+            if <#ty as ::agena_plugin_sdk::manifest::ToolSurface>::has_tool(__tool_name.as_str()) {
+                let __parsed = <#ty as ::agena_plugin_sdk::manifest::ToolSurface>::parse_tool(
                     __tool_name.as_str(),
                     input.input,
                 )?;
@@ -2920,7 +2925,7 @@ fn expand_plugin_layer_permission_direct_branch(
     let call =
         plugin_layer_permission_method_call(&binding.method, binding.is_async, &call_args, paths);
     let parse = quote! {
-        let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_input(input.clone())?;
+        let __parsed = <#ty as ::agena_plugin_sdk::manifest::ToolSurface>::parse_input(input.clone())?;
     };
     quote! {
         #tool => {
@@ -2940,8 +2945,8 @@ fn expand_plugin_layer_permission_branch(
         plugin_layer_permission_method_call(&binding.method, binding.is_async, &call_args, paths);
     quote! {
         {
-            if <#ty as ::agena_plugin_sdk::ToolSurface>::has_tool(tool) {
-                let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_tool(
+            if <#ty as ::agena_plugin_sdk::manifest::ToolSurface>::has_tool(tool) {
+                let __parsed = <#ty as ::agena_plugin_sdk::manifest::ToolSurface>::parse_tool(
                     tool,
                     input.clone(),
                 )?;
@@ -4520,7 +4525,7 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
             }
         }
 
-        impl ::agena_plugin_sdk::ToolSurface for #name {
+        impl ::agena_plugin_sdk::manifest::ToolSurface for #name {
             fn tool_name() -> &'static str {
                 Self::tool_name()
             }
@@ -5115,7 +5120,7 @@ fn expand_input_dispatch_fn(
                 {
                     return Err(syn::Error::new_spanned(
                         variant,
-                        "variant handle_by_value requires #[tool(handle = path)], #[tool(handle_with_context = path)], #[tool(stream_handle = path)], or #[tool(stream_handle_with_context = path)]",
+                        "variant handle_by_value requires #[input(handle = path)], #[input(handle_with_context = path)], #[input(stream_handle = path)], or #[input(stream_handle_with_context = path)]",
                     ));
                 }
                 let plain_handle = config.handle.clone();
@@ -5226,37 +5231,37 @@ fn expand_input_dispatch_fn(
             if saw_any_handle && !can_generate_plain && !saw_context_handle {
                 return Err(syn::Error::new(
                     proc_macro2::Span::call_site(),
-                    "shape dispatch requires #[tool(handle = path)] on every variant",
+                    "input dispatch requires #[input(handle = path)] on every variant",
                 ));
             }
             if saw_context_handle && !can_generate_context {
                 return Err(syn::Error::new(
                     proc_macro2::Span::call_site(),
-                    "context-aware shape dispatch requires #[tool(handle = path)] or #[tool(handle_with_context = path)] on every variant",
+                    "context-aware input dispatch requires #[input(handle = path)] or #[input(handle_with_context = path)] on every variant",
                 ));
             }
             if saw_any_stream_handle && !can_generate_plain_stream && !saw_context_stream_handle {
                 return Err(syn::Error::new(
                     proc_macro2::Span::call_site(),
-                    "shape stream dispatch requires #[tool(stream_handle = path)], #[tool(stream_handle_with_context = path)], #[tool(handle = path)], or #[tool(handle_with_context = path)] on every variant",
+                    "input stream dispatch requires #[input(stream_handle = path)], #[input(stream_handle_with_context = path)], #[input(handle = path)], or #[input(handle_with_context = path)] on every variant",
                 ));
             }
             if saw_context_stream_handle && !can_generate_context_stream {
                 return Err(syn::Error::new(
                     proc_macro2::Span::call_site(),
-                    "context-aware shape stream dispatch requires #[tool(stream_handle = path)], #[tool(stream_handle_with_context = path)], #[tool(handle = path)], or #[tool(handle_with_context = path)] on every variant",
+                    "context-aware input stream dispatch requires #[input(stream_handle = path)], #[input(stream_handle_with_context = path)], #[input(handle = path)], or #[input(handle_with_context = path)] on every variant",
                 ));
             }
             if saw_any_permission_paths_handle && saw_missing_permission_paths_handle {
                 return Err(syn::Error::new(
                     proc_macro2::Span::call_site(),
-                    "shape permission path dispatch requires #[tool(permission_paths_handle = path)] on every variant",
+                    "input permission path dispatch requires #[input(permission_paths_handle = path)] on every variant",
                 ));
             }
             if saw_any_permission_networks_handle && saw_missing_permission_networks_handle {
                 return Err(syn::Error::new(
                     proc_macro2::Span::call_site(),
-                    "shape permission network dispatch requires #[tool(permission_networks_handle = path)] on every variant",
+                    "input permission network dispatch requires #[input(permission_networks_handle = path)] on every variant",
                 ));
             }
             let plain_fn = if can_generate_plain && !plain_dispatch_arms.is_empty() {
@@ -5791,7 +5796,7 @@ fn flatten_shape_type(field: &Field) -> Result<Option<syn::Type>> {
         return Ok(None);
     }
     for attr in &field.attrs {
-        if !attr.path().is_ident("tool") {
+        if !attr.path().is_ident("input") {
             continue;
         }
         let metas = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
@@ -6247,7 +6252,7 @@ fn expand_input_shape_enum_normalize_fn(
         return Err(syn::Error::new(
             proc_macro2::Span::call_site(),
             format!(
-                "only one #[tool(default_when_empty = true)] variant is allowed, found {}",
+                "only one #[input(default_when_empty = true)] variant is allowed, found {}",
                 default_actions.join(", ")
             ),
         ));
@@ -6497,7 +6502,7 @@ fn parse_input_variant_config(variant: &Variant) -> Result<ToolInputVariantConfi
     let mut infer_when_present = Vec::new();
     let mut drop_keys = Vec::new();
     for attr in &variant.attrs {
-        if !attr.path().is_ident("tool") && !attr.path().is_ident("input") {
+        if !attr.path().is_ident("input") {
             continue;
         }
         let metas = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
@@ -6508,7 +6513,13 @@ fn parse_input_variant_config(variant: &Variant) -> Result<ToolInputVariantConfi
                         return Err(syn::Error::new_spanned(value.path, "expected identifier"));
                     };
                     match ident.to_string().as_str() {
-                        "exec" => action = Some(expr_lit_str(&value.value, "exec")?),
+                        "action" => action = Some(expr_lit_str(&value.value, "action")?),
+                        "exec" => {
+                            return Err(syn::Error::new_spanned(
+                                ident,
+                                "ToolInput uses `#[input(action = \"...\")]`; `exec` is only valid for generated tool routing",
+                            ));
+                        }
                         "validate" => validate = Some(expr_path(&value.value, "validate")?),
                         "handle" => handle = Some(expr_path(&value.value, "handle")?),
                         "handle_with_context" => {
@@ -6539,15 +6550,13 @@ fn parse_input_variant_config(variant: &Variant) -> Result<ToolInputVariantConfi
                         "map" => {
                             return Err(syn::Error::new_spanned(
                                 ident,
-                                "ToolInput does not support #[tool(map = ...)]",
+                                "ToolInput does not support `map`; use `#[input(action = \"...\")]` to override the action name",
                             ));
                         }
                         other => {
                             return Err(syn::Error::new_spanned(
                                 ident,
-                                format!(
-                                    "unsupported tool variant attribute '{other}' for ToolInput"
-                                ),
+                                format!("unsupported input variant attribute '{other}'"),
                             ));
                         }
                     }
@@ -6596,7 +6605,7 @@ fn parse_input_variant_config(variant: &Variant) -> Result<ToolInputVariantConfi
                         other => {
                             return Err(syn::Error::new_spanned(
                                 ident,
-                                format!("unsupported tool variant list '{other}' for ToolInput"),
+                                format!("unsupported input variant list '{other}'"),
                             ));
                         }
                     }
@@ -6604,7 +6613,7 @@ fn parse_input_variant_config(variant: &Variant) -> Result<ToolInputVariantConfi
                 Meta::Path(path) => {
                     return Err(syn::Error::new_spanned(
                         path,
-                        "unsupported bare tool argument",
+                        "unsupported bare input variant argument",
                     ));
                 }
             }
@@ -7753,7 +7762,12 @@ fn parse_surface_config(attrs: &[Attribute]) -> Result<SurfaceConfig> {
                         "ui_display" => {
                             ui_display = Some(expr_string_like(&value.value, "ui_display")?)
                         }
-                        "output" => output_ty = Some(expr_as_type(value.value)?),
+                        "output" => {
+                            return Err(syn::Error::new_spanned(
+                                ident,
+                                "use `output(Type)` instead of `output = Type`",
+                            ));
+                        }
                         "description_mode" => {
                             description_mode =
                                 Some(expr_string_like(&value.value, "description_mode")?)

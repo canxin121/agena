@@ -262,7 +262,7 @@ pub struct ProcessEvent {
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum ProcessToolInput {
     /// Run one process. Set `background = true` to keep it attached to the session.
-    #[tool(non_empty("command"))]
+    #[input(non_empty("command"))]
     Run {
         #[serde(default)]
         shell: ProcessShell,
@@ -273,10 +273,10 @@ pub enum ProcessToolInput {
         background: bool,
     },
     /// List every active or recently-finished background process in this session.
-    #[tool(default_when_empty = true)]
+    #[input(default_when_empty = true)]
     List {},
     /// Read buffered logs from a background process; optionally block waiting for new events.
-    #[tool(non_empty("process_id"))]
+    #[input(non_empty("process_id"))]
     Logs {
         process_id: String,
         /// Return only events with `seq > since_seq`. Default 0.
@@ -290,7 +290,7 @@ pub enum ProcessToolInput {
         wait_ms: u64,
     },
     /// Terminate a running background process.
-    #[tool(non_empty("process_id"))]
+    #[input(non_empty("process_id"))]
     Stop { process_id: String },
 }
 
@@ -484,7 +484,7 @@ pub struct LspPositionToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(trim("file_path"), non_empty("file_path"))]
 pub struct LspDefinitionToolInput {
-    #[tool(flatten_shape)]
+    #[input(flatten_shape)]
     #[serde(flatten)]
     pub position: LspPositionToolInput,
 }
@@ -492,7 +492,7 @@ pub struct LspDefinitionToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(trim("file_path"), non_empty("file_path"))]
 pub struct LspReferencesToolInput {
-    #[tool(flatten_shape)]
+    #[input(flatten_shape)]
     #[serde(flatten)]
     pub position: LspPositionToolInput,
     #[serde(default = "default_true")]
@@ -506,7 +506,7 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(trim("file_path"), non_empty("file_path"))]
 pub struct LspHoverToolInput {
-    #[tool(flatten_shape)]
+    #[input(flatten_shape)]
     #[serde(flatten)]
     pub position: LspPositionToolInput,
 }

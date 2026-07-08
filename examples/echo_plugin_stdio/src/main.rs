@@ -3,24 +3,10 @@
 
 use agena_plugin_sdk::prelude::*;
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolCommand)]
-#[tool_command(
-    tool = "echo",
-    summary = "Echo text over stdio transport.",
-    trim("text"),
-    streaming = "streaming",
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct EchoToolInput {
-    /// Text payload to echo back.
-    text: String,
-}
-
 #[derive(Default)]
 struct EchoPlugin;
 
-#[plugin(
+#[agena_plugin(
     namespace = "example",
     name = "echo_stdio",
     version = env!("CARGO_PKG_VERSION"),
@@ -29,16 +15,23 @@ struct EchoPlugin;
     export = stdio
 )]
 impl EchoPlugin {
-    #[tool]
-    async fn invoke_echo(&self, input: EchoToolInput) -> String {
-        format!("stdio-echo: {}", input.text)
+    #[tool(
+        name = "echo",
+        summary = "Echo text over stdio transport.",
+        read_only,
+        streaming,
+        concurrency_safe
+    )]
+    async fn echo(&self, #[arg(trim, non_empty)] text: String) -> String {
+        format!("stdio-echo: {text}")
     }
 
-    #[tool_stream]
-    async fn invoke_echo_stream(&self, input: EchoToolInput, sink: ToolStreamSink) -> String {
+    #[stream(echo)]
+    async fn echo_stream(&self, text: String, sink: ToolStreamSink) -> String {
+        let output = format!("stdio-echo: {text}");
         sink.text("stdio-").await;
-        sink.text(format!("echo: {}", input.text)).await;
-        format!("stdio-echo: {}", input.text)
+        sink.text(format!("echo: {text}")).await;
+        output
     }
 
     #[hook]

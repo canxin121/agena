@@ -10,12 +10,12 @@
 
 示例使用新的插件层聚合宏写法：
 
-- `#[tool_command(...)]` 只描述工具名、输入 schema、help、约束和展示策略，不再绑定 handler。
-- `#[plugin(...)] impl EchoPlugin { ... }` 汇集插件元数据、tool handler 和 hook handler。
-- `#[tool]` 从方法参数推断输入类型，把 JSON 输入解析成结构化参数后再调用方法。
-- `#[stream(...)]` 和 `#[permission(...)]` 同样支持直接返回简单类型，宏会自动包成协议输出。
+- `#[agena_plugin(...)] impl EchoPlugin { ... }` 汇集插件元数据、tool handler、hook handler 和导出方式。
+- `#[tool(...)]` 直接描述工具名、help、约束、展示策略和 handler；宏会生成隐藏 tool surface。
+- `#[arg(...)]` 可以写在方法参数上，宏会生成隐藏 input struct，并把 JSON 输入解析成结构化参数后再调用方法。
+- `#[stream(...)]` 和 `permission(paths = ...)` 可以挂回目标 tool，宏会自动生成 stream / permission 分发。
 - `#[hook]` 从标准方法名推断 hook；返回 patch、`Option<Patch>`、`()`, `Result<_>` 都会自动适配。
-- `#[derive(PluginConfigStore)]` + 字段级 `#[config(default)]` 汇集配置字段；`#[plugin(..., config)]` 自动生成配置 schema，并在 init 时解析到 `PluginConfig<EchoPluginConfig>`。
+- `#[derive(PluginConfigStore)]` + 字段级 `#[config(default)]` 汇集配置字段；`#[agena_plugin(..., config)]` 自动生成配置 schema，并在 init 时解析到 `PluginConfig<EchoPluginConfig>`。
 - `export = cdylib` 在 cdylib crate 中自动导出 host 加载所需的动态库入口。
 
 ## 构建

@@ -51,7 +51,7 @@ pub use crate::manifest::{
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
 pub use agena_macros::{
     PluginConfigStore, StaticToolSurface, ToolArgs, ToolCommand, ToolInputShape, ToolSubcommands,
-    ToolSuite, plugin,
+    ToolSuite, agena_plugin, plugin,
 };
 
 #[cfg(feature = "cdylib")]

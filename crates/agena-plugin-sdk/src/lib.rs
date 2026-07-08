@@ -3,7 +3,9 @@
 //! Implement [`Plugin`] for your type, fill in the hooks you care about (every method
 //! has a default no-op), and pick a transport with one of the `export_*!` macros.
 
+pub extern crate schemars;
 extern crate self as agena_plugin_sdk;
+pub extern crate serde;
 pub extern crate serde_json;
 
 pub mod attachment;
@@ -26,7 +28,7 @@ pub mod drivers;
 
 pub use agena_macros::{
     PluginConfigStore, StaticToolSurface, ToolArgs, ToolCommand, ToolInputShape, ToolSubcommands,
-    ToolSuite, plugin,
+    ToolSuite, agena_plugin, plugin,
 };
 pub use async_trait::async_trait;
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};

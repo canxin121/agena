@@ -48,7 +48,6 @@ impl ToolsPlugin {
     }
 
     #[tool(
-        name = "list",
         summary = "Enumerate current tools.",
         read_only,
         discovery,
@@ -61,14 +60,11 @@ impl ToolsPlugin {
     }
 
     #[tool(
-        name = "search",
         summary = "Search the current tool catalog.",
         read_only,
         discovery,
         ui_display = detailed,
         capabilities(HostCapability::ListTools, HostCapability::ToolRegistry),
-        trim("query"),
-        non_empty("query"),
         concurrency_safe
     )]
     async fn search(&self, input: &CatalogSearchInput) -> SdkResult<ToolInvokeOutput> {
@@ -76,14 +72,11 @@ impl ToolsPlugin {
     }
 
     #[tool(
-        name = "help",
         summary = "Fetch detailed tool help.",
         read_only,
         discovery,
         ui_display = detailed,
         capabilities(HostCapability::ListTools),
-        trim("tool"),
-        non_empty("tool"),
         concurrency_safe
     )]
     async fn help(&self, input: &ToolsHelpInput) -> SdkResult<ToolInvokeOutput> {
@@ -91,7 +84,6 @@ impl ToolsPlugin {
     }
 
     #[tool(
-        name = "tags",
         summary = "List tool tags with pagination.",
         read_only,
         discovery,
@@ -104,13 +96,10 @@ impl ToolsPlugin {
     }
 
     #[tool(
-        name = "call",
         summary = "Invoke a tool after reading its help.",
         discovery,
         ui_display = detailed,
-        capabilities(HostCapability::InvokeTool),
-        trim("tool"),
-        non_empty("tool")
+        capabilities(HostCapability::InvokeTool)
     )]
     async fn call(&self, input: &ToolCallInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_tool_call(input).await

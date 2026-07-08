@@ -301,7 +301,6 @@ impl SettingsPlugin {
     }
 
     #[tool(
-        name = "get",
         summary = "Read one settings path.",
         help = "For effective reads, prefer explicit `scope = config|meta` with a relative `path` instead of relying on prefixed paths like `config.foo`.",
         display = brief,
@@ -310,7 +309,6 @@ impl SettingsPlugin {
             crate::plugin::sdk::HostCapability::ReadConfig,
             crate::plugin::sdk::HostCapability::ReloadConfig
         ),
-        trim("path"),
         permission(paths = permission_get),
         concurrency_safe
     )]
@@ -352,7 +350,6 @@ impl SettingsPlugin {
     }
 
     #[tool(
-        name = "list",
         summary = "List settings paths.",
         display = brief,
         tags(ToolTag::ReadOnly, ToolTag::Discovery, settings_tag()),
@@ -360,7 +357,6 @@ impl SettingsPlugin {
             crate::plugin::sdk::HostCapability::ReadConfig,
             crate::plugin::sdk::HostCapability::ReloadConfig
         ),
-        trim("path"),
         permission(paths = permission_list),
         concurrency_safe
     )]
@@ -419,7 +415,6 @@ impl SettingsPlugin {
     }
 
     #[tool(
-        name = "set",
         summary = "Set one settings value.",
         display = brief,
         tags(ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()),
@@ -427,8 +422,6 @@ impl SettingsPlugin {
             crate::plugin::sdk::HostCapability::ReadConfig,
             crate::plugin::sdk::HostCapability::ReloadConfig
         ),
-        trim("path"),
-        non_empty("path"),
         permission(paths = permission_set)
     )]
     async fn set(&self, input: SettingsSetToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -454,7 +447,6 @@ impl SettingsPlugin {
     }
 
     #[tool(
-        name = "delete",
         summary = "Delete one settings value.",
         display = brief,
         tags(ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()),
@@ -462,8 +454,6 @@ impl SettingsPlugin {
             crate::plugin::sdk::HostCapability::ReadConfig,
             crate::plugin::sdk::HostCapability::ReloadConfig
         ),
-        trim("path"),
-        non_empty("path"),
         permission(paths = permission_delete)
     )]
     async fn delete(&self, input: SettingsDeleteToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -488,7 +478,6 @@ impl SettingsPlugin {
     }
 
     #[tool(
-        name = "patch",
         summary = "Patch settings in agena.json.",
         display = brief,
         tags(ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()),
@@ -496,7 +485,6 @@ impl SettingsPlugin {
             crate::plugin::sdk::HostCapability::ReadConfig,
             crate::plugin::sdk::HostCapability::ReloadConfig
         ),
-        trim("path"),
         permission(paths = permission_patch)
     )]
     async fn patch(&self, input: SettingsPatchToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -517,7 +505,6 @@ impl SettingsPlugin {
     }
 
     #[tool(
-        name = "validate",
         summary = "Validate agena.json.",
         display = brief,
         tags(ToolTag::ReadOnly, settings_tag()),

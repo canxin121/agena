@@ -50,7 +50,6 @@ impl PlanPlugin {
     }
 
     #[tool(
-        name = "get",
         summary = "Inspect the current plan state.",
         planning,
         read_only,
@@ -67,7 +66,6 @@ impl PlanPlugin {
     }
 
     #[tool(
-        name = "set",
         summary = "Create or replace the current plan.",
         planning,
         mutating,
@@ -83,7 +81,6 @@ impl PlanPlugin {
     }
 
     #[tool(
-        name = "update",
         summary = "Update the current plan.",
         help = "Keep plan-level updates separate from step/check updates: do not send `phase` together with `step_id`, `check_id`, `status`, `wait_until_ms`, or `note`. To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`.",
         planning,
@@ -93,15 +90,13 @@ impl PlanPlugin {
             HostCapability::AskUser,
             HostCapability::PluginStorage,
             HostCapability::Statusline
-        ),
-        trim("summary", "step_id", "check_id", "note")
+        )
     )]
     async fn update(&self, input: &PlanUpdateInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_plan_update(input).await
     }
 
     #[tool(
-        name = "clear",
         summary = "Remove the current plan.",
         planning,
         mutating,

@@ -107,8 +107,6 @@ impl SchemaLabPlugin {
         read_only,
         discovery,
         ui_display = brief,
-        trim("section", "label"),
-        non_empty_if_present("section", "label"),
         concurrency_safe
     )]
     async fn tool_invoke(&self, input: SchemaLabToolInput) -> SdkResult<ToolInvokeOutput> {

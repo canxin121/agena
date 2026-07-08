@@ -381,8 +381,6 @@ impl McpPlugin {
         read_only,
         mcp,
         ui_display = brief,
-        trim("server"),
-        non_empty("server"),
         permission(networks = permission_networks_resources_list),
         concurrency_safe
     )]
@@ -403,8 +401,6 @@ impl McpPlugin {
         read_only,
         mcp,
         ui_display = brief,
-        trim("server", "uri"),
-        non_empty("server", "uri"),
         permission(networks = permission_networks_resources_read),
         concurrency_safe
     )]
@@ -431,8 +427,6 @@ impl McpPlugin {
         read_only,
         mcp,
         ui_display = brief,
-        trim("server"),
-        non_empty("server"),
         permission(networks = permission_networks_prompts_list),
         concurrency_safe
     )]
@@ -453,8 +447,6 @@ impl McpPlugin {
         read_only,
         mcp,
         ui_display = brief,
-        trim("server", "name"),
-        non_empty("server", "name"),
         permission(networks = permission_networks_prompts_get),
         concurrency_safe
     )]
@@ -478,8 +470,6 @@ impl McpPlugin {
         mutating,
         mcp,
         ui_display = brief,
-        trim("server", "name"),
-        non_empty("server", "name"),
         permission(networks = permission_networks_tools_call)
     )]
     async fn invoke_tools_call(&self, input: &CallToolInput) -> SdkResult<ToolInvokeOutput> {

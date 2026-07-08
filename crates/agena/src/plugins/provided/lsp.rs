@@ -320,7 +320,6 @@ impl LspPlugin {
     }
 
     #[tool(
-        name = "servers",
         summary = "List configured language servers.",
         read_only,
         lsp,
@@ -355,15 +354,12 @@ impl LspPlugin {
     }
 
     #[tool(
-        name = "definition",
         summary = "Resolve symbol definitions.",
         read_only,
         filesystem_read,
         lsp,
         capabilities(HostCapability::LspRegistry),
         display = brief,
-        trim("file_path"),
-        non_empty("file_path"),
         permission(paths = permission_definition),
         concurrency_safe
     )]
@@ -376,15 +372,12 @@ impl LspPlugin {
     }
 
     #[tool(
-        name = "references",
         summary = "Find symbol references.",
         read_only,
         filesystem_read,
         lsp,
         capabilities(HostCapability::LspRegistry),
         display = brief,
-        trim("file_path"),
-        non_empty("file_path"),
         permission(paths = permission_references),
         concurrency_safe
     )]
@@ -397,15 +390,12 @@ impl LspPlugin {
     }
 
     #[tool(
-        name = "hover",
         summary = "Fetch hover text.",
         read_only,
         filesystem_read,
         lsp,
         capabilities(HostCapability::LspRegistry),
         display = brief,
-        trim("file_path"),
-        non_empty("file_path"),
         permission(paths = permission_hover),
         concurrency_safe
     )]
@@ -418,15 +408,12 @@ impl LspPlugin {
     }
 
     #[tool(
-        name = "diagnostics",
         summary = "Fetch file diagnostics.",
         read_only,
         filesystem_read,
         lsp,
         capabilities(HostCapability::LspRegistry),
         display = brief,
-        trim("file_path"),
-        non_empty("file_path"),
         permission(paths = permission_diagnostics),
         concurrency_safe
     )]

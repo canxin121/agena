@@ -57,7 +57,6 @@ impl CronPlugin {
     }
 
     #[tool(
-        name = "list",
         summary = "List registered cron jobs and wakeups.",
         read_only,
         scheduler,
@@ -81,7 +80,6 @@ impl CronPlugin {
     }
 
     #[tool(
-        name = "create",
         summary = "Create one cron schedule.",
         mutating,
         scheduler,
@@ -104,7 +102,6 @@ impl CronPlugin {
     }
 
     #[tool(
-        name = "delete",
         summary = "Delete one cron schedule.",
         mutating,
         scheduler,
@@ -127,7 +124,6 @@ impl CronPlugin {
     }
 
     #[tool(
-        name = "wakeup",
         summary = "Create one one-shot wakeup.",
         mutating,
         scheduler,

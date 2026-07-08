@@ -20,16 +20,19 @@ impl Default for NotesConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
 #[serde(deny_unknown_fields)]
 struct FormatNoteInput {
+    #[arg(trim, non_empty)]
     text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
 #[serde(deny_unknown_fields)]
 struct WriteNoteInput {
+    #[arg(trim, non_empty)]
     path: String,
+    #[arg(trim, non_empty)]
     text: String,
     #[serde(default)]
     append: bool,
@@ -71,8 +74,6 @@ impl NotesPlugin {
         help = "Formats text using this plugin's runtime config. The streaming path emits the formatted text in line-sized chunks.",
         read_only,
         streaming,
-        trim("text"),
-        non_empty("text"),
         concurrency_safe
     )]
     async fn format(&self, input: &FormatNoteInput) -> Result<ToolInvokeOutput> {
@@ -105,8 +106,6 @@ impl NotesPlugin {
         help = "Writes the formatted text to the provided path. Path permission is supplied dynamically by this tool's permission handler.",
         mutating,
         filesystem_write,
-        trim("path", "text"),
-        non_empty("path", "text"),
         permission(paths = write_permission_paths)
     )]
     async fn write(&self, input: &WriteNoteInput) -> Result<ToolInvokeOutput> {

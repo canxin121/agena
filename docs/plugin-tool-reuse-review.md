@@ -8,7 +8,7 @@
 目标不是重新设计 Agena runtime，而是回答两个更实际的问题：
 
 1. 哪些外部项目适合替代我们现在自研的 plugin/tool 底层实现，从而降低维护成本。
-2. 哪些外部项目更适合接到现有内置 plugin 下面，用来增强能力，而不是替换当前 tool surface。
+2. 哪些外部项目更适合接到现有内置 plugin 下面，用来增强能力，而不是替换当前 tool set。
 
 ## 结论摘要
 
@@ -17,7 +17,7 @@
 优先级最高的建议：
 
 1. 用官方 MCP Rust SDK `rmcp` 替换或包裹现有 `agena-mcp-client` / `agena-mcp-server` 协议栈。
-2. 保留 `agena.process` tool surface，但把执行后端抽象出来，优先接入真正的 sandbox backend，而不是继续只靠本地进程执行。
+2. 保留 `agena.process` tool API，但把执行后端抽象出来，优先接入真正的 sandbox backend，而不是继续只靠本地进程执行。
 3. 不自建浏览器自动化 plugin；直接通过 `agena.mcp` 接入 Playwright MCP 一类现成 server。
 4. 保留 `agena.skills`，但把 skill/frontmatter 向公开格式靠拢，减少自定义规范维护成本。
 5. 增强代码理解能力时，不要造新的“全家桶 agent 框架”；直接给内置 tool 增加 `ast-grep` / `tree-sitter` 这一层能力。
@@ -47,7 +47,7 @@
 | 领域 | 当前仓库实现 | 调研候选 | 建议 | 优先级 |
 | --- | --- | --- | --- | --- |
 | MCP 协议 | `crates/agena-mcp-client` + `crates/agena-mcp-server` 自研 | `rmcp` / 官方 Rust SDK | 适合替换底层协议实现 | P0 |
-| Process 执行 | `agena.process` + 本地 executor/background process registry | `microsandbox`、Daytona、E2B、SWE-ReX 思路 | 保留 tool surface，替换执行 backend | P1 |
+| Process 执行 | `agena.process` + 本地 executor/background process registry | `microsandbox`、Daytona、E2B、SWE-ReX 思路 | 保留 tool API，替换执行 backend | P1 |
 | 浏览器自动化 | 当前无专门内置 browser plugin | Playwright MCP | 不自研，直接接入 `agena.mcp` | P1 |
 | Skills 格式 | `agena.skills` 扫描 `SKILL.md` / slash command | GitHub Agent Skills、Vercel Skills、AGENTS.md | 保留实现，增强兼容层 | P1 |
 | 代码结构化搜索 | 当前以 `glob`/`grep`/LSP 为主 | `ast-grep`、`tree-sitter` | 适合增强内置 tool | P1 |
@@ -89,7 +89,7 @@
 
 不建议替换的部分：
 
-- 不要把 `agena.mcp` 的单一入口 tool surface 改回“一台 server 一个 tool”。
+- 不要把 `agena.mcp` 的单一入口 tool API 改回“一台 server 一个 tool”。
 - 不要把 MCP server 配置和 host capability 管理交给外部 SDK；这些仍然应该是 Agena runtime 自己的边界。
 
 ### 2. `agena.process` 的执行后端应该抽象，优先接 sandbox，不优先继续自研隔离
@@ -100,7 +100,7 @@
 - 前台 `run` 和后台 process log/stop 已经统一成同一个 process tool
 - 权限系统已经能在执行前做检查
 
-真正重的是执行隔离，不是 tool surface。
+真正重的是执行隔离，不是 tool API。
 
 建议：
 
@@ -373,7 +373,7 @@
 
 如果目标是“增强内置工具”，最应该自己继续掌握的是：
 
-- tool surface 设计
+- tool design
 - 权限模型
 - host callback 能力
 - session/workflow/worktree/settings 这类宿主绑定逻辑

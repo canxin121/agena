@@ -303,6 +303,10 @@ impl Default for ToolRuntimePolicy {
 
 pub trait ToolSurface: Sized {
     fn tool_name() -> &'static str;
+    fn tool_names() -> &'static [&'static str];
+    fn has_tool(tool: &str) -> bool {
+        Self::tool_names().contains(&tool)
+    }
     fn tool_definition() -> ToolDefinition;
     fn tool_definitions() -> Vec<ToolDefinition> {
         vec![Self::tool_definition()]
@@ -333,6 +337,7 @@ pub trait ToolSurface: Sized {
 }
 
 pub trait ToolSuiteSurface: Sized {
+    fn has_tool(tool: &str) -> bool;
     fn tool_definitions() -> Vec<ToolDefinition>;
     fn parse_tool(tool: &str, input: serde_json::Value) -> crate::Result<Self>;
     fn parse_tool_json_str(tool: &str, input: &str) -> crate::Result<Self> {

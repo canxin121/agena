@@ -1,0 +1,21 @@
+[package]
+name = "agena-multi-tool-plugin-stdio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "agena-multi-tool-plugin-stdio"
+path = "src/main.rs"
+
+[dependencies]
+agena-plugin-sdk = { workspace = true, features = ["stdio"] }
+async-trait = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
+
+[lints]
+workspace = true

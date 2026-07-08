@@ -81,7 +81,6 @@ Plugin tool registry 现在有三条统一观测路径，分别面向快照、�
 一个 tool 是模型可调用的能力单元。Tool 使用统一的 `ToolDefinition`，顶层只保留少量入口字段：
 
 - `name`: plugin 内部 tool 名称。
-- `aliases`: plugin 内部别名。
 - `contract`: 调用契约，包含 `input_schema`、`output_schema`、`strict`。
 - `model`: 给模型看的内容，只保留 `examples`。
 - `docs`: 给 help/catalog/UI 使用的文档，包含 `summary`、`help`、`before_help`、`after_help`。
@@ -636,6 +635,69 @@ async fn main() -> std::io::Result<()> {
 
 - `examples/echo_plugin`: cdylib plugin。
 - `examples/echo_plugin_stdio`: stdio plugin。
+- `examples/multi_tool_plugin_stdio`: 推荐的多 tool stdio plugin 写法，覆盖 `ToolSubcommands`、`#[tool_suite]`、streaming、动态权限和 config。
+
+## 多 Tool Plugin 推荐写法
+
+一个 plugin 暴露多个模型可见 tool 时，推荐把每个 tool 写成一个独立 input struct，再用 `ToolSubcommands` 聚合：
+
+```rust
+#[derive(Debug, Serialize, Deserialize, JsonSchema, ToolCommand)]
+#[tool_command(
+    tool = "format",
+    summary = "Format text.",
+    handler_receiver = NotesPlugin,
+    handle = NotesPlugin::format,
+    stream_handle = NotesPlugin::format_stream,
+    tags(ToolTag::ReadOnly),
+    streaming = "streaming",
+    concurrency_safe = true
+)]
+struct FormatInput {
+    text: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, ToolCommand)]
+#[tool_command(
+    tool = "write",
+    summary = "Write text.",
+    handler_receiver = NotesPlugin,
+    handle = NotesPlugin::write,
+    permission_paths_handle = NotesPlugin::write_permission_paths,
+    tags(ToolTag::Mutating, ToolTag::FilesystemWrite)
+)]
+struct WriteInput {
+    path: String,
+    text: String,
+}
+
+#[derive(Debug, ToolSubcommands)]
+#[tool_subcommands(handler_receiver = NotesPlugin)]
+enum NotesTools {
+    Format(FormatInput),
+    Write(WriteInput),
+}
+
+#[plugin(namespace = "example", name = "notes", version = env!("CARGO_PKG_VERSION"), summary = "Notes plugin.")]
+impl NotesPlugin {
+    #[tool_suite]
+    async fn invoke(&self, input: NotesTools) -> Result<ToolInvokeOutput> {
+        input.dispatch_tool_invoke(self).await
+    }
+
+    #[tool_suite_stream]
+    async fn invoke_stream(&self, input: NotesTools, sink: ToolStreamSink) -> Result<ToolStreamEnd> {
+        input.dispatch_tool_invoke_stream(self, sink).await
+    }
+
+    #[permission(paths, suite)]
+    async fn permission_paths(&self, input: NotesTools) -> Result<Vec<PathRequest>> {
+        input.dispatch_permission_paths(self).await
+    }
+}
+```
+
+这个模式让 manifest 注册、输入解析、stream fallback、权限分发都由宏统一生成。完整可运行版本见 `examples/multi_tool_plugin_stdio`。
 
 ## Plugin UI
 

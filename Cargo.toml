@@ -25,6 +25,7 @@ members = [
     "crates/agena-skills",
     "examples/echo_plugin",
     "examples/echo_plugin_stdio",
+    "examples/multi_tool_plugin_stdio",
 ]
 
 [workspace.package]

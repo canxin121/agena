@@ -289,11 +289,17 @@ struct PluginImplConfig {
 }
 
 #[derive(Clone)]
-struct PluginToolBinding {
-    method: Ident,
+struct PluginToolPlan {
     tool: LitStr,
     input_model: PluginGeneratedToolInput,
+    invoke: PluginToolInvokeHandler,
     stream: Option<PluginToolStreamHandler>,
+    permissions: PluginToolPermissionHandlers,
+}
+
+#[derive(Clone)]
+struct PluginToolInvokeHandler {
+    method: Ident,
     output_ty: Option<Type>,
     output_is_result: bool,
     is_async: bool,
@@ -306,25 +312,27 @@ struct PluginToolStreamHandler {
     method: Ident,
     is_async: bool,
     sink_first: bool,
-}
-
-#[derive(Clone)]
-struct PluginStreamToolBinding {
-    method: Ident,
-    is_async: bool,
-    sink_first: bool,
-    tool: LitStr,
-    input_model: PluginGeneratedToolInput,
     context: Option<PluginContextArg>,
     input: PluginCallInput,
 }
 
 #[derive(Clone)]
-struct PluginPermissionBinding {
+struct PluginToolStreamSignature {
     method: Ident,
     is_async: bool,
-    tool: LitStr,
-    input_model: PluginGeneratedToolInput,
+    sink_first: bool,
+}
+
+#[derive(Clone, Default)]
+struct PluginToolPermissionHandlers {
+    paths: Option<PluginToolPermissionHandler>,
+    networks: Option<PluginToolPermissionHandler>,
+}
+
+#[derive(Clone)]
+struct PluginToolPermissionHandler {
+    method: Ident,
+    is_async: bool,
     input: PluginCallInput,
 }
 
@@ -402,9 +410,7 @@ fn expand_plugin_inherent_impl_attr(
     let self_ty = item.self_ty.as_ref().clone();
     let self_label = plugin_self_type_label(&self_ty);
     let method_infos = plugin_impl_method_infos(&item);
-    let mut tool_bindings = Vec::new();
-    let mut permission_path_bindings = Vec::new();
-    let mut permission_network_bindings = Vec::new();
+    let mut tool_plans = Vec::new();
     let mut hook_bindings = Vec::new();
 
     for impl_item in &mut item.items {
@@ -412,27 +418,21 @@ fn expand_plugin_inherent_impl_attr(
             continue;
         };
         let attrs = parse_plugin_inherent_method_attrs(method, &self_label, &method_infos)?;
-        tool_bindings.extend(attrs.tools);
-        permission_path_bindings.extend(attrs.permission_paths);
-        permission_network_bindings.extend(attrs.permission_networks);
+        tool_plans.extend(attrs.tools);
         hook_bindings.extend(attrs.hooks);
     }
 
-    if !tool_bindings.is_empty() && !item.generics.params.is_empty() {
+    if !tool_plans.is_empty() && !item.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
             &item.generics,
             "method-level #[tool(...)] generation does not support generic plugin impls yet; use a non-generic plugin wrapper type",
         ));
     }
-    let stream_bindings = collect_plugin_stream_bindings(&tool_bindings);
-    reject_duplicate_tool_bindings(&tool_bindings)?;
-    reject_duplicate_stream_bindings(&stream_bindings)?;
-    reject_duplicate_permission_bindings(&permission_path_bindings, "path")?;
-    reject_duplicate_permission_bindings(&permission_network_bindings, "network")?;
+    reject_duplicate_tool_plans(&tool_plans)?;
     reject_duplicate_hook_bindings(&hook_bindings)?;
-    let generated_input_items = tool_bindings
+    let generated_input_items = tool_plans
         .iter()
-        .map(|binding| expand_plugin_generated_input(&binding.input_model))
+        .map(|tool| expand_plugin_generated_input(&tool.input_model))
         .collect::<Result<Vec<_>>>()?;
 
     let manifest_method = expand_plugin_layer_manifest(
@@ -440,23 +440,26 @@ fn expand_plugin_inherent_impl_attr(
         &self_ty,
         item.generics.params.is_empty(),
         docs.as_deref(),
-        &tool_bindings,
-        &stream_bindings,
-        &permission_path_bindings,
-        &permission_network_bindings,
+        &tool_plans,
         &hook_bindings,
     )?;
-    let tool_invoke_method = (!tool_bindings.is_empty())
-        .then(|| expand_plugin_layer_tool_invoke(&self_ty, &tool_bindings))
+    let tool_invoke_method = (!tool_plans.is_empty())
+        .then(|| expand_plugin_layer_tool_invoke(&self_ty, &tool_plans))
         .transpose()?;
-    let stream_method = (!stream_bindings.is_empty())
-        .then(|| expand_plugin_layer_tool_stream(&self_ty, &stream_bindings))
+    let stream_method = tool_plans
+        .iter()
+        .any(|tool| tool.stream.is_some())
+        .then(|| expand_plugin_layer_tool_stream(&self_ty, &tool_plans))
         .transpose()?;
-    let permission_paths_method = (!permission_path_bindings.is_empty())
-        .then(|| expand_plugin_layer_permission_paths(&self_ty, &permission_path_bindings))
+    let permission_paths_method = tool_plans
+        .iter()
+        .any(|tool| tool.permissions.paths.is_some())
+        .then(|| expand_plugin_layer_permission_paths(&self_ty, &tool_plans))
         .transpose()?;
-    let permission_networks_method = (!permission_network_bindings.is_empty())
-        .then(|| expand_plugin_layer_permission_networks(&self_ty, &permission_network_bindings))
+    let permission_networks_method = tool_plans
+        .iter()
+        .any(|tool| tool.permissions.networks.is_some())
+        .then(|| expand_plugin_layer_permission_networks(&self_ty, &tool_plans))
         .transpose()?;
     let init_binding = hook_bindings
         .iter()
@@ -804,7 +807,7 @@ fn validate_tool_stream_handler(
     methods: &[PluginMethodInfo],
     target: &Ident,
     expected_args: &[Type],
-) -> Result<PluginToolStreamHandler> {
+) -> Result<PluginToolStreamSignature> {
     let info = plugin_method_info(methods, target)?;
     let label = "#[tool(stream = ...)] handlers";
     ensure_plugin_method_info_shared_receiver(info, label)?;
@@ -816,7 +819,7 @@ fn validate_tool_stream_handler(
         expected_args,
         label,
     )?;
-    Ok(PluginToolStreamHandler {
+    Ok(PluginToolStreamSignature {
         method: target.clone(),
         is_async: info.is_async,
         sink_first,
@@ -878,9 +881,7 @@ fn ensure_plugin_method_info_typed_args_for_slice(
 }
 
 struct PluginInherentMethodAttrs {
-    tools: Vec<PluginToolBinding>,
-    permission_paths: Vec<PluginPermissionBinding>,
-    permission_networks: Vec<PluginPermissionBinding>,
+    tools: Vec<PluginToolPlan>,
     hooks: Vec<PluginHookBinding>,
 }
 
@@ -890,8 +891,6 @@ fn parse_plugin_inherent_method_attrs(
     method_infos: &[PluginMethodInfo],
 ) -> Result<PluginInherentMethodAttrs> {
     let mut tools = Vec::new();
-    let mut permission_paths = Vec::new();
-    let mut permission_networks = Vec::new();
     let mut hooks = Vec::new();
     let mut kept_attrs = Vec::new();
     let method_ident = method.sig.ident.clone();
@@ -912,56 +911,70 @@ fn parse_plugin_inherent_method_attrs(
                 .clone()
                 .expect("inline tool config has a default tool name");
             let stream = if let Some(stream_method) = inline.stream_method.as_ref() {
-                let stream = validate_tool_stream_handler(
+                let stream_signature = validate_tool_stream_handler(
                     method_infos,
                     stream_method,
                     &inline.stream_arg_types,
                 )?;
                 input_model.spec.streaming = true;
-                Some(stream)
+                Some(PluginToolStreamHandler {
+                    method: stream_signature.method,
+                    is_async: stream_signature.is_async,
+                    sink_first: stream_signature.sink_first,
+                    context: inline.context,
+                    input: inline.call_input.clone(),
+                })
             } else {
                 None
             };
-            if let Some(permission_method) = inline.permission_paths_method.as_ref() {
-                let permission_info = validate_tool_permission_handler(
-                    method_infos,
-                    permission_method,
-                    &inline.call_arg_types,
-                    "path",
-                )?;
-                permission_paths.push(PluginPermissionBinding {
-                    method: permission_method.clone(),
-                    is_async: permission_info.is_async,
-                    tool: tool.clone(),
-                    input_model: input_model.clone(),
-                    input: inline.call_input.clone(),
-                });
-            }
-            if let Some(permission_method) = inline.permission_networks_method.as_ref() {
-                let permission_info = validate_tool_permission_handler(
-                    method_infos,
-                    permission_method,
-                    &inline.call_arg_types,
-                    "network",
-                )?;
-                permission_networks.push(PluginPermissionBinding {
-                    method: permission_method.clone(),
-                    is_async: permission_info.is_async,
-                    tool: tool.clone(),
-                    input_model: input_model.clone(),
-                    input: inline.call_input.clone(),
-                });
-            }
-            tools.push(PluginToolBinding {
-                method: method_ident.clone(),
+            let permission_paths =
+                if let Some(permission_method) = inline.permission_paths_method.as_ref() {
+                    let permission_info = validate_tool_permission_handler(
+                        method_infos,
+                        permission_method,
+                        &inline.call_arg_types,
+                        "path",
+                    )?;
+                    Some(PluginToolPermissionHandler {
+                        method: permission_method.clone(),
+                        is_async: permission_info.is_async,
+                        input: inline.call_input.clone(),
+                    })
+                } else {
+                    None
+                };
+            let permission_networks =
+                if let Some(permission_method) = inline.permission_networks_method.as_ref() {
+                    let permission_info = validate_tool_permission_handler(
+                        method_infos,
+                        permission_method,
+                        &inline.call_arg_types,
+                        "network",
+                    )?;
+                    Some(PluginToolPermissionHandler {
+                        method: permission_method.clone(),
+                        is_async: permission_info.is_async,
+                        input: inline.call_input.clone(),
+                    })
+                } else {
+                    None
+                };
+            tools.push(PluginToolPlan {
                 tool,
-                stream,
-                output_ty,
-                output_is_result,
-                is_async,
-                context: inline.context,
-                input: inline.call_input.clone(),
                 input_model,
+                invoke: PluginToolInvokeHandler {
+                    method: method_ident.clone(),
+                    output_ty,
+                    output_is_result,
+                    is_async,
+                    context: inline.context,
+                    input: inline.call_input.clone(),
+                },
+                stream,
+                permissions: PluginToolPermissionHandlers {
+                    paths: permission_paths,
+                    networks: permission_networks,
+                },
             });
         } else if attr.path().is_ident("hook") {
             ensure_plugin_method_shared_receiver(method, "#[hook] methods")?;
@@ -981,12 +994,7 @@ fn parse_plugin_inherent_method_attrs(
         }
     }
     method.attrs = kept_attrs;
-    Ok(PluginInherentMethodAttrs {
-        tools,
-        permission_paths,
-        permission_networks,
-        hooks,
-    })
+    Ok(PluginInherentMethodAttrs { tools, hooks })
 }
 
 fn plugin_attr_has_explicit_args(attr: &Attribute) -> bool {
@@ -2028,77 +2036,17 @@ fn reject_duplicate_hook_bindings(hooks: &[PluginHookBinding]) -> Result<()> {
     Ok(())
 }
 
-fn collect_plugin_stream_bindings(tools: &[PluginToolBinding]) -> Vec<PluginStreamToolBinding> {
-    let mut bindings = Vec::new();
-    for tool in tools {
-        let Some(stream) = tool.stream.as_ref() else {
-            continue;
-        };
-        bindings.push(PluginStreamToolBinding {
-            method: stream.method.clone(),
-            is_async: stream.is_async,
-            sink_first: stream.sink_first,
-            tool: tool.tool.clone(),
-            input_model: tool.input_model.clone(),
-            context: tool.context,
-            input: tool.input.clone(),
-        });
-    }
-    bindings
-}
-
-fn reject_duplicate_tool_bindings(bindings: &[PluginToolBinding]) -> Result<()> {
-    for (index, binding) in bindings.iter().enumerate() {
-        let tool = &binding.tool;
-        if bindings
+fn reject_duplicate_tool_plans(tools: &[PluginToolPlan]) -> Result<()> {
+    for (index, tool) in tools.iter().enumerate() {
+        let name = &tool.tool;
+        if tools
             .iter()
             .skip(index + 1)
-            .any(|other| other.tool.value() == tool.value())
+            .any(|other| other.tool.value() == name.value())
         {
             return Err(syn::Error::new_spanned(
-                tool,
-                format!("duplicate inline tool name '{}'", tool.value()),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn reject_duplicate_stream_bindings(bindings: &[PluginStreamToolBinding]) -> Result<()> {
-    for (index, binding) in bindings.iter().enumerate() {
-        if bindings
-            .iter()
-            .skip(index + 1)
-            .any(|other| other.tool.value() == binding.tool.value())
-        {
-            return Err(syn::Error::new_spanned(
-                &binding.method,
-                format!(
-                    "duplicate stream handler for tool '{}'",
-                    binding.tool.value()
-                ),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn reject_duplicate_permission_bindings(
-    bindings: &[PluginPermissionBinding],
-    kind: &str,
-) -> Result<()> {
-    for (index, binding) in bindings.iter().enumerate() {
-        if bindings
-            .iter()
-            .skip(index + 1)
-            .any(|other| other.tool.value() == binding.tool.value())
-        {
-            return Err(syn::Error::new_spanned(
-                &binding.method,
-                format!(
-                    "duplicate {kind} permission handler for tool '{}'",
-                    binding.tool.value()
-                ),
+                name,
+                format!("duplicate inline tool name '{}'", name.value()),
             ));
         }
     }
@@ -2162,10 +2110,7 @@ fn expand_plugin_layer_manifest(
     self_ty: &Type,
     cacheable: bool,
     docs: Option<&str>,
-    tools: &[PluginToolBinding],
-    streams: &[PluginStreamToolBinding],
-    permission_paths: &[PluginPermissionBinding],
-    permission_networks: &[PluginPermissionBinding],
+    tools: &[PluginToolPlan],
     hooks: &[PluginHookBinding],
 ) -> Result<proc_macro2::TokenStream> {
     let namespace = config
@@ -2184,14 +2129,7 @@ fn expand_plugin_layer_manifest(
             "#[agena_plugin(...)] requires `summary = ...` or doc comments on the impl block",
         ));
     };
-    let hooks_expr = plugin_layer_hooks_expr(
-        config.explicit_hooks.as_ref(),
-        tools,
-        streams,
-        permission_paths,
-        permission_networks,
-        hooks,
-    );
+    let hooks_expr = plugin_layer_hooks_expr(config.explicit_hooks.as_ref(), tools, hooks);
 
     let config_schema_assignment = expand_plugin_layer_config_schema_assignment(
         config.config_schema_type.as_ref(),
@@ -2357,10 +2295,7 @@ fn expr_is_ident(expr: &Expr, expected: &str) -> bool {
 
 fn plugin_layer_hooks_expr(
     explicit_hooks: Option<&Expr>,
-    tools: &[PluginToolBinding],
-    streams: &[PluginStreamToolBinding],
-    _permission_paths: &[PluginPermissionBinding],
-    _permission_networks: &[PluginPermissionBinding],
+    tools: &[PluginToolPlan],
     hooks: &[PluginHookBinding],
 ) -> proc_macro2::TokenStream {
     let mut terms = Vec::new();
@@ -2370,7 +2305,7 @@ fn plugin_layer_hooks_expr(
     if !tools.is_empty() {
         terms.push(quote! { ::agena_plugin_sdk::HookSubscription::TOOL_INVOKE });
     }
-    if !streams.is_empty() {
+    if tools.iter().any(|tool| tool.stream.is_some()) {
         terms.push(quote! { ::agena_plugin_sdk::HookSubscription::TOOL_INVOKE_STREAM });
     }
     for hook in hooks {
@@ -2446,9 +2381,9 @@ fn plugin_hook_subscription_expr(hook: PluginHookKind) -> proc_macro2::TokenStre
 
 fn expand_plugin_layer_tool_invoke(
     _self_ty: &Type,
-    bindings: &[PluginToolBinding],
+    tools: &[PluginToolPlan],
 ) -> Result<proc_macro2::TokenStream> {
-    let branches = bindings
+    let branches = tools
         .iter()
         .map(expand_plugin_layer_tool_invoke_branch)
         .collect::<Result<Vec<_>>>()?;
@@ -2483,21 +2418,22 @@ fn expand_plugin_layer_tool_invoke(
 }
 
 fn expand_plugin_layer_tool_invoke_branch(
-    binding: &PluginToolBinding,
+    tool: &PluginToolPlan,
 ) -> Result<proc_macro2::TokenStream> {
-    let tool = &binding.tool;
-    let call_args = plugin_layer_tool_call_args(binding.context, &binding.input);
+    let tool_name = &tool.tool;
+    let handler = &tool.invoke;
+    let call_args = plugin_layer_tool_call_args(handler.context, &handler.input);
     let call = plugin_layer_tool_method_call(
-        &binding.method,
-        binding.is_async,
+        &handler.method,
+        handler.is_async,
         &call_args,
-        binding.output_ty.as_ref(),
-        binding.output_is_result,
+        handler.output_ty.as_ref(),
+        handler.output_is_result,
     );
     let parse =
-        expand_plugin_tool_parse_input(&binding.input_model, quote! { __input }, &binding.method)?;
+        expand_plugin_tool_parse_input(&tool.input_model, quote! { __input }, &handler.method)?;
     Ok(quote! {
-        #tool => {
+        #tool_name => {
             let __parsed = #parse;
             return #call;
         }
@@ -2506,10 +2442,11 @@ fn expand_plugin_layer_tool_invoke_branch(
 
 fn expand_plugin_layer_tool_stream(
     _self_ty: &Type,
-    bindings: &[PluginStreamToolBinding],
+    tools: &[PluginToolPlan],
 ) -> Result<proc_macro2::TokenStream> {
-    let branches = bindings
+    let branches = tools
         .iter()
+        .filter(|tool| tool.stream.is_some())
         .map(expand_plugin_layer_tool_stream_branch)
         .collect::<Result<Vec<_>>>()?;
 
@@ -2559,12 +2496,12 @@ fn expand_plugin_layer_tool_stream(
 }
 
 fn expand_plugin_layer_tool_stream_branch(
-    binding: &PluginStreamToolBinding,
+    tool: &PluginToolPlan,
 ) -> Result<proc_macro2::TokenStream> {
-    let tool = &binding.tool;
-    let input_model = &binding.input_model;
-    let input_args = plugin_layer_tool_call_args(binding.context, &binding.input);
-    let args = if binding.sink_first {
+    let tool_name = &tool.tool;
+    let stream = tool.stream.as_ref().expect("stream branch prefiltered");
+    let input_args = plugin_layer_tool_call_args(stream.context, &stream.input);
+    let args = if stream.sink_first {
         let mut args = vec![quote! { sink }];
         args.extend(input_args);
         args
@@ -2573,10 +2510,11 @@ fn expand_plugin_layer_tool_stream_branch(
         args.push(quote! { sink });
         args
     };
-    let call = plugin_layer_stream_method_call(&binding.method, binding.is_async, &args);
-    let parse = expand_plugin_tool_parse_input(input_model, quote! { __input }, &binding.method)?;
+    let call = plugin_layer_stream_method_call(&stream.method, stream.is_async, &args);
+    let parse =
+        expand_plugin_tool_parse_input(&tool.input_model, quote! { __input }, &stream.method)?;
     Ok(quote! {
-        #tool => {
+        #tool_name => {
             let __parsed = #parse;
             return #call;
         }
@@ -2585,11 +2523,12 @@ fn expand_plugin_layer_tool_stream_branch(
 
 fn expand_plugin_layer_permission_paths(
     _self_ty: &Type,
-    bindings: &[PluginPermissionBinding],
+    tools: &[PluginToolPlan],
 ) -> Result<proc_macro2::TokenStream> {
-    let branches = bindings
+    let branches = tools
         .iter()
-        .map(|binding| expand_plugin_layer_permission_branch(binding, true))
+        .filter(|tool| tool.permissions.paths.is_some())
+        .map(|tool| expand_plugin_layer_permission_branch(tool, true))
         .collect::<Result<Vec<_>>>()?;
 
     Ok(quote! {
@@ -2608,11 +2547,12 @@ fn expand_plugin_layer_permission_paths(
 
 fn expand_plugin_layer_permission_networks(
     _self_ty: &Type,
-    bindings: &[PluginPermissionBinding],
+    tools: &[PluginToolPlan],
 ) -> Result<proc_macro2::TokenStream> {
-    let branches = bindings
+    let branches = tools
         .iter()
-        .map(|binding| expand_plugin_layer_permission_branch(binding, false))
+        .filter(|tool| tool.permissions.networks.is_some())
+        .map(|tool| expand_plugin_layer_permission_branch(tool, false))
         .collect::<Result<Vec<_>>>()?;
 
     Ok(quote! {
@@ -2630,18 +2570,31 @@ fn expand_plugin_layer_permission_networks(
 }
 
 fn expand_plugin_layer_permission_branch(
-    binding: &PluginPermissionBinding,
+    tool: &PluginToolPlan,
     paths: bool,
 ) -> Result<proc_macro2::TokenStream> {
-    let tool = &binding.tool;
-    let input_model = &binding.input_model;
-    let call_args = plugin_call_input_args(&binding.input);
+    let tool_name = &tool.tool;
+    let handler = if paths {
+        tool.permissions
+            .paths
+            .as_ref()
+            .expect("path permission branch prefiltered")
+    } else {
+        tool.permissions
+            .networks
+            .as_ref()
+            .expect("network permission branch prefiltered")
+    };
+    let call_args = plugin_call_input_args(&handler.input);
     let call =
-        plugin_layer_permission_method_call(&binding.method, binding.is_async, &call_args, paths);
-    let parse =
-        expand_plugin_tool_parse_input(input_model, quote! { input.clone() }, &binding.method)?;
+        plugin_layer_permission_method_call(&handler.method, handler.is_async, &call_args, paths);
+    let parse = expand_plugin_tool_parse_input(
+        &tool.input_model,
+        quote! { input.clone() },
+        &handler.method,
+    )?;
     Ok(quote! {
-        #tool => {
+        #tool_name => {
             let __parsed = #parse;
             return #call;
         }

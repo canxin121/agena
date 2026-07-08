@@ -43,19 +43,35 @@ impl ManifestPlugin {
         ))
     }
 
-    fn render_paths(&self, _input: &ManifestInput) -> Vec<PathRequest> {
-        Vec::new()
+    fn render_paths(&self, input: &ManifestInput) -> Vec<PathRequest> {
+        vec![PathRequest::read(input.text.clone())]
+    }
+
+    /// Render docs summary.
+    ///
+    /// Render docs help.
+    #[tool(read_only)]
+    fn doc_render(&self) -> String {
+        "doc".to_string()
+    }
+
+    #[tool(summary = "Dynamic output.", read_only)]
+    fn dynamic(&self) -> ToolInvokeOutput {
+        ToolInvokeOutput::text("dynamic")
+    }
+
+    #[tool(summary = "Explicit output.", output(ManifestOutput), read_only)]
+    fn explicit(&self) -> ManifestOutput {
+        ManifestOutput {
+            rendered: "explicit".to_string(),
+        }
     }
 }
 
 #[test]
 fn tool_macro_manifest_infers_output_and_streaming() {
     let manifest = Plugin::manifest(&ManifestPlugin);
-    let tool = manifest
-        .tools
-        .iter()
-        .find(|tool| tool.name == "render")
-        .expect("render tool should be generated");
+    let tool = tool_by_name(&manifest, "render");
 
     assert!(manifest.hooks.contains(HookSubscription::TOOL_INVOKE));
     assert!(
@@ -73,4 +89,55 @@ fn tool_macro_manifest_infers_output_and_streaming() {
             .is_some(),
         "typed output schema should be inferred from Result<ManifestOutput>"
     );
+}
+
+#[test]
+fn tool_macro_manifest_uses_doc_comments_and_dynamic_output() {
+    let manifest = Plugin::manifest(&ManifestPlugin);
+    let doc_tool = tool_by_name(&manifest, "doc_render");
+    let dynamic_tool = tool_by_name(&manifest, "dynamic");
+    let explicit_tool = tool_by_name(&manifest, "explicit");
+
+    assert_eq!(
+        doc_tool.docs.summary.as_deref(),
+        Some("Render docs summary.")
+    );
+    assert!(
+        doc_tool
+            .docs
+            .help
+            .as_deref()
+            .is_some_and(|help| help.contains("Render docs help."))
+    );
+    assert_eq!(dynamic_tool.contract.output_schema, Value::Null);
+    assert!(
+        explicit_tool
+            .contract
+            .output_schema
+            .pointer("/properties/rendered")
+            .is_some(),
+        "explicit output(Type) should still generate a typed schema"
+    );
+}
+
+#[test]
+fn tool_macro_permission_dispatch_parses_tool_input() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("test runtime should build");
+    let plugin = ManifestPlugin;
+    let input = json!({ "text": "/tmp/render.txt" });
+    let requests = runtime
+        .block_on(Plugin::permission_paths(&plugin, "render", &input))
+        .expect("permission dispatch should succeed");
+
+    assert_eq!(requests, vec![PathRequest::read("/tmp/render.txt")]);
+}
+
+fn tool_by_name<'a>(manifest: &'a PluginManifest, name: &str) -> &'a ToolDefinition {
+    manifest
+        .tools
+        .iter()
+        .find(|tool| tool.name == name)
+        .unwrap_or_else(|| panic!("{name} tool should be generated"))
 }

@@ -1,6 +1,6 @@
 use super::*;
 
-use agena_macros::ToolInputShape;
+use agena_macros::ToolInput;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
@@ -114,7 +114,7 @@ pub(crate) struct WorkflowPlanStepInput {
     pub(crate) checkpoints: Vec<WorkflowPlanCheckpointInput>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 #[schemars(
     description = "Create or overwrite the current active-session plan in planning. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically."
@@ -135,7 +135,7 @@ pub(crate) struct PlanSetInput {
 }
 
 #[derive(
-    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape, Default,
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput, Default,
 )]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PlanGetView {
@@ -145,19 +145,15 @@ pub(crate) enum PlanGetView {
     Full,
 }
 
-#[derive(
-    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape, Default,
-)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput, Default)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct PlanGetInput {
     #[serde(default)]
     pub(crate) view: PlanGetView,
 }
 
-#[derive(
-    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape, Default,
-)]
-#[tool_input(trim("summary", "step_id", "check_id", "note"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput, Default)]
+#[input(trim("summary", "step_id", "check_id", "note"))]
 #[serde(default, deny_unknown_fields)]
 #[schemars(
     description = "Update the current plan. Use `phase` / `autorun` for plan-level state changes, `step_id` + `status` to update a step, or `step_id` + `check_id` + `status` to update a check. Do not combine plan-level fields (`phase`, `autorun`, `summary`) with step/check fields. To complete a plan with steps, first mark the relevant steps or checks `completed`, then make a separate plan-level update with `phase: completed`. Canonical phase values are `planning`, `active`, `blocked`, `completed`, and `cancelled`."

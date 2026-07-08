@@ -6,7 +6,7 @@ use crate::plugin::sdk::{
     NetworkRequest, PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
 };
 use crate::plugins::provided::router;
-use agena_macros::ToolInputShape;
+use agena_macros::ToolInput;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -18,9 +18,9 @@ pub(crate) fn new_plugin() -> ProcessPlugin {
     ProcessPlugin
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ProcessRunToolArgs {
+pub(crate) struct ProcessRunInput {
     #[serde(default)]
     shell: ProcessShell,
     #[serde(flatten)]
@@ -30,10 +30,10 @@ pub(crate) struct ProcessRunToolArgs {
     background: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("process_id"), non_empty("process_id"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("process_id"), non_empty("process_id"))]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ProcessLogsToolArgs {
+pub(crate) struct ProcessLogsInput {
     process_id: String,
     #[serde(default)]
     since_seq: u64,
@@ -43,10 +43,10 @@ pub(crate) struct ProcessLogsToolArgs {
     wait_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("process_id"), non_empty("process_id"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("process_id"), non_empty("process_id"))]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ProcessStopToolArgs {
+pub(crate) struct ProcessStopInput {
     process_id: String,
 }
 
@@ -69,7 +69,7 @@ impl ProcessPlugin {
     async fn invoke_run(
         &self,
         context: &ToolInvokeContext<'_>,
-        args: ProcessRunToolArgs,
+        args: ProcessRunInput,
     ) -> SdkResult<ToolInvokeOutput> {
         router::invoke_tool(
             "process",
@@ -111,7 +111,7 @@ impl ProcessPlugin {
     async fn invoke_logs(
         &self,
         context: &ToolInvokeContext<'_>,
-        args: ProcessLogsToolArgs,
+        args: ProcessLogsInput,
     ) -> SdkResult<ToolInvokeOutput> {
         router::invoke_tool(
             "process",
@@ -136,7 +136,7 @@ impl ProcessPlugin {
     async fn invoke_stop(
         &self,
         context: &ToolInvokeContext<'_>,
-        args: ProcessStopToolArgs,
+        args: ProcessStopInput,
     ) -> SdkResult<ToolInvokeOutput> {
         router::invoke_tool(
             "process",
@@ -148,7 +148,7 @@ impl ProcessPlugin {
         )
     }
 
-    async fn permission_run(&self, args: ProcessRunToolArgs) -> SdkResult<Vec<PathRequest>> {
+    async fn permission_run(&self, args: ProcessRunInput) -> SdkResult<Vec<PathRequest>> {
         router::permission_paths_for(
             "process",
             &json_input(ProcessToolInput::Run {
@@ -163,7 +163,7 @@ impl ProcessPlugin {
         router::permission_paths_for("process", &json_input(ProcessToolInput::List {})?)
     }
 
-    async fn permission_logs(&self, args: ProcessLogsToolArgs) -> SdkResult<Vec<PathRequest>> {
+    async fn permission_logs(&self, args: ProcessLogsInput) -> SdkResult<Vec<PathRequest>> {
         router::permission_paths_for(
             "process",
             &json_input(ProcessToolInput::Logs {
@@ -175,7 +175,7 @@ impl ProcessPlugin {
         )
     }
 
-    async fn permission_stop(&self, args: ProcessStopToolArgs) -> SdkResult<Vec<PathRequest>> {
+    async fn permission_stop(&self, args: ProcessStopInput) -> SdkResult<Vec<PathRequest>> {
         router::permission_paths_for(
             "process",
             &json_input(ProcessToolInput::Stop {
@@ -186,7 +186,7 @@ impl ProcessPlugin {
 
     async fn permission_networks_run(
         &self,
-        args: ProcessRunToolArgs,
+        args: ProcessRunInput,
     ) -> SdkResult<Vec<NetworkRequest>> {
         router::permission_networks_for(
             "process",
@@ -204,7 +204,7 @@ impl ProcessPlugin {
 
     async fn permission_networks_logs(
         &self,
-        args: ProcessLogsToolArgs,
+        args: ProcessLogsInput,
     ) -> SdkResult<Vec<NetworkRequest>> {
         router::permission_networks_for(
             "process",
@@ -219,7 +219,7 @@ impl ProcessPlugin {
 
     async fn permission_networks_stop(
         &self,
-        args: ProcessStopToolArgs,
+        args: ProcessStopInput,
     ) -> SdkResult<Vec<NetworkRequest>> {
         router::permission_networks_for(
             "process",

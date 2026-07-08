@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, OnceLock, RwLock},
 };
 
-use agena_macros::ToolInputShape;
+use agena_macros::ToolInput;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -131,8 +131,8 @@ fn settings_config_schema() -> JsonValue {
     schema
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape, Default)]
-#[tool_input(trim("path"))]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput, Default)]
+#[input(trim("path"))]
 #[serde(default, deny_unknown_fields)]
 struct SettingsGetToolInput {
     path: Option<String>,
@@ -140,8 +140,8 @@ struct SettingsGetToolInput {
     source: Option<ConfigSettingsSource>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape, Default)]
-#[tool_input(trim("path"))]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput, Default)]
+#[input(trim("path"))]
 #[serde(default, deny_unknown_fields)]
 struct SettingsListToolInput {
     path: Option<String>,
@@ -150,12 +150,12 @@ struct SettingsListToolInput {
     recursive: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput, Default)]
 #[serde(default, deny_unknown_fields)]
 struct SettingsValidateToolInput {}
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
-#[tool_input(trim("path"), non_empty("path"))]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[input(trim("path"), non_empty("path"))]
 #[serde(deny_unknown_fields)]
 struct SettingsSetToolInput {
     path: String,
@@ -168,8 +168,8 @@ struct SettingsSetToolInput {
     reload: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
-#[tool_input(trim("path"), non_empty("path"))]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[input(trim("path"), non_empty("path"))]
 #[serde(deny_unknown_fields)]
 struct SettingsDeleteToolInput {
     path: String,
@@ -181,8 +181,8 @@ struct SettingsDeleteToolInput {
     reload: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape, Default)]
-#[tool_input(trim("path"))]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput, Default)]
+#[input(trim("path"))]
 #[serde(default, deny_unknown_fields)]
 struct SettingsPatchToolInput {
     path: Option<String>,

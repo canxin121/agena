@@ -622,17 +622,17 @@ async fn main() -> std::io::Result<()> {
 
 推荐入口是 `#[agena_plugin(...)]`。一个 plugin 暴露多个模型可见 tool 时，把每个 tool 写成 impl 里的一个方法即可；宏会生成隐藏 input/surface 类型、manifest tool definition、静态分发、stream fallback 和 permission 分发。非泛型插件的 manifest/schema 会在生成代码中按类型缓存，避免每次查询 catalog 时重复构造 schema。
 
-如果 tool 输入比较复杂，继续使用独立 input struct。推荐给输入类型派生 `ToolInputShape`，把字段级清洗和校验写在字段旁边；`#[tool]` 只保留 tool 的语义、权限和运行时策略：
+如果 tool 输入比较复杂，继续使用独立 input struct。推荐给输入类型派生 `ToolInput`，把字段级清洗和校验写在字段旁边；`#[tool]` 只保留 tool 的语义、权限和运行时策略：
 
 ```rust
-#[derive(Debug, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct FormatInput {
     #[arg(trim, non_empty)]
     text: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct WriteInput {
     #[arg(trim, non_empty)]
@@ -641,17 +641,34 @@ struct WriteInput {
     text: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FormatOutput {
+    rendered: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct WriteOutput {
+    message: String,
+    path: String,
+    bytes: usize,
+}
+
 #[agena_plugin(namespace = "example", name = "notes", version = env!("CARGO_PKG_VERSION"), summary = "Notes plugin.")]
 impl NotesPlugin {
     #[tool(
         name = "format",
         summary = "Format text.",
+        output = FormatOutput,
         read_only,
         streaming,
         concurrency_safe
     )]
-    async fn format(&self, input: &FormatInput) -> Result<ToolInvokeOutput> {
-        // ...
+    async fn format(&self, input: &FormatInput) -> Result<FormatOutput> {
+        Ok(FormatOutput {
+            rendered: input.text.trim().to_string(),
+        })
     }
 
     #[stream(format)]
@@ -662,12 +679,17 @@ impl NotesPlugin {
     #[tool(
         name = "write",
         summary = "Write text.",
+        output = WriteOutput,
         mutating,
         filesystem_write,
         permission(paths = write_permission_paths)
     )]
-    async fn write(&self, input: &WriteInput) -> Result<ToolInvokeOutput> {
-        // ...
+    async fn write(&self, input: &WriteInput) -> Result<WriteOutput> {
+        Ok(WriteOutput {
+            message: format!("wrote {}", input.path),
+            path: input.path.clone(),
+            bytes: input.text.len(),
+        })
     }
 
     async fn write_permission_paths(&self, input: &WriteInput) -> Result<Vec<PathRequest>> {
@@ -676,7 +698,7 @@ impl NotesPlugin {
 }
 ```
 
-方法只有一个输入 struct 参数时，`#[agena_plugin]` 会通过该类型的 `ToolInputShape` 解析输入；因此该类型应派生 `ToolInputShape`。schema、trim、non-empty、items/chars 约束和校验逻辑都来自输入类型本身，不需要在 `#[tool]` 上重复声明。
+方法只有一个输入 struct 参数时，`#[agena_plugin]` 会通过该类型的 `ToolInput` 解析输入；因此该类型应派生 `ToolInput`。schema、trim、non-empty、items/chars 约束和校验逻辑都来自输入类型本身，不需要在 `#[tool]` 上重复声明。方法声明 `output = OutputType` 后，manifest 会包含该输出类型的 JSON schema，handler 可以直接返回 `OutputType` 或 `Result<OutputType, E>`；泛型输出类型使用 `output(Vec<OutputItem>)` 这种列表写法。
 
 简单 tool 可以省掉 input struct，由方法参数直接生成隐藏输入类型：
 

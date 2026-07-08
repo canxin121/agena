@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use agena_macros::ToolInputShape;
+use agena_macros::ToolInput;
 use ast_grep_core::Pattern;
 use ast_grep_language::{Language as AstGrepLanguage, LanguageExt, SupportLang};
 use schemars::JsonSchema;
@@ -161,7 +161,7 @@ impl CodeLanguage {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct CodeSearchAstInput {
     #[arg(trim, non_empty)]
@@ -174,7 +174,7 @@ struct CodeSearchAstInput {
     limit: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct CodeSyntaxTreeInput {
     #[arg(trim, non_empty)]

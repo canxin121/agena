@@ -21,18 +21,13 @@ pub fn agena_plugin(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-#[proc_macro_derive(ToolInputShape, attributes(tool_input, tool_args, tool, arg))]
-pub fn derive_tool_input_shape(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(ToolInput, attributes(input, tool, arg))]
+pub fn derive_input(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    match expand_tool_input_shape(input) {
+    match expand_input(input) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
-}
-
-#[proc_macro_derive(ToolArgs, attributes(tool_input, tool_args, tool, arg))]
-pub fn derive_tool_args(input: TokenStream) -> TokenStream {
-    derive_tool_input_shape(input)
 }
 
 #[proc_macro_derive(PluginConfigStore, attributes(config, plugin_config))]
@@ -297,6 +292,8 @@ struct PluginImplConfig {
 struct PluginToolBinding {
     method: Ident,
     ty: Type,
+    output_ty: Option<Type>,
+    output_is_result: bool,
     is_async: bool,
     context: Option<PluginContextArg>,
     input: PluginCallInput,
@@ -662,9 +659,18 @@ fn expr_as_type(expr: Expr) -> Result<Type> {
         }
         other => Err(syn::Error::new_spanned(
             other,
-            "expected a type path, such as `MyConfig`",
+            "expected a type path, such as `MyType`",
         )),
     }
+}
+
+fn parse_type_list(tokens: proc_macro2::TokenStream, label: &str) -> Result<Type> {
+    syn::parse2::<Type>(tokens).map_err(|err| {
+        syn::Error::new(
+            err.span(),
+            format!("{label} expects a single type, such as `{label}(Vec<Item>)`"),
+        )
+    })
 }
 
 fn expr_path_ident(expr: Expr, label: &str) -> Result<Ident> {
@@ -809,6 +815,9 @@ fn parse_plugin_inherent_method_attrs(
                     tools.push(PluginToolBinding {
                         method: method_ident.clone(),
                         ty: surface_ty,
+                        output_ty: inline.surface.surface.output_ty.clone(),
+                        output_is_result: inline.surface.surface.output_ty.is_some()
+                            && plugin_method_returns_result(method),
                         is_async,
                         context: inline.context,
                         input: inline.call_input.clone(),
@@ -1030,6 +1039,7 @@ fn plugin_tool_meta_is_inline(meta: &Meta) -> bool {
                 | "validate"
                 | "display"
                 | "ui_display"
+                | "output"
                 | "description_mode"
                 | "ui_display_mode"
                 | "streaming"
@@ -1117,6 +1127,7 @@ fn parse_plugin_inline_tool_config(
                     "ui_display" => {
                         surface.ui_display = Some(expr_string_like(&value.value, "ui_display")?)
                     }
+                    "output" => surface.output_ty = Some(expr_as_type(value.value)?),
                     "description_mode" => {
                         surface.description_mode =
                             Some(expr_string_like(&value.value, "description_mode")?)
@@ -1216,6 +1227,7 @@ fn parse_plugin_inline_tool_config(
                         .push(parse_path_usize_constraint(list.tokens, "max_chars")?),
                     "tags" => surface.tags = parse_expr_list(list.tokens)?,
                     "capabilities" => surface.capabilities = parse_expr_list(list.tokens)?,
+                    "output" => surface.output_ty = Some(parse_type_list(list.tokens, "output")?),
                     "permission" => parse_inline_permission_list(
                         list.tokens,
                         &mut permission_paths_method,
@@ -1376,6 +1388,19 @@ fn plugin_method_inferred_stream_input_type(method: &ImplItemFn, sink_first: boo
             "cannot infer plugin stream input type without an input argument",
         )
     })
+}
+
+fn plugin_method_returns_result(method: &ImplItemFn) -> bool {
+    let syn::ReturnType::Type(_, ty) = &method.sig.output else {
+        return false;
+    };
+    let Type::Path(path) = ty.as_ref() else {
+        return false;
+    };
+    path.path
+        .segments
+        .last()
+        .is_some_and(|segment| matches!(segment.ident.to_string().as_str(), "Result" | "SdkResult"))
 }
 
 fn plugin_inline_tool_method_surface(
@@ -1662,7 +1687,7 @@ fn apply_arg_config_to_surface(
     }
 }
 
-fn apply_tool_input_field_arg_attrs(config: &mut ToolInputShapeConfig, data: &Data) -> Result<()> {
+fn apply_input_field_arg_attrs(config: &mut ToolInputConfig, data: &Data) -> Result<()> {
     let Data::Struct(data_struct) = data else {
         return Ok(());
     };
@@ -1670,7 +1695,7 @@ fn apply_tool_input_field_arg_attrs(config: &mut ToolInputShapeConfig, data: &Da
         return Ok(());
     };
     for field in &fields.named {
-        let arg_config = parse_tool_input_field_arg_attrs(field)?;
+        let arg_config = parse_input_field_arg_attrs(field)?;
         if !arg_config_has_constraints(&arg_config) {
             continue;
         }
@@ -1681,12 +1706,12 @@ fn apply_tool_input_field_arg_attrs(config: &mut ToolInputShapeConfig, data: &Da
             ));
         };
         let field_name = LitStr::new(&field_name, field.span());
-        apply_field_arg_config_to_tool_input(config, &field_name, &arg_config);
+        apply_field_arg_config_to_input(config, &field_name, &arg_config);
     }
     Ok(())
 }
 
-fn parse_tool_input_field_arg_attrs(field: &Field) -> Result<FieldArgConfig> {
+fn parse_input_field_arg_attrs(field: &Field) -> Result<FieldArgConfig> {
     let mut config = FieldArgConfig::default();
     for attr in &field.attrs {
         if !attr.path().is_ident("arg") {
@@ -1700,16 +1725,13 @@ fn parse_tool_input_field_arg_attrs(field: &Field) -> Result<FieldArgConfig> {
                     "#[arg] supports list syntax, for example #[arg(trim, non_empty)]",
                 ));
             }
-            Meta::List(_) => parse_tool_input_field_arg_config_attr(attr, &mut config)?,
+            Meta::List(_) => parse_input_field_arg_config_attr(attr, &mut config)?,
         }
     }
     Ok(config)
 }
 
-fn parse_tool_input_field_arg_config_attr(
-    attr: &Attribute,
-    config: &mut FieldArgConfig,
-) -> Result<()> {
+fn parse_input_field_arg_config_attr(attr: &Attribute, config: &mut FieldArgConfig) -> Result<()> {
     let metas = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
     for meta in metas {
         match meta {
@@ -1781,8 +1803,8 @@ fn arg_config_has_constraints(config: &FieldArgConfig) -> bool {
         || config.max_chars.is_some()
 }
 
-fn apply_field_arg_config_to_tool_input(
-    target: &mut ToolInputShapeConfig,
+fn apply_field_arg_config_to_input(
+    target: &mut ToolInputConfig,
     field_name: &LitStr,
     config: &FieldArgConfig,
 ) {
@@ -2667,7 +2689,13 @@ fn expand_plugin_layer_tool_invoke_direct_branch(
     let tool = binding.direct_tool.as_ref().expect("direct tool checked");
     let ty = &binding.ty;
     let call_args = plugin_layer_tool_call_args(binding.context, &binding.input);
-    let call = plugin_layer_tool_method_call(&binding.method, binding.is_async, &call_args);
+    let call = plugin_layer_tool_method_call(
+        &binding.method,
+        binding.is_async,
+        &call_args,
+        binding.output_ty.as_ref(),
+        binding.output_is_result,
+    );
     let parse = quote! {
         let __parsed = <#ty as ::agena_plugin_sdk::ToolSurface>::parse_input(__input)?;
     };
@@ -2682,7 +2710,13 @@ fn expand_plugin_layer_tool_invoke_direct_branch(
 fn expand_plugin_layer_tool_invoke_branch(binding: &PluginToolBinding) -> proc_macro2::TokenStream {
     let ty = &binding.ty;
     let call_args = plugin_layer_tool_call_args(binding.context, &binding.input);
-    let call = plugin_layer_tool_method_call(&binding.method, binding.is_async, &call_args);
+    let call = plugin_layer_tool_method_call(
+        &binding.method,
+        binding.is_async,
+        &call_args,
+        binding.output_ty.as_ref(),
+        binding.output_is_result,
+    );
     quote! {
         {
             if <#ty as ::agena_plugin_sdk::ToolSurface>::has_tool(__tool_name.as_str()) {
@@ -3216,10 +3250,29 @@ fn plugin_layer_tool_method_call(
     method: &Ident,
     is_async: bool,
     args: &[proc_macro2::TokenStream],
+    output_ty: Option<&Type>,
+    output_is_result: bool,
 ) -> proc_macro2::TokenStream {
     let call = plugin_layer_method_call(method, is_async, args);
-    quote! {
-        ::agena_plugin_sdk::IntoToolInvokeOutput::into_tool_invoke_output(#call)
+    if let Some(output_ty) = output_ty {
+        if output_is_result {
+            quote! {
+                match #call {
+                    Ok(__value) => {
+                        ::agena_plugin_sdk::macro_support::typed_tool_output::<#output_ty>(__value)
+                    }
+                    Err(__err) => Err(::core::convert::Into::into(__err)),
+                }
+            }
+        } else {
+            quote! {
+                ::agena_plugin_sdk::macro_support::typed_tool_output::<#output_ty>(#call)
+            }
+        }
+    } else {
+        quote! {
+            ::agena_plugin_sdk::IntoToolInvokeOutput::into_tool_invoke_output(#call)
+        }
     }
 }
 
@@ -3324,10 +3377,10 @@ fn expand_plugin_generated_surface(
         .as_ref()
         .map(|docs| quote! { #[doc = #docs] })
         .unwrap_or_default();
-    let tool_command_items = generated_tool_command_items(&generated.surface)?;
+    let tool_items = generated_tool_items(&generated.surface)?;
     let surface_impl_input: DeriveInput = syn::parse2(quote! {
         #docs_attr
-        #[tool_command(#(#tool_command_items),*)]
+        #[tool(#(#tool_items),*)]
         struct #surface_ident(#input_ty);
     })?;
     let surface_impl = expand_static_tool_surface(surface_impl_input)?;
@@ -3349,7 +3402,7 @@ fn expand_plugin_generated_surface(
     })
 }
 
-fn generated_tool_command_items(surface: &SurfaceConfig) -> Result<Vec<proc_macro2::TokenStream>> {
+fn generated_tool_items(surface: &SurfaceConfig) -> Result<Vec<proc_macro2::TokenStream>> {
     let mut items = Vec::new();
     let tool = surface.tool.as_ref().ok_or_else(|| {
         syn::Error::new(
@@ -3381,6 +3434,9 @@ fn generated_tool_command_items(surface: &SurfaceConfig) -> Result<Vec<proc_macr
     }
     if let Some(value) = surface.ui_display.as_ref() {
         items.push(quote! { ui_display = #value });
+    }
+    if let Some(value) = surface.output_ty.as_ref() {
+        items.push(quote! { output(#value) });
     }
     if let Some(value) = surface.description_mode.as_ref() {
         items.push(quote! { description_mode = #value });
@@ -3523,6 +3579,7 @@ struct SurfaceConfig {
     strict: bool,
     streaming: Option<LitStr>,
     input_shape: Option<Type>,
+    output_ty: Option<Type>,
 }
 
 fn empty_surface_config() -> SurfaceConfig {
@@ -3569,6 +3626,7 @@ fn empty_surface_config() -> SurfaceConfig {
         strict: false,
         streaming: None,
         input_shape: None,
+        output_ty: None,
     }
 }
 
@@ -3699,7 +3757,7 @@ impl SchemaRelationSource for SurfaceConfig {
     }
 }
 
-impl SchemaConstraintSource for ToolInputShapeConfig {
+impl SchemaConstraintSource for ToolInputConfig {
     fn non_empty(&self) -> &[LitStr] {
         &self.non_empty
     }
@@ -3721,7 +3779,7 @@ impl SchemaConstraintSource for ToolInputShapeConfig {
     }
 }
 
-impl SchemaRelationSource for ToolInputShapeConfig {
+impl SchemaRelationSource for ToolInputConfig {
     fn exactly_one_of(&self) -> &[Vec<LitStr>] {
         &self.exactly_one_of
     }
@@ -3857,10 +3915,7 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
             Ok(calls)
         })?;
     let tool = surface.tool.ok_or_else(|| {
-        syn::Error::new_spanned(
-            &name,
-            "missing #[tool_surface(tool = \"...\")] or #[tool_command(tool = \"...\")]",
-        )
+        syn::Error::new_spanned(&name, "generated tool surface is missing a tool name")
     })?;
     let summary = surface
         .summary
@@ -3868,11 +3923,16 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
         .ok_or_else(|| {
             syn::Error::new_spanned(
                 &name,
-                "missing #[tool_surface(summary = \"...\")] / #[tool_command(summary = \"...\")] or doc comments",
+                "generated tool surface is missing summary metadata or doc comments",
             )
         })?;
     let concurrency_safe = surface.concurrency_safe;
     let strict = surface.strict;
+    let output_schema_body = surface
+        .output_ty
+        .as_ref()
+        .map(|ty| quote! { ::agena_plugin_sdk::macro_support::json_schema_for::<#ty>() })
+        .unwrap_or_else(|| quote! { serde_json::Value::Null });
     let built_in_normalize_expr =
         built_in_normalization_tokens(quote! { &mut input }, &surface.trim, &surface.trim_suffix);
     let built_in_post_parse_normalize_expr =
@@ -4052,7 +4112,7 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
     };
     let input_schema_body = if let Some(input_shape_ty) = input_shape_ty.as_ref() {
         quote! {
-            let mut schema = <#input_shape_ty as ::agena_plugin_sdk::ToolInputShape>::input_schema();
+            let mut schema = <#input_shape_ty as ::agena_plugin_sdk::ToolInput>::input_schema();
             Self::__macro_apply_schema_metadata(&mut schema);
             schema
         }
@@ -4068,6 +4128,13 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
             static __AGENA_TOOL_INPUT_SCHEMA: ::std::sync::OnceLock<serde_json::Value> =
                 ::std::sync::OnceLock::new();
             __AGENA_TOOL_INPUT_SCHEMA.get_or_init(|| { #input_schema_body }).clone()
+        }
+    };
+    let output_schema_fn = quote! {
+        pub(crate) fn output_schema() -> serde_json::Value {
+            static __AGENA_TOOL_OUTPUT_SCHEMA: ::std::sync::OnceLock<serde_json::Value> =
+                ::std::sync::OnceLock::new();
+            __AGENA_TOOL_OUTPUT_SCHEMA.get_or_init(|| { #output_schema_body }).clone()
         }
     };
 
@@ -4089,7 +4156,7 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
                 name: name.into(),
                 contract: ::agena_plugin_sdk::manifest::ToolContract {
                     input_schema: schema,
-                    output_schema: serde_json::Value::Null,
+                    output_schema: Self::output_schema(),
                     strict: #strict,
                 },
                 model: ::agena_plugin_sdk::manifest::ToolModelSurface {
@@ -4124,7 +4191,11 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
 
     let tool_definition_fn = quote! {
         pub(crate) fn tool_definition() -> ::agena_plugin_sdk::ToolDefinition {
-            Self::__macro_tool_definition(#tool, Self::input_schema())
+            static __AGENA_TOOL_DEFINITION: ::std::sync::OnceLock<::agena_plugin_sdk::ToolDefinition> =
+                ::std::sync::OnceLock::new();
+            __AGENA_TOOL_DEFINITION
+                .get_or_init(|| Self::__macro_tool_definition(#tool, Self::input_schema()))
+                .clone()
         }
     };
 
@@ -4211,7 +4282,9 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
 
     let tool_definitions_fn = quote! {
         pub(crate) fn tool_definitions() -> Vec<::agena_plugin_sdk::ToolDefinition> {
-            #tool_definitions_body
+            static __AGENA_TOOL_DEFINITIONS: ::std::sync::OnceLock<Vec<::agena_plugin_sdk::ToolDefinition>> =
+                ::std::sync::OnceLock::new();
+            __AGENA_TOOL_DEFINITIONS.get_or_init(|| { #tool_definitions_body }).clone()
         }
     };
     let tool_names_fn = quote! {
@@ -4320,7 +4393,7 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
                     let mut input = input;
                     #built_in_normalize_expr
                     let input = #normalize_expr;
-                    let parsed = <#input_shape_ty as ::agena_plugin_sdk::ToolInputShape>::parse_input(input)?;
+                    let parsed = <#input_shape_ty as ::agena_plugin_sdk::ToolInput>::parse_input(input)?;
                     let parsed = Self(parsed);
                     let parsed = #built_in_post_parse_normalize_expr;
                     let parsed = #flatten_shape_post_parse_expr;
@@ -4403,6 +4476,8 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
             #has_tool_fn
 
             #input_schema_fn
+
+            #output_schema_fn
 
             #parse_input_fn
 
@@ -4498,12 +4573,12 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
     })
 }
 
-fn expand_tool_input_shape(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
+fn expand_input(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
     let name = input.ident;
-    let mut config = parse_tool_input_shape_config(&input.attrs)?;
-    apply_tool_input_field_arg_attrs(&mut config, &input.data)?;
+    let mut config = parse_input_config(&input.attrs)?;
+    apply_input_field_arg_attrs(&mut config, &input.data)?;
     let schema_metadata_fn = expand_schema_metadata_fn(&input.data, &config, |variant, prefix| {
-        let config = parse_tool_input_variant_config(variant)?;
+        let config = parse_input_variant_config(variant)?;
         let mut calls = constraint_schema_metadata_calls(prefix, &config)?;
         calls.extend(constraint_relation_metadata_calls(prefix, &config)?);
         Ok(calls)
@@ -4533,7 +4608,7 @@ fn expand_tool_input_shape(input: DeriveInput) -> Result<proc_macro2::TokenStrea
         _ => {
             return Err(syn::Error::new_spanned(
                 name,
-                "ToolInputShape can only be derived for enums or structs",
+                "ToolInput can only be derived for enums or structs",
             ));
         }
     };
@@ -4568,7 +4643,7 @@ fn expand_tool_input_shape(input: DeriveInput) -> Result<proc_macro2::TokenStrea
         &config.max_items,
         &config.max_chars,
     );
-    let dispatch_tool_invoke_fn = expand_tool_input_shape_dispatch_fn(&input.data, &config)?;
+    let dispatch_tool_invoke_fn = expand_input_dispatch_fn(&input.data, &config)?;
 
     Ok(quote! {
         impl #name {
@@ -4618,7 +4693,7 @@ fn expand_tool_input_shape(input: DeriveInput) -> Result<proc_macro2::TokenStrea
             }
         }
 
-        impl ::agena_plugin_sdk::ToolInputShape for #name {
+        impl ::agena_plugin_sdk::ToolInput for #name {
             fn input_schema() -> serde_json::Value {
                 Self::input_schema()
             }
@@ -4722,9 +4797,9 @@ fn dispatch_variant_pattern_and_args(
     }
 }
 
-fn expand_tool_input_shape_dispatch_fn(
+fn expand_input_dispatch_fn(
     data: &Data,
-    config: &ToolInputShapeConfig,
+    config: &ToolInputConfig,
 ) -> Result<proc_macro2::TokenStream> {
     let receiver_ty = config.handler_receiver.as_ref();
     let struct_handle = config.handle.as_ref();
@@ -4755,13 +4830,13 @@ fn expand_tool_input_shape_dispatch_fn(
             if struct_handle.is_some() && struct_handle_with_context.is_some() {
                 return Err(syn::Error::new(
                     proc_macro2::Span::call_site(),
-                    "ToolInputShape structs cannot combine handle and handle_with_context",
+                    "ToolInput structs cannot combine handle and handle_with_context",
                 ));
             }
             if struct_stream_handle.is_some() && struct_stream_handle_with_context.is_some() {
                 return Err(syn::Error::new(
                     proc_macro2::Span::call_site(),
-                    "ToolInputShape structs cannot combine stream_handle and stream_handle_with_context",
+                    "ToolInput structs cannot combine stream_handle and stream_handle_with_context",
                 ));
             }
             let Some(receiver_ty) = receiver_ty else {
@@ -4991,7 +5066,7 @@ fn expand_tool_input_shape_dispatch_fn(
         Data::Enum(data_enum) => {
             if receiver_ty.is_none() {
                 let has_variant_handles = data_enum.variants.iter().any(|variant| {
-                    parse_tool_input_variant_config(variant)
+                    parse_input_variant_config(variant)
                         .ok()
                         .map(|cfg| {
                             cfg.handle.is_some()
@@ -5031,7 +5106,7 @@ fn expand_tool_input_shape_dispatch_fn(
             let mut saw_missing_permission_paths_handle = false;
             let mut saw_missing_permission_networks_handle = false;
             for variant in &data_enum.variants {
-                let config = parse_tool_input_variant_config(variant)?;
+                let config = parse_input_variant_config(variant)?;
                 if config.handle_by_value
                     && config.handle.is_none()
                     && config.handle_with_context.is_none()
@@ -5558,7 +5633,7 @@ fn struct_field_schema_metadata_calls(
         if let Some(flatten_shape_ty) = flatten_shape_type(field)? {
             let pointer = LitStr::new(prefix, field.span());
             calls.push(quote! {
-                let mut overlay = <#flatten_shape_ty as ::agena_plugin_sdk::ToolInputShape>::input_schema();
+                let mut overlay = <#flatten_shape_ty as ::agena_plugin_sdk::ToolInput>::input_schema();
                 ::agena_plugin_sdk::macro_support::prefix_schema_order_metadata(
                     &mut overlay,
                     #order,
@@ -5754,7 +5829,7 @@ fn expand_flatten_shape_post_parse_tokens(data: &Data) -> Result<proc_macro2::To
                 .into_iter()
                 .map(|(member, ty)| {
                     quote! {
-                        parsed.#member = <#ty as ::agena_plugin_sdk::ToolInputShape>::parse_input(
+                        parsed.#member = <#ty as ::agena_plugin_sdk::ToolInput>::parse_input(
                             serde_json::to_value(&parsed.#member)
                                 .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?,
                         )?;
@@ -5824,7 +5899,7 @@ fn expand_flatten_shape_variant_post_parse_arm(
                 .filter_map(|(ident, flatten_shape_ty)| {
                     flatten_shape_ty.as_ref().map(|ty| {
                         quote! {
-                            let #ident = <#ty as ::agena_plugin_sdk::ToolInputShape>::parse_input(
+                            let #ident = <#ty as ::agena_plugin_sdk::ToolInput>::parse_input(
                                 serde_json::to_value(&#ident)
                                     .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?,
                             )?;
@@ -5864,7 +5939,7 @@ fn expand_flatten_shape_variant_post_parse_arm(
                 .filter_map(|(binding, flatten_shape_ty)| {
                     flatten_shape_ty.as_ref().map(|ty| {
                         quote! {
-                            let #binding = <#ty as ::agena_plugin_sdk::ToolInputShape>::parse_input(
+                            let #binding = <#ty as ::agena_plugin_sdk::ToolInput>::parse_input(
                                 serde_json::to_value(&#binding)
                                     .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?,
                             )?;
@@ -5930,7 +6005,7 @@ struct ToolInputVariantConfig {
     drop_keys: Vec<LitStr>,
 }
 
-struct ToolInputShapeConfig {
+struct ToolInputConfig {
     normalize: Option<Path>,
     validate: Option<Path>,
     handler_receiver: Option<Path>,
@@ -5959,7 +6034,7 @@ struct ToolInputShapeConfig {
     max_chars: Vec<PathUsizeConstraint>,
 }
 
-fn parse_tool_input_shape_config(attrs: &[Attribute]) -> Result<ToolInputShapeConfig> {
+fn parse_input_config(attrs: &[Attribute]) -> Result<ToolInputConfig> {
     let mut normalize = None;
     let mut validate = None;
     let mut handler_receiver = None;
@@ -5987,7 +6062,7 @@ fn parse_tool_input_shape_config(attrs: &[Attribute]) -> Result<ToolInputShapeCo
     let mut max_items = Vec::new();
     let mut max_chars = Vec::new();
     for attr in attrs {
-        if !attr.path().is_ident("tool_input") && !attr.path().is_ident("tool_args") {
+        if !attr.path().is_ident("input") {
             continue;
         }
         let metas = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
@@ -6032,7 +6107,7 @@ fn parse_tool_input_shape_config(attrs: &[Attribute]) -> Result<ToolInputShapeCo
                         other => {
                             return Err(syn::Error::new_spanned(
                                 ident,
-                                format!("unsupported tool args attribute '{other}'"),
+                                format!("unsupported input attribute '{other}'"),
                             ));
                         }
                     }
@@ -6080,7 +6155,7 @@ fn parse_tool_input_shape_config(attrs: &[Attribute]) -> Result<ToolInputShapeCo
                         other => {
                             return Err(syn::Error::new_spanned(
                                 ident,
-                                format!("unsupported tool args list '{other}'"),
+                                format!("unsupported input list '{other}'"),
                             ));
                         }
                     }
@@ -6088,13 +6163,13 @@ fn parse_tool_input_shape_config(attrs: &[Attribute]) -> Result<ToolInputShapeCo
                 Meta::Path(path) => {
                     return Err(syn::Error::new_spanned(
                         path,
-                        "unsupported bare tool args argument",
+                        "unsupported bare input argument",
                     ));
                 }
             }
         }
     }
-    Ok(ToolInputShapeConfig {
+    Ok(ToolInputConfig {
         normalize,
         validate,
         handler_receiver,
@@ -6137,15 +6212,15 @@ fn expand_input_shape_enum_normalize_fn(
     let mut normalize_variants = Vec::new();
     let mut action_candidates = Vec::new();
     for variant in variants {
-        let config = parse_tool_input_variant_config(variant)?;
-        let action = tool_input_variant_action_name(variant, &config);
+        let config = parse_input_variant_config(variant)?;
+        let action = input_variant_action_name(variant, &config);
         action_candidates.push(action.clone());
         if config.default_when_empty
             || !config.infer_when_present.is_empty()
             || !config.drop_keys.is_empty()
         {
             normalize_variants.push(EnumNormalizeVariant {
-                action: tool_input_variant_action_name(variant, &config),
+                action: input_variant_action_name(variant, &config),
                 default_when_empty: config.default_when_empty,
                 infer_when_present: config.infer_when_present,
                 drop_keys: config.drop_keys,
@@ -6279,7 +6354,7 @@ fn expand_input_shape_enum_normalize_fn(
 fn expand_input_shape_variant_validation_arm(
     variant: &Variant,
 ) -> Result<Option<proc_macro2::TokenStream>> {
-    let config = parse_tool_input_variant_config(variant)?;
+    let config = parse_input_variant_config(variant)?;
     let has_built_in_validation = !config.non_empty.is_empty()
         || !config.non_empty_if_present.is_empty()
         || !config.exactly_one_of.is_empty()
@@ -6395,7 +6470,7 @@ fn expand_input_shape_variant_validation_arm(
     Ok(Some(arm))
 }
 
-fn parse_tool_input_variant_config(variant: &Variant) -> Result<ToolInputVariantConfig> {
+fn parse_input_variant_config(variant: &Variant) -> Result<ToolInputVariantConfig> {
     let mut action = None;
     let mut validate = None;
     let mut handle = None;
@@ -6422,10 +6497,7 @@ fn parse_tool_input_variant_config(variant: &Variant) -> Result<ToolInputVariant
     let mut infer_when_present = Vec::new();
     let mut drop_keys = Vec::new();
     for attr in &variant.attrs {
-        if !attr.path().is_ident("tool")
-            && !attr.path().is_ident("tool_input")
-            && !attr.path().is_ident("tool_args")
-        {
+        if !attr.path().is_ident("tool") && !attr.path().is_ident("input") {
             continue;
         }
         let metas = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
@@ -6467,14 +6539,14 @@ fn parse_tool_input_variant_config(variant: &Variant) -> Result<ToolInputVariant
                         "map" => {
                             return Err(syn::Error::new_spanned(
                                 ident,
-                                "ToolInputShape does not support #[tool(map = ...)]",
+                                "ToolInput does not support #[tool(map = ...)]",
                             ));
                         }
                         other => {
                             return Err(syn::Error::new_spanned(
                                 ident,
                                 format!(
-                                    "unsupported tool variant attribute '{other}' for ToolInputShape"
+                                    "unsupported tool variant attribute '{other}' for ToolInput"
                                 ),
                             ));
                         }
@@ -6524,9 +6596,7 @@ fn parse_tool_input_variant_config(variant: &Variant) -> Result<ToolInputVariant
                         other => {
                             return Err(syn::Error::new_spanned(
                                 ident,
-                                format!(
-                                    "unsupported tool variant list '{other}' for ToolInputShape"
-                                ),
+                                format!("unsupported tool variant list '{other}' for ToolInput"),
                             ));
                         }
                     }
@@ -6627,7 +6697,7 @@ fn expand_variant_arm(variant: &Variant) -> Result<proc_macro2::TokenStream> {
                 let payload_expr = if let Some(shape) = config.shape.as_ref() {
                     quote! {{
                         let routed_value = #action_injected_payload_expr;
-                        let routed_input = <#shape as ::agena_plugin_sdk::ToolInputShape>::parse_input(routed_value)?;
+                        let routed_input = <#shape as ::agena_plugin_sdk::ToolInput>::parse_input(routed_value)?;
                         serde_json::to_value(routed_input)
                             .map_err(|err| ::agena_plugin_sdk::PluginError::invalid_params(err.to_string()))?
                     }}
@@ -7618,8 +7688,9 @@ fn parse_surface_config(attrs: &[Attribute]) -> Result<SurfaceConfig> {
     let mut concurrency_safe = false;
     let mut strict = false;
     let mut streaming = None;
+    let mut output_ty = None;
     for attr in attrs {
-        if !attr.path().is_ident("tool_surface") && !attr.path().is_ident("tool_command") {
+        if !attr.path().is_ident("tool") {
             continue;
         }
         let metas = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
@@ -7682,6 +7753,7 @@ fn parse_surface_config(attrs: &[Attribute]) -> Result<SurfaceConfig> {
                         "ui_display" => {
                             ui_display = Some(expr_string_like(&value.value, "ui_display")?)
                         }
+                        "output" => output_ty = Some(expr_as_type(value.value)?),
                         "description_mode" => {
                             description_mode =
                                 Some(expr_string_like(&value.value, "description_mode")?)
@@ -7700,7 +7772,7 @@ fn parse_surface_config(attrs: &[Attribute]) -> Result<SurfaceConfig> {
                         other => {
                             return Err(syn::Error::new_spanned(
                                 ident,
-                                format!("unsupported tool command argument '{other}'"),
+                                format!("unsupported generated tool argument '{other}'"),
                             ));
                         }
                     }
@@ -7748,10 +7820,11 @@ fn parse_surface_config(attrs: &[Attribute]) -> Result<SurfaceConfig> {
                         }
                         "tags" => tags = parse_expr_list(list.tokens)?,
                         "capabilities" => capabilities = parse_expr_list(list.tokens)?,
+                        "output" => output_ty = Some(parse_type_list(list.tokens, "output")?),
                         other => {
                             return Err(syn::Error::new_spanned(
                                 ident,
-                                format!("unsupported tool command list '{other}'"),
+                                format!("unsupported generated tool list '{other}'"),
                             ));
                         }
                     }
@@ -7759,7 +7832,7 @@ fn parse_surface_config(attrs: &[Attribute]) -> Result<SurfaceConfig> {
                 Meta::Path(path) => {
                     return Err(syn::Error::new_spanned(
                         path,
-                        "unsupported bare tool command argument",
+                        "unsupported bare generated tool argument",
                     ));
                 }
             }
@@ -7808,6 +7881,7 @@ fn parse_surface_config(attrs: &[Attribute]) -> Result<SurfaceConfig> {
         strict,
         streaming,
         input_shape: None,
+        output_ty,
     })
 }
 
@@ -8033,7 +8107,7 @@ fn parse_tool_variant_config(variant: &Variant) -> Result<ToolVariantConfig> {
     })
 }
 
-fn tool_input_variant_action_name(variant: &Variant, config: &ToolInputVariantConfig) -> LitStr {
+fn input_variant_action_name(variant: &Variant, config: &ToolInputVariantConfig) -> LitStr {
     config
         .action
         .clone()

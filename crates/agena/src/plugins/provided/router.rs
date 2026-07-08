@@ -15,7 +15,7 @@ use crate::message::{
     ProcessToolInput, ReadToolInput,
 };
 use crate::plugin::PluginError;
-use crate::plugin::sdk::{NetworkRequest, Result as SdkResult, ToolInputShape, ToolInvokeOutput};
+use crate::plugin::sdk::{NetworkRequest, Result as SdkResult, ToolInput, ToolInvokeOutput};
 use crate::tool::result::ToolPayloadExecution;
 use crate::tool::{ToolExecutor, ToolPayloadOutput, ToolRuntimeContext, orchestrator};
 
@@ -254,7 +254,7 @@ pub(crate) fn permission_networks_for(
     }
 }
 
-fn parse_shape_input<T: ToolInputShape>(input: &serde_json::Value) -> SdkResult<T> {
+fn parse_shape_input<T: ToolInput>(input: &serde_json::Value) -> SdkResult<T> {
     T::parse_input(input.clone())
 }
 

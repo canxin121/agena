@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 
-use agena_macros::ToolInputShape;
+use agena_macros::ToolInput;
 use agena_mcp_client::protocol::{
     CallToolResult, ContentBlock, GetPromptResult, ListPromptsResult, ListResourcesResult,
     ReadResourceResult, ResourceContents,
@@ -586,15 +586,15 @@ impl McpPlugin {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ToolInputShape, PartialEq, Eq)]
-#[tool_input(trim("server"), non_empty("server"))]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ToolInput, PartialEq, Eq)]
+#[input(trim("server"), non_empty("server"))]
 #[serde(deny_unknown_fields)]
 struct McpServerInput {
     server: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ToolInputShape, PartialEq)]
-#[tool_input(trim("server", "name"), non_empty("server", "name"))]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ToolInput, PartialEq)]
+#[input(trim("server", "name"), non_empty("server", "name"))]
 #[serde(deny_unknown_fields)]
 struct CallToolInput {
     server: String,
@@ -624,16 +624,16 @@ fn network_requests_for_server(
         .unwrap_or_default()
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ToolInputShape, PartialEq, Eq)]
-#[tool_input(trim("server", "uri"), non_empty("server", "uri"))]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ToolInput, PartialEq, Eq)]
+#[input(trim("server", "uri"), non_empty("server", "uri"))]
 #[serde(deny_unknown_fields)]
 pub(super) struct ReadResourceInput {
     server: String,
     uri: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInputShape, Clone, PartialEq, Eq)]
-#[tool_input(trim("server", "name"), non_empty("server", "name"))]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, ToolInput, Clone, PartialEq, Eq)]
+#[input(trim("server", "name"), non_empty("server", "name"))]
 #[serde(deny_unknown_fields)]
 pub(super) struct GetPromptInput {
     server: String,

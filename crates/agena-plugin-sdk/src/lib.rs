@@ -26,7 +26,7 @@ pub mod cdylib_abi;
 #[cfg(any(feature = "cdylib", feature = "stdio", feature = "http"))]
 pub mod drivers;
 
-pub use agena_macros::{PluginConfigStore, ToolArgs, ToolInputShape, agena_plugin};
+pub use agena_macros::{PluginConfigStore, ToolInput, agena_plugin};
 pub use async_trait::async_trait;
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
 pub use error::{PluginError, PluginErrorCode, Result};
@@ -43,21 +43,12 @@ pub use manifest::{
     PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView,
     PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions, PluginUiAction,
     PluginUiContributions, PluginUiThemePalette, ToolDefinition, ToolDescriptionMode,
-    ToolDisplayPreset, ToolInputShape, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode,
+    ToolDisplayPreset, ToolInput, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode,
     ToolSurface, ToolTag, TransportKind, UiTextDisplayMode, normalize_tool_tag_name,
 };
 pub use plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
 pub use schemars::JsonSchema;
 
-#[macro_export]
-macro_rules! tool_shape_dispatch {
-    ($input:expr, $shape:ty, { $($pattern:pat => $body:expr),+ $(,)? }) => {{
-        let __input = $input;
-        match <$shape as $crate::ToolInputShape>::parse_input(__input)? {
-            $($pattern => $body,)+
-        }
-    }};
-}
 // Re-exports used by macros so plugin authors don't have to add deps directly.
 #[doc(hidden)]
 #[cfg(feature = "cdylib")]

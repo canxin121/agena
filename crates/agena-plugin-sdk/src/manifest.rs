@@ -336,7 +336,7 @@ pub trait ToolSurface: Sized {
     }
 }
 
-pub trait ToolInputShape: Sized {
+pub trait ToolInput: Sized {
     fn input_schema() -> serde_json::Value;
     fn parse_input(input: serde_json::Value) -> crate::Result<Self>;
     fn parse_json_str(input: &str) -> crate::Result<Self> {

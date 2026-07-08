@@ -36,6 +36,26 @@ where
     value
 }
 
+pub fn typed_tool_output<T>(value: T) -> Result<crate::ToolInvokeOutput>
+where
+    T: Serialize,
+{
+    let payload =
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+    let output_text = match &payload {
+        Value::Null => String::new(),
+        Value::String(value) => value.clone(),
+        _ => payload.to_string(),
+    };
+    Ok(crate::ToolInvokeOutput::from_parts(
+        String::new(),
+        output_text,
+        Some(payload),
+        Default::default(),
+        Vec::new(),
+    ))
+}
+
 pub fn empty_config_schema() -> Value {
     serde_json::json!({
         "title": "Plugin Config",

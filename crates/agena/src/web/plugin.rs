@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use agena_macros::ToolInputShape;
+use agena_macros::ToolInput;
 use agena_web::{
     BrowserRenderOptions, CrawlPageFetcher, CrawlRunOptions, CrawlRunReport, CrawlStore,
     CrawlStoreRetention, FetchedPage, LocalBrowserOptions, SpiderFetchOptions, WebSearchEngine,
@@ -505,8 +505,8 @@ impl WebPluginState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
-#[tool_input(
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[input(
     trim("url", "prompt"),
     non_empty("url"),
     non_empty_if_present("prompt")
@@ -522,8 +522,8 @@ struct CrawlFetchInput {
     render_js: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
-#[tool_input(trim("start_url"), non_empty("start_url"))]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[input(trim("start_url"), non_empty("start_url"))]
 #[serde(deny_unknown_fields)]
 struct CrawlRunInput {
     start_url: String,
@@ -539,8 +539,8 @@ struct CrawlRunInput {
     render_js: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
-#[tool_input(trim("query"), non_empty("query"))]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[input(trim("query"), non_empty("query"))]
 #[serde(deny_unknown_fields)]
 struct CrawlWebSearchInput {
     query: String,

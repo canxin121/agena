@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::{collections::BTreeMap, fmt};
 
-use agena_macros::ToolInputShape;
+use agena_macros::ToolInput;
 use agena_skills::discovery::{default_command_roots, default_roots, scan, scan_commands};
 use agena_skills::skill::Skill;
 use schemars::JsonSchema;
@@ -49,8 +49,7 @@ struct DiscoveredTool {
     kind: DiscoveredToolKind,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input()]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct SkillsListInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -63,15 +62,15 @@ struct SkillsListInput {
     verbose: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("name"), non_empty("name"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("name"), non_empty("name"))]
 #[serde(deny_unknown_fields)]
 struct SkillsGetInput {
     name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("name", "args"), non_empty("name"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("name", "args"), non_empty("name"))]
 #[serde(deny_unknown_fields)]
 struct SkillsRunInput {
     name: String,

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use agena_macros::ToolInputShape;
+use agena_macros::ToolInput;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -107,8 +107,8 @@ pub struct WebSearchResult {
     pub snippet: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("content"), non_empty("content"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("content"), non_empty("content"))]
 pub struct TodoItem {
     /// Todo item text.
     pub content: String,
@@ -324,8 +324,8 @@ impl InteractiveRequestPart<PermissionRequest, PermissionReply> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("label", "description"), non_empty("label"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("label", "description"), non_empty("label"))]
 pub struct UserInputOption {
     /// Visible label for the option.
     pub label: String,
@@ -334,8 +334,8 @@ pub struct UserInputOption {
     pub description: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(
     trim("id", "header", "question", "options[].label", "options[].description"),
     non_empty("id", "question"),
     max_chars("header", 12)

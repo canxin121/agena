@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use agena_macros::ToolInputShape;
+use agena_macros::ToolInput;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use strum::Display;
@@ -48,8 +48,8 @@ pub struct NetworkEffect {
     pub target: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(
     trim(
         "command",
         "description",
@@ -75,7 +75,7 @@ pub struct ShellCommandInput {
     pub network_effects: Vec<NetworkEffect>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 pub struct ReadToolInput {
     /// File or directory path to read. Relative paths are resolved from the
     /// workspace root.
@@ -102,7 +102,7 @@ pub enum ReadMode {
     Auto,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 pub struct GlobToolInput {
     /// Glob pattern to match.
     #[arg(trim, non_empty)]
@@ -113,7 +113,7 @@ pub struct GlobToolInput {
     pub path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 pub struct GrepToolInput {
     /// Regex pattern to search for.
     #[arg(trim, non_empty)]
@@ -167,8 +167,8 @@ impl TaskSubagentType {
 }
 
 /// Input for the delegated `task` subagent command.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(
     trim("description", "prompt", "task_id", "command"),
     non_empty("description", "prompt")
 )]
@@ -187,8 +187,8 @@ pub struct TaskToolInput {
     pub command: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("query"), non_empty("query"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("query"), non_empty("query"))]
 #[serde(deny_unknown_fields)]
 pub struct ToolSearchToolInput {
     /// Search text used to rank matching tool names and descriptions.
@@ -250,8 +250,8 @@ pub struct ProcessEvent {
 }
 
 /// Action discriminator for the `process` tool payload.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim(
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim(
     "command",
     "description",
     "workdir",
@@ -312,8 +312,8 @@ pub struct ProcessSummary {
     pub exit_code: Option<i32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(
     trim(
         "title",
         "body_markdown",
@@ -352,15 +352,15 @@ pub struct AskUserToolInput {
 }
 
 /// Textual patch payload in the agena patch format.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 pub struct ApplyPatchToolInput {
     /// Unified patch text to apply to the workspace.
     pub patch: String,
 }
 
 /// Input for the native `web_fetch` tool.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("url", "prompt"), non_empty("url"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("url", "prompt"), non_empty("url"))]
 pub struct WebFetchToolInput {
     /// Absolute URL to fetch. HTTP is upgraded to HTTPS.
     pub url: String,
@@ -371,8 +371,8 @@ pub struct WebFetchToolInput {
 }
 
 /// Input for the native `web_search` tool.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(
     trim("query", "allowed_domains[]", "blocked_domains[]"),
     non_empty("query")
 )]
@@ -389,10 +389,8 @@ pub struct WebSearchToolInput {
     pub max_results: Option<u32>,
 }
 
-#[derive(
-    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInputShape,
-)]
-#[tool_input(trim("agent"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInput)]
+#[input(trim("agent"))]
 pub struct AgentSwitchToolInput {
     /// Target agent profile. Omit or pass an empty string to clear the
     /// explicit runtime agent selection.
@@ -403,25 +401,19 @@ pub struct AgentSwitchToolInput {
     pub push_previous: bool,
 }
 
-#[derive(
-    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInputShape,
-)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInput)]
 pub struct AgentRestoreToolInput {}
 
-#[derive(
-    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInputShape,
-)]
-#[tool_input(trim("args"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInput)]
+#[input(trim("args"))]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowPromptToolInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<String>,
 }
 
-#[derive(
-    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInputShape,
-)]
-#[tool_input(
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInput)]
+#[input(
     trim("name", "path"),
     non_empty_if_present("name", "path"),
     conflicts_with("name", "path")
@@ -436,8 +428,8 @@ pub struct EnterSnapshotToolInput {
     pub path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("action"), non_empty("action"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("action"), non_empty("action"))]
 pub struct ExitSnapshotToolInput {
     /// "keep" leaves the snapshot on disk; "remove" deletes it.
     pub action: String,
@@ -447,8 +439,8 @@ pub struct ExitSnapshotToolInput {
     pub discard_changes: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("expression", "prompt"), non_empty("expression", "prompt"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("expression", "prompt"), non_empty("expression", "prompt"))]
 pub struct CronCreateToolInput {
     /// 6-field cron expression: `<sec> <min> <hour> <day-of-month> <month> <day-of-week>`.
     pub expression: String,
@@ -462,19 +454,17 @@ fn default_cron_max_age() -> u32 {
     7
 }
 
-#[derive(
-    Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInputShape,
-)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInput)]
 pub struct CronListToolInput {}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("id"), non_empty("id"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("id"), non_empty("id"))]
 pub struct CronDeleteToolInput {
     pub id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("prompt", "reason"), non_empty("prompt"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("prompt", "reason"), non_empty("prompt"))]
 pub struct ScheduleWakeupToolInput {
     pub delay_seconds: u32,
     pub prompt: String,
@@ -483,24 +473,24 @@ pub struct ScheduleWakeupToolInput {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("file_path"), non_empty("file_path"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("file_path"), non_empty("file_path"))]
 pub struct LspPositionToolInput {
     pub file_path: String,
     pub line: u32,
     pub character: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("file_path"), non_empty("file_path"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("file_path"), non_empty("file_path"))]
 pub struct LspDefinitionToolInput {
     #[tool(flatten_shape)]
     #[serde(flatten)]
     pub position: LspPositionToolInput,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("file_path"), non_empty("file_path"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("file_path"), non_empty("file_path"))]
 pub struct LspReferencesToolInput {
     #[tool(flatten_shape)]
     #[serde(flatten)]
@@ -513,16 +503,16 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("file_path"), non_empty("file_path"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("file_path"), non_empty("file_path"))]
 pub struct LspHoverToolInput {
     #[tool(flatten_shape)]
     #[serde(flatten)]
     pub position: LspPositionToolInput,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("file_path"), non_empty("file_path"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("file_path"), non_empty("file_path"))]
 pub struct LspDiagnosticsToolInput {
     pub file_path: String,
 }

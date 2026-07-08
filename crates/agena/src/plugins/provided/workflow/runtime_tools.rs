@@ -1,9 +1,9 @@
 use super::*;
 
-use agena_macros::ToolInputShape;
+use agena_macros::ToolInput;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("title"), non_empty("title"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("title"), non_empty("title"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionRenameToolInput {
     pub title: String,

@@ -2,7 +2,7 @@ use serde_json::Value as JsonValue;
 
 use crate::message::ApplyPatchToolInput;
 use crate::message::{FileChangeKind, FileChangeRecord};
-use crate::plugin::sdk::ToolInputShape;
+use crate::plugin::sdk::ToolInput;
 
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
@@ -154,6 +154,6 @@ pub(crate) fn execute_tool(
     }
 }
 
-fn parse_shape_input<T: ToolInputShape>(input: JsonValue) -> Result<T, ToolError> {
+fn parse_shape_input<T: ToolInput>(input: JsonValue) -> Result<T, ToolError> {
     T::parse_input(input).map_err(|err| ToolError::InvalidInput(err.to_string()))
 }

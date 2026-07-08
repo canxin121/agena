@@ -1,17 +1,17 @@
 use super::*;
 
-use agena_macros::ToolInputShape;
+use agena_macros::ToolInput;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("tool"), non_empty("tool"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("tool"), non_empty("tool"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ToolsHelpInput {
     /// Registered gateway-visible tool name to inspect.
     pub tool: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("tool"), non_empty("tool"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, ToolInput)]
+#[input(trim("tool"), non_empty("tool"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ToolCallInput {
     /// Registered gateway-visible tool name to invoke.
@@ -21,8 +21,7 @@ pub(crate) struct ToolCallInput {
     pub input: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input()]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ToolListInput {
     /// Number of tools to skip before returning results.
@@ -39,8 +38,8 @@ pub(crate) struct ToolListInput {
     pub tags: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("query"), non_empty("query"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("query"), non_empty("query"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CatalogSearchInput {
     /// Search text used to rank matching tool names and summaries.
@@ -60,8 +59,7 @@ pub(crate) struct CatalogSearchInput {
     pub tags: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input()]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ToolTagsInput {
     /// Number of tags to skip before returning results.

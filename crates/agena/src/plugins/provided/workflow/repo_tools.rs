@@ -2,20 +2,20 @@ use std::fmt;
 
 use super::*;
 
-use agena_macros::ToolInputShape;
+use agena_macros::ToolInput;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("name", "path"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("name", "path"))]
 #[serde(tag = "target", rename_all = "snake_case")]
 pub(crate) enum EnterSnapshotCommandInput {
     /// Create a new managed snapshot under the managed `snapshots` directory.
-    #[tool_input(non_empty_if_present("name"))]
+    #[input(non_empty_if_present("name"))]
     New {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
     },
     /// Attach to an already-existing snapshot at the provided path.
-    #[tool_input(non_empty("path"))]
+    #[input(non_empty("path"))]
     Existing { path: String },
 }
 
@@ -41,7 +41,7 @@ impl fmt::Display for ExitSnapshotAction {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 pub(crate) struct ExitSnapshotCommandInput {
     #[serde(rename = "exit_action")]
     pub(crate) exit_action: ExitSnapshotAction,

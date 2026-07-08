@@ -1,7 +1,7 @@
 //! `agena.schema_lab` plugin: a built-in fixture for exercising the
 //! structured plugin config editor against deep, heterogeneous JSON Schema.
 
-use agena_macros::ToolInputShape;
+use agena_macros::ToolInput;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
@@ -14,8 +14,8 @@ pub(crate) const SCHEMA_LAB_PLUGIN_ID: &str = "agena.schema_lab";
 
 pub(crate) struct SchemaLabPlugin;
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, ToolInputShape, Default)]
-#[tool_input(trim("section"), non_empty_if_present("section"))]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, ToolInput, Default)]
+#[input(trim("section"), non_empty_if_present("section"))]
 #[serde(default, deny_unknown_fields)]
 struct SchemaLabInspectArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -24,8 +24,8 @@ struct SchemaLabInspectArgs {
     include_defaults: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, ToolInputShape, Default)]
-#[tool_input(trim("label"), non_empty_if_present("label"))]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, ToolInput, Default)]
+#[input(trim("label"), non_empty_if_present("label"))]
 #[serde(default, deny_unknown_fields)]
 struct SchemaLabEchoArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]

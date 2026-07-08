@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use agena_macros::ToolInputShape;
+use agena_macros::ToolInput;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -123,8 +123,8 @@ pub struct MemoryPlugin {
     sync_lock: Mutex<()>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
-#[tool_input(trim("query"), non_empty("query"))]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[input(trim("query"), non_empty("query"))]
 #[serde(deny_unknown_fields)]
 struct MemorySearchInput {
     query: String,
@@ -132,8 +132,8 @@ struct MemorySearchInput {
     limit: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
-#[tool_input(
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[input(
     trim("name"),
     trim_suffix("name", ".md"),
     non_empty("name"),
@@ -144,15 +144,15 @@ struct MemoryGetInput {
     name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct MemoryListInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     limit: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
-#[tool_input(
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[input(
     trim("name", "description", "content"),
     trim_suffix("name", ".md"),
     non_empty("name", "content"),
@@ -168,8 +168,8 @@ struct MemoryWriteInput {
     content: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
-#[tool_input(
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[input(
     trim("name"),
     trim_suffix("name", ".md"),
     non_empty("name"),

@@ -20,14 +20,14 @@ impl Default for NotesConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct FormatNoteInput {
     #[arg(trim, non_empty)]
     text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct WriteNoteInput {
     #[arg(trim, non_empty)]
@@ -36,6 +36,21 @@ struct WriteNoteInput {
     text: String,
     #[serde(default)]
     append: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FormatNoteOutput {
+    rendered: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct WriteNoteOutput {
+    message: String,
+    path: String,
+    append: bool,
+    bytes: usize,
 }
 
 #[derive(Default, PluginConfigStore)]
@@ -74,17 +89,12 @@ impl NotesPlugin {
         help = "Formats text using this plugin's runtime config. The streaming path emits the formatted text in line-sized chunks.",
         read_only,
         streaming,
-        concurrency_safe
+        concurrency_safe,
+        output = FormatNoteOutput
     )]
-    async fn format(&self, input: &FormatNoteInput) -> Result<ToolInvokeOutput> {
+    async fn format(&self, input: &FormatNoteInput) -> Result<FormatNoteOutput> {
         let rendered = self.render(input.text.as_str());
-        Ok(ToolInvokeOutput::from_parts(
-            "Format note",
-            rendered.clone(),
-            Some(json!({ "rendered": rendered })),
-            Default::default(),
-            Vec::new(),
-        ))
+        Ok(FormatNoteOutput { rendered })
     }
 
     #[stream(format)]
@@ -106,9 +116,10 @@ impl NotesPlugin {
         help = "Writes the formatted text to the provided path. Path permission is supplied dynamically by this tool's permission handler.",
         mutating,
         filesystem_write,
-        permission(paths = write_permission_paths)
+        permission(paths = write_permission_paths),
+        output = WriteNoteOutput
     )]
-    async fn write(&self, input: &WriteNoteInput) -> Result<ToolInvokeOutput> {
+    async fn write(&self, input: &WriteNoteInput) -> Result<WriteNoteOutput> {
         let rendered = self.render(input.text.as_str());
         let path = PathBuf::from(input.path.as_str());
         if let Some(parent) = path.parent()
@@ -129,17 +140,12 @@ impl NotesPlugin {
         file.write_all(rendered.as_bytes())
             .map_err(|err| PluginError::new(format!("failed to write note file: {err}")))?;
 
-        Ok(ToolInvokeOutput::from_parts(
-            "Write note",
-            format!("wrote {}", path.display()),
-            Some(json!({
-                "path": input.path,
-                "append": input.append,
-                "bytes": rendered.len()
-            })),
-            Default::default(),
-            Vec::new(),
-        ))
+        Ok(WriteNoteOutput {
+            message: format!("wrote {}", path.display()),
+            path: input.path.clone(),
+            append: input.append,
+            bytes: rendered.len(),
+        })
     }
 
     async fn write_permission_paths(&self, input: &WriteNoteInput) -> Result<Vec<PathRequest>> {

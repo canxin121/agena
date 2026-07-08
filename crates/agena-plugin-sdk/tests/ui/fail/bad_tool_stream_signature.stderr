@@ -1,4 +1,4 @@
-error: #[tool(stream = ...)] handlers must take exactly 2 typed argument(s) after `&self`
+error: #[tool(stream = ...)] handlers must take exactly 1 plugin argument(s) plus ToolStreamSink
   --> tests/ui/fail/bad_tool_stream_signature.rs:22:8
    |
 22 |     fn echo_stream(&self, _sink: ToolStreamSink) -> String {

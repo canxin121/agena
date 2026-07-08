@@ -1,0 +1,5 @@
+error: #[tool(permission(paths = ...))] handlers argument 1 must have type `& EchoInput`; found `EchoInput`
+  --> tests/ui/fail/bad_tool_permission_signature.rs:27:8
+   |
+27 |     fn echo_permission_paths(&self, _input: EchoInput) -> Vec<PathRequest> {
+   |        ^^^^^^^^^^^^^^^^^^^^^

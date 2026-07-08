@@ -19,7 +19,6 @@ impl EchoPlugin {
         name = "echo",
         summary = "Echo text over stdio transport.",
         read_only,
-        streaming,
         stream = echo_stream,
         concurrency_safe
     )]

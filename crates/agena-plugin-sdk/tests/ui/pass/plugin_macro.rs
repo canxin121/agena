@@ -50,7 +50,6 @@ struct UiPlugin;
 impl UiPlugin {
     #[tool(
         summary = "Resolve a hover position.",
-        output(Vec<HoverOutput>),
         read_only,
         concurrency_safe
     )]
@@ -64,7 +63,6 @@ impl UiPlugin {
 
     #[tool(
         summary = "Echo text.",
-        output(EchoOutput),
         read_only,
         concurrency_safe
     )]
@@ -72,9 +70,27 @@ impl UiPlugin {
         EchoOutput { text }
     }
 
-    #[tool(summary = "Search.", output(Vec<String>), read_only)]
+    #[tool(summary = "Search.", read_only)]
     fn search(&self, _input: SearchInput) -> Vec<String> {
         Vec::new()
+    }
+
+    #[tool(summary = "Echo text with context.", read_only, stream = context_echo_stream)]
+    fn context_echo(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        #[arg(trim, non_empty)] text: String,
+    ) -> String {
+        format!("{}:{text}", context.tool_name)
+    }
+
+    fn context_echo_stream(
+        &self,
+        _sink: ToolStreamSink,
+        context: &ToolInvokeContext<'_>,
+        text: String,
+    ) -> String {
+        format!("{}:{text}", context.tool_name)
     }
 }
 

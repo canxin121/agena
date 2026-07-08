@@ -89,6 +89,7 @@ impl NotesPlugin {
         help = "Formats text using this plugin's runtime config. The streaming path emits the formatted text in line-sized chunks.",
         read_only,
         streaming,
+        stream = format_stream,
         concurrency_safe,
         output(FormatNoteOutput)
     )]
@@ -97,7 +98,6 @@ impl NotesPlugin {
         Ok(FormatNoteOutput { rendered })
     }
 
-    #[stream(format)]
     async fn format_stream(
         &self,
         sink: ToolStreamSink,

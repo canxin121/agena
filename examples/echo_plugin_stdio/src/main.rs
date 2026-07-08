@@ -20,13 +20,13 @@ impl EchoPlugin {
         summary = "Echo text over stdio transport.",
         read_only,
         streaming,
+        stream = echo_stream,
         concurrency_safe
     )]
     async fn echo(&self, #[arg(trim, non_empty)] text: String) -> String {
         format!("stdio-echo: {text}")
     }
 
-    #[stream(echo)]
     async fn echo_stream(&self, text: String, sink: ToolStreamSink) -> String {
         let output = format!("stdio-echo: {text}");
         sink.text("stdio-").await;

@@ -293,6 +293,7 @@ struct PluginToolBinding {
     method: Ident,
     tool: LitStr,
     input_model: PluginGeneratedToolInput,
+    stream: Option<PluginToolStreamHandler>,
     output_ty: Option<Type>,
     output_is_result: bool,
     is_async: bool,
@@ -301,13 +302,19 @@ struct PluginToolBinding {
 }
 
 #[derive(Clone)]
+struct PluginToolStreamHandler {
+    method: Ident,
+    is_async: bool,
+    sink_first: bool,
+}
+
+#[derive(Clone)]
 struct PluginStreamToolBinding {
     method: Ident,
     is_async: bool,
     sink_first: bool,
-    for_method: Ident,
-    tool: Option<LitStr>,
-    input_model: Option<PluginGeneratedToolInput>,
+    tool: LitStr,
+    input_model: PluginGeneratedToolInput,
     input: PluginCallInput,
 }
 
@@ -315,9 +322,8 @@ struct PluginStreamToolBinding {
 struct PluginPermissionBinding {
     method: Ident,
     is_async: bool,
-    for_method: Option<Ident>,
-    tool: Option<LitStr>,
-    input_model: Option<PluginGeneratedToolInput>,
+    tool: LitStr,
+    input_model: PluginGeneratedToolInput,
     input: PluginCallInput,
 }
 
@@ -329,7 +335,6 @@ struct PluginContextArg {
 
 #[derive(Clone)]
 enum PluginCallInput {
-    Parsed,
     Wrapped { by_ref: bool },
     Fields(Vec<Ident>),
 }
@@ -348,16 +353,6 @@ struct PluginGeneratedInputField {
     ident: Ident,
     ty: Type,
     default: bool,
-}
-
-enum PluginPermissionTarget {
-    Paths,
-    Networks,
-}
-
-struct PluginPermissionAttr {
-    target: PluginPermissionTarget,
-    for_method: Option<Ident>,
 }
 
 #[derive(Clone)]
@@ -405,9 +400,8 @@ fn expand_plugin_inherent_impl_attr(
     let docs = doc_text(&item.attrs);
     let self_ty = item.self_ty.as_ref().clone();
     let self_label = plugin_self_type_label(&self_ty);
-    let method_async = plugin_impl_method_asyncness(&item);
+    let method_infos = plugin_impl_method_infos(&item);
     let mut tool_bindings = Vec::new();
-    let mut stream_bindings = Vec::new();
     let mut permission_path_bindings = Vec::new();
     let mut permission_network_bindings = Vec::new();
     let mut hook_bindings = Vec::new();
@@ -416,9 +410,8 @@ fn expand_plugin_inherent_impl_attr(
         let ImplItem::Fn(method) = impl_item else {
             continue;
         };
-        let attrs = parse_plugin_inherent_method_attrs(method, &self_label, &method_async)?;
+        let attrs = parse_plugin_inherent_method_attrs(method, &self_label, &method_infos)?;
         tool_bindings.extend(attrs.tools);
-        stream_bindings.extend(attrs.stream_tools);
         permission_path_bindings.extend(attrs.permission_paths);
         permission_network_bindings.extend(attrs.permission_networks);
         hook_bindings.extend(attrs.hooks);
@@ -430,10 +423,7 @@ fn expand_plugin_inherent_impl_attr(
             "method-level #[tool(...)] generation does not support generic plugin impls yet; use a non-generic plugin wrapper type",
         ));
     }
-    resolve_plugin_stream_bindings(&tool_bindings, &mut stream_bindings)?;
-    resolve_plugin_permission_bindings(&tool_bindings, &mut permission_path_bindings)?;
-    resolve_plugin_permission_bindings(&tool_bindings, &mut permission_network_bindings)?;
-    mark_streaming_tool_bindings(&mut tool_bindings, &stream_bindings);
+    let stream_bindings = collect_plugin_stream_bindings(&tool_bindings);
     reject_duplicate_tool_bindings(&tool_bindings)?;
     reject_duplicate_stream_bindings(&stream_bindings)?;
     reject_duplicate_permission_bindings(&permission_path_bindings, "path")?;
@@ -730,22 +720,30 @@ fn sanitize_generated_ident_label(value: &str) -> String {
     }
 }
 
-fn plugin_impl_method_asyncness(item: &ItemImpl) -> Vec<(Ident, bool)> {
+fn plugin_impl_method_infos(item: &ItemImpl) -> Vec<PluginMethodInfo> {
     item.items
         .iter()
         .filter_map(|item| {
             let ImplItem::Fn(method) = item else {
                 return None;
             };
-            Some((method.sig.ident.clone(), method.sig.asyncness.is_some()))
+            Some(PluginMethodInfo {
+                ident: method.sig.ident.clone(),
+                is_async: method.sig.asyncness.is_some(),
+                typed_args: typed_arg_types_from_inputs(&method.sig.inputs),
+                shared_receiver: plugin_method_has_shared_receiver(method),
+            })
         })
         .collect()
 }
 
-fn plugin_method_is_async(methods: &[(Ident, bool)], target: &Ident) -> Result<bool> {
+fn plugin_method_info<'a>(
+    methods: &'a [PluginMethodInfo],
+    target: &Ident,
+) -> Result<&'a PluginMethodInfo> {
     methods
         .iter()
-        .find_map(|(ident, is_async)| (ident == target).then_some(*is_async))
+        .find(|method| method.ident == *target)
         .ok_or_else(|| {
             syn::Error::new_spanned(
                 target,
@@ -754,9 +752,63 @@ fn plugin_method_is_async(methods: &[(Ident, bool)], target: &Ident) -> Result<b
         })
 }
 
+fn ensure_plugin_method_info_shared_receiver(info: &PluginMethodInfo, label: &str) -> Result<()> {
+    if info.shared_receiver {
+        return Ok(());
+    }
+    Err(syn::Error::new_spanned(
+        &info.ident,
+        format!("{label} must be inherent methods with `&self` receiver"),
+    ))
+}
+
+fn ensure_plugin_method_info_typed_arg_count(
+    info: &PluginMethodInfo,
+    expected: usize,
+    label: &str,
+) -> Result<()> {
+    let count = info.typed_args.len();
+    if count != expected {
+        return Err(syn::Error::new_spanned(
+            &info.ident,
+            format!("{label} must take exactly {expected} typed argument(s) after `&self`"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_tool_stream_handler(
+    methods: &[PluginMethodInfo],
+    target: &Ident,
+    input: &PluginCallInput,
+) -> Result<PluginToolStreamHandler> {
+    let info = plugin_method_info(methods, target)?;
+    let label = "#[tool(stream = ...)] handlers";
+    ensure_plugin_method_info_shared_receiver(info, label)?;
+    ensure_plugin_method_info_typed_arg_count(info, plugin_call_input_arg_count(input) + 1, label)?;
+    let sink_first = stream_sink_is_edge_info(info, label)?;
+    Ok(PluginToolStreamHandler {
+        method: target.clone(),
+        is_async: info.is_async,
+        sink_first,
+    })
+}
+
+fn validate_tool_permission_handler<'a>(
+    methods: &'a [PluginMethodInfo],
+    target: &Ident,
+    input: &PluginCallInput,
+    kind: &str,
+) -> Result<&'a PluginMethodInfo> {
+    let info = plugin_method_info(methods, target)?;
+    let label = format!("#[tool(permission({kind}s = ...))] handlers");
+    ensure_plugin_method_info_shared_receiver(info, &label)?;
+    ensure_plugin_method_info_typed_arg_count(info, plugin_call_input_arg_count(input), &label)?;
+    Ok(info)
+}
+
 struct PluginInherentMethodAttrs {
     tools: Vec<PluginToolBinding>,
-    stream_tools: Vec<PluginStreamToolBinding>,
     permission_paths: Vec<PluginPermissionBinding>,
     permission_networks: Vec<PluginPermissionBinding>,
     hooks: Vec<PluginHookBinding>,
@@ -765,10 +817,9 @@ struct PluginInherentMethodAttrs {
 fn parse_plugin_inherent_method_attrs(
     method: &mut ImplItemFn,
     self_label: &str,
-    method_async: &[(Ident, bool)],
+    method_infos: &[PluginMethodInfo],
 ) -> Result<PluginInherentMethodAttrs> {
     let mut tools = Vec::new();
-    let mut stream_tools = Vec::new();
     let mut permission_paths = Vec::new();
     let mut permission_networks = Vec::new();
     let mut hooks = Vec::new();
@@ -779,87 +830,82 @@ fn parse_plugin_inherent_method_attrs(
     for attr in attrs {
         if attr.path().is_ident("tool") {
             ensure_plugin_method_shared_receiver(method, "#[tool] methods")?;
-            match parse_plugin_tool_method_attr(&attr, &method_ident)? {
-                PluginToolMethodAttr::Inline(mut spec) => {
-                    let inline =
-                        build_plugin_inline_tool(method, &method_ident, self_label, &mut spec)?;
-                    let input_model = inline.input_model;
-                    let tool = input_model
-                        .spec
-                        .tool
-                        .clone()
-                        .expect("inline tool config has a default tool name");
-                    if let Some(permission_method) = inline.permission_paths_method.as_ref() {
-                        let is_async = plugin_method_is_async(method_async, permission_method)?;
-                        permission_paths.push(PluginPermissionBinding {
-                            method: permission_method.clone(),
-                            is_async,
-                            for_method: None,
-                            tool: Some(tool.clone()),
-                            input_model: Some(input_model.clone()),
-                            input: inline.call_input.clone(),
-                        });
+            let mut spec = parse_plugin_tool_method_attr(&attr, &method_ident)?;
+            let inline = build_plugin_inline_tool(method, &method_ident, self_label, &mut spec)?;
+            let mut input_model = inline.input_model;
+            let tool = input_model
+                .spec
+                .tool
+                .clone()
+                .expect("inline tool config has a default tool name");
+            let stream = if let Some(stream_method) = inline.stream_method.as_ref() {
+                let stream =
+                    validate_tool_stream_handler(method_infos, stream_method, &inline.call_input)?;
+                match input_model
+                    .spec
+                    .streaming
+                    .as_ref()
+                    .map(LitStr::value)
+                    .as_deref()
+                {
+                    Some("buffered") => {
+                        return Err(syn::Error::new_spanned(
+                            stream_method,
+                            "`stream = method` cannot be combined with `buffered`",
+                        ));
                     }
-                    if let Some(permission_method) = inline.permission_networks_method.as_ref() {
-                        let is_async = plugin_method_is_async(method_async, permission_method)?;
-                        permission_networks.push(PluginPermissionBinding {
-                            method: permission_method.clone(),
-                            is_async,
-                            for_method: None,
-                            tool: Some(tool.clone()),
-                            input_model: Some(input_model.clone()),
-                            input: inline.call_input.clone(),
-                        });
+                    Some("streaming") => {}
+                    Some(_) | None => {
+                        input_model.spec.streaming =
+                            Some(LitStr::new("streaming", stream_method.span()));
                     }
-                    tools.push(PluginToolBinding {
-                        method: method_ident.clone(),
-                        tool,
-                        output_ty: input_model.spec.output_ty.clone(),
-                        output_is_result: input_model.spec.output_ty.is_some()
-                            && plugin_method_returns_result(method),
-                        is_async,
-                        context: inline.context,
-                        input: inline.call_input.clone(),
-                        input_model,
-                    });
                 }
+                Some(stream)
+            } else {
+                None
+            };
+            if let Some(permission_method) = inline.permission_paths_method.as_ref() {
+                let permission_info = validate_tool_permission_handler(
+                    method_infos,
+                    permission_method,
+                    &inline.call_input,
+                    "path",
+                )?;
+                permission_paths.push(PluginPermissionBinding {
+                    method: permission_method.clone(),
+                    is_async: permission_info.is_async,
+                    tool: tool.clone(),
+                    input_model: input_model.clone(),
+                    input: inline.call_input.clone(),
+                });
             }
-        } else if attr.path().is_ident("stream") {
-            ensure_plugin_method_shared_receiver(method, "#[stream] methods")?;
-            let for_method = parse_plugin_stream_attr(&attr)?;
-            strip_plugin_arg_attrs_from_method(method)?;
-            let sink_first = stream_sink_is_edge_arg(method, "#[stream] methods", true)?;
-            stream_tools.push(PluginStreamToolBinding {
+            if let Some(permission_method) = inline.permission_networks_method.as_ref() {
+                let permission_info = validate_tool_permission_handler(
+                    method_infos,
+                    permission_method,
+                    &inline.call_input,
+                    "network",
+                )?;
+                permission_networks.push(PluginPermissionBinding {
+                    method: permission_method.clone(),
+                    is_async: permission_info.is_async,
+                    tool: tool.clone(),
+                    input_model: input_model.clone(),
+                    input: inline.call_input.clone(),
+                });
+            }
+            tools.push(PluginToolBinding {
                 method: method_ident.clone(),
+                tool,
+                stream,
+                output_ty: input_model.spec.output_ty.clone(),
+                output_is_result: input_model.spec.output_ty.is_some()
+                    && plugin_method_returns_result(method),
                 is_async,
-                sink_first,
-                for_method,
-                tool: None,
-                input_model: None,
-                input: PluginCallInput::Parsed,
+                context: inline.context,
+                input: inline.call_input.clone(),
+                input_model,
             });
-        } else if attr.path().is_ident("permission") {
-            ensure_plugin_method_shared_receiver(method, "#[permission] methods")?;
-            let permission = parse_plugin_permission_attr(&attr)?;
-            if permission.for_method.is_none() {
-                return Err(syn::Error::new_spanned(
-                    attr,
-                    "#[permission(...)] must include `for = tool_method`; standalone permission handlers were removed",
-                ));
-            };
-            strip_plugin_arg_attrs_from_method(method)?;
-            let binding = PluginPermissionBinding {
-                method: method_ident.clone(),
-                is_async,
-                for_method: permission.for_method,
-                tool: None,
-                input_model: None,
-                input: PluginCallInput::Parsed,
-            };
-            match permission.target {
-                PluginPermissionTarget::Paths => permission_paths.push(binding),
-                PluginPermissionTarget::Networks => permission_networks.push(binding),
-            }
         } else if attr.path().is_ident("hook") {
             ensure_plugin_method_shared_receiver(method, "#[hook] methods")?;
             let hook = parse_plugin_hook_attr(&attr, &method_ident)?;
@@ -880,7 +926,6 @@ fn parse_plugin_inherent_method_attrs(
     method.attrs = kept_attrs;
     Ok(PluginInherentMethodAttrs {
         tools,
-        stream_tools,
         permission_paths,
         permission_networks,
         hooks,
@@ -895,12 +940,9 @@ fn plugin_attr_has_explicit_args(attr: &Attribute) -> bool {
     }
 }
 
-enum PluginToolMethodAttr {
-    Inline(PluginInlineToolConfig),
-}
-
 struct PluginInlineToolConfig {
     spec: ToolSpecConfig,
+    stream_method: Option<Ident>,
     permission_paths_method: Option<Ident>,
     permission_networks_method: Option<Ident>,
 }
@@ -909,8 +951,16 @@ struct PluginInlineTool {
     input_model: PluginGeneratedToolInput,
     context: Option<PluginContextArg>,
     call_input: PluginCallInput,
+    stream_method: Option<Ident>,
     permission_paths_method: Option<Ident>,
     permission_networks_method: Option<Ident>,
+}
+
+struct PluginMethodInfo {
+    ident: Ident,
+    is_async: bool,
+    typed_args: Vec<Type>,
+    shared_receiver: bool,
 }
 
 #[derive(Default)]
@@ -939,100 +989,13 @@ struct FieldArgConfig {
 fn parse_plugin_tool_method_attr(
     attr: &Attribute,
     method_ident: &Ident,
-) -> Result<PluginToolMethodAttr> {
+) -> Result<PluginInlineToolConfig> {
     if !plugin_attr_has_explicit_args(attr) {
-        return Ok(PluginToolMethodAttr::Inline(
-            parse_plugin_inline_tool_config(Vec::new(), method_ident)?,
-        ));
-    }
-
-    let metas = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated);
-    if let Ok(metas) = metas {
-        let metas = metas.into_iter().collect::<Vec<_>>();
-        if metas.iter().any(plugin_tool_meta_is_inline) {
-            return Ok(PluginToolMethodAttr::Inline(
-                parse_plugin_inline_tool_config(metas, method_ident)?,
-            ));
-        }
+        return parse_plugin_inline_tool_config(Vec::new(), method_ident);
     }
 
     let metas = attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)?;
-    Ok(PluginToolMethodAttr::Inline(
-        parse_plugin_inline_tool_config(metas.into_iter().collect(), method_ident)?,
-    ))
-}
-
-fn plugin_tool_meta_is_inline(meta: &Meta) -> bool {
-    let ident = match meta {
-        Meta::Path(path) => path.get_ident(),
-        Meta::NameValue(value) => value.path.get_ident(),
-        Meta::List(list) => list.path.get_ident(),
-    };
-    ident.is_some_and(|ident| {
-        matches!(
-            ident.to_string().as_str(),
-            "tool"
-                | "name"
-                | "summary"
-                | "about"
-                | "help"
-                | "long_help"
-                | "after_help"
-                | "after_long_help"
-                | "before_help"
-                | "before_long_help"
-                | "normalize"
-                | "validate"
-                | "display"
-                | "ui_display"
-                | "output"
-                | "description_mode"
-                | "ui_display_mode"
-                | "streaming"
-                | "buffered"
-                | "concurrency_safe"
-                | "strict"
-                | "permission_paths"
-                | "permission_networks"
-                | "permission"
-                | "trim"
-                | "trim_suffix"
-                | "non_empty"
-                | "non_empty_if_present"
-                | "exactly_one_of"
-                | "at_least_one_of"
-                | "examples"
-                | "requires"
-                | "conflicts_with"
-                | "required_unless_present"
-                | "forbid_substrings"
-                | "distinct_trimmed"
-                | "distinct_trimmed_within"
-                | "min_items"
-                | "max_items"
-                | "max_chars"
-                | "tags"
-                | "capabilities"
-                | "read_only"
-                | "mutating"
-                | "task"
-                | "filesystem_read"
-                | "filesystem_write"
-                | "network"
-                | "internet"
-                | "shell"
-                | "interactive"
-                | "discovery"
-                | "planning"
-                | "goal"
-                | "snapshot"
-                | "scheduler"
-                | "lsp"
-                | "mcp"
-                | "subtask"
-                | "private_network"
-        )
-    })
+    parse_plugin_inline_tool_config(metas.into_iter().collect(), method_ident)
 }
 
 fn parse_plugin_inline_tool_config(
@@ -1044,6 +1007,7 @@ fn parse_plugin_inline_tool_config(
         &default_tool_name(method_ident),
         method_ident.span(),
     ));
+    let mut stream_method = None;
     let mut permission_paths_method = None;
     let mut permission_networks_method = None;
 
@@ -1092,18 +1056,18 @@ fn parse_plugin_inline_tool_config(
                             spec.streaming = Some(expr_string_like(&value.value, "streaming")?);
                         }
                     }
+                    "stream" => {
+                        if stream_method
+                            .replace(expr_path_ident(value.value, "stream")?)
+                            .is_some()
+                        {
+                            return Err(syn::Error::new_spanned(ident, "duplicate stream handler"));
+                        }
+                    }
                     "concurrency_safe" => {
                         spec.concurrency_safe = expr_lit_bool(&value.value, "concurrency_safe")?
                     }
                     "strict" => spec.strict = expr_lit_bool(&value.value, "strict")?,
-                    "permission_paths" => {
-                        permission_paths_method =
-                            Some(expr_path_ident(value.value, "permission_paths")?)
-                    }
-                    "permission_networks" => {
-                        permission_networks_method =
-                            Some(expr_path_ident(value.value, "permission_networks")?)
-                    }
                     other => {
                         return Err(syn::Error::new_spanned(
                             ident,
@@ -1215,6 +1179,7 @@ fn parse_plugin_inline_tool_config(
 
     Ok(PluginInlineToolConfig {
         spec,
+        stream_method,
         permission_paths_method,
         permission_networks_method,
     })
@@ -1381,6 +1346,7 @@ fn build_plugin_inline_tool(
         input_model,
         context,
         call_input,
+        stream_method: config.stream_method.clone(),
         permission_paths_method: config.permission_paths_method.clone(),
         permission_networks_method: config.permission_networks_method.clone(),
     })
@@ -1480,16 +1446,6 @@ fn parse_plugin_arg_attrs(attrs: &mut Vec<Attribute>) -> Result<(PluginArgConfig
     }
     *attrs = kept;
     Ok((config, found))
-}
-
-fn strip_plugin_arg_attrs_from_method(method: &mut ImplItemFn) -> Result<()> {
-    for arg in method.sig.inputs.iter_mut() {
-        let FnArg::Typed(pat_type) = arg else {
-            continue;
-        };
-        let _ = parse_plugin_arg_attrs(&mut pat_type.attrs)?;
-    }
-    Ok(())
 }
 
 fn parse_plugin_arg_config_attr(attr: &Attribute, config: &mut PluginArgConfig) -> Result<()> {
@@ -1745,138 +1701,14 @@ fn apply_field_arg_config_to_input(
     }
 }
 
-fn parse_plugin_stream_attr(attr: &Attribute) -> Result<Ident> {
-    if !plugin_attr_has_explicit_args(attr) {
-        return Err(syn::Error::new_spanned(
-            attr,
-            "#[stream(...)] must reference a #[tool] method, e.g. #[stream(read_file)]",
-        ));
-    }
-    let parsed = attr.parse_args::<PluginStreamAttr>()?;
-    parsed.for_method.ok_or_else(|| {
-        syn::Error::new_spanned(
-            attr,
-            "#[stream(...)] must reference a #[tool] method, e.g. #[stream(read_file)]",
-        )
-    })
-}
-
-struct PluginStreamAttr {
-    for_method: Option<Ident>,
-}
-
-impl Parse for PluginStreamAttr {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let mut for_method = None;
-        while !input.is_empty() {
-            let key = input.call(Ident::parse_any)?;
-            if input.is_empty() {
-                if for_method.replace(key).is_some() {
-                    return Err(syn::Error::new(
-                        proc_macro2::Span::call_site(),
-                        "duplicate stream target option",
-                    ));
-                }
-                break;
-            }
-            match key.to_string().as_str() {
-                "for" | "tool" => {
-                    let _: Token![=] = input.parse()?;
-                    let value = input.call(Ident::parse_any)?;
-                    if for_method.replace(value).is_some() {
-                        return Err(syn::Error::new_spanned(
-                            key,
-                            "duplicate stream target option",
-                        ));
-                    }
-                }
-                other => {
-                    return Err(syn::Error::new_spanned(
-                        key,
-                        format!("unsupported stream option '{other}'; expected `for = method`"),
-                    ));
-                }
-            }
-            if input.peek(Token![,]) {
-                let _: Token![,] = input.parse()?;
-            }
-        }
-        Ok(Self { for_method })
-    }
-}
-
-fn parse_plugin_permission_attr(attr: &Attribute) -> Result<PluginPermissionAttr> {
-    attr.parse_args::<PluginPermissionAttr>()
-}
-
-impl Parse for PluginPermissionAttr {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let mut target = None;
-        let mut for_method = None;
-        while !input.is_empty() {
-            let ident = input.call(Ident::parse_any)?;
-            match ident.to_string().as_str() {
-                "paths" => {
-                    if target.replace(PluginPermissionTarget::Paths).is_some() {
-                        return Err(syn::Error::new_spanned(
-                            ident,
-                            "duplicate permission target",
-                        ));
-                    }
-                }
-                "networks" => {
-                    if target.replace(PluginPermissionTarget::Networks).is_some() {
-                        return Err(syn::Error::new_spanned(
-                            ident,
-                            "duplicate permission target",
-                        ));
-                    }
-                }
-                "for" | "tool" => {
-                    let _: Token![=] = input.parse()?;
-                    let value = input.call(Ident::parse_any)?;
-                    if for_method.replace(value).is_some() {
-                        return Err(syn::Error::new_spanned(
-                            ident,
-                            "duplicate permission target method",
-                        ));
-                    }
-                }
-                other => {
-                    return Err(syn::Error::new_spanned(
-                        ident,
-                        format!(
-                            "unsupported permission option '{other}'; expected paths, networks, or for = method"
-                        ),
-                    ));
-                }
-            }
-            if input.peek(Token![,]) {
-                let _: Token![,] = input.parse()?;
-            }
-        }
-        let target = target.ok_or_else(|| {
-            syn::Error::new(
-                proc_macro2::Span::call_site(),
-                "#[permission(...)] requires `paths` or `networks`",
-            )
-        })?;
-        Ok(Self { target, for_method })
-    }
-}
-
 fn ensure_plugin_method_shared_receiver(method: &ImplItemFn, label: &str) -> Result<()> {
-    match method.sig.inputs.first() {
-        Some(FnArg::Receiver(receiver))
-            if receiver.reference.is_some() && receiver.mutability.is_none() =>
-        {
-            Ok(())
-        }
-        _ => Err(syn::Error::new_spanned(
-            &method.sig,
-            format!("{label} must be inherent methods with `&self` receiver"),
-        )),
+    if plugin_method_has_shared_receiver(method) {
+        return Ok(());
     }
+    Err(syn::Error::new_spanned(
+        &method.sig,
+        format!("{label} must be inherent methods with `&self` receiver"),
+    ))
 }
 
 fn ensure_plugin_method_typed_arg_count(
@@ -1894,47 +1726,45 @@ fn ensure_plugin_method_typed_arg_count(
     Ok(())
 }
 
-fn stream_sink_is_edge_arg(
-    method: &ImplItemFn,
-    label: &str,
-    allow_multi_input: bool,
-) -> Result<bool> {
-    let args = typed_arg_types(method);
-    if !allow_multi_input && args.len() != 2 {
-        return Err(syn::Error::new_spanned(
-            &method.sig,
-            format!(
-                "{label} must take exactly two typed arguments after `&self`: input and ToolStreamSink",
-            ),
-        ));
-    }
-    let sink_positions = args
+fn plugin_method_has_shared_receiver(method: &ImplItemFn) -> bool {
+    matches!(
+        method.sig.inputs.first(),
+        Some(FnArg::Receiver(receiver))
+            if receiver.reference.is_some() && receiver.mutability.is_none()
+    )
+}
+
+fn stream_sink_is_edge_info(info: &PluginMethodInfo, label: &str) -> Result<bool> {
+    let sink_positions = info
+        .typed_args
         .iter()
         .enumerate()
         .filter_map(|(index, ty)| type_last_segment_is(ty, "ToolStreamSink").then_some(index))
         .collect::<Vec<_>>();
     let [sink_index] = sink_positions.as_slice() else {
         return Err(syn::Error::new_spanned(
-            &method.sig,
+            &info.ident,
             format!("{label} must include exactly one ToolStreamSink argument"),
         ));
     };
     if *sink_index == 0 {
         return Ok(true);
     }
-    if *sink_index + 1 == args.len() {
+    if *sink_index + 1 == info.typed_args.len() {
         return Ok(false);
     }
     Err(syn::Error::new_spanned(
-        &method.sig,
+        &info.ident,
         format!("{label} must put ToolStreamSink either first or last"),
     ))
 }
 
 fn typed_arg_types(method: &ImplItemFn) -> Vec<Type> {
-    method
-        .sig
-        .inputs
+    typed_arg_types_from_inputs(&method.sig.inputs)
+}
+
+fn typed_arg_types_from_inputs(inputs: &Punctuated<FnArg, Token![,]>) -> Vec<Type> {
+    inputs
         .iter()
         .filter_map(|arg| match arg {
             FnArg::Receiver(_) => None,
@@ -2085,59 +1915,22 @@ fn reject_duplicate_hook_bindings(hooks: &[PluginHookBinding]) -> Result<()> {
     Ok(())
 }
 
-fn resolve_plugin_stream_bindings(
-    tools: &[PluginToolBinding],
-    streams: &mut [PluginStreamToolBinding],
-) -> Result<()> {
-    for stream in streams {
-        let Some(tool) = tools.iter().find(|tool| tool.method == stream.for_method) else {
-            return Err(syn::Error::new_spanned(
-                &stream.for_method,
-                "stream target must reference a #[tool] method in the same #[agena_plugin] impl",
-            ));
-        };
-        stream.tool = Some(tool.tool.clone());
-        stream.input_model = Some(tool.input_model.clone());
-        stream.input = tool.input.clone();
-    }
-    Ok(())
-}
-
-fn resolve_plugin_permission_bindings(
-    tools: &[PluginToolBinding],
-    permissions: &mut [PluginPermissionBinding],
-) -> Result<()> {
-    for permission in permissions {
-        let Some(for_method) = permission.for_method.as_ref() else {
+fn collect_plugin_stream_bindings(tools: &[PluginToolBinding]) -> Vec<PluginStreamToolBinding> {
+    let mut bindings = Vec::new();
+    for tool in tools {
+        let Some(stream) = tool.stream.as_ref() else {
             continue;
         };
-        let Some(tool) = tools.iter().find(|tool| &tool.method == for_method) else {
-            return Err(syn::Error::new_spanned(
-                for_method,
-                "permission target must reference a #[tool] method in the same #[agena_plugin] impl",
-            ));
-        };
-        permission.tool = Some(tool.tool.clone());
-        permission.input_model = Some(tool.input_model.clone());
-        permission.input = tool.input.clone();
+        bindings.push(PluginStreamToolBinding {
+            method: stream.method.clone(),
+            is_async: stream.is_async,
+            sink_first: stream.sink_first,
+            tool: tool.tool.clone(),
+            input_model: tool.input_model.clone(),
+            input: tool.input.clone(),
+        });
     }
-    Ok(())
-}
-
-fn mark_streaming_tool_bindings(
-    tools: &mut [PluginToolBinding],
-    streams: &[PluginStreamToolBinding],
-) {
-    for stream in streams {
-        if let Some(tool) = tools
-            .iter_mut()
-            .find(|tool| tool.method == stream.for_method)
-            && tool.input_model.spec.streaming.is_none()
-        {
-            tool.input_model.spec.streaming =
-                Some(LitStr::new("streaming", stream.for_method.span()));
-        }
-    }
+    bindings
 }
 
 fn reject_duplicate_tool_bindings(bindings: &[PluginToolBinding]) -> Result<()> {
@@ -2159,16 +1952,17 @@ fn reject_duplicate_tool_bindings(bindings: &[PluginToolBinding]) -> Result<()> 
 
 fn reject_duplicate_stream_bindings(bindings: &[PluginStreamToolBinding]) -> Result<()> {
     for (index, binding) in bindings.iter().enumerate() {
-        let tool = resolved_stream_tool(binding)?;
         if bindings
             .iter()
             .skip(index + 1)
-            .filter_map(|other| resolved_stream_tool(other).ok())
-            .any(|other| other.value() == tool.value())
+            .any(|other| other.tool.value() == binding.tool.value())
         {
             return Err(syn::Error::new_spanned(
                 &binding.method,
-                format!("duplicate stream handler for tool '{}'", tool.value()),
+                format!(
+                    "duplicate stream handler for tool '{}'",
+                    binding.tool.value()
+                ),
             ));
         }
     }
@@ -2180,18 +1974,16 @@ fn reject_duplicate_permission_bindings(
     kind: &str,
 ) -> Result<()> {
     for (index, binding) in bindings.iter().enumerate() {
-        let tool = resolved_permission_tool(binding)?;
         if bindings
             .iter()
             .skip(index + 1)
-            .filter_map(|other| resolved_permission_tool(other).ok())
-            .any(|other| other.value() == tool.value())
+            .any(|other| other.tool.value() == binding.tool.value())
         {
             return Err(syn::Error::new_spanned(
                 &binding.method,
                 format!(
                     "duplicate {kind} permission handler for tool '{}'",
-                    tool.value()
+                    binding.tool.value()
                 ),
             ));
         }
@@ -2636,8 +2428,8 @@ fn expand_plugin_layer_tool_stream(
 fn expand_plugin_layer_tool_stream_branch(
     binding: &PluginStreamToolBinding,
 ) -> Result<proc_macro2::TokenStream> {
-    let tool = resolved_stream_tool(binding)?;
-    let input_model = resolved_stream_input_model(binding)?;
+    let tool = &binding.tool;
+    let input_model = &binding.input_model;
     let input_args = plugin_call_input_args(&binding.input);
     let args = if binding.sink_first {
         let mut args = vec![quote! { sink }];
@@ -2709,8 +2501,8 @@ fn expand_plugin_layer_permission_branch(
     binding: &PluginPermissionBinding,
     paths: bool,
 ) -> Result<proc_macro2::TokenStream> {
-    let tool = resolved_permission_tool(binding)?;
-    let input_model = resolved_permission_input_model(binding)?;
+    let tool = &binding.tool;
+    let input_model = &binding.input_model;
     let call_args = plugin_call_input_args(&binding.input);
     let call =
         plugin_layer_permission_method_call(&binding.method, binding.is_async, &call_args, paths);
@@ -2721,46 +2513,6 @@ fn expand_plugin_layer_permission_branch(
             let __parsed = #parse;
             return #call;
         }
-    })
-}
-
-fn resolved_stream_tool(binding: &PluginStreamToolBinding) -> Result<&LitStr> {
-    binding.tool.as_ref().ok_or_else(|| {
-        syn::Error::new_spanned(
-            &binding.method,
-            "stream binding was not resolved to a #[tool] method",
-        )
-    })
-}
-
-fn resolved_stream_input_model(
-    binding: &PluginStreamToolBinding,
-) -> Result<&PluginGeneratedToolInput> {
-    binding.input_model.as_ref().ok_or_else(|| {
-        syn::Error::new_spanned(
-            &binding.method,
-            "stream binding was not resolved to a #[tool] method",
-        )
-    })
-}
-
-fn resolved_permission_tool(binding: &PluginPermissionBinding) -> Result<&LitStr> {
-    binding.tool.as_ref().ok_or_else(|| {
-        syn::Error::new_spanned(
-            &binding.method,
-            "permission binding was not resolved to a #[tool] method",
-        )
-    })
-}
-
-fn resolved_permission_input_model(
-    binding: &PluginPermissionBinding,
-) -> Result<&PluginGeneratedToolInput> {
-    binding.input_model.as_ref().ok_or_else(|| {
-        syn::Error::new_spanned(
-            &binding.method,
-            "permission binding was not resolved to a #[tool] method",
-        )
     })
 }
 
@@ -3114,7 +2866,6 @@ fn plugin_layer_tool_call_args(
 
 fn plugin_call_input_args(input: &PluginCallInput) -> Vec<proc_macro2::TokenStream> {
     match input {
-        PluginCallInput::Parsed => vec![quote! { __parsed }],
         PluginCallInput::Wrapped { by_ref } => {
             if *by_ref {
                 vec![quote! { &__parsed }]
@@ -3126,6 +2877,13 @@ fn plugin_call_input_args(input: &PluginCallInput) -> Vec<proc_macro2::TokenStre
             .iter()
             .map(|field| quote! { __parsed.#field })
             .collect(),
+    }
+}
+
+fn plugin_call_input_arg_count(input: &PluginCallInput) -> usize {
+    match input {
+        PluginCallInput::Wrapped { .. } => 1,
+        PluginCallInput::Fields(fields) => fields.len(),
     }
 }
 

@@ -300,11 +300,16 @@ struct PluginToolPlan {
 #[derive(Clone)]
 struct PluginToolInvokeHandler {
     method: Ident,
-    output_ty: Option<Type>,
-    output_is_result: bool,
+    output: PluginToolOutputPlan,
     is_async: bool,
     context: Option<PluginContextArg>,
     input: PluginCallInput,
+}
+
+#[derive(Clone)]
+struct PluginToolOutputPlan {
+    ty: Option<Type>,
+    returns_result: bool,
 }
 
 #[derive(Clone)]
@@ -940,13 +945,12 @@ fn build_plugin_tool_plan(
 ) -> Result<PluginToolPlan> {
     ensure_plugin_method_shared_receiver(method, "#[tool] methods")?;
     let mut spec = parse_plugin_tool_method_attr(attr, method_ident)?;
-    let inline = build_plugin_inline_tool(method, method_ident, self_label, &mut spec, docs)?;
-    let stream = build_plugin_tool_stream_handler(method_infos, &inline)?;
-    let permissions = build_plugin_tool_permission_handlers(method_infos, &inline)?;
-    let mut input_model = inline.input_model;
-    let (output_ty, output_is_result) =
-        plugin_method_tool_output(method, input_model.spec.output_ty.clone());
-    input_model.spec.output_ty = output_ty.clone();
+    let shape = build_plugin_tool_method_shape(method, method_ident, self_label, &mut spec, docs)?;
+    let stream = build_plugin_tool_stream_handler(method_infos, &shape)?;
+    let permissions = build_plugin_tool_permission_handlers(method_infos, &shape)?;
+    let mut input_model = shape.input_model;
+    let output = plugin_method_tool_output(method, input_model.spec.output_ty.clone());
+    input_model.spec.output_ty = output.ty.clone();
     let tool = input_model
         .spec
         .tool
@@ -961,11 +965,10 @@ fn build_plugin_tool_plan(
         input_model,
         invoke: PluginToolInvokeHandler {
             method: method_ident.clone(),
-            output_ty,
-            output_is_result,
+            output,
             is_async,
-            context: inline.context,
-            input: inline.call_input.clone(),
+            context: shape.context,
+            input: shape.call_input.clone(),
         },
         stream,
         permissions,
@@ -974,38 +977,38 @@ fn build_plugin_tool_plan(
 
 fn build_plugin_tool_stream_handler(
     methods: &[PluginMethodInfo],
-    inline: &PluginInlineTool,
+    shape: &PluginToolMethodShape,
 ) -> Result<Option<PluginToolStreamHandler>> {
-    let Some(stream_method) = inline.stream_method.as_ref() else {
+    let Some(stream_method) = shape.stream_method.as_ref() else {
         return Ok(None);
     };
-    let stream = validate_tool_stream_handler(methods, stream_method, &inline.stream_arg_types)?;
+    let stream = validate_tool_stream_handler(methods, stream_method, &shape.stream_arg_types)?;
     Ok(Some(PluginToolStreamHandler {
         method: stream.method,
         is_async: stream.is_async,
         sink_first: stream.sink_first,
-        context: inline.context,
-        input: inline.call_input.clone(),
+        context: shape.context,
+        input: shape.call_input.clone(),
     }))
 }
 
 fn build_plugin_tool_permission_handlers(
     methods: &[PluginMethodInfo],
-    inline: &PluginInlineTool,
+    shape: &PluginToolMethodShape,
 ) -> Result<PluginToolPermissionHandlers> {
     Ok(PluginToolPermissionHandlers {
         paths: build_plugin_tool_permission_handler(
             methods,
-            inline.permission_paths_method.as_ref(),
-            &inline.call_arg_types,
-            &inline.call_input,
+            shape.permission_paths_method.as_ref(),
+            &shape.call_arg_types,
+            &shape.call_input,
             "path",
         )?,
         networks: build_plugin_tool_permission_handler(
             methods,
-            inline.permission_networks_method.as_ref(),
-            &inline.call_arg_types,
-            &inline.call_input,
+            shape.permission_networks_method.as_ref(),
+            &shape.call_arg_types,
+            &shape.call_input,
             "network",
         )?,
     })
@@ -1038,14 +1041,14 @@ fn plugin_attr_has_explicit_args(attr: &Attribute) -> bool {
     }
 }
 
-struct PluginInlineToolConfig {
+struct PluginToolAttrConfig {
     spec: ToolSpecConfig,
     stream_method: Option<Ident>,
     permission_paths_method: Option<Ident>,
     permission_networks_method: Option<Ident>,
 }
 
-struct PluginInlineTool {
+struct PluginToolMethodShape {
     input_model: PluginGeneratedToolInput,
     context: Option<PluginContextArg>,
     call_input: PluginCallInput,
@@ -1089,7 +1092,7 @@ struct FieldArgConfig {
 fn parse_plugin_tool_method_attr(
     attr: &Attribute,
     method_ident: &Ident,
-) -> Result<PluginInlineToolConfig> {
+) -> Result<PluginToolAttrConfig> {
     if !plugin_attr_has_explicit_args(attr) {
         return parse_plugin_inline_tool_config(Vec::new(), method_ident);
     }
@@ -1101,7 +1104,7 @@ fn parse_plugin_tool_method_attr(
 fn parse_plugin_inline_tool_config(
     metas: Vec<Meta>,
     method_ident: &Ident,
-) -> Result<PluginInlineToolConfig> {
+) -> Result<PluginToolAttrConfig> {
     let mut spec = empty_tool_spec_config();
     spec.tool = Some(LitStr::new(
         &default_tool_name(method_ident),
@@ -1262,7 +1265,7 @@ fn parse_plugin_inline_tool_config(
         }
     }
 
-    Ok(PluginInlineToolConfig {
+    Ok(PluginToolAttrConfig {
         spec,
         stream_method,
         permission_paths_method,
@@ -1345,21 +1348,33 @@ fn inline_tool_tag_expr(tag: &str) -> Option<Expr> {
     Some(parse_quote!(#variant))
 }
 
-fn plugin_method_tool_output(method: &ImplItemFn, explicit: Option<Type>) -> (Option<Type>, bool) {
-    let output_is_result = plugin_method_result_ok_type(method).is_some();
+fn plugin_method_tool_output(method: &ImplItemFn, explicit: Option<Type>) -> PluginToolOutputPlan {
+    let returns_result = plugin_method_result_ok_type(method).is_some();
     if let Some(explicit) = explicit {
-        return (Some(explicit), output_is_result);
+        return PluginToolOutputPlan {
+            ty: Some(explicit),
+            returns_result,
+        };
     }
     let Some((candidate, is_result)) = plugin_method_return_value_type(method) else {
-        return (None, false);
+        return PluginToolOutputPlan {
+            ty: None,
+            returns_result: false,
+        };
     };
     if type_is_unit(&candidate)
         || type_last_segment_is(&candidate, "ToolInvokeOutput")
         || type_last_segment_is(&candidate, "ToolStreamEnd")
     {
-        return (None, false);
+        return PluginToolOutputPlan {
+            ty: None,
+            returns_result: false,
+        };
     }
-    (Some(candidate), is_result)
+    PluginToolOutputPlan {
+        ty: Some(candidate),
+        returns_result: is_result,
+    }
 }
 
 fn plugin_method_return_value_type(method: &ImplItemFn) -> Option<(Type, bool)> {
@@ -1398,13 +1413,13 @@ fn result_ok_type(ty: &Type) -> Option<&Type> {
     })
 }
 
-fn build_plugin_inline_tool(
+fn build_plugin_tool_method_shape(
     method: &mut ImplItemFn,
     method_ident: &Ident,
     self_label: &str,
-    config: &mut PluginInlineToolConfig,
+    config: &mut PluginToolAttrConfig,
     docs: Option<String>,
-) -> Result<PluginInlineTool> {
+) -> Result<PluginToolMethodShape> {
     let value_args = plugin_method_value_args(method)?;
     let context = plugin_inline_context_arg(&value_args)?;
     let stream_arg_types = value_args
@@ -1475,7 +1490,7 @@ fn build_plugin_inline_tool(
         docs,
     };
 
-    Ok(PluginInlineTool {
+    Ok(PluginToolMethodShape {
         input_model,
         context,
         call_input,
@@ -2460,8 +2475,7 @@ fn expand_plugin_layer_tool_invoke_branch(
         &handler.method,
         handler.is_async,
         &call_args,
-        handler.output_ty.as_ref(),
-        handler.output_is_result,
+        &handler.output,
     );
     let parse =
         expand_plugin_tool_parse_input(&tool.input_model, quote! { __input }, &handler.method)?;
@@ -2933,12 +2947,11 @@ fn plugin_layer_tool_method_call(
     method: &Ident,
     is_async: bool,
     args: &[proc_macro2::TokenStream],
-    output_ty: Option<&Type>,
-    output_is_result: bool,
+    output: &PluginToolOutputPlan,
 ) -> proc_macro2::TokenStream {
     let call = plugin_layer_method_call(method, is_async, args);
-    if let Some(output_ty) = output_ty {
-        if output_is_result {
+    if let Some(output_ty) = output.ty.as_ref() {
+        if output.returns_result {
             quote! {
                 match #call {
                     Ok(__value) => {

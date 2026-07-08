@@ -65,7 +65,7 @@ impl ProviderRegistry {
     pub async fn resolve_model(&self, model: &ModelRef) -> Result<Model, AppError> {
         let provider = self.provider_for_model_ref(model)?;
 
-        let listed = self.list_models(model.provider_id.as_str()).await?;
+        let listed = self.list_models(model.provider_id.as_ref()).await?;
         if let Some(entry) = listed.into_iter().find(|entry| {
             entry.id == model.model_id
                 && model

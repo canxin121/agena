@@ -11,6 +11,7 @@
 //! multiple tool invocations.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -28,12 +29,18 @@ pub enum SnapshotBackend {
     Git,
 }
 
-impl SnapshotBackend {
-    pub const fn as_str(self) -> &'static str {
+impl AsRef<str> for SnapshotBackend {
+    fn as_ref(&self) -> &str {
         match self {
             Self::Rift => "rift",
             Self::Git => "git",
         }
+    }
+}
+
+impl fmt::Display for SnapshotBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())
     }
 }
 
@@ -133,7 +140,7 @@ pub(super) fn execute_enter(
         format!("Snapshot → {}", session.path.display()),
         format!(
             "Switched to managed snapshot:\n  backend: {}\n  path:    {}\n  branch:  {}\n{}",
-            session.backend.as_str(),
+            session.backend,
             session.path.display(),
             session.branch,
             note_line,
@@ -142,7 +149,7 @@ pub(super) fn execute_enter(
     let output = ToolPayloadOutput::EnterSnapshot {
         path: session.path.to_string_lossy().to_string(),
         branch: session.branch.clone(),
-        backend: Some(session.backend.as_str().to_string()),
+        backend: Some(session.backend.to_string()),
         note,
     };
 
@@ -180,7 +187,7 @@ pub(super) fn execute_exit(
         format!(
             "Snapshot at {} (backend {}, branch {}) — action: {action}",
             session.path.display(),
-            session.backend.as_str(),
+            session.backend,
             session.branch,
         ),
     );
@@ -268,8 +275,8 @@ fn create_new_backend_error(
 ) -> ToolError {
     let preferred = capabilities
         .preferred_backend
-        .map(SnapshotBackend::as_str)
-        .unwrap_or("none");
+        .map(|backend| backend.to_string())
+        .unwrap_or_else(|| "none".to_owned());
     let mut detail = vec![
         format!("preferred backend: {preferred}"),
         format!(

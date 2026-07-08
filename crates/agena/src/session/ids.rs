@@ -4,6 +4,8 @@
 //! around as ad-hoc business keys. They serialize transparently so the
 //! on-disk and wire formats are unchanged.
 
+use std::borrow::Borrow;
+
 use derive_more::{Display, From, Into};
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
@@ -109,8 +111,16 @@ impl ToolCallId {
     pub fn new(id: impl Into<SmolStr>) -> Self {
         Self(id.into())
     }
+}
 
-    pub fn as_str(&self) -> &str {
+impl Borrow<str> for ToolCallId {
+    fn borrow(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl AsRef<str> for ToolCallId {
+    fn as_ref(&self) -> &str {
         self.0.as_str()
     }
 }

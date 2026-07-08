@@ -65,18 +65,18 @@ impl ToolCatalog {
         } else if enabled {
             format!(
                 "tool '{}' enabled for {:?} profile",
-                tool.model_name(),
+                crate::tool::tool_value_name(tool.model_name().as_str()),
                 self.profile
             )
         } else {
             format!(
                 "tool '{}' disabled for {:?} profile",
-                tool.model_name(),
+                crate::tool::tool_value_name(tool.model_name().as_str()),
                 self.profile
             )
         };
         ToolAvailability {
-            tool_name: tool.model_name(),
+            tool_name: crate::tool::tool_value_name(tool.model_name().as_str()),
             enabled: enabled && !agent.disable,
             reason,
         }

@@ -77,7 +77,7 @@ impl ProviderRegistry {
                 AppError::Config(format!("invalid model reference `{target}`: {err}"))
             })?;
             if parsed.adapter_id.is_none()
-                && let Some(provider) = self.get(parsed.provider_id.as_str())
+                && let Some(provider) = self.get(parsed.provider_id.as_ref())
             {
                 parsed.adapter_id = provider.default_adapter().cloned();
             }

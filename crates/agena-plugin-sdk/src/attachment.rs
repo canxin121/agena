@@ -1,3 +1,5 @@
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -10,8 +12,8 @@ pub enum AttachmentKind {
     File,
 }
 
-impl AttachmentKind {
-    pub const fn as_str(self) -> &'static str {
+impl AsRef<str> for AttachmentKind {
+    fn as_ref(&self) -> &str {
         match self {
             Self::Image => "image",
             Self::Audio => "audio",
@@ -20,7 +22,15 @@ impl AttachmentKind {
             Self::File => "file",
         }
     }
+}
 
+impl fmt::Display for AttachmentKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())
+    }
+}
+
+impl AttachmentKind {
     pub fn detect(mime: &str, hint: Option<&str>) -> Self {
         let normalized_mime = mime.trim().to_ascii_lowercase();
         if normalized_mime.starts_with("image/") {
@@ -165,7 +175,7 @@ impl AttachmentItem {
             }
         }
 
-        self.kind.as_str().to_owned()
+        self.kind.to_string()
     }
 }
 

@@ -413,13 +413,12 @@ fn permission_action_from_write_request(
                     )
                 })?
                 .to_string();
-            let parsed = agena::permission::NetworkTarget::parse(
-                request
-                    .network_port
-                    .map(|port| format!("{target}:{port}"))
-                    .unwrap_or_else(|| target.clone()),
-            )
-            .map_err(|err| ApiError::bad_request(format!("invalid network target: {err}")))?;
+            let parsed: agena::permission::NetworkTarget = request
+                .network_port
+                .map(|port| format!("{target}:{port}"))
+                .unwrap_or_else(|| target.clone())
+                .parse()
+                .map_err(|err| ApiError::bad_request(format!("invalid network target: {err}")))?;
             Ok(PermissionAction::NetworkAccess {
                 target,
                 host: parsed.host().to_string(),

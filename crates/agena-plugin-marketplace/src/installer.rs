@@ -849,7 +849,10 @@ fn write_plugin_config(
 ) -> Result<(), MarketplaceError> {
     let list = ensure_plugins_list_object(doc)?;
     let mut package = JsonMap::new();
-    package.insert("kind".to_string(), JsonValue::from(version.kind.as_str()));
+    package.insert(
+        "kind".to_string(),
+        JsonValue::from(version.kind.to_string()),
+    );
     match version.kind {
         PluginKind::Cdylib => {
             package.insert(

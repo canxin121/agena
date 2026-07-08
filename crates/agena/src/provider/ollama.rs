@@ -543,7 +543,7 @@ fn tools_to_ollama_definitions(
         .map(|tool| OllamaToolDefinition {
             kind: "function",
             function: OllamaFunctionDefinition {
-                name: tool.provider_safe_name,
+                name: tool.model_name,
                 description: tool.description,
                 parameters: tool.input_schema,
             },

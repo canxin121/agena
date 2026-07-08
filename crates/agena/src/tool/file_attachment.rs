@@ -168,7 +168,7 @@ fn build_file_attachment(
 
 fn populate_view_metadata(view: &mut ToolExecutionView, prepared: &PreparedFileAttachment) {
     view.metadata
-        .insert("kind".to_string(), prepared.kind.as_str().to_string());
+        .insert("kind".to_string(), prepared.kind.to_string());
     view.metadata
         .insert("path".to_string(), prepared.path.clone());
     if let Some(filename) = prepared.filename.as_ref() {
@@ -205,7 +205,7 @@ fn render_summary(
         }
         _ => format!(
             "Attached {} file {path} ({mime}, {size_bytes} bytes).",
-            kind.as_str()
+            kind
         ),
     }
 }

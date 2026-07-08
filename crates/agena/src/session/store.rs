@@ -1252,7 +1252,7 @@ fn persisted_permission_rule_from_model(
             model.id
         ))
     })?;
-    let scope = permission_rule::scope_from_string(model.scope.as_str()).map_err(|_| {
+    let scope = permission_rule::scope_from_string(model.scope.as_ref()).map_err(|_| {
         AppError::Internal(format!(
             "invalid permission scope in persisted rule {}",
             model.id

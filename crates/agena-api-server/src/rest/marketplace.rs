@@ -50,7 +50,7 @@ pub async fn search_marketplace_plugins(
                 homepage: plugin.homepage,
                 version_count: plugin.versions.len(),
                 latest_version: latest.map(|version| version.version.clone()),
-                latest_kind: latest.map(|version| version.kind.as_str().to_string()),
+                latest_kind: latest.map(|version| version.kind.to_string()),
                 latest_platform: latest.map(|version| version.platform.clone()),
             }
         })
@@ -109,7 +109,7 @@ pub async fn list_marketplace_installed_plugins(
         .map(|record| MarketplaceInstalledPluginResource {
             plugin_id: record.plugin_id,
             version: record.version,
-            kind: record.kind.as_str().to_string(),
+            kind: record.kind.to_string(),
             platform: record.platform,
             binary_path: record.binary_path.display().to_string(),
             config_path: record.config_path.display().to_string(),

@@ -105,7 +105,7 @@ impl ApiService {
 
         let resolved_adapter_id = model.adapter_id.clone().or_else(|| {
             provider_registry
-                .get(model.provider_id.as_str())
+                .get(model.provider_id.as_ref())
                 .and_then(|provider| provider.default_adapter().cloned())
         });
 
@@ -281,7 +281,7 @@ fn resolve_mode_request_override(
     resolved_adapter_id: Option<&AdapterId>,
 ) -> ModelSpeedModeRequestOverride {
     let mut merged = request_override.clone();
-    if let Some(adapter_id) = resolved_adapter_id.map(AdapterId::as_str)
+    if let Some(adapter_id) = resolved_adapter_id.map(AsRef::<str>::as_ref)
         && let Some(adapter_override) = adapter_overrides.get(adapter_id)
     {
         merged = merged.merged_with(adapter_override);
@@ -290,7 +290,7 @@ fn resolve_mode_request_override(
 }
 
 fn ensure_provider_exists(provider_registry: &ProviderRegistry, model: &ModelRef) -> ApiResult<()> {
-    if provider_registry.get(model.provider_id.as_str()).is_some() {
+    if provider_registry.get(model.provider_id.as_ref()).is_some() {
         Ok(())
     } else {
         Err(ApiError::bad_request(format!(

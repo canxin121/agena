@@ -229,7 +229,8 @@ impl RuntimeHostClient {
             .plugin_id
             .filter(|id| !id.trim().is_empty())
             .ok_or_else(|| host_unavailable("host callback context is missing plugin_id"))?;
-        PluginKey::parse(plugin_id.as_str())
+        plugin_id
+            .parse()
             .map_err(|err| host_unavailable(format!("invalid host callback plugin_id: {err}")))
     }
 
@@ -391,7 +392,7 @@ impl HostClient for RuntimeHostClient {
             .and_then(|context| context.plugin_id)
             .or_else(active_invocations::current_plugin)
             .unwrap_or_else(|| "<unknown>".into());
-        let plugin_id = crate::plugin::PluginKey::parse(plugin_id.as_str()).unwrap_or_else(|_| {
+        let plugin_id = plugin_id.parse().unwrap_or_else(|_| {
             crate::plugin::PluginKey::new("unknown", "unknown").expect("static plugin key")
         });
         let kind = crate::event::EventKind::PluginEvent(crate::event::PluginEventPayload {
@@ -603,8 +604,9 @@ impl HostClient for RuntimeHostClient {
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, PluginError> {
         let (executor, _) = self.callback_scoped_tool_executor().await?;
         Ok(executor
-            .detailed_model_tools()
+            .detailed_tools()
             .into_iter()
+            .filter(|tool| !crate::tool::is_model_tools_gateway(tool))
             .map(render_tool_descriptor)
             .collect())
     }
@@ -988,7 +990,7 @@ impl HostClient for RuntimeHostClient {
         if req.agent.name.trim().is_empty() {
             return Err(PluginError::invalid_params("agent.name must not be empty"));
         }
-        let scope = agent_scope_from_str(req.agent.scope.as_str());
+        let scope = agent_scope_from_str(req.agent.scope.as_ref());
         let permission = core_agent_permission_from_sdk(req.agent.permission);
         crate::agent::Agent::new(
             req.agent.name.clone(),

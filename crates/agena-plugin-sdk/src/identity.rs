@@ -22,8 +22,26 @@ impl PluginKey {
         })
     }
 
-    pub fn parse(value: &str) -> Result<Self, PluginKeyParseError> {
-        let trimmed = value.trim();
+    pub fn namespace(&self) -> &str {
+        self.namespace.0.as_str()
+    }
+
+    pub fn name(&self) -> &str {
+        self.name.0.as_str()
+    }
+}
+
+impl fmt::Display for PluginKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}", self.namespace(), self.name())
+    }
+}
+
+impl FromStr for PluginKey {
+    type Err = PluginKeyParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let trimmed = s.trim();
         let Some((namespace, name)) = trimmed.split_once('.') else {
             return Err(PluginKeyParseError::MissingSeparator(trimmed.to_string()));
         };
@@ -36,32 +54,6 @@ impl PluginKey {
         }
         Self::new(namespace, name)
     }
-
-    pub fn namespace(&self) -> &str {
-        self.namespace.as_str()
-    }
-
-    pub fn name(&self) -> &str {
-        self.name.as_str()
-    }
-
-    pub fn to_model_string(&self) -> String {
-        format!("{}.{}", self.namespace(), self.name())
-    }
-}
-
-impl fmt::Display for PluginKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.to_model_string().as_str())
-    }
-}
-
-impl FromStr for PluginKey {
-    type Err = PluginKeyParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse(s)
-    }
 }
 
 impl Serialize for PluginKey {
@@ -69,7 +61,7 @@ impl Serialize for PluginKey {
     where
         S: Serializer,
     {
-        serializer.serialize_str(self.to_model_string().as_str())
+        serializer.collect_str(self)
     }
 }
 
@@ -79,7 +71,7 @@ impl<'de> Deserialize<'de> for PluginKey {
         D: Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        Self::parse(value.as_str()).map_err(serde::de::Error::custom)
+        value.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -97,73 +89,41 @@ impl ToolKey {
         })
     }
 
-    pub fn parse_model_name(value: &str) -> Result<Self, ToolKeyParseError> {
-        let trimmed = value.trim();
-        let mut parts = trimmed.split('.');
+    pub fn plugin(&self) -> &PluginKey {
+        &self.plugin
+    }
+
+    pub fn name(&self) -> &str {
+        self.name.0.as_str()
+    }
+}
+
+impl fmt::Display for ToolKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{}", self.plugin, self.name())
+    }
+}
+
+impl FromStr for ToolKey {
+    type Err = ToolKeyParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let trimmed = s.trim();
+        let mut parts = trimmed.splitn(3, '.');
         let namespace = parts
             .next()
             .ok_or_else(|| ToolKeyParseError::MissingPlugin(trimmed.to_string()))?;
         let plugin_name = parts
             .next()
             .ok_or_else(|| ToolKeyParseError::MissingPlugin(trimmed.to_string()))?;
-        let tool_name = parts.collect::<Vec<_>>().join(".");
+        let tool_name = parts
+            .next()
+            .ok_or_else(|| ToolKeyParseError::MissingTool(trimmed.to_string()))?;
         if tool_name.is_empty() {
             return Err(ToolKeyParseError::MissingTool(trimmed.to_string()));
         }
         let plugin = PluginKey::new(namespace, plugin_name).map_err(ToolKeyParseError::Plugin)?;
         Self::new(plugin, tool_name)
-    }
-
-    pub fn plugin(&self) -> &PluginKey {
-        &self.plugin
-    }
-
-    pub fn name(&self) -> &str {
-        self.name.as_str()
-    }
-
-    pub fn to_model_string(&self) -> String {
-        format!("{}.{}", self.plugin, self.name())
-    }
-
-    pub fn to_provider_safe_string(&self) -> String {
-        let trimmed = self.to_model_string();
-        let mut out = String::with_capacity(trimmed.len());
-        let mut previous_was_separator = false;
-
-        for ch in trimmed.chars() {
-            if ch.is_ascii_alphanumeric() || ch == '_' {
-                out.push(ch);
-                previous_was_separator = false;
-            } else if !previous_was_separator {
-                out.push('_');
-                previous_was_separator = true;
-            }
-        }
-
-        while out.ends_with('_') {
-            out.pop();
-        }
-        while out.starts_with('_') {
-            out.remove(0);
-        }
-        if out.is_empty() {
-            out.push_str("tool");
-        }
-        if out
-            .bytes()
-            .next()
-            .is_some_and(|byte| !byte.is_ascii_alphabetic() && byte != b'_')
-        {
-            out.insert(0, '_');
-        }
-        out
-    }
-}
-
-impl fmt::Display for ToolKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.to_model_string().as_str())
     }
 }
 
@@ -172,7 +132,7 @@ impl Serialize for ToolKey {
     where
         S: Serializer,
     {
-        serializer.serialize_str(self.to_model_string().as_str())
+        serializer.collect_str(self)
     }
 }
 
@@ -182,7 +142,7 @@ impl<'de> Deserialize<'de> for ToolKey {
         D: Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        Self::parse_model_name(value.as_str()).map_err(serde::de::Error::custom)
+        value.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -206,18 +166,7 @@ impl KeySegment {
                 reason: "must not contain `.`".to_string(),
             });
         }
-        if trimmed.contains('/') {
-            return Err(PluginKeyParseError::InvalidComponent {
-                label,
-                value,
-                reason: "must not contain `/`".to_string(),
-            });
-        }
         Ok(Self(trimmed.to_string()))
-    }
-
-    fn as_str(&self) -> &str {
-        self.0.as_str()
     }
 }
 
@@ -230,17 +179,7 @@ impl ToolName {
         if trimmed.is_empty() {
             return Err(ToolKeyParseError::MissingTool(value));
         }
-        if trimmed.contains('/') {
-            return Err(ToolKeyParseError::InvalidToolName {
-                value,
-                reason: "must not contain `/`".to_string(),
-            });
-        }
         Ok(Self(trimmed.to_string()))
-    }
-
-    fn as_str(&self) -> &str {
-        self.0.as_str()
     }
 }
 
@@ -277,5 +216,32 @@ impl From<PluginKeyParseError> for PluginError {
 impl From<ToolKeyParseError> for PluginError {
     fn from(value: ToolKeyParseError) -> Self {
         PluginError::invalid_params(value.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PluginKey, ToolKey};
+
+    #[test]
+    fn plugin_key_accepts_non_snake_case_segments_but_rejects_dots() {
+        assert!(PluginKey::new("agena-tools", "FileSystem").is_ok());
+        assert!(PluginKey::new("agena.tools", "fs").is_err());
+        assert!(PluginKey::new("agena", "fs.tools").is_err());
+    }
+
+    #[test]
+    fn tool_key_allows_dotted_tool_names() {
+        let key: ToolKey = "agena.fs.read.file".parse().expect("valid tool key");
+        assert_eq!(key.to_string(), "agena.fs.read.file");
+        assert_eq!(key.name(), "read.file");
+        assert!("agena.fs".parse::<ToolKey>().is_err());
+    }
+
+    #[test]
+    fn tool_key_preserves_original_name_text() {
+        let key: ToolKey = "agena.fs.read-file".parse().expect("valid tool key");
+        assert_eq!(key.to_string(), "agena.fs.read-file");
+        assert_eq!(key.name(), "read-file");
     }
 }

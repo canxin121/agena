@@ -783,7 +783,7 @@ impl App {
         let statuses = self.backend.plugin_statuses();
         let sections =
             build_plugin_policy_sections(&sources, locale.as_str(), statuses, |plugin_id| {
-                self.backend.plugin_inspect(plugin_id)
+                self.backend.plugin_inspect(&plugin_id.to_string())
             });
         Ok(PluginPolicyStudioOverlay {
             title: "Plugin Policy Studio".to_owned(),
@@ -1126,10 +1126,12 @@ impl App {
             .into_iter()
             .map(|status| {
                 let plugin_id = status.plugin_id.clone();
-                let inspect = self.backend.plugin_inspect(plugin_id.as_str());
-                let logs =
-                    self.backend
-                        .plugin_logs(plugin_id.as_str(), None, PLUGIN_WORKBENCH_LOG_LIMIT);
+                let inspect = self.backend.plugin_inspect(&plugin_id.to_string());
+                let logs = self.backend.plugin_logs(
+                    &plugin_id.to_string(),
+                    None,
+                    PLUGIN_WORKBENCH_LOG_LIMIT,
+                );
                 build_plugin_workbench_plugin(&sources, locale.as_str(), status, inspect, logs)
             })
             .collect::<Vec<_>>();
@@ -4950,18 +4952,32 @@ fn plugins_config_from_root(root: &JsonValue) -> agena::plugin::PluginsConfig {
         .unwrap_or_default()
 }
 
-fn configured_plugin_ids(root: &JsonValue) -> BTreeSet<String> {
+fn configured_plugin_ids(root: &JsonValue) -> BTreeSet<agena::plugin::sdk::PluginKey> {
     get_json_path(root, Some("plugins.list"))
         .ok()
         .and_then(|value| value.as_object().cloned())
-        .map(|entries| entries.keys().cloned().collect())
+        .map(|entries| {
+            entries
+                .keys()
+                .filter_map(|key| key.parse::<agena::plugin::sdk::PluginKey>().ok())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
-fn configured_plugin_kind(root: &JsonValue, plugin_id: &str) -> Option<String> {
+fn configured_plugin_kind(
+    root: &JsonValue,
+    plugin_id: &agena::plugin::sdk::PluginKey,
+) -> Option<String> {
     get_json_path(
         root,
-        Some(format!("plugins.list.{}", quote_settings_segment(plugin_id)).as_str()),
+        Some(
+            format!(
+                "plugins.list.{}",
+                quote_settings_segment(&plugin_id.to_string())
+            )
+            .as_str(),
+        ),
     )
     .ok()
     .and_then(|value| value.get("package").cloned())
@@ -4985,7 +5001,7 @@ fn resolve_prompt_override_mode(
 
 fn resolve_plugin_prompt_mode(
     policy: &agena::plugin::ToolPresentationConfig,
-    plugin_id: &str,
+    plugin_id: &agena::plugin::sdk::PluginKey,
     plugin_default: Option<agena::plugin::ToolDescriptionMode>,
 ) -> agena::plugin::ToolDescriptionMode {
     policy
@@ -5012,17 +5028,13 @@ fn prompt_plugin_source(
 
 fn tool_prompt_override_from_policy(
     policy: &agena::plugin::ToolPresentationConfig,
-    plugin_id: &str,
+    plugin_id: &agena::plugin::sdk::PluginKey,
     tool_name: &str,
 ) -> Option<agena::plugin::ToolDescriptionOverride> {
-    for key in [
-        format!("{plugin_id}/{tool_name}"),
-        format!("{plugin_id}.{tool_name}"),
-        tool_name.to_owned(),
-    ] {
-        if let Some(mode) = policy.tools.get(key.as_str()).copied() {
-            return Some(mode);
-        }
+    if let Ok(key) = agena::plugin::sdk::ToolKey::new(plugin_id.clone(), tool_name.to_owned())
+        && let Some(mode) = policy.tools.get(&key).copied()
+    {
+        return Some(mode);
     }
     None
 }
@@ -5070,7 +5082,7 @@ fn resolve_ui_override_mode(
 
 fn resolve_plugin_ui_mode(
     policy: &agena::plugin::UiPresentationConfig,
-    plugin_id: &str,
+    plugin_id: &agena::plugin::sdk::PluginKey,
     plugin_default: Option<PluginTextDisplayMode>,
 ) -> PluginTextDisplayMode {
     policy
@@ -5109,17 +5121,13 @@ fn ui_plugin_source(
 
 fn tool_ui_override_from_policy(
     policy: &agena::plugin::UiPresentationConfig,
-    plugin_id: &str,
+    plugin_id: &agena::plugin::sdk::PluginKey,
     tool_name: &str,
 ) -> Option<agena::plugin::UiPresentationOverride> {
-    for key in [
-        format!("{plugin_id}/{tool_name}"),
-        format!("{plugin_id}.{tool_name}"),
-        tool_name.to_owned(),
-    ] {
-        if let Some(mode) = policy.tools.get(key.as_str()).copied() {
-            return Some(mode);
-        }
+    if let Ok(key) = agena::plugin::sdk::ToolKey::new(plugin_id.clone(), tool_name.to_owned())
+        && let Some(mode) = policy.tools.get(&key).copied()
+    {
+        return Some(mode);
     }
     None
 }
@@ -5190,7 +5198,7 @@ fn build_plugin_policy_sections<F>(
     mut inspect_for: F,
 ) -> Vec<PluginPolicySection>
 where
-    F: FnMut(&str) -> Option<agena::plugin::PluginInspect>,
+    F: FnMut(&agena::plugin::sdk::PluginKey) -> Option<agena::plugin::PluginInspect>,
 {
     let file_plugins = plugins_config_from_root(&sources.file);
     let effective_plugins = plugins_config_from_root(&sources.effective);
@@ -5205,9 +5213,9 @@ where
     let mut sections = plugin_ids
         .into_iter()
         .map(|plugin_id| {
-            let status = status_by_id.remove(plugin_id.as_str()).unwrap_or_else(|| {
-                let kind = configured_plugin_kind(&sources.effective, plugin_id.as_str())
-                    .or_else(|| configured_plugin_kind(&sources.file, plugin_id.as_str()))
+            let status = status_by_id.remove(&plugin_id).unwrap_or_else(|| {
+                let kind = configured_plugin_kind(&sources.effective, &plugin_id)
+                    .or_else(|| configured_plugin_kind(&sources.file, &plugin_id))
                     .unwrap_or_else(|| "configured".to_owned());
                 let static_kind = match kind.as_str() {
                     "static" => "static",
@@ -5217,9 +5225,9 @@ where
                     "wasm" => "wasm",
                     _ => "configured",
                 };
-                agena::plugin::status::PluginStatus::initial(plugin_id.as_str(), static_kind)
+                agena::plugin::status::PluginStatus::initial(&plugin_id, static_kind)
             });
-            let inspect = inspect_for(plugin_id.as_str());
+            let inspect = inspect_for(&plugin_id);
             build_plugin_policy_section(sources, &file_plugins, &effective_plugins, status, inspect)
         })
         .collect::<Vec<_>>();
@@ -5239,15 +5247,9 @@ fn build_plugin_policy_section(
         .and_then(|inspect| inspect.manifest.as_ref());
     let label = manifest
         .map(|manifest| manifest.name.clone())
-        .unwrap_or_else(|| status.plugin_id.clone());
+        .unwrap_or_else(|| status.plugin_id.to_string());
     let description = manifest
-        .and_then(|manifest| {
-            manifest
-                .summary
-                .clone()
-                .or_else(|| manifest.description.clone())
-                .or_else(|| manifest.help.clone())
-        })
+        .and_then(|manifest| manifest.summary.clone().or_else(|| manifest.help.clone()))
         .unwrap_or_else(|| {
             "No plugin metadata available until this plugin can be inspected at runtime.".to_owned()
         });
@@ -5258,13 +5260,13 @@ fn build_plugin_policy_section(
         .policy
         .tool_presentation
         .plugins
-        .get(status.plugin_id.as_str())
+        .get(&status.plugin_id)
         .copied();
     let effective_plugin_ui_override = effective_plugins
         .policy
         .ui_presentation
         .plugins
-        .get(status.plugin_id.as_str())
+        .get(&status.plugin_id)
         .copied();
 
     let mut items = vec![PluginPolicyItem {
@@ -5278,33 +5280,33 @@ fn build_plugin_policy_section(
             .policy
             .tool_presentation
             .plugins
-            .get(status.plugin_id.as_str())
+            .get(&status.plugin_id)
             .copied(),
         prompt_effective_mode: resolve_plugin_prompt_mode(
             &effective_plugins.policy.tool_presentation,
-            status.plugin_id.as_str(),
+            &status.plugin_id,
             plugin_prompt_default,
         ),
         prompt_source: prompt_plugin_source(
             effective_plugin_prompt_override,
             plugin_prompt_default,
         ),
-        prompt_path: plugin_policy_prompt_path(status.plugin_id.as_str(), None),
+        prompt_path: plugin_policy_prompt_path(&status.plugin_id.to_string(), None),
         ui_tool_default: None,
         ui_plugin_declared_default: plugin_ui_default,
         ui_file_override: file_plugins
             .policy
             .ui_presentation
             .plugins
-            .get(status.plugin_id.as_str())
+            .get(&status.plugin_id)
             .copied(),
         ui_effective_mode: resolve_plugin_ui_mode(
             &effective_plugins.policy.ui_presentation,
-            status.plugin_id.as_str(),
+            &status.plugin_id,
             plugin_ui_default,
         ),
         ui_source: ui_plugin_source(effective_plugin_ui_override, plugin_ui_default),
-        ui_path: plugin_policy_ui_path(status.plugin_id.as_str(), None),
+        ui_path: plugin_policy_ui_path(&status.plugin_id.to_string(), None),
     }];
 
     if let Some(manifest) = manifest {
@@ -5316,12 +5318,12 @@ fn build_plugin_policy_section(
             let nearest_ui_default = tool_ui_default.or(plugin_ui_default);
             let effective_tool_prompt_override = tool_prompt_override_from_policy(
                 &effective_plugins.policy.tool_presentation,
-                status.plugin_id.as_str(),
+                &status.plugin_id,
                 tool.name.as_str(),
             );
             let effective_tool_ui_override = tool_ui_override_from_policy(
                 &effective_plugins.policy.ui_presentation,
-                status.plugin_id.as_str(),
+                &status.plugin_id,
                 tool.name.as_str(),
             );
             items.push(PluginPolicyItem {
@@ -5332,20 +5334,20 @@ fn build_plugin_policy_section(
                     .docs
                     .summary
                     .clone()
-                    .or_else(|| tool.model.description.clone())
                     .or_else(|| tool.docs.help.clone())
                     .unwrap_or_else(|| "No tool metadata available.".to_owned()),
                 prompt_tool_default: tool_prompt_default,
                 prompt_plugin_declared_default: plugin_prompt_default,
                 prompt_file_override: tool_prompt_override_from_policy(
                     &file_plugins.policy.tool_presentation,
-                    status.plugin_id.as_str(),
+                    &status.plugin_id,
                     tool.name.as_str(),
                 ),
                 prompt_effective_mode: effective_plugins.policy.tool_presentation.mode_for(
-                    status.plugin_id.as_str(),
-                    tool.name.as_str(),
-                    tool.name.as_str(),
+                    &status.plugin_id,
+                    &format!("{}.{}", status.plugin_id, tool.name)
+                        .parse()
+                        .expect("tool key should parse"),
                     nearest_prompt_default,
                 ),
                 prompt_source: prompt_tool_source(
@@ -5355,19 +5357,19 @@ fn build_plugin_policy_section(
                     plugin_prompt_default,
                 ),
                 prompt_path: plugin_policy_prompt_path(
-                    status.plugin_id.as_str(),
+                    &status.plugin_id.to_string(),
                     Some(tool.name.as_str()),
                 ),
                 ui_tool_default: tool_ui_default,
                 ui_plugin_declared_default: plugin_ui_default,
                 ui_file_override: tool_ui_override_from_policy(
                     &file_plugins.policy.ui_presentation,
-                    status.plugin_id.as_str(),
+                    &status.plugin_id,
                     tool.name.as_str(),
                 ),
                 ui_effective_mode: resolve_tool_text_display_mode(
                     sources,
-                    status.plugin_id.as_str(),
+                    &status.plugin_id.to_string(),
                     tool.name.as_str(),
                     nearest_ui_default,
                     plugin_ui_default,
@@ -5378,7 +5380,10 @@ fn build_plugin_policy_section(
                     tool_ui_default,
                     plugin_ui_default,
                 ),
-                ui_path: plugin_policy_ui_path(status.plugin_id.as_str(), Some(tool.name.as_str())),
+                ui_path: plugin_policy_ui_path(
+                    &status.plugin_id.to_string(),
+                    Some(tool.name.as_str()),
+                ),
             });
         }
     }
@@ -5396,7 +5401,7 @@ fn build_plugin_policy_section(
     );
 
     PluginPolicySection {
-        plugin_id: status.plugin_id.clone(),
+        plugin_id: status.plugin_id.to_string(),
         label,
         summary,
         description,
@@ -5519,18 +5524,12 @@ fn build_plugin_workbench_plugin(
     let visible_tool = tools
         .first()
         .map(|tool| tool.name.clone())
-        .unwrap_or_else(|| {
-            status
-                .plugin_id
-                .rsplit('.')
-                .next()
-                .unwrap_or(status.plugin_id.as_str())
-                .to_owned()
-        });
+        .unwrap_or_else(|| status.plugin_id.name().to_owned());
+    let plugin_id = status.plugin_id.to_string();
     let ui_display_mode =
-        resolve_plugin_text_display_mode(sources, status.plugin_id.as_str(), plugin_ui_default);
+        resolve_plugin_text_display_mode(sources, plugin_id.as_str(), plugin_ui_default);
     let ui_display_source =
-        if config_plugin_text_display_mode_override(sources, status.plugin_id.as_str()).is_some() {
+        if config_plugin_text_display_mode_override(sources, plugin_id.as_str()).is_some() {
             PluginTextDisplaySource::PluginOverride
         } else if plugin_ui_default.is_some() {
             PluginTextDisplaySource::PluginDefault
@@ -5545,7 +5544,7 @@ fn build_plugin_workbench_plugin(
                 tool.name.clone(),
                 resolve_tool_text_display_mode(
                     sources,
-                    status.plugin_id.as_str(),
+                    plugin_id.as_str(),
                     tool.name.as_str(),
                     tool_default,
                     plugin_ui_default,
@@ -5567,13 +5566,13 @@ fn build_plugin_workbench_plugin(
             let tool_default = plugin_text_display_mode_from_declared(tool.display.ui_display_mode);
             let source = if config_tool_text_display_mode_override(
                 sources,
-                status.plugin_id.as_str(),
+                plugin_id.as_str(),
                 tool.name.as_str(),
             )
             .is_some()
             {
                 PluginTextDisplaySource::ToolOverride
-            } else if config_plugin_text_display_mode_override(sources, status.plugin_id.as_str())
+            } else if config_plugin_text_display_mode_override(sources, plugin_id.as_str())
                 .is_some()
             {
                 PluginTextDisplaySource::PluginOverride
@@ -5597,7 +5596,7 @@ fn build_plugin_workbench_plugin(
                 Some(
                     format!(
                         "plugins.list.{}",
-                        quote_settings_segment(status.plugin_id.as_str())
+                        quote_settings_segment(plugin_id.as_str())
                     )
                     .as_str(),
                 ),
@@ -5617,7 +5616,7 @@ fn build_plugin_workbench_plugin(
     let saved_config = materialized_config_value(schema.as_ref(), &raw_config);
     let saved_override = derive_override_value(&default_config, &saved_config);
     let mut plugin = PluginWorkbenchPlugin {
-        plugin_id: status.plugin_id.clone(),
+        plugin_id,
         visible_tool,
         version,
         transport: status.kind.to_owned(),
@@ -11141,20 +11140,20 @@ fn plugin_tools_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
         let ui_label = plugin_text_display_mode_label(mode);
         let default_label = plugin
             .tool_ui_display_defaults
-            .get(tool.name.as_str())
+            .get(&tool.name)
             .copied()
             .map(plugin_text_display_mode_label)
             .unwrap_or("global");
         let source_label = plugin
             .tool_ui_display_sources
-            .get(tool.name.as_str())
+            .get(&tool.name)
             .copied()
             .map(plugin_text_display_source_label)
             .unwrap_or("global-default");
         let description = match mode {
             PluginTextDisplayMode::Detailed => tool
-                .model
-                .description
+                .docs
+                .help
                 .as_deref()
                 .or(tool.docs.summary.as_deref())
                 .unwrap_or(""),
@@ -11162,7 +11161,7 @@ fn plugin_tools_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
                 .docs
                 .summary
                 .as_deref()
-                .or(tool.model.description.as_deref())
+                .or(tool.docs.help.as_deref())
                 .unwrap_or(""),
         };
         lines.push(Line::from(fixed_columns(
@@ -11181,7 +11180,7 @@ fn plugin_tools_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
         matches!(
             plugin
                 .tool_ui_display_modes
-                .get(tool.name.as_str())
+                .get(&tool.name)
                 .copied()
                 .unwrap_or(plugin.ui_display_mode),
             PluginTextDisplayMode::Detailed

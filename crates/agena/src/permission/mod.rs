@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use thiserror::Error;
 
 use crate::plugin::sdk::{ToolTag, normalize_tool_tag_name};
@@ -361,7 +362,7 @@ impl ToolPermissionPolicy {
         }
         let matched = tags
             .iter()
-            .filter_map(|tag| self.tag_modes.get(tag.as_str()).copied())
+            .filter_map(|tag| self.tag_modes.get(tag.as_ref()).copied())
             .reduce(combine_permission_modes);
         let mode = matched.unwrap_or(self.default_mode);
         let name = names.first().copied().unwrap_or("tool");
@@ -498,8 +499,24 @@ pub struct NetworkTarget {
 }
 
 impl NetworkTarget {
-    pub fn parse(raw: impl AsRef<str>) -> Result<Self, NetworkTargetParseError> {
-        let original = raw.as_ref().trim().to_string();
+    pub fn original(&self) -> &str {
+        &self.original
+    }
+
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub fn port(&self) -> Option<u16> {
+        self.port
+    }
+}
+
+impl FromStr for NetworkTarget {
+    type Err = NetworkTargetParseError;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let original = raw.trim().to_string();
         if original.is_empty() {
             return Err(NetworkTargetParseError::Empty);
         }
@@ -525,23 +542,13 @@ impl NetworkTarget {
             port,
         })
     }
+}
 
-    pub fn original(&self) -> &str {
-        &self.original
-    }
-
-    pub fn host(&self) -> &str {
-        &self.host
-    }
-
-    pub fn port(&self) -> Option<u16> {
-        self.port
-    }
-
-    pub fn display(&self) -> String {
+impl std::fmt::Display for NetworkTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.port {
-            Some(port) => format!("{}:{port}", self.host),
-            None => self.host.clone(),
+            Some(port) => write!(f, "{}:{port}", self.host),
+            None => f.write_str(self.host.as_str()),
         }
     }
 }

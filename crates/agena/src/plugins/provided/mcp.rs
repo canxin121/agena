@@ -475,7 +475,7 @@ impl McpPlugin {
         &self,
         input: ToolDefinitionInput,
     ) -> SdkResult<Option<ToolDefinitionPatch>> {
-        if input.plugin_key().to_model_string() != MCP_PLUGIN_ID {
+        if input.plugin_key().to_string() != MCP_PLUGIN_ID {
             return Ok(None);
         }
         let servers = self.manager.server_names().await;

@@ -17,7 +17,6 @@ struct EchoPluginConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolCommand)]
 #[tool_command(
     tool = "echo",
-    description = "Echo the supplied text.",
     summary = "Echo text back to the caller.",
     trim("text"),
     non_empty("text"),
@@ -37,9 +36,10 @@ pub struct EchoPlugin {
 }
 
 #[plugin(
-    id = "echo",
+    namespace = "example",
+    name = "echo",
     version = env!("CARGO_PKG_VERSION"),
-    description = "Sample plugin: echo + before/after/shell hooks.",
+    summary = "Sample plugin: echo + before/after/shell hooks.",
     config,
     display = compact,
     export = cdylib
@@ -68,7 +68,7 @@ impl EchoPlugin {
 
     #[hook]
     async fn tool_execute_before(&self, input: ToolBeforeInput) -> Option<ToolBeforePatch> {
-        if input.tool_name != "echo" {
+        if input.tool_name() != "echo" {
             return None;
         }
         let mut new_input = input.input.clone();
@@ -86,7 +86,7 @@ impl EchoPlugin {
 
     #[hook]
     async fn tool_execute_after(&self, input: ToolAfterInput) -> Option<ToolAfterPatch> {
-        if input.tool_name != "echo" {
+        if input.tool_name() != "echo" {
             return None;
         }
         Some(ToolAfterPatch {

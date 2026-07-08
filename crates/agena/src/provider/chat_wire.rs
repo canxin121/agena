@@ -217,12 +217,11 @@ pub(crate) fn reasoning_effort(thinking: Option<&ThinkingRequest>, model: &str) 
         return None;
     }
     match thinking {
-        Some(ThinkingRequest::Effort { effort }) => Some(effort.as_str().to_owned()),
+        Some(ThinkingRequest::Effort { effort }) => Some(effort.to_string()),
         Some(ThinkingRequest::Adaptive { effort, .. }) => Some(
             (*effort)
                 .unwrap_or(crate::provider::ReasoningEffort::High)
-                .as_str()
-                .to_owned(),
+                .to_string(),
         ),
         Some(ThinkingRequest::Budget { budget_tokens }) => {
             let effort = if *budget_tokens > 10_000 {

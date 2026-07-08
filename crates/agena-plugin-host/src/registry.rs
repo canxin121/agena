@@ -56,11 +56,11 @@ impl RegisteredTool {
     }
 
     pub fn plugin_full_name(&self) -> String {
-        self.key.plugin().to_model_string()
+        self.key.plugin().to_string()
     }
 
     pub fn model_name(&self) -> String {
-        self.key.to_model_string()
+        self.key.to_string()
     }
 
     pub fn summary_text(&self) -> Option<&str> {
@@ -79,16 +79,12 @@ impl RegisteredTool {
         self.definition.after_help_text()
     }
 
-    pub fn sanitized_input_schema(&self) -> serde_json::Value {
-        self.definition.sanitized_input_schema()
+    pub fn input_schema(&self) -> serde_json::Value {
+        self.definition.input_schema()
     }
 
-    pub fn sanitized_output_schema(&self) -> serde_json::Value {
-        self.definition.sanitized_output_schema()
-    }
-
-    pub fn provider_safe_name(&self) -> String {
-        self.key.to_provider_safe_string()
+    pub fn output_schema(&self) -> serde_json::Value {
+        self.definition.output_schema()
     }
 
     pub fn definition_identity(&self) -> String {
@@ -97,8 +93,8 @@ impl RegisteredTool {
             "tool_name": self.tool_name(),
             "model_name": self.model_name(),
             "summary": self.summary_text(),
-            "input_schema": self.sanitized_input_schema(),
-            "output_schema": self.sanitized_output_schema(),
+            "input_schema": self.input_schema(),
+            "output_schema": self.output_schema(),
             "strict": self.definition.contract.strict,
             "streaming": self.definition.runtime.streaming,
             "tags": self.effective_tags(),
@@ -163,7 +159,7 @@ impl PluginToolRegistry {
         }
         let tool_name = definition.name.clone();
         let key = ToolKey::new(plugin_key.clone(), tool_name).expect("validated tool key");
-        self.by_model_name.remove(key.to_model_string().as_str());
+        self.by_model_name.remove(key.to_string().as_str());
         self.by_key.remove(&key);
         let tool = RegisteredTool::new(plugin_key.clone(), definition);
         self.by_model_name

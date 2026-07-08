@@ -490,7 +490,7 @@ impl GitlabProvider {
         request: CompletionRequest,
         force_refresh: bool,
     ) -> Result<CompletionResponse, AppError> {
-        let model = Self::mapped_model(request.model.as_str());
+        let model = Self::mapped_model(request.model.as_ref());
         let token = self.get_direct_access_token(force_refresh).await?;
 
         if Self::use_openai_backend(model.as_str()) {
@@ -576,7 +576,7 @@ impl GitlabProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let model = Self::mapped_model(request.model.as_str());
+        let model = Self::mapped_model(request.model.as_ref());
         let token = self.get_direct_access_token(force_refresh).await?;
 
         if Self::use_openai_backend(model.as_str()) {
@@ -689,7 +689,7 @@ impl ModelRuntime for GitlabProvider {
     }
 
     fn prompt_cache_shape(&self, model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
-        let mapped_model = Self::mapped_model(model.as_str());
+        let mapped_model = Self::mapped_model(model.as_ref());
         let mut feature_flags = self
             .feature_flags
             .iter()

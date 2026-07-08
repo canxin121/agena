@@ -9,7 +9,7 @@ impl ProviderRegistry {
         let provider = self.provider_for_model_ref(model)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
-        self.call_with_retry(model.provider_id.as_str(), "complete", {
+        self.call_with_retry(model.provider_id.as_ref(), "complete", {
             let provider = provider.clone();
             let request = request.clone();
             let adapter_id = model.adapter_id.clone();
@@ -43,7 +43,7 @@ impl ProviderRegistry {
         let provider = self.provider_for_model_ref(model)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
-        self.call_with_retry(model.provider_id.as_str(), "compact_conversation", {
+        self.call_with_retry(model.provider_id.as_ref(), "compact_conversation", {
             let provider = provider.clone();
             let request = request.clone();
             let adapter_id = model.adapter_id.clone();

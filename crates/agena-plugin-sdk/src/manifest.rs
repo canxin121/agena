@@ -120,7 +120,7 @@ impl ToolTag {
         })
     }
 
-    pub fn as_str(&self) -> &str {
+    fn label(&self) -> &str {
         match self {
             Self::ReadOnly => "read_only",
             Self::Mutating => "mutating",
@@ -147,7 +147,13 @@ impl ToolTag {
 
 impl fmt::Display for ToolTag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(self.label())
+    }
+}
+
+impl AsRef<str> for ToolTag {
+    fn as_ref(&self) -> &str {
+        self.label()
     }
 }
 
@@ -156,7 +162,7 @@ impl Serialize for ToolTag {
     where
         S: Serializer,
     {
-        serializer.serialize_str(self.as_str())
+        serializer.collect_str(self)
     }
 }
 
@@ -400,12 +406,12 @@ impl ToolDefinition {
         self.display.ui_display_mode
     }
 
-    pub fn sanitized_input_schema(&self) -> serde_json::Value {
-        sanitize_schema_json(self.contract.input_schema.clone())
+    pub fn input_schema(&self) -> serde_json::Value {
+        normalize_schema_json(self.contract.input_schema.clone())
     }
 
-    pub fn sanitized_output_schema(&self) -> serde_json::Value {
-        sanitize_schema_json(self.contract.output_schema.clone())
+    pub fn output_schema(&self) -> serde_json::Value {
+        normalize_schema_json(self.contract.output_schema.clone())
     }
 
     pub fn effective_tags(&self) -> Vec<ToolTag> {
@@ -789,8 +795,8 @@ pub struct NetworkAccessSpec {
     pub target: String,
 }
 
-fn sanitize_schema_json(value: serde_json::Value) -> serde_json::Value {
-    sanitize_schema_json_value(value, true)
+fn normalize_schema_json(value: serde_json::Value) -> serde_json::Value {
+    normalize_schema_json_value(value, true)
 }
 
 fn serde_json_value_is_empty_schema(value: &serde_json::Value) -> bool {
@@ -798,7 +804,7 @@ fn serde_json_value_is_empty_schema(value: &serde_json::Value) -> bool {
         || value.as_object().is_some_and(|object| object.is_empty())
 }
 
-fn sanitize_schema_json_value(
+fn normalize_schema_json_value(
     value: serde_json::Value,
     remove_schema_metadata: bool,
 ) -> serde_json::Value {
@@ -810,21 +816,39 @@ fn sanitize_schema_json_value(
             }
             let mut cleaned = serde_json::Map::new();
             for (key, value) in object {
-                let sanitized = match key.as_str() {
-                    "properties" | "$defs" | "definitions" | "patternProperties"
-                    | "dependentSchemas" => match value {
+                let normalized = match key.as_str() {
+                    "properties" => match value {
                         serde_json::Value::Object(map) => serde_json::Value::Object(
                             map.into_iter()
                                 .map(|(nested_key, nested_value)| {
-                                    (nested_key, sanitize_schema_json_value(nested_value, true))
+                                    (nested_key, normalize_schema_json_value(nested_value, true))
                                 })
                                 .collect(),
                         ),
-                        other => sanitize_schema_json_value(other, true),
+                        other => normalize_schema_json_value(other, true),
                     },
-                    _ => sanitize_schema_json_value(value, true),
+                    "required" => match value {
+                        serde_json::Value::Array(items) => serde_json::Value::Array(items),
+                        other => normalize_schema_json_value(other, true),
+                    },
+                    "$defs" | "definitions" | "patternProperties" | "dependentSchemas" => {
+                        match value {
+                            serde_json::Value::Object(map) => serde_json::Value::Object(
+                                map.into_iter()
+                                    .map(|(nested_key, nested_value)| {
+                                        (
+                                            nested_key,
+                                            normalize_schema_json_value(nested_value, true),
+                                        )
+                                    })
+                                    .collect(),
+                            ),
+                            other => normalize_schema_json_value(other, true),
+                        }
+                    }
+                    _ => normalize_schema_json_value(value, true),
                 };
-                cleaned.insert(key, sanitized);
+                cleaned.insert(key, normalized);
             }
             if !cleaned.contains_key("type") && schema_map_is_object_like(&cleaned) {
                 cleaned.insert(
@@ -848,7 +872,7 @@ fn sanitize_schema_json_value(
         serde_json::Value::Array(items) => serde_json::Value::Array(
             items
                 .into_iter()
-                .map(|item| sanitize_schema_json_value(item, true))
+                .map(|item| normalize_schema_json_value(item, true))
                 .collect(),
         ),
         other => other,
@@ -875,6 +899,38 @@ fn schema_map_is_object_like(map: &serde_json::Map<String, serde_json::Value>) -
 
 fn schema_value_is_object_like(value: &serde_json::Value) -> bool {
     value.as_object().is_some_and(schema_map_is_object_like)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_schema_json;
+    use serde_json::json;
+
+    #[test]
+    fn normalize_schema_preserves_property_names() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "valid_name": { "type": "string" },
+                "invalid-name": { "type": "string" },
+                "WithCaps": { "type": "string" }
+            },
+            "required": ["valid_name", "invalid-name", "WithCaps"]
+        });
+
+        let normalized = normalize_schema_json(schema);
+        let properties = normalized
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("object properties");
+        assert!(properties.contains_key("valid_name"));
+        assert!(properties.contains_key("invalid-name"));
+        assert!(properties.contains_key("WithCaps"));
+        assert_eq!(
+            normalized.get("required"),
+            Some(&json!(["valid_name", "invalid-name", "WithCaps"]))
+        );
+    }
 }
 
 fn push_normalized_tag(tags: &mut Vec<ToolTag>, tag: ToolTag) {

@@ -205,7 +205,7 @@ impl ModelCatalogService {
                 Ok(models) => {
                     succeeded += 1;
                     for model in models {
-                        if model.id.as_str().trim().is_empty() {
+                        if model.id.as_ref().trim().is_empty() {
                             continue;
                         }
                         let definition = catalog_definition_from_model(&model);

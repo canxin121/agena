@@ -22,7 +22,6 @@ pub(crate) mod task;
 pub(crate) mod tool_search;
 pub(crate) mod truncation;
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -49,7 +48,7 @@ use crate::plugin::{
     sdk::{
         InputNetworkSpec as SdkInputNetworkSpec, InputPathSpec as SdkInputPathSpec,
         NetworkAccessSpec as SdkNetworkAccessSpec, PathAccessSpec as SdkPathAccessSpec,
-        PathKind as SdkPathKind, ShellEnvInput as PluginShellEnvInput, ToolKey,
+        PathKind as SdkPathKind, ShellEnvInput as PluginShellEnvInput,
         ToolResultPolicy as SdkToolResultPolicy, ToolStreamingMode as SdkToolStreamingMode,
     },
 };
@@ -63,8 +62,11 @@ use crate::plugins::provided::{
 
 const TOOL_MODEL_OUTPUT_MAX_LINES: usize = 2_000;
 const TOOL_MODEL_OUTPUT_MAX_BYTES: usize = 50 * 1024;
-const MODEL_CATALOG_HELP_TOOL: &str = "agena.tools/help";
-const MODEL_CATALOG_CALL_TOOL: &str = "agena.tools/call";
+const MODEL_TOOLS_LIST: &str = "tools_list";
+const MODEL_TOOLS_SEARCH: &str = "tools_search";
+const MODEL_TOOLS_HELP: &str = "tools_help";
+const MODEL_TOOLS_TAGS: &str = "tools_tags";
+const MODEL_TOOLS_CALL: &str = "tools_call";
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
 pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
@@ -88,56 +90,53 @@ pub fn skills_plugin_id() -> &'static str {
     skills::SKILLS_PLUGIN_ID
 }
 
-pub(crate) fn model_safe_tool_name(name: &str) -> String {
+pub(crate) fn tool_value_name(name: &str) -> String {
     let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return "tool".to_owned();
+    let mut parts = trimmed.splitn(3, '.');
+    let _namespace = parts.next();
+    let plugin = parts.next();
+    let tool = parts.next();
+    match (plugin, tool) {
+        (Some(plugin), Some(tool)) if plugin == tool => plugin.to_string(),
+        (Some(plugin), Some(tool)) => format!("{plugin}.{tool}"),
+        _ => trimmed.to_string(),
     }
+}
 
-    if trimmed
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-    {
-        return trimmed.to_owned();
-    }
+pub(crate) fn is_model_tools_gateway(tool: &RegisteredTool) -> bool {
+    tool.plugin_name() == "tools"
+        && matches!(
+            tool.tool_name(),
+            "list" | "search" | "help" | "tags" | "call"
+        )
+}
 
-    let mut out = String::with_capacity(trimmed.len());
-    let mut previous_was_separator = false;
+pub(crate) fn gateway_help_tool_name() -> &'static str {
+    MODEL_TOOLS_HELP
+}
 
-    for ch in trimmed.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            out.push(ch);
-            previous_was_separator = false;
-        } else if !previous_was_separator {
-            out.push('_');
-            previous_was_separator = true;
-        }
-    }
+pub(crate) fn gateway_call_tool_name() -> &'static str {
+    MODEL_TOOLS_CALL
+}
 
-    while out.ends_with('_') {
-        out.pop();
+fn gateway_model_tool_name(tool: &RegisteredTool) -> Option<&'static str> {
+    if tool.plugin_name() != "tools" {
+        return None;
     }
-    while out.starts_with('_') {
-        out.remove(0);
+    match tool.tool_name() {
+        "list" => Some(MODEL_TOOLS_LIST),
+        "search" => Some(MODEL_TOOLS_SEARCH),
+        "help" => Some(MODEL_TOOLS_HELP),
+        "tags" => Some(MODEL_TOOLS_TAGS),
+        "call" => Some(MODEL_TOOLS_CALL),
+        _ => None,
     }
-    if out.is_empty() {
-        out.push_str("tool");
-    }
-    if out
-        .bytes()
-        .next()
-        .is_some_and(|byte| !byte.is_ascii_alphabetic() && byte != b'_')
-    {
-        out.insert(0, '_');
-    }
-    out
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelToolSpec {
     pub canonical_name: String,
     pub model_name: String,
-    pub provider_safe_name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
     pub output_schema: serde_json::Value,
@@ -153,14 +152,18 @@ pub enum ModelToolExecution {
 
 impl ModelToolSpec {
     pub fn from_registered_tool(tool: &RegisteredTool) -> Self {
-        let model_name = tool.model_name();
+        let canonical_name = tool.model_name();
+        let model_name = if let Some(gateway_name) = gateway_model_tool_name(tool) {
+            gateway_name.to_string()
+        } else {
+            tool_value_name(canonical_name.as_str())
+        };
         Self {
-            canonical_name: model_name.clone(),
-            provider_safe_name: model_safe_tool_name(model_name.as_str()),
+            canonical_name,
             model_name,
             description: compact_tool_description(tool),
-            input_schema: model_safe_tool_schema(&tool.sanitized_input_schema()),
-            output_schema: tool.sanitized_output_schema(),
+            input_schema: tool.input_schema(),
+            output_schema: tool.output_schema(),
             strict: tool.definition.contract.strict,
             execution: ModelToolExecution::Local,
             definition_identity: tool.definition_identity(),
@@ -265,169 +268,9 @@ fn normalized_tool_name_distance(left: &str, right: &str) -> usize {
 pub(crate) fn tool_matches_model_name(registered_tool: &RegisteredTool, name: &str) -> bool {
     let trimmed = name.trim();
     registered_tool.model_name() == trimmed
-        || model_safe_tool_name(registered_tool.model_name().as_str()) == trimmed
-}
-
-pub(crate) fn model_safe_tool_schema(schema: &serde_json::Value) -> serde_json::Value {
-    let serde_json::Value::Object(mut object) = schema.clone() else {
-        return empty_object_schema();
-    };
-
-    for key in ["oneOf", "anyOf", "allOf"] {
-        let Some(serde_json::Value::Array(variants)) = object.remove(key) else {
-            continue;
-        };
-        if variants
-            .iter()
-            .all(|variant| json_schema_object(variant).is_some())
-        {
-            return merge_top_level_object_variants(object, variants);
-        }
-        return empty_object_schema();
-    }
-
-    let is_object = object
-        .get("type")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|kind| kind == "object")
-        || object.contains_key("properties");
-    if !is_object {
-        return empty_object_schema();
-    }
-    object
-        .entry("type".to_owned())
-        .or_insert_with(|| serde_json::Value::String("object".to_owned()));
-    object
-        .entry("properties".to_owned())
-        .or_insert_with(|| serde_json::Value::Object(Default::default()));
-    serde_json::Value::Object(object)
-}
-
-fn empty_object_schema() -> serde_json::Value {
-    serde_json::json!({
-        "type": "object",
-        "properties": {}
-    })
-}
-
-fn merge_top_level_object_variants(
-    mut base: serde_json::Map<String, serde_json::Value>,
-    variants: Vec<serde_json::Value>,
-) -> serde_json::Value {
-    base.insert(
-        "type".to_owned(),
-        serde_json::Value::String("object".to_owned()),
-    );
-    let mut properties = base
-        .remove("properties")
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
-    let mut required_intersection: Option<BTreeSet<String>> = required_set(&base);
-
-    for variant in variants {
-        let Some(variant) = json_schema_object(&variant) else {
-            continue;
-        };
-        if let Some(variant_properties) = variant
-            .get("properties")
-            .and_then(serde_json::Value::as_object)
-        {
-            for (name, schema) in variant_properties {
-                properties
-                    .entry(name.clone())
-                    .and_modify(|existing| *existing = merge_property_schema(existing, schema))
-                    .or_insert_with(|| schema.clone());
-            }
-        }
-        if let Some(variant_required) = required_set(variant) {
-            required_intersection = Some(match required_intersection.take() {
-                Some(existing) => existing
-                    .intersection(&variant_required)
-                    .cloned()
-                    .collect::<BTreeSet<_>>(),
-                None => variant_required,
-            });
-        }
-    }
-
-    base.insert(
-        "properties".to_owned(),
-        serde_json::Value::Object(properties),
-    );
-    if let Some(required) = required_intersection.filter(|required| !required.is_empty()) {
-        base.insert(
-            "required".to_owned(),
-            serde_json::Value::Array(
-                required
-                    .into_iter()
-                    .map(serde_json::Value::String)
-                    .collect(),
-            ),
-        );
-    } else {
-        base.remove("required");
-    }
-    serde_json::Value::Object(base)
-}
-
-fn json_schema_object(
-    value: &serde_json::Value,
-) -> Option<&serde_json::Map<String, serde_json::Value>> {
-    let object = value.as_object()?;
-    let is_object = object
-        .get("type")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|kind| kind == "object")
-        || object.contains_key("properties")
-        || object.contains_key("required");
-    is_object.then_some(object)
-}
-
-fn required_set(object: &serde_json::Map<String, serde_json::Value>) -> Option<BTreeSet<String>> {
-    object
-        .get("required")
-        .and_then(serde_json::Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-}
-
-fn merge_property_schema(
-    existing: &serde_json::Value,
-    next: &serde_json::Value,
-) -> serde_json::Value {
-    let Some(mut literals) = string_literals(existing) else {
-        return existing.clone();
-    };
-    let Some(next_literals) = string_literals(next) else {
-        return existing.clone();
-    };
-    literals.extend(next_literals);
-    serde_json::json!({
-        "type": "string",
-        "enum": literals.into_iter().collect::<Vec<_>>()
-    })
-}
-
-fn string_literals(value: &serde_json::Value) -> Option<BTreeSet<String>> {
-    let object = value.as_object()?;
-    if let Some(value) = object.get("const").and_then(serde_json::Value::as_str) {
-        return Some(BTreeSet::from([value.to_owned()]));
-    }
-    object
-        .get("enum")
-        .and_then(serde_json::Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect()
-        })
+        || tool_value_name(registered_tool.model_name().as_str()) == trimmed
+        || gateway_model_tool_name(registered_tool)
+            .is_some_and(|gateway_name| gateway_name == trimmed)
 }
 
 fn expand_registered_tool_for_model(base: &RegisteredTool, out: &mut Vec<RegisteredTool>) {
@@ -666,10 +509,15 @@ fn present_registered_tool(
 }
 
 fn compact_tool_description(registered_tool: &RegisteredTool) -> String {
+    if is_model_tools_gateway(registered_tool) {
+        return "Discover tools, inspect help, and invoke internal tools through the gateway."
+            .to_string();
+    }
     let summary = tool_summary_sentence(registered_tool);
     format!(
-        "{summary} See `agena.tools/help` for `{}`.",
-        registered_tool.model_name()
+        "{summary} Use `{}` for `{}`.",
+        gateway_help_tool_name(),
+        tool_value_name(registered_tool.model_name().as_str())
     )
 }
 
@@ -685,22 +533,22 @@ fn tool_summary(registered_tool: &RegisteredTool) -> String {
     if let Some(summary) = registered_tool.summary_text() {
         return summary.to_string();
     }
-    format!("Tool `{}`.", registered_tool.model_name())
-}
-
-fn provider_gateway_model_tool_names() -> [&'static str; 2] {
-    [MODEL_CATALOG_HELP_TOOL, MODEL_CATALOG_CALL_TOOL]
-}
-
-fn is_provider_gateway_tool(name: &str) -> bool {
-    provider_gateway_model_tool_names()
-        .iter()
-        .any(|candidate| *candidate == name)
+    if is_model_tools_gateway(registered_tool) {
+        return "Tool gateway.".to_string();
+    }
+    format!(
+        "Tool `{}`.",
+        tool_value_name(registered_tool.model_name().as_str())
+    )
 }
 
 fn render_model_tool_index_entry(tool: &RegisteredTool) -> String {
     let summary = tool_summary(tool);
-    format!("- {}: {}", tool.model_name(), summary.trim())
+    format!(
+        "- {}: {}",
+        tool_value_name(tool.model_name().as_str()),
+        summary.trim()
+    )
 }
 
 #[derive(Clone)]
@@ -831,7 +679,7 @@ impl ToolExecutor {
                         summary: tool_summary(&entry),
                         help: entry.definition.docs.help.clone(),
                         description_mode: entry.definition.display.description_mode,
-                        input_schema: entry.sanitized_input_schema(),
+                        input_schema: entry.input_schema(),
                     };
                     match self.plugins.dispatch_tool_definition_blocking(input) {
                         Ok(patched) => {
@@ -922,27 +770,36 @@ impl ToolExecutor {
     }
 
     pub fn available_model_tools(&self) -> Vec<RegisteredTool> {
-        let gateway_names = provider_gateway_model_tool_names();
         self.catalogued_model_tools()
             .into_iter()
-            .filter(|tool| gateway_names.iter().any(|name| *name == tool.model_name()))
+            .filter(is_model_tools_gateway)
             .collect()
     }
 
     pub fn model_tool_prompt_text(&self) -> Option<String> {
         let tools = self
-            .detailed_model_tools()
+            .detailed_tools()
             .into_iter()
-            .filter(|tool| !is_provider_gateway_tool(tool.model_name().as_str()))
+            .filter(|tool| !is_model_tools_gateway(tool))
             .collect::<Vec<_>>();
         if tools.is_empty() {
             return None;
         }
 
         let mut lines = vec![
-            "Tool protocol: only `agena.tools/help` and `agena.tools/call` are callable function tools.".to_string(),
-            "Read `agena.tools/help` first to inspect a tool's exact input schema, examples, and usage notes.".to_string(),
-            "Execute the real tool through `agena.tools/call` with `{ \"tool\": \"...\", \"input\": { ... } }`.".to_string(),
+            "Tool protocol: only gateway tools are callable function tools.".to_string(),
+            format!(
+                "Use `{}`, `{}`, `{}`, `{}`, and `{}` for tool discovery and execution.",
+                MODEL_TOOLS_LIST,
+                MODEL_TOOLS_SEARCH,
+                MODEL_TOOLS_HELP,
+                MODEL_TOOLS_TAGS,
+                MODEL_TOOLS_CALL
+            ),
+            format!(
+                "To execute a real tool, call `{}` with `{{ \"tool\": \"...\", \"input\": {{ ... }} }}`.",
+                MODEL_TOOLS_CALL
+            ),
             "Do not invent arguments when unsure; inspect help first.".to_string(),
             "Available tools:".to_string(),
         ];
@@ -954,12 +811,13 @@ impl ToolExecutor {
         let mut candidates = self
             .catalogued_tools_raw()
             .into_iter()
-            .map(|tool| tool.model_name())
+            .map(|tool| tool_value_name(tool.model_name().as_str()))
             .collect::<Vec<_>>();
         candidates.extend(
             self.catalogued_model_tools_raw()
                 .into_iter()
-                .map(|tool| tool.model_name()),
+                .filter(|tool| !is_model_tools_gateway(tool))
+                .map(|tool| tool_value_name(tool.model_name().as_str())),
         );
         candidates.sort();
         candidates.dedup();
@@ -1524,7 +1382,7 @@ impl ToolExecutor {
         let hook_tool = self
             .plugin_resolution_for_invocation(invocation)
             .map(|entry| entry.tool_key().clone())
-            .or_else(|| ToolKey::parse_model_name(hook_tool_name.as_str()).ok())
+            .or_else(|| hook_tool_name.parse().ok())
             .ok_or_else(|| ToolError::UnknownTool {
                 tool: hook_tool_name.clone(),
             })?;
@@ -1867,7 +1725,7 @@ impl ToolExecutor {
         let hook_tool = self
             .plugin_resolution_for_invocation(invocation)
             .map(|entry| entry.tool_key().clone())
-            .or_else(|| ToolKey::parse_model_name(hook_tool_name.as_str()).ok())
+            .or_else(|| hook_tool_name.parse().ok())
             .ok_or_else(|| ToolError::UnknownTool {
                 tool: hook_tool_name.clone(),
             })?;
@@ -2074,7 +1932,7 @@ impl ToolExecutor {
         let Some(hook_tool) = self
             .plugin_resolution_for_invocation(invocation)
             .map(|entry| entry.tool_key().clone())
-            .or_else(|| ToolKey::parse_model_name(hook_tool_name.as_str()).ok())
+            .or_else(|| hook_tool_name.parse().ok())
         else {
             return;
         };
@@ -2226,7 +2084,7 @@ impl ToolExecutor {
         effects: &[NetworkEffect],
     ) -> Result<(), ToolError> {
         for effect in effects {
-            let target = NetworkTarget::parse(effect.target.as_str()).map_err(|err| {
+            let target: NetworkTarget = effect.target.parse().map_err(|err| {
                 ToolError::InvalidInput(format!(
                     "invalid network effect target `{}`: {err}",
                     effect.target
@@ -2297,7 +2155,7 @@ impl ToolExecutor {
         checks: &mut Vec<ToolPermissionCheck>,
         target: &str,
     ) -> Result<(), ToolError> {
-        let target = NetworkTarget::parse(target).map_err(|err| {
+        let target: NetworkTarget = target.parse().map_err(|err| {
             ToolError::InvalidInput(format!(
                 "invalid network permission target `{target}`: {err}"
             ))
@@ -2410,7 +2268,7 @@ fn persist_tool_result_output(
     fs::create_dir_all(&dir)?;
     let digest = blake3::hash(output_text.as_bytes()).to_hex().to_string();
     let short_digest = digest.get(..12).unwrap_or(digest.as_str());
-    let safe_tool = model_safe_tool_name(model_tool_name).replace("__", "_");
+    let safe_tool = tool_result_file_stem(model_tool_name);
     let call_part = if call_id >= 0 {
         call_id.to_string()
     } else {
@@ -2423,6 +2281,30 @@ fn persist_tool_result_output(
     let mut file = fs::File::create(&path)?;
     file.write_all(output_text.as_bytes())?;
     Ok(Some(path))
+}
+
+fn tool_result_file_stem(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return "tool".to_string();
+    }
+    let mut stem = String::with_capacity(trimmed.len());
+    let mut previous_was_separator = false;
+    for ch in trimmed.chars() {
+        if ch.is_ascii_alphanumeric() {
+            stem.push(ch);
+            previous_was_separator = false;
+        } else if !previous_was_separator {
+            stem.push('_');
+            previous_was_separator = true;
+        }
+    }
+    let stem = stem.trim_matches('_');
+    if stem.is_empty() {
+        "tool".to_string()
+    } else {
+        stem.to_string()
+    }
 }
 
 fn access_kind_name(access: AccessKind) -> &'static str {

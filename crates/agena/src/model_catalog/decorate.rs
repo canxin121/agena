@@ -60,7 +60,7 @@ pub fn decorate_provider_models(
 
     for model in &mut models {
         listed.insert(model.id.to_string());
-        if let Some(catalog_model_id) = catalog_match_model_id_for_raw(model.id.as_str()) {
+        if let Some(catalog_model_id) = catalog_match_model_id_for_raw(model.id.as_ref()) {
             listed_catalog_ids.insert(catalog_model_id.clone());
             model.catalog_model_id = Some(ModelId::new(catalog_model_id));
         }
@@ -72,9 +72,9 @@ pub fn decorate_provider_models(
         if listed.contains(model_id.as_str())
             || listed_catalog_ids.contains(model_id.as_str())
             || models.iter().any(|model| {
-                model.id.as_str() == model_id.as_str()
-                    || model.catalog_model_id.as_ref().map(ModelId::as_str)
-                        == Some(model_id.as_str())
+                model.id.as_ref() == AsRef::<str>::as_ref(model_id)
+                    || model.catalog_model_id.as_ref().map(AsRef::<str>::as_ref)
+                        == Some(AsRef::<str>::as_ref(model_id))
             })
         {
             continue;
@@ -84,7 +84,7 @@ pub fn decorate_provider_models(
         let base = Model {
             provider_id: ProviderId::new(provider.id()),
             adapter_id: None,
-            id: ModelId::new(model_id.as_str()),
+            id: ModelId::new(model_id.as_ref()),
             catalog_model_id: Some(model_id.clone()),
             display_name: None,
             capabilities: provider.model_capabilities_for_adapter(None, &model_id),
@@ -114,12 +114,12 @@ fn decorate_provider_model(
     model_id: ModelId,
     mut model: Model,
 ) -> Model {
-    let matched_catalog_id = catalog_match_model_id_for_raw(model_id.as_str());
+    let matched_catalog_id = catalog_match_model_id_for_raw(model_id.as_ref());
     if let Some(catalog_model_id) = matched_catalog_id {
         model.catalog_model_id = Some(ModelId::new(catalog_model_id));
     }
 
-    if let Some(definition) = catalog_definition_for_model_id(provider_record, model_id.as_str()) {
+    if let Some(definition) = catalog_definition_for_model_id(provider_record, model_id.as_ref()) {
         apply_catalog_display_name_as_fallback(&mut model, definition);
         let adapter_id = model.adapter_id.clone();
         apply_catalog_definition_as_baseline(
@@ -148,7 +148,7 @@ fn provider_model_thinking_modes(
     model: &ModelId,
 ) -> BTreeMap<String, crate::model::ModelThinkingMode> {
     let modes = provider.model_thinking_modes_for_adapter(adapter_id, model);
-    if let Some(definition) = catalog_definition_for_model_id(provider_record, model.as_str()) {
+    if let Some(definition) = catalog_definition_for_model_id(provider_record, model.as_ref()) {
         merge_catalog_baseline_thinking_modes(
             modes,
             &catalog_definition_to_provider_definition(definition).thinking_modes,
@@ -165,7 +165,7 @@ fn provider_model_speed_modes(
     model: &ModelId,
 ) -> BTreeMap<String, crate::model::ModelSpeedMode> {
     let modes = provider.model_speed_modes_for_adapter(adapter_id, model);
-    if let Some(definition) = catalog_definition_for_model_id(provider_record, model.as_str()) {
+    if let Some(definition) = catalog_definition_for_model_id(provider_record, model.as_ref()) {
         merge_catalog_baseline_speed_modes(
             modes,
             &catalog_definition_to_provider_definition(definition).speed_modes,

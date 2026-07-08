@@ -850,7 +850,7 @@ where
         return Ok(());
     }
 
-    let part_id = synthetic_tool_call_part_id(payload.message_id.raw(), payload.call_id.as_str());
+    let part_id = synthetic_tool_call_part_id(payload.message_id.raw(), payload.call_id.as_ref());
     let part_index = count_parts_for_message(db, payload.message_id.raw()).await? as i32;
     let invocation = crate::message::ToolInvocation {
         name: payload.name.to_string(),
@@ -871,7 +871,7 @@ where
         )),
     );
     part.part_index = part_index;
-    part.operation_id = Some(payload.call_id.as_str().to_owned());
+    part.operation_id = Some(payload.call_id.as_ref().to_owned());
 
     upsert_part_projection(db, session_id, &part).await?;
     touch_message_projection(
@@ -897,7 +897,7 @@ where
         delete_duplicate_operation_parts(
             db,
             payload.message_id.raw(),
-            payload.call_id.as_str(),
+            payload.call_id.as_ref(),
             authoritative_part.id,
         )
         .await?;
@@ -912,7 +912,7 @@ where
 
     let existing = activity_part::Entity::find()
         .filter(activity_part::Column::MessageId.eq(payload.message_id.raw()))
-        .filter(activity_part::Column::OperationId.eq(payload.call_id.as_str()))
+        .filter(activity_part::Column::OperationId.eq(payload.call_id.as_ref()))
         .one(db)
         .await?;
 
@@ -946,7 +946,7 @@ where
             )
         }
         None => (
-            synthetic_tool_call_part_id(payload.message_id.raw(), payload.call_id.as_str()),
+            synthetic_tool_call_part_id(payload.message_id.raw(), payload.call_id.as_ref()),
             count_parts_for_message(db, payload.message_id.raw()).await? as i32,
             0,
             crate::message::ToolInvocation::new(
@@ -1002,7 +1002,7 @@ where
         content,
     );
     part.part_index = part_index;
-    part.operation_id = Some(payload.call_id.as_str().to_owned());
+    part.operation_id = Some(payload.call_id.as_ref().to_owned());
     upsert_part_projection(db, session_id, &part).await?;
 
     touch_message_projection(

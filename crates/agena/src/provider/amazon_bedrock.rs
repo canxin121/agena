@@ -420,7 +420,7 @@ impl AmazonBedrockAdapter {
     ) -> Result<CompletionResponse, AppError> {
         crate::provider::chat_wire::parse_completion_response_with_required_tool_calls(
             PROVIDER_ID,
-            self.default_model.as_str(),
+            self.default_model.as_ref(),
             payload,
         )
     }
@@ -763,10 +763,10 @@ impl AmazonBedrockAdapter {
                 messages,
                 tools,
                 thinking: bedrock_anthropic_thinking_body(
-                    model.as_str(),
+                    model.as_ref(),
                     request.thinking.as_ref(),
                 ),
-                temperature: if Self::anthropic_model_supports_sampling_parameters(model.as_str()) {
+                temperature: if Self::anthropic_model_supports_sampling_parameters(model.as_ref()) {
                     request.temperature
                 } else {
                     None
@@ -905,7 +905,7 @@ impl AmazonBedrockAdapter {
                 static_credentials,
                 Sigv4Request {
                     method: reqwest::Method::POST,
-                    url: self.native_anthropic_invoke_endpoint(model.as_str(), false)?,
+                    url: self.native_anthropic_invoke_endpoint(model.as_ref(), false)?,
                     body: Some(serde_json::to_vec(&body_json)?),
                     headers,
                     body_debug: Some(&body_json),
@@ -950,7 +950,7 @@ impl AmazonBedrockAdapter {
                 static_credentials,
                 Sigv4Request {
                     method: reqwest::Method::POST,
-                    url: self.native_anthropic_invoke_endpoint(model.as_str(), true)?,
+                    url: self.native_anthropic_invoke_endpoint(model.as_ref(), true)?,
                     body: Some(serde_json::to_vec(&body_json)?),
                     headers,
                     body_debug: Some(&body_json),
@@ -1220,14 +1220,14 @@ impl AmazonBedrockAdapter {
         static_credentials: Option<&Credentials>,
         request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
-        if Self::is_native_anthropic_model(request.model.as_str()) {
+        if Self::is_native_anthropic_model(request.model.as_ref()) {
             return self
                 .complete_sigv4_anthropic(profile, static_credentials, request)
                 .await;
         }
 
         let prompt_cache_key = request.prompt_cache_key.clone();
-        let model = self.resolve_model(request.model.as_str());
+        let model = self.resolve_model(request.model.as_ref());
         let messages = Self::chat_messages_for_request(&request);
         let body = ChatCompletionRequest {
             model,
@@ -1309,14 +1309,14 @@ impl AmazonBedrockAdapter {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        if Self::is_native_anthropic_model(request.model.as_str()) {
+        if Self::is_native_anthropic_model(request.model.as_ref()) {
             return self
                 .complete_stream_sigv4_anthropic(profile, static_credentials, request)
                 .await;
         }
 
         let prompt_cache_key = request.prompt_cache_key.clone();
-        let model = self.resolve_model(request.model.as_str());
+        let model = self.resolve_model(request.model.as_ref());
         let messages = Self::chat_messages_for_request(&request);
 
         let body = ChatCompletionRequest {
@@ -1579,7 +1579,7 @@ impl ModelRuntime for AmazonBedrockAdapter {
                 (
                     "native_anthropic_transport",
                     (matches!(&self.auth_mode, BedrockAuthMode::SigV4 { .. })
-                        && Self::is_native_anthropic_model(model.as_str()))
+                        && Self::is_native_anthropic_model(model.as_ref()))
                     .to_string(),
                 ),
             ],
@@ -1629,7 +1629,7 @@ impl ModelRuntime for AmazonBedrockAdapter {
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
-        let model = self.resolve_model(request.model.as_str());
+        let model = self.resolve_model(request.model.as_ref());
         let request = CompletionRequest {
             model: ModelId::new(model),
             ..request
@@ -1653,7 +1653,7 @@ impl ModelRuntime for AmazonBedrockAdapter {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let model = self.resolve_model(request.model.as_str());
+        let model = self.resolve_model(request.model.as_ref());
         let request = CompletionRequest {
             model: ModelId::new(model),
             ..request
@@ -1745,7 +1745,7 @@ fn json_value_to_string(value: &Value) -> String {
 }
 
 fn bedrock_wire_tool_name(name: &str) -> String {
-    crate::tool::model_safe_tool_name(name)
+    name.trim().to_string()
 }
 
 fn map_bedrock_anthropic_usage(usage: BedrockAnthropicUsage) -> CompletionUsage {
@@ -1901,13 +1901,13 @@ fn bedrock_anthropic_display(
     model: &str,
     explicit: Option<crate::provider::ThinkingDisplay>,
 ) -> Option<&'static str> {
-    explicit
-        .map(crate::provider::ThinkingDisplay::as_str)
-        .or_else(|| {
-            (model.to_ascii_lowercase().contains("claude-opus-4-7")
-                || model.to_ascii_lowercase().contains("claude-opus-4.7"))
-            .then_some("summarized")
-        })
+    match explicit {
+        Some(crate::provider::ThinkingDisplay::Summarized) => Some("summarized"),
+        Some(crate::provider::ThinkingDisplay::Omitted) => Some("omitted"),
+        None => (model.to_ascii_lowercase().contains("claude-opus-4-7")
+            || model.to_ascii_lowercase().contains("claude-opus-4.7"))
+        .then_some("summarized"),
+    }
 }
 
 fn bedrock_anthropic_thinking_body(
@@ -1919,7 +1919,14 @@ fn bedrock_anthropic_thinking_body(
         ThinkingRequest::Budget { budget_tokens } => {
             if let Some(effort) = bedrock_anthropic_effort_for_budget(model, *budget_tokens) {
                 Some(BedrockAnthropicThinkingConfig::Adaptive {
-                    effort: Some(effort.as_str()),
+                    effort: Some(match effort {
+                        crate::provider::ReasoningEffort::Minimal => "minimal",
+                        crate::provider::ReasoningEffort::Low => "low",
+                        crate::provider::ReasoningEffort::Medium => "medium",
+                        crate::provider::ReasoningEffort::High => "high",
+                        crate::provider::ReasoningEffort::Xhigh => "xhigh",
+                        crate::provider::ReasoningEffort::Max => "max",
+                    }),
                     display: bedrock_anthropic_display(model, None),
                 })
             } else {
@@ -1932,7 +1939,14 @@ fn bedrock_anthropic_thinking_body(
             if AmazonBedrockAdapter::anthropic_model_uses_adaptive_thinking(model) =>
         {
             Some(BedrockAnthropicThinkingConfig::Adaptive {
-                effort: effort.map(crate::provider::ReasoningEffort::as_str),
+                effort: effort.map(|effort| match effort {
+                    crate::provider::ReasoningEffort::Minimal => "minimal",
+                    crate::provider::ReasoningEffort::Low => "low",
+                    crate::provider::ReasoningEffort::Medium => "medium",
+                    crate::provider::ReasoningEffort::High => "high",
+                    crate::provider::ReasoningEffort::Xhigh => "xhigh",
+                    crate::provider::ReasoningEffort::Max => "max",
+                }),
                 display: bedrock_anthropic_display(model, *display),
             })
         }
@@ -1945,7 +1959,14 @@ fn bedrock_anthropic_thinking_body(
             if AmazonBedrockAdapter::anthropic_model_uses_adaptive_thinking(model) =>
         {
             Some(BedrockAnthropicThinkingConfig::Adaptive {
-                effort: Some(effort.as_str()),
+                effort: Some(match effort {
+                    crate::provider::ReasoningEffort::Minimal => "minimal",
+                    crate::provider::ReasoningEffort::Low => "low",
+                    crate::provider::ReasoningEffort::Medium => "medium",
+                    crate::provider::ReasoningEffort::High => "high",
+                    crate::provider::ReasoningEffort::Xhigh => "xhigh",
+                    crate::provider::ReasoningEffort::Max => "max",
+                }),
                 display: bedrock_anthropic_display(model, None),
             })
         }

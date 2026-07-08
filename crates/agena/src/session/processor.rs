@@ -158,8 +158,8 @@ impl SessionProcessor {
         // affinity. Mutating chat hooks can rewrite/drop/reorder system and
         // message content, so they are not applied on the provider request path.
         self.apply_chat_params_hook(
-            run.model.provider_id.as_str(),
-            run.model.model_id.as_str(),
+            run.model.provider_id.as_ref(),
+            run.model.model_id.as_ref(),
             &mut run.completion,
         )
         .await;

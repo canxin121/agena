@@ -19,7 +19,7 @@ where
         object.remove("$schema");
         object.remove("title");
     }
-    sanitize_schema_json(value)
+    normalize_schema_json(value)
 }
 
 pub fn json_schema_for_default<T>(default: T) -> Value
@@ -633,11 +633,11 @@ fn unescape_json_pointer_segment(segment: &str) -> String {
     segment.replace("~1", "/").replace("~0", "~")
 }
 
-pub fn sanitize_schema_json(value: Value) -> Value {
-    sanitize_schema_json_value(value, true)
+pub fn normalize_schema_json(value: Value) -> Value {
+    normalize_schema_json_value(value, true)
 }
 
-fn sanitize_schema_json_value(value: Value, remove_schema_metadata: bool) -> Value {
+fn normalize_schema_json_value(value: Value, remove_schema_metadata: bool) -> Value {
     match value {
         Value::Object(mut object) => {
             if remove_schema_metadata {
@@ -646,21 +646,39 @@ fn sanitize_schema_json_value(value: Value, remove_schema_metadata: bool) -> Val
             }
             let mut cleaned = serde_json::Map::new();
             for (key, value) in object {
-                let sanitized = match key.as_str() {
-                    "properties" | "$defs" | "definitions" | "patternProperties"
-                    | "dependentSchemas" => match value {
+                let normalized = match key.as_str() {
+                    "properties" => match value {
                         Value::Object(map) => Value::Object(
                             map.into_iter()
                                 .map(|(nested_key, nested_value)| {
-                                    (nested_key, sanitize_schema_json_value(nested_value, true))
+                                    (nested_key, normalize_schema_json_value(nested_value, true))
                                 })
                                 .collect(),
                         ),
-                        other => sanitize_schema_json_value(other, true),
+                        other => normalize_schema_json_value(other, true),
                     },
-                    _ => sanitize_schema_json_value(value, true),
+                    "required" => match value {
+                        Value::Array(items) => Value::Array(items),
+                        other => normalize_schema_json_value(other, true),
+                    },
+                    "$defs" | "definitions" | "patternProperties" | "dependentSchemas" => {
+                        match value {
+                            Value::Object(map) => Value::Object(
+                                map.into_iter()
+                                    .map(|(nested_key, nested_value)| {
+                                        (
+                                            nested_key,
+                                            normalize_schema_json_value(nested_value, true),
+                                        )
+                                    })
+                                    .collect(),
+                            ),
+                            other => normalize_schema_json_value(other, true),
+                        }
+                    }
+                    _ => normalize_schema_json_value(value, true),
                 };
-                cleaned.insert(key, sanitized);
+                cleaned.insert(key, normalized);
             }
             if !cleaned.contains_key("type") && schema_map_is_object_like(&cleaned) {
                 cleaned.insert("type".to_string(), Value::String("object".to_string()));
@@ -681,7 +699,7 @@ fn sanitize_schema_json_value(value: Value, remove_schema_metadata: bool) -> Val
         Value::Array(items) => Value::Array(
             items
                 .into_iter()
-                .map(|item| sanitize_schema_json_value(item, true))
+                .map(|item| normalize_schema_json_value(item, true))
                 .collect(),
         ),
         other => other,

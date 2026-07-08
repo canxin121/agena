@@ -118,7 +118,7 @@ pub(crate) enum CatalogToolSuite {
 #[tool_input(trim("tool"), non_empty("tool"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ToolsHelpInput {
-    /// Registered model-visible tool name to inspect.
+    /// Registered gateway-visible tool name to inspect.
     pub tool: String,
 }
 
@@ -126,7 +126,7 @@ pub(crate) struct ToolsHelpInput {
 #[tool_input(trim("tool"), non_empty("tool"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ToolCallInput {
-    /// Registered model-visible tool name to invoke.
+    /// Registered gateway-visible tool name to invoke.
     pub tool: String,
     /// Tool input object passed through verbatim to the target tool.
     #[schemars(schema_with = "tool_call_input_schema")]
@@ -187,7 +187,7 @@ pub(crate) struct ToolTagsInput {
 fn tool_call_input_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
     serde_json::json!({
         "type": "object",
-        "description": "Arguments for the target tool. Read agena.tools/help for the exact schema before calling."
+        "description": "Arguments for the target tool. Read `tools_help` for the exact schema before calling."
     })
     .try_into()
     .expect("valid schema")

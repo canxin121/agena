@@ -56,27 +56,23 @@ macro_rules! define_string_identifier {
             pub fn try_new(value: impl Into<String>) -> Result<Self, IdentifierError> {
                 Ok(Self(normalize_non_empty(value, $field)?))
             }
-
-            pub fn as_str(&self) -> &str {
-                self.0.as_str()
-            }
         }
 
         impl Borrow<str> for $name {
             fn borrow(&self) -> &str {
-                self.as_str()
+                self.0.as_str()
             }
         }
 
         impl AsRef<str> for $name {
             fn as_ref(&self) -> &str {
-                self.as_str()
+                self.0.as_str()
             }
         }
 
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str(self.as_str())
+                f.write_str(self.0.as_str())
             }
         }
 
@@ -220,8 +216,8 @@ pub enum ModelInputModality {
     File,
 }
 
-impl ModelInputModality {
-    pub const fn as_str(self) -> &'static str {
+impl AsRef<str> for ModelInputModality {
+    fn as_ref(&self) -> &str {
         match self {
             Self::Text => "text",
             Self::Image => "image",
@@ -230,6 +226,12 @@ impl ModelInputModality {
             Self::Video => "video",
             Self::File => "file",
         }
+    }
+}
+
+impl fmt::Display for ModelInputModality {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())
     }
 }
 
@@ -396,7 +398,7 @@ impl ModelMetadata {
             return Vec::new();
         }
 
-        let mut levels = if model_only_supports_medium_verbosity(model_id.as_str()) {
+        let mut levels = if model_only_supports_medium_verbosity(model_id.as_ref()) {
             vec!["medium".to_owned()]
         } else {
             vec!["low".to_owned(), "medium".to_owned(), "high".to_owned()]

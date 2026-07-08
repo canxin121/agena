@@ -69,7 +69,7 @@ fn assign_catalog_model_id(model: &mut Model) {
 }
 
 fn catalog_model_id_for(model_id: &ModelId) -> Option<ModelId> {
-    let catalog_model_id = crate::model_catalog::canonical_model_catalog_id(model_id.as_str());
+    let catalog_model_id = crate::model_catalog::canonical_model_catalog_id(model_id.as_ref());
     (!catalog_model_id.is_empty()).then(|| ModelId::new(catalog_model_id))
 }
 
@@ -356,7 +356,7 @@ impl ForwardingModelRuntime for NamedProvider {
 #[async_trait]
 impl ModelRuntime for NamedProvider {
     fn id(&self) -> &str {
-        self.provider_id.as_str()
+        self.provider_id.as_ref()
     }
 
     impl_model_runtime_target_defaults!();
@@ -385,7 +385,7 @@ impl ModelRuntime for NamedProvider {
         for model in &mut models {
             prepare_listed_model(
                 self.target.as_ref(),
-                self.provider_id.as_str(),
+                self.provider_id.as_ref(),
                 model,
                 false,
             );
@@ -445,7 +445,7 @@ impl ModelRuntime for NamedProvider {
 #[async_trait]
 impl ModelRuntime for PluginRegisteredProvider {
     fn id(&self) -> &str {
-        self.id.as_str()
+        self.id.as_ref()
     }
 
     fn default_model(&self) -> &ModelId {
@@ -459,7 +459,7 @@ impl ModelRuntime for PluginRegisteredProvider {
             .map(|model| Model {
                 provider_id: ProviderId::new(self.id.as_str()),
                 adapter_id: None,
-                id: ModelId::new(model.as_str()),
+                id: ModelId::new(model.as_ref()),
                 catalog_model_id: None,
                 display_name: Some(self.display_name.clone()),
                 capabilities: ModelCapabilities::default(),
@@ -572,7 +572,7 @@ impl ProviderRegistry {
         &self,
         model: &ModelRef,
     ) -> Result<Arc<dyn ModelRuntime>, AppError> {
-        self.require_provider(model.provider_id.as_str())
+        self.require_provider(model.provider_id.as_ref())
     }
 
     pub(super) fn use_model_ref_provider<T>(
@@ -691,7 +691,7 @@ fn validate_request_capabilities(
     if !unsupported.is_empty() {
         let details = unsupported
             .into_iter()
-            .map(|(modality, label)| format!("{} (`{label}`)", modality.as_str()))
+            .map(|(modality, label)| format!("{modality} (`{label}`)"))
             .collect::<Vec<_>>()
             .join(", ");
         return Err(AppError::Provider(format!(

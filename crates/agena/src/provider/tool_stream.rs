@@ -93,7 +93,7 @@ impl ToolStreamAccumulator {
         ) && (was_new || !state.registered)
         {
             state.registered = true;
-            updates.push(state.registered_update(stream_key.as_str()));
+            updates.push(state.registered_update(stream_key.as_ref()));
         }
 
         match input.kind {
@@ -104,7 +104,7 @@ impl ToolStreamAccumulator {
                         state.registered = true;
                     }
                     updates
-                        .push(state.arguments_delta_update(stream_key.as_str(), arguments_delta));
+                        .push(state.arguments_delta_update(stream_key.as_ref(), arguments_delta));
                 }
             }
             ToolStreamInputKind::Start | ToolStreamInputKind::Finish => {
@@ -118,10 +118,10 @@ impl ToolStreamAccumulator {
                         }
                         updates.push(match arguments_delta {
                             SnapshotEffect::Append(delta) => {
-                                state.arguments_delta_update(stream_key.as_str(), delta)
+                                state.arguments_delta_update(stream_key.as_ref(), delta)
                             }
                             SnapshotEffect::Replace(snapshot) => {
-                                state.arguments_snapshot_update(stream_key.as_str(), snapshot)
+                                state.arguments_snapshot_update(stream_key.as_ref(), snapshot)
                             }
                         });
                     }
@@ -132,7 +132,7 @@ impl ToolStreamAccumulator {
         let metadata_changed =
             previous_model_call_id != state.model_call_id || previous_name != state.name;
         if updates.is_empty() && state.registered && metadata_changed {
-            updates.push(state.registered_update(stream_key.as_str()));
+            updates.push(state.registered_update(stream_key.as_ref()));
         }
 
         Ok(updates)
@@ -151,7 +151,7 @@ impl ToolStreamAccumulator {
 
         let key = candidates
             .iter()
-            .find_map(|candidate| self.aliases.get(candidate.as_str()).cloned())
+            .find_map(|candidate| self.aliases.get(candidate.as_ref()).cloned())
             .or_else(|| {
                 candidates
                     .iter()
@@ -162,7 +162,7 @@ impl ToolStreamAccumulator {
 
         for candidate in candidates {
             self.aliases
-                .insert(candidate.as_str().to_owned(), key.clone());
+                .insert(candidate.as_ref().to_owned(), key.clone());
         }
 
         Ok(key)
@@ -173,7 +173,7 @@ impl ToolStreamState {
     fn registered_update(&self, stream_key: &str) -> ToolStreamUpdate {
         ToolStreamUpdate::Registered {
             stream_key: stream_key.to_owned(),
-            id: self.model_call_id.as_ref().map(|id| id.as_str().to_owned()),
+            id: self.model_call_id.as_ref().map(|id| id.as_ref().to_owned()),
             name: self.name.clone(),
         }
     }
@@ -185,7 +185,7 @@ impl ToolStreamState {
     ) -> ToolStreamUpdate {
         ToolStreamUpdate::ArgumentsDelta {
             stream_key: stream_key.to_owned(),
-            id: self.model_call_id.as_ref().map(|id| id.as_str().to_owned()),
+            id: self.model_call_id.as_ref().map(|id| id.as_ref().to_owned()),
             name: self.name.clone(),
             arguments_delta,
         }
@@ -198,7 +198,7 @@ impl ToolStreamState {
     ) -> ToolStreamUpdate {
         ToolStreamUpdate::ArgumentsSnapshot {
             stream_key: stream_key.to_owned(),
-            id: self.model_call_id.as_ref().map(|id| id.as_str().to_owned()),
+            id: self.model_call_id.as_ref().map(|id| id.as_ref().to_owned()),
             name: self.name.clone(),
             arguments_json,
         }

@@ -130,7 +130,7 @@ pub trait ModelRuntime: Send + Sync {
     fn model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
         match self.capability_family() {
             Some(family) => {
-                super::default_capability_registry().capabilities_for_family(family, model.as_str())
+                super::default_capability_registry().capabilities_for_family(family, model.as_ref())
             }
             None => ModelCapabilities::default(),
         }
@@ -148,7 +148,7 @@ pub trait ModelRuntime: Send + Sync {
     fn model_metadata(&self, model: &ModelId) -> ModelMetadata {
         match self.capability_family() {
             Some(family) => {
-                super::default_model_metadata_registry().metadata_for_family(family, model.as_str())
+                super::default_model_metadata_registry().metadata_for_family(family, model.as_ref())
             }
             None => ModelMetadata::default(),
         }
@@ -168,7 +168,7 @@ pub trait ModelRuntime: Send + Sync {
             Some(family) => super::default_model_mode_registry().thinking_modes_for_family(
                 family,
                 None,
-                model.as_str(),
+                model.as_ref(),
                 &self.model_metadata(model),
             ),
             None => BTreeMap::new(),
@@ -184,7 +184,7 @@ pub trait ModelRuntime: Send + Sync {
             Some(family) => super::default_model_mode_registry().thinking_modes_for_family(
                 family,
                 adapter_id,
-                model.as_str(),
+                model.as_ref(),
                 &self.model_metadata_for_adapter(adapter_id, model),
             ),
             None => self.model_thinking_modes(model),

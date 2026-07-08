@@ -109,9 +109,9 @@ pub(super) fn render_tool_descriptor(
         help_parts.push(after_help.to_string());
     }
     let help = (!help_parts.is_empty()).then(|| help_parts.join("\n\n"));
-    let input_schema = Some(tool.sanitized_input_schema());
+    let input_schema = Some(tool.input_schema());
     ToolDescriptor {
-        name: tool.model_name(),
+        name: crate::tool::tool_value_name(tool.model_name().as_str()),
         summary,
         help,
         examples: tool.definition.model.examples.clone(),
@@ -609,7 +609,7 @@ pub(super) fn host_status_to_sdk(
     HostPluginStatus {
         plugin_id: status.plugin_id,
         kind: status.kind.to_string(),
-        state: status.state.as_str().to_string(),
+        state: status.state.to_string(),
         pid: status.pid,
         restart_count: status.restart_count,
         last_exit_code: status.last_exit_code,

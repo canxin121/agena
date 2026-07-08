@@ -13241,19 +13241,19 @@ impl App {
         if !dialog.adapter_models[adapter_index]
             .models
             .iter()
-            .any(|model| model.id.as_str() == model_id)
+            .any(|model| model.id.as_ref() == model_id)
         {
             dialog.adapter_models[adapter_index]
                 .models
                 .push(ProviderModel::new(adapter_id.as_str(), model_id));
             dialog.adapter_models[adapter_index]
                 .models
-                .sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
+                .sort_by(|left, right| left.id.as_ref().cmp(right.id.as_ref()));
         }
         let selected_model_index = dialog.adapter_models[adapter_index]
             .models
             .iter()
-            .position(|model| model.id.as_str() == model_id)
+            .position(|model| model.id.as_ref() == model_id)
             .unwrap_or_default();
         if let Some(left_index) = dialog
             .adapter_candidate_ids
@@ -13761,7 +13761,7 @@ impl App {
                             (
                                 provider_studio_model_key(
                                     adapter.adapter_id.as_str(),
-                                    provider_model.id.as_str(),
+                                    provider_model.id.as_ref(),
                                 ),
                                 catalog_model.clone(),
                             )
@@ -16971,7 +16971,7 @@ fn provider_default_model_detail(i18n: &I18n, model: &ProviderModel) -> String {
     if let Some(display_name) = model
         .display_name
         .as_deref()
-        .filter(|value| !value.trim().is_empty() && *value != model.id.as_str())
+        .filter(|value| !value.trim().is_empty() && *value != model.id.as_ref())
     {
         parts.push(display_name.trim().to_owned());
     }
@@ -20000,7 +20000,7 @@ fn provider_studio_default_model_choice_items(
                 && !provider_studio_model_selected(
                     dialog,
                     adapter_models.adapter_id.as_str(),
-                    model.id.as_str(),
+                    model.id.as_ref(),
                 )
             {
                 continue;
@@ -20014,7 +20014,7 @@ fn provider_studio_default_model_choice_items(
                 detail_parts.push(display_name.trim().to_owned());
             }
             let key =
-                provider_studio_model_key(adapter_models.adapter_id.as_str(), model.id.as_str());
+                provider_studio_model_key(adapter_models.adapter_id.as_str(), model.id.as_ref());
             detail_parts.push(provider_studio_catalog_match_label(
                 i18n,
                 dialog
@@ -20267,8 +20267,8 @@ fn session_model_choice_item(
         .or_else(|| default_adapter.map(str::to_owned));
     let model_ref = adapter_id
         .as_deref()
-        .map(|adapter_id| ModelRef::new_with_adapter(provider_id, adapter_id, model.id.as_str()))
-        .unwrap_or_else(|| ModelRef::new(provider_id, model.id.as_str()));
+        .map(|adapter_id| ModelRef::new_with_adapter(provider_id, adapter_id, model.id.as_ref()))
+        .unwrap_or_else(|| ModelRef::new(provider_id, model.id.as_ref()));
     let display_name = model
         .display_name
         .as_deref()
@@ -20296,7 +20296,7 @@ fn session_model_choice_item(
             )
         });
     let mut detail_parts = vec![provider_id.to_owned(), adapter_label, context_window];
-    if !display_name.is_empty() && display_name != model.id.as_str() {
+    if !display_name.is_empty() && display_name != model.id.as_ref() {
         detail_parts.push(display_name.clone());
     }
     let search_text = format!(
@@ -20339,7 +20339,7 @@ fn provider_model_catalog_lookup_id(model: &ProviderModel) -> String {
         .as_ref()
         .map(ToString::to_string)
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| agena::model_catalog::canonical_model_catalog_id(model.id.as_str()))
+        .unwrap_or_else(|| agena::model_catalog::canonical_model_catalog_id(model.id.as_ref()))
 }
 
 fn provider_studio_catalog_match_model<'a>(
@@ -20350,7 +20350,7 @@ fn provider_studio_catalog_match_model<'a>(
     catalog_models
         .iter()
         .filter(|catalog_model| {
-            catalog_model.model_id == model.id.as_str() || catalog_model.model_id == lookup_id
+            catalog_model.model_id == model.id.as_ref() || catalog_model.model_id == lookup_id
         })
         .min_by_key(|catalog_model| catalog_model.model_id.as_str())
 }
@@ -22141,13 +22141,13 @@ fn timeline_event_summary(i18n: &I18n, record: &DomainEvent) -> String {
         ),
         AgenaSessionEvent::PluginToolRegistryChanged(event) => format!(
             "{} {} {}",
-            format!("{}.{}", event.namespace, event.plugin_name),
+            event.plugin,
             match event.kind {
                 agena::plugin::sdk::host_api::ToolRegistryChangeKind::Registered => "registered",
                 agena::plugin::sdk::host_api::ToolRegistryChangeKind::Updated => "updated",
                 agena::plugin::sdk::host_api::ToolRegistryChangeKind::Removed => "removed",
             },
-            event.model_name
+            event.tool_key
         ),
     }
 }
@@ -22490,7 +22490,7 @@ fn timeline_event_detail_lines(i18n: &I18n, record: &DomainEvent) -> Vec<DetailT
             ),
         ],
         AgenaSessionEvent::PluginEvent(p) => vec![
-            timeline_detail_labeled_line(i18n, "timeline-label-plugin-id", p.plugin_id.clone()),
+            timeline_detail_labeled_line(i18n, "timeline-label-plugin-id", p.plugin_id.to_string()),
             timeline_detail_labeled_line(i18n, "timeline-label-kind-label", p.kind_label.clone()),
             timeline_detail_labeled_line(
                 i18n,
@@ -22499,7 +22499,7 @@ fn timeline_event_detail_lines(i18n: &I18n, record: &DomainEvent) -> Vec<DetailT
             ),
         ],
         AgenaSessionEvent::PluginToolRegistryChanged(event) => {
-            let plugin_full_name = format!("{}.{}", event.namespace, event.plugin_name);
+            let plugin_full_name = event.plugin.to_string();
             let mut lines = vec![
                 timeline_detail_labeled_line(i18n, "timeline-label-plugin-id", plugin_full_name),
                 timeline_detail_labeled_line(
@@ -22513,16 +22513,19 @@ fn timeline_event_detail_lines(i18n: &I18n, record: &DomainEvent) -> Vec<DetailT
                         agena::plugin::sdk::host_api::ToolRegistryChangeKind::Removed => "removed",
                     },
                 ),
-                timeline_detail_labeled_line(i18n, "timeline-label-name", event.tool_name.clone()),
-                app_detail_plain_line(format!("model_name: {}", event.model_name)),
+                timeline_detail_labeled_line(
+                    i18n,
+                    "timeline-label-name",
+                    event.tool_key.name().to_owned(),
+                ),
+                app_detail_plain_line(format!("tool_key: {}", event.tool_key)),
                 app_detail_plain_line(format!("generation: {}", event.generation)),
                 app_detail_plain_line(format!("timestamp_ms: {}", event.timestamp_ms)),
             ];
             if let Some(tool) = &event.tool {
-                let description = tool.description_text();
                 let summary = tool
                     .summary_text()
-                    .or_else(|| (!description.is_empty()).then_some(description))
+                    .or_else(|| tool.help_text())
                     .unwrap_or(tool.name.as_str())
                     .to_owned();
                 lines.push(timeline_detail_labeled_line(

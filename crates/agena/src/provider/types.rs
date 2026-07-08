@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -44,8 +47,8 @@ pub enum ReasoningEffort {
     Max,
 }
 
-impl ReasoningEffort {
-    pub fn as_str(self) -> &'static str {
+impl AsRef<str> for ReasoningEffort {
+    fn as_ref(&self) -> &str {
         match self {
             Self::Minimal => "minimal",
             Self::Low => "low",
@@ -57,6 +60,12 @@ impl ReasoningEffort {
     }
 }
 
+impl fmt::Display for ReasoningEffort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ThinkingDisplay {
@@ -64,12 +73,18 @@ pub enum ThinkingDisplay {
     Omitted,
 }
 
-impl ThinkingDisplay {
-    pub fn as_str(self) -> &'static str {
+impl AsRef<str> for ThinkingDisplay {
+    fn as_ref(&self) -> &str {
         match self {
             Self::Summarized => "summarized",
             Self::Omitted => "omitted",
         }
+    }
+}
+
+impl fmt::Display for ThinkingDisplay {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_ref())
     }
 }
 

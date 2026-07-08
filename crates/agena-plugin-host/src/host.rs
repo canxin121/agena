@@ -450,7 +450,7 @@ impl PluginHost {
     }
 
     pub fn plugin_status(&self, plugin_id: &str) -> Option<crate::status::PluginStatus> {
-        let plugin_key = PluginKey::parse(plugin_id).ok()?;
+        let plugin_key: PluginKey = plugin_id.parse().ok()?;
         self.statuses.get(&plugin_key)
     }
 
@@ -487,8 +487,7 @@ impl PluginHost {
         fields: serde_json::Value,
     ) -> PluginLogRecord {
         let plugin_id = plugin_id.into();
-        let plugin_key =
-            PluginKey::parse(plugin_id.as_str()).expect("plugin log key should be valid");
+        let plugin_key = plugin_id.parse().expect("plugin log key should be valid");
         self.logs
             .append(&plugin_key, level, source, message, fields)
     }
@@ -499,7 +498,7 @@ impl PluginHost {
         after_seq: Option<u64>,
         limit: usize,
     ) -> Vec<PluginLogRecord> {
-        let Some(plugin_key) = PluginKey::parse(plugin_id).ok() else {
+        let Some(plugin_key) = plugin_id.parse().ok() else {
             return Vec::new();
         };
         self.logs.list(&plugin_key, after_seq, limit)
@@ -507,7 +506,7 @@ impl PluginHost {
 
     pub fn plugin_inspect(&self, plugin_id: &str) -> Option<PluginInspect> {
         let status = self.plugin_status(plugin_id)?;
-        let plugin_key = PluginKey::parse(plugin_id).ok()?;
+        let plugin_key: PluginKey = plugin_id.parse().ok()?;
         let plugin = self.plugins_by_id.get(&plugin_key);
         let manifest = plugin.as_ref().map(|plugin| plugin.manifest.clone());
         let authority = plugin.map(|plugin| plugin.authority_summary());
@@ -1784,7 +1783,7 @@ impl PluginHost {
         plugin_id: &str,
         action_id: &str,
     ) -> Option<PluginUiAction> {
-        let plugin_key = PluginKey::parse(plugin_id).ok()?;
+        let plugin_key: PluginKey = plugin_id.parse().ok()?;
         let plugin = self.plugins_by_id.get(&plugin_key)?;
         for command in &plugin.manifest.commands {
             if command.id == action_id {
@@ -1811,13 +1810,13 @@ impl PluginHost {
         plugin_id: &str,
         tool_name: &str,
     ) -> Option<RegisteredTool> {
-        let plugin_key = PluginKey::parse(plugin_id).ok()?;
+        let plugin_key: PluginKey = plugin_id.parse().ok()?;
         let registry = self.tool_registry.read().ok()?;
         registry
             .lookup_for_plugin(&plugin_key, tool_name)
             .cloned()
             .or_else(|| {
-                let tool_key = ToolKey::parse_model_name(tool_name).ok()?;
+                let tool_key: ToolKey = tool_name.parse().ok()?;
                 (tool_key.plugin() == &plugin_key)
                     .then(|| registry.lookup_tool_by_key(&tool_key).cloned())
                     .flatten()
@@ -2071,7 +2070,7 @@ impl PluginHost {
             .unwrap_or_default();
 
         for (idx, (id, configured_plugin)) in configured_plugins.into_iter().enumerate() {
-            let plugin_key = PluginKey::parse(id.as_str()).map_err(|err| {
+            let plugin_key: PluginKey = id.parse().map_err(|err| {
                 HostError::Config(format!("invalid plugin id `{id}` in plugins.list: {err}"))
             })?;
             statuses_shared.set(crate::status::PluginStatus::initial(
@@ -2369,7 +2368,7 @@ impl HostHandle {
         method: &str,
         params: serde_json::Value,
     ) -> Result<bool, PluginError> {
-        let Some(plugin_key) = PluginKey::parse(plugin_id).ok() else {
+        let Some(plugin_key) = plugin_id.parse().ok() else {
             return Ok(false);
         };
         let transport = self
@@ -2472,8 +2471,7 @@ impl HostHandle {
         fields: serde_json::Value,
     ) -> PluginLogRecord {
         let plugin_id = plugin_id.into();
-        let plugin_key =
-            PluginKey::parse(plugin_id.as_str()).expect("plugin log key should be valid");
+        let plugin_key = plugin_id.parse().expect("plugin log key should be valid");
         self.logs
             .append(&plugin_key, level, source, message, fields)
     }
@@ -2484,7 +2482,7 @@ impl HostHandle {
         after_seq: Option<u64>,
         limit: usize,
     ) -> Vec<PluginLogRecord> {
-        let Some(plugin_key) = PluginKey::parse(plugin_id).ok() else {
+        let Some(plugin_key) = plugin_id.parse().ok() else {
             return Vec::new();
         };
         self.logs.list(&plugin_key, after_seq, limit)
@@ -2536,7 +2534,7 @@ impl HostHandle {
         let Some(plugin_id) = plugin_id else {
             return Ok(());
         };
-        let plugin_key = PluginKey::parse(plugin_id)?;
+        let plugin_key: PluginKey = plugin_id.parse()?;
         // Prefer per-tool scope if the active host call originates from
         // tool_invoke (`tool_name` in HostCallbackContext carries the
         // original tool name). Otherwise
@@ -2593,7 +2591,7 @@ impl HostHandle {
 
     pub async fn callback_token(&self, plugin_id: &str) -> Option<String> {
         self.callback_base_url.as_ref()?;
-        let plugin_key = PluginKey::parse(plugin_id).ok()?;
+        let plugin_key: PluginKey = plugin_id.parse().ok()?;
         let mut tokens = self.tokens.lock().await;
         Some(
             tokens
@@ -2607,7 +2605,7 @@ impl HostHandle {
         let Some(token) = token else {
             return false;
         };
-        let Some(plugin_key) = PluginKey::parse(plugin_id).ok() else {
+        let Some(plugin_key) = plugin_id.parse().ok() else {
             return false;
         };
         let tokens = self.tokens.lock().await;
@@ -2664,7 +2662,7 @@ impl HostHandle {
         // can't be attributed to a quota bucket.
         let _quota_guard = match plugin_id.as_deref() {
             Some(pid) => {
-                let plugin_key = PluginKey::parse(pid).map_err(|err| PluginError {
+                let plugin_key: PluginKey = pid.parse().map_err(|err| PluginError {
                     code: PluginErrorCode::Generic,
                     message: format!("invalid plugin id `{pid}`: {err}"),
                     hook: Some(method.to_string()),
@@ -2751,16 +2749,16 @@ impl HostHandle {
                         // back to the regular HostClient method.
                         let handler_id = self.permission_handler.read().await.clone();
                         let d = if let Some(handler_id) = handler_id {
-                            let transport =
-                                if let Ok(handler_key) = PluginKey::parse(handler_id.as_str()) {
-                                    self.plugin_transports
-                                        .read()
-                                        .await
-                                        .get(&handler_key)
-                                        .cloned()
-                                } else {
-                                    None
-                                };
+                            let transport = if let Ok(handler_key) = handler_id.parse::<PluginKey>()
+                            {
+                                self.plugin_transports
+                                    .read()
+                                    .await
+                                    .get(&handler_key)
+                                    .cloned()
+                            } else {
+                                None
+                            };
                             match transport {
                                 Some(transport) => {
                                     let params = serde_json::to_value(&req)
@@ -3617,7 +3615,7 @@ impl HostHandle {
             .plugin_indices
             .read()
             .map_err(|_| host_unavailable("plugin index lock poisoned"))?
-            .contains_key(&PluginKey::parse(plugin_id)?);
+            .contains_key(&plugin_id.parse::<PluginKey>()?);
         if !registered {
             return Err(host_unavailable(format!(
                 "plugin `{plugin_id}` is not registered"
@@ -3628,7 +3626,7 @@ impl HostHandle {
             .write()
             .map_err(|_| host_unavailable("tool registry lock poisoned"))?;
         let plugin_tool_name = definition.name.clone();
-        let plugin_key = PluginKey::parse(plugin_id)?;
+        let plugin_key: PluginKey = plugin_id.parse()?;
         let kind = if tool_registry
             .lookup_for_plugin(&plugin_key, &plugin_tool_name)
             .is_some()
@@ -3665,9 +3663,9 @@ impl HostHandle {
             .tool_registry
             .write()
             .map_err(|_| host_unavailable("tool registry lock poisoned"))?;
-        let plugin_key = PluginKey::parse(plugin_id)?;
+        let plugin_key: PluginKey = plugin_id.parse()?;
         let tool_name = if by_model_name {
-            let tool_key = ToolKey::parse_model_name(name)?;
+            let tool_key: ToolKey = name.parse()?;
             if tool_key.plugin() != &plugin_key {
                 return Err(host_unavailable(format!(
                     "tool `{name}` does not belong to plugin `{plugin_id}`"
@@ -3746,7 +3744,7 @@ impl HostHandle {
     }
 
     fn statusline_contribute(&self, plugin_id: &str, req: HostStatuslineContributeRequest) {
-        let Ok(plugin_id) = PluginKey::parse(plugin_id) else {
+        let Ok(plugin_id) = plugin_id.parse::<PluginKey>() else {
             return;
         };
         if let Ok(mut guard) = self.statusline.write() {
@@ -3765,7 +3763,7 @@ impl HostHandle {
     }
 
     fn statusline_remove(&self, plugin_id: &str, segment_id: &str) -> bool {
-        let Ok(plugin_id) = PluginKey::parse(plugin_id) else {
+        let Ok(plugin_id) = plugin_id.parse::<PluginKey>() else {
             return false;
         };
         if let Ok(mut guard) = self.statusline.write() {
@@ -3790,7 +3788,7 @@ impl HostHandle {
     }
 
     fn theme_register(&self, plugin_id: &str, req: HostThemeRegisterRequest) {
-        let Ok(plugin_id) = PluginKey::parse(plugin_id) else {
+        let Ok(plugin_id) = plugin_id.parse::<PluginKey>() else {
             return;
         };
         if let Ok(mut guard) = self.themes.write() {
@@ -3807,7 +3805,7 @@ impl HostHandle {
     }
 
     fn theme_remove(&self, plugin_id: &str, id: &str) -> bool {
-        let Ok(plugin_id) = PluginKey::parse(plugin_id) else {
+        let Ok(plugin_id) = plugin_id.parse::<PluginKey>() else {
             return false;
         };
         if let Ok(mut guard) = self.themes.write()
@@ -3833,7 +3831,7 @@ fn host_status_from(status: crate::status::PluginStatus) -> HostPluginStatus {
     HostPluginStatus {
         plugin_id: status.plugin_id,
         kind: status.kind.to_string(),
-        state: status.state.as_str().to_string(),
+        state: status.state.to_string(),
         pid: status.pid,
         restart_count: status.restart_count,
         last_exit_code: status.last_exit_code,

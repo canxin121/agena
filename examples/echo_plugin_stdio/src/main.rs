@@ -6,7 +6,6 @@ use agena_plugin_sdk::prelude::*;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolCommand)]
 #[tool_command(
     tool = "echo",
-    description = "Echo via stdio.",
     summary = "Echo text over stdio transport.",
     trim("text"),
     streaming = "streaming",
@@ -22,9 +21,10 @@ struct EchoToolInput {
 struct EchoPlugin;
 
 #[plugin(
-    id = "echo-stdio",
+    namespace = "example",
+    name = "echo_stdio",
     version = env!("CARGO_PKG_VERSION"),
-    description = "Echo via stdio.",
+    summary = "Echo via stdio.",
     display = compact,
     export = stdio
 )]

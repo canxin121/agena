@@ -371,11 +371,10 @@ const DIRECT_TOOL_MAPPINGS: &[(&str, &str, &str)] = &[
 ];
 
 fn model_tool_name(plugin: &str, tool: &str) -> String {
-    let plugin_key =
-        crate::plugin::PluginKey::parse(plugin).expect("direct tool mapping plugin key");
+    let plugin_key = plugin.parse().expect("direct tool mapping plugin key");
     crate::plugin::ToolKey::new(plugin_key, tool.to_string())
         .expect("direct tool mapping tool key")
-        .to_model_string()
+        .to_string()
 }
 
 fn direct_mapping_for_tool(tool: &str) -> Option<(&'static str, &'static str)> {

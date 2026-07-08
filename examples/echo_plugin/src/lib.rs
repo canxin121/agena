@@ -14,28 +14,13 @@ struct EchoPluginConfig {
     uppercase: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolCommand)]
-#[tool_command(
-    tool = "echo",
-    summary = "Echo text back to the caller.",
-    trim("text"),
-    non_empty("text"),
-    tags(ToolTag::ReadOnly),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct EchoToolInput {
-    /// Text payload to echo back.
-    text: String,
-}
-
 #[derive(Default, PluginConfigStore)]
 pub struct EchoPlugin {
     #[config(default)]
     config: PluginConfig<EchoPluginConfig>,
 }
 
-#[plugin(
+#[agena_plugin(
     namespace = "example",
     name = "echo",
     version = env!("CARGO_PKG_VERSION"),
@@ -49,12 +34,17 @@ impl EchoPlugin {
         self.config.get().is_some_and(|config| config.uppercase)
     }
 
-    #[tool]
-    async fn invoke_echo(&self, input: EchoToolInput) -> Result<ToolInvokeOutput> {
+    #[tool(
+        name = "echo",
+        summary = "Echo text back to the caller.",
+        read_only,
+        concurrency_safe
+    )]
+    async fn echo(&self, #[arg(trim, non_empty)] text: String) -> Result<ToolInvokeOutput> {
         let rendered = if self.uppercase() {
-            input.text.to_uppercase()
+            text.to_uppercase()
         } else {
-            input.text
+            text
         };
 
         Ok(ToolInvokeOutput {

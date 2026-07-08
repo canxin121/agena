@@ -2,12 +2,13 @@
 
 This example shows the recommended shape for a plugin that owns multiple model-visible tools:
 
-- Define one `ToolCommand` input type per tool.
-- Group those input types with `ToolSubcommands`.
-- Expose one `#[tool_suite]` method for normal invocation.
-- Expose one `#[tool_suite_stream]` method when any tool can stream.
-- Expose `#[permission(paths, suite)]` for dynamic path auditing.
-- Keep plugin configuration in `PluginConfig<T>` and enable it with `#[plugin(..., config)]`.
+- Use `#[agena_plugin(...)]` as the single plugin entry point.
+- Put one `#[tool(...)]` method in the plugin impl per model-visible tool.
+- Use `#[stream(tool_method)]` when a tool has a custom streaming implementation.
+- Attach dynamic permission auditing with `permission(paths = handler)` on the tool.
+- Keep plugin configuration in `PluginConfig<T>` and enable it with `#[agena_plugin(..., config)]`.
+
+The macro generates the hidden tool surfaces, manifest definitions, static dispatch, streaming dispatch, and permission dispatch. `ToolCommand` and `ToolSubcommands` remain available as lower-level compatibility primitives, but are not needed for normal multi-tool plugins.
 
 ## Build
 

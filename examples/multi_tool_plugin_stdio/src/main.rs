@@ -20,38 +20,13 @@ impl Default for NotesConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolCommand)]
-#[tool_command(
-    tool = "format",
-    summary = "Format text with the configured notes prefix.",
-    help = "Formats text using this plugin's runtime config. The streaming path emits the formatted text in line-sized chunks.",
-    handler_receiver = NotesPlugin,
-    handle = NotesPlugin::format,
-    stream_handle = NotesPlugin::format_stream,
-    trim("text"),
-    non_empty("text"),
-    tags(ToolTag::ReadOnly),
-    streaming = "streaming",
-    concurrency_safe = true
-)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct FormatNoteInput {
     text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolCommand)]
-#[tool_command(
-    tool = "write",
-    summary = "Write formatted text to a file.",
-    help = "Writes the formatted text to the provided path. Path permission is supplied dynamically by the suite permission handler.",
-    handler_receiver = NotesPlugin,
-    handle = NotesPlugin::write,
-    permission_paths_handle = NotesPlugin::write_permission_paths,
-    trim("path", "text"),
-    non_empty("path", "text"),
-    tags(ToolTag::Mutating, ToolTag::FilesystemWrite),
-    concurrency_safe = false
-)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct WriteNoteInput {
     path: String,
@@ -60,20 +35,13 @@ struct WriteNoteInput {
     append: bool,
 }
 
-#[derive(Debug, ToolSubcommands)]
-#[tool_subcommands(handler_receiver = NotesPlugin)]
-enum NotesTools {
-    Format(FormatNoteInput),
-    Write(WriteNoteInput),
-}
-
 #[derive(Default, PluginConfigStore)]
 struct NotesPlugin {
     #[config(default)]
     config: PluginConfig<NotesConfig>,
 }
 
-#[plugin(
+#[agena_plugin(
     namespace = "example",
     name = "notes",
     version = env!("CARGO_PKG_VERSION"),
@@ -97,25 +65,16 @@ impl NotesPlugin {
         }
     }
 
-    #[tool_suite]
-    async fn invoke(&self, input: NotesTools) -> Result<ToolInvokeOutput> {
-        input.dispatch_tool_invoke(self).await
-    }
-
-    #[tool_suite_stream]
-    async fn invoke_stream(
-        &self,
-        input: NotesTools,
-        sink: ToolStreamSink,
-    ) -> Result<ToolStreamEnd> {
-        input.dispatch_tool_invoke_stream(self, sink).await
-    }
-
-    #[permission(paths, suite)]
-    async fn permission_paths(&self, input: NotesTools) -> Result<Vec<PathRequest>> {
-        input.dispatch_permission_paths(self).await
-    }
-
+    #[tool(
+        name = "format",
+        summary = "Format text with the configured notes prefix.",
+        help = "Formats text using this plugin's runtime config. The streaming path emits the formatted text in line-sized chunks.",
+        read_only,
+        streaming,
+        trim("text"),
+        non_empty("text"),
+        concurrency_safe
+    )]
     async fn format(&self, input: &FormatNoteInput) -> Result<ToolInvokeOutput> {
         let rendered = self.render(input.text.as_str());
         Ok(ToolInvokeOutput::from_parts(
@@ -127,6 +86,7 @@ impl NotesPlugin {
         ))
     }
 
+    #[stream(format)]
     async fn format_stream(
         &self,
         sink: ToolStreamSink,
@@ -139,6 +99,16 @@ impl NotesPlugin {
         Ok(ToolStreamEnd::text(sink.stream_id().to_string(), rendered))
     }
 
+    #[tool(
+        name = "write",
+        summary = "Write formatted text to a file.",
+        help = "Writes the formatted text to the provided path. Path permission is supplied dynamically by this tool's permission handler.",
+        mutating,
+        filesystem_write,
+        trim("path", "text"),
+        non_empty("path", "text"),
+        permission(paths = write_permission_paths)
+    )]
     async fn write(&self, input: &WriteNoteInput) -> Result<ToolInvokeOutput> {
         let rendered = self.render(input.text.as_str());
         let path = PathBuf::from(input.path.as_str());

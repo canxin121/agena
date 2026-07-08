@@ -574,7 +574,7 @@ Manifest 包含：
 - `config_schema`
 - `config_schema_i18n`
 
-Rust SDK 中的最小 plugin：
+Rust SDK 中的最小 plugin 推荐使用 `#[agena_plugin]`：
 
 ```rust
 use agena_plugin_sdk::prelude::*;
@@ -582,41 +582,22 @@ use agena_plugin_sdk::prelude::*;
 #[derive(Default)]
 struct EchoPlugin;
 
-#[async_trait]
-impl Plugin for EchoPlugin {
-    fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder("echo", env!("CARGO_PKG_VERSION"))
-            .description("Echo text.")
-            .hooks(HookSubscription::TOOL_INVOKE)
-            .tool(
-                ToolDefinition::new(
-                    "echo",
-                    json!({
-                        "type": "object",
-                        "properties": {
-                            "text": { "type": "string" }
-                        },
-                        "required": ["text"]
-                    }),
-                )
-                .description("Echo the supplied text.")
-                .tag(ToolTag::ReadOnly),
-            )
-            .build()
-    }
-
-    async fn tool_invoke(&self, input: ToolInvokeInput) -> Result<ToolInvokeOutput> {
-        let text = input
-            .input
-            .get("text")
-            .and_then(|value| value.as_str())
-            .unwrap_or("");
-        Ok(ToolInvokeOutput::text(text.to_string()))
+#[agena_plugin(
+    namespace = "example",
+    name = "echo",
+    version = env!("CARGO_PKG_VERSION"),
+    summary = "Echo text.",
+    export = stdio
+)]
+impl EchoPlugin {
+    #[tool(name = "echo", summary = "Echo the supplied text.", read_only, concurrency_safe)]
+    async fn echo(&self, #[arg(trim, non_empty)] text: String) -> String {
+        text
     }
 }
 ```
 
-导出为 cdylib：
+如果不使用 `export = ...`，也可以手动导出为 cdylib：
 
 ```rust
 agena_plugin_sdk::export_cdylib!(EchoPlugin);
@@ -635,69 +616,80 @@ async fn main() -> std::io::Result<()> {
 
 - `examples/echo_plugin`: cdylib plugin。
 - `examples/echo_plugin_stdio`: stdio plugin。
-- `examples/multi_tool_plugin_stdio`: 推荐的多 tool stdio plugin 写法，覆盖 `ToolSubcommands`、`#[tool_suite]`、streaming、动态权限和 config。
+- `examples/multi_tool_plugin_stdio`: 推荐的多 tool stdio plugin 写法，覆盖方法级 `#[tool]`、`#[stream]`、动态权限和 config。
 
 ## 多 Tool Plugin 推荐写法
 
-一个 plugin 暴露多个模型可见 tool 时，推荐把每个 tool 写成一个独立 input struct，再用 `ToolSubcommands` 聚合：
+推荐入口是 `#[agena_plugin(...)]`。一个 plugin 暴露多个模型可见 tool 时，把每个 tool 写成 impl 里的一个方法即可；宏会生成隐藏 input/surface 类型、manifest tool definition、静态分发、stream fallback 和 permission 分发。
+
+如果 tool 输入比较复杂，继续使用独立 input struct：
 
 ```rust
-#[derive(Debug, Serialize, Deserialize, JsonSchema, ToolCommand)]
-#[tool_command(
-    tool = "format",
-    summary = "Format text.",
-    handler_receiver = NotesPlugin,
-    handle = NotesPlugin::format,
-    stream_handle = NotesPlugin::format_stream,
-    tags(ToolTag::ReadOnly),
-    streaming = "streaming",
-    concurrency_safe = true
-)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct FormatInput {
     text: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, ToolCommand)]
-#[tool_command(
-    tool = "write",
-    summary = "Write text.",
-    handler_receiver = NotesPlugin,
-    handle = NotesPlugin::write,
-    permission_paths_handle = NotesPlugin::write_permission_paths,
-    tags(ToolTag::Mutating, ToolTag::FilesystemWrite)
-)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct WriteInput {
     path: String,
     text: String,
 }
 
-#[derive(Debug, ToolSubcommands)]
-#[tool_subcommands(handler_receiver = NotesPlugin)]
-enum NotesTools {
-    Format(FormatInput),
-    Write(WriteInput),
-}
-
-#[plugin(namespace = "example", name = "notes", version = env!("CARGO_PKG_VERSION"), summary = "Notes plugin.")]
+#[agena_plugin(namespace = "example", name = "notes", version = env!("CARGO_PKG_VERSION"), summary = "Notes plugin.")]
 impl NotesPlugin {
-    #[tool_suite]
-    async fn invoke(&self, input: NotesTools) -> Result<ToolInvokeOutput> {
-        input.dispatch_tool_invoke(self).await
+    #[tool(
+        name = "format",
+        summary = "Format text.",
+        read_only,
+        streaming,
+        trim("text"),
+        non_empty("text"),
+        concurrency_safe
+    )]
+    async fn format(&self, input: &FormatInput) -> Result<ToolInvokeOutput> {
+        // ...
     }
 
-    #[tool_suite_stream]
-    async fn invoke_stream(&self, input: NotesTools, sink: ToolStreamSink) -> Result<ToolStreamEnd> {
-        input.dispatch_tool_invoke_stream(self, sink).await
+    #[stream(format)]
+    async fn format_stream(&self, sink: ToolStreamSink, input: &FormatInput) -> Result<ToolStreamEnd> {
+        // ...
     }
 
-    #[permission(paths, suite)]
-    async fn permission_paths(&self, input: NotesTools) -> Result<Vec<PathRequest>> {
-        input.dispatch_permission_paths(self).await
+    #[tool(
+        name = "write",
+        summary = "Write text.",
+        mutating,
+        filesystem_write,
+        trim("path", "text"),
+        non_empty("path", "text"),
+        permission(paths = write_permission_paths)
+    )]
+    async fn write(&self, input: &WriteInput) -> Result<ToolInvokeOutput> {
+        // ...
+    }
+
+    async fn write_permission_paths(&self, input: &WriteInput) -> Result<Vec<PathRequest>> {
+        Ok(vec![PathRequest::write(input.path.clone())])
     }
 }
 ```
 
-这个模式让 manifest 注册、输入解析、stream fallback、权限分发都由宏统一生成。完整可运行版本见 `examples/multi_tool_plugin_stdio`。
+简单 tool 可以省掉 input struct，由方法参数直接生成隐藏输入类型：
+
+```rust
+#[agena_plugin(namespace = "example", name = "echo", version = env!("CARGO_PKG_VERSION"), summary = "Echo plugin.")]
+impl EchoPlugin {
+    #[tool(name = "echo", summary = "Echo text.", read_only, concurrency_safe)]
+    async fn echo(&self, #[arg(trim, non_empty)] text: String) -> String {
+        format!("echo: {text}")
+    }
+}
+```
+
+`ToolCommand` / `ToolSubcommands` / `#[tool_suite]` 仍保留为底层兼容层，适合需要手写聚合 enum、跨 plugin 复用 tool surface 或泛型插件的场景。日常插件优先使用 `#[agena_plugin]` 的方法级写法。完整可运行版本见 `examples/multi_tool_plugin_stdio`。
 
 ## Plugin UI
 

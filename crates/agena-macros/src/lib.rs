@@ -291,34 +291,34 @@ struct PluginImplConfig {
 #[derive(Clone)]
 struct PluginToolBinding {
     method: Ident,
-    ty: Type,
+    tool: LitStr,
+    input_model: PluginGeneratedToolInput,
     output_ty: Option<Type>,
     output_is_result: bool,
     is_async: bool,
     context: Option<PluginContextArg>,
     input: PluginCallInput,
-    direct_tool: Option<LitStr>,
 }
 
 #[derive(Clone)]
 struct PluginStreamToolBinding {
     method: Ident,
-    ty: Type,
     is_async: bool,
     sink_first: bool,
-    for_method: Option<Ident>,
+    for_method: Ident,
+    tool: Option<LitStr>,
+    input_model: Option<PluginGeneratedToolInput>,
     input: PluginCallInput,
-    direct_tool: Option<LitStr>,
 }
 
 #[derive(Clone)]
 struct PluginPermissionBinding {
     method: Ident,
-    ty: Type,
     is_async: bool,
     for_method: Option<Ident>,
+    tool: Option<LitStr>,
+    input_model: Option<PluginGeneratedToolInput>,
     input: PluginCallInput,
-    direct_tool: Option<LitStr>,
 }
 
 #[derive(Clone, Copy)]
@@ -334,9 +334,8 @@ enum PluginCallInput {
     Fields(Vec<Ident>),
 }
 
-struct PluginGeneratedToolSpec {
-    tool_method: Ident,
-    spec_ident: Ident,
+#[derive(Clone)]
+struct PluginGeneratedToolInput {
     input_ident: Option<Ident>,
     input_fields: Vec<PluginGeneratedInputField>,
     input_ty: Type,
@@ -344,6 +343,7 @@ struct PluginGeneratedToolSpec {
     docs: Option<String>,
 }
 
+#[derive(Clone)]
 struct PluginGeneratedInputField {
     ident: Ident,
     ty: Type,
@@ -411,7 +411,6 @@ fn expand_plugin_inherent_impl_attr(
     let mut permission_path_bindings = Vec::new();
     let mut permission_network_bindings = Vec::new();
     let mut hook_bindings = Vec::new();
-    let mut generated_specs = Vec::new();
 
     for impl_item in &mut item.items {
         let ImplItem::Fn(method) = impl_item else {
@@ -423,10 +422,9 @@ fn expand_plugin_inherent_impl_attr(
         permission_path_bindings.extend(attrs.permission_paths);
         permission_network_bindings.extend(attrs.permission_networks);
         hook_bindings.extend(attrs.hooks);
-        generated_specs.extend(attrs.generated_specs);
     }
 
-    if !generated_specs.is_empty() && !item.generics.params.is_empty() {
+    if !tool_bindings.is_empty() && !item.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
             &item.generics,
             "method-level #[tool(...)] generation does not support generic plugin impls yet; use a non-generic plugin wrapper type",
@@ -435,12 +433,15 @@ fn expand_plugin_inherent_impl_attr(
     resolve_plugin_stream_bindings(&tool_bindings, &mut stream_bindings)?;
     resolve_plugin_permission_bindings(&tool_bindings, &mut permission_path_bindings)?;
     resolve_plugin_permission_bindings(&tool_bindings, &mut permission_network_bindings)?;
-    mark_streaming_generated_specs(&mut generated_specs, &stream_bindings);
-    reject_duplicate_direct_tool_bindings(&tool_bindings)?;
+    mark_streaming_tool_bindings(&mut tool_bindings, &stream_bindings);
+    reject_duplicate_tool_bindings(&tool_bindings)?;
+    reject_duplicate_stream_bindings(&stream_bindings)?;
+    reject_duplicate_permission_bindings(&permission_path_bindings, "path")?;
+    reject_duplicate_permission_bindings(&permission_network_bindings, "network")?;
     reject_duplicate_hook_bindings(&hook_bindings)?;
-    let generated_spec_items = generated_specs
+    let generated_input_items = tool_bindings
         .iter()
-        .map(expand_plugin_generated_tool_spec)
+        .map(|binding| expand_plugin_generated_input(&binding.input_model))
         .collect::<Result<Vec<_>>>()?;
 
     let manifest_method = expand_plugin_layer_manifest(
@@ -484,7 +485,7 @@ fn expand_plugin_inherent_impl_attr(
     Ok(quote! {
         #item
 
-        #(#generated_spec_items)*
+        #(#generated_input_items)*
 
         #[::agena_plugin_sdk::async_trait]
         impl #impl_generics ::agena_plugin_sdk::Plugin for #self_ty #where_clause {
@@ -759,7 +760,6 @@ struct PluginInherentMethodAttrs {
     permission_paths: Vec<PluginPermissionBinding>,
     permission_networks: Vec<PluginPermissionBinding>,
     hooks: Vec<PluginHookBinding>,
-    generated_specs: Vec<PluginGeneratedToolSpec>,
 }
 
 fn parse_plugin_inherent_method_attrs(
@@ -772,7 +772,6 @@ fn parse_plugin_inherent_method_attrs(
     let mut permission_paths = Vec::new();
     let mut permission_networks = Vec::new();
     let mut hooks = Vec::new();
-    let mut generated_specs = Vec::new();
     let mut kept_attrs = Vec::new();
     let method_ident = method.sig.ident.clone();
     let is_async = method.sig.asyncness.is_some();
@@ -782,125 +781,80 @@ fn parse_plugin_inherent_method_attrs(
             ensure_plugin_method_shared_receiver(method, "#[tool] methods")?;
             match parse_plugin_tool_method_attr(&attr, &method_ident)? {
                 PluginToolMethodAttr::Inline(mut spec) => {
-                    let inline = plugin_inline_tool_method_spec(
-                        method,
-                        &method_ident,
-                        self_label,
-                        &mut spec,
-                    )?;
-                    let spec_ty = inline.spec_ty();
-                    let direct_tool = inline.spec.spec.tool.clone();
+                    let inline =
+                        build_plugin_inline_tool(method, &method_ident, self_label, &mut spec)?;
+                    let input_model = inline.input_model;
+                    let tool = input_model
+                        .spec
+                        .tool
+                        .clone()
+                        .expect("inline tool config has a default tool name");
                     if let Some(permission_method) = inline.permission_paths_method.as_ref() {
                         let is_async = plugin_method_is_async(method_async, permission_method)?;
                         permission_paths.push(PluginPermissionBinding {
                             method: permission_method.clone(),
-                            ty: spec_ty.clone(),
                             is_async,
                             for_method: None,
+                            tool: Some(tool.clone()),
+                            input_model: Some(input_model.clone()),
                             input: inline.call_input.clone(),
-                            direct_tool: direct_tool.clone(),
                         });
                     }
                     if let Some(permission_method) = inline.permission_networks_method.as_ref() {
                         let is_async = plugin_method_is_async(method_async, permission_method)?;
                         permission_networks.push(PluginPermissionBinding {
                             method: permission_method.clone(),
-                            ty: spec_ty.clone(),
                             is_async,
                             for_method: None,
+                            tool: Some(tool.clone()),
+                            input_model: Some(input_model.clone()),
                             input: inline.call_input.clone(),
-                            direct_tool: direct_tool.clone(),
                         });
                     }
                     tools.push(PluginToolBinding {
                         method: method_ident.clone(),
-                        ty: spec_ty,
-                        output_ty: inline.spec.spec.output_ty.clone(),
-                        output_is_result: inline.spec.spec.output_ty.is_some()
+                        tool,
+                        output_ty: input_model.spec.output_ty.clone(),
+                        output_is_result: input_model.spec.output_ty.is_some()
                             && plugin_method_returns_result(method),
                         is_async,
                         context: inline.context,
                         input: inline.call_input.clone(),
-                        direct_tool,
+                        input_model,
                     });
-                    generated_specs.push(inline.spec);
                 }
             }
-        } else if attr.path().is_ident("tool_stream") {
-            ensure_plugin_method_shared_receiver(method, "#[tool_stream] methods")?;
-            let sink_first = stream_sink_is_first_arg(method)?;
-            stream_tools.push(PluginStreamToolBinding {
-                method: method_ident.clone(),
-                ty: plugin_method_stream_input_type(&attr, method, sink_first)?,
-                is_async,
-                sink_first,
-                for_method: None,
-                input: PluginCallInput::Parsed,
-                direct_tool: None,
-            });
         } else if attr.path().is_ident("stream") {
             ensure_plugin_method_shared_receiver(method, "#[stream] methods")?;
             let for_method = parse_plugin_stream_attr(&attr)?;
             strip_plugin_arg_attrs_from_method(method)?;
-            let sink_first = if for_method.is_some() {
-                stream_sink_is_edge_arg(method, "#[stream] methods", true)?
-            } else {
-                stream_sink_is_first_arg(method)?
-            };
-            let ty = match plugin_method_inferred_stream_input_type(method, sink_first) {
-                Ok(ty) => ty,
-                Err(_err) if for_method.is_some() => parse_quote!(()),
-                Err(err) => return Err(err),
-            };
+            let sink_first = stream_sink_is_edge_arg(method, "#[stream] methods", true)?;
             stream_tools.push(PluginStreamToolBinding {
                 method: method_ident.clone(),
-                ty,
                 is_async,
                 sink_first,
                 for_method,
+                tool: None,
+                input_model: None,
                 input: PluginCallInput::Parsed,
-                direct_tool: None,
-            });
-        } else if attr.path().is_ident("permission_paths") {
-            ensure_plugin_method_shared_receiver(method, "#[permission_paths] methods")?;
-            ensure_plugin_method_typed_arg_count(method, 1, "#[permission_paths] methods")?;
-            permission_paths.push(PluginPermissionBinding {
-                method: method_ident.clone(),
-                ty: plugin_method_single_input_type(&attr, method)?,
-                is_async,
-                for_method: None,
-                input: PluginCallInput::Parsed,
-                direct_tool: None,
-            });
-        } else if attr.path().is_ident("permission_networks") {
-            ensure_plugin_method_shared_receiver(method, "#[permission_networks] methods")?;
-            ensure_plugin_method_typed_arg_count(method, 1, "#[permission_networks] methods")?;
-            permission_networks.push(PluginPermissionBinding {
-                method: method_ident.clone(),
-                ty: plugin_method_single_input_type(&attr, method)?,
-                is_async,
-                for_method: None,
-                input: PluginCallInput::Parsed,
-                direct_tool: None,
             });
         } else if attr.path().is_ident("permission") {
             ensure_plugin_method_shared_receiver(method, "#[permission] methods")?;
             let permission = parse_plugin_permission_attr(&attr)?;
-            let ty = if permission.for_method.is_some() {
-                strip_plugin_arg_attrs_from_method(method)?;
-                plugin_method_inferred_single_input_type(method)
-                    .unwrap_or_else(|_| parse_quote!(()))
-            } else {
-                ensure_plugin_method_typed_arg_count(method, 1, "#[permission] methods")?;
-                plugin_method_inferred_single_input_type(method)?
+            if permission.for_method.is_none() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[permission(...)] must include `for = tool_method`; standalone permission handlers were removed",
+                ));
             };
+            strip_plugin_arg_attrs_from_method(method)?;
             let binding = PluginPermissionBinding {
                 method: method_ident.clone(),
-                ty,
                 is_async,
                 for_method: permission.for_method,
+                tool: None,
+                input_model: None,
                 input: PluginCallInput::Parsed,
-                direct_tool: None,
             };
             match permission.target {
                 PluginPermissionTarget::Paths => permission_paths.push(binding),
@@ -930,7 +884,6 @@ fn parse_plugin_inherent_method_attrs(
         permission_paths,
         permission_networks,
         hooks,
-        generated_specs,
     })
 }
 
@@ -952,19 +905,12 @@ struct PluginInlineToolConfig {
     permission_networks_method: Option<Ident>,
 }
 
-struct PluginInlineToolSpec {
-    spec: PluginGeneratedToolSpec,
+struct PluginInlineTool {
+    input_model: PluginGeneratedToolInput,
     context: Option<PluginContextArg>,
     call_input: PluginCallInput,
     permission_paths_method: Option<Ident>,
     permission_networks_method: Option<Ident>,
-}
-
-impl PluginInlineToolSpec {
-    fn spec_ty(&self) -> Type {
-        let ident = &self.spec.spec_ident;
-        parse_quote!(#ident)
-    }
 }
 
 #[derive(Default)]
@@ -1349,44 +1295,6 @@ fn inline_tool_tag_expr(tag: &str) -> Option<Expr> {
     Some(parse_quote!(#variant))
 }
 
-fn plugin_method_single_input_type(attr: &Attribute, method: &ImplItemFn) -> Result<Type> {
-    if plugin_attr_has_explicit_args(attr) {
-        return attr.parse_args::<Type>();
-    }
-    plugin_method_inferred_single_input_type(method)
-}
-
-fn plugin_method_inferred_single_input_type(method: &ImplItemFn) -> Result<Type> {
-    typed_arg_types(method).into_iter().next().ok_or_else(|| {
-        syn::Error::new_spanned(
-            &method.sig,
-            "cannot infer plugin method input type without a typed argument",
-        )
-    })
-}
-
-fn plugin_method_stream_input_type(
-    attr: &Attribute,
-    method: &ImplItemFn,
-    sink_first: bool,
-) -> Result<Type> {
-    if plugin_attr_has_explicit_args(attr) {
-        return attr.parse_args::<Type>();
-    }
-    plugin_method_inferred_stream_input_type(method, sink_first)
-}
-
-fn plugin_method_inferred_stream_input_type(method: &ImplItemFn, sink_first: bool) -> Result<Type> {
-    let args = typed_arg_types(method);
-    let index = usize::from(sink_first);
-    args.get(index).cloned().ok_or_else(|| {
-        syn::Error::new_spanned(
-            &method.sig,
-            "cannot infer plugin stream input type without an input argument",
-        )
-    })
-}
-
 fn plugin_method_returns_result(method: &ImplItemFn) -> bool {
     let syn::ReturnType::Type(_, ty) = &method.sig.output else {
         return false;
@@ -1400,12 +1308,12 @@ fn plugin_method_returns_result(method: &ImplItemFn) -> bool {
         .is_some_and(|segment| matches!(segment.ident.to_string().as_str(), "Result" | "SdkResult"))
 }
 
-fn plugin_inline_tool_method_spec(
+fn build_plugin_inline_tool(
     method: &mut ImplItemFn,
     method_ident: &Ident,
     self_label: &str,
     config: &mut PluginInlineToolConfig,
-) -> Result<PluginInlineToolSpec> {
+) -> Result<PluginInlineTool> {
     let docs = doc_text(&method.attrs);
     let value_args = plugin_method_value_args(method)?;
     let context = plugin_inline_context_arg(&value_args)?;
@@ -1414,7 +1322,6 @@ fn plugin_inline_tool_method_spec(
         .filter(|arg| !arg.is_context)
         .collect::<Vec<_>>();
 
-    let spec_ident = format_ident!("__AgenaPluginToolSpec_{}_{}", self_label, method_ident);
     let input_ident = format_ident!("__AgenaPluginToolInput_{}_{}", self_label, method_ident);
 
     let (input_ident, input_fields, input_ty, call_input) = match input_args.as_slice() {
@@ -1462,9 +1369,7 @@ fn plugin_inline_tool_method_spec(
         }
     };
 
-    let generated = PluginGeneratedToolSpec {
-        tool_method: method_ident.clone(),
-        spec_ident,
+    let input_model = PluginGeneratedToolInput {
         input_ident,
         input_fields,
         input_ty,
@@ -1472,8 +1377,8 @@ fn plugin_inline_tool_method_spec(
         docs,
     };
 
-    Ok(PluginInlineToolSpec {
-        spec: generated,
+    Ok(PluginInlineTool {
+        input_model,
         context,
         call_input,
         permission_paths_method: config.permission_paths_method.clone(),
@@ -1840,12 +1745,20 @@ fn apply_field_arg_config_to_input(
     }
 }
 
-fn parse_plugin_stream_attr(attr: &Attribute) -> Result<Option<Ident>> {
+fn parse_plugin_stream_attr(attr: &Attribute) -> Result<Ident> {
     if !plugin_attr_has_explicit_args(attr) {
-        return Ok(None);
+        return Err(syn::Error::new_spanned(
+            attr,
+            "#[stream(...)] must reference a #[tool] method, e.g. #[stream(read_file)]",
+        ));
     }
     let parsed = attr.parse_args::<PluginStreamAttr>()?;
-    Ok(parsed.for_method)
+    parsed.for_method.ok_or_else(|| {
+        syn::Error::new_spanned(
+            attr,
+            "#[stream(...)] must reference a #[tool] method, e.g. #[stream(read_file)]",
+        )
+    })
 }
 
 struct PluginStreamAttr {
@@ -1979,10 +1892,6 @@ fn ensure_plugin_method_typed_arg_count(
         ));
     }
     Ok(())
-}
-
-fn stream_sink_is_first_arg(method: &ImplItemFn) -> Result<bool> {
-    stream_sink_is_edge_arg(method, "#[tool_stream] methods", false)
 }
 
 fn stream_sink_is_edge_arg(
@@ -2181,28 +2090,15 @@ fn resolve_plugin_stream_bindings(
     streams: &mut [PluginStreamToolBinding],
 ) -> Result<()> {
     for stream in streams {
-        let Some(for_method) = stream.for_method.as_ref() else {
-            continue;
-        };
-        let Some(tool) = tools.iter().find(|tool| &tool.method == for_method) else {
+        let Some(tool) = tools.iter().find(|tool| tool.method == stream.for_method) else {
             return Err(syn::Error::new_spanned(
-                for_method,
+                &stream.for_method,
                 "stream target must reference a #[tool] method in the same #[agena_plugin] impl",
             ));
         };
-        let tool_ty = &tool.ty;
-        let stream_ty = &stream.ty;
-        if tool.direct_tool.is_none()
-            && quote!(#tool_ty).to_string() != quote!(#stream_ty).to_string()
-        {
-            return Err(syn::Error::new_spanned(
-                &stream.method,
-                "stream input type must match the referenced tool method input type",
-            ));
-        }
-        stream.ty = tool.ty.clone();
+        stream.tool = Some(tool.tool.clone());
+        stream.input_model = Some(tool.input_model.clone());
         stream.input = tool.input.clone();
-        stream.direct_tool = tool.direct_tool.clone();
     }
     Ok(())
 }
@@ -2221,45 +2117,82 @@ fn resolve_plugin_permission_bindings(
                 "permission target must reference a #[tool] method in the same #[agena_plugin] impl",
             ));
         };
-        permission.ty = tool.ty.clone();
+        permission.tool = Some(tool.tool.clone());
+        permission.input_model = Some(tool.input_model.clone());
         permission.input = tool.input.clone();
-        permission.direct_tool = tool.direct_tool.clone();
     }
     Ok(())
 }
 
-fn mark_streaming_generated_specs(
-    specs: &mut [PluginGeneratedToolSpec],
+fn mark_streaming_tool_bindings(
+    tools: &mut [PluginToolBinding],
     streams: &[PluginStreamToolBinding],
 ) {
     for stream in streams {
-        let Some(for_method) = stream.for_method.as_ref() else {
-            continue;
-        };
-        if let Some(spec) = specs
+        if let Some(tool) = tools
             .iter_mut()
-            .find(|spec| &spec.tool_method == for_method)
-            && spec.spec.streaming.is_none()
+            .find(|tool| tool.method == stream.for_method)
+            && tool.input_model.spec.streaming.is_none()
         {
-            spec.spec.streaming = Some(LitStr::new("streaming", for_method.span()));
+            tool.input_model.spec.streaming =
+                Some(LitStr::new("streaming", stream.for_method.span()));
         }
     }
 }
 
-fn reject_duplicate_direct_tool_bindings(bindings: &[PluginToolBinding]) -> Result<()> {
+fn reject_duplicate_tool_bindings(bindings: &[PluginToolBinding]) -> Result<()> {
     for (index, binding) in bindings.iter().enumerate() {
-        let Some(tool) = binding.direct_tool.as_ref() else {
-            continue;
-        };
+        let tool = &binding.tool;
         if bindings
             .iter()
             .skip(index + 1)
-            .filter_map(|other| other.direct_tool.as_ref())
-            .any(|other| other.value() == tool.value())
+            .any(|other| other.tool.value() == tool.value())
         {
             return Err(syn::Error::new_spanned(
                 tool,
                 format!("duplicate inline tool name '{}'", tool.value()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn reject_duplicate_stream_bindings(bindings: &[PluginStreamToolBinding]) -> Result<()> {
+    for (index, binding) in bindings.iter().enumerate() {
+        let tool = resolved_stream_tool(binding)?;
+        if bindings
+            .iter()
+            .skip(index + 1)
+            .filter_map(|other| resolved_stream_tool(other).ok())
+            .any(|other| other.value() == tool.value())
+        {
+            return Err(syn::Error::new_spanned(
+                &binding.method,
+                format!("duplicate stream handler for tool '{}'", tool.value()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn reject_duplicate_permission_bindings(
+    bindings: &[PluginPermissionBinding],
+    kind: &str,
+) -> Result<()> {
+    for (index, binding) in bindings.iter().enumerate() {
+        let tool = resolved_permission_tool(binding)?;
+        if bindings
+            .iter()
+            .skip(index + 1)
+            .filter_map(|other| resolved_permission_tool(other).ok())
+            .any(|other| other.value() == tool.value())
+        {
+            return Err(syn::Error::new_spanned(
+                &binding.method,
+                format!(
+                    "duplicate {kind} permission handler for tool '{}'",
+                    tool.value()
+                ),
             ));
         }
     }
@@ -2429,11 +2362,13 @@ fn expand_plugin_layer_manifest(
         .iter()
         .map(|capability| quote! { manifest.add_plugin_capability(#capability); })
         .collect::<Vec<_>>();
-    let tool_types = unique_manifest_tool_types(tools, streams);
-    let tool_definition_assignments = tool_types
+    let tool_definition_assignments = tools
         .iter()
-        .map(|ty| quote! { manifest.tools.extend(<#ty>::tool_definitions()); })
-        .collect::<Vec<_>>();
+        .map(|binding| {
+            let definition = expand_plugin_tool_definition(&binding.input_model)?;
+            Ok(quote! { manifest.tools.push(#definition); })
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     let build_manifest = quote! {{
             let mut manifest = ::agena_plugin_sdk::PluginManifest::new(#namespace, #name, #version);
@@ -2512,29 +2447,6 @@ fn expr_is_ident(expr: &Expr, expected: &str) -> bool {
         return false;
     };
     path.path.get_ident().is_some_and(|ident| ident == expected)
-}
-
-fn unique_manifest_tool_types(
-    tools: &[PluginToolBinding],
-    streams: &[PluginStreamToolBinding],
-) -> Vec<Type> {
-    let mut tool_types = Vec::new();
-    let mut tool_keys = Vec::new();
-    for binding in tools {
-        push_unique_type(&mut tool_types, &mut tool_keys, &binding.ty);
-    }
-    for binding in streams {
-        push_unique_type(&mut tool_types, &mut tool_keys, &binding.ty);
-    }
-    tool_types
-}
-
-fn push_unique_type(types: &mut Vec<Type>, keys: &mut Vec<String>, ty: &Type) {
-    let key = quote!(#ty).to_string();
-    if !keys.contains(&key) {
-        keys.push(key);
-        types.push(ty.clone());
-    }
 }
 
 fn plugin_layer_hooks_expr(
@@ -2630,26 +2542,10 @@ fn expand_plugin_layer_tool_invoke(
     _self_ty: &Type,
     bindings: &[PluginToolBinding],
 ) -> Result<proc_macro2::TokenStream> {
-    let direct_branches = bindings
+    let branches = bindings
         .iter()
-        .filter(|binding| binding.direct_tool.is_some())
-        .map(expand_plugin_layer_tool_invoke_direct_branch)
-        .collect::<Vec<_>>();
-    let fallback_branches = bindings
-        .iter()
-        .filter(|binding| binding.direct_tool.is_none())
         .map(expand_plugin_layer_tool_invoke_branch)
-        .collect::<Vec<_>>();
-    let direct_match = if direct_branches.is_empty() {
-        quote! {}
-    } else {
-        quote! {
-            match __tool_name.as_str() {
-                #(#direct_branches,)*
-                _ => {}
-            }
-        }
-    };
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(quote! {
         async fn tool_invoke(
@@ -2669,21 +2565,21 @@ fn expand_plugin_layer_tool_invoke(
                 call_id: __call_id,
                 workspace_root: __workspace_root.as_str(),
             };
-            #direct_match
-            #(#fallback_branches)*
-            Err(::agena_plugin_sdk::PluginError::not_implemented(format!(
-                "tool_invoke({})",
-                __tool_name
-            )))
+            match __tool_name.as_str() {
+                #(#branches,)*
+                _ => Err(::agena_plugin_sdk::PluginError::not_implemented(format!(
+                    "tool_invoke({})",
+                    __tool_name
+                ))),
+            }
         }
     })
 }
 
-fn expand_plugin_layer_tool_invoke_direct_branch(
+fn expand_plugin_layer_tool_invoke_branch(
     binding: &PluginToolBinding,
-) -> proc_macro2::TokenStream {
-    let tool = binding.direct_tool.as_ref().expect("direct tool checked");
-    let ty = &binding.ty;
+) -> Result<proc_macro2::TokenStream> {
+    let tool = &binding.tool;
     let call_args = plugin_layer_tool_call_args(binding.context, &binding.input);
     let call = plugin_layer_tool_method_call(
         &binding.method,
@@ -2692,64 +2588,24 @@ fn expand_plugin_layer_tool_invoke_direct_branch(
         binding.output_ty.as_ref(),
         binding.output_is_result,
     );
-    let parse = quote! {
-        let __parsed = <#ty>::parse_input(__input)?;
-    };
-    quote! {
+    let parse =
+        expand_plugin_tool_parse_input(&binding.input_model, quote! { __input }, &binding.method)?;
+    Ok(quote! {
         #tool => {
-            #parse
+            let __parsed = #parse;
             return #call;
         }
-    }
-}
-
-fn expand_plugin_layer_tool_invoke_branch(binding: &PluginToolBinding) -> proc_macro2::TokenStream {
-    let ty = &binding.ty;
-    let call_args = plugin_layer_tool_call_args(binding.context, &binding.input);
-    let call = plugin_layer_tool_method_call(
-        &binding.method,
-        binding.is_async,
-        &call_args,
-        binding.output_ty.as_ref(),
-        binding.output_is_result,
-    );
-    quote! {
-        {
-            if <#ty>::has_tool(__tool_name.as_str()) {
-                let __parsed = <#ty>::parse_tool(
-                    __tool_name.as_str(),
-                    __input.clone(),
-                )?;
-                return #call;
-            }
-        }
-    }
+    })
 }
 
 fn expand_plugin_layer_tool_stream(
     _self_ty: &Type,
     bindings: &[PluginStreamToolBinding],
 ) -> Result<proc_macro2::TokenStream> {
-    let direct_branches = bindings
+    let branches = bindings
         .iter()
-        .filter(|binding| binding.direct_tool.is_some())
-        .map(expand_plugin_layer_tool_stream_direct_branch)
-        .collect::<Vec<_>>();
-    let fallback_branches = bindings
-        .iter()
-        .filter(|binding| binding.direct_tool.is_none())
         .map(expand_plugin_layer_tool_stream_branch)
-        .collect::<Vec<_>>();
-    let direct_match = if direct_branches.is_empty() {
-        quote! {}
-    } else {
-        quote! {
-            match __tool_name.as_str() {
-                #(#direct_branches,)*
-                _ => {}
-            }
-        }
-    };
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(quote! {
         async fn tool_invoke_stream(
@@ -2758,8 +2614,10 @@ fn expand_plugin_layer_tool_stream(
             sink: ::agena_plugin_sdk::ToolStreamSink,
         ) -> ::agena_plugin_sdk::Result<::agena_plugin_sdk::ToolStreamEnd> {
             let __tool_name = input.tool_name.clone();
-            #direct_match
-            #(#fallback_branches)*
+            match __tool_name.as_str() {
+                #(#branches,)*
+                _ => {}
+            }
 
             let __stream_id = sink.stream_id().to_string();
             let __result = self.tool_invoke(input).await?;
@@ -2775,37 +2633,11 @@ fn expand_plugin_layer_tool_stream(
     })
 }
 
-fn expand_plugin_layer_tool_stream_direct_branch(
-    binding: &PluginStreamToolBinding,
-) -> proc_macro2::TokenStream {
-    let tool = binding.direct_tool.as_ref().expect("direct tool checked");
-    let ty = &binding.ty;
-    let input_args = plugin_call_input_args(&binding.input);
-    let args = if binding.sink_first {
-        let mut args = vec![quote! { sink }];
-        args.extend(input_args);
-        args
-    } else {
-        let mut args = input_args;
-        args.push(quote! { sink });
-        args
-    };
-    let call = plugin_layer_stream_method_call(&binding.method, binding.is_async, &args);
-    let parse = quote! {
-        let __parsed = <#ty>::parse_input(input.input)?;
-    };
-    quote! {
-        #tool => {
-            #parse
-            return #call;
-        }
-    }
-}
-
 fn expand_plugin_layer_tool_stream_branch(
     binding: &PluginStreamToolBinding,
-) -> proc_macro2::TokenStream {
-    let ty = &binding.ty;
+) -> Result<proc_macro2::TokenStream> {
+    let tool = resolved_stream_tool(binding)?;
+    let input_model = resolved_stream_input_model(binding)?;
     let input_args = plugin_call_input_args(&binding.input);
     let args = if binding.sink_first {
         let mut args = vec![quote! { sink }];
@@ -2817,43 +2649,24 @@ fn expand_plugin_layer_tool_stream_branch(
         args
     };
     let call = plugin_layer_stream_method_call(&binding.method, binding.is_async, &args);
-    quote! {
-        {
-            if <#ty>::has_tool(__tool_name.as_str()) {
-                let __parsed = <#ty>::parse_tool(
-                    __tool_name.as_str(),
-                    input.input,
-                )?;
-                return #call;
-            }
+    let parse =
+        expand_plugin_tool_parse_input(input_model, quote! { input.input }, &binding.method)?;
+    Ok(quote! {
+        #tool => {
+            let __parsed = #parse;
+            return #call;
         }
-    }
+    })
 }
 
 fn expand_plugin_layer_permission_paths(
     _self_ty: &Type,
     bindings: &[PluginPermissionBinding],
 ) -> Result<proc_macro2::TokenStream> {
-    let direct_branches = bindings
+    let branches = bindings
         .iter()
-        .filter(|binding| binding.direct_tool.is_some())
-        .map(|binding| expand_plugin_layer_permission_direct_branch(binding, true))
-        .collect::<Vec<_>>();
-    let fallback_branches = bindings
-        .iter()
-        .filter(|binding| binding.direct_tool.is_none())
         .map(|binding| expand_plugin_layer_permission_branch(binding, true))
-        .collect::<Vec<_>>();
-    let direct_match = if direct_branches.is_empty() {
-        quote! {}
-    } else {
-        quote! {
-            match tool {
-                #(#direct_branches,)*
-                _ => {}
-            }
-        }
-    };
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(quote! {
         async fn permission_paths(
@@ -2861,9 +2674,10 @@ fn expand_plugin_layer_permission_paths(
             tool: &str,
             input: &::agena_plugin_sdk::serde_json::Value,
         ) -> ::agena_plugin_sdk::Result<Vec<::agena_plugin_sdk::PathRequest>> {
-            #direct_match
-            #(#fallback_branches)*
-            Ok(Vec::new())
+            match tool {
+                #(#branches,)*
+                _ => Ok(Vec::new()),
+            }
         }
     })
 }
@@ -2872,26 +2686,10 @@ fn expand_plugin_layer_permission_networks(
     _self_ty: &Type,
     bindings: &[PluginPermissionBinding],
 ) -> Result<proc_macro2::TokenStream> {
-    let direct_branches = bindings
+    let branches = bindings
         .iter()
-        .filter(|binding| binding.direct_tool.is_some())
-        .map(|binding| expand_plugin_layer_permission_direct_branch(binding, false))
-        .collect::<Vec<_>>();
-    let fallback_branches = bindings
-        .iter()
-        .filter(|binding| binding.direct_tool.is_none())
         .map(|binding| expand_plugin_layer_permission_branch(binding, false))
-        .collect::<Vec<_>>();
-    let direct_match = if direct_branches.is_empty() {
-        quote! {}
-    } else {
-        quote! {
-            match tool {
-                #(#direct_branches,)*
-                _ => {}
-            }
-        }
-    };
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(quote! {
         async fn permission_networks(
@@ -2899,52 +2697,71 @@ fn expand_plugin_layer_permission_networks(
             tool: &str,
             input: &::agena_plugin_sdk::serde_json::Value,
         ) -> ::agena_plugin_sdk::Result<Vec<::agena_plugin_sdk::NetworkRequest>> {
-            #direct_match
-            #(#fallback_branches)*
-            Ok(Vec::new())
+            match tool {
+                #(#branches,)*
+                _ => Ok(Vec::new()),
+            }
         }
     })
-}
-
-fn expand_plugin_layer_permission_direct_branch(
-    binding: &PluginPermissionBinding,
-    paths: bool,
-) -> proc_macro2::TokenStream {
-    let tool = binding.direct_tool.as_ref().expect("direct tool checked");
-    let ty = &binding.ty;
-    let call_args = plugin_call_input_args(&binding.input);
-    let call =
-        plugin_layer_permission_method_call(&binding.method, binding.is_async, &call_args, paths);
-    let parse = quote! {
-        let __parsed = <#ty>::parse_input(input.clone())?;
-    };
-    quote! {
-        #tool => {
-            #parse
-            return #call;
-        }
-    }
 }
 
 fn expand_plugin_layer_permission_branch(
     binding: &PluginPermissionBinding,
     paths: bool,
-) -> proc_macro2::TokenStream {
-    let ty = &binding.ty;
+) -> Result<proc_macro2::TokenStream> {
+    let tool = resolved_permission_tool(binding)?;
+    let input_model = resolved_permission_input_model(binding)?;
     let call_args = plugin_call_input_args(&binding.input);
     let call =
         plugin_layer_permission_method_call(&binding.method, binding.is_async, &call_args, paths);
-    quote! {
-        {
-            if <#ty>::has_tool(tool) {
-                let __parsed = <#ty>::parse_tool(
-                    tool,
-                    input.clone(),
-                )?;
-                return #call;
-            }
+    let parse =
+        expand_plugin_tool_parse_input(input_model, quote! { input.clone() }, &binding.method)?;
+    Ok(quote! {
+        #tool => {
+            let __parsed = #parse;
+            return #call;
         }
-    }
+    })
+}
+
+fn resolved_stream_tool(binding: &PluginStreamToolBinding) -> Result<&LitStr> {
+    binding.tool.as_ref().ok_or_else(|| {
+        syn::Error::new_spanned(
+            &binding.method,
+            "stream binding was not resolved to a #[tool] method",
+        )
+    })
+}
+
+fn resolved_stream_input_model(
+    binding: &PluginStreamToolBinding,
+) -> Result<&PluginGeneratedToolInput> {
+    binding.input_model.as_ref().ok_or_else(|| {
+        syn::Error::new_spanned(
+            &binding.method,
+            "stream binding was not resolved to a #[tool] method",
+        )
+    })
+}
+
+fn resolved_permission_tool(binding: &PluginPermissionBinding) -> Result<&LitStr> {
+    binding.tool.as_ref().ok_or_else(|| {
+        syn::Error::new_spanned(
+            &binding.method,
+            "permission binding was not resolved to a #[tool] method",
+        )
+    })
+}
+
+fn resolved_permission_input_model(
+    binding: &PluginPermissionBinding,
+) -> Result<&PluginGeneratedToolInput> {
+    binding.input_model.as_ref().ok_or_else(|| {
+        syn::Error::new_spanned(
+            &binding.method,
+            "permission binding was not resolved to a #[tool] method",
+        )
+    })
 }
 
 fn expand_plugin_layer_init_method(
@@ -3300,14 +3117,14 @@ fn plugin_call_input_args(input: &PluginCallInput) -> Vec<proc_macro2::TokenStre
         PluginCallInput::Parsed => vec![quote! { __parsed }],
         PluginCallInput::Wrapped { by_ref } => {
             if *by_ref {
-                vec![quote! { &__parsed.0 }]
+                vec![quote! { &__parsed }]
             } else {
-                vec![quote! { __parsed.0 }]
+                vec![quote! { __parsed }]
             }
         }
         PluginCallInput::Fields(fields) => fields
             .iter()
-            .map(|field| quote! { __parsed.0.#field })
+            .map(|field| quote! { __parsed.#field })
             .collect(),
     }
 }
@@ -3338,47 +3155,28 @@ fn plugin_layer_permission_method_call(
     }
 }
 
-fn expand_plugin_generated_tool_spec(
-    generated: &PluginGeneratedToolSpec,
+fn expand_plugin_generated_input(
+    generated: &PluginGeneratedToolInput,
 ) -> Result<proc_macro2::TokenStream> {
-    let spec_ident = &generated.spec_ident;
-    let input_ty = &generated.input_ty;
-    let input_struct = if let Some(input_ident) = generated.input_ident.as_ref() {
-        let fields = generated.input_fields.iter().map(|field| {
-            let ident = &field.ident;
-            let ty = &field.ty;
-            let default_attr = field.default.then(|| quote! { #[serde(default)] });
-            quote! {
-                #default_attr
-                #ident: #ty
-            }
-        });
-        quote! {
-            #[allow(non_camel_case_types)]
-            #[derive(
-                ::agena_plugin_sdk::serde::Serialize,
-                ::agena_plugin_sdk::serde::Deserialize,
-                ::agena_plugin_sdk::JsonSchema
-            )]
-            #[serde(deny_unknown_fields)]
-            struct #input_ident {
-                #(#fields),*
-            }
-        }
-    } else {
-        quote! {}
+    let Some(input_ident) = generated.input_ident.as_ref() else {
+        return Ok(quote! {});
     };
+    let fields = generated.input_fields.iter().map(|field| {
+        let ident = &field.ident;
+        let ty = &field.ty;
+        let default_attr = field.default.then(|| quote! { #[serde(default)] });
+        quote! {
+            #default_attr
+            #ident: #ty
+        }
+    });
     let docs_attr = generated
         .docs
         .as_ref()
         .map(|docs| quote! { #[doc = #docs] })
         .unwrap_or_default();
-    let spec_impl =
-        expand_generated_tool_spec_impl(spec_ident, generated.docs.as_deref(), &generated.spec)?;
 
     Ok(quote! {
-        #input_struct
-
         #[allow(non_camel_case_types)]
         #docs_attr
         #[derive(
@@ -3386,10 +3184,10 @@ fn expand_plugin_generated_tool_spec(
             ::agena_plugin_sdk::serde::Deserialize,
             ::agena_plugin_sdk::JsonSchema
         )]
-        #[serde(transparent)]
-        struct #spec_ident(#input_ty);
-
-        #spec_impl
+        #[serde(deny_unknown_fields)]
+        struct #input_ident {
+            #(#fields),*
+        }
     })
 }
 
@@ -3655,81 +3453,56 @@ impl SchemaRelationSource for ToolInputVariantConfig {
     }
 }
 
-fn expand_generated_tool_spec_impl(
-    name: &Ident,
-    docs: Option<&str>,
-    spec: &ToolSpecConfig,
+fn expand_plugin_tool_definition(
+    model: &PluginGeneratedToolInput,
 ) -> Result<proc_macro2::TokenStream> {
-    let spec = spec.clone();
-    let input_shape_ty = spec.input_shape.clone();
-    let schema_metadata_fn = expand_tool_spec_schema_metadata_fn(&spec)?;
-    let tool = spec.tool.ok_or_else(|| {
-        syn::Error::new_spanned(&name, "generated tool spec is missing a tool name")
+    let spec = &model.spec;
+    let docs = model.docs.as_deref();
+    let tool = spec.tool.as_ref().ok_or_else(|| {
+        syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "generated tool is missing a tool name",
+        )
     })?;
     let summary = spec
         .summary
+        .clone()
         .or_else(|| lit_str_from_text(doc_summary(docs).as_deref()))
         .ok_or_else(|| {
-            syn::Error::new_spanned(
-                &name,
-                "generated tool spec is missing summary metadata or doc comments",
+            syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "generated tool is missing summary metadata or doc comments",
             )
         })?;
     let concurrency_safe = spec.concurrency_safe;
     let strict = spec.strict;
-    let output_schema_body = spec
+    let input_schema_expr = expand_plugin_tool_input_schema(model)?;
+    let output_schema_expr = spec
         .output_ty
         .as_ref()
         .map(|ty| quote! { ::agena_plugin_sdk::macro_support::json_schema_for::<#ty>() })
-        .unwrap_or_else(|| quote! { serde_json::Value::Null });
-    let built_in_normalize_expr =
-        built_in_normalization_tokens(quote! { &mut input }, &spec.trim, &spec.trim_suffix);
-    let built_in_post_parse_normalize_expr =
-        built_in_post_parse_normalization_tokens(&spec.trim, &spec.trim_suffix);
-    let normalize_expr = spec
-        .normalize
-        .as_ref()
-        .map(|path| quote! { #path(input)? })
-        .unwrap_or_else(|| quote! { input });
-    let validate_expr = spec
-        .validate
-        .as_ref()
-        .map(|path| quote! { #path(&parsed)?; })
-        .unwrap_or_default();
-    let built_in_validate_expr = built_in_validation_tokens(
-        quote! { parsed },
-        &spec.non_empty,
-        &spec.non_empty_if_present,
-        &spec.exactly_one_of,
-        &spec.at_least_one_of,
-        &spec.requires,
-        &spec.conflicts_with,
-        &spec.required_unless_present,
-        &spec.forbid_substrings,
-        &spec.distinct_trimmed,
-        &spec.distinct_trimmed_within,
-        &spec.min_items,
-        &spec.max_items,
-        &spec.max_chars,
-    );
-
+        .unwrap_or_else(|| quote! { ::agena_plugin_sdk::serde_json::Value::Null });
     let help_expr = spec
         .help
+        .as_ref()
+        .cloned()
         .or_else(|| lit_str_from_text(docs))
         .map(|value| quote! { Some(#value.to_string()) })
         .unwrap_or_else(|| quote! { None });
     let before_help_expr = spec
         .before_help
+        .as_ref()
         .map(|value| quote! { Some(#value.to_string()) })
         .unwrap_or_else(|| quote! { None });
     let after_help_expr = spec
         .after_help
+        .as_ref()
         .map(|value| quote! { Some(#value.to_string()) })
         .unwrap_or_else(|| quote! { None });
     let examples_expr = if spec.examples.is_empty() {
-        quote! { Vec::new() }
+        quote! { ::std::vec::Vec::new() }
     } else {
-        let examples = spec.examples;
+        let examples = &spec.examples;
         quote! { vec![#(#examples.to_string()),*] }
     };
     let display_preset = match spec.display.as_ref().map(LitStr::value).as_deref() {
@@ -3816,15 +3589,15 @@ fn expand_generated_tool_spec_impl(
         quote! { None }
     };
     let tags_expr = if spec.tags.is_empty() {
-        quote! { Vec::new() }
+        quote! { ::std::vec::Vec::new() }
     } else {
-        let tags = spec.tags.clone();
+        let tags = &spec.tags;
         quote! { vec![#(#tags),*] }
     };
     let capabilities_expr = if spec.capabilities.is_empty() {
-        quote! { Vec::new() }
+        quote! { ::std::vec::Vec::new() }
     } else {
-        let capabilities = spec.capabilities.clone();
+        let capabilities = &spec.capabilities;
         quote! { vec![#(#capabilities),*] }
     };
     let streaming_expr = match spec.streaming.as_ref().map(LitStr::value).as_deref() {
@@ -3842,181 +3615,137 @@ fn expand_generated_tool_spec_impl(
         }
     };
 
-    let input_schema_body = if let Some(input_shape_ty) = input_shape_ty.as_ref() {
-        quote! {
-            let mut schema = <#input_shape_ty as ::agena_plugin_sdk::ToolInput>::input_schema();
-            Self::__macro_apply_schema_metadata(&mut schema);
-            schema
+    Ok(quote! {{
+        let input_schema = #input_schema_expr;
+        ::agena_plugin_sdk::ToolDefinition {
+            name: #tool.to_string(),
+            contract: ::agena_plugin_sdk::manifest::ToolContract {
+                input_schema,
+                output_schema: #output_schema_expr,
+                strict: #strict,
+            },
+            model: ::agena_plugin_sdk::manifest::ToolModelSurface {
+                examples: #examples_expr,
+            },
+            docs: ::agena_plugin_sdk::manifest::ToolDocs {
+                before_help: #before_help_expr,
+                after_help: #after_help_expr,
+                summary: Some(#summary.to_string()),
+                help: #help_expr,
+            },
+            runtime: ::agena_plugin_sdk::manifest::ToolRuntimePolicy {
+                concurrency_safe: #concurrency_safe,
+                streaming: #streaming_expr,
+                result_policy: ::agena_plugin_sdk::ToolResultPolicy::default(),
+            },
+            permissions: ::agena_plugin_sdk::manifest::ToolPermissionContract {
+                input_paths: ::std::vec::Vec::new(),
+                input_networks: ::std::vec::Vec::new(),
+                path_access: ::std::vec::Vec::new(),
+                network_access: ::std::vec::Vec::new(),
+                tags: #tags_expr,
+            },
+            display: ::agena_plugin_sdk::manifest::ToolDisplay {
+                description_mode: #description_mode_expr,
+                ui_display_mode: #ui_display_mode_expr,
+            },
+            capabilities: #capabilities_expr,
         }
+    }})
+}
+
+fn expand_plugin_tool_input_schema(
+    model: &PluginGeneratedToolInput,
+) -> Result<proc_macro2::TokenStream> {
+    let spec = &model.spec;
+    let input_ty = &model.input_ty;
+    let metadata_calls = tool_spec_schema_metadata_calls(spec)?;
+    let schema_source = if let Some(input_shape_ty) = spec.input_shape.as_ref() {
+        quote! { <#input_shape_ty as ::agena_plugin_sdk::ToolInput>::input_schema() }
     } else {
-        quote! {
-            let mut schema = ::agena_plugin_sdk::macro_support::json_schema_for::<Self>();
-            Self::__macro_apply_schema_metadata(&mut schema);
-            schema
-        }
+        quote! { ::agena_plugin_sdk::macro_support::json_schema_for::<#input_ty>() }
     };
-    let input_schema_fn = quote! {
-        pub(crate) fn input_schema() -> serde_json::Value {
-            static __AGENA_TOOL_INPUT_SCHEMA: ::std::sync::OnceLock<serde_json::Value> =
-                ::std::sync::OnceLock::new();
-            __AGENA_TOOL_INPUT_SCHEMA.get_or_init(|| { #input_schema_body }).clone()
+    Ok(quote! {{
+        let mut schema = #schema_source;
+        {
+            let schema = &mut schema;
+            #(#metadata_calls)*
         }
-    };
-    let output_schema_fn = quote! {
-        pub(crate) fn output_schema() -> serde_json::Value {
-            static __AGENA_TOOL_OUTPUT_SCHEMA: ::std::sync::OnceLock<serde_json::Value> =
-                ::std::sync::OnceLock::new();
-            __AGENA_TOOL_OUTPUT_SCHEMA.get_or_init(|| { #output_schema_body }).clone()
-        }
-    };
+        schema
+    }})
+}
 
-    let make_tool_definition_fn = quote! {
-        fn __macro_tool_definition(
-            name: impl Into<String>,
-            schema: serde_json::Value,
-        ) -> ::agena_plugin_sdk::ToolDefinition {
-            ::agena_plugin_sdk::ToolDefinition {
-                name: name.into(),
-                contract: ::agena_plugin_sdk::manifest::ToolContract {
-                    input_schema: schema,
-                    output_schema: Self::output_schema(),
-                    strict: #strict,
-                },
-                model: ::agena_plugin_sdk::manifest::ToolModelSurface {
-                    examples: #examples_expr,
-                },
-                docs: ::agena_plugin_sdk::manifest::ToolDocs {
-                    before_help: #before_help_expr,
-                    after_help: #after_help_expr,
-                    summary: Some(#summary.to_string()),
-                    help: #help_expr,
-                },
-                runtime: ::agena_plugin_sdk::manifest::ToolRuntimePolicy {
-                    concurrency_safe: #concurrency_safe,
-                    streaming: #streaming_expr,
-                    result_policy: ::agena_plugin_sdk::ToolResultPolicy::default(),
-                },
-                permissions: ::agena_plugin_sdk::manifest::ToolPermissionContract {
-                    input_paths: Vec::new(),
-                    input_networks: Vec::new(),
-                    path_access: Vec::new(),
-                    network_access: Vec::new(),
-                    tags: #tags_expr,
-                },
-                display: ::agena_plugin_sdk::manifest::ToolDisplay {
-                    description_mode: #description_mode_expr,
-                    ui_display_mode: #ui_display_mode_expr,
-                },
-                capabilities: #capabilities_expr,
-            }
-        }
-    };
+fn expand_plugin_tool_parse_input(
+    model: &PluginGeneratedToolInput,
+    input_expr: proc_macro2::TokenStream,
+    cache_label: &Ident,
+) -> Result<proc_macro2::TokenStream> {
+    let spec = &model.spec;
+    let input_ty = &model.input_ty;
+    let built_in_normalize_expr =
+        built_in_normalization_tokens(quote! { &mut input }, &spec.trim, &spec.trim_suffix);
+    let built_in_post_parse_normalize_expr =
+        built_in_post_parse_normalization_tokens(&spec.trim, &spec.trim_suffix);
+    let normalize_expr = spec
+        .normalize
+        .as_ref()
+        .map(|path| quote! { #path(input)? })
+        .unwrap_or_else(|| quote! { input });
+    let validate_expr = spec
+        .validate
+        .as_ref()
+        .map(|path| quote! { #path(&parsed)?; })
+        .unwrap_or_default();
+    let built_in_validate_expr = built_in_validation_tokens(
+        quote! { parsed },
+        &spec.non_empty,
+        &spec.non_empty_if_present,
+        &spec.exactly_one_of,
+        &spec.at_least_one_of,
+        &spec.requires,
+        &spec.conflicts_with,
+        &spec.required_unless_present,
+        &spec.forbid_substrings,
+        &spec.distinct_trimmed,
+        &spec.distinct_trimmed_within,
+        &spec.min_items,
+        &spec.max_items,
+        &spec.max_chars,
+    );
 
-    let tool_definition_fn = quote! {
-        pub(crate) fn tool_definition() -> ::agena_plugin_sdk::ToolDefinition {
-            static __AGENA_TOOL_DEFINITION: ::std::sync::OnceLock<::agena_plugin_sdk::ToolDefinition> =
-                ::std::sync::OnceLock::new();
-            __AGENA_TOOL_DEFINITION
-                .get_or_init(|| Self::__macro_tool_definition(#tool, Self::input_schema()))
-                .clone()
-        }
-    };
-
-    let flatten_shape_post_parse_expr = quote! { parsed };
-    let tool_definitions_fn = quote! {
-        pub(crate) fn tool_definitions() -> Vec<::agena_plugin_sdk::ToolDefinition> {
-            static __AGENA_TOOL_DEFINITIONS: ::std::sync::OnceLock<Vec<::agena_plugin_sdk::ToolDefinition>> =
-                ::std::sync::OnceLock::new();
-            __AGENA_TOOL_DEFINITIONS
-                .get_or_init(|| vec![Self::tool_definition()])
-                .clone()
-        }
-    };
-    let has_tool_fn = quote! {
-        pub(crate) fn has_tool(tool: &str) -> bool {
-            tool == #tool
-        }
-    };
-
-    let parse_input_body = if let Some(input_shape_ty) = input_shape_ty.as_ref() {
-        quote! {
-            let mut input = input;
+    if let Some(input_shape_ty) = spec.input_shape.as_ref() {
+        return Ok(quote! {{
+            let mut input = #input_expr;
             #built_in_normalize_expr
             let input = #normalize_expr;
             let parsed = <#input_shape_ty as ::agena_plugin_sdk::ToolInput>::parse_input(input)?;
-            let parsed = Self(parsed);
             let parsed = #built_in_post_parse_normalize_expr;
-            let parsed = #flatten_shape_post_parse_expr;
             #built_in_validate_expr
             #validate_expr
-            Ok(parsed)
-        }
-    } else {
-        quote! {
-            let mut input = input;
-            #built_in_normalize_expr
-            let input = #normalize_expr;
-            let schema = Self::input_schema();
-            let parsed = ::agena_plugin_sdk::macro_support::parse_typed_json_value_with_field_suggestions::<Self>(
-                input,
-                &schema,
-                "field",
-            )?;
-            let parsed = #built_in_post_parse_normalize_expr;
-            let parsed = #flatten_shape_post_parse_expr;
-            #built_in_validate_expr
-            #validate_expr
-            Ok(parsed)
-        }
-    };
-    let parse_tool_body = quote! {
-        match tool {
-            #tool => Self::parse_input(input),
-            other => Err(::agena_plugin_sdk::PluginError::invalid_params(format!(
-                "unknown {} tool '{other}'",
-                #tool
-            ))),
-        }
-    };
+            parsed
+        }});
+    }
 
-    let parse_input_fn = quote! {
-        pub(crate) fn parse_input(
-            input: serde_json::Value,
-        ) -> ::agena_plugin_sdk::Result<Self> {
-            #parse_input_body
-        }
-    };
-    let parse_tool_fn = quote! {
-        pub(crate) fn parse_tool(
-            tool: &str,
-            input: serde_json::Value,
-        ) -> ::agena_plugin_sdk::Result<Self> {
-            #parse_tool_body
-        }
-    };
-
-    Ok(quote! {
-        impl #name {
-            #schema_metadata_fn
-
-            #has_tool_fn
-
-            #input_schema_fn
-
-            #output_schema_fn
-
-            #parse_input_fn
-
-            #parse_tool_fn
-
-            #make_tool_definition_fn
-
-            #tool_definition_fn
-
-            #tool_definitions_fn
-        }
-
-    })
+    let cache_label = sanitize_generated_ident_label(&cache_label.to_string()).to_ascii_uppercase();
+    let schema_static = format_ident!("__AGENA_TOOL_INPUT_SCHEMA_{}", cache_label);
+    let input_schema_expr = expand_plugin_tool_input_schema(model)?;
+    Ok(quote! {{
+        static #schema_static: ::std::sync::OnceLock<::agena_plugin_sdk::serde_json::Value> =
+            ::std::sync::OnceLock::new();
+        let mut input = #input_expr;
+        #built_in_normalize_expr
+        let input = #normalize_expr;
+        let schema = #schema_static.get_or_init(|| #input_schema_expr);
+        let parsed = ::agena_plugin_sdk::macro_support::parse_typed_json_value_with_field_suggestions::<#input_ty>(
+            input,
+            schema,
+            "field",
+        )?;
+        let parsed = #built_in_post_parse_normalize_expr;
+        #built_in_validate_expr
+        #validate_expr
+        parsed
+    }})
 }
 
 fn expand_input(input: DeriveInput) -> Result<proc_macro2::TokenStream> {
@@ -4886,14 +4615,10 @@ where
     })
 }
 
-fn expand_tool_spec_schema_metadata_fn(spec: &ToolSpecConfig) -> Result<proc_macro2::TokenStream> {
+fn tool_spec_schema_metadata_calls(spec: &ToolSpecConfig) -> Result<Vec<proc_macro2::TokenStream>> {
     let mut metadata_calls = constraint_schema_metadata_calls("", spec)?;
     metadata_calls.extend(constraint_relation_metadata_calls("", spec)?);
-    Ok(quote! {
-        fn __macro_apply_schema_metadata(schema: &mut serde_json::Value) {
-            #(#metadata_calls)*
-        }
-    })
+    Ok(metadata_calls)
 }
 
 fn constraint_relation_metadata_calls<C: SchemaRelationSource>(

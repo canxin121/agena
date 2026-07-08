@@ -315,6 +315,7 @@ struct PluginStreamToolBinding {
     sink_first: bool,
     tool: LitStr,
     input_model: PluginGeneratedToolInput,
+    context: Option<PluginContextArg>,
     input: PluginCallInput,
 }
 
@@ -525,8 +526,8 @@ fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<PluginImpl
                     "namespace" => namespace = Some(value.value),
                     "name" => name = Some(value.value),
                     "version" => version = Some(value.value),
-                    "summary" | "about" => summary = Some(value.value),
-                    "help" | "long_help" => help = Some(value.value),
+                    "summary" => summary = Some(value.value),
+                    "help" => help = Some(value.value),
                     "config" => {
                         config_schema_type = Some(expr_as_type(value.value)?);
                         config_store = true;
@@ -547,7 +548,7 @@ fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<PluginImpl
                     "plugin_capabilities" => plugin_capabilities_expr = Some(value.value),
                     "hooks" => explicit_hooks = Some(value.value),
                     "export" => export = Some(expr_path_ident(value.value, "export")?),
-                    "bind" | "export_bind" | "http_bind" => export_bind = Some(value.value),
+                    "bind" => export_bind = Some(value.value),
                     other => {
                         return Err(syn::Error::new_spanned(
                             ident,
@@ -777,16 +778,44 @@ fn ensure_plugin_method_info_typed_arg_count(
     Ok(())
 }
 
+fn ensure_plugin_method_info_typed_args(
+    info: &PluginMethodInfo,
+    expected: &[Type],
+    label: &str,
+) -> Result<()> {
+    ensure_plugin_method_info_typed_arg_count(info, expected.len(), label)?;
+    for (index, (actual, expected)) in info.typed_args.iter().zip(expected).enumerate() {
+        if !types_equivalent(actual, expected) {
+            return Err(syn::Error::new_spanned(
+                &info.ident,
+                format!(
+                    "{label} argument {} must have type `{}`; found `{}`",
+                    index + 1,
+                    type_display(expected),
+                    type_display(actual),
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_tool_stream_handler(
     methods: &[PluginMethodInfo],
     target: &Ident,
-    input: &PluginCallInput,
+    expected_args: &[Type],
 ) -> Result<PluginToolStreamHandler> {
     let info = plugin_method_info(methods, target)?;
     let label = "#[tool(stream = ...)] handlers";
     ensure_plugin_method_info_shared_receiver(info, label)?;
-    ensure_plugin_method_info_typed_arg_count(info, plugin_call_input_arg_count(input) + 1, label)?;
     let sink_first = stream_sink_is_edge_info(info, label)?;
+    let handler_args = stream_handler_value_arg_types(info, sink_first);
+    ensure_plugin_method_info_typed_args_for_slice(
+        &info.ident,
+        handler_args.as_slice(),
+        expected_args,
+        label,
+    )?;
     Ok(PluginToolStreamHandler {
         method: target.clone(),
         is_async: info.is_async,
@@ -797,14 +826,55 @@ fn validate_tool_stream_handler(
 fn validate_tool_permission_handler<'a>(
     methods: &'a [PluginMethodInfo],
     target: &Ident,
-    input: &PluginCallInput,
+    expected_args: &[Type],
     kind: &str,
 ) -> Result<&'a PluginMethodInfo> {
     let info = plugin_method_info(methods, target)?;
     let label = format!("#[tool(permission({kind}s = ...))] handlers");
     ensure_plugin_method_info_shared_receiver(info, &label)?;
-    ensure_plugin_method_info_typed_arg_count(info, plugin_call_input_arg_count(input), &label)?;
+    ensure_plugin_method_info_typed_args(info, expected_args, &label)?;
     Ok(info)
+}
+
+fn stream_handler_value_arg_types(info: &PluginMethodInfo, sink_first: bool) -> Vec<Type> {
+    let mut args = info.typed_args.clone();
+    if sink_first {
+        let _ = args.remove(0);
+    } else {
+        let _ = args.pop();
+    }
+    args
+}
+
+fn ensure_plugin_method_info_typed_args_for_slice(
+    ident: &Ident,
+    actual: &[Type],
+    expected: &[Type],
+    label: &str,
+) -> Result<()> {
+    if actual.len() != expected.len() {
+        return Err(syn::Error::new_spanned(
+            ident,
+            format!(
+                "{label} must take exactly {} plugin argument(s) plus ToolStreamSink",
+                expected.len(),
+            ),
+        ));
+    }
+    for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        if !types_equivalent(actual, expected) {
+            return Err(syn::Error::new_spanned(
+                ident,
+                format!(
+                    "{label} argument {} must have type `{}`; found `{}`",
+                    index + 1,
+                    type_display(expected),
+                    type_display(actual),
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 struct PluginInherentMethodAttrs {
@@ -833,33 +903,21 @@ fn parse_plugin_inherent_method_attrs(
             let mut spec = parse_plugin_tool_method_attr(&attr, &method_ident)?;
             let inline = build_plugin_inline_tool(method, &method_ident, self_label, &mut spec)?;
             let mut input_model = inline.input_model;
+            let (output_ty, output_is_result) =
+                plugin_method_tool_output(method, input_model.spec.output_ty.clone());
+            input_model.spec.output_ty = output_ty.clone();
             let tool = input_model
                 .spec
                 .tool
                 .clone()
                 .expect("inline tool config has a default tool name");
             let stream = if let Some(stream_method) = inline.stream_method.as_ref() {
-                let stream =
-                    validate_tool_stream_handler(method_infos, stream_method, &inline.call_input)?;
-                match input_model
-                    .spec
-                    .streaming
-                    .as_ref()
-                    .map(LitStr::value)
-                    .as_deref()
-                {
-                    Some("buffered") => {
-                        return Err(syn::Error::new_spanned(
-                            stream_method,
-                            "`stream = method` cannot be combined with `buffered`",
-                        ));
-                    }
-                    Some("streaming") => {}
-                    Some(_) | None => {
-                        input_model.spec.streaming =
-                            Some(LitStr::new("streaming", stream_method.span()));
-                    }
-                }
+                let stream = validate_tool_stream_handler(
+                    method_infos,
+                    stream_method,
+                    &inline.stream_arg_types,
+                )?;
+                input_model.spec.streaming = true;
                 Some(stream)
             } else {
                 None
@@ -868,7 +926,7 @@ fn parse_plugin_inherent_method_attrs(
                 let permission_info = validate_tool_permission_handler(
                     method_infos,
                     permission_method,
-                    &inline.call_input,
+                    &inline.call_arg_types,
                     "path",
                 )?;
                 permission_paths.push(PluginPermissionBinding {
@@ -883,7 +941,7 @@ fn parse_plugin_inherent_method_attrs(
                 let permission_info = validate_tool_permission_handler(
                     method_infos,
                     permission_method,
-                    &inline.call_input,
+                    &inline.call_arg_types,
                     "network",
                 )?;
                 permission_networks.push(PluginPermissionBinding {
@@ -898,9 +956,8 @@ fn parse_plugin_inherent_method_attrs(
                 method: method_ident.clone(),
                 tool,
                 stream,
-                output_ty: input_model.spec.output_ty.clone(),
-                output_is_result: input_model.spec.output_ty.is_some()
-                    && plugin_method_returns_result(method),
+                output_ty,
+                output_is_result,
                 is_async,
                 context: inline.context,
                 input: inline.call_input.clone(),
@@ -951,6 +1008,8 @@ struct PluginInlineTool {
     input_model: PluginGeneratedToolInput,
     context: Option<PluginContextArg>,
     call_input: PluginCallInput,
+    call_arg_types: Vec<Type>,
+    stream_arg_types: Vec<Type>,
     stream_method: Option<Ident>,
     permission_paths_method: Option<Ident>,
     permission_networks_method: Option<Ident>,
@@ -1018,15 +1077,13 @@ fn parse_plugin_inline_tool_config(
                     return Err(syn::Error::new_spanned(value.path, "expected identifier"));
                 };
                 match ident.to_string().as_str() {
-                    "tool" | "name" => spec.tool = Some(expr_lit_str(&value.value, "tool")?),
-                    "summary" | "about" => {
-                        spec.summary = Some(expr_lit_str(&value.value, "summary")?)
-                    }
-                    "help" | "long_help" => spec.help = Some(expr_lit_str(&value.value, "help")?),
-                    "after_help" | "after_long_help" => {
+                    "name" => spec.tool = Some(expr_lit_str(&value.value, "name")?),
+                    "summary" => spec.summary = Some(expr_lit_str(&value.value, "summary")?),
+                    "help" => spec.help = Some(expr_lit_str(&value.value, "help")?),
+                    "after_help" => {
                         spec.after_help = Some(expr_lit_str(&value.value, "after_help")?)
                     }
-                    "before_help" | "before_long_help" => {
+                    "before_help" => {
                         spec.before_help = Some(expr_lit_str(&value.value, "before_help")?)
                     }
                     "normalize" => spec.normalize = Some(expr_path(&value.value, "normalize")?),
@@ -1048,13 +1105,6 @@ fn parse_plugin_inline_tool_config(
                     "ui_display_mode" => {
                         spec.ui_display_mode =
                             Some(expr_string_like(&value.value, "ui_display_mode")?)
-                    }
-                    "streaming" => {
-                        if expr_is_ident(&value.value, "streaming") {
-                            spec.streaming = Some(LitStr::new("streaming", value.value.span()));
-                        } else {
-                            spec.streaming = Some(expr_string_like(&value.value, "streaming")?);
-                        }
                     }
                     "stream" => {
                         if stream_method
@@ -1154,12 +1204,6 @@ fn parse_plugin_inline_tool_config(
                     return Err(syn::Error::new_spanned(path, "expected identifier"));
                 };
                 match ident.to_string().as_str() {
-                    "streaming" => {
-                        spec.streaming = Some(LitStr::new("streaming", ident.span()));
-                    }
-                    "buffered" => {
-                        spec.streaming = Some(LitStr::new("buffered", ident.span()));
-                    }
                     "concurrency_safe" => spec.concurrency_safe = true,
                     "strict" => spec.strict = true,
                     tag if inline_tool_tag_expr(tag).is_some() => {
@@ -1260,17 +1304,57 @@ fn inline_tool_tag_expr(tag: &str) -> Option<Expr> {
     Some(parse_quote!(#variant))
 }
 
-fn plugin_method_returns_result(method: &ImplItemFn) -> bool {
+fn plugin_method_tool_output(method: &ImplItemFn, explicit: Option<Type>) -> (Option<Type>, bool) {
+    let output_is_result = plugin_method_result_ok_type(method).is_some();
+    if let Some(explicit) = explicit {
+        return (Some(explicit), output_is_result);
+    }
+    let Some((candidate, is_result)) = plugin_method_return_value_type(method) else {
+        return (None, false);
+    };
+    if type_is_unit(&candidate)
+        || type_last_segment_is(&candidate, "ToolInvokeOutput")
+        || type_last_segment_is(&candidate, "ToolStreamEnd")
+    {
+        return (None, false);
+    }
+    (Some(candidate), is_result)
+}
+
+fn plugin_method_return_value_type(method: &ImplItemFn) -> Option<(Type, bool)> {
+    let ty = plugin_method_return_type(method)?;
+    if let Some(ok_ty) = result_ok_type(ty) {
+        return Some((ok_ty.clone(), true));
+    }
+    Some((ty.clone(), false))
+}
+
+fn plugin_method_result_ok_type(method: &ImplItemFn) -> Option<&Type> {
+    result_ok_type(plugin_method_return_type(method)?)
+}
+
+fn plugin_method_return_type(method: &ImplItemFn) -> Option<&Type> {
     let syn::ReturnType::Type(_, ty) = &method.sig.output else {
-        return false;
+        return None;
     };
-    let Type::Path(path) = ty.as_ref() else {
-        return false;
+    Some(ty.as_ref())
+}
+
+fn result_ok_type(ty: &Type) -> Option<&Type> {
+    let Type::Path(path) = ty else {
+        return None;
     };
-    path.path
-        .segments
-        .last()
-        .is_some_and(|segment| matches!(segment.ident.to_string().as_str(), "Result" | "SdkResult"))
+    let segment = path.path.segments.last()?;
+    if !matches!(segment.ident.to_string().as_str(), "Result" | "SdkResult") {
+        return None;
+    }
+    let PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return None;
+    };
+    args.args.iter().find_map(|arg| match arg {
+        syn::GenericArgument::Type(ty) => Some(ty),
+        _ => None,
+    })
 }
 
 fn build_plugin_inline_tool(
@@ -1282,9 +1366,17 @@ fn build_plugin_inline_tool(
     let docs = doc_text(&method.attrs);
     let value_args = plugin_method_value_args(method)?;
     let context = plugin_inline_context_arg(&value_args)?;
+    let stream_arg_types = value_args
+        .iter()
+        .map(|arg| arg.ty.clone())
+        .collect::<Vec<_>>();
     let input_args = value_args
         .into_iter()
         .filter(|arg| !arg.is_context)
+        .collect::<Vec<_>>();
+    let call_arg_types = input_args
+        .iter()
+        .map(|arg| arg.ty.clone())
         .collect::<Vec<_>>();
 
     let input_ident = format_ident!("__AgenaPluginToolInput_{}_{}", self_label, method_ident);
@@ -1346,6 +1438,8 @@ fn build_plugin_inline_tool(
         input_model,
         context,
         call_input,
+        call_arg_types,
+        stream_arg_types,
         stream_method: config.stream_method.clone(),
         permission_paths_method: config.permission_paths_method.clone(),
         permission_networks_method: config.permission_networks_method.clone(),
@@ -1793,6 +1887,25 @@ fn type_is_reference(ty: &Type) -> bool {
     matches!(ty, Type::Reference(_))
 }
 
+fn type_is_unit(ty: &Type) -> bool {
+    matches!(ty, Type::Tuple(tuple) if tuple.elems.is_empty())
+}
+
+fn types_equivalent(left: &Type, right: &Type) -> bool {
+    type_key(left) == type_key(right)
+}
+
+fn type_display(ty: &Type) -> String {
+    quote! { #ty }.to_string()
+}
+
+fn type_key(ty: &Type) -> String {
+    type_display(ty)
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect()
+}
+
 fn parse_plugin_hook_attr(attr: &Attribute, method_ident: &Ident) -> Result<PluginHookKind> {
     if plugin_attr_has_explicit_args(attr) {
         let ident = attr.parse_args::<Ident>()?;
@@ -1927,6 +2040,7 @@ fn collect_plugin_stream_bindings(tools: &[PluginToolBinding]) -> Vec<PluginStre
             sink_first: stream.sink_first,
             tool: tool.tool.clone(),
             input_model: tool.input_model.clone(),
+            context: tool.context,
             input: tool.input.clone(),
         });
     }
@@ -2405,13 +2519,32 @@ fn expand_plugin_layer_tool_stream(
             input: ::agena_plugin_sdk::ToolInvokeInput,
             sink: ::agena_plugin_sdk::ToolStreamSink,
         ) -> ::agena_plugin_sdk::Result<::agena_plugin_sdk::ToolStreamEnd> {
-            let __tool_name = input.tool_name.clone();
+            let ::agena_plugin_sdk::ToolInvokeInput {
+                tool_name: __tool_name,
+                session_id: __session_id,
+                call_id: __call_id,
+                workspace_root: __workspace_root,
+                input: __input,
+            } = input;
+            let __context = ::agena_plugin_sdk::ToolInvokeContext {
+                tool_name: __tool_name.as_str(),
+                session_id: __session_id,
+                call_id: __call_id,
+                workspace_root: __workspace_root.as_str(),
+            };
             match __tool_name.as_str() {
                 #(#branches,)*
                 _ => {}
             }
 
             let __stream_id = sink.stream_id().to_string();
+            let input = ::agena_plugin_sdk::ToolInvokeInput {
+                tool_name: __tool_name,
+                session_id: __session_id,
+                call_id: __call_id,
+                workspace_root: __workspace_root,
+                input: __input,
+            };
             let __result = self.tool_invoke(input).await?;
             sink.chunk(::agena_plugin_sdk::ToolStreamChunk {
                 stream_id: __stream_id.clone(),
@@ -2430,7 +2563,7 @@ fn expand_plugin_layer_tool_stream_branch(
 ) -> Result<proc_macro2::TokenStream> {
     let tool = &binding.tool;
     let input_model = &binding.input_model;
-    let input_args = plugin_call_input_args(&binding.input);
+    let input_args = plugin_layer_tool_call_args(binding.context, &binding.input);
     let args = if binding.sink_first {
         let mut args = vec![quote! { sink }];
         args.extend(input_args);
@@ -2441,8 +2574,7 @@ fn expand_plugin_layer_tool_stream_branch(
         args
     };
     let call = plugin_layer_stream_method_call(&binding.method, binding.is_async, &args);
-    let parse =
-        expand_plugin_tool_parse_input(input_model, quote! { input.input }, &binding.method)?;
+    let parse = expand_plugin_tool_parse_input(input_model, quote! { __input }, &binding.method)?;
     Ok(quote! {
         #tool => {
             let __parsed = #parse;
@@ -2880,13 +3012,6 @@ fn plugin_call_input_args(input: &PluginCallInput) -> Vec<proc_macro2::TokenStre
     }
 }
 
-fn plugin_call_input_arg_count(input: &PluginCallInput) -> usize {
-    match input {
-        PluginCallInput::Wrapped { .. } => 1,
-        PluginCallInput::Fields(fields) => fields.len(),
-    }
-}
-
 fn plugin_layer_stream_method_call(
     method: &Ident,
     is_async: bool,
@@ -2982,7 +3107,7 @@ struct ToolSpecConfig {
     capabilities: Vec<Expr>,
     concurrency_safe: bool,
     strict: bool,
-    streaming: Option<LitStr>,
+    streaming: bool,
     input_shape: Option<Type>,
     output_ty: Option<Type>,
 }
@@ -3020,7 +3145,7 @@ fn empty_tool_spec_config() -> ToolSpecConfig {
         capabilities: Vec::new(),
         concurrency_safe: false,
         strict: false,
-        streaming: None,
+        streaming: false,
         input_shape: None,
         output_ty: None,
     }
@@ -3358,19 +3483,10 @@ fn expand_plugin_tool_definition(
         let capabilities = &spec.capabilities;
         quote! { vec![#(#capabilities),*] }
     };
-    let streaming_expr = match spec.streaming.as_ref().map(LitStr::value).as_deref() {
-        Some("streaming") => {
-            quote! { ::agena_plugin_sdk::ToolStreamingMode::Streaming }
-        }
-        Some("buffered") | None => quote! { ::agena_plugin_sdk::ToolStreamingMode::default() },
-        Some(other) => {
-            return Err(syn::Error::new_spanned(
-                spec.streaming
-                    .clone()
-                    .expect("streaming was matched as Some"),
-                format!("unsupported tool streaming mode '{other}'"),
-            ));
-        }
+    let streaming_expr = if spec.streaming {
+        quote! { ::agena_plugin_sdk::ToolStreamingMode::Streaming }
+    } else {
+        quote! { ::agena_plugin_sdk::ToolStreamingMode::default() }
     };
 
     Ok(quote! {{

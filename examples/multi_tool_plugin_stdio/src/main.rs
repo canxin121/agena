@@ -88,10 +88,8 @@ impl NotesPlugin {
         summary = "Format text with the configured notes prefix.",
         help = "Formats text using this plugin's runtime config. The streaming path emits the formatted text in line-sized chunks.",
         read_only,
-        streaming,
         stream = format_stream,
-        concurrency_safe,
-        output(FormatNoteOutput)
+        concurrency_safe
     )]
     async fn format(&self, input: &FormatNoteInput) -> Result<FormatNoteOutput> {
         let rendered = self.render(input.text.as_str());
@@ -116,8 +114,7 @@ impl NotesPlugin {
         help = "Writes the formatted text to the provided path. Path permission is supplied dynamically by this tool's permission handler.",
         mutating,
         filesystem_write,
-        permission(paths = write_permission_paths),
-        output(WriteNoteOutput)
+        permission(paths = write_permission_paths)
     )]
     async fn write(&self, input: &WriteNoteInput) -> Result<WriteNoteOutput> {
         let rendered = self.render(input.text.as_str());

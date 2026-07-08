@@ -1,0 +1,5 @@
+error: unsupported inline tool argument 'tool'
+  --> tests/ui/fail/old_tool_name_alias.rs:13:12
+   |
+13 |     #[tool(tool = "echo", summary = "Echo text.", read_only)]
+   |            ^^^^

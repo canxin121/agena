@@ -1,5 +1,5 @@
-error: cannot find attribute `stream` in this scope
-  --> tests/ui/fail/old_stream_attr.rs:18:7
+error: unsupported inline tool flag 'streaming'
+  --> tests/ui/fail/old_stream_attr.rs:13:47
    |
-18 |     #[stream(echo)]
-   |       ^^^^^^
+13 |     #[tool(summary = "Echo text.", read_only, streaming)]
+   |                                               ^^^^^^^^^

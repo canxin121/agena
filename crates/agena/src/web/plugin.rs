@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
+use agena_macros::ToolInputShape;
 use agena_web::{
     BrowserRenderOptions, CrawlPageFetcher, CrawlRunOptions, CrawlRunReport, CrawlStore,
     CrawlStoreRetention, FetchedPage, LocalBrowserOptions, SpiderFetchOptions, WebSearchEngine,
@@ -21,7 +21,7 @@ use tokio::sync::Mutex;
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostNetworkPermissionCheckRequest};
 use crate::plugin::sdk::{
-    HostCapability, NetworkRequest, PathRequest, Result as SdkResult, ToolInvokeOutput, ToolTag,
+    HostCapability, NetworkRequest, PathRequest, Result as SdkResult, ToolInvokeOutput,
 };
 
 pub const WEB_PLUGIN_ID: &str = "agena.web";
@@ -566,98 +566,6 @@ enum WebSearchEngineSelection {
     Baidu,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "search",
-    summary = "Find candidate public-web pages to fetch.",
-    help = "Use this tool to discover candidate pages, not to answer from result snippets alone. After searching, fetch 1-3 relevant result URLs before answering when the user needs facts, summaries, comparisons, or latest information. Use allowed_domains and blocked_domains to steer source quality.",
-    handler_receiver = WebPlugin,
-    handle = WebPlugin::invoke_search,
-    handle_field = args,
-    permission_paths_handle = WebPlugin::permission_paths_search,
-    permission_networks_handle = WebPlugin::permission_networks_search,
-    examples(
-        r#"{"query":"Agena plugin architecture","limit":5}"#,
-        r#"{"query":"Rust schemars derive examples","allowed_domains":["docs.rs","github.com"]}"#
-    ),
-    display = detailed,
-    tags(
-        ToolTag::ReadOnly,
-        ToolTag::Network,
-        ToolTag::Internet,
-        ToolTag::Discovery
-    ),
-    capabilities(HostCapability::PermissionCheck),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct SearchToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: CrawlWebSearchInput,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "fetch",
-    summary = "Fetch one web page and inspect its actual content.",
-    help = "Use this tool after search when you need evidence from the actual page rather than search snippets. If you already know what facts you need, set `prompt` so Agena prioritizes the most relevant excerpts from the page in the returned text output.",
-    handler_receiver = WebPlugin,
-    handle = WebPlugin::invoke_fetch,
-    handle_field = args,
-    permission_paths_handle = WebPlugin::permission_paths_fetch,
-    permission_networks_handle = WebPlugin::permission_networks_fetch,
-    examples(
-        r#"{"url":"https://openai.com"}"#,
-        r#"{"url":"https://example.com/docs","prompt":"extract the release date and breaking changes"}"#
-    ),
-    display = detailed,
-    tags(ToolTag::ReadOnly, ToolTag::Network, ToolTag::Internet),
-    capabilities(HostCapability::PermissionCheck),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct FetchToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: CrawlFetchInput,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "crawl",
-    summary = "Crawl a site and cache indexed pages locally.",
-    handler_receiver = WebPlugin,
-    handle = WebPlugin::invoke_crawl,
-    handle_field = args,
-    permission_paths_handle = WebPlugin::permission_paths_crawl,
-    permission_networks_handle = WebPlugin::permission_networks_crawl,
-    ui_display = detailed,
-    tags(
-        ToolTag::Mutating,
-        ToolTag::Network,
-        ToolTag::Internet,
-        ToolTag::Discovery
-    ),
-    capabilities(HostCapability::PermissionCheck),
-    concurrency_safe = false
-)]
-#[serde(deny_unknown_fields)]
-struct CrawlToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: CrawlRunInput,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, ToolSuite)]
-#[tool_suite(handler_receiver = WebPlugin)]
-enum WebToolSuite {
-    Search(SearchToolInput),
-    Fetch(FetchToolInput),
-    Crawl(CrawlToolInput),
-}
-
 #[derive(Debug, Serialize)]
 struct CrawlWebSearchOutput {
     query: String,
@@ -666,6 +574,14 @@ struct CrawlWebSearchOutput {
     results: Vec<WebSearchResult>,
 }
 
+#[crate::plugin::sdk::agena_plugin(
+    namespace = "agena",
+    name = "web",
+    version = env!("CARGO_PKG_VERSION"),
+    summary = "Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering.",
+    config_schema = web_config_schema(),
+    display = brief_detailed
+)]
 impl WebPlugin {
     pub fn new() -> Self {
         Self {
@@ -674,6 +590,26 @@ impl WebPlugin {
             host: OnceLock::new(),
             sync_lock: Mutex::new(()),
         }
+    }
+
+    #[hook]
+    async fn init(
+        &self,
+        ctx: crate::plugin::sdk::InitContext,
+        host: Arc<dyn HostClient>,
+    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
+        self.state
+            .set(WebPluginState::new(parse_web_config(ctx.config)?))
+            .map_err(|_| PluginError::new("web plugin initialized more than once"))?;
+        self.host
+            .set(host)
+            .map_err(|_| PluginError::new("web plugin host initialized more than once"))?;
+        self.workspace_root.set(ctx.workspace_root).map_err(|_| {
+            PluginError::new("web plugin workspace root initialized more than once")
+        })?;
+        Ok(crate::plugin::sdk::InitOutcome::ack(
+            crate::plugin::sdk::Plugin::manifest(self),
+        ))
     }
 
     fn state(&self) -> SdkResult<&WebPluginState> {
@@ -769,6 +705,25 @@ impl WebPlugin {
         Ok(page)
     }
 
+    #[tool(
+        name = "fetch",
+        summary = "Fetch one web page and inspect its actual content.",
+        help = "Use this tool after search when you need evidence from the actual page rather than search snippets. If you already know what facts you need, set `prompt` so Agena prioritizes the most relevant excerpts from the page in the returned text output.",
+        read_only,
+        network,
+        internet,
+        display = detailed,
+        capabilities(HostCapability::PermissionCheck),
+        trim("url", "prompt"),
+        non_empty("url"),
+        non_empty_if_present("prompt"),
+        examples(
+            r#"{"url":"https://openai.com"}"#,
+            r#"{"url":"https://example.com/docs","prompt":"extract the release date and breaking changes"}"#
+        ),
+        permission(paths = permission_paths_fetch, networks = permission_networks_fetch),
+        concurrency_safe
+    )]
     async fn invoke_fetch(&self, input: &CrawlFetchInput) -> SdkResult<ToolInvokeOutput> {
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
         let config = self.config()?;
@@ -786,6 +741,19 @@ impl WebPlugin {
         ))
     }
 
+    #[tool(
+        name = "crawl",
+        summary = "Crawl a site and cache indexed pages locally.",
+        mutating,
+        network,
+        internet,
+        discovery,
+        ui_display = detailed,
+        capabilities(HostCapability::PermissionCheck),
+        trim("start_url"),
+        non_empty("start_url"),
+        permission(paths = permission_paths_crawl, networks = permission_networks_crawl)
+    )]
     async fn invoke_crawl(&self, input: &CrawlRunInput) -> SdkResult<ToolInvokeOutput> {
         let start_url =
             prepare_fetch_url(input.start_url.as_str()).map_err(crawl_error_to_plugin)?;
@@ -831,6 +799,25 @@ impl WebPlugin {
         ))
     }
 
+    #[tool(
+        name = "search",
+        summary = "Find candidate public-web pages to fetch.",
+        help = "Use this tool to discover candidate pages, not to answer from result snippets alone. After searching, fetch 1-3 relevant result URLs before answering when the user needs facts, summaries, comparisons, or latest information. Use allowed_domains and blocked_domains to steer source quality.",
+        read_only,
+        network,
+        internet,
+        discovery,
+        display = detailed,
+        capabilities(HostCapability::PermissionCheck),
+        trim("query"),
+        non_empty("query"),
+        examples(
+            r#"{"query":"Agena plugin architecture","limit":5}"#,
+            r#"{"query":"Rust schemars derive examples","allowed_domains":["docs.rs","github.com"]}"#
+        ),
+        permission(paths = permission_paths_search, networks = permission_networks_search),
+        concurrency_safe
+    )]
     async fn invoke_search(&self, input: &CrawlWebSearchInput) -> SdkResult<ToolInvokeOutput> {
         let query = input.query.as_str();
         let config = self.config()?;
@@ -975,51 +962,6 @@ impl WebPlugin {
                 .map_err(crawl_error_to_plugin)?
                 .to_string(),
         )])
-    }
-}
-
-#[crate::plugin::sdk::plugin(
-    namespace = "agena",
-    name = "web",
-    version = env!("CARGO_PKG_VERSION"),
-    summary = "Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering.",
-    config_schema = web_config_schema(),
-    display = brief_detailed
-)]
-impl WebPlugin {
-    #[hook]
-    async fn init(
-        &self,
-        ctx: crate::plugin::sdk::InitContext,
-        host: Arc<dyn HostClient>,
-    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
-        self.state
-            .set(WebPluginState::new(parse_web_config(ctx.config)?))
-            .map_err(|_| PluginError::new("web plugin initialized more than once"))?;
-        self.host
-            .set(host)
-            .map_err(|_| PluginError::new("web plugin host initialized more than once"))?;
-        self.workspace_root.set(ctx.workspace_root).map_err(|_| {
-            PluginError::new("web plugin workspace root initialized more than once")
-        })?;
-        Ok(crate::plugin::sdk::InitOutcome::ack(
-            crate::plugin::sdk::Plugin::manifest(self),
-        ))
-    }
-
-    #[tool_suite]
-    async fn tool_invoke(&self, input: WebToolSuite) -> SdkResult<ToolInvokeOutput> {
-        input.dispatch_tool_invoke(self).await
-    }
-
-    #[permission(paths, suite)]
-    async fn permission_paths(&self, input: WebToolSuite) -> SdkResult<Vec<PathRequest>> {
-        input.dispatch_permission_paths(self).await
-    }
-
-    #[permission(networks, suite)]
-    async fn permission_networks(&self, input: WebToolSuite) -> SdkResult<Vec<NetworkRequest>> {
-        input.dispatch_permission_networks(self).await
     }
 }
 

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
+use agena_macros::ToolInputShape;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -10,7 +10,7 @@ use crate::memory::{
     MemoryError, MemoryIndex, MemoryRecord, MemorySearchDocument, MemoryStore, MemoryType,
     NewMemory,
 };
-use crate::plugin::sdk::{PathRequest, Result as SdkResult, ToolInvokeOutput, ToolTag};
+use crate::plugin::sdk::{PathRequest, Result as SdkResult, ToolInvokeOutput};
 use crate::plugin::{
     ChatMessage, ChatMessagesTransformInput, ChatMessagesTransformPatch, ChatSystemTransformInput,
     ChatSystemTransformPatch, PluginError,
@@ -123,112 +123,6 @@ pub struct MemoryPlugin {
     sync_lock: Mutex<()>,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "search",
-    summary = "Search durable memory records.",
-    handler_receiver = MemoryPlugin,
-    handle = MemoryPlugin::invoke_search,
-    handle_field = args,
-    permission_paths_handle = MemoryPlugin::permission_search,
-    display = brief,
-    tags(ToolTag::ReadOnly),
-    concurrency_safe = false
-)]
-#[serde(deny_unknown_fields)]
-struct MemorySearchToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: MemorySearchInput,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "get",
-    summary = "Read one durable memory record.",
-    handler_receiver = MemoryPlugin,
-    handle = MemoryPlugin::invoke_get,
-    handle_field = args,
-    permission_paths_handle = MemoryPlugin::permission_get,
-    display = brief,
-    tags(ToolTag::ReadOnly),
-    concurrency_safe = false
-)]
-#[serde(deny_unknown_fields)]
-struct MemoryGetToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: MemoryGetInput,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "list",
-    summary = "List durable memory records.",
-    handler_receiver = MemoryPlugin,
-    handle = MemoryPlugin::invoke_list,
-    handle_field = args,
-    permission_paths_handle = MemoryPlugin::permission_list,
-    display = brief,
-    tags(ToolTag::ReadOnly),
-    concurrency_safe = false
-)]
-#[serde(deny_unknown_fields)]
-struct MemoryListToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: MemoryListInput,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "write",
-    summary = "Write one durable memory record.",
-    handler_receiver = MemoryPlugin,
-    handle = MemoryPlugin::invoke_write,
-    handle_field = args,
-    permission_paths_handle = MemoryPlugin::permission_write,
-    display = brief,
-    tags(ToolTag::Mutating),
-    concurrency_safe = false
-)]
-#[serde(deny_unknown_fields)]
-struct MemoryWriteToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: MemoryWriteInput,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "delete",
-    summary = "Delete one durable memory record.",
-    handler_receiver = MemoryPlugin,
-    handle = MemoryPlugin::invoke_delete,
-    handle_field = args,
-    permission_paths_handle = MemoryPlugin::permission_delete,
-    display = brief,
-    tags(ToolTag::Mutating),
-    concurrency_safe = false
-)]
-#[serde(deny_unknown_fields)]
-struct MemoryDeleteToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: MemoryDeleteInput,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, ToolSuite)]
-#[tool_suite(handler_receiver = MemoryPlugin)]
-enum MemoryToolSuite {
-    Search(MemorySearchToolInput),
-    Get(MemoryGetToolInput),
-    List(MemoryListToolInput),
-    Write(MemoryWriteToolInput),
-    Delete(MemoryDeleteToolInput),
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
 #[tool_input(trim("query"), non_empty("query"))]
 #[serde(deny_unknown_fields)]
@@ -295,6 +189,14 @@ struct MemoryRecordOutput {
     body: String,
 }
 
+#[crate::plugin::sdk::agena_plugin(
+    namespace = "agena",
+    name = "memory",
+    version = env!("CARGO_PKG_VERSION"),
+    summary = "Persistent memory with searchable retrieval and write tools.",
+    config_schema = memory_config_schema(),
+    display = brief
+)]
 impl MemoryPlugin {
     pub fn new() -> Self {
         Self {
@@ -302,6 +204,23 @@ impl MemoryPlugin {
             workspace_root: OnceLock::new(),
             sync_lock: Mutex::new(()),
         }
+    }
+
+    #[hook]
+    async fn init(
+        &self,
+        ctx: crate::plugin::sdk::InitContext,
+        _host: std::sync::Arc<dyn crate::plugin::sdk::HostClient>,
+    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
+        self.config
+            .set(parse_memory_config(ctx.config)?)
+            .map_err(|_| PluginError::new("memory plugin initialized more than once"))?;
+        self.workspace_root
+            .set(ctx.workspace_root)
+            .map_err(|_| PluginError::new("memory plugin workspace root already initialized"))?;
+        Ok(crate::plugin::sdk::InitOutcome::ack(
+            crate::plugin::sdk::Plugin::manifest(self),
+        ))
     }
 
     fn config(&self) -> SdkResult<&MemoryConfig> {
@@ -374,6 +293,15 @@ impl MemoryPlugin {
         self.sync_and_search_documents(query, limit).await
     }
 
+    #[tool(
+        name = "search",
+        summary = "Search durable memory records.",
+        read_only,
+        display = brief,
+        trim("query"),
+        non_empty("query"),
+        permission(paths = permission_search)
+    )]
     async fn invoke_search(&self, input: &MemorySearchInput) -> SdkResult<ToolInvokeOutput> {
         let query = input.query.as_str();
         let limit = input
@@ -408,6 +336,17 @@ impl MemoryPlugin {
         ))
     }
 
+    #[tool(
+        name = "get",
+        summary = "Read one durable memory record.",
+        read_only,
+        display = brief,
+        trim("name"),
+        trim_suffix("name", ".md"),
+        non_empty("name"),
+        forbid_substrings("name", "/", "\\"),
+        permission(paths = permission_get)
+    )]
     async fn invoke_get(&self, input: &MemoryGetInput) -> SdkResult<ToolInvokeOutput> {
         let store = self.store()?;
         let entry = store
@@ -424,6 +363,13 @@ impl MemoryPlugin {
         ))
     }
 
+    #[tool(
+        name = "list",
+        summary = "List durable memory records.",
+        read_only,
+        display = brief,
+        permission(paths = permission_list)
+    )]
     async fn invoke_list(&self, input: &MemoryListInput) -> SdkResult<ToolInvokeOutput> {
         let store = self.store()?;
         let limit = input.limit.unwrap_or(50).clamp(1, 200) as usize;
@@ -467,6 +413,17 @@ impl MemoryPlugin {
         ))
     }
 
+    #[tool(
+        name = "write",
+        summary = "Write one durable memory record.",
+        mutating,
+        display = brief,
+        trim("name", "description", "content"),
+        trim_suffix("name", ".md"),
+        non_empty("name", "content"),
+        forbid_substrings("name", "/", "\\"),
+        permission(paths = permission_write)
+    )]
     async fn invoke_write(&self, input: &MemoryWriteInput) -> SdkResult<ToolInvokeOutput> {
         let name = input.name.clone();
         let content = input.content.as_str();
@@ -496,6 +453,17 @@ impl MemoryPlugin {
         ))
     }
 
+    #[tool(
+        name = "delete",
+        summary = "Delete one durable memory record.",
+        mutating,
+        display = brief,
+        trim("name"),
+        trim_suffix("name", ".md"),
+        non_empty("name"),
+        forbid_substrings("name", "/", "\\"),
+        permission(paths = permission_delete)
+    )]
     async fn invoke_delete(&self, input: &MemoryDeleteInput) -> SdkResult<ToolInvokeOutput> {
         let name = input.name.clone();
         let store = self.store()?;
@@ -557,43 +525,6 @@ impl MemoryPlugin {
         }
         let min_chars = self.config()?.retrieval.min_query_chars as usize;
         Ok((latest_user.len() >= min_chars).then_some(latest_user))
-    }
-}
-
-#[crate::plugin::sdk::plugin(
-    namespace = "agena",
-    name = "memory",
-    version = env!("CARGO_PKG_VERSION"),
-    summary = "Persistent memory with searchable retrieval and write tools.",
-    config_schema = memory_config_schema(),
-    display = brief
-)]
-impl MemoryPlugin {
-    #[hook]
-    async fn init(
-        &self,
-        ctx: crate::plugin::sdk::InitContext,
-        _host: std::sync::Arc<dyn crate::plugin::sdk::HostClient>,
-    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
-        self.config
-            .set(parse_memory_config(ctx.config)?)
-            .map_err(|_| PluginError::new("memory plugin initialized more than once"))?;
-        self.workspace_root
-            .set(ctx.workspace_root)
-            .map_err(|_| PluginError::new("memory plugin workspace root already initialized"))?;
-        Ok(crate::plugin::sdk::InitOutcome::ack(
-            crate::plugin::sdk::Plugin::manifest(self),
-        ))
-    }
-
-    #[tool_suite]
-    async fn tool_invoke(&self, input: MemoryToolSuite) -> SdkResult<ToolInvokeOutput> {
-        input.dispatch_tool_invoke(self).await
-    }
-
-    #[permission(paths, suite)]
-    async fn permission_paths(&self, input: MemoryToolSuite) -> SdkResult<Vec<PathRequest>> {
-        input.dispatch_permission_paths(self).await
     }
 
     #[hook]

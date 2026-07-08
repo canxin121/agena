@@ -2,55 +2,7 @@ use std::fmt;
 
 use super::*;
 
-use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "enter",
-    summary = "Enter a managed repository snapshot.",
-    handler_receiver = WorkflowPlugin,
-    handle = WorkflowPlugin::invoke_snapshot_enter,
-    handle_field = args,
-    permission_paths_handle = WorkflowPlugin::permission_snapshot_enter,
-    display = brief,
-    tags(ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Snapshot),
-    capabilities(HostCapability::SnapshotRegistry, HostCapability::PluginStorage),
-    concurrency_safe = false
-)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SnapshotEnterToolInput {
-    #[serde(flatten)]
-    #[tool(flatten_shape)]
-    args: EnterSnapshotCommandInput,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "exit",
-    summary = "Exit a managed repository snapshot.",
-    handler_receiver = WorkflowPlugin,
-    handle = WorkflowPlugin::invoke_snapshot_exit,
-    handle_field = args,
-    permission_paths_handle = WorkflowPlugin::permission_snapshot_exit,
-    display = brief,
-    tags(ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Snapshot),
-    capabilities(HostCapability::SnapshotRegistry, HostCapability::PluginStorage),
-    concurrency_safe = false
-)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SnapshotExitToolInput {
-    #[serde(flatten)]
-    #[tool(flatten_shape)]
-    args: ExitSnapshotCommandInput,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, ToolSuite)]
-#[tool_suite(handler_receiver = WorkflowPlugin)]
-pub(crate) enum SnapshotToolSuite {
-    Enter(SnapshotEnterToolInput),
-    Exit(SnapshotExitToolInput),
-}
+use agena_macros::ToolInputShape;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
 #[tool_input(trim("name", "path"))]

@@ -26,10 +26,7 @@ pub mod cdylib_abi;
 #[cfg(any(feature = "cdylib", feature = "stdio", feature = "http"))]
 pub mod drivers;
 
-pub use agena_macros::{
-    PluginConfigStore, StaticToolSurface, ToolArgs, ToolCommand, ToolInputShape, ToolSubcommands,
-    ToolSuite, agena_plugin, plugin,
-};
+pub use agena_macros::{PluginConfigStore, ToolArgs, ToolInputShape, agena_plugin};
 pub use async_trait::async_trait;
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
 pub use error::{PluginError, PluginErrorCode, Result};
@@ -47,41 +44,10 @@ pub use manifest::{
     PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions, PluginUiAction,
     PluginUiContributions, PluginUiThemePalette, ToolDefinition, ToolDescriptionMode,
     ToolDisplayPreset, ToolInputShape, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode,
-    ToolSuiteSurface, ToolSurface, ToolTag, TransportKind, UiTextDisplayMode,
-    normalize_tool_tag_name,
+    ToolSurface, ToolTag, TransportKind, UiTextDisplayMode, normalize_tool_tag_name,
 };
 pub use plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
 pub use schemars::JsonSchema;
-
-#[macro_export]
-macro_rules! tool_surface_dispatch {
-    ($tool_name:expr, $input:expr, $surface:ty, { $($pattern:pat => $body:expr),+ $(,)? }) => {{
-        let __tool_name = $tool_name;
-        let __input = $input;
-        if __tool_name != <$surface as $crate::ToolSurface>::tool_name() {
-            Err($crate::PluginError::invalid_params(format!(
-                "unknown {} tool '{}'",
-                <$surface as $crate::ToolSurface>::tool_name(),
-                __tool_name
-            )))
-        } else {
-            match <$surface as $crate::ToolSurface>::parse_input(__input)? {
-                $($pattern => $body,)+
-            }
-        }
-    }};
-}
-
-#[macro_export]
-macro_rules! tool_suite_dispatch {
-    ($tool_name:expr, $input:expr, $suite:ty, { $($pattern:pat => $body:expr),+ $(,)? }) => {{
-        let __tool_name = $tool_name;
-        let __input = $input;
-        match <$suite as $crate::ToolSuiteSurface>::parse_tool(__tool_name, __input)? {
-            $($pattern => $body,)+
-        }
-    }};
-}
 
 #[macro_export]
 macro_rules! tool_shape_dispatch {

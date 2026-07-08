@@ -4,7 +4,6 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-use agena_macros::{StaticToolSurface, ToolSuite};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -14,7 +13,7 @@ use crate::message::{
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostLspListServersResponse};
 use crate::plugin::sdk::{
-    HostCapability, PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, ToolTag,
+    HostCapability, PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
 };
 use crate::plugins::provided::router;
 
@@ -254,116 +253,6 @@ impl LspPlugin {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "servers",
-    summary = "List configured language servers.",
-    handler_receiver = LspPlugin,
-    handle_with_context = LspPlugin::dispatch_servers,
-    permission_paths_handle = LspPlugin::permission_servers,
-    display = brief,
-    tags(ToolTag::ReadOnly, ToolTag::Lsp),
-    capabilities(HostCapability::LspRegistry),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LspServersToolInput {}
-
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "definition",
-    summary = "Resolve symbol definitions.",
-    handler_receiver = LspPlugin,
-    handle_with_context = LspPlugin::dispatch_definition,
-    handle_field = args,
-    permission_paths_handle = LspPlugin::permission_definition,
-    handle_by_value = true,
-    display = brief,
-    tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp),
-    capabilities(HostCapability::LspRegistry),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LspDefinitionSurfaceInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: LspDefinitionToolInput,
-}
-
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "references",
-    summary = "Find symbol references.",
-    handler_receiver = LspPlugin,
-    handle_with_context = LspPlugin::dispatch_references,
-    handle_field = args,
-    permission_paths_handle = LspPlugin::permission_references,
-    handle_by_value = true,
-    display = brief,
-    tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp),
-    capabilities(HostCapability::LspRegistry),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LspReferencesSurfaceInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: LspReferencesToolInput,
-}
-
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "hover",
-    summary = "Fetch hover text.",
-    handler_receiver = LspPlugin,
-    handle_with_context = LspPlugin::dispatch_hover,
-    handle_field = args,
-    permission_paths_handle = LspPlugin::permission_hover,
-    handle_by_value = true,
-    display = brief,
-    tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp),
-    capabilities(HostCapability::LspRegistry),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LspHoverSurfaceInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: LspHoverToolInput,
-}
-
-#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "diagnostics",
-    summary = "Fetch file diagnostics.",
-    handler_receiver = LspPlugin,
-    handle_with_context = LspPlugin::dispatch_diagnostics,
-    handle_field = args,
-    permission_paths_handle = LspPlugin::permission_diagnostics,
-    handle_by_value = true,
-    display = brief,
-    tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp),
-    capabilities(HostCapability::LspRegistry),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LspDiagnosticsSurfaceInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: LspDiagnosticsToolInput,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, ToolSuite)]
-#[tool_suite(handler_receiver = LspPlugin)]
-pub(crate) enum LspToolSuite {
-    Servers(LspServersToolInput),
-    Definition(LspDefinitionSurfaceInput),
-    References(LspReferencesSurfaceInput),
-    Hover(LspHoverSurfaceInput),
-    Diagnostics(LspDiagnosticsSurfaceInput),
-}
-
 #[derive(Debug, Serialize)]
 struct LspServersOutput {
     servers: Vec<LspServerSummary>,
@@ -377,7 +266,7 @@ struct LspServerSummary {
     file_extensions: Vec<String>,
 }
 
-#[crate::plugin::sdk::plugin(
+#[crate::plugin::sdk::agena_plugin(
     namespace = "agena",
     name = "lsp",
     version = env!("CARGO_PKG_VERSION"),
@@ -401,26 +290,7 @@ impl LspPlugin {
         ))
     }
 
-    #[tool_suite]
-    async fn tool_invoke(
-        &self,
-        input: LspToolSuite,
-        context: &ToolInvokeContext<'_>,
-    ) -> SdkResult<ToolInvokeOutput> {
-        input.dispatch_tool_invoke_with_context(self, context).await
-    }
-
-    #[permission(paths, suite)]
-    async fn permission_paths(&self, input: LspToolSuite) -> SdkResult<Vec<PathRequest>> {
-        input.dispatch_permission_paths(self).await
-    }
-}
-
-impl LspPlugin {
-    async fn permission_servers(
-        &self,
-        _input: &LspServersToolInput,
-    ) -> SdkResult<Vec<PathRequest>> {
+    async fn permission_servers(&self) -> SdkResult<Vec<PathRequest>> {
         Ok(Vec::new())
     }
 
@@ -449,11 +319,17 @@ impl LspPlugin {
         Ok(vec![PathRequest::read(input.file_path)])
     }
 
-    async fn dispatch_servers(
-        &self,
-        _context: &ToolInvokeContext<'_>,
-        _input: &LspServersToolInput,
-    ) -> SdkResult<ToolInvokeOutput> {
+    #[tool(
+        name = "servers",
+        summary = "List configured language servers.",
+        read_only,
+        lsp,
+        capabilities(HostCapability::LspRegistry),
+        display = brief,
+        permission(paths = permission_servers),
+        concurrency_safe
+    )]
+    async fn dispatch_servers(&self) -> SdkResult<ToolInvokeOutput> {
         let HostLspListServersResponse { servers } = self.host()?.lsp_list_servers().await?;
         let summary = LspServersOutput {
             servers: servers
@@ -478,6 +354,19 @@ impl LspPlugin {
         })
     }
 
+    #[tool(
+        name = "definition",
+        summary = "Resolve symbol definitions.",
+        read_only,
+        filesystem_read,
+        lsp,
+        capabilities(HostCapability::LspRegistry),
+        display = brief,
+        trim("file_path"),
+        non_empty("file_path"),
+        permission(paths = permission_definition),
+        concurrency_safe
+    )]
     async fn dispatch_definition(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -486,6 +375,19 @@ impl LspPlugin {
         self.invoke_routed_tool("lsp_definition", args, context.session_id, context.call_id)
     }
 
+    #[tool(
+        name = "references",
+        summary = "Find symbol references.",
+        read_only,
+        filesystem_read,
+        lsp,
+        capabilities(HostCapability::LspRegistry),
+        display = brief,
+        trim("file_path"),
+        non_empty("file_path"),
+        permission(paths = permission_references),
+        concurrency_safe
+    )]
     async fn dispatch_references(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -494,6 +396,19 @@ impl LspPlugin {
         self.invoke_routed_tool("lsp_references", args, context.session_id, context.call_id)
     }
 
+    #[tool(
+        name = "hover",
+        summary = "Fetch hover text.",
+        read_only,
+        filesystem_read,
+        lsp,
+        capabilities(HostCapability::LspRegistry),
+        display = brief,
+        trim("file_path"),
+        non_empty("file_path"),
+        permission(paths = permission_hover),
+        concurrency_safe
+    )]
     async fn dispatch_hover(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -502,6 +417,19 @@ impl LspPlugin {
         self.invoke_routed_tool("lsp_hover", args, context.session_id, context.call_id)
     }
 
+    #[tool(
+        name = "diagnostics",
+        summary = "Fetch file diagnostics.",
+        read_only,
+        filesystem_read,
+        lsp,
+        capabilities(HostCapability::LspRegistry),
+        display = brief,
+        trim("file_path"),
+        non_empty("file_path"),
+        permission(paths = permission_diagnostics),
+        concurrency_safe
+    )]
     async fn dispatch_diagnostics(
         &self,
         context: &ToolInvokeContext<'_>,

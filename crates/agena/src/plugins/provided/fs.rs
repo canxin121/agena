@@ -2,13 +2,9 @@
 
 use crate::message::{ApplyPatchToolInput, GlobToolInput, GrepToolInput, ReadToolInput};
 use crate::plugin::PluginError;
-use crate::plugin::sdk::{
-    PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, ToolTag,
-};
+use crate::plugin::sdk::{PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput};
 use crate::plugins::provided::router;
-use agena_macros::{StaticToolSurface, ToolSuite};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 pub(crate) const FS_PLUGIN_ID: &str = "agena.fs";
 
@@ -18,103 +14,7 @@ pub(crate) fn new_plugin() -> FsPlugin {
     FsPlugin
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "read",
-    summary = "Read workspace files.",
-    help = "Use `read` for text previews, directory listings, or file attachments via `mode = text|attachment|auto` (default `auto`).",
-    handler_receiver = FsPlugin,
-    handle_with_context = FsPlugin::invoke_read,
-    handle_field = args,
-    permission_paths_handle = FsPlugin::permission_read,
-    handle_by_value = true,
-    examples(r#"{"path":"Cargo.toml"}"#),
-    display = detailed,
-    tags(ToolTag::ReadOnly, ToolTag::FilesystemRead),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct FsReadToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: ReadToolInput,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "glob",
-    summary = "Find paths with glob patterns.",
-    help = "Use `glob` for path discovery before reading or editing files.",
-    handler_receiver = FsPlugin,
-    handle_with_context = FsPlugin::invoke_glob,
-    handle_field = args,
-    permission_paths_handle = FsPlugin::permission_glob,
-    handle_by_value = true,
-    examples(r#"{"pattern":"**/*.rs","path":"crates"}"#),
-    display = detailed,
-    tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Discovery),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct FsGlobToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: GlobToolInput,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "grep",
-    summary = "Search file contents with regex.",
-    help = "Use `grep` for regex text search across files in the workspace.",
-    handler_receiver = FsPlugin,
-    handle_with_context = FsPlugin::invoke_grep,
-    handle_field = args,
-    permission_paths_handle = FsPlugin::permission_grep,
-    handle_by_value = true,
-    examples(r#"{"pattern":"StaticToolSurface","path":"crates"}"#),
-    display = detailed,
-    tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Discovery),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct FsGrepToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: GrepToolInput,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "apply_patch",
-    summary = "Apply a text patch.",
-    help = "Use `apply_patch` for explicit text patch operations against workspace files.",
-    handler_receiver = FsPlugin,
-    handle_with_context = FsPlugin::invoke_apply_patch,
-    handle_field = args,
-    permission_paths_handle = FsPlugin::permission_apply_patch,
-    handle_by_value = true,
-    display = detailed,
-    tags(ToolTag::Mutating, ToolTag::FilesystemWrite),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct FsApplyPatchToolInput {
-    #[serde(flatten)]
-    args: ApplyPatchToolInput,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, ToolSuite)]
-#[tool_suite(handler_receiver = FsPlugin)]
-enum FsToolSuite {
-    Read(FsReadToolInput),
-    Glob(FsGlobToolInput),
-    Grep(FsGrepToolInput),
-    ApplyPatch(FsApplyPatchToolInput),
-}
-
-#[crate::plugin::sdk::plugin(
+#[crate::plugin::sdk::agena_plugin(
     namespace = "agena",
     name = "fs",
     version = env!("CARGO_PKG_VERSION"),
@@ -122,6 +22,19 @@ enum FsToolSuite {
     display = detailed
 )]
 impl FsPlugin {
+    #[tool(
+        name = "read",
+        summary = "Read workspace files.",
+        help = "Use `read` for text previews, directory listings, or file attachments via `mode = text|attachment|auto` (default `auto`).",
+        read_only,
+        filesystem_read,
+        display = detailed,
+        trim("file_path"),
+        non_empty("file_path"),
+        examples(r#"{"path":"Cargo.toml"}"#),
+        permission(paths = permission_read),
+        concurrency_safe
+    )]
     async fn invoke_read(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -130,6 +43,21 @@ impl FsPlugin {
         invoke_internal(context, "read", args)
     }
 
+    #[tool(
+        name = "glob",
+        summary = "Find paths with glob patterns.",
+        help = "Use `glob` for path discovery before reading or editing files.",
+        read_only,
+        filesystem_read,
+        discovery,
+        display = detailed,
+        trim("pattern", "path"),
+        non_empty("pattern"),
+        non_empty_if_present("path"),
+        examples(r#"{"pattern":"**/*.rs","path":"crates"}"#),
+        permission(paths = permission_glob),
+        concurrency_safe
+    )]
     async fn invoke_glob(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -138,6 +66,21 @@ impl FsPlugin {
         invoke_internal(context, "glob", args)
     }
 
+    #[tool(
+        name = "grep",
+        summary = "Search file contents with regex.",
+        help = "Use `grep` for regex text search across files in the workspace.",
+        read_only,
+        filesystem_read,
+        discovery,
+        display = detailed,
+        trim("pattern", "path", "include"),
+        non_empty("pattern"),
+        non_empty_if_present("path", "include"),
+        examples(r#"{"pattern":"agena_plugin","path":"crates"}"#),
+        permission(paths = permission_grep),
+        concurrency_safe
+    )]
     async fn invoke_grep(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -146,6 +89,16 @@ impl FsPlugin {
         invoke_internal(context, "grep", args)
     }
 
+    #[tool(
+        name = "apply_patch",
+        summary = "Apply a text patch.",
+        help = "Use `apply_patch` for explicit text patch operations against workspace files.",
+        mutating,
+        filesystem_write,
+        display = detailed,
+        permission(paths = permission_apply_patch),
+        concurrency_safe
+    )]
     async fn invoke_apply_patch(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -171,20 +124,6 @@ impl FsPlugin {
         args: ApplyPatchToolInput,
     ) -> SdkResult<Vec<PathRequest>> {
         permission_paths_internal("apply_patch", args)
-    }
-
-    #[tool_suite]
-    async fn tool_invoke(
-        &self,
-        input: FsToolSuite,
-        context: &ToolInvokeContext<'_>,
-    ) -> SdkResult<ToolInvokeOutput> {
-        input.dispatch_tool_invoke_with_context(self, context).await
-    }
-
-    #[permission(paths, suite)]
-    async fn permission_paths(&self, input: FsToolSuite) -> SdkResult<Vec<PathRequest>> {
-        input.dispatch_permission_paths(self).await
     }
 }
 

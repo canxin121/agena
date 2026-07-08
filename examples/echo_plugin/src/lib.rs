@@ -1,7 +1,7 @@
 //! Demonstration plugin for the new agena plugin SDK.
 //!
 //! Implements every relevant hook surface in a tiny amount of code, then
-//! exports itself as a cdylib via `#[plugin(..., export = cdylib)]`. The same `Plugin` impl
+//! exports itself as a cdylib via `#[agena_plugin(..., export = cdylib)]`. The same `Plugin` impl
 //! could be exported as stdio (`export_stdio!`) or HTTP (`export_http!`)
 //! by enabling the corresponding feature on `agena-plugin-sdk`.
 

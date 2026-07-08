@@ -1,13 +1,13 @@
 //! `agena.schema_lab` plugin: a built-in fixture for exercising the
 //! structured plugin config editor against deep, heterogeneous JSON Schema.
 
-use agena_macros::{StaticToolSurface, ToolInputShape};
+use agena_macros::ToolInputShape;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 
 use crate::plugin::sdk::{
-    PluginStudioCommand, PluginUiAction, Result as SdkResult, ToolInvokeOutput, ToolTag,
+    PluginStudioCommand, PluginUiAction, Result as SdkResult, ToolInvokeOutput,
 };
 
 pub(crate) const SCHEMA_LAB_PLUGIN_ID: &str = "agena.schema_lab";
@@ -34,31 +34,14 @@ struct SchemaLabEchoArgs {
     payload: Option<JsonValue>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "schema_lab",
-    summary = "Inspect the schema lab fixture without mutating external state.",
-    help = "Use action `inspect` to summarize one config section or `echo` to round-trip a payload into the tool result. The tool is intentionally inert and exists only to populate the Tools tab for the schema lab demo plugin.",
-    handler_receiver = SchemaLabPlugin,
-    ui_display = brief,
-    tags(ToolTag::ReadOnly, ToolTag::Discovery),
-    concurrency_safe = true
-)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum SchemaLabToolInput {
-    #[tool(
-        exec = "inspect",
-        handle = SchemaLabPlugin::inspect,
-        handle_by_value = true
-    )]
     Inspect {
-        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: SchemaLabInspectArgs,
     },
-    #[tool(exec = "echo", handle = SchemaLabPlugin::echo, handle_by_value = true)]
     Echo {
-        #[tool(flatten_shape)]
         #[serde(flatten)]
         args: SchemaLabEchoArgs,
     },
@@ -107,7 +90,7 @@ impl SchemaLabPlugin {
     }
 }
 
-#[crate::plugin::sdk::plugin(
+#[crate::plugin::sdk::agena_plugin(
     namespace = "agena",
     name = "schema_lab",
     version = env!("CARGO_PKG_VERSION"),
@@ -117,9 +100,22 @@ impl SchemaLabPlugin {
     commands = schema_lab_commands()
 )]
 impl SchemaLabPlugin {
-    #[tool]
+    #[tool(
+        name = "schema_lab",
+        summary = "Inspect the schema lab fixture without mutating external state.",
+        help = "Use action `inspect` to summarize one config section or `echo` to round-trip a payload into the tool result. The tool is intentionally inert and exists only to populate the Tools tab for the schema lab demo plugin.",
+        read_only,
+        discovery,
+        ui_display = brief,
+        trim("section", "label"),
+        non_empty_if_present("section", "label"),
+        concurrency_safe
+    )]
     async fn tool_invoke(&self, input: SchemaLabToolInput) -> SdkResult<ToolInvokeOutput> {
-        input.dispatch_tool_invoke(self).await
+        match input {
+            SchemaLabToolInput::Inspect { args } => self.inspect(args).await,
+            SchemaLabToolInput::Echo { args } => self.echo(args).await,
+        }
     }
 }
 

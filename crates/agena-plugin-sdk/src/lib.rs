@@ -44,7 +44,7 @@ pub use manifest::{
     PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions, PluginUiAction,
     PluginUiContributions, PluginUiThemePalette, ToolDefinition, ToolDescriptionMode,
     ToolDisplayPreset, ToolInput, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode,
-    ToolSurface, ToolTag, TransportKind, UiTextDisplayMode, normalize_tool_tag_name,
+    ToolTag, TransportKind, UiTextDisplayMode, normalize_tool_tag_name,
 };
 pub use plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
 pub use schemars::JsonSchema;

@@ -1,0 +1,5 @@
+error: use `output(Type)` instead of `output = Type`
+  --> tests/ui/fail/old_output_equals.rs:18:36
+   |
+18 |     #[tool(summary = "Echo text.", output = EchoOutput, read_only)]
+   |                                    ^^^^^^

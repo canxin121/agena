@@ -5,12 +5,12 @@ This example shows the recommended shape for a plugin that owns multiple model-v
 - Use `#[agena_plugin(...)]` as the single plugin entry point.
 - Put one `#[tool(...)]` method in the plugin impl per model-visible tool.
 - Derive `ToolInput` on non-trivial input structs and keep field constraints next to fields with `#[arg(...)]`.
-- Add `output = OutputType` on tools that return structured data so the manifest includes an output schema.
+- Add `output(OutputType)` on tools that return structured data so the manifest includes an output schema.
 - Use `#[stream(tool_method)]` when a tool has a custom streaming implementation.
 - Attach dynamic permission auditing with `permission(paths = handler)` on the tool.
 - Keep plugin configuration in `PluginConfig<T>` and enable it with `#[agena_plugin(..., config)]`.
 
-The macro generates the hidden tool surfaces, manifest definitions, static dispatch, streaming dispatch, and permission dispatch. New plugins should define tools as `#[tool(...)]` methods inside a single `#[agena_plugin(...)]` impl.
+The macro generates hidden schema metadata, manifest definitions, static dispatch, streaming dispatch, and permission dispatch. New plugins should define tools as `#[tool(...)]` methods inside a single `#[agena_plugin(...)]` impl.
 
 ## Build
 

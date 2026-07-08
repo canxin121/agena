@@ -46,7 +46,7 @@ pub use crate::manifest::{
     PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions, PluginUiAction,
     PluginUiContributions, PluginUiThemePalette, ToolDefinition, ToolDescriptionMode,
     ToolDisplayPreset, ToolInput, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode,
-    ToolSurface, ToolTag, TransportKind, normalize_tool_tag_name,
+    ToolTag, TransportKind, normalize_tool_tag_name,
 };
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
 pub use agena_macros::{PluginConfigStore, ToolInput, agena_plugin};

@@ -90,7 +90,7 @@ impl NotesPlugin {
         read_only,
         streaming,
         concurrency_safe,
-        output = FormatNoteOutput
+        output(FormatNoteOutput)
     )]
     async fn format(&self, input: &FormatNoteInput) -> Result<FormatNoteOutput> {
         let rendered = self.render(input.text.as_str());
@@ -117,7 +117,7 @@ impl NotesPlugin {
         mutating,
         filesystem_write,
         permission(paths = write_permission_paths),
-        output = WriteNoteOutput
+        output(WriteNoteOutput)
     )]
     async fn write(&self, input: &WriteNoteInput) -> Result<WriteNoteOutput> {
         let rendered = self.render(input.text.as_str());

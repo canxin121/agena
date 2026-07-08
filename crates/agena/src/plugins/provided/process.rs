@@ -3,11 +3,10 @@
 use crate::message::{ProcessShell, ProcessToolInput, ShellCommandInput};
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
-    NetworkRequest, PathRequest, Plugin, PluginManifest, Result as SdkResult, ToolInvokeContext,
-    ToolInvokeOutput, ToolTag, async_trait,
+    NetworkRequest, PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
 };
 use crate::plugins::provided::router;
-use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
+use agena_macros::ToolInputShape;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -51,148 +50,31 @@ pub(crate) struct ProcessStopToolArgs {
     process_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "run",
-    summary = "Run one shell process.",
-    help = "Set `background = true` to keep the process attached to the session and receive a `process_id` for later inspection.",
-    handler_receiver = ProcessPlugin,
-    handle_with_context = ProcessPlugin::invoke_run,
-    handle_field = args,
-    permission_paths_handle = ProcessPlugin::permission_run,
-    permission_networks_handle = ProcessPlugin::permission_networks_run,
-    handle_by_value = true,
-    display = detailed,
-    tags(ToolTag::Mutating, ToolTag::Shell),
-    concurrency_safe = false
+#[crate::plugin::sdk::agena_plugin(
+    namespace = "agena",
+    name = "process",
+    version = env!("CARGO_PKG_VERSION"),
+    summary = "Command execution and background process tools.",
+    display = brief_detailed
 )]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ProcessRunToolInput {
-    #[serde(flatten)]
-    #[tool(flatten_shape)]
-    args: ProcessRunToolArgs,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "list",
-    summary = "List active background processes.",
-    handler_receiver = ProcessPlugin,
-    handle_with_context = ProcessPlugin::invoke_list,
-    permission_paths_handle = ProcessPlugin::permission_list,
-    permission_networks_handle = ProcessPlugin::permission_networks_list,
-    display = detailed,
-    tags(ToolTag::ReadOnly, ToolTag::Shell),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ProcessListToolInput {}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "logs",
-    summary = "Read background process logs.",
-    handler_receiver = ProcessPlugin,
-    handle_with_context = ProcessPlugin::invoke_logs,
-    handle_field = args,
-    permission_paths_handle = ProcessPlugin::permission_logs,
-    permission_networks_handle = ProcessPlugin::permission_networks_logs,
-    handle_by_value = true,
-    display = detailed,
-    tags(ToolTag::ReadOnly, ToolTag::Shell),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ProcessLogsToolInput {
-    #[serde(flatten)]
-    #[tool(flatten_shape)]
-    args: ProcessLogsToolArgs,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "stop",
-    summary = "Stop one background process.",
-    handler_receiver = ProcessPlugin,
-    handle_with_context = ProcessPlugin::invoke_stop,
-    handle_field = args,
-    permission_paths_handle = ProcessPlugin::permission_stop,
-    permission_networks_handle = ProcessPlugin::permission_networks_stop,
-    handle_by_value = true,
-    display = detailed,
-    tags(ToolTag::Mutating, ToolTag::Shell),
-    concurrency_safe = false
-)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ProcessStopToolInput {
-    #[serde(flatten)]
-    #[tool(flatten_shape)]
-    args: ProcessStopToolArgs,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, ToolSuite)]
-#[tool_suite(handler_receiver = ProcessPlugin)]
-pub(crate) enum ProcessToolSuite {
-    Run(ProcessRunToolInput),
-    List(ProcessListToolInput),
-    Logs(ProcessLogsToolInput),
-    Stop(ProcessStopToolInput),
-}
-
-#[async_trait]
-impl Plugin for ProcessPlugin {
-    fn manifest(&self) -> PluginManifest {
-        let mut manifest = PluginManifest::new("agena", "process", env!("CARGO_PKG_VERSION"));
-        manifest.summary = Some("Command execution and background process tools.".to_string());
-        manifest.set_display(crate::plugin::sdk::ToolDisplayPreset::BriefDetailed);
-        manifest.tools.extend(ProcessToolSuite::tool_definitions());
-        manifest
-    }
-
-    async fn tool_invoke(
-        &self,
-        input: crate::plugin::sdk::ToolInvokeInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let crate::plugin::sdk::ToolInvokeInput {
-            tool_name,
-            session_id,
-            call_id,
-            workspace_root,
-            input,
-        } = input;
-        let context = ToolInvokeContext {
-            tool_name: tool_name.as_str(),
-            session_id,
-            call_id,
-            workspace_root: workspace_root.as_str(),
-        };
-        let parsed = ProcessToolSuite::parse_tool(tool_name.as_str(), input)?;
-        parsed
-            .dispatch_tool_invoke_with_context(self, &context)
-            .await
-    }
-
-    async fn permission_paths(
-        &self,
-        tool: &str,
-        input: &serde_json::Value,
-    ) -> SdkResult<Vec<PathRequest>> {
-        let parsed = ProcessToolSuite::parse_tool(tool, input.clone())?;
-        parsed.dispatch_permission_paths(self).await
-    }
-
-    async fn permission_networks(
-        &self,
-        tool: &str,
-        input: &serde_json::Value,
-    ) -> SdkResult<Vec<NetworkRequest>> {
-        let parsed = ProcessToolSuite::parse_tool(tool, input.clone())?;
-        parsed.dispatch_permission_networks(self).await
-    }
-}
-
 impl ProcessPlugin {
+    #[tool(
+        name = "run",
+        summary = "Run one shell process.",
+        help = "Set `background = true` to keep the process attached to the session and receive a `process_id` for later inspection.",
+        mutating,
+        shell,
+        display = detailed,
+        trim(
+            "command",
+            "description",
+            "workdir",
+            "filesystem_effects[].path",
+            "network_effects[].target"
+        ),
+        non_empty("command"),
+        permission(paths = permission_run, networks = permission_networks_run)
+    )]
     async fn invoke_run(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -210,11 +92,16 @@ impl ProcessPlugin {
         )
     }
 
-    async fn invoke_list(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        _input: &ProcessListToolInput,
-    ) -> SdkResult<ToolInvokeOutput> {
+    #[tool(
+        name = "list",
+        summary = "List active background processes.",
+        read_only,
+        shell,
+        display = detailed,
+        permission(paths = permission_list, networks = permission_networks_list),
+        concurrency_safe
+    )]
+    async fn invoke_list(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
         router::invoke_tool(
             "process",
             json_input(ProcessToolInput::List {})?,
@@ -223,6 +110,17 @@ impl ProcessPlugin {
         )
     }
 
+    #[tool(
+        name = "logs",
+        summary = "Read background process logs.",
+        read_only,
+        shell,
+        display = detailed,
+        trim("process_id"),
+        non_empty("process_id"),
+        permission(paths = permission_logs, networks = permission_networks_logs),
+        concurrency_safe
+    )]
     async fn invoke_logs(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -241,6 +139,16 @@ impl ProcessPlugin {
         )
     }
 
+    #[tool(
+        name = "stop",
+        summary = "Stop one background process.",
+        mutating,
+        shell,
+        display = detailed,
+        trim("process_id"),
+        non_empty("process_id"),
+        permission(paths = permission_stop, networks = permission_networks_stop)
+    )]
     async fn invoke_stop(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -267,7 +175,7 @@ impl ProcessPlugin {
         )
     }
 
-    async fn permission_list(&self, _input: &ProcessListToolInput) -> SdkResult<Vec<PathRequest>> {
+    async fn permission_list(&self) -> SdkResult<Vec<PathRequest>> {
         router::permission_paths_for("process", &json_input(ProcessToolInput::List {})?)
     }
 
@@ -306,10 +214,7 @@ impl ProcessPlugin {
         )
     }
 
-    async fn permission_networks_list(
-        &self,
-        _input: &ProcessListToolInput,
-    ) -> SdkResult<Vec<NetworkRequest>> {
+    async fn permission_networks_list(&self) -> SdkResult<Vec<NetworkRequest>> {
         router::permission_networks_for("process", &json_input(ProcessToolInput::List {})?)
     }
 

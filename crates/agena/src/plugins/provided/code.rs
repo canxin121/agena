@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
+use agena_macros::ToolInputShape;
 use ast_grep_core::Pattern;
 use ast_grep_language::{Language as AstGrepLanguage, LanguageExt, SupportLang};
 use schemars::JsonSchema;
@@ -9,9 +9,7 @@ use serde::{Deserialize, Serialize};
 use tree_sitter::Parser;
 
 use crate::plugin::PluginError;
-use crate::plugin::sdk::{
-    PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, ToolTag,
-};
+use crate::plugin::sdk::{PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput};
 
 pub(crate) const CODE_PLUGIN_ID: &str = "agena.code";
 
@@ -163,56 +161,6 @@ impl CodeLanguage {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "search_ast",
-    summary = "Search code structurally with ast-grep.",
-    help = "Supported languages: bash, c, cpp, csharp, css, dart, elixir, go, haskell, hcl, html, java, javascript, json, lua, markdown, nix, php, python, ruby, rust, solidity, swift, tsx, typescript, yaml. Use patterns like `if $COND { $BODY }`, `def $NAME($ARGS): $$$`, or `function $NAME($ARGS) { $$$ }`. When `language` is omitted for a file path, Agena infers it from the extension. Directory searches require `language` explicitly.",
-    handler_receiver = CodePlugin,
-    handle_with_context = CodePlugin::dispatch_search_ast,
-    handle_field = args,
-    permission_paths_handle = CodePlugin::permission_search_ast,
-    handle_by_value = true,
-    display = brief,
-    tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Discovery),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct CodeSearchAstToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: CodeSearchAstInput,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "syntax_tree",
-    summary = "Inspect a parsed syntax tree.",
-    help = "Use `syntax_tree` to inspect named syntax nodes for a supported file. When `language` is omitted, Agena infers it from the file extension.",
-    handler_receiver = CodePlugin,
-    handle_with_context = CodePlugin::dispatch_syntax_tree,
-    handle_field = args,
-    permission_paths_handle = CodePlugin::permission_syntax_tree,
-    handle_by_value = true,
-    display = brief,
-    tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Discovery),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct CodeSyntaxTreeToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: CodeSyntaxTreeInput,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, ToolSuite)]
-#[tool_suite(handler_receiver = CodePlugin)]
-enum CodeToolSuite {
-    SearchAst(CodeSearchAstToolInput),
-    SyntaxTree(CodeSyntaxTreeToolInput),
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
 #[tool_input(trim("path", "pattern"), non_empty("path", "pattern"))]
 #[serde(deny_unknown_fields)]
@@ -273,7 +221,7 @@ struct SyntaxNodeView {
     children: Vec<SyntaxNodeView>,
 }
 
-#[crate::plugin::sdk::plugin(
+#[crate::plugin::sdk::agena_plugin(
     namespace = "agena",
     name = "code",
     version = env!("CARGO_PKG_VERSION"),
@@ -281,22 +229,19 @@ struct SyntaxNodeView {
     display = brief
 )]
 impl CodePlugin {
-    #[tool_suite]
-    async fn tool_invoke(
-        &self,
-        input: CodeToolSuite,
-        context: &ToolInvokeContext<'_>,
-    ) -> SdkResult<ToolInvokeOutput> {
-        input.dispatch_tool_invoke_with_context(self, context).await
-    }
-
-    #[permission(paths, suite)]
-    async fn permission_paths(&self, input: CodeToolSuite) -> SdkResult<Vec<PathRequest>> {
-        input.dispatch_permission_paths(self).await
-    }
-}
-
-impl CodePlugin {
+    #[tool(
+        name = "search_ast",
+        summary = "Search code structurally with ast-grep.",
+        help = "Supported languages: bash, c, cpp, csharp, css, dart, elixir, go, haskell, hcl, html, java, javascript, json, lua, markdown, nix, php, python, ruby, rust, solidity, swift, tsx, typescript, yaml. Use patterns like `if $COND { $BODY }`, `def $NAME($ARGS): $$$`, or `function $NAME($ARGS) { $$$ }`. When `language` is omitted for a file path, Agena infers it from the extension. Directory searches require `language` explicitly.",
+        read_only,
+        filesystem_read,
+        discovery,
+        display = brief,
+        trim("path", "pattern"),
+        non_empty("path", "pattern"),
+        permission(paths = permission_search_ast),
+        concurrency_safe
+    )]
     async fn dispatch_search_ast(
         &self,
         context: &ToolInvokeContext<'_>,
@@ -305,6 +250,19 @@ impl CodePlugin {
         self.invoke_search_ast(context.workspace_root, input)
     }
 
+    #[tool(
+        name = "syntax_tree",
+        summary = "Inspect a parsed syntax tree.",
+        help = "Use `syntax_tree` to inspect named syntax nodes for a supported file. When `language` is omitted, Agena infers it from the file extension.",
+        read_only,
+        filesystem_read,
+        discovery,
+        display = brief,
+        trim("path"),
+        non_empty("path"),
+        permission(paths = permission_syntax_tree),
+        concurrency_safe
+    )]
     async fn dispatch_syntax_tree(
         &self,
         context: &ToolInvokeContext<'_>,

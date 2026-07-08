@@ -4,9 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
-use crate::message::{
-    AgentRestoreToolInput, AgentSwitchToolInput, AskUserToolInput, TaskToolInput,
-};
+use crate::message::{AgentSwitchToolInput, AskUserToolInput, TaskToolInput};
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{
     AskUserOption as HostAskUserOption, AskUserQuestion as HostAskUserQuestion, AskUserRequest,
@@ -17,8 +15,8 @@ use crate::plugin::sdk::host_api::{
     HostStorageSetRequest, HostStorageVisibility, SpawnSubtaskRequest, ToolDescriptor,
 };
 use crate::plugin::sdk::{
-    CommandBeforeInput, CommandBeforeResponse, HostCapability, PathRequest, Result as SdkResult,
-    ToolBeforeInput, ToolBeforePatch, ToolInvokeOutput, ToolTag,
+    CommandBeforeInput, CommandBeforeResponse, PathRequest, Result as SdkResult, ToolBeforeInput,
+    ToolBeforePatch, ToolInvokeOutput, ToolTag,
 };
 use crate::search::tool_catalog::{ToolCatalogDocument, search_tool_catalog};
 use crate::tool::{ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ask_user};
@@ -155,23 +153,19 @@ mod catalog_tools;
 mod planning_tools;
 mod repo_tools;
 mod runtime_tools;
-mod task_tools;
 
 pub(crate) use catalog_tools::{
-    CatalogSearchInput, CatalogToolSuite, ToolCallInput, ToolListInput, ToolTagsInput,
-    ToolsHelpInput,
+    CatalogSearchInput, ToolCallInput, ToolListInput, ToolTagsInput, ToolsHelpInput,
 };
 pub(crate) use planning_tools::{
-    PlanGetInput, PlanGetView, PlanSetInput, PlanToolSuite, PlanUpdateInput, WorkflowPlan,
-    WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase, WorkflowPlanStep,
-    WorkflowPlanStepInput, WorkflowPlanStepStatus,
+    PlanGetInput, PlanGetView, PlanSetInput, PlanUpdateInput, WorkflowPlan, WorkflowPlanCheckpoint,
+    WorkflowPlanExecutor, WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepInput,
+    WorkflowPlanStepStatus,
 };
 pub(crate) use repo_tools::{
-    EnterSnapshotCommandInput, ExitSnapshotCommandInput, SnapshotToolSuite,
-    snapshot_enter_permission_paths,
+    EnterSnapshotCommandInput, ExitSnapshotCommandInput, snapshot_enter_permission_paths,
 };
-pub(crate) use runtime_tools::{RuntimeToolSuite, SessionRenameToolInput, SessionToolResponse};
-pub(crate) use task_tools::TaskToolSuite;
+pub(crate) use runtime_tools::{SessionRenameToolInput, SessionToolResponse};
 
 const PLAN_NAMESPACE: &str = "workflow_plan";
 const PLAN_KEY_ACTIVE: &str = "active";
@@ -469,10 +463,7 @@ impl WorkflowPlugin {
         parts.join(" | ")
     }
 
-    async fn invoke_get_session(
-        &self,
-        _input: &runtime_tools::RuntimeGetToolInput,
-    ) -> SdkResult<ToolInvokeOutput> {
+    pub(crate) async fn invoke_get_session(&self) -> SdkResult<ToolInvokeOutput> {
         let response = self
             .host()?
             .get_session(HostGetSessionRequest::default())
@@ -491,7 +482,7 @@ impl WorkflowPlugin {
         ))
     }
 
-    async fn invoke_rename_session(
+    pub(crate) async fn invoke_rename_session(
         &self,
         input: &SessionRenameToolInput,
     ) -> SdkResult<ToolInvokeOutput> {
@@ -1710,7 +1701,10 @@ impl WorkflowPlugin {
         lines.join("\n")
     }
 
-    async fn invoke_plan_get(&self, input: &PlanGetInput) -> SdkResult<ToolInvokeOutput> {
+    pub(crate) async fn invoke_plan_get(
+        &self,
+        input: &PlanGetInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let view = input.view;
         let Some(plan) = self.load_active_plan().await? else {
             let payload = serde_json::json!({
@@ -1737,7 +1731,10 @@ impl WorkflowPlugin {
         ))
     }
 
-    async fn invoke_plan_set(&self, input: &PlanSetInput) -> SdkResult<ToolInvokeOutput> {
+    pub(crate) async fn invoke_plan_set(
+        &self,
+        input: &PlanSetInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let previous = self.load_active_plan().await?;
         let plan = self.build_plan(
             input.objective.as_str(),
@@ -1758,7 +1755,10 @@ impl WorkflowPlugin {
         ))
     }
 
-    async fn invoke_plan_update(&self, input: &PlanUpdateInput) -> SdkResult<ToolInvokeOutput> {
+    pub(crate) async fn invoke_plan_update(
+        &self,
+        input: &PlanUpdateInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let Some(mut plan) = self.load_active_plan().await? else {
             return Err(PluginError::invalid_params("no active plan to update"));
         };
@@ -1886,10 +1886,7 @@ impl WorkflowPlugin {
         ))
     }
 
-    async fn invoke_plan_clear(
-        &self,
-        _input: &planning_tools::PlanClearToolInput,
-    ) -> SdkResult<ToolInvokeOutput> {
+    pub(crate) async fn invoke_plan_clear(&self) -> SdkResult<ToolInvokeOutput> {
         let existing = self.load_active_plan().await?;
         self.clear_active_plan().await?;
         let payload = serde_json::json!({
@@ -1909,7 +1906,7 @@ impl WorkflowPlugin {
         ))
     }
 
-    async fn invoke_snapshot_enter(
+    pub(crate) async fn invoke_snapshot_enter(
         &self,
         args: &EnterSnapshotCommandInput,
     ) -> SdkResult<ToolInvokeOutput> {
@@ -1926,7 +1923,7 @@ impl WorkflowPlugin {
         self.host()?.enter_snapshot(request).await
     }
 
-    async fn invoke_snapshot_exit(
+    pub(crate) async fn invoke_snapshot_exit(
         &self,
         args: &ExitSnapshotCommandInput,
     ) -> SdkResult<ToolInvokeOutput> {
@@ -1938,21 +1935,24 @@ impl WorkflowPlugin {
             .await
     }
 
-    async fn permission_snapshot_enter(
+    pub(crate) async fn permission_snapshot_enter(
         &self,
         args: &EnterSnapshotCommandInput,
     ) -> SdkResult<Vec<PathRequest>> {
         snapshot_enter_permission_paths(self.workspace_root()?, args)
     }
 
-    async fn permission_snapshot_exit(
+    pub(crate) async fn permission_snapshot_exit(
         &self,
         _args: &ExitSnapshotCommandInput,
     ) -> SdkResult<Vec<PathRequest>> {
         Ok(Vec::new())
     }
 
-    async fn invoke_ask_user(&self, input: &AskUserToolInput) -> SdkResult<ToolInvokeOutput> {
+    pub(crate) async fn invoke_ask_user(
+        &self,
+        input: &AskUserToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         ask_user::validate(input).map_err(|err| PluginError::invalid_params(err.to_string()))?;
         let host = self.host()?;
         let response = host
@@ -1989,7 +1989,7 @@ impl WorkflowPlugin {
         Ok(crate::plugins::provided::router::tool_execution_to_invoke_output(execution))
     }
 
-    async fn invoke_task(&self, input: &TaskToolInput) -> SdkResult<ToolInvokeOutput> {
+    pub(crate) async fn invoke_task(&self, input: &TaskToolInput) -> SdkResult<ToolInvokeOutput> {
         let host = self.host()?;
         let response = host
             .spawn_subtask(SpawnSubtaskRequest {
@@ -2057,7 +2057,7 @@ impl WorkflowPlugin {
         )
     }
 
-    async fn invoke_agent_switch(
+    pub(crate) async fn invoke_agent_switch(
         &self,
         input: &AgentSwitchToolInput,
     ) -> SdkResult<ToolInvokeOutput> {
@@ -2083,10 +2083,7 @@ impl WorkflowPlugin {
         ))
     }
 
-    async fn invoke_agent_restore(
-        &self,
-        _input: &AgentRestoreToolInput,
-    ) -> SdkResult<ToolInvokeOutput> {
+    pub(crate) async fn invoke_agent_restore(&self) -> SdkResult<ToolInvokeOutput> {
         let response = self.restore_agent_for_tool().await?;
         let payload =
             serde_json::to_value(&response).map_err(|err| PluginError::new(err.to_string()))?;
@@ -2115,7 +2112,10 @@ impl WorkflowPlugin {
         ))
     }
 
-    async fn invoke_tool_search(&self, input: &CatalogSearchInput) -> SdkResult<ToolInvokeOutput> {
+    pub(crate) async fn invoke_tool_search(
+        &self,
+        input: &CatalogSearchInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let query = input.query.as_str();
         let config = self.config()?;
         let max_query_length = config.tool_catalog.search.max_query_length as usize;
@@ -2190,7 +2190,10 @@ impl WorkflowPlugin {
         ))
     }
 
-    async fn invoke_tool_list(&self, input: &ToolListInput) -> SdkResult<ToolInvokeOutput> {
+    pub(crate) async fn invoke_tool_list(
+        &self,
+        input: &ToolListInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let config = self.config()?;
         let limit = input
             .limit
@@ -2251,7 +2254,10 @@ impl WorkflowPlugin {
         ))
     }
 
-    async fn invoke_tool_tags(&self, input: &ToolTagsInput) -> SdkResult<ToolInvokeOutput> {
+    pub(crate) async fn invoke_tool_tags(
+        &self,
+        input: &ToolTagsInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let config = self.config()?;
         let limit = input
             .limit
@@ -2287,7 +2293,10 @@ impl WorkflowPlugin {
         ))
     }
 
-    async fn invoke_tool_help(&self, input: &ToolsHelpInput) -> SdkResult<ToolInvokeOutput> {
+    pub(crate) async fn invoke_tool_help(
+        &self,
+        input: &ToolsHelpInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let requested = input.tool.as_str();
         let tools = self.host()?.list_tools().await?;
         let tag_index = self
@@ -2362,7 +2371,10 @@ impl WorkflowPlugin {
         ))
     }
 
-    async fn invoke_tool_call(&self, input: &ToolCallInput) -> SdkResult<ToolInvokeOutput> {
+    pub(crate) async fn invoke_tool_call(
+        &self,
+        input: &ToolCallInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         let requested = input.tool.trim();
         if requested.eq_ignore_ascii_case(crate::tool::gateway_call_tool_name()) {
             return Err(PluginError::invalid_params(format!(

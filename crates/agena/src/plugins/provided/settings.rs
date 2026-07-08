@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, OnceLock, RwLock},
 };
 
-use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
+use agena_macros::ToolInputShape;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -195,169 +195,42 @@ struct SettingsPatchToolInput {
     reload: Option<bool>,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "get",
-    summary = "Read one settings path.",
-    help = "For effective reads, prefer explicit `scope = config|meta` with a relative `path` instead of relying on prefixed paths like `config.foo`.",
-    handler_receiver = SettingsPlugin,
-    handle = SettingsPlugin::get,
-    handle_field = args,
-    permission_paths_handle = SettingsPlugin::permission_get,
-    handle_by_value = true,
-    display = brief,
-    tags(ToolTag::ReadOnly, ToolTag::Discovery, settings_tag()),
-    capabilities(
-        crate::plugin::sdk::HostCapability::ReadConfig,
-        crate::plugin::sdk::HostCapability::ReloadConfig
-    ),
-    concurrency_safe = true
+#[crate::plugin::sdk::agena_plugin(
+    namespace = "agena",
+    name = "settings",
+    version = env!("CARGO_PKG_VERSION"),
+    summary = "Read and edit Agena runtime settings in agena.json.",
+    config_schema = settings_config_schema(),
+    display = brief
 )]
-#[serde(deny_unknown_fields)]
-struct SettingsGetSurfaceInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: SettingsGetToolInput,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "list",
-    summary = "List settings paths.",
-    handler_receiver = SettingsPlugin,
-    handle = SettingsPlugin::list,
-    handle_field = args,
-    permission_paths_handle = SettingsPlugin::permission_list,
-    handle_by_value = true,
-    display = brief,
-    tags(ToolTag::ReadOnly, ToolTag::Discovery, settings_tag()),
-    capabilities(
-        crate::plugin::sdk::HostCapability::ReadConfig,
-        crate::plugin::sdk::HostCapability::ReloadConfig
-    ),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct SettingsListSurfaceInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: SettingsListToolInput,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "validate",
-    summary = "Validate agena.json.",
-    handler_receiver = SettingsPlugin,
-    handle = SettingsPlugin::validate,
-    handle_field = args,
-    permission_paths_handle = SettingsPlugin::permission_validate,
-    handle_by_value = true,
-    display = brief,
-    tags(ToolTag::ReadOnly, settings_tag()),
-    capabilities(
-        crate::plugin::sdk::HostCapability::ReadConfig,
-        crate::plugin::sdk::HostCapability::ReloadConfig
-    ),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct SettingsValidateSurfaceInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: SettingsValidateToolInput,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "set",
-    summary = "Set one settings value.",
-    handler_receiver = SettingsPlugin,
-    handle = SettingsPlugin::set,
-    handle_field = args,
-    permission_paths_handle = SettingsPlugin::permission_set,
-    handle_by_value = true,
-    display = brief,
-    tags(ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()),
-    capabilities(
-        crate::plugin::sdk::HostCapability::ReadConfig,
-        crate::plugin::sdk::HostCapability::ReloadConfig
-    ),
-    concurrency_safe = false
-)]
-#[serde(deny_unknown_fields)]
-struct SettingsSetSurfaceInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: SettingsSetToolInput,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "delete",
-    summary = "Delete one settings value.",
-    handler_receiver = SettingsPlugin,
-    handle = SettingsPlugin::delete,
-    handle_field = args,
-    permission_paths_handle = SettingsPlugin::permission_delete,
-    handle_by_value = true,
-    display = brief,
-    tags(ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()),
-    capabilities(
-        crate::plugin::sdk::HostCapability::ReadConfig,
-        crate::plugin::sdk::HostCapability::ReloadConfig
-    ),
-    concurrency_safe = false
-)]
-#[serde(deny_unknown_fields)]
-struct SettingsDeleteSurfaceInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: SettingsDeleteToolInput,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "patch",
-    summary = "Patch settings in agena.json.",
-    handler_receiver = SettingsPlugin,
-    handle = SettingsPlugin::patch,
-    handle_field = args,
-    permission_paths_handle = SettingsPlugin::permission_patch,
-    handle_by_value = true,
-    display = brief,
-    tags(ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()),
-    capabilities(
-        crate::plugin::sdk::HostCapability::ReadConfig,
-        crate::plugin::sdk::HostCapability::ReloadConfig
-    ),
-    concurrency_safe = false
-)]
-#[serde(deny_unknown_fields)]
-struct SettingsPatchSurfaceInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: SettingsPatchToolInput,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, ToolSuite)]
-#[tool_suite(handler_receiver = SettingsPlugin)]
-enum SettingsToolSuite {
-    Get(SettingsGetSurfaceInput),
-    List(SettingsListSurfaceInput),
-    Validate(SettingsValidateSurfaceInput),
-    Set(SettingsSetSurfaceInput),
-    Delete(SettingsDeleteSurfaceInput),
-    Patch(SettingsPatchSurfaceInput),
-}
-
 impl SettingsPlugin {
     pub(crate) fn new() -> Self {
         Self {
             host: RwLock::new(None),
             config: OnceLock::new(),
         }
+    }
+
+    #[hook]
+    async fn init(
+        &self,
+        ctx: crate::plugin::sdk::InitContext,
+        host: Arc<dyn HostClient>,
+    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
+        let config = crate::plugin::sdk::macro_support::parse_defaulted_config(
+            ctx.config,
+            "invalid settings plugin config",
+        )?;
+        self.config
+            .set(config)
+            .map_err(|_| PluginError::new("settings plugin config already initialized"))?;
+        *self
+            .host
+            .write()
+            .map_err(|_| PluginError::new("settings plugin host lock poisoned"))? = Some(host);
+        Ok(crate::plugin::sdk::InitOutcome::ack(
+            crate::plugin::sdk::Plugin::manifest(self),
+        ))
     }
 
     fn host(&self) -> SdkResult<Arc<dyn HostClient>> {
@@ -427,6 +300,20 @@ impl SettingsPlugin {
         host.read_config(effective_host_path(path)).await
     }
 
+    #[tool(
+        name = "get",
+        summary = "Read one settings path.",
+        help = "For effective reads, prefer explicit `scope = config|meta` with a relative `path` instead of relying on prefixed paths like `config.foo`.",
+        display = brief,
+        tags(ToolTag::ReadOnly, ToolTag::Discovery, settings_tag()),
+        capabilities(
+            crate::plugin::sdk::HostCapability::ReadConfig,
+            crate::plugin::sdk::HostCapability::ReloadConfig
+        ),
+        trim("path"),
+        permission(paths = permission_get),
+        concurrency_safe
+    )]
     async fn get(&self, input: SettingsGetToolInput) -> SdkResult<ToolInvokeOutput> {
         let (config_path, config_found) = self.config_meta().await?;
         let source = self.read_source(input.source)?;
@@ -464,6 +351,19 @@ impl SettingsPlugin {
         output("Settings value", "Read settings value.", &response)
     }
 
+    #[tool(
+        name = "list",
+        summary = "List settings paths.",
+        display = brief,
+        tags(ToolTag::ReadOnly, ToolTag::Discovery, settings_tag()),
+        capabilities(
+            crate::plugin::sdk::HostCapability::ReadConfig,
+            crate::plugin::sdk::HostCapability::ReloadConfig
+        ),
+        trim("path"),
+        permission(paths = permission_list),
+        concurrency_safe
+    )]
     async fn list(&self, input: SettingsListToolInput) -> SdkResult<ToolInvokeOutput> {
         let (config_path, config_found) = self.config_meta().await?;
         let source = self.read_source(input.source)?;
@@ -518,6 +418,19 @@ impl SettingsPlugin {
         )
     }
 
+    #[tool(
+        name = "set",
+        summary = "Set one settings value.",
+        display = brief,
+        tags(ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()),
+        capabilities(
+            crate::plugin::sdk::HostCapability::ReadConfig,
+            crate::plugin::sdk::HostCapability::ReloadConfig
+        ),
+        trim("path"),
+        non_empty("path"),
+        permission(paths = permission_set)
+    )]
     async fn set(&self, input: SettingsSetToolInput) -> SdkResult<ToolInvokeOutput> {
         let (config_path, _) = self.config_meta().await?;
         let options = self.edit_options(input.dry_run, input.validate, input.reload)?;
@@ -540,6 +453,19 @@ impl SettingsPlugin {
         .await
     }
 
+    #[tool(
+        name = "delete",
+        summary = "Delete one settings value.",
+        display = brief,
+        tags(ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()),
+        capabilities(
+            crate::plugin::sdk::HostCapability::ReadConfig,
+            crate::plugin::sdk::HostCapability::ReloadConfig
+        ),
+        trim("path"),
+        non_empty("path"),
+        permission(paths = permission_delete)
+    )]
     async fn delete(&self, input: SettingsDeleteToolInput) -> SdkResult<ToolInvokeOutput> {
         let (config_path, _) = self.config_meta().await?;
         let options = self.edit_options(input.dry_run, input.validate, input.reload)?;
@@ -561,6 +487,18 @@ impl SettingsPlugin {
         .await
     }
 
+    #[tool(
+        name = "patch",
+        summary = "Patch settings in agena.json.",
+        display = brief,
+        tags(ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()),
+        capabilities(
+            crate::plugin::sdk::HostCapability::ReadConfig,
+            crate::plugin::sdk::HostCapability::ReloadConfig
+        ),
+        trim("path"),
+        permission(paths = permission_patch)
+    )]
     async fn patch(&self, input: SettingsPatchToolInput) -> SdkResult<ToolInvokeOutput> {
         let (config_path, _) = self.config_meta().await?;
         let options = self.edit_options(input.dry_run, input.validate, input.reload)?;
@@ -578,6 +516,18 @@ impl SettingsPlugin {
             .await
     }
 
+    #[tool(
+        name = "validate",
+        summary = "Validate agena.json.",
+        display = brief,
+        tags(ToolTag::ReadOnly, settings_tag()),
+        capabilities(
+            crate::plugin::sdk::HostCapability::ReadConfig,
+            crate::plugin::sdk::HostCapability::ReloadConfig
+        ),
+        permission(paths = permission_validate),
+        concurrency_safe
+    )]
     async fn validate(&self, _input: SettingsValidateToolInput) -> SdkResult<ToolInvokeOutput> {
         let (config_path, _) = self.config_meta().await?;
         let response: ConfigSettingsValidateResponse =
@@ -659,48 +609,6 @@ impl SettingsPlugin {
             std::collections::BTreeMap::from([("agena.effect".to_string(), "config".to_string())]),
             Vec::new(),
         ))
-    }
-}
-
-#[crate::plugin::sdk::plugin(
-    namespace = "agena",
-    name = "settings",
-    version = env!("CARGO_PKG_VERSION"),
-    summary = "Read and edit Agena runtime settings in agena.json.",
-    config_schema = settings_config_schema(),
-    display = brief
-)]
-impl SettingsPlugin {
-    #[hook]
-    async fn init(
-        &self,
-        ctx: crate::plugin::sdk::InitContext,
-        host: Arc<dyn HostClient>,
-    ) -> SdkResult<crate::plugin::sdk::InitOutcome> {
-        let config = crate::plugin::sdk::macro_support::parse_defaulted_config(
-            ctx.config,
-            "invalid settings plugin config",
-        )?;
-        self.config
-            .set(config)
-            .map_err(|_| PluginError::new("settings plugin config already initialized"))?;
-        *self
-            .host
-            .write()
-            .map_err(|_| PluginError::new("settings plugin host lock poisoned"))? = Some(host);
-        Ok(crate::plugin::sdk::InitOutcome::ack(
-            crate::plugin::sdk::Plugin::manifest(self),
-        ))
-    }
-
-    #[tool_suite]
-    async fn tool_invoke(&self, input: SettingsToolSuite) -> SdkResult<ToolInvokeOutput> {
-        input.dispatch_tool_invoke(self).await
-    }
-
-    #[permission(paths, suite)]
-    async fn permission_paths(&self, input: SettingsToolSuite) -> SdkResult<Vec<PathRequest>> {
-        input.dispatch_permission_paths(self).await
     }
 }
 

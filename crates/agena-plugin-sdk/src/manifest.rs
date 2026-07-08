@@ -336,27 +336,6 @@ pub trait ToolSurface: Sized {
     }
 }
 
-pub trait ToolSuiteSurface: Sized {
-    fn has_tool(tool: &str) -> bool;
-    fn tool_definitions() -> Vec<ToolDefinition>;
-    fn parse_tool(tool: &str, input: serde_json::Value) -> crate::Result<Self>;
-    fn parse_tool_json_str(tool: &str, input: &str) -> crate::Result<Self> {
-        let value = crate::macro_support::parse_json_value_str(input)?;
-        Self::parse_tool(tool, value)
-    }
-    fn resolve_tool(
-        tool: &str,
-        input: serde_json::Value,
-    ) -> crate::Result<(String, serde_json::Value)>;
-    fn resolve_tool_json_str(
-        tool: &str,
-        input: &str,
-    ) -> crate::Result<(String, serde_json::Value)> {
-        let value = crate::macro_support::parse_json_value_str(input)?;
-        Self::resolve_tool(tool, value)
-    }
-}
-
 pub trait ToolInputShape: Sized {
     fn input_schema() -> serde_json::Value;
     fn parse_input(input: serde_json::Value) -> crate::Result<Self>;

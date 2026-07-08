@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::{collections::BTreeMap, fmt};
 
-use agena_macros::{StaticToolSurface, ToolInputShape, ToolSuite};
+use agena_macros::ToolInputShape;
 use agena_skills::discovery::{default_command_roots, default_roots, scan, scan_commands};
 use agena_skills::skill::Skill;
 use schemars::JsonSchema;
@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
-    HookSubscription, InitContext, InitOutcome, PluginManifest, Result as SdkResult,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolInvokeInput, ToolInvokeOutput, ToolTag,
+    HostClient, InitContext, InitOutcome, Result as SdkResult, ToolDefinitionInput,
+    ToolDefinitionPatch, ToolInvokeOutput,
 };
 
 pub(crate) const SKILLS_PLUGIN_ID: &str = "agena.skills";
@@ -79,82 +79,28 @@ struct SkillsRunInput {
     args: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "list",
-    summary = "List discovered skills and slash commands.",
-    handler_receiver = SkillsPlugin,
-    handle = SkillsPlugin::invoke_list,
-    handle_field = args,
-    ui_display = detailed,
-    tags(ToolTag::ReadOnly, ToolTag::Discovery),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct SkillsListToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: SkillsListInput,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "get",
-    summary = "Read one discovered skill or slash command.",
-    handler_receiver = SkillsPlugin,
-    handle = SkillsPlugin::invoke_get,
-    handle_field = args,
-    trim("name"),
-    non_empty("name"),
-    ui_display = detailed,
-    tags(ToolTag::ReadOnly, ToolTag::Discovery),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct SkillsGetToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: SkillsGetInput,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
-#[tool_surface(
-    tool = "run",
-    summary = "Render one discovered skill or slash command prompt.",
-    handler_receiver = SkillsPlugin,
-    handle = SkillsPlugin::invoke_run,
-    handle_field = args,
-    trim("name", "args"),
-    non_empty("name"),
-    ui_display = detailed,
-    tags(ToolTag::ReadOnly),
-    concurrency_safe = true
-)]
-#[serde(deny_unknown_fields)]
-struct SkillsRunToolInput {
-    #[tool(flatten_shape)]
-    #[serde(flatten)]
-    args: SkillsRunInput,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, ToolSuite)]
-#[tool_suite(handler_receiver = SkillsPlugin)]
-enum SkillsToolSuite {
-    List(SkillsListToolInput),
-    Get(SkillsGetToolInput),
-    Run(SkillsRunToolInput),
-}
-
 pub(crate) struct SkillsPlugin {
     workspace_root: OnceLock<PathBuf>,
 }
 
+#[crate::plugin::sdk::agena_plugin(
+    namespace = "agena",
+    name = "skills",
+    version = env!("CARGO_PKG_VERSION"),
+    summary = "Discover, inspect, and render skills and slash commands.",
+    display = brief
+)]
 impl SkillsPlugin {
     pub(crate) fn new() -> Self {
         Self {
             workspace_root: OnceLock::new(),
         }
+    }
+
+    #[hook]
+    async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
+        let _ = self.workspace_root.set(ctx.workspace_root);
+        Ok(InitOutcome::ack(crate::plugin::sdk::Plugin::manifest(self)))
     }
 
     fn render_prompt(body: &str, args: &str) -> String {
@@ -286,6 +232,7 @@ impl SkillsPlugin {
             .ok_or_else(|| PluginError::invalid_params(format!("unknown skill '{}'", requested)))
     }
 
+    #[hook(tool_definition)]
     fn tool_definition_patch(
         &self,
         input: ToolDefinitionInput,
@@ -345,6 +292,14 @@ impl SkillsPlugin {
         }))
     }
 
+    #[tool(
+        name = "list",
+        summary = "List discovered skills and slash commands.",
+        read_only,
+        discovery,
+        ui_display = detailed,
+        concurrency_safe
+    )]
     async fn invoke_list(&self, input: &SkillsListInput) -> SdkResult<ToolInvokeOutput> {
         let tools = self.discovered_tools()?;
         let kind_filter = Self::normalize_kind_filter(input.kind.as_deref())?;
@@ -395,6 +350,16 @@ impl SkillsPlugin {
         ))
     }
 
+    #[tool(
+        name = "get",
+        summary = "Read one discovered skill or slash command.",
+        read_only,
+        discovery,
+        ui_display = detailed,
+        trim("name"),
+        non_empty("name"),
+        concurrency_safe
+    )]
     async fn invoke_get(&self, input: &SkillsGetInput) -> SdkResult<ToolInvokeOutput> {
         let tools = self.discovered_tools()?;
         let (name, discovered_tool) = Self::resolve_tool(&tools, input.name.as_str())?;
@@ -422,6 +387,15 @@ impl SkillsPlugin {
         ))
     }
 
+    #[tool(
+        name = "run",
+        summary = "Render one discovered skill or slash command prompt.",
+        read_only,
+        ui_display = detailed,
+        trim("name", "args"),
+        non_empty("name"),
+        concurrency_safe
+    )]
     async fn invoke_run(&self, input: &SkillsRunInput) -> SdkResult<ToolInvokeOutput> {
         let tools = self.discovered_tools()?;
         let (name, discovered_tool) = Self::resolve_tool(&tools, input.name.as_str())?;
@@ -442,39 +416,5 @@ impl SkillsPlugin {
             ]),
             Vec::new(),
         ))
-    }
-}
-
-#[crate::plugin::sdk::async_trait]
-impl crate::plugin::sdk::Plugin for SkillsPlugin {
-    fn manifest(&self) -> PluginManifest {
-        let mut manifest = PluginManifest::new("agena", "skills", env!("CARGO_PKG_VERSION"));
-        manifest.summary =
-            Some("Discover, inspect, and render skills and slash commands.".to_string());
-        manifest.hooks |= HookSubscription::TOOL_INVOKE | HookSubscription::TOOL_DEFINITION;
-        manifest.set_display(crate::plugin::sdk::ToolDisplayPreset::Compact);
-        manifest.tools.extend(SkillsToolSuite::tool_definitions());
-        manifest
-    }
-
-    async fn init(
-        &self,
-        ctx: InitContext,
-        _host: Arc<dyn crate::plugin::sdk::HostClient>,
-    ) -> SdkResult<InitOutcome> {
-        let _ = self.workspace_root.set(ctx.workspace_root);
-        Ok(InitOutcome::ack(self.manifest()))
-    }
-
-    async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        let parsed = SkillsToolSuite::parse_tool(input.tool_name.as_str(), input.input)?;
-        parsed.dispatch_tool_invoke(self).await
-    }
-
-    async fn tool_definition(
-        &self,
-        input: ToolDefinitionInput,
-    ) -> SdkResult<Option<ToolDefinitionPatch>> {
-        self.tool_definition_patch(input)
     }
 }

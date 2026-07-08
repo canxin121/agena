@@ -46,13 +46,10 @@ pub use crate::manifest::{
     PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions, PluginUiAction,
     PluginUiContributions, PluginUiThemePalette, ToolDefinition, ToolDescriptionMode,
     ToolDisplayPreset, ToolInputShape, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode,
-    ToolSuiteSurface, ToolSurface, ToolTag, TransportKind, normalize_tool_tag_name,
+    ToolSurface, ToolTag, TransportKind, normalize_tool_tag_name,
 };
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
-pub use agena_macros::{
-    PluginConfigStore, StaticToolSurface, ToolArgs, ToolCommand, ToolInputShape, ToolSubcommands,
-    ToolSuite, agena_plugin, plugin,
-};
+pub use agena_macros::{PluginConfigStore, ToolArgs, ToolInputShape, agena_plugin};
 
 #[cfg(feature = "cdylib")]
 pub use crate::cdylib_abi::{AgenaPluginCdylib, AgenaPluginCdylib_Ref};

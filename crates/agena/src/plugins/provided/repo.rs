@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use crate::plugin::sdk::host_api::HostClient;
 use crate::plugin::sdk::{
-    HookSubscription, InitContext, InitOutcome, PathRequest, Plugin, PluginManifest,
-    Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, async_trait,
+    HostCapability, InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput,
 };
-use crate::plugins::provided::workflow::{SnapshotToolSuite, WorkflowPlugin, WorkflowPluginConfig};
+use crate::plugins::provided::workflow::{
+    EnterSnapshotCommandInput, ExitSnapshotCommandInput, WorkflowPlugin, WorkflowPluginConfig,
+};
 
 pub(crate) const SNAPSHOT_PLUGIN_ID: &str = "agena.snapshot";
 
@@ -13,43 +14,68 @@ pub(crate) struct SnapshotPlugin {
     inner: WorkflowPlugin,
 }
 
+#[crate::plugin::sdk::agena_plugin(
+    namespace = "agena",
+    name = "snapshot",
+    version = env!("CARGO_PKG_VERSION"),
+    summary = "Managed snapshot tools backed by Rift or git worktree.",
+    display = brief_detailed
+)]
 impl SnapshotPlugin {
     pub(crate) fn new() -> Self {
         Self {
             inner: WorkflowPlugin::new(),
         }
     }
-}
 
-#[async_trait]
-impl Plugin for SnapshotPlugin {
-    fn manifest(&self) -> PluginManifest {
-        let mut manifest = PluginManifest::new("agena", "snapshot", env!("CARGO_PKG_VERSION"));
-        manifest.summary =
-            Some("Managed snapshot tools backed by Rift or git worktree.".to_string());
-        manifest.set_display(crate::plugin::sdk::ToolDisplayPreset::BriefDetailed);
-        manifest.hooks |= HookSubscription::TOOL_INVOKE;
-        manifest.tools.extend(SnapshotToolSuite::tool_definitions());
-        manifest
-    }
-
+    #[hook]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         self.inner
             .initialize(ctx, WorkflowPluginConfig::default(), host)?;
-        Ok(InitOutcome::ack(self.manifest()))
+        Ok(InitOutcome::ack(crate::plugin::sdk::Plugin::manifest(self)))
     }
 
-    async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        let parsed = SnapshotToolSuite::parse_tool(input.tool_name.as_str(), input.input)?;
-        parsed.dispatch_tool_invoke(&self.inner).await
+    #[tool(
+        name = "enter",
+        summary = "Enter a managed repository snapshot.",
+        mutating,
+        filesystem_write,
+        snapshot,
+        display = brief,
+        capabilities(HostCapability::SnapshotRegistry, HostCapability::PluginStorage),
+        trim("name", "path"),
+        non_empty_if_present("name", "path"),
+        permission(paths = permission_enter)
+    )]
+    async fn enter(&self, input: &EnterSnapshotCommandInput) -> SdkResult<ToolInvokeOutput> {
+        self.inner.invoke_snapshot_enter(input).await
     }
 
-    async fn permission_paths(
+    #[tool(
+        name = "exit",
+        summary = "Exit a managed repository snapshot.",
+        mutating,
+        filesystem_write,
+        snapshot,
+        display = brief,
+        capabilities(HostCapability::SnapshotRegistry, HostCapability::PluginStorage),
+        permission(paths = permission_exit)
+    )]
+    async fn exit(&self, input: &ExitSnapshotCommandInput) -> SdkResult<ToolInvokeOutput> {
+        self.inner.invoke_snapshot_exit(input).await
+    }
+
+    async fn permission_enter(
         &self,
-        tool: &str,
-        input: &serde_json::Value,
+        input: &EnterSnapshotCommandInput,
     ) -> SdkResult<Vec<PathRequest>> {
-        let parsed = SnapshotToolSuite::parse_tool(tool, input.clone())?;
-        parsed.dispatch_permission_paths(&self.inner).await
+        self.inner.permission_snapshot_enter(input).await
+    }
+
+    async fn permission_exit(
+        &self,
+        input: &ExitSnapshotCommandInput,
+    ) -> SdkResult<Vec<PathRequest>> {
+        self.inner.permission_snapshot_exit(input).await
     }
 }

@@ -8,7 +8,7 @@ This example shows the recommended shape for a plugin that owns multiple model-v
 - Attach dynamic permission auditing with `permission(paths = handler)` on the tool.
 - Keep plugin configuration in `PluginConfig<T>` and enable it with `#[agena_plugin(..., config)]`.
 
-The macro generates the hidden tool surfaces, manifest definitions, static dispatch, streaming dispatch, and permission dispatch. `ToolCommand` and `ToolSubcommands` remain available as lower-level compatibility primitives, but are not needed for normal multi-tool plugins.
+The macro generates the hidden tool surfaces, manifest definitions, static dispatch, streaming dispatch, and permission dispatch. New plugins should define tools as `#[tool(...)]` methods inside a single `#[agena_plugin(...)]` impl.
 
 ## Build
 

@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use crate::plugin::sdk::host_api::HostClient;
 use crate::plugin::sdk::{
-    CommandBeforeInput, CommandBeforeResponse, HookSubscription, HostCapability, InitContext,
-    InitOutcome, Plugin, PluginManifest, Result as SdkResult, ToolBeforeInput, ToolBeforePatch,
-    ToolInvokeInput, ToolInvokeOutput, async_trait,
+    CommandBeforeInput, CommandBeforeResponse, HostCapability, InitContext, InitOutcome,
+    Result as SdkResult, ToolBeforeInput, ToolBeforePatch, ToolInvokeOutput,
 };
 use crate::plugins::provided::workflow::{
-    PlanToolSuite, WorkflowPlugin, WorkflowPluginConfig, planning_plugin_config_schema,
+    PlanGetInput, PlanSetInput, PlanUpdateInput, WorkflowPlugin, WorkflowPluginConfig,
+    planning_plugin_config_schema,
 };
 
 pub(crate) const PLAN_PLUGIN_ID: &str = "agena.plan";
@@ -16,31 +16,23 @@ pub(crate) struct PlanPlugin {
     inner: WorkflowPlugin,
 }
 
+#[crate::plugin::sdk::agena_plugin(
+    namespace = "agena",
+    name = "plan",
+    version = env!("CARGO_PKG_VERSION"),
+    summary = "Plan orchestration and plan-autorun tools.",
+    config_schema = planning_plugin_config_schema(),
+    display = brief_detailed,
+    plugin_capabilities(HostCapability::PluginStorage, HostCapability::Statusline)
+)]
 impl PlanPlugin {
     pub(crate) fn new() -> Self {
         Self {
             inner: WorkflowPlugin::new(),
         }
     }
-}
 
-#[async_trait]
-impl Plugin for PlanPlugin {
-    fn manifest(&self) -> PluginManifest {
-        let mut manifest = PluginManifest::new("agena", "plan", env!("CARGO_PKG_VERSION"));
-        manifest.summary = Some("Plan orchestration and plan-autorun tools.".to_string());
-        manifest.config_schema = Some(planning_plugin_config_schema());
-        manifest.set_display(crate::plugin::sdk::ToolDisplayPreset::BriefDetailed);
-        manifest.hooks |= HookSubscription::TOOL_INVOKE
-            | HookSubscription::TOOL_BEFORE
-            | HookSubscription::COMMAND_BEFORE
-            | HookSubscription::AGENT_STOP;
-        manifest
-            .add_plugin_capabilities([HostCapability::PluginStorage, HostCapability::Statusline]);
-        manifest.tools.extend(PlanToolSuite::tool_definitions());
-        manifest
-    }
-
+    #[hook]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let plan = crate::plugin::sdk::macro_support::parse_defaulted_config(
             ctx.config.clone(),
@@ -54,14 +46,77 @@ impl Plugin for PlanPlugin {
             },
             host,
         )?;
-        Ok(InitOutcome::ack(self.manifest()))
+        Ok(InitOutcome::ack(crate::plugin::sdk::Plugin::manifest(self)))
     }
 
-    async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        let parsed = PlanToolSuite::parse_tool(input.tool_name.as_str(), input.input)?;
-        parsed.dispatch_tool_invoke(&self.inner).await
+    #[tool(
+        name = "get",
+        summary = "Inspect the current plan state.",
+        planning,
+        read_only,
+        display = brief,
+        capabilities(
+            HostCapability::AskUser,
+            HostCapability::PluginStorage,
+            HostCapability::Statusline
+        ),
+        concurrency_safe
+    )]
+    async fn get(&self, input: &PlanGetInput) -> SdkResult<ToolInvokeOutput> {
+        self.inner.invoke_plan_get(input).await
     }
 
+    #[tool(
+        name = "set",
+        summary = "Create or replace the current plan.",
+        planning,
+        mutating,
+        display = brief,
+        capabilities(
+            HostCapability::AskUser,
+            HostCapability::PluginStorage,
+            HostCapability::Statusline
+        )
+    )]
+    async fn set(&self, input: &PlanSetInput) -> SdkResult<ToolInvokeOutput> {
+        self.inner.invoke_plan_set(input).await
+    }
+
+    #[tool(
+        name = "update",
+        summary = "Update the current plan.",
+        help = "Keep plan-level updates separate from step/check updates: do not send `phase` together with `step_id`, `check_id`, `status`, `wait_until_ms`, or `note`. To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`.",
+        planning,
+        mutating,
+        display = brief,
+        capabilities(
+            HostCapability::AskUser,
+            HostCapability::PluginStorage,
+            HostCapability::Statusline
+        ),
+        trim("summary", "step_id", "check_id", "note")
+    )]
+    async fn update(&self, input: &PlanUpdateInput) -> SdkResult<ToolInvokeOutput> {
+        self.inner.invoke_plan_update(input).await
+    }
+
+    #[tool(
+        name = "clear",
+        summary = "Remove the current plan.",
+        planning,
+        mutating,
+        display = brief,
+        capabilities(
+            HostCapability::AskUser,
+            HostCapability::PluginStorage,
+            HostCapability::Statusline
+        )
+    )]
+    async fn clear(&self) -> SdkResult<ToolInvokeOutput> {
+        self.inner.invoke_plan_clear().await
+    }
+
+    #[hook]
     async fn tool_execute_before(
         &self,
         input: ToolBeforeInput,
@@ -69,6 +124,7 @@ impl Plugin for PlanPlugin {
         self.inner.tool_execute_before_hook(input).await
     }
 
+    #[hook]
     async fn command_execute_before(
         &self,
         input: CommandBeforeInput,
@@ -76,6 +132,7 @@ impl Plugin for PlanPlugin {
         self.inner.command_execute_before_hook(input).await
     }
 
+    #[hook]
     async fn agent_stop(
         &self,
         input: crate::plugin::AgentStopInput,

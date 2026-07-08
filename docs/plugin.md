@@ -689,7 +689,7 @@ impl EchoPlugin {
 }
 ```
 
-`ToolCommand` / `ToolSubcommands` / `#[tool_suite]` 仍保留为底层兼容层，适合需要手写聚合 enum、跨 plugin 复用 tool surface 或泛型插件的场景。日常插件优先使用 `#[agena_plugin]` 的方法级写法。完整可运行版本见 `examples/multi_tool_plugin_stdio`。
+旧的聚合 enum/suite 写法已经移除。插件应统一使用 `#[agena_plugin]` 的方法级写法：每个模型可见 tool 对应一个 `#[tool(...)]` 方法，宏生成隐藏 surface、manifest、静态分发、stream fallback 和 permission 分发。完整可运行版本见 `examples/multi_tool_plugin_stdio`。
 
 ## Plugin UI
 

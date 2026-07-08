@@ -23,14 +23,11 @@ pub(crate) fn new_plugin() -> FsPlugin {
 )]
 impl FsPlugin {
     #[tool(
-        name = "read",
         summary = "Read workspace files.",
         help = "Use `read` for text previews, directory listings, or file attachments via `mode = text|attachment|auto` (default `auto`).",
         read_only,
         filesystem_read,
         display = detailed,
-        trim("file_path"),
-        non_empty("file_path"),
         examples(r#"{"path":"Cargo.toml"}"#),
         permission(paths = permission_read),
         concurrency_safe
@@ -44,16 +41,12 @@ impl FsPlugin {
     }
 
     #[tool(
-        name = "glob",
         summary = "Find paths with glob patterns.",
         help = "Use `glob` for path discovery before reading or editing files.",
         read_only,
         filesystem_read,
         discovery,
         display = detailed,
-        trim("pattern", "path"),
-        non_empty("pattern"),
-        non_empty_if_present("path"),
         examples(r#"{"pattern":"**/*.rs","path":"crates"}"#),
         permission(paths = permission_glob),
         concurrency_safe
@@ -67,16 +60,12 @@ impl FsPlugin {
     }
 
     #[tool(
-        name = "grep",
         summary = "Search file contents with regex.",
         help = "Use `grep` for regex text search across files in the workspace.",
         read_only,
         filesystem_read,
         discovery,
         display = detailed,
-        trim("pattern", "path", "include"),
-        non_empty("pattern"),
-        non_empty_if_present("path", "include"),
         examples(r#"{"pattern":"agena_plugin","path":"crates"}"#),
         permission(paths = permission_grep),
         concurrency_safe
@@ -90,7 +79,6 @@ impl FsPlugin {
     }
 
     #[tool(
-        name = "apply_patch",
         summary = "Apply a text patch.",
         help = "Use `apply_patch` for explicit text patch operations against workspace files.",
         mutating,

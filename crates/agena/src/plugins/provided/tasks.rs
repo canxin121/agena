@@ -35,14 +35,11 @@ impl TasksPlugin {
     }
 
     #[tool(
-        name = "run",
         summary = "Create or resume a delegated subagent task.",
         task,
         subtask,
         display = detailed,
-        capabilities(HostCapability::SpawnSubtask, HostCapability::PluginStorage),
-        trim("description", "prompt", "task_id", "command"),
-        non_empty("description", "prompt")
+        capabilities(HostCapability::SpawnSubtask, HostCapability::PluginStorage)
     )]
     async fn run(&self, input: &TaskToolInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_task(input).await

@@ -59,20 +59,11 @@ pub(crate) struct ProcessStopToolArgs {
 )]
 impl ProcessPlugin {
     #[tool(
-        name = "run",
         summary = "Run one shell process.",
         help = "Set `background = true` to keep the process attached to the session and receive a `process_id` for later inspection.",
         mutating,
         shell,
         display = detailed,
-        trim(
-            "command",
-            "description",
-            "workdir",
-            "filesystem_effects[].path",
-            "network_effects[].target"
-        ),
-        non_empty("command"),
         permission(paths = permission_run, networks = permission_networks_run)
     )]
     async fn invoke_run(
@@ -93,7 +84,6 @@ impl ProcessPlugin {
     }
 
     #[tool(
-        name = "list",
         summary = "List active background processes.",
         read_only,
         shell,
@@ -111,13 +101,10 @@ impl ProcessPlugin {
     }
 
     #[tool(
-        name = "logs",
         summary = "Read background process logs.",
         read_only,
         shell,
         display = detailed,
-        trim("process_id"),
-        non_empty("process_id"),
         permission(paths = permission_logs, networks = permission_networks_logs),
         concurrency_safe
     )]
@@ -140,13 +127,10 @@ impl ProcessPlugin {
     }
 
     #[tool(
-        name = "stop",
         summary = "Stop one background process.",
         mutating,
         shell,
         display = detailed,
-        trim("process_id"),
-        non_empty("process_id"),
         permission(paths = permission_stop, networks = permission_networks_stop)
     )]
     async fn invoke_stop(

@@ -4,6 +4,7 @@ This example shows the recommended shape for a plugin that owns multiple model-v
 
 - Use `#[agena_plugin(...)]` as the single plugin entry point.
 - Put one `#[tool(...)]` method in the plugin impl per model-visible tool.
+- Derive `ToolInputShape` on non-trivial input structs and keep field constraints next to fields with `#[arg(...)]`.
 - Use `#[stream(tool_method)]` when a tool has a custom streaming implementation.
 - Attach dynamic permission auditing with `permission(paths = handler)` on the tool.
 - Keep plugin configuration in `PluginConfig<T>` and enable it with `#[agena_plugin(..., config)]`.

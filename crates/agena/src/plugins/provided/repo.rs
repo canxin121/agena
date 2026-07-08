@@ -36,15 +36,12 @@ impl SnapshotPlugin {
     }
 
     #[tool(
-        name = "enter",
         summary = "Enter a managed repository snapshot.",
         mutating,
         filesystem_write,
         snapshot,
         display = brief,
         capabilities(HostCapability::SnapshotRegistry, HostCapability::PluginStorage),
-        trim("name", "path"),
-        non_empty_if_present("name", "path"),
         permission(paths = permission_enter)
     )]
     async fn enter(&self, input: &EnterSnapshotCommandInput) -> SdkResult<ToolInvokeOutput> {
@@ -52,7 +49,6 @@ impl SnapshotPlugin {
     }
 
     #[tool(
-        name = "exit",
         summary = "Exit a managed repository snapshot.",
         mutating,
         filesystem_write,

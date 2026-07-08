@@ -294,12 +294,9 @@ impl MemoryPlugin {
     }
 
     #[tool(
-        name = "search",
         summary = "Search durable memory records.",
         read_only,
         display = brief,
-        trim("query"),
-        non_empty("query"),
         permission(paths = permission_search)
     )]
     async fn invoke_search(&self, input: &MemorySearchInput) -> SdkResult<ToolInvokeOutput> {
@@ -337,14 +334,9 @@ impl MemoryPlugin {
     }
 
     #[tool(
-        name = "get",
         summary = "Read one durable memory record.",
         read_only,
         display = brief,
-        trim("name"),
-        trim_suffix("name", ".md"),
-        non_empty("name"),
-        forbid_substrings("name", "/", "\\"),
         permission(paths = permission_get)
     )]
     async fn invoke_get(&self, input: &MemoryGetInput) -> SdkResult<ToolInvokeOutput> {
@@ -364,7 +356,6 @@ impl MemoryPlugin {
     }
 
     #[tool(
-        name = "list",
         summary = "List durable memory records.",
         read_only,
         display = brief,
@@ -414,14 +405,9 @@ impl MemoryPlugin {
     }
 
     #[tool(
-        name = "write",
         summary = "Write one durable memory record.",
         mutating,
         display = brief,
-        trim("name", "description", "content"),
-        trim_suffix("name", ".md"),
-        non_empty("name", "content"),
-        forbid_substrings("name", "/", "\\"),
         permission(paths = permission_write)
     )]
     async fn invoke_write(&self, input: &MemoryWriteInput) -> SdkResult<ToolInvokeOutput> {
@@ -454,14 +440,9 @@ impl MemoryPlugin {
     }
 
     #[tool(
-        name = "delete",
         summary = "Delete one durable memory record.",
         mutating,
         display = brief,
-        trim("name"),
-        trim_suffix("name", ".md"),
-        non_empty("name"),
-        forbid_substrings("name", "/", "\\"),
         permission(paths = permission_delete)
     )]
     async fn invoke_delete(&self, input: &MemoryDeleteInput) -> SdkResult<ToolInvokeOutput> {

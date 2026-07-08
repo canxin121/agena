@@ -162,10 +162,11 @@ impl CodeLanguage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
-#[tool_input(trim("path", "pattern"), non_empty("path", "pattern"))]
 #[serde(deny_unknown_fields)]
 struct CodeSearchAstInput {
+    #[arg(trim, non_empty)]
     path: String,
+    #[arg(trim, non_empty)]
     pattern: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     language: Option<CodeLanguage>,
@@ -174,9 +175,9 @@ struct CodeSearchAstInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInputShape)]
-#[tool_input(trim("path"), non_empty("path"))]
 #[serde(deny_unknown_fields)]
 struct CodeSyntaxTreeInput {
+    #[arg(trim, non_empty)]
     path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     language: Option<CodeLanguage>,
@@ -230,15 +231,12 @@ struct SyntaxNodeView {
 )]
 impl CodePlugin {
     #[tool(
-        name = "search_ast",
         summary = "Search code structurally with ast-grep.",
         help = "Supported languages: bash, c, cpp, csharp, css, dart, elixir, go, haskell, hcl, html, java, javascript, json, lua, markdown, nix, php, python, ruby, rust, solidity, swift, tsx, typescript, yaml. Use patterns like `if $COND { $BODY }`, `def $NAME($ARGS): $$$`, or `function $NAME($ARGS) { $$$ }`. When `language` is omitted for a file path, Agena infers it from the extension. Directory searches require `language` explicitly.",
         read_only,
         filesystem_read,
         discovery,
         display = brief,
-        trim("path", "pattern"),
-        non_empty("path", "pattern"),
         permission(paths = permission_search_ast),
         concurrency_safe
     )]
@@ -251,15 +249,12 @@ impl CodePlugin {
     }
 
     #[tool(
-        name = "syntax_tree",
         summary = "Inspect a parsed syntax tree.",
         help = "Use `syntax_tree` to inspect named syntax nodes for a supported file. When `language` is omitted, Agena infers it from the file extension.",
         read_only,
         filesystem_read,
         discovery,
         display = brief,
-        trim("path"),
-        non_empty("path"),
         permission(paths = permission_syntax_tree),
         concurrency_safe
     )]

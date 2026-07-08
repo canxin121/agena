@@ -76,11 +76,11 @@ pub struct ShellCommandInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(trim("file_path"), non_empty("file_path"))]
 pub struct ReadToolInput {
     /// File or directory path to read. Relative paths are resolved from the
     /// workspace root.
     #[serde(alias = "path")]
+    #[arg(trim, non_empty)]
     pub file_path: String,
     /// 1-based offset for file lines or directory entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -103,33 +103,28 @@ pub enum ReadMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(
-    trim("pattern", "path"),
-    non_empty("pattern"),
-    non_empty_if_present("path")
-)]
 pub struct GlobToolInput {
     /// Glob pattern to match.
+    #[arg(trim, non_empty)]
     pub pattern: String,
     /// Optional base path. Defaults to the workspace root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
     pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInputShape)]
-#[tool_input(
-    trim("pattern", "path", "include"),
-    non_empty("pattern"),
-    non_empty_if_present("path", "include")
-)]
 pub struct GrepToolInput {
     /// Regex pattern to search for.
+    #[arg(trim, non_empty)]
     pub pattern: String,
     /// Optional base path. Defaults to the workspace root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
     pub path: Option<String>,
     /// Optional glob filter applied before matching lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
     pub include: Option<String>,
 }
 

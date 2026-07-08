@@ -620,21 +620,24 @@ async fn main() -> std::io::Result<()> {
 
 ## 多 Tool Plugin 推荐写法
 
-推荐入口是 `#[agena_plugin(...)]`。一个 plugin 暴露多个模型可见 tool 时，把每个 tool 写成 impl 里的一个方法即可；宏会生成隐藏 input/surface 类型、manifest tool definition、静态分发、stream fallback 和 permission 分发。
+推荐入口是 `#[agena_plugin(...)]`。一个 plugin 暴露多个模型可见 tool 时，把每个 tool 写成 impl 里的一个方法即可；宏会生成隐藏 input/surface 类型、manifest tool definition、静态分发、stream fallback 和 permission 分发。非泛型插件的 manifest/schema 会在生成代码中按类型缓存，避免每次查询 catalog 时重复构造 schema。
 
-如果 tool 输入比较复杂，继续使用独立 input struct：
+如果 tool 输入比较复杂，继续使用独立 input struct。推荐给输入类型派生 `ToolInputShape`，把字段级清洗和校验写在字段旁边；`#[tool]` 只保留 tool 的语义、权限和运行时策略：
 
 ```rust
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, ToolInputShape)]
 #[serde(deny_unknown_fields)]
 struct FormatInput {
+    #[arg(trim, non_empty)]
     text: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, ToolInputShape)]
 #[serde(deny_unknown_fields)]
 struct WriteInput {
+    #[arg(trim, non_empty)]
     path: String,
+    #[arg(trim, non_empty)]
     text: String,
 }
 
@@ -645,8 +648,6 @@ impl NotesPlugin {
         summary = "Format text.",
         read_only,
         streaming,
-        trim("text"),
-        non_empty("text"),
         concurrency_safe
     )]
     async fn format(&self, input: &FormatInput) -> Result<ToolInvokeOutput> {
@@ -663,8 +664,6 @@ impl NotesPlugin {
         summary = "Write text.",
         mutating,
         filesystem_write,
-        trim("path", "text"),
-        non_empty("path", "text"),
         permission(paths = write_permission_paths)
     )]
     async fn write(&self, input: &WriteInput) -> Result<ToolInvokeOutput> {
@@ -676,6 +675,8 @@ impl NotesPlugin {
     }
 }
 ```
+
+方法只有一个输入 struct 参数时，`#[agena_plugin]` 会通过该类型的 `ToolInputShape` 解析输入；因此该类型应派生 `ToolInputShape`。schema、trim、non-empty、items/chars 约束和校验逻辑都来自输入类型本身，不需要在 `#[tool]` 上重复声明。
 
 简单 tool 可以省掉 input struct，由方法参数直接生成隐藏输入类型：
 

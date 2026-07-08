@@ -293,7 +293,6 @@ impl SkillsPlugin {
     }
 
     #[tool(
-        name = "list",
         summary = "List discovered skills and slash commands.",
         read_only,
         discovery,
@@ -351,13 +350,10 @@ impl SkillsPlugin {
     }
 
     #[tool(
-        name = "get",
         summary = "Read one discovered skill or slash command.",
         read_only,
         discovery,
         ui_display = detailed,
-        trim("name"),
-        non_empty("name"),
         concurrency_safe
     )]
     async fn invoke_get(&self, input: &SkillsGetInput) -> SdkResult<ToolInvokeOutput> {
@@ -388,12 +384,9 @@ impl SkillsPlugin {
     }
 
     #[tool(
-        name = "run",
         summary = "Render one discovered skill or slash command prompt.",
         read_only,
         ui_display = detailed,
-        trim("name", "args"),
-        non_empty("name"),
         concurrency_safe
     )]
     async fn invoke_run(&self, input: &SkillsRunInput) -> SdkResult<ToolInvokeOutput> {

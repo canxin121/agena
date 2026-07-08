@@ -706,7 +706,6 @@ impl WebPlugin {
     }
 
     #[tool(
-        name = "fetch",
         summary = "Fetch one web page and inspect its actual content.",
         help = "Use this tool after search when you need evidence from the actual page rather than search snippets. If you already know what facts you need, set `prompt` so Agena prioritizes the most relevant excerpts from the page in the returned text output.",
         read_only,
@@ -714,9 +713,6 @@ impl WebPlugin {
         internet,
         display = detailed,
         capabilities(HostCapability::PermissionCheck),
-        trim("url", "prompt"),
-        non_empty("url"),
-        non_empty_if_present("prompt"),
         examples(
             r#"{"url":"https://openai.com"}"#,
             r#"{"url":"https://example.com/docs","prompt":"extract the release date and breaking changes"}"#
@@ -742,7 +738,6 @@ impl WebPlugin {
     }
 
     #[tool(
-        name = "crawl",
         summary = "Crawl a site and cache indexed pages locally.",
         mutating,
         network,
@@ -750,8 +745,6 @@ impl WebPlugin {
         discovery,
         ui_display = detailed,
         capabilities(HostCapability::PermissionCheck),
-        trim("start_url"),
-        non_empty("start_url"),
         permission(paths = permission_paths_crawl, networks = permission_networks_crawl)
     )]
     async fn invoke_crawl(&self, input: &CrawlRunInput) -> SdkResult<ToolInvokeOutput> {
@@ -800,7 +793,6 @@ impl WebPlugin {
     }
 
     #[tool(
-        name = "search",
         summary = "Find candidate public-web pages to fetch.",
         help = "Use this tool to discover candidate pages, not to answer from result snippets alone. After searching, fetch 1-3 relevant result URLs before answering when the user needs facts, summaries, comparisons, or latest information. Use allowed_domains and blocked_domains to steer source quality.",
         read_only,
@@ -809,8 +801,6 @@ impl WebPlugin {
         discovery,
         display = detailed,
         capabilities(HostCapability::PermissionCheck),
-        trim("query"),
-        non_empty("query"),
         examples(
             r#"{"query":"Agena plugin architecture","limit":5}"#,
             r#"{"query":"Rust schemars derive examples","allowed_domains":["docs.rs","github.com"]}"#

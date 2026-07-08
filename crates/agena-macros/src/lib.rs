@@ -898,84 +898,16 @@ fn parse_plugin_inherent_method_attrs(
     let attrs = std::mem::take(&mut method.attrs);
     for attr in attrs {
         if attr.path().is_ident("tool") {
-            ensure_plugin_method_shared_receiver(method, "#[tool] methods")?;
-            let mut spec = parse_plugin_tool_method_attr(&attr, &method_ident)?;
-            let inline = build_plugin_inline_tool(method, &method_ident, self_label, &mut spec)?;
-            let mut input_model = inline.input_model;
-            let (output_ty, output_is_result) =
-                plugin_method_tool_output(method, input_model.spec.output_ty.clone());
-            input_model.spec.output_ty = output_ty.clone();
-            let tool = input_model
-                .spec
-                .tool
-                .clone()
-                .expect("inline tool config has a default tool name");
-            let stream = if let Some(stream_method) = inline.stream_method.as_ref() {
-                let stream_signature = validate_tool_stream_handler(
-                    method_infos,
-                    stream_method,
-                    &inline.stream_arg_types,
-                )?;
-                input_model.spec.streaming = true;
-                Some(PluginToolStreamHandler {
-                    method: stream_signature.method,
-                    is_async: stream_signature.is_async,
-                    sink_first: stream_signature.sink_first,
-                    context: inline.context,
-                    input: inline.call_input.clone(),
-                })
-            } else {
-                None
-            };
-            let permission_paths =
-                if let Some(permission_method) = inline.permission_paths_method.as_ref() {
-                    let permission_info = validate_tool_permission_handler(
-                        method_infos,
-                        permission_method,
-                        &inline.call_arg_types,
-                        "path",
-                    )?;
-                    Some(PluginToolPermissionHandler {
-                        method: permission_method.clone(),
-                        is_async: permission_info.is_async,
-                        input: inline.call_input.clone(),
-                    })
-                } else {
-                    None
-                };
-            let permission_networks =
-                if let Some(permission_method) = inline.permission_networks_method.as_ref() {
-                    let permission_info = validate_tool_permission_handler(
-                        method_infos,
-                        permission_method,
-                        &inline.call_arg_types,
-                        "network",
-                    )?;
-                    Some(PluginToolPermissionHandler {
-                        method: permission_method.clone(),
-                        is_async: permission_info.is_async,
-                        input: inline.call_input.clone(),
-                    })
-                } else {
-                    None
-                };
-            tools.push(PluginToolPlan {
-                tool,
-                input_model,
-                invoke: PluginToolInvokeHandler {
-                    method: method_ident.clone(),
-                    output_ty,
-                    output_is_result,
-                    is_async,
-                    context: inline.context,
-                    input: inline.call_input.clone(),
-                },
-                stream,
-                permissions: PluginToolPermissionHandlers {
-                    paths: permission_paths,
-                    networks: permission_networks,
-                },
-            });
+            let method_docs = doc_text(&kept_attrs);
+            tools.push(build_plugin_tool_plan(
+                method,
+                &method_ident,
+                is_async,
+                self_label,
+                method_infos,
+                method_docs,
+                &attr,
+            )?);
         } else if attr.path().is_ident("hook") {
             ensure_plugin_method_shared_receiver(method, "#[hook] methods")?;
             let hook = parse_plugin_hook_attr(&attr, &method_ident)?;
@@ -995,6 +927,107 @@ fn parse_plugin_inherent_method_attrs(
     }
     method.attrs = kept_attrs;
     Ok(PluginInherentMethodAttrs { tools, hooks })
+}
+
+fn build_plugin_tool_plan(
+    method: &mut ImplItemFn,
+    method_ident: &Ident,
+    is_async: bool,
+    self_label: &str,
+    method_infos: &[PluginMethodInfo],
+    docs: Option<String>,
+    attr: &Attribute,
+) -> Result<PluginToolPlan> {
+    ensure_plugin_method_shared_receiver(method, "#[tool] methods")?;
+    let mut spec = parse_plugin_tool_method_attr(attr, method_ident)?;
+    let inline = build_plugin_inline_tool(method, method_ident, self_label, &mut spec, docs)?;
+    let stream = build_plugin_tool_stream_handler(method_infos, &inline)?;
+    let permissions = build_plugin_tool_permission_handlers(method_infos, &inline)?;
+    let mut input_model = inline.input_model;
+    let (output_ty, output_is_result) =
+        plugin_method_tool_output(method, input_model.spec.output_ty.clone());
+    input_model.spec.output_ty = output_ty.clone();
+    let tool = input_model
+        .spec
+        .tool
+        .clone()
+        .expect("inline tool config has a default tool name");
+    if stream.is_some() {
+        input_model.spec.streaming = true;
+    }
+
+    Ok(PluginToolPlan {
+        tool,
+        input_model,
+        invoke: PluginToolInvokeHandler {
+            method: method_ident.clone(),
+            output_ty,
+            output_is_result,
+            is_async,
+            context: inline.context,
+            input: inline.call_input.clone(),
+        },
+        stream,
+        permissions,
+    })
+}
+
+fn build_plugin_tool_stream_handler(
+    methods: &[PluginMethodInfo],
+    inline: &PluginInlineTool,
+) -> Result<Option<PluginToolStreamHandler>> {
+    let Some(stream_method) = inline.stream_method.as_ref() else {
+        return Ok(None);
+    };
+    let stream = validate_tool_stream_handler(methods, stream_method, &inline.stream_arg_types)?;
+    Ok(Some(PluginToolStreamHandler {
+        method: stream.method,
+        is_async: stream.is_async,
+        sink_first: stream.sink_first,
+        context: inline.context,
+        input: inline.call_input.clone(),
+    }))
+}
+
+fn build_plugin_tool_permission_handlers(
+    methods: &[PluginMethodInfo],
+    inline: &PluginInlineTool,
+) -> Result<PluginToolPermissionHandlers> {
+    Ok(PluginToolPermissionHandlers {
+        paths: build_plugin_tool_permission_handler(
+            methods,
+            inline.permission_paths_method.as_ref(),
+            &inline.call_arg_types,
+            &inline.call_input,
+            "path",
+        )?,
+        networks: build_plugin_tool_permission_handler(
+            methods,
+            inline.permission_networks_method.as_ref(),
+            &inline.call_arg_types,
+            &inline.call_input,
+            "network",
+        )?,
+    })
+}
+
+fn build_plugin_tool_permission_handler(
+    methods: &[PluginMethodInfo],
+    permission_method: Option<&Ident>,
+    expected_args: &[Type],
+    call_input: &PluginCallInput,
+    kind: &str,
+) -> Result<Option<PluginToolPermissionHandler>> {
+    let Some(permission_method) = permission_method else {
+        return Ok(None);
+    };
+    let permission_info =
+        validate_tool_permission_handler(methods, permission_method, expected_args, kind)?;
+    Ok(Some(PluginToolPermissionHandler {
+        method: permission_method.clone(),
+        is_async: permission_info.is_async,
+        input: call_input.clone(),
+    }))
 }
 
 fn plugin_attr_has_explicit_args(attr: &Attribute) -> bool {
@@ -1370,8 +1403,8 @@ fn build_plugin_inline_tool(
     method_ident: &Ident,
     self_label: &str,
     config: &mut PluginInlineToolConfig,
+    docs: Option<String>,
 ) -> Result<PluginInlineTool> {
-    let docs = doc_text(&method.attrs);
     let value_args = plugin_method_value_args(method)?;
     let context = plugin_inline_context_arg(&value_args)?;
     let stream_arg_types = value_args

@@ -134,6 +134,29 @@ fn tool_macro_permission_dispatch_parses_tool_input() {
     assert_eq!(requests, vec![PathRequest::read("/tmp/render.txt")]);
 }
 
+#[test]
+fn tool_macro_invoke_dispatch_parses_and_serializes_output() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("test runtime should build");
+    let plugin = ManifestPlugin;
+    let output = runtime
+        .block_on(Plugin::tool_invoke(
+            &plugin,
+            ToolInvokeInput {
+                tool_name: "render".to_string(),
+                session_id: 1,
+                call_id: 2,
+                workspace_root: "/workspace".to_string(),
+                input: json!({ "text": "hello" }),
+            },
+        ))
+        .expect("tool invoke should succeed");
+
+    assert_eq!(output.payload, Some(json!({ "rendered": "hello" })));
+    assert_eq!(output.output_text, r#"{"rendered":"hello"}"#);
+}
+
 fn tool_by_name<'a>(manifest: &'a PluginManifest, name: &str) -> &'a ToolDefinition {
     manifest
         .tools

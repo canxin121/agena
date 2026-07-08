@@ -46,7 +46,7 @@ pub struct PluginManifest {
     pub plugin_capabilities: Vec<HostCapability>,
     /// UI contributions owned by this plugin. TUI-facing content and Studio
     /// Web-facing views/controls are intentionally split so each host can
-    /// consume only the surface it can render.
+    /// consume only the view it can render.
     #[serde(default, skip_serializing_if = "PluginUiContributions::is_empty")]
     pub ui: PluginUiContributions,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -298,42 +298,6 @@ impl Default for ToolRuntimePolicy {
             streaming: ToolStreamingMode::Buffered,
             result_policy: ToolResultPolicy::default(),
         }
-    }
-}
-
-#[doc(hidden)]
-pub trait ToolSurface: Sized {
-    fn tool_name() -> &'static str;
-    fn tool_names() -> &'static [&'static str];
-    fn has_tool(tool: &str) -> bool {
-        Self::tool_names().contains(&tool)
-    }
-    fn tool_definition() -> ToolDefinition;
-    fn tool_definitions() -> Vec<ToolDefinition> {
-        vec![Self::tool_definition()]
-    }
-    fn parse_input(input: serde_json::Value) -> crate::Result<Self>;
-    fn parse_tool(tool: &str, input: serde_json::Value) -> crate::Result<Self> {
-        let definition = Self::tool_definition();
-        if tool == definition.name {
-            return Self::parse_input(input);
-        }
-        Err(crate::PluginError::invalid_params(format!(
-            "unknown {} tool '{tool}'",
-            Self::tool_name()
-        )))
-    }
-    fn parse_json_str(input: &str) -> crate::Result<Self> {
-        let value = crate::macro_support::parse_json_value_str(input)?;
-        Self::parse_input(value)
-    }
-    fn resolve_tool(
-        tool: &str,
-        input: serde_json::Value,
-    ) -> crate::Result<(String, serde_json::Value)>;
-    fn resolve_json_str(tool: &str, input: &str) -> crate::Result<(String, serde_json::Value)> {
-        let value = crate::macro_support::parse_json_value_str(input)?;
-        Self::resolve_tool(tool, value)
     }
 }
 

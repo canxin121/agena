@@ -34,19 +34,6 @@ struct SchemaLabEchoArgs {
     payload: Option<JsonValue>,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "action", rename_all = "snake_case")]
-enum SchemaLabToolInput {
-    Inspect {
-        #[serde(flatten)]
-        args: SchemaLabInspectArgs,
-    },
-    Echo {
-        #[serde(flatten)]
-        args: SchemaLabEchoArgs,
-    },
-}
-
 impl SchemaLabPlugin {
     pub(crate) fn new() -> Self {
         Self
@@ -101,19 +88,27 @@ impl SchemaLabPlugin {
 )]
 impl SchemaLabPlugin {
     #[tool(
-        name = "schema_lab",
         summary = "Inspect the schema lab fixture without mutating external state.",
-        help = "Use action `inspect` to summarize one config section or `echo` to round-trip a payload into the tool result. The tool is intentionally inert and exists only to populate the Tools tab for the schema lab demo plugin.",
+        help = "Summarize one schema lab config section. The tool is intentionally inert and exists only to populate the Tools tab for the schema lab demo plugin.",
         read_only,
         discovery,
         ui_display = brief,
         concurrency_safe
     )]
-    async fn tool_invoke(&self, input: SchemaLabToolInput) -> SdkResult<ToolInvokeOutput> {
-        match input {
-            SchemaLabToolInput::Inspect { args } => self.inspect(args).await,
-            SchemaLabToolInput::Echo { args } => self.echo(args).await,
-        }
+    async fn invoke_inspect(&self, input: SchemaLabInspectArgs) -> SdkResult<ToolInvokeOutput> {
+        self.inspect(input).await
+    }
+
+    #[tool(
+        summary = "Echo schema lab input without mutating external state.",
+        help = "Round-trip a label and arbitrary payload into the tool result. The tool is intentionally inert and exists only to populate the Tools tab for the schema lab demo plugin.",
+        read_only,
+        discovery,
+        ui_display = brief,
+        concurrency_safe
+    )]
+    async fn invoke_echo(&self, input: SchemaLabEchoArgs) -> SdkResult<ToolInvokeOutput> {
+        self.echo(input).await
     }
 }
 

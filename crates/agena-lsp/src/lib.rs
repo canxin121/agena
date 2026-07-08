@@ -3,7 +3,7 @@
 //! Speaks Language Server Protocol over stdio with the per-server child
 //! process model that LSP itself standardises. Limited to a curated subset
 //! of LSP requests — definition, references, diagnostics, hover — that
-//! cover the agena tool surface; we are not building a full editor here.
+//! cover the agena tool API; we are not building a full editor here.
 //!
 //! Layout mirrors `agena-mcp-client`: a low-level `transport` (in-memory
 //! or stdio), a JSON-RPC bookkeeping `client`, a multi-server `registry`,

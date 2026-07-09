@@ -37,7 +37,7 @@ pub struct PluginManifest {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolDefinition>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub commands: Vec<PluginStudioCommand>,
+    pub commands: Vec<PluginCommandDefinition>,
     /// Plugin-level host capabilities. Useful for plugins that need to
     /// call host APIs without exposing any model-visible tool. These are merged
     /// into the effective capability set alongside the per-tool
@@ -304,9 +304,100 @@ impl Default for ToolRuntimePolicy {
 pub trait ToolInput: Sized {
     fn input_schema() -> serde_json::Value;
     fn parse_input(input: serde_json::Value) -> crate::Result<Self>;
+    fn input_paths() -> Vec<InputPathSpec> {
+        Vec::new()
+    }
+    fn input_networks() -> Vec<InputNetworkSpec> {
+        Vec::new()
+    }
+    fn input_tags() -> Vec<ToolTag> {
+        Vec::new()
+    }
+    fn input_example() -> Option<serde_json::Value> {
+        None
+    }
+    fn input_usage() -> Option<String> {
+        let schema = Self::input_schema();
+        Self::input_example()
+            .and_then(|example| {
+                let merged = crate::macro_support::merge_example_with_schema(&schema, &example);
+                crate::macro_support::command_usage_text_for_schema(&schema, &merged)
+            })
+            .or_else(|| crate::macro_support::command_usage_text_from_schema(&schema))
+    }
     fn parse_json_str(input: &str) -> crate::Result<Self> {
         let value = crate::macro_support::parse_json_value_str(input)?;
         Self::parse_input(value)
+    }
+}
+
+fn simple_tool_input_schema<T>() -> serde_json::Value
+where
+    T: schemars::JsonSchema,
+{
+    crate::macro_support::json_schema_for::<T>()
+}
+
+fn simple_tool_input_parse<T>(input: serde_json::Value) -> crate::Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    crate::macro_support::parse_typed_json_value(input)
+}
+
+macro_rules! impl_simple_tool_input {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl ToolInput for $ty {
+                fn input_schema() -> serde_json::Value {
+                    simple_tool_input_schema::<Self>()
+                }
+
+                fn parse_input(input: serde_json::Value) -> crate::Result<Self> {
+                    simple_tool_input_parse(input)
+                }
+            }
+        )+
+    };
+}
+
+impl_simple_tool_input!(
+    String, bool, i8, i16, i32, i64, isize, u8, u16, u32, u64, usize, f32, f64,
+);
+
+impl<T> ToolInput for Option<T>
+where
+    T: schemars::JsonSchema + serde::de::DeserializeOwned,
+{
+    fn input_schema() -> serde_json::Value {
+        simple_tool_input_schema::<Self>()
+    }
+
+    fn parse_input(input: serde_json::Value) -> crate::Result<Self> {
+        simple_tool_input_parse(input)
+    }
+}
+
+impl<T> ToolInput for Vec<T>
+where
+    T: schemars::JsonSchema + serde::de::DeserializeOwned,
+{
+    fn input_schema() -> serde_json::Value {
+        simple_tool_input_schema::<Self>()
+    }
+
+    fn parse_input(input: serde_json::Value) -> crate::Result<Self> {
+        simple_tool_input_parse(input)
+    }
+}
+
+impl ToolInput for serde_json::Value {
+    fn input_schema() -> serde_json::Value {
+        simple_tool_input_schema::<Self>()
+    }
+
+    fn parse_input(input: serde_json::Value) -> crate::Result<Self> {
+        Ok(input)
     }
 }
 
@@ -593,7 +684,7 @@ pub struct PluginTuiContentBlock {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PluginStudioCommand {
+pub struct PluginCommandDefinition {
     pub id: String,
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -608,9 +699,19 @@ pub struct PluginStudioCommand {
     pub usage: Option<String>,
     #[serde(default = "default_studio_command_location")]
     pub location: String,
+    /// Optional JSON schema for command arguments accepted by the plugin
+    /// command handler.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<serde_json::Value>,
+    /// Plugin method-backed commands set this to the command id. Hosts can use
+    /// it to route UI/slash invocations back through `command/invoke`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handler: Option<String>,
     #[serde(default)]
     pub action: PluginUiAction,
 }
+
+pub type PluginStudioCommand = PluginCommandDefinition;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginStudioControl {
@@ -677,6 +778,11 @@ pub enum PluginUiAction {
     SubmitPrompt {
         prompt: String,
     },
+    InvokeCommand {
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input: Option<serde_json::Value>,
+    },
 }
 
 fn default_tui_content_location() -> String {
@@ -715,6 +821,11 @@ fn default_studio_view_kind() -> String {
 pub struct InputPathSpec {
     pub jsonpath: String,
     pub kind: PathKind,
+    /// Value used when `jsonpath` has no matches. This is useful for inputs
+    /// whose omitted field has a meaningful permission target, such as the
+    /// workspace root represented by an empty path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
     /// If true, missing matches are silently ignored instead of erroring.
     #[serde(default)]
     pub optional: bool,
@@ -726,6 +837,9 @@ pub struct InputPathSpec {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InputNetworkSpec {
     pub jsonpath: String,
+    /// Value used when `jsonpath` has no matches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
     /// If true, missing matches are silently ignored instead of erroring.
     #[serde(default)]
     pub optional: bool,

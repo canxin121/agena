@@ -66,6 +66,7 @@ pub struct ShellCommandInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(path.read, fallback = "")]
     pub workdir: Option<String>,
     /// Filesystem paths the command may read or write. Pass an empty list only
     /// when the command has no filesystem effect beyond entering `workdir`.
@@ -80,7 +81,7 @@ pub struct ReadToolInput {
     /// File or directory path to read. Relative paths are resolved from the
     /// workspace root.
     #[serde(alias = "path")]
-    #[arg(trim, non_empty)]
+    #[arg(trim, non_empty, path.read)]
     pub file_path: String,
     /// 1-based offset for file lines or directory entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -109,7 +110,7 @@ pub struct GlobToolInput {
     pub pattern: String,
     /// Optional base path. Defaults to the workspace root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[arg(trim, non_empty_if_present)]
+    #[arg(trim, non_empty_if_present, path.read, fallback = "")]
     pub path: Option<String>,
 }
 
@@ -120,7 +121,7 @@ pub struct GrepToolInput {
     pub pattern: String,
     /// Optional base path. Defaults to the workspace root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[arg(trim, non_empty_if_present)]
+    #[arg(trim, non_empty_if_present, path.read, fallback = "")]
     pub path: Option<String>,
     /// Optional glob filter applied before matching lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -476,6 +477,7 @@ pub struct ScheduleWakeupToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(trim("file_path"), non_empty("file_path"))]
 pub struct LspPositionToolInput {
+    #[arg(path.read)]
     pub file_path: String,
     pub line: u32,
     pub character: u32,
@@ -514,6 +516,7 @@ pub struct LspHoverToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(trim("file_path"), non_empty("file_path"))]
 pub struct LspDiagnosticsToolInput {
+    #[arg(path.read)]
     pub file_path: String,
 }
 

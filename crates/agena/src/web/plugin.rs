@@ -20,9 +20,7 @@ use tokio::sync::Mutex;
 
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostNetworkPermissionCheckRequest};
-use crate::plugin::sdk::{
-    HostCapability, NetworkRequest, PathRequest, Result as SdkResult, ToolInvokeOutput,
-};
+use crate::plugin::sdk::{HostCapability, Result as SdkResult, ToolInvokeOutput};
 
 pub const WEB_PLUGIN_ID: &str = "agena.web";
 
@@ -592,7 +590,7 @@ impl WebPlugin {
         }
     }
 
-    #[hook]
+    #[hook(init)]
     async fn init(
         &self,
         ctx: crate::plugin::sdk::InitContext,
@@ -717,7 +715,7 @@ impl WebPlugin {
             r#"{"url":"https://openai.com"}"#,
             r#"{"url":"https://example.com/docs","prompt":"extract the release date and breaking changes"}"#
         ),
-        permission(paths = permission_paths_fetch, networks = permission_networks_fetch),
+        network(connect = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?.to_string()),
         concurrency_safe
     )]
     async fn invoke_fetch(&self, input: &CrawlFetchInput) -> SdkResult<ToolInvokeOutput> {
@@ -745,7 +743,8 @@ impl WebPlugin {
         discovery,
         ui_display = detailed,
         capabilities(HostCapability::PermissionCheck),
-        permission(paths = permission_paths_crawl, networks = permission_networks_crawl)
+        path(write = self.store_write_permission_path()?),
+        network(connect = prepare_fetch_url(input.start_url.as_str()).map_err(crawl_error_to_plugin)?.to_string())
     )]
     async fn invoke_crawl(&self, input: &CrawlRunInput) -> SdkResult<ToolInvokeOutput> {
         let start_url =
@@ -805,7 +804,7 @@ impl WebPlugin {
             r#"{"query":"Agena plugin architecture","limit":5}"#,
             r#"{"query":"Rust schemars derive examples","allowed_domains":["docs.rs","github.com"]}"#
         ),
-        permission(paths = permission_paths_search, networks = permission_networks_search),
+        network(connects = search_network_targets(input.engine)),
         concurrency_safe
     )]
     async fn invoke_search(&self, input: &CrawlWebSearchInput) -> SdkResult<ToolInvokeOutput> {
@@ -898,65 +897,21 @@ impl WebPlugin {
             .collect())
     }
 
-    fn store_write_permission_requests(&self) -> SdkResult<Vec<PathRequest>> {
+    fn store_write_permission_path(&self) -> SdkResult<String> {
         let store = self.store()?;
-        let path = store.dir().display().to_string();
-        Ok(vec![PathRequest::write(path)])
-    }
-
-    async fn permission_paths_search(
-        &self,
-        _input: &CrawlWebSearchInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        Ok(Vec::new())
-    }
-
-    async fn permission_networks_search(
-        &self,
-        input: &CrawlWebSearchInput,
-    ) -> SdkResult<Vec<NetworkRequest>> {
-        Ok(search_engines(input.engine)
-            .into_iter()
-            .map(|engine| NetworkRequest::connect(engine.permission_url().to_string()))
-            .collect())
-    }
-
-    async fn permission_paths_fetch(
-        &self,
-        _input: &CrawlFetchInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        Ok(Vec::new())
-    }
-
-    async fn permission_networks_fetch(
-        &self,
-        input: &CrawlFetchInput,
-    ) -> SdkResult<Vec<NetworkRequest>> {
-        Ok(vec![NetworkRequest::connect(
-            prepare_fetch_url(input.url.as_str())
-                .map_err(crawl_error_to_plugin)?
-                .to_string(),
-        )])
-    }
-
-    async fn permission_paths_crawl(&self, _input: &CrawlRunInput) -> SdkResult<Vec<PathRequest>> {
-        self.store_write_permission_requests()
-    }
-
-    async fn permission_networks_crawl(
-        &self,
-        input: &CrawlRunInput,
-    ) -> SdkResult<Vec<NetworkRequest>> {
-        Ok(vec![NetworkRequest::connect(
-            prepare_fetch_url(input.start_url.as_str())
-                .map_err(crawl_error_to_plugin)?
-                .to_string(),
-        )])
+        Ok(store.dir().display().to_string())
     }
 }
 
 fn crawl_error_to_plugin(err: agena_web::CrawlError) -> PluginError {
     PluginError::new(err.to_string())
+}
+
+fn search_network_targets(engine: Option<WebSearchEngineSelection>) -> Vec<String> {
+    search_engines(engine)
+        .into_iter()
+        .map(|engine| engine.permission_url().to_string())
+        .collect()
 }
 
 struct PluginPageFetcher<'a> {

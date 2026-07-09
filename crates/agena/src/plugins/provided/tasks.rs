@@ -27,7 +27,7 @@ impl TasksPlugin {
         }
     }
 
-    #[hook]
+    #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         self.inner
             .initialize(ctx, WorkflowPluginConfig::default(), host)?;

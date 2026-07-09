@@ -1,0 +1,5 @@
+error: `tool`/`tools(...)` filters are only valid for tool hooks
+  --> tests/ui/fail/bad_hook_filter.rs:12:33
+   |
+12 |     #[hook(chat.message, tool = "render")]
+   |                                 ^^^^^^^^

@@ -3,6 +3,7 @@ import { computed, inject, ref } from 'vue'
 import { routerKey } from 'vue-router'
 
 import { runPluginUiAction, type PluginInspect, type PluginLogEntry, type PluginStatus } from '@/agena/lib/agenaApi'
+import { isPluginUiToolInvokeResponse, resolvePluginCommandOutput } from '@/agena/lib/pluginUiActionRuntime'
 import type { SettingsPluginUiPresentationSnapshot } from './runtimePageLoaders'
 
 const props = defineProps<{
@@ -427,7 +428,7 @@ async function runStudioUiItem(item: ManifestStudioUiItem, input?: Record<string
       return
     }
     const response = await runPluginUiAction({ pluginId, actionId: item.id, payload: input })
-    pluginUiMessage.value = response.result?.output_text || `Ran ${item.title || item.id}.`
+    pluginUiMessage.value = await renderPluginUiActionResult(pluginId, item, response.result)
   } catch (err) {
     pluginUiError.value = err instanceof Error ? err.message : String(err)
   }
@@ -435,6 +436,48 @@ async function runStudioUiItem(item: ManifestStudioUiItem, input?: Record<string
 
 async function runStudioUiControl(control: ManifestStudioUiItem) {
   await runStudioUiItem(control, { value: controlValue(control) })
+}
+
+async function renderPluginUiActionResult(pluginId: string, item: ManifestStudioUiItem, result: unknown) {
+  if (isPluginUiToolInvokeResponse(result)) {
+    return result.output_text || `Ran ${item.title || item.id}.`
+  }
+  return await renderResolvedPluginCommandEffect(
+    item,
+    await resolvePluginCommandOutput({
+      pluginId,
+      result,
+      fallbackNotice: `Ran ${item.title || item.id}.`,
+    }),
+  )
+}
+
+async function renderResolvedPluginCommandEffect(
+  item: ManifestStudioUiItem,
+  effect: Awaited<ReturnType<typeof resolvePluginCommandOutput>>,
+) {
+  if (effect.kind === 'notice') {
+    return effect.message
+  }
+  if (effect.kind === 'submit_prompt') {
+    if (router) {
+      await router.push({ path: '/chat', query: { prompt: effect.prompt } })
+    }
+    return `Queued prompt from ${item.title || item.id}.`
+  }
+  if (effect.kind === 'open_route') {
+    if (router) {
+      await router.push(effect.route)
+    }
+    return `Opened route for ${item.title || item.id}.`
+  }
+  if (effect.kind === 'open_url') {
+    if (typeof window !== 'undefined') {
+      window.open(effect.url, '_blank', 'noopener,noreferrer')
+    }
+    return `Opened link for ${item.title || item.id}.`
+  }
+  return `Ran ${item.title || item.id}.`
 }
 </script>
 

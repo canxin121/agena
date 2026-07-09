@@ -96,7 +96,7 @@ impl SkillsPlugin {
         }
     }
 
-    #[hook]
+    #[hook(init)]
     async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let _ = self.workspace_root.set(ctx.workspace_root);
         Ok(InitOutcome::ack(crate::plugin::sdk::Plugin::manifest(self)))
@@ -231,7 +231,7 @@ impl SkillsPlugin {
             .ok_or_else(|| PluginError::invalid_params(format!("unknown skill '{}'", requested)))
     }
 
-    #[hook(tool_definition)]
+    #[hook(tool.definition)]
     fn tool_definition_patch(
         &self,
         input: ToolDefinitionInput,

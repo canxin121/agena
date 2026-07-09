@@ -1,0 +1,5 @@
+error: #[hook] now requires an explicit hook name, e.g. #[hook(init)], #[hook(tool.before)], or #[hook(shell.after)]
+  --> tests/ui/fail/old_hook_bare_attr.rs:12:5
+   |
+12 |     #[hook]
+   |     ^^^^^^^

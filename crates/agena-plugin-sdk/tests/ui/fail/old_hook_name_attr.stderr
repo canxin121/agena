@@ -1,0 +1,5 @@
+error: explicit hook names use dotted DSL, e.g. #[hook(tool.before)] or #[hook(shell.after)]
+  --> tests/ui/fail/old_hook_name_attr.rs:13:5
+   |
+13 |     #[hook(tool_definition)]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^

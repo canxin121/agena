@@ -13,8 +13,8 @@
 - `#[agena_plugin(...)] impl EchoPlugin { ... }` 汇集插件元数据、tool handler、hook handler 和导出方式。
 - `#[tool(...)]` 直接描述工具名、help、约束、展示策略和 handler；宏会生成隐藏 schema 与 dispatch glue。
 - `#[arg(...)]` 可以写在方法参数上，宏会生成隐藏 input struct，并把 JSON 输入解析成结构化参数后再调用方法。
-- `#[stream(...)]` 和 `permission(paths = ...)` 可以挂回目标 tool，宏会自动生成 stream / permission 分发。
-- `#[hook]` 从标准方法名推断 hook；返回 patch、`Option<Patch>`、`()`, `Result<_>` 都会自动适配。
+- `stream = ...`、`path(...)` 和 `network(...)` 写在目标 `#[tool(...)]` 上，宏会自动生成 stream / permission 分发。
+- `#[hook(tool.before)]`、`#[hook(shell.env)]` 等显式 dotted DSL 描述 hook；返回 patch、`Option<Patch>`、`()`, `Result<_>` 都会自动适配。
 - `#[derive(PluginConfigStore)]` + 字段级 `#[config(default)]` 汇集配置字段；`#[agena_plugin(..., config)]` 自动生成配置 schema，并在 init 时解析到 `PluginConfig<EchoPluginConfig>`。
 - `export = cdylib` 在 cdylib crate 中自动导出 host 加载所需的动态库入口。
 

@@ -50,13 +50,13 @@ use crate::sdk::{
     CommandAfterInput, CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome,
     CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
     HostCapability, NotificationInput, PermissionAdvice, PermissionAskDecision, PermissionAskInput,
-    PermissionDecision, PluginError, PluginErrorCode, PluginKey, PluginManifest,
-    PluginStudioCommand, PluginStudioControl, PluginStudioView, PluginTuiContentBlock,
-    PluginUiAction, PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch,
-    SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch,
-    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput,
-    ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolKey,
-    ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
+    PermissionDecision, PluginCommandDefinition, PluginCommandInvokeInput, PluginCommandOutput,
+    PluginError, PluginErrorCode, PluginKey, PluginManifest, PluginStudioControl, PluginStudioView,
+    PluginTuiContentBlock, PluginUiAction, PostRunInput, PreRunInput, ProviderListInput,
+    ProviderListPatch, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
+    ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
+    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
+    ToolKey, ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
     UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 use crate::transport::PluginTransport;
@@ -277,7 +277,7 @@ pub struct PluginTuiUiCatalog {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PluginStudioUiCatalog {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub commands: Vec<PluginStudioCommandCatalogItem>,
+    pub commands: Vec<PluginCommandCatalogItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub controls: Vec<PluginStudioControlCatalogItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -292,10 +292,10 @@ pub struct PluginTuiContentBlockCatalogItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginStudioCommandCatalogItem {
+pub struct PluginCommandCatalogItem {
     pub plugin_id: PluginKey,
     #[serde(flatten)]
-    pub command: PluginStudioCommand,
+    pub command: PluginCommandDefinition,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -727,6 +727,53 @@ impl PluginHost {
         });
         let value = result.map_err(transport_to_plugin_error)?;
         serde_json::from_value(value).map_err(|e| PluginError::invalid_params(e.to_string()))
+    }
+
+    pub fn invoke_plugin_command(
+        &self,
+        plugin_id: &str,
+        input: PluginCommandInvokeInput,
+    ) -> Result<PluginCommandOutput, PluginError> {
+        let plugin_key: PluginKey = plugin_id
+            .parse()
+            .map_err(|err| PluginError::invalid_params(format!("invalid plugin id: {err}")))?;
+        let plugin = self
+            .plugins_by_id
+            .get(&plugin_key)
+            .cloned()
+            .ok_or_else(|| {
+                PluginError::not_implemented(format!("plugin `{plugin_id}` not loaded"))
+            })?;
+        if input.command_id.is_empty() {
+            return Err(PluginError::invalid_params(
+                "command_id must not be empty".to_string(),
+            ));
+        }
+        let timeout = self.timeouts.fast_or(Duration::from_secs(10));
+        let plugin_id = plugin_id.to_string();
+        let session_id = input.session_id;
+        let call_id = input.call_id;
+        let workspace_root = input.workspace_root.clone();
+        let command_id = input.command_id.clone();
+        let params =
+            serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
+        let result = self.block_on_static(async move {
+            host_api::run_in_host_callback_context(
+                HostCallbackContext {
+                    plugin_id: Some(plugin_id),
+                    session_id,
+                    call_id,
+                    workspace_root,
+                    tool_name: None,
+                },
+                call_with_timeout(&plugin, method::COMMAND_INVOKE, params, timeout),
+            )
+            .await
+        });
+        let value = result.map_err(transport_to_plugin_error)?;
+        serde_json::from_value(value).map_err(|e| {
+            PluginError::invalid_params(format!("invalid command output for `{command_id}`: {e}"))
+        })
     }
 
     fn tool_invoke_timeout(&self, registered_tool: &RegisteredTool) -> Duration {
@@ -1640,7 +1687,7 @@ impl PluginHost {
         self.ui_catalog().tui.content_blocks
     }
 
-    pub fn studio_commands(&self) -> Vec<PluginStudioCommandCatalogItem> {
+    pub fn studio_commands(&self) -> Vec<PluginCommandCatalogItem> {
         self.ui_catalog().studio.commands
     }
 
@@ -1695,7 +1742,7 @@ impl PluginHost {
             ));
 
             studio_commands.extend(plugin.manifest.commands.iter().cloned().map(|command| {
-                PluginStudioCommandCatalogItem {
+                PluginCommandCatalogItem {
                     plugin_id: plugin.key(),
                     command,
                 }

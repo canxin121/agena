@@ -4,7 +4,7 @@ import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
 import LoginPage from './agena/pages/LoginPage.vue'
 import { dispatchAuthCallback } from './agena/lib/authCallbackRegistry'
-import { createCommandPalette, type CommandItem } from './agena/lib/commandPalette'
+import { buildPluginCommandPayload, createCommandPalette, type CommandItem } from './agena/lib/commandPalette'
 import { registeredLocalCommands, setGlobalCommandPaletteOpenHandler } from './agena/lib/commandPaletteRegistry'
 import {
   fetchRuntimeStatus,
@@ -13,6 +13,7 @@ import {
   type RuntimeStatus,
   type RuntimeSkill,
 } from './agena/lib/agenaApi'
+import { isPluginUiToolInvokeResponse, resolvePluginCommandOutput } from './agena/lib/pluginUiActionRuntime'
 import { usePluginToolRegistryRuntimeSync } from './agena/lib/usePluginToolRegistryRuntimeSync'
 import { sectionBasePaths, sectionNavItems } from './agena/pages/runtimePageStateModel'
 import { syncDesktopBackendTarget } from './lib/backend'
@@ -58,14 +59,43 @@ const commandPalette = createCommandPalette({
       const response = await runPluginUiAction({
         pluginId: command.plugin_id,
         actionId: command.id,
-        payload: { args: context?.args.join(' ').trim() || null },
+        payload: buildPluginCommandPayload(command, context),
       })
-      if (action.submit_output_as_prompt && response.result?.output_text) {
+      if (action.submit_output_as_prompt && isPluginUiToolInvokeResponse(response.result)) {
         await router.push({ path: '/chat', query: { prompt: response.result.output_text } })
       }
+      return
+    }
+    if (action.kind === 'invoke_command') {
+      const response = await runPluginUiAction({
+        pluginId: command.plugin_id,
+        actionId: command.id,
+        payload: buildPluginCommandPayload(command, context),
+      })
+      await applyResolvedPluginCommandEffect(
+        await resolvePluginCommandOutput({
+          pluginId: command.plugin_id,
+          result: response.result,
+        }),
+      )
     }
   },
 })
+
+async function applyResolvedPluginCommandEffect(effect: Awaited<ReturnType<typeof resolvePluginCommandOutput>>) {
+  if (effect.kind === 'submit_prompt') {
+    await router.push({ path: '/chat', query: { prompt: effect.prompt } })
+    return
+  }
+  if (effect.kind === 'open_route') {
+    await router.push(effect.route)
+    return
+  }
+  if (effect.kind === 'open_url') {
+    if (typeof window !== 'undefined') window.open(effect.url, '_blank', 'noopener,noreferrer')
+    return
+  }
+}
 
 function runPaletteItem(item: CommandItem) {
   void item.run()

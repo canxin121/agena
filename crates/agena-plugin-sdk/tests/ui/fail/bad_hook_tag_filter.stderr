@@ -1,0 +1,5 @@
+error: `tag`/`tags(...)` filters are only valid for tool.before hooks
+  --> tests/ui/fail/bad_hook_tag_filter.rs:12:29
+   |
+12 |     #[hook(tool.after, tags(filesystem_write))]
+   |                             ^^^^^^^^^^^^^^^^

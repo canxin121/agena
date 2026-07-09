@@ -1,0 +1,5 @@
+error: #[arg] accepts only one path permission semantic
+ --> tests/ui/fail/bad_arg_path_semantic.rs:5:22
+  |
+5 |     #[arg(path.read, path.write)]
+  |                      ^^^^

@@ -1,13 +1,14 @@
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashSet};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::{OnceLock, RwLock};
 
 use schemars::{JsonSchema, schema_for};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 
-use crate::{PluginError, Result};
+use crate::{PluginError, PluginErrorCode, Result, ToolTag};
 
 pub fn json_schema_for<T>() -> Value
 where
@@ -54,6 +55,16 @@ where
         Default::default(),
         Vec::new(),
     ))
+}
+
+pub fn dedupe_tool_tags(tags: &mut Vec<ToolTag>) {
+    let mut deduped = Vec::with_capacity(tags.len());
+    for tag in tags.drain(..) {
+        if !deduped.iter().any(|existing| existing == &tag) {
+            deduped.push(tag);
+        }
+    }
+    *tags = deduped;
 }
 
 pub fn empty_config_schema() -> Value {
@@ -125,8 +136,88 @@ pub fn merge_flattened_schema_at_pointer(schema: &mut Value, pointer: &str, over
             None => return,
         }
     };
+    let overlay_parse_names = flattened_overlay_parse_name_mappings(&overlay_without_root_meta);
+    let mut required = schema_required_names(target);
+    remove_schema_parse_name_properties(target, &overlay_parse_names);
+    required.retain(|name| {
+        !overlay_parse_names
+            .iter()
+            .any(|(_, parse_name)| parse_name == name)
+    });
+    for name in schema_required_names(&overlay_without_root_meta) {
+        if !required.contains(&name) {
+            required.push(name);
+        }
+    }
+    merge_schema_overlay(target, &overlay_without_root_meta);
+    set_schema_required_names(target, &required);
+    promote_nested_composite_properties(target);
+}
+
+pub fn merge_schema_overlay_at_pointer(schema: &mut Value, pointer: &str, overlay: &Value) {
+    let Some(root) = schema.as_object_mut() else {
+        return;
+    };
+    let Some(overlay_object) = overlay.as_object() else {
+        return;
+    };
+    if let Some(defs) = overlay_object.get("$defs") {
+        let root_defs = root
+            .entry("$defs".to_string())
+            .or_insert_with(|| Value::Object(Default::default()));
+        merge_schema_overlay(root_defs, defs);
+    }
+
+    let mut overlay_without_root_meta = overlay.clone();
+    if let Some(object) = overlay_without_root_meta.as_object_mut() {
+        object.remove("$defs");
+        object.remove("title");
+        object.remove("description");
+    }
+
+    let Some(target) = ensure_schema_object_at_pointer(schema, pointer) else {
+        return;
+    };
+    let target = &mut Value::Object(target.clone());
     merge_schema_overlay(target, &overlay_without_root_meta);
     promote_nested_composite_properties(target);
+    if let Some(merged) = target.as_object() {
+        if let Some(destination) = ensure_schema_object_at_pointer(schema, pointer) {
+            *destination = merged.clone();
+        }
+    }
+}
+
+pub fn rename_schema_property(schema: &mut Value, pointer: &str, from: &str, to: &str) {
+    if from == to {
+        return;
+    }
+    let Some(resolved_pointer) = resolve_schema_pointer(schema, pointer) else {
+        return;
+    };
+    let target = if resolved_pointer.is_empty() {
+        schema
+    } else {
+        match schema.pointer_mut(resolved_pointer.as_str()) {
+            Some(target) => target,
+            None => return,
+        }
+    };
+    let Some(object) = target.as_object_mut() else {
+        return;
+    };
+    if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut)
+        && let Some(property) = properties.remove(from)
+    {
+        properties.insert(to.to_string(), property);
+    }
+    if let Some(required) = object.get_mut("required").and_then(Value::as_array_mut) {
+        for item in required {
+            if item.as_str() == Some(from) {
+                *item = Value::String(to.to_string());
+            }
+        }
+    }
 }
 
 pub fn set_schema_string_list_metadata(
@@ -155,6 +246,34 @@ pub fn set_schema_string_list_metadata(
     );
 }
 
+pub fn set_schema_value_list_metadata(
+    schema: &mut Value,
+    pointer: &str,
+    key: &str,
+    values: &[Value],
+) {
+    if values.is_empty() {
+        return;
+    }
+    let Some(resolved_pointer) = resolve_schema_pointer(schema, pointer) else {
+        return;
+    };
+    let Some(object) = ensure_schema_object_at_pointer(schema, resolved_pointer.as_str()) else {
+        return;
+    };
+    object.insert(key.to_string(), Value::Array(values.to_vec()));
+}
+
+pub fn set_schema_value_metadata(schema: &mut Value, pointer: &str, key: &str, value: Value) {
+    let Some(resolved_pointer) = resolve_schema_pointer(schema, pointer) else {
+        return;
+    };
+    let Some(object) = ensure_schema_object_at_pointer(schema, resolved_pointer.as_str()) else {
+        return;
+    };
+    object.insert(key.to_string(), value);
+}
+
 pub fn set_schema_string_metadata(schema: &mut Value, pointer: &str, key: &str, value: &str) {
     let Some(resolved_pointer) = resolve_schema_pointer(schema, pointer) else {
         return;
@@ -173,6 +292,29 @@ pub fn set_schema_u64_metadata(schema: &mut Value, pointer: &str, key: &str, val
         return;
     };
     set_schema_u64_metadata_on_object(target, key, value);
+}
+
+pub fn set_schema_number_metadata(schema: &mut Value, pointer: &str, key: &str, value: Value) {
+    if !value.is_number() {
+        return;
+    }
+    let Some(resolved_pointer) = resolve_schema_pointer(schema, pointer) else {
+        return;
+    };
+    let Some(target) = ensure_schema_object_at_pointer(schema, resolved_pointer.as_str()) else {
+        return;
+    };
+    set_schema_number_metadata_on_object(target, key, &value);
+}
+
+pub fn set_schema_bool_metadata(schema: &mut Value, pointer: &str, key: &str, value: bool) {
+    let Some(resolved_pointer) = resolve_schema_pointer(schema, pointer) else {
+        return;
+    };
+    let Some(target) = ensure_schema_object_at_pointer(schema, resolved_pointer.as_str()) else {
+        return;
+    };
+    target.insert(key.to_string(), Value::Bool(value));
 }
 
 pub fn suggest_name_candidates<I, T>(requested: &str, candidates: I, limit: usize) -> Vec<String>
@@ -257,6 +399,51 @@ pub fn prefix_schema_order_metadata(schema: &mut Value, prefix: &str) {
     prefix_schema_order_metadata_on_value(schema, prefix);
 }
 
+pub fn remap_invalid_params_paths<T>(result: Result<T>, mappings: &[(&str, &str)]) -> Result<T> {
+    result.map_err(|mut err| {
+        if err.code != PluginErrorCode::InvalidParams || mappings.is_empty() {
+            return err;
+        }
+        let mut mappings = mappings.to_vec();
+        mappings.sort_by(|left, right| {
+            right
+                .0
+                .len()
+                .cmp(&left.0.len())
+                .then_with(|| left.0.cmp(right.0))
+        });
+        for (from, to) in mappings {
+            err.message = remap_message_path_prefixes(err.message.as_str(), from, to);
+            if let Some(data) = err.data.as_mut() {
+                remap_error_data_paths(data, from, to);
+            }
+        }
+        err
+    })
+}
+
+pub fn remap_invalid_params_paths_owned<T>(
+    result: Result<T>,
+    mappings: &[(String, String)],
+) -> Result<T> {
+    let borrowed = mappings
+        .iter()
+        .map(|(from, to)| (from.as_str(), to.as_str()))
+        .collect::<Vec<_>>();
+    remap_invalid_params_paths(result, &borrowed)
+}
+
+pub fn prefixed_input_error_path_mappings(schema: &Value, prefix: &str) -> Vec<(String, String)> {
+    let schema = resolve_schema_value(schema, schema);
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    properties
+        .keys()
+        .map(|name| (name.clone(), format!("{prefix}.{name}")))
+        .collect()
+}
+
 fn set_schema_u64_metadata_on_object(
     object: &mut serde_json::Map<String, Value>,
     key: &str,
@@ -287,6 +474,28 @@ fn set_schema_string_metadata_on_object(
 fn set_schema_u64_metadata_on_value(target: &mut Value, key: &str, value: u64) {
     if let Some(object) = target.as_object_mut() {
         set_schema_u64_metadata_on_object(object, key, value);
+    }
+}
+
+fn set_schema_number_metadata_on_object(
+    object: &mut serde_json::Map<String, Value>,
+    key: &str,
+    value: &Value,
+) {
+    for composite_key in ["oneOf", "anyOf", "allOf"] {
+        if let Some(Value::Array(items)) = object.get_mut(composite_key) {
+            for item in items {
+                set_schema_number_metadata_on_value(item, key, value);
+            }
+            return;
+        }
+    }
+    object.insert(key.to_string(), value.clone());
+}
+
+fn set_schema_number_metadata_on_value(target: &mut Value, key: &str, value: &Value) {
+    if let Some(object) = target.as_object_mut() {
+        set_schema_number_metadata_on_object(object, key, value);
     }
 }
 
@@ -355,6 +564,44 @@ fn prefix_schema_order_metadata_on_value(target: &mut Value, prefix: &str) {
         }
         _ => {}
     }
+}
+
+fn remap_message_path_prefixes(message: &str, from: &str, to: &str) -> String {
+    message
+        .replace(format!("`{from}`").as_str(), format!("`{to}`").as_str())
+        .replace(format!("`{from}.").as_str(), format!("`{to}.").as_str())
+        .replace(format!("`{from}[").as_str(), format!("`{to}[").as_str())
+}
+
+fn remap_error_data_paths(value: &mut Value, from: &str, to: &str) {
+    match value {
+        Value::Object(object) => {
+            if let Some(Value::String(path)) = object.get_mut("path") {
+                *path = remap_prefixed_path(path.as_str(), from, to);
+            }
+            for nested in object.values_mut() {
+                remap_error_data_paths(nested, from, to);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                remap_error_data_paths(item, from, to);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn remap_prefixed_path(path: &str, from: &str, to: &str) -> String {
+    if path == from {
+        return to.to_string();
+    }
+    if let Some(rest) = path.strip_prefix(from)
+        && matches!(rest.chars().next(), Some('.') | Some('['))
+    {
+        return format!("{to}{rest}");
+    }
+    path.to_string()
 }
 
 fn prefix_schema_order_metadata_on_object(
@@ -744,6 +991,71 @@ fn merge_schema_overlay(target: &mut Value, overlay: &Value) {
     }
 }
 
+fn flattened_overlay_parse_name_mappings(overlay: &Value) -> Vec<(String, String)> {
+    overlay
+        .as_object()
+        .and_then(|object| object.get("properties"))
+        .and_then(Value::as_object)
+        .map(|properties| {
+            properties
+                .iter()
+                .filter_map(|(name, property)| {
+                    let parse_name = property.get("x-agena-parse-name").and_then(Value::as_str)?;
+                    (parse_name != name).then(|| (name.clone(), parse_name.to_string()))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn schema_required_names(schema: &Value) -> Vec<String> {
+    schema
+        .as_object()
+        .and_then(|object| object.get("required"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn remove_schema_parse_name_properties(target: &mut Value, mappings: &[(String, String)]) {
+    let Some(object) = target.as_object_mut() else {
+        return;
+    };
+    let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for (_, parse_name) in mappings {
+        properties.remove(parse_name);
+    }
+}
+
+fn set_schema_required_names(target: &mut Value, required: &[String]) {
+    let Some(object) = target.as_object_mut() else {
+        return;
+    };
+    let mut required = required
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(Value::String)
+        .collect::<Vec<_>>();
+    if required.is_empty() {
+        object.remove("required");
+    } else {
+        object.insert(
+            "required".to_string(),
+            Value::Array(std::mem::take(&mut required)),
+        );
+    }
+}
+
 fn promote_nested_composite_properties(target: &mut Value) {
     let Some(object) = target.as_object_mut() else {
         return;
@@ -1113,6 +1425,223 @@ fn resolve_schema_value<'a>(
 
 const MAX_VARIANT_EXAMPLES: usize = 6;
 
+pub fn command_usage_text(value: &serde_json::Value) -> Option<String> {
+    command_usage_shorthand_text(value).or_else(|| serde_json::to_string(value).ok())
+}
+
+pub fn command_usage_text_for_schema(
+    schema: &serde_json::Value,
+    value: &serde_json::Value,
+) -> Option<String> {
+    command_usage_shorthand_text_for_schema(schema, value)
+        .or_else(|| schema_compact_json_text(schema, schema, value))
+        .or_else(|| command_usage_text(value))
+}
+
+pub fn command_usage_text_from_schema(schema: &serde_json::Value) -> Option<String> {
+    let example = example_value_from_schema(schema)?;
+    let merged = merge_example_with_schema(schema, &example);
+    command_usage_text_for_schema(schema, &merged)
+}
+
+pub fn example_value_from_schema(schema: &serde_json::Value) -> Option<serde_json::Value> {
+    schema_example_value("value", schema)
+}
+
+pub fn merge_example_with_schema(
+    schema: &serde_json::Value,
+    example: &serde_json::Value,
+) -> serde_json::Value {
+    merge_required_example_values(schema, example)
+}
+
+fn command_usage_shorthand_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            Some(value.to_string())
+        }
+        serde_json::Value::String(text) => command_bare_string_usage_text(text),
+        serde_json::Value::Object(object) => command_object_usage_text(object),
+        serde_json::Value::Array(_) => None,
+    }
+}
+
+fn command_usage_shorthand_text_for_schema(
+    schema: &serde_json::Value,
+    value: &serde_json::Value,
+) -> Option<String> {
+    match value {
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            Some(value.to_string())
+        }
+        serde_json::Value::String(text) => command_bare_string_usage_text(text),
+        serde_json::Value::Object(object) => command_object_usage_text_for_schema(schema, object),
+        serde_json::Value::Array(_) => None,
+    }
+}
+
+fn command_object_usage_text(object: &Map<String, Value>) -> Option<String> {
+    if object.is_empty() {
+        return None;
+    }
+
+    if object.len() == 1 {
+        let (_, value) = object.iter().next()?;
+        return command_single_field_usage_text(value);
+    }
+
+    let mut rendered = Vec::with_capacity(object.len());
+    for (name, value) in object {
+        rendered.push(format!("{name}={}", command_key_value_usage_text(value)?));
+    }
+    Some(rendered.join(" "))
+}
+
+fn command_object_usage_text_for_schema(
+    schema: &serde_json::Value,
+    object: &Map<String, Value>,
+) -> Option<String> {
+    if object.is_empty() {
+        return None;
+    }
+
+    if object.len() == 1 {
+        let (name, value) = object.iter().next()?;
+        let property_schema = ordered_schema_properties(schema, schema)
+            .and_then(|properties| {
+                properties
+                    .into_iter()
+                    .find_map(|(property_name, property_schema)| {
+                        (property_name == name).then_some(property_schema)
+                    })
+            })
+            .unwrap_or(schema);
+        return command_single_field_usage_text_for_schema(schema, property_schema, value);
+    }
+
+    let mut rendered = Vec::with_capacity(object.len());
+    let mut seen = BTreeSet::new();
+    if let Some(ordered_properties) = ordered_schema_properties(schema, schema) {
+        for (name, property_schema) in ordered_properties {
+            if let Some(value) = object.get(name) {
+                rendered.push(format!(
+                    "{name}={}",
+                    command_key_value_usage_text_for_schema(schema, property_schema, value)?
+                ));
+                seen.insert(name.clone());
+            }
+        }
+    }
+    for (name, value) in object {
+        if seen.contains(name) {
+            continue;
+        }
+        rendered.push(format!(
+            "{name}={}",
+            command_key_value_usage_text_for_schema(schema, schema, value)?
+        ));
+    }
+    Some(rendered.join(" "))
+}
+
+fn command_single_field_usage_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            Some(value.to_string())
+        }
+        serde_json::Value::String(text) => command_bare_string_usage_text(text),
+        serde_json::Value::Object(_) | serde_json::Value::Array(_) => None,
+    }
+}
+
+fn command_single_field_usage_text_for_schema(
+    root: &serde_json::Value,
+    schema: &serde_json::Value,
+    value: &serde_json::Value,
+) -> Option<String> {
+    command_single_field_usage_text(value)
+        .or_else(|| compact_command_value_text(root, schema, value))
+}
+
+fn command_key_value_usage_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            Some(value.to_string())
+        }
+        serde_json::Value::String(text) if command_key_value_string_is_safe(text) => {
+            Some(text.to_string())
+        }
+        serde_json::Value::String(_)
+        | serde_json::Value::Object(_)
+        | serde_json::Value::Array(_) => None,
+    }
+}
+
+fn command_key_value_usage_text_for_schema(
+    root: &serde_json::Value,
+    schema: &serde_json::Value,
+    value: &serde_json::Value,
+) -> Option<String> {
+    command_key_value_usage_text(value).or_else(|| compact_command_value_text(root, schema, value))
+}
+
+fn command_bare_string_usage_text(text: &str) -> Option<String> {
+    command_string_is_shorthand_safe(text).then(|| text.to_string())
+}
+
+fn command_key_value_string_is_safe(text: &str) -> bool {
+    command_string_is_shorthand_safe(text) && !text.chars().any(char::is_whitespace)
+}
+
+fn command_string_is_shorthand_safe(text: &str) -> bool {
+    !text.is_empty()
+        && text.trim() == text
+        && !text.chars().any(|c| matches!(c, '\n' | '\r' | '\t'))
+}
+
+fn compact_command_value_text(
+    root: &serde_json::Value,
+    schema: &serde_json::Value,
+    value: &serde_json::Value,
+) -> Option<String> {
+    match value {
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            schema_compact_json_text(root, schema, value)
+                .or_else(|| serde_json::to_string(value).ok())
+                .filter(|text| !text.chars().any(char::is_whitespace))
+        }
+        _ => None,
+    }
+}
+
+fn merge_required_example_values(schema: &Value, example: &Value) -> Value {
+    let Some(mut merged) = example.as_object().cloned() else {
+        return example.clone();
+    };
+    let required = resolve_schema_value(schema, schema)
+        .as_object()
+        .and_then(|object| object.get("required"))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let Some(ordered_properties) = ordered_schema_properties(schema, schema) else {
+        return example.clone();
+    };
+    for (name, property) in ordered_properties {
+        if required.contains(name.as_str()) && !merged.contains_key(name.as_str()) {
+            if let Some(value) = schema_example_value(&name, property) {
+                merged.insert(name.clone(), value);
+            }
+        }
+    }
+    Value::Object(merged)
+}
+
 pub fn schema_example_texts(schema: &serde_json::Value) -> Vec<String> {
     if let Some(variants) = top_level_discriminated_variants(schema) {
         return variants
@@ -1369,6 +1898,11 @@ fn schema_compact_json_text(
 
 fn schema_example_object(schema: &serde_json::Value) -> Option<serde_json::Value> {
     let object = schema.as_object()?;
+    if let Some(example) = schema_first_example_value(object) {
+        if example.is_object() {
+            return Some(example);
+        }
+    }
     if let Some(default) = object.get("default") {
         return Some(default.clone());
     }
@@ -1385,6 +1919,7 @@ fn schema_example_object(schema: &serde_json::Value) -> Option<serde_json::Value
     let mut rendered = serde_json::Map::new();
     for (name, property) in ordered_schema_properties(schema, schema)? {
         if required.contains(name.as_str())
+            || property.get("examples").is_some()
             || property.get("const").is_some()
             || property.get("default").is_some()
         {
@@ -1398,6 +1933,9 @@ fn schema_example_object(schema: &serde_json::Value) -> Option<serde_json::Value
 
 fn schema_example_value(field_name: &str, schema: &serde_json::Value) -> Option<serde_json::Value> {
     let object = schema.as_object()?;
+    if let Some(example) = schema_first_example_value(object) {
+        return Some(example);
+    }
     if let Some(default) = object.get("default") {
         return Some(default.clone());
     }
@@ -1436,9 +1974,12 @@ fn schema_example_value(field_name: &str, schema: &serde_json::Value) -> Option<
         }
     }
     match object.get("type").and_then(serde_json::Value::as_str) {
-        Some("string") => Some(serde_json::Value::String(format!("<{field_name}>"))),
-        Some("integer") => Some(serde_json::Value::Number(1.into())),
-        Some("number") => Some(serde_json::json!(1.0)),
+        Some("string") => Some(schema_string_example_value(field_name, object)),
+        Some("integer") => Some(schema_numeric_example_value(object, serde_json::json!(1))?),
+        Some("number") => Some(schema_numeric_example_value(
+            object,
+            serde_json::json!(1.0),
+        )?),
         Some("boolean") => Some(serde_json::Value::Bool(false)),
         Some("array") => {
             let item_schema = object.get("items")?;
@@ -1454,6 +1995,243 @@ fn schema_example_value(field_name: &str, schema: &serde_json::Value) -> Option<
         _ if object.get("properties").is_some() => schema_example_object(schema),
         _ => None,
     }
+}
+
+fn schema_string_example_value(field_name: &str, object: &Map<String, Value>) -> Value {
+    let text = object
+        .get("format")
+        .and_then(serde_json::Value::as_str)
+        .and_then(schema_format_example_text)
+        .unwrap_or_else(|| format!("<{field_name}>"));
+    Value::String(text)
+}
+
+fn schema_format_example_text(format: &str) -> Option<String> {
+    let text = match format {
+        "uri" => "https://example.com",
+        "uuid" => "550e8400-e29b-41d4-a716-446655440000",
+        "email" => "user@example.com",
+        "hostname" => "example.com",
+        "ipv4" => "127.0.0.1",
+        "ipv6" => "2001:db8::1",
+        _ => return None,
+    };
+    Some(text.to_string())
+}
+
+fn schema_numeric_example_value(
+    object: &Map<String, Value>,
+    default: Value,
+) -> Option<serde_json::Value> {
+    let default_number = default.as_number()?;
+    if number_value_satisfies_schema_bounds(default_number, object) {
+        return Some(default);
+    }
+    if default.as_i64().is_some() || default.as_u64().is_some() {
+        if let Some(value) = schema_integer_example_value(object) {
+            return Some(value);
+        }
+    }
+    if let Some(value) = schema_float_example_value(object) {
+        return Some(value);
+    }
+    Some(default)
+}
+
+#[derive(Clone, Copy)]
+struct NumericSchemaBound<'a> {
+    value: &'a serde_json::Number,
+    exclusive: bool,
+}
+
+fn schema_numeric_lower_bound(object: &Map<String, Value>) -> Option<NumericSchemaBound<'_>> {
+    choose_stricter_lower_bound(
+        object.get("minimum").and_then(Value::as_number),
+        object.get("exclusiveMinimum").and_then(Value::as_number),
+    )
+}
+
+fn schema_numeric_upper_bound(object: &Map<String, Value>) -> Option<NumericSchemaBound<'_>> {
+    choose_stricter_upper_bound(
+        object.get("maximum").and_then(Value::as_number),
+        object.get("exclusiveMaximum").and_then(Value::as_number),
+    )
+}
+
+fn choose_stricter_lower_bound<'a>(
+    inclusive: Option<&'a serde_json::Number>,
+    exclusive: Option<&'a serde_json::Number>,
+) -> Option<NumericSchemaBound<'a>> {
+    match (inclusive, exclusive) {
+        (Some(inclusive), Some(exclusive)) => {
+            match compare_json_numbers(inclusive, exclusive).unwrap_or(Ordering::Equal) {
+                Ordering::Less => Some(NumericSchemaBound {
+                    value: exclusive,
+                    exclusive: true,
+                }),
+                Ordering::Greater => Some(NumericSchemaBound {
+                    value: inclusive,
+                    exclusive: false,
+                }),
+                Ordering::Equal => Some(NumericSchemaBound {
+                    value: exclusive,
+                    exclusive: true,
+                }),
+            }
+        }
+        (Some(inclusive), None) => Some(NumericSchemaBound {
+            value: inclusive,
+            exclusive: false,
+        }),
+        (None, Some(exclusive)) => Some(NumericSchemaBound {
+            value: exclusive,
+            exclusive: true,
+        }),
+        (None, None) => None,
+    }
+}
+
+fn choose_stricter_upper_bound<'a>(
+    inclusive: Option<&'a serde_json::Number>,
+    exclusive: Option<&'a serde_json::Number>,
+) -> Option<NumericSchemaBound<'a>> {
+    match (inclusive, exclusive) {
+        (Some(inclusive), Some(exclusive)) => {
+            match compare_json_numbers(inclusive, exclusive).unwrap_or(Ordering::Equal) {
+                Ordering::Less => Some(NumericSchemaBound {
+                    value: inclusive,
+                    exclusive: false,
+                }),
+                Ordering::Greater => Some(NumericSchemaBound {
+                    value: exclusive,
+                    exclusive: true,
+                }),
+                Ordering::Equal => Some(NumericSchemaBound {
+                    value: exclusive,
+                    exclusive: true,
+                }),
+            }
+        }
+        (Some(inclusive), None) => Some(NumericSchemaBound {
+            value: inclusive,
+            exclusive: false,
+        }),
+        (None, Some(exclusive)) => Some(NumericSchemaBound {
+            value: exclusive,
+            exclusive: true,
+        }),
+        (None, None) => None,
+    }
+}
+
+fn number_value_satisfies_schema_bounds(
+    number: &serde_json::Number,
+    object: &Map<String, Value>,
+) -> bool {
+    if let Some(lower) = schema_numeric_lower_bound(object) {
+        let Some(ordering) = compare_json_numbers(number, lower.value) else {
+            return false;
+        };
+        if ordering == Ordering::Less || (lower.exclusive && ordering == Ordering::Equal) {
+            return false;
+        }
+    }
+    if let Some(upper) = schema_numeric_upper_bound(object) {
+        let Some(ordering) = compare_json_numbers(number, upper.value) else {
+            return false;
+        };
+        if ordering == Ordering::Greater || (upper.exclusive && ordering == Ordering::Equal) {
+            return false;
+        }
+    }
+    true
+}
+
+fn schema_integer_example_value(object: &Map<String, Value>) -> Option<Value> {
+    let lower = schema_numeric_lower_bound(object).and_then(|bound| {
+        integer_candidate_from_lower_bound(bound.value.as_f64()?, bound.exclusive)
+    });
+    let upper = schema_numeric_upper_bound(object).and_then(|bound| {
+        integer_candidate_from_upper_bound(bound.value.as_f64()?, bound.exclusive)
+    });
+
+    let mut candidate = lower.unwrap_or(1);
+    if let Some(upper) = upper {
+        if candidate > upper {
+            candidate = upper;
+        }
+    }
+    if let Some(lower) = lower {
+        if candidate < lower {
+            return None;
+        }
+    }
+    let number = serde_json::Number::from(candidate);
+    number_value_satisfies_schema_bounds(&number, object).then_some(Value::Number(number))
+}
+
+fn integer_candidate_from_lower_bound(value: f64, exclusive: bool) -> Option<i64> {
+    if !value.is_finite() {
+        return None;
+    }
+    let candidate = if exclusive {
+        value.floor() + 1.0
+    } else {
+        value.ceil()
+    };
+    (candidate >= i64::MIN as f64 && candidate <= i64::MAX as f64).then_some(candidate as i64)
+}
+
+fn integer_candidate_from_upper_bound(value: f64, exclusive: bool) -> Option<i64> {
+    if !value.is_finite() {
+        return None;
+    }
+    let candidate = if exclusive {
+        value.ceil() - 1.0
+    } else {
+        value.floor()
+    };
+    (candidate >= i64::MIN as f64 && candidate <= i64::MAX as f64).then_some(candidate as i64)
+}
+
+fn schema_float_example_value(object: &Map<String, Value>) -> Option<Value> {
+    let lower = schema_numeric_lower_bound(object);
+    let upper = schema_numeric_upper_bound(object);
+    let candidate = match (lower, upper) {
+        (Some(lower), Some(upper)) => {
+            let lower = lower.value.as_f64()?;
+            let upper = upper.value.as_f64()?;
+            if !lower.is_finite() || !upper.is_finite() || lower >= upper {
+                return None;
+            }
+            (lower + upper) / 2.0
+        }
+        (Some(lower), None) => {
+            let lower_value = lower.value.as_f64()?;
+            if !lower_value.is_finite() {
+                return None;
+            }
+            lower_value + if lower.exclusive { 1.0 } else { 0.0 }
+        }
+        (None, Some(upper)) => {
+            let upper_value = upper.value.as_f64()?;
+            if !upper_value.is_finite() {
+                return None;
+            }
+            upper_value - if upper.exclusive { 1.0 } else { 0.0 }
+        }
+        (None, None) => return None,
+    };
+    let number = serde_json::Number::from_f64(candidate)?;
+    number_value_satisfies_schema_bounds(&number, object).then_some(Value::Number(number))
+}
+
+fn schema_first_example_value(object: &Map<String, Value>) -> Option<Value> {
+    object
+        .get("examples")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .cloned()
 }
 
 fn schema_type_label(root: &serde_json::Value, schema: &serde_json::Value) -> String {
@@ -1566,6 +2344,24 @@ fn schema_constraint_labels(schema: &serde_json::Value) -> Option<Vec<String>> {
         return Some(labels);
     }
     let mut labels = Vec::new();
+    if let Some(value) = object.get("minimum").filter(|value| value.is_number()) {
+        labels.push(format!("minimum={}", compact_json_value(value)));
+    }
+    if let Some(value) = object.get("maximum").filter(|value| value.is_number()) {
+        labels.push(format!("maximum={}", compact_json_value(value)));
+    }
+    if let Some(value) = object
+        .get("exclusiveMinimum")
+        .filter(|value| value.is_number())
+    {
+        labels.push(format!("exclusive_minimum={}", compact_json_value(value)));
+    }
+    if let Some(value) = object
+        .get("exclusiveMaximum")
+        .filter(|value| value.is_number())
+    {
+        labels.push(format!("exclusive_maximum={}", compact_json_value(value)));
+    }
     if let Some(value) = object.get("minItems").and_then(serde_json::Value::as_u64) {
         labels.push(format!("min_items={value}"));
     }
@@ -1583,6 +2379,12 @@ fn schema_constraint_labels(schema: &serde_json::Value) -> Option<Vec<String>> {
         .and_then(serde_json::Value::as_u64)
     {
         labels.push(format!("min_properties={value}"));
+    }
+    if let Some(value) = object
+        .get("maxProperties")
+        .and_then(serde_json::Value::as_u64)
+    {
+        labels.push(format!("max_properties={value}"));
     }
     if let Some(value) = object.get("pattern").and_then(serde_json::Value::as_str) {
         labels.push(format!("pattern={value}"));
@@ -1620,13 +2422,31 @@ fn schema_array_item_constraint_labels(schema: &serde_json::Value) -> Option<Vec
         return Some(labels);
     }
     let item_schema = object.get("items")?.as_object()?;
-    if item_schema.get("type").and_then(serde_json::Value::as_str) == Some("object")
-        || item_schema.get("properties").is_some()
-    {
-        return None;
-    }
-
     let mut labels = Vec::new();
+    if let Some(value) = item_schema.get("minimum").filter(|value| value.is_number()) {
+        labels.push(format!("item_minimum={}", compact_json_value(value)));
+    }
+    if let Some(value) = item_schema.get("maximum").filter(|value| value.is_number()) {
+        labels.push(format!("item_maximum={}", compact_json_value(value)));
+    }
+    if let Some(value) = item_schema
+        .get("exclusiveMinimum")
+        .filter(|value| value.is_number())
+    {
+        labels.push(format!(
+            "item_exclusive_minimum={}",
+            compact_json_value(value)
+        ));
+    }
+    if let Some(value) = item_schema
+        .get("exclusiveMaximum")
+        .filter(|value| value.is_number())
+    {
+        labels.push(format!(
+            "item_exclusive_maximum={}",
+            compact_json_value(value)
+        ));
+    }
     if let Some(value) = item_schema
         .get("minLength")
         .and_then(serde_json::Value::as_u64)
@@ -1640,6 +2460,18 @@ fn schema_array_item_constraint_labels(schema: &serde_json::Value) -> Option<Vec
         labels.push(format!("item_max_length={value}"));
     }
     if let Some(value) = item_schema
+        .get("minProperties")
+        .and_then(serde_json::Value::as_u64)
+    {
+        labels.push(format!("item_min_properties={value}"));
+    }
+    if let Some(value) = item_schema
+        .get("maxProperties")
+        .and_then(serde_json::Value::as_u64)
+    {
+        labels.push(format!("item_max_properties={value}"));
+    }
+    if let Some(value) = item_schema
         .get("pattern")
         .and_then(serde_json::Value::as_str)
     {
@@ -1650,6 +2482,10 @@ fn schema_array_item_constraint_labels(schema: &serde_json::Value) -> Option<Vec
         .and_then(serde_json::Value::as_str)
     {
         labels.push(format!("item_format={value}"));
+    }
+    if let Some(values) = string_literals(&Value::Object(item_schema.clone())) {
+        let joined = values.into_iter().collect::<Vec<_>>().join(" | ");
+        labels.push(format!("item_values={joined}"));
     }
     Some(labels)
 }
@@ -1673,6 +2509,124 @@ fn schema_aliases(schema: &serde_json::Value) -> Option<Vec<String>> {
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>()
         })
+}
+
+fn schema_property_input_keys(name: &str, property_schema: &Value) -> Vec<String> {
+    let parse_name = property_schema
+        .get("x-agena-parse-name")
+        .and_then(Value::as_str)
+        .unwrap_or(name);
+    let mut seen = BTreeSet::new();
+    let mut keys = Vec::new();
+    for key in std::iter::once(parse_name.to_string())
+        .chain(std::iter::once(name.to_string()))
+        .chain(schema_aliases(property_schema).unwrap_or_default())
+    {
+        if seen.insert(key.clone()) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
+pub fn flattened_input_keys_for_parse_path(schema: &Value, path: &str) -> Vec<String> {
+    let schema = resolve_schema_value(schema, schema);
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+
+    let head_end = path.find('.').unwrap_or(path.len());
+    let (head, tail) = path.split_at(head_end);
+    let mut base = head;
+    let mut suffix = String::new();
+    while let Some(stripped) = base.strip_suffix("[]") {
+        base = stripped;
+        suffix.push_str("[]");
+    }
+
+    for (name, property_schema) in properties {
+        let property_schema = resolve_schema_value(schema, property_schema);
+        let keys = schema_property_input_keys(name, property_schema);
+        if keys.iter().any(|candidate| candidate == base) {
+            return keys
+                .into_iter()
+                .map(|key| format!("{key}{suffix}{tail}"))
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
+pub fn resolve_input_constraint_path(schema: &Value, path: &str) -> String {
+    let schema = resolve_schema_value(schema, schema);
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return path.to_string();
+    };
+
+    let head_end = path.find('.').unwrap_or(path.len());
+    let (head, tail) = path.split_at(head_end);
+    let mut base = head;
+    let mut suffix = String::new();
+    while let Some(stripped) = base.strip_suffix("[]") {
+        base = stripped;
+        suffix.push_str("[]");
+    }
+
+    for (name, property_schema) in properties {
+        let property_schema = resolve_schema_value(schema, property_schema);
+        let keys = schema_property_input_keys(name, property_schema);
+        if let Some(parse_name) = keys.first()
+            && keys.iter().any(|candidate| candidate == base)
+        {
+            return format!("{parse_name}{suffix}{tail}");
+        }
+    }
+    path.to_string()
+}
+
+pub fn normalize_flattened_input_object(input: &mut Value, schema: &Value) {
+    let Some(object) = input.as_object_mut() else {
+        return;
+    };
+    let schema = resolve_schema_value(schema, schema);
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return;
+    };
+
+    for (name, property_schema) in properties {
+        let property_schema = resolve_schema_value(schema, property_schema);
+        let keys = schema_property_input_keys(name, property_schema);
+        let parse_name = keys.first().cloned().unwrap_or_else(|| name.clone());
+        let candidate_keys = keys
+            .iter()
+            .filter(|candidate| candidate.as_str() != parse_name.as_str())
+            .collect::<Vec<_>>();
+
+        if !object.contains_key(parse_name.as_str()) {
+            let mut matched_alias = None;
+            for candidate in &candidate_keys {
+                if object.contains_key(candidate.as_str()) {
+                    matched_alias = Some((*candidate).clone());
+                    break;
+                }
+            }
+            if let Some(alias) = matched_alias
+                && let Some(value) = object.remove(alias.as_str())
+            {
+                object.insert(parse_name.to_string(), value);
+            }
+        } else {
+            for candidate in &candidate_keys {
+                object.remove(candidate.as_str());
+            }
+        }
+
+        if !object.contains_key(parse_name.as_str())
+            && let Some(default) = property_schema.get("default")
+        {
+            object.insert(parse_name.to_string(), default.clone());
+        }
+    }
 }
 
 fn schema_relations(schema: &serde_json::Value) -> Option<Vec<String>> {
@@ -1739,6 +2693,24 @@ pub fn normalize_trim_suffix_path(input: &mut Value, path: &str, suffix: &str) {
             *text = stripped.to_string();
         }
     });
+}
+
+pub fn remove_json_path(root: &mut Value, path: &str) {
+    let segments = parse_json_path(path);
+    remove_json_path_matches(root, &segments);
+}
+
+pub fn normalize_nested_input_path(input: &mut Value, path: &str, schema: &Value) {
+    let segments = parse_json_path(path);
+    normalize_nested_input_matches(input, &segments, schema);
+}
+
+pub fn prefix_input_jsonpath(prefix: &str, jsonpath: &str) -> Option<String> {
+    if jsonpath == "$" {
+        return Some(prefix.to_string());
+    }
+    let suffix = jsonpath.strip_prefix("$.")?;
+    Some(format!("{prefix}.{suffix}"))
 }
 
 pub fn validate_non_empty_paths<T>(value: &T, paths: &[&str]) -> Result<()>
@@ -1847,6 +2819,73 @@ where
     Ok(())
 }
 
+pub fn validate_min_properties_path<T>(value: &T, path: &str, minimum: usize) -> Result<()>
+where
+    T: Serialize,
+{
+    let json =
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+    for candidate in json_path_matches(&json, path) {
+        let Value::Object(object) = candidate else {
+            return Err(PluginError::invalid_params(format!(
+                "field `{}` must be an object",
+                display_path(path)
+            )));
+        };
+        if object.len() < minimum {
+            return Err(PluginError::invalid_params(format!(
+                "field `{}` requires at least {minimum} propert{}",
+                display_path(path),
+                if minimum == 1 { "y" } else { "ies" }
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_max_properties_path<T>(value: &T, path: &str, maximum: usize) -> Result<()>
+where
+    T: Serialize,
+{
+    let json =
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+    for candidate in json_path_matches(&json, path) {
+        let Value::Object(object) = candidate else {
+            return Err(PluginError::invalid_params(format!(
+                "field `{}` must be an object",
+                display_path(path)
+            )));
+        };
+        if object.len() > maximum {
+            return Err(PluginError::invalid_params(format!(
+                "field `{}` accepts at most {maximum} propert{}",
+                display_path(path),
+                if maximum == 1 { "y" } else { "ies" }
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_min_chars_path<T>(value: &T, path: &str, minimum: usize) -> Result<()>
+where
+    T: Serialize,
+{
+    let json =
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+    if json_path_matches(&json, path)
+        .iter()
+        .any(|value| string_char_count(value) < minimum)
+    {
+        return Err(PluginError::invalid_params(format!(
+            "field `{}` must be at least {minimum} character{}",
+            display_path(path),
+            if minimum == 1 { "" } else { "s" }
+        )));
+    }
+    Ok(())
+}
+
 pub fn validate_max_chars_path<T>(value: &T, path: &str, maximum: usize) -> Result<()>
 where
     T: Serialize,
@@ -1861,6 +2900,310 @@ where
             "field `{}` must be at most {maximum} character{}",
             display_path(path),
             if maximum == 1 { "" } else { "s" }
+        )));
+    }
+    Ok(())
+}
+
+pub fn validate_minimum_path<T>(value: &T, path: &str, minimum: &Value) -> Result<()>
+where
+    T: Serialize,
+{
+    let Some(minimum_number) = minimum.as_number() else {
+        return Err(PluginError::invalid_params(format!(
+            "minimum for field `{}` must be numeric",
+            display_path(path)
+        )));
+    };
+    let json =
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+    for candidate in json_path_matches(&json, path) {
+        let Value::Number(candidate_number) = candidate else {
+            return Err(PluginError::invalid_params(format!(
+                "field `{}` must be a number",
+                display_path(path)
+            )));
+        };
+        if compare_json_numbers(candidate_number, minimum_number)
+            .is_some_and(|ordering| ordering == Ordering::Less)
+        {
+            return Err(PluginError::invalid_params(format!(
+                "field `{}` must be at least {}",
+                display_path(path),
+                minimum
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_maximum_path<T>(value: &T, path: &str, maximum: &Value) -> Result<()>
+where
+    T: Serialize,
+{
+    let Some(maximum_number) = maximum.as_number() else {
+        return Err(PluginError::invalid_params(format!(
+            "maximum for field `{}` must be numeric",
+            display_path(path)
+        )));
+    };
+    let json =
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+    for candidate in json_path_matches(&json, path) {
+        let Value::Number(candidate_number) = candidate else {
+            return Err(PluginError::invalid_params(format!(
+                "field `{}` must be a number",
+                display_path(path)
+            )));
+        };
+        if compare_json_numbers(candidate_number, maximum_number)
+            .is_some_and(|ordering| ordering == Ordering::Greater)
+        {
+            return Err(PluginError::invalid_params(format!(
+                "field `{}` must be at most {}",
+                display_path(path),
+                maximum
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_exclusive_minimum_path<T>(value: &T, path: &str, minimum: &Value) -> Result<()>
+where
+    T: Serialize,
+{
+    let Some(minimum_number) = minimum.as_number() else {
+        return Err(PluginError::invalid_params(format!(
+            "exclusive minimum for field `{}` must be numeric",
+            display_path(path)
+        )));
+    };
+    let json =
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+    for candidate in json_path_matches(&json, path) {
+        let Value::Number(candidate_number) = candidate else {
+            return Err(PluginError::invalid_params(format!(
+                "field `{}` must be a number",
+                display_path(path)
+            )));
+        };
+        if compare_json_numbers(candidate_number, minimum_number)
+            .is_some_and(|ordering| ordering == Ordering::Less || ordering == Ordering::Equal)
+        {
+            return Err(PluginError::invalid_params(format!(
+                "field `{}` must be greater than {}",
+                display_path(path),
+                minimum
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_exclusive_maximum_path<T>(value: &T, path: &str, maximum: &Value) -> Result<()>
+where
+    T: Serialize,
+{
+    let Some(maximum_number) = maximum.as_number() else {
+        return Err(PluginError::invalid_params(format!(
+            "exclusive maximum for field `{}` must be numeric",
+            display_path(path)
+        )));
+    };
+    let json =
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+    for candidate in json_path_matches(&json, path) {
+        let Value::Number(candidate_number) = candidate else {
+            return Err(PluginError::invalid_params(format!(
+                "field `{}` must be a number",
+                display_path(path)
+            )));
+        };
+        if compare_json_numbers(candidate_number, maximum_number)
+            .is_some_and(|ordering| ordering == Ordering::Greater || ordering == Ordering::Equal)
+        {
+            return Err(PluginError::invalid_params(format!(
+                "field `{}` must be less than {}",
+                display_path(path),
+                maximum
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_format_path<T>(value: &T, path: &str, format: &str) -> Result<()>
+where
+    T: Serialize,
+{
+    if !is_supported_string_format(format) {
+        return Err(PluginError::invalid_params(format!(
+            "unsupported format `{}` for field `{}`",
+            format,
+            display_path(path)
+        )));
+    }
+    let json =
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+    for candidate in json_path_matches(&json, path) {
+        let Value::String(text) = candidate else {
+            return Err(PluginError::invalid_params(format!(
+                "field `{}` must be a string",
+                display_path(path)
+            )));
+        };
+        if !string_matches_format(text, format) {
+            return Err(PluginError::invalid_params(format!(
+                "field `{}` must match format `{}`",
+                display_path(path),
+                format
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_pattern_path<T>(value: &T, path: &str, pattern: &str) -> Result<()>
+where
+    T: Serialize,
+{
+    let regex = regex::Regex::new(pattern).map_err(|err| {
+        PluginError::invalid_params(format!(
+            "invalid pattern for field `{}`: {err}",
+            display_path(path)
+        ))
+    })?;
+    let json =
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+    for candidate in json_path_matches(&json, path) {
+        let Value::String(text) = candidate else {
+            return Err(PluginError::invalid_params(format!(
+                "field `{}` must be a string",
+                display_path(path)
+            )));
+        };
+        if !regex.is_match(text) {
+            return Err(PluginError::invalid_params(format!(
+                "field `{}` must match pattern `{}`",
+                display_path(path),
+                pattern
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn is_supported_string_format(format: &str) -> bool {
+    matches!(
+        format,
+        "uri" | "uuid" | "email" | "hostname" | "ipv4" | "ipv6"
+    )
+}
+
+fn string_matches_format(text: &str, format: &str) -> bool {
+    match format {
+        "uri" => url::Url::parse(text).is_ok(),
+        "uuid" => uuid::Uuid::parse_str(text).is_ok(),
+        "email" => validate_email_text(text),
+        "hostname" => validate_hostname_text(text),
+        "ipv4" => text.parse::<Ipv4Addr>().is_ok(),
+        "ipv6" => text.parse::<Ipv6Addr>().is_ok(),
+        _ => false,
+    }
+}
+
+fn validate_email_text(text: &str) -> bool {
+    if text.is_empty() || text.len() > 254 || text.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let Some((local, domain)) = text.rsplit_once('@') else {
+        return false;
+    };
+    if local.is_empty()
+        || local.len() > 64
+        || local.starts_with('.')
+        || local.ends_with('.')
+        || local.contains("..")
+    {
+        return false;
+    }
+    if !local.bytes().all(|byte| {
+        matches!(byte,
+            b'a'..=b'z'
+            | b'A'..=b'Z'
+            | b'0'..=b'9'
+            | b'!'
+            | b'#'
+            | b'$'
+            | b'%'
+            | b'&'
+            | b'\''
+            | b'*'
+            | b'+'
+            | b'-'
+            | b'/'
+            | b'='
+            | b'?'
+            | b'^'
+            | b'_'
+            | b'`'
+            | b'{'
+            | b'|'
+            | b'}'
+            | b'~'
+            | b'.')
+    }) {
+        return false;
+    }
+    if let Some(domain_literal) = domain
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+    {
+        if let Some(ipv6) = domain_literal.strip_prefix("IPv6:") {
+            return ipv6.parse::<Ipv6Addr>().is_ok();
+        }
+        return domain_literal.parse::<Ipv4Addr>().is_ok();
+    }
+    validate_hostname_text(domain)
+}
+
+fn validate_hostname_text(text: &str) -> bool {
+    let hostname = text.strip_suffix('.').unwrap_or(text);
+    if hostname.is_empty() || hostname.len() > 253 {
+        return false;
+    }
+    hostname.split('.').all(validate_hostname_label)
+}
+
+fn validate_hostname_label(label: &str) -> bool {
+    if label.is_empty() || label.len() > 63 {
+        return false;
+    }
+    let bytes = label.as_bytes();
+    bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+}
+
+pub fn validate_allowed_values_path<T>(value: &T, path: &str, allowed: &[Value]) -> Result<()>
+where
+    T: Serialize,
+{
+    let json =
+        serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
+    for candidate in json_path_matches(&json, path) {
+        if allowed.iter().any(|value| value == candidate) {
+            continue;
+        }
+        let allowed_json = serde_json::to_string(&Value::Array(allowed.to_vec()))
+            .unwrap_or_else(|_| "[]".to_string());
+        return Err(PluginError::invalid_params(format!(
+            "field `{}` must be one of {}",
+            display_path(path),
+            allowed_json
         )));
     }
     Ok(())
@@ -2042,7 +3385,7 @@ fn json_error_data(
     Value::Object(data)
 }
 
-fn json_path_present(root: &Value, path: &str) -> bool {
+pub fn json_path_present(root: &Value, path: &str) -> bool {
     let segments = parse_json_path(path);
     path_present_segments(root, &segments)
 }
@@ -2069,6 +3412,29 @@ fn string_char_count(value: &Value) -> usize {
         Value::String(text) => text.chars().count(),
         _ => 0,
     }
+}
+
+fn compare_json_numbers(left: &serde_json::Number, right: &serde_json::Number) -> Option<Ordering> {
+    match (left.as_i64(), left.as_u64(), right.as_i64(), right.as_u64()) {
+        (Some(left), _, Some(right), _) => return Some(left.cmp(&right)),
+        (_, Some(left), _, Some(right)) => return Some(left.cmp(&right)),
+        (Some(left), _, _, Some(right)) => {
+            return Some(if left < 0 {
+                Ordering::Less
+            } else {
+                (left as u64).cmp(&right)
+            });
+        }
+        (_, Some(left), Some(right), _) => {
+            return Some(if right < 0 {
+                Ordering::Greater
+            } else {
+                left.cmp(&(right as u64))
+            });
+        }
+        _ => {}
+    }
+    left.as_f64()?.partial_cmp(&right.as_f64()?)
 }
 
 fn json_path_matches<'a>(root: &'a Value, path: &str) -> Vec<&'a Value> {
@@ -2130,6 +3496,65 @@ fn collect_json_path_matches<'a>(
             if let Value::Array(items) = current {
                 for item in items {
                     collect_json_path_matches(item, &segments[1..], matches);
+                }
+            }
+        }
+    }
+}
+
+fn remove_json_path_matches(current: &mut Value, segments: &[JsonPathSegment]) {
+    let Some((head, tail)) = segments.split_first() else {
+        return;
+    };
+
+    match head {
+        JsonPathSegment::Key(key) => {
+            let Value::Object(object) = current else {
+                return;
+            };
+            if tail.is_empty() {
+                object.remove(key);
+            } else if let Some(next) = object.get_mut(key) {
+                remove_json_path_matches(next, tail);
+            }
+        }
+        JsonPathSegment::AllItems => {
+            let Value::Array(items) = current else {
+                return;
+            };
+            if tail.is_empty() {
+                items.clear();
+            } else {
+                for item in items {
+                    remove_json_path_matches(item, tail);
+                }
+            }
+        }
+    }
+}
+
+fn normalize_nested_input_matches(
+    current: &mut Value,
+    segments: &[JsonPathSegment],
+    schema: &Value,
+) {
+    if segments.is_empty() {
+        normalize_flattened_input_object(current, schema);
+        return;
+    }
+
+    match &segments[0] {
+        JsonPathSegment::Key(key) => {
+            if let Value::Object(object) = current
+                && let Some(next) = object.get_mut(key)
+            {
+                normalize_nested_input_matches(next, &segments[1..], schema);
+            }
+        }
+        JsonPathSegment::AllItems => {
+            if let Value::Array(items) = current {
+                for item in items {
+                    normalize_nested_input_matches(item, &segments[1..], schema);
                 }
             }
         }

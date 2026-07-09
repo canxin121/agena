@@ -187,6 +187,13 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(ToolStreamEnd::from_output(stream_id, result))
     }
 
+    async fn command_invoke(&self, input: PluginCommandInvokeInput) -> Result<PluginCommandOutput> {
+        Err(crate::error::PluginError::not_implemented(format!(
+            "command_invoke({})",
+            input.command_id
+        )))
+    }
+
     // -------- chat --------
     async fn chat_message(&self, _input: ChatMessageInput) -> Result<Option<ChatMessagePatch>> {
         Ok(None)

@@ -1,20 +1,20 @@
 use agena_plugin_sdk::prelude::*;
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 struct EchoInput {
     text: String,
 }
 
 #[derive(Default)]
-struct BadPermissionPlugin;
+struct OldPermissionPlugin;
 
 #[agena_plugin(
     namespace = "test",
-    name = "bad_permission",
+    name = "old_permission",
     version = "0.0.0",
-    summary = "Bad permission signature test plugin."
+    summary = "Old permission syntax test plugin."
 )]
-impl BadPermissionPlugin {
+impl OldPermissionPlugin {
     #[tool(
         summary = "Echo text.",
         read_only,
@@ -24,7 +24,7 @@ impl BadPermissionPlugin {
         input.text.clone()
     }
 
-    fn echo_permission_paths(&self, _input: EchoInput) -> Vec<PathRequest> {
+    fn echo_permission_paths(&self, _input: &EchoInput) -> Vec<PathRequest> {
         Vec::new()
     }
 }

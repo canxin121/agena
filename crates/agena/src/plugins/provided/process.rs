@@ -2,9 +2,7 @@
 
 use crate::message::{ProcessShell, ProcessToolInput, ShellCommandInput};
 use crate::plugin::PluginError;
-use crate::plugin::sdk::{
-    NetworkRequest, PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
-};
+use crate::plugin::sdk::{Result as SdkResult, ToolInvokeContext, ToolInvokeOutput};
 use crate::plugins::provided::router;
 use agena_macros::ToolInput;
 use schemars::JsonSchema;
@@ -64,7 +62,7 @@ impl ProcessPlugin {
         mutating,
         shell,
         display = detailed,
-        permission(paths = permission_run, networks = permission_networks_run)
+        network(connects = run_network_targets(input)?)
     )]
     async fn invoke_run(
         &self,
@@ -88,7 +86,6 @@ impl ProcessPlugin {
         read_only,
         shell,
         display = detailed,
-        permission(paths = permission_list, networks = permission_networks_list),
         concurrency_safe
     )]
     async fn invoke_list(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
@@ -105,7 +102,6 @@ impl ProcessPlugin {
         read_only,
         shell,
         display = detailed,
-        permission(paths = permission_logs, networks = permission_networks_logs),
         concurrency_safe
     )]
     async fn invoke_logs(
@@ -130,8 +126,7 @@ impl ProcessPlugin {
         summary = "Stop one background process.",
         mutating,
         shell,
-        display = detailed,
-        permission(paths = permission_stop, networks = permission_networks_stop)
+        display = detailed
     )]
     async fn invoke_stop(
         &self,
@@ -147,87 +142,17 @@ impl ProcessPlugin {
             context.call_id,
         )
     }
+}
 
-    async fn permission_run(&self, args: ProcessRunInput) -> SdkResult<Vec<PathRequest>> {
-        router::permission_paths_for(
-            "process",
-            &json_input(ProcessToolInput::Run {
-                shell: args.shell,
-                command: args.command,
-                background: args.background,
-            })?,
-        )
-    }
-
-    async fn permission_list(&self) -> SdkResult<Vec<PathRequest>> {
-        router::permission_paths_for("process", &json_input(ProcessToolInput::List {})?)
-    }
-
-    async fn permission_logs(&self, args: ProcessLogsInput) -> SdkResult<Vec<PathRequest>> {
-        router::permission_paths_for(
-            "process",
-            &json_input(ProcessToolInput::Logs {
-                process_id: args.process_id,
-                since_seq: args.since_seq,
-                limit: args.limit,
-                wait_ms: args.wait_ms,
-            })?,
-        )
-    }
-
-    async fn permission_stop(&self, args: ProcessStopInput) -> SdkResult<Vec<PathRequest>> {
-        router::permission_paths_for(
-            "process",
-            &json_input(ProcessToolInput::Stop {
-                process_id: args.process_id,
-            })?,
-        )
-    }
-
-    async fn permission_networks_run(
-        &self,
-        args: ProcessRunInput,
-    ) -> SdkResult<Vec<NetworkRequest>> {
-        router::permission_networks_for(
-            "process",
-            &json_input(ProcessToolInput::Run {
-                shell: args.shell,
-                command: args.command,
-                background: args.background,
-            })?,
-        )
-    }
-
-    async fn permission_networks_list(&self) -> SdkResult<Vec<NetworkRequest>> {
-        router::permission_networks_for("process", &json_input(ProcessToolInput::List {})?)
-    }
-
-    async fn permission_networks_logs(
-        &self,
-        args: ProcessLogsInput,
-    ) -> SdkResult<Vec<NetworkRequest>> {
-        router::permission_networks_for(
-            "process",
-            &json_input(ProcessToolInput::Logs {
-                process_id: args.process_id,
-                since_seq: args.since_seq,
-                limit: args.limit,
-                wait_ms: args.wait_ms,
-            })?,
-        )
-    }
-
-    async fn permission_networks_stop(
-        &self,
-        args: ProcessStopInput,
-    ) -> SdkResult<Vec<NetworkRequest>> {
-        router::permission_networks_for(
-            "process",
-            &json_input(ProcessToolInput::Stop {
-                process_id: args.process_id,
-            })?,
-        )
-    }
+fn run_network_targets(args: &ProcessRunInput) -> SdkResult<Vec<String>> {
+    router::permission_network_targets_for(
+        "process",
+        &json_input(ProcessToolInput::Run {
+            shell: args.shell,
+            command: args.command.clone(),
+            background: args.background,
+        })?,
+    )
 }
 
 fn json_input<T: Serialize>(input: T) -> SdkResult<serde_json::Value> {

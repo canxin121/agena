@@ -10,7 +10,7 @@ use crate::memory::{
     MemoryError, MemoryIndex, MemoryRecord, MemorySearchDocument, MemoryStore, MemoryType,
     NewMemory,
 };
-use crate::plugin::sdk::{PathRequest, Result as SdkResult, ToolInvokeOutput};
+use crate::plugin::sdk::{Result as SdkResult, ToolInvokeOutput};
 use crate::plugin::{
     ChatMessage, ChatMessagesTransformInput, ChatMessagesTransformPatch, ChatSystemTransformInput,
     ChatSystemTransformPatch, PluginError,
@@ -206,7 +206,7 @@ impl MemoryPlugin {
         }
     }
 
-    #[hook]
+    #[hook(init)]
     async fn init(
         &self,
         ctx: crate::plugin::sdk::InitContext,
@@ -297,7 +297,7 @@ impl MemoryPlugin {
         summary = "Search durable memory records.",
         read_only,
         display = brief,
-        permission(paths = permission_search)
+        path(write = self.store_dir_permission_path()?)
     )]
     async fn invoke_search(&self, input: &MemorySearchInput) -> SdkResult<ToolInvokeOutput> {
         let query = input.query.as_str();
@@ -337,7 +337,7 @@ impl MemoryPlugin {
         summary = "Read one durable memory record.",
         read_only,
         display = brief,
-        permission(paths = permission_get)
+        path(read = self.store_dir_permission_path()?)
     )]
     async fn invoke_get(&self, input: &MemoryGetInput) -> SdkResult<ToolInvokeOutput> {
         let store = self.store()?;
@@ -359,7 +359,7 @@ impl MemoryPlugin {
         summary = "List durable memory records.",
         read_only,
         display = brief,
-        permission(paths = permission_list)
+        path(read = self.store_dir_permission_path()?)
     )]
     async fn invoke_list(&self, input: &MemoryListInput) -> SdkResult<ToolInvokeOutput> {
         let store = self.store()?;
@@ -408,7 +408,7 @@ impl MemoryPlugin {
         summary = "Write one durable memory record.",
         mutating,
         display = brief,
-        permission(paths = permission_write)
+        path(write = self.store_dir_permission_path()?)
     )]
     async fn invoke_write(&self, input: &MemoryWriteInput) -> SdkResult<ToolInvokeOutput> {
         let name = input.name.clone();
@@ -443,7 +443,7 @@ impl MemoryPlugin {
         summary = "Delete one durable memory record.",
         mutating,
         display = brief,
-        permission(paths = permission_delete)
+        path(write = self.store_dir_permission_path()?)
     )]
     async fn invoke_delete(&self, input: &MemoryDeleteInput) -> SdkResult<ToolInvokeOutput> {
         let name = input.name.clone();
@@ -460,30 +460,9 @@ impl MemoryPlugin {
         ))
     }
 
-    fn store_dir_request(&self, request: fn(String) -> PathRequest) -> SdkResult<Vec<PathRequest>> {
+    fn store_dir_permission_path(&self) -> SdkResult<String> {
         let store = self.store()?;
-        let store_dir = store.dir().display().to_string();
-        Ok(vec![request(store_dir)])
-    }
-
-    async fn permission_search(&self, _input: &MemorySearchInput) -> SdkResult<Vec<PathRequest>> {
-        self.store_dir_request(PathRequest::write)
-    }
-
-    async fn permission_get(&self, _input: &MemoryGetInput) -> SdkResult<Vec<PathRequest>> {
-        self.store_dir_request(PathRequest::read)
-    }
-
-    async fn permission_list(&self, _input: &MemoryListInput) -> SdkResult<Vec<PathRequest>> {
-        self.store_dir_request(PathRequest::read)
-    }
-
-    async fn permission_write(&self, _input: &MemoryWriteInput) -> SdkResult<Vec<PathRequest>> {
-        self.store_dir_request(PathRequest::write)
-    }
-
-    async fn permission_delete(&self, _input: &MemoryDeleteInput) -> SdkResult<Vec<PathRequest>> {
-        self.store_dir_request(PathRequest::write)
+        Ok(store.dir().display().to_string())
     }
 
     fn memory_retrieval_query(
@@ -508,7 +487,7 @@ impl MemoryPlugin {
         Ok((latest_user.len() >= min_chars).then_some(latest_user))
     }
 
-    #[hook]
+    #[hook(chat.system)]
     async fn chat_system_transform(
         &self,
         _input: ChatSystemTransformInput,
@@ -534,7 +513,7 @@ impl MemoryPlugin {
         }))
     }
 
-    #[hook]
+    #[hook(chat.messages)]
     async fn chat_messages_transform(
         &self,
         input: ChatMessagesTransformInput,

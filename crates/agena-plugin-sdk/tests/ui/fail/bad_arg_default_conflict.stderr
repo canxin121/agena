@@ -1,0 +1,7 @@
+error: field-level #[arg(default)] and #[serde(default)] cannot be combined; keep one default source
+ --> tests/ui/fail/bad_arg_default_conflict.rs:5:5
+  |
+5 | /     #[serde(default)]
+6 | |     #[arg(default = 3)]
+7 | |     count: usize,
+  | |________________^

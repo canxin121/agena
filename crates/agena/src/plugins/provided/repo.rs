@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::plugin::sdk::host_api::HostClient;
 use crate::plugin::sdk::{
-    HostCapability, InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput,
+    HostCapability, InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput,
 };
 use crate::plugins::provided::workflow::{
     EnterSnapshotCommandInput, ExitSnapshotCommandInput, WorkflowPlugin, WorkflowPluginConfig,
@@ -28,7 +28,7 @@ impl SnapshotPlugin {
         }
     }
 
-    #[hook]
+    #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         self.inner
             .initialize(ctx, WorkflowPluginConfig::default(), host)?;
@@ -42,7 +42,7 @@ impl SnapshotPlugin {
         snapshot,
         display = brief,
         capabilities(HostCapability::SnapshotRegistry, HostCapability::PluginStorage),
-        permission(paths = permission_enter)
+        path(requests = self.inner.permission_snapshot_enter(input).await?)
     )]
     async fn enter(&self, input: &EnterSnapshotCommandInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_snapshot_enter(input).await
@@ -55,23 +55,9 @@ impl SnapshotPlugin {
         snapshot,
         display = brief,
         capabilities(HostCapability::SnapshotRegistry, HostCapability::PluginStorage),
-        permission(paths = permission_exit)
+        path(requests = self.inner.permission_snapshot_exit(input).await?)
     )]
     async fn exit(&self, input: &ExitSnapshotCommandInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_snapshot_exit(input).await
-    }
-
-    async fn permission_enter(
-        &self,
-        input: &EnterSnapshotCommandInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        self.inner.permission_snapshot_enter(input).await
-    }
-
-    async fn permission_exit(
-        &self,
-        input: &ExitSnapshotCommandInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        self.inner.permission_snapshot_exit(input).await
     }
 }

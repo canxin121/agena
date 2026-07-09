@@ -1,0 +1,5 @@
+error: #[hook(tool.before)] must return `ToolBeforePatch`, `Option<ToolBeforePatch>`, or `Result<...>`, got `ToolAfterPatch`
+  --> tests/ui/fail/bad_hook_output_signature.rs:14:55
+   |
+14 |     fn before_tool(&self, _input: ToolBeforeInput) -> ToolAfterPatch {
+   |                                                       ^^^^^^^^^^^^^^

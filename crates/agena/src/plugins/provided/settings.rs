@@ -19,7 +19,7 @@ use crate::config::{
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostConfigReloadResponse};
-use crate::plugin::sdk::{PathRequest, Result as SdkResult, ToolInvokeOutput, ToolTag};
+use crate::plugin::sdk::{Result as SdkResult, ToolInvokeOutput, ToolTag};
 
 pub(crate) const SETTINGS_PLUGIN_ID: &str = "agena.settings";
 
@@ -211,7 +211,7 @@ impl SettingsPlugin {
         }
     }
 
-    #[hook]
+    #[hook(init)]
     async fn init(
         &self,
         ctx: crate::plugin::sdk::InitContext,
@@ -309,7 +309,7 @@ impl SettingsPlugin {
             crate::plugin::sdk::HostCapability::ReadConfig,
             crate::plugin::sdk::HostCapability::ReloadConfig
         ),
-        permission(paths = permission_get),
+        path(read = self.config_permission_path().await?),
         concurrency_safe
     )]
     async fn get(&self, input: SettingsGetToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -357,7 +357,7 @@ impl SettingsPlugin {
             crate::plugin::sdk::HostCapability::ReadConfig,
             crate::plugin::sdk::HostCapability::ReloadConfig
         ),
-        permission(paths = permission_list),
+        path(read = self.config_permission_path().await?),
         concurrency_safe
     )]
     async fn list(&self, input: SettingsListToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -422,7 +422,7 @@ impl SettingsPlugin {
             crate::plugin::sdk::HostCapability::ReadConfig,
             crate::plugin::sdk::HostCapability::ReloadConfig
         ),
-        permission(paths = permission_set)
+        path(write = self.config_permission_path().await?)
     )]
     async fn set(&self, input: SettingsSetToolInput) -> SdkResult<ToolInvokeOutput> {
         let (config_path, _) = self.config_meta().await?;
@@ -454,7 +454,7 @@ impl SettingsPlugin {
             crate::plugin::sdk::HostCapability::ReadConfig,
             crate::plugin::sdk::HostCapability::ReloadConfig
         ),
-        permission(paths = permission_delete)
+        path(write = self.config_permission_path().await?)
     )]
     async fn delete(&self, input: SettingsDeleteToolInput) -> SdkResult<ToolInvokeOutput> {
         let (config_path, _) = self.config_meta().await?;
@@ -485,7 +485,7 @@ impl SettingsPlugin {
             crate::plugin::sdk::HostCapability::ReadConfig,
             crate::plugin::sdk::HostCapability::ReloadConfig
         ),
-        permission(paths = permission_patch)
+        path(write = self.config_permission_path().await?)
     )]
     async fn patch(&self, input: SettingsPatchToolInput) -> SdkResult<ToolInvokeOutput> {
         let (config_path, _) = self.config_meta().await?;
@@ -512,7 +512,7 @@ impl SettingsPlugin {
             crate::plugin::sdk::HostCapability::ReadConfig,
             crate::plugin::sdk::HostCapability::ReloadConfig
         ),
-        permission(paths = permission_validate),
+        path(read = self.config_permission_path().await?),
         concurrency_safe
     )]
     async fn validate(&self, _input: SettingsValidateToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -522,47 +522,9 @@ impl SettingsPlugin {
         output("Settings valid", "Settings file is valid.", &response)
     }
 
-    async fn config_read_permission(&self) -> SdkResult<Vec<PathRequest>> {
+    async fn config_permission_path(&self) -> SdkResult<String> {
         let (config_path, _) = self.config_meta().await?;
-        Ok(vec![PathRequest::read(config_path.display().to_string())])
-    }
-
-    async fn config_write_permission(&self) -> SdkResult<Vec<PathRequest>> {
-        let (config_path, _) = self.config_meta().await?;
-        Ok(vec![PathRequest::write(config_path.display().to_string())])
-    }
-
-    async fn permission_get(&self, _input: SettingsGetToolInput) -> SdkResult<Vec<PathRequest>> {
-        self.config_read_permission().await
-    }
-
-    async fn permission_list(&self, _input: SettingsListToolInput) -> SdkResult<Vec<PathRequest>> {
-        self.config_read_permission().await
-    }
-
-    async fn permission_validate(
-        &self,
-        _input: SettingsValidateToolInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        self.config_read_permission().await
-    }
-
-    async fn permission_set(&self, _input: SettingsSetToolInput) -> SdkResult<Vec<PathRequest>> {
-        self.config_write_permission().await
-    }
-
-    async fn permission_delete(
-        &self,
-        _input: SettingsDeleteToolInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        self.config_write_permission().await
-    }
-
-    async fn permission_patch(
-        &self,
-        _input: SettingsPatchToolInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        self.config_write_permission().await
+        Ok(config_path.display().to_string())
     }
 
     async fn edit_output<T>(

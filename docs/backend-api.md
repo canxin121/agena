@@ -449,7 +449,7 @@ Path 使用点分语法。带点的 object key 用引号包起来，例如 `plug
 }
 ```
 
-`plugin_id` 可省略；省略时 `tool` 按 exposed tool name 查找。带 `plugin_id` 时，`tool` 可以是 plugin manifest 中的原始 tool name，也可以是 registry 暴露名。`input` 必须是 JSON object 或 null。
+`plugin_id` 可省略；省略时 `tool` 按 exposed tool name 查找。带 `plugin_id` 时，`tool` 可以是 plugin manifest 中的原始 tool name，也可以是 registry 暴露名。`input` 可以是任意 JSON 值；绝大多数 tool schema 仍然是 object。
 
 响应：
 
@@ -473,9 +473,13 @@ Path 使用点分语法。带点的 object key 用引号包起来，例如 `plug
 }
 ```
 
-如果 action 是 `invoke_tool`，后端会把 manifest action 自带的 `input` 和请求 `input` 合并，请求字段覆盖默认字段，然后通过 plugin host 执行 tool。`open_route`、`open_url`、`submit_prompt` 和 `none` 不在后端产生副作用，响应会原样返回 action，Studio 前端负责本地行为。
+如果 action 是 `invoke_tool`，后端会把 manifest action 自带的 `input` 和请求 `input` 合并，请求字段覆盖默认字段，然后通过 plugin host 执行 tool。
 
-Studio controls 会通过同一个 action endpoint 执行。按钮不额外传值；`select`、`toggle`/`checkbox`/`switch`、`text`、`number` 等输入型 controls 会把当前值放到请求 `input.value`，再按上面的合并规则交给 `invoke_tool` action。
+如果 action 是 `invoke_command`，后端会按同样的输入合并规则调用 plugin command，并把 plugin 返回的 `message`、`submit_prompt`、`invoke_tool`、`open_route`、`open_url` 或 `none` 结果放进响应的 `result` 字段。当前 Studio/CLI 等宿主会继续解释这些结果并决定是否导航、回填 prompt 或继续触发 tool。
+
+`open_route`、`open_url`、`submit_prompt` 和 `none` 不在后端直接产生副作用，响应会原样返回 action，Studio 前端负责本地行为。
+
+Studio controls 会通过同一个 action endpoint 执行。按钮不额外传值；`select`、`toggle`/`checkbox`/`switch`、`text`、`number` 等输入型 controls 会把当前值放到请求 `input.value`，再按上面的合并规则交给 `invoke_tool` 或 `invoke_command` action。
 
 Direct UI invocation 会经过 tool registry 和 permission check。当前没有交互式 permission confirmation 响应通道；如果调用需要 `ask_permission` 或被 deny，接口返回 409。
 

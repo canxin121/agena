@@ -89,6 +89,155 @@ export function parseCommandInput(input: string): { slash: string; args: string[
   }
 }
 
+function schemaType(schema: unknown): string | null {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return null
+  const value = (schema as { type?: unknown }).type
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) {
+    const match = value.find((entry): entry is string => typeof entry === 'string' && entry !== 'null')
+    return match || null
+  }
+  return null
+}
+
+function schemaProperties(schema: unknown): Record<string, unknown> {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return {}
+  const properties = (schema as { properties?: unknown }).properties
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) return {}
+  return properties as Record<string, unknown>
+}
+
+function schemaPropertyNames(schema: unknown): string[] {
+  return Object.keys(schemaProperties(schema))
+}
+
+function schemaPropertyAliasMap(schema: unknown): Record<string, string> {
+  const properties = schemaProperties(schema)
+  const aliases: Record<string, string> = {}
+  for (const [name, property] of Object.entries(properties)) {
+    if (!property || typeof property !== 'object' || Array.isArray(property)) continue
+    const values = (property as { 'x-agena-aliases'?: unknown })['x-agena-aliases']
+    if (!Array.isArray(values)) continue
+    for (const value of values) {
+      if (typeof value !== 'string' || !value) continue
+      aliases[value] = name
+    }
+  }
+  return aliases
+}
+
+function parseSchemaLiteral(raw: string, schema: unknown): unknown {
+  const type = schemaType(schema)
+  if (type === 'string') return raw
+  if (type === 'integer' || type === 'number') {
+    const value = Number(raw)
+    if (!Number.isNaN(value) && Number.isFinite(value)) {
+      return type === 'integer' ? Math.trunc(value) : value
+    }
+  }
+  if (type === 'boolean') {
+    if (raw === 'true') return true
+    if (raw === 'false') return false
+  }
+  if (type === 'null' && raw === 'null') {
+    return null
+  }
+  return undefined
+}
+
+function parseLooseJsonLiteral(raw: string): unknown {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return raw
+  }
+}
+
+function parsePropertyLiteral(raw: string, schema: unknown): unknown {
+  const literal = parseSchemaLiteral(raw, schema)
+  return literal !== undefined ? literal : parseLooseJsonLiteral(raw)
+}
+
+function parseKeyValueArgs(
+  args: string[],
+  properties: Record<string, unknown>,
+  aliases: Record<string, string>,
+): Record<string, unknown> | null {
+  if (!args.length) return null
+  const output: Record<string, unknown> = {}
+  for (const token of args) {
+    const separator = token.indexOf('=')
+    if (separator <= 0) return null
+    const rawKey = token.slice(0, separator).trim()
+    if (!rawKey) return null
+    const key = rawKey in properties ? rawKey : aliases[rawKey]
+    if (!key || !(key in properties)) return null
+    const rawValue = token.slice(separator + 1)
+    output[key] = parsePropertyLiteral(rawValue, properties[key])
+  }
+  return Object.keys(output).length ? output : null
+}
+
+export function buildPluginCommandPayload(command: PluginStudioCommand, context?: CommandContext): unknown {
+  const raw = context?.args.join(' ').trim() || ''
+  if (!raw) return undefined
+
+  const schema = command.input_schema
+  if (!schema) {
+    return { args: raw }
+  }
+
+  const type = schemaType(schema)
+  const properties = schemaProperties(schema)
+  const propertyNames = schemaPropertyNames(schema)
+  const propertyAliases = schemaPropertyAliasMap(schema)
+
+  try {
+    const parsed = JSON.parse(raw)
+    if (type !== 'object') {
+      return parsed
+    }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed
+    }
+    if (propertyNames.length === 1) {
+      return { [propertyNames[0]]: parsed }
+    }
+  } catch {
+    if (propertyNames.length === 1 && type === 'object') {
+      const key = propertyNames[0]
+      return { [key]: parsePropertyLiteral(raw, properties[key]) }
+    }
+    if (propertyNames.length > 1 && type === 'object') {
+      const payload = parseKeyValueArgs(context?.args || [], properties, propertyAliases)
+      if (payload) {
+        return payload
+      }
+    }
+    const literal = parseSchemaLiteral(raw, schema)
+    if (literal !== undefined) {
+      return literal
+    }
+    return { args: raw }
+  }
+
+  if (propertyNames.length === 1 && type === 'object') {
+    const key = propertyNames[0]
+    return { [key]: parsePropertyLiteral(raw, properties[key]) }
+  }
+  if (propertyNames.length > 1 && type === 'object') {
+    const payload = parseKeyValueArgs(context?.args || [], properties, propertyAliases)
+    if (payload) {
+      return payload
+    }
+  }
+  const literal = parseSchemaLiteral(raw, schema)
+  if (literal !== undefined) {
+    return literal
+  }
+  return { args: raw }
+}
+
 export function sourceLabel(source: CommandSource): string {
   switch (source) {
     case 'navigation':

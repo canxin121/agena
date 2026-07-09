@@ -30,7 +30,7 @@ struct FormatNoteInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct WriteNoteInput {
-    #[arg(trim, non_empty)]
+    #[arg(trim, non_empty, path.write)]
     path: String,
     #[arg(trim, non_empty)]
     text: String,
@@ -111,10 +111,9 @@ impl NotesPlugin {
     #[tool(
         name = "write",
         summary = "Write formatted text to a file.",
-        help = "Writes the formatted text to the provided path. Path permission is supplied dynamically by this tool's permission handler.",
+        help = "Writes the formatted text to the provided path. Path permission is declared directly on the input field.",
         mutating,
-        filesystem_write,
-        permission(paths = write_permission_paths)
+        filesystem_write
     )]
     async fn write(&self, input: &WriteNoteInput) -> Result<WriteNoteOutput> {
         let rendered = self.render(input.text.as_str());
@@ -143,9 +142,5 @@ impl NotesPlugin {
             append: input.append,
             bytes: rendered.len(),
         })
-    }
-
-    async fn write_permission_paths(&self, input: &WriteNoteInput) -> Result<Vec<PathRequest>> {
-        Ok(vec![PathRequest::write(input.path.clone())])
     }
 }

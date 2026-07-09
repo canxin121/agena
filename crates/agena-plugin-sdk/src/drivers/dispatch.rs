@@ -122,6 +122,19 @@ impl<P: Plugin> PluginDispatcher<P> {
                         .await?;
                 ok_json(&output)
             }
+            method::COMMAND_INVOKE => {
+                let i: PluginCommandInvokeInput = serde_json::from_value(params)?;
+                let ctx = crate::host_api::HostCallbackContext {
+                    session_id: i.session_id,
+                    call_id: i.call_id,
+                    workspace_root: i.workspace_root.clone(),
+                    ..crate::host_api::HostCallbackContext::default()
+                };
+                let output =
+                    crate::host_api::run_in_host_callback_context(ctx, plugin.command_invoke(i))
+                        .await?;
+                ok_json(&output)
+            }
             method::HOOK_TOOL_PERMISSION_PATHS => {
                 let i: ToolPermissionPathsInput = serde_json::from_value(params)?;
                 let ctx = crate::host_api::HostCallbackContext {

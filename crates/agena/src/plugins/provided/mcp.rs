@@ -18,8 +18,8 @@ use serde_json::Value;
 use crate::message::{AttachmentItem, OperationBlock};
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
-    InitOutcome, NetworkAccessSpec, NetworkRequest, PluginManifest, Result as SdkResult,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolInvokeOutput,
+    InitOutcome, NetworkAccessSpec, PluginManifest, Result as SdkResult, ToolDefinitionInput,
+    ToolDefinitionPatch, ToolInvokeOutput,
 };
 
 pub(crate) const MCP_PLUGIN_ID: &str = "agena.mcp";
@@ -366,7 +366,7 @@ impl McpPlugin {
         Self { manager }
     }
 
-    #[hook]
+    #[hook(init)]
     async fn init(
         &self,
         _ctx: crate::plugin::sdk::InitContext,
@@ -381,7 +381,7 @@ impl McpPlugin {
         read_only,
         mcp,
         ui_display = brief,
-        permission(networks = permission_networks_resources_list),
+        network(connects = self.server_network_targets(input.server.as_str()).await?),
         concurrency_safe
     )]
     async fn invoke_resources_list(&self, input: &McpServerInput) -> SdkResult<ToolInvokeOutput> {
@@ -401,7 +401,7 @@ impl McpPlugin {
         read_only,
         mcp,
         ui_display = brief,
-        permission(networks = permission_networks_resources_read),
+        network(connects = self.server_network_targets(input.server.as_str()).await?),
         concurrency_safe
     )]
     async fn invoke_resources_read(
@@ -427,7 +427,7 @@ impl McpPlugin {
         read_only,
         mcp,
         ui_display = brief,
-        permission(networks = permission_networks_prompts_list),
+        network(connects = self.server_network_targets(input.server.as_str()).await?),
         concurrency_safe
     )]
     async fn invoke_prompts_list(&self, input: &McpServerInput) -> SdkResult<ToolInvokeOutput> {
@@ -447,7 +447,7 @@ impl McpPlugin {
         read_only,
         mcp,
         ui_display = brief,
-        permission(networks = permission_networks_prompts_get),
+        network(connects = self.server_network_targets(input.server.as_str()).await?),
         concurrency_safe
     )]
     async fn invoke_prompts_get(&self, input: &GetPromptInput) -> SdkResult<ToolInvokeOutput> {
@@ -470,7 +470,7 @@ impl McpPlugin {
         mutating,
         mcp,
         ui_display = brief,
-        permission(networks = permission_networks_tools_call)
+        network(connects = self.server_network_targets(input.server.as_str()).await?)
     )]
     async fn invoke_tools_call(&self, input: &CallToolInput) -> SdkResult<ToolInvokeOutput> {
         let result = self
@@ -490,47 +490,12 @@ impl McpPlugin {
         invoke_tool_output(&input.server, input.name.as_str(), result)
     }
 
-    async fn permission_networks_for_server(&self, server: &str) -> SdkResult<Vec<NetworkRequest>> {
+    async fn server_network_targets(&self, server: &str) -> SdkResult<Vec<String>> {
         let network_access = network_access_by_server(&self.manager).await;
-        Ok(network_requests_for_server(&network_access, server))
+        Ok(network_targets_for_server(&network_access, server))
     }
 
-    async fn permission_networks_resources_list(
-        &self,
-        input: &McpServerInput,
-    ) -> SdkResult<Vec<NetworkRequest>> {
-        self.permission_networks_for_server(&input.server).await
-    }
-
-    async fn permission_networks_resources_read(
-        &self,
-        input: &ReadResourceInput,
-    ) -> SdkResult<Vec<NetworkRequest>> {
-        self.permission_networks_for_server(&input.server).await
-    }
-
-    async fn permission_networks_prompts_list(
-        &self,
-        input: &McpServerInput,
-    ) -> SdkResult<Vec<NetworkRequest>> {
-        self.permission_networks_for_server(&input.server).await
-    }
-
-    async fn permission_networks_prompts_get(
-        &self,
-        input: &GetPromptInput,
-    ) -> SdkResult<Vec<NetworkRequest>> {
-        self.permission_networks_for_server(&input.server).await
-    }
-
-    async fn permission_networks_tools_call(
-        &self,
-        input: &CallToolInput,
-    ) -> SdkResult<Vec<NetworkRequest>> {
-        self.permission_networks_for_server(&input.server).await
-    }
-
-    #[hook(tool_definition)]
+    #[hook(tool.definition)]
     async fn tool_definition_patch(
         &self,
         input: ToolDefinitionInput,
@@ -614,13 +579,13 @@ async fn network_access_by_server(
         .collect()
 }
 
-fn network_requests_for_server(
+fn network_targets_for_server(
     network_access: &BTreeMap<String, NetworkAccessSpec>,
     server: &str,
-) -> Vec<NetworkRequest> {
+) -> Vec<String> {
     network_access
         .get(server)
-        .map(|spec| vec![NetworkRequest::connect(spec.target.clone())])
+        .map(|spec| vec![spec.target.clone()])
         .unwrap_or_default()
 }
 

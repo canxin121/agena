@@ -10,6 +10,7 @@ import {
 } from '../lib/agenaApi'
 import { createChatCommandCatalog, type ChatCommandCatalogActions } from '../lib/chatCommandCatalog'
 import {
+  buildPluginCommandPayload,
   commandSearchText,
   createCommandPalette,
   createCommandPaletteItems,
@@ -17,6 +18,7 @@ import {
   type CommandPaletteCatalogInput,
 } from '../lib/commandPalette'
 import { useRegisteredCommandPaletteItems } from '../lib/commandPaletteRegistry'
+import { isPluginUiToolInvokeResponse, resolvePluginCommandOutput } from '../lib/pluginUiActionRuntime'
 import type { ChatUsageSummary } from './chatUsageModel'
 
 export type ChatCommandStateInput = {
@@ -130,14 +132,30 @@ export function useChatCommandState(input: ChatCommandStateInput) {
         const response = await runPluginUiAction({
           pluginId: command.plugin_id,
           actionId: command.id,
-          payload: { args: context?.args.join(' ').trim() || null },
+          payload: buildPluginCommandPayload(command, context),
           sessionId: input.selectedSessionId.value,
         })
-        const output = response.result?.output_text?.trim() || ''
+        const output = isPluginUiToolInvokeResponse(response.result) ? response.result.output_text.trim() : ''
         if (action.submit_output_as_prompt && output) {
           return { submitText: output }
         }
         return { notice: output || `Ran plugin command ${command.title}.` }
+      }
+      if (action.kind === 'invoke_command') {
+        const response = await runPluginUiAction({
+          pluginId: command.plugin_id,
+          actionId: command.id,
+          payload: buildPluginCommandPayload(command, context),
+          sessionId: input.selectedSessionId.value,
+        })
+        return await applyResolvedPluginCommandEffect(
+          await resolvePluginCommandOutput({
+            pluginId: command.plugin_id,
+            result: response.result,
+            sessionId: input.selectedSessionId.value,
+            fallbackNotice: `Ran plugin command ${command.title}.`,
+          }),
+        )
       }
       if (action.kind === 'open_route') {
         await input.routeRouter.push(action.route)
@@ -148,6 +166,23 @@ export function useChatCommandState(input: ChatCommandStateInput) {
         return
       }
     },
+  }
+
+  async function applyResolvedPluginCommandEffect(effect: Awaited<ReturnType<typeof resolvePluginCommandOutput>>) {
+    if (effect.kind === 'notice') {
+      return { notice: effect.message }
+    }
+    if (effect.kind === 'submit_prompt') {
+      return { submitText: effect.prompt }
+    }
+    if (effect.kind === 'open_route') {
+      await input.routeRouter.push(effect.route)
+      return
+    }
+    if (effect.kind === 'open_url') {
+      if (typeof window !== 'undefined') window.open(effect.url, '_blank', 'noopener,noreferrer')
+      return
+    }
   }
 
   const commandItems = createCommandPaletteItems(paletteCatalogInput)

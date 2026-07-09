@@ -32,7 +32,7 @@ impl PlanPlugin {
         }
     }
 
-    #[hook]
+    #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let plan = crate::plugin::sdk::macro_support::parse_defaulted_config(
             ctx.config.clone(),
@@ -111,7 +111,7 @@ impl PlanPlugin {
         self.inner.invoke_plan_clear().await
     }
 
-    #[hook]
+    #[hook(tool.before)]
     async fn tool_execute_before(
         &self,
         input: ToolBeforeInput,
@@ -119,7 +119,7 @@ impl PlanPlugin {
         self.inner.tool_execute_before_hook(input).await
     }
 
-    #[hook]
+    #[hook(shell.before)]
     async fn command_execute_before(
         &self,
         input: CommandBeforeInput,
@@ -127,7 +127,7 @@ impl PlanPlugin {
         self.inner.command_execute_before_hook(input).await
     }
 
-    #[hook]
+    #[hook(agent.stop)]
     async fn agent_stop(
         &self,
         input: crate::plugin::AgentStopInput,

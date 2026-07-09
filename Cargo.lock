@@ -351,6 +351,7 @@ version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
+ "regex",
  "syn 2.0.117",
 ]
 
@@ -457,6 +458,7 @@ dependencies = [
  "bitflags 2.11.1",
  "hyper",
  "indexmap 2.14.0",
+ "regex",
  "reqwest 0.13.3",
  "schemars 1.2.1",
  "serde",
@@ -467,6 +469,8 @@ dependencies = [
  "tokio-util",
  "tracing",
  "trybuild",
+ "url",
+ "uuid",
 ]
 
 [[package]]

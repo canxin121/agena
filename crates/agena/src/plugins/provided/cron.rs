@@ -33,7 +33,7 @@ impl CronPlugin {
         }
     }
 
-    #[hook]
+    #[hook(init)]
     async fn init(
         &self,
         _ctx: crate::plugin::sdk::InitContext,

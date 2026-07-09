@@ -126,6 +126,7 @@ pub mod method {
     pub const HOOK_TOOL_PERMISSION_PATHS: &str = "hooks/tool.permission_paths";
     pub const HOOK_TOOL_PERMISSION_NETWORKS: &str = "hooks/tool.permission_networks";
     pub const HOOK_TOOL_INVOKE_STREAM: &str = "hooks/tool.invoke.stream";
+    pub const COMMAND_INVOKE: &str = "command/invoke";
     /// Notification: plugin → host, one chunk in an open stream.
     pub const TOOL_STREAM_CHUNK: &str = "tool.stream.chunk";
     /// Notification: plugin → host, terminal frame in a stream.

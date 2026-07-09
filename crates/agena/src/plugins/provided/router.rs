@@ -9,13 +9,9 @@ use std::sync::{LazyLock, Mutex};
 
 use serde_json::Value as JsonValue;
 
-use crate::message::{
-    ApplyPatchToolInput, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
-    LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, NetworkEffect,
-    ProcessToolInput, ReadToolInput,
-};
+use crate::message::{ApplyPatchToolInput, NetworkEffect, ProcessToolInput};
 use crate::plugin::PluginError;
-use crate::plugin::sdk::{NetworkRequest, Result as SdkResult, ToolInput, ToolInvokeOutput};
+use crate::plugin::sdk::{Result as SdkResult, ToolInput, ToolInvokeOutput};
 use crate::tool::result::ToolPayloadExecution;
 use crate::tool::{ToolExecutor, ToolPayloadOutput, ToolRuntimeContext, orchestrator};
 
@@ -170,12 +166,6 @@ pub(crate) fn permission_paths_for(
     input: &serde_json::Value,
 ) -> SdkResult<Vec<crate::plugin::sdk::PathRequest>> {
     match tool {
-        "read" => {
-            let payload: ReadToolInput = parse_shape_input(input)?;
-            Ok(vec![crate::plugin::sdk::PathRequest::read(
-                payload.file_path,
-            )])
-        }
         "apply_patch" => {
             let payload = ApplyPatchToolInput::parse_input(input.clone())?;
             let paths = crate::tool::apply_patch::planned_paths(&payload.patch)
@@ -185,62 +175,19 @@ pub(crate) fn permission_paths_for(
                 .map(crate::plugin::sdk::PathRequest::write)
                 .collect())
         }
-        "glob" => {
-            let payload: GlobToolInput = parse_shape_input(input)?;
-            Ok(base_path_read_request(payload.path.as_deref()))
-        }
-        "grep" => {
-            let payload: GrepToolInput = parse_shape_input(input)?;
-            Ok(base_path_read_request(payload.path.as_deref()))
-        }
-        "process" => {
-            let payload: ProcessToolInput = parse_shape_input(input)?;
-            Ok(match payload {
-                ProcessToolInput::Run { command, .. } => {
-                    workdir_read_request(command.workdir.as_deref())
-                }
-                ProcessToolInput::List {}
-                | ProcessToolInput::Logs { .. }
-                | ProcessToolInput::Stop { .. } => Vec::new(),
-            })
-        }
-        "lsp_definition" => {
-            let payload: LspDefinitionToolInput = parse_shape_input(input)?;
-            Ok(vec![crate::plugin::sdk::PathRequest::read(
-                payload.position.file_path,
-            )])
-        }
-        "lsp_references" => {
-            let payload: LspReferencesToolInput = parse_shape_input(input)?;
-            Ok(vec![crate::plugin::sdk::PathRequest::read(
-                payload.position.file_path,
-            )])
-        }
-        "lsp_hover" => {
-            let payload: LspHoverToolInput = parse_shape_input(input)?;
-            Ok(vec![crate::plugin::sdk::PathRequest::read(
-                payload.position.file_path,
-            )])
-        }
-        "lsp_diagnostics" => {
-            let payload: LspDiagnosticsToolInput = parse_shape_input(input)?;
-            Ok(vec![crate::plugin::sdk::PathRequest::read(
-                payload.file_path,
-            )])
-        }
         _ => Ok(Vec::new()),
     }
 }
 
-pub(crate) fn permission_networks_for(
+pub(crate) fn permission_network_targets_for(
     tool: &str,
     input: &serde_json::Value,
-) -> SdkResult<Vec<NetworkRequest>> {
+) -> SdkResult<Vec<String>> {
     match tool {
         "process" => {
             let payload: ProcessToolInput = parse_shape_input(input)?;
             match payload {
-                ProcessToolInput::Run { command, .. } => declared_shell_network_requests(
+                ProcessToolInput::Run { command, .. } => declared_shell_network_targets(
                     "process",
                     command.command.as_str(),
                     &command.network_effects,
@@ -258,30 +205,11 @@ fn parse_shape_input<T: ToolInput>(input: &serde_json::Value) -> SdkResult<T> {
     T::parse_input(input.clone())
 }
 
-fn workdir_read_request(workdir: Option<&str>) -> Vec<crate::plugin::sdk::PathRequest> {
-    vec![crate::plugin::sdk::PathRequest::read(
-        normalized_declared_path(workdir),
-    )]
-}
-
-fn base_path_read_request(path: Option<&str>) -> Vec<crate::plugin::sdk::PathRequest> {
-    vec![crate::plugin::sdk::PathRequest::read(
-        normalized_declared_path(path),
-    )]
-}
-
-fn normalized_declared_path(path: Option<&str>) -> String {
-    path.map(str::trim)
-        .filter(|path| !path.is_empty())
-        .unwrap_or("")
-        .to_string()
-}
-
-fn declared_shell_network_requests(
+fn declared_shell_network_targets(
     tool: &str,
     command: &str,
     effects: &[NetworkEffect],
-) -> SdkResult<Vec<NetworkRequest>> {
+) -> SdkResult<Vec<String>> {
     if effects.is_empty()
         && let Some(reason) = crate::tool::shell_tools::network_command_reason(command)
     {
@@ -289,10 +217,7 @@ fn declared_shell_network_requests(
             "{tool} network_effects must declare at least one target because the command appears to use the network: {reason}"
         )));
     }
-    Ok(effects
-        .iter()
-        .map(|effect| NetworkRequest::connect(effect.target.clone()))
-        .collect())
+    Ok(effects.iter().map(|effect| effect.target.clone()).collect())
 }
 
 pub(crate) fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -> ToolInvokeOutput {

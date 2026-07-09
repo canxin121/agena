@@ -30,7 +30,7 @@ impl ToolsPlugin {
         }
     }
 
-    #[hook]
+    #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let tool_catalog = crate::plugin::sdk::macro_support::parse_defaulted_config(
             ctx.config.clone(),

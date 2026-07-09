@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tree_sitter::Parser;
 
 use crate::plugin::PluginError;
-use crate::plugin::sdk::{PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput};
+use crate::plugin::sdk::{Result as SdkResult, ToolInvokeContext, ToolInvokeOutput};
 
 pub(crate) const CODE_PLUGIN_ID: &str = "agena.code";
 
@@ -164,7 +164,7 @@ impl CodeLanguage {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct CodeSearchAstInput {
-    #[arg(trim, non_empty)]
+    #[arg(trim, non_empty, path.read)]
     path: String,
     #[arg(trim, non_empty)]
     pattern: String,
@@ -177,7 +177,7 @@ struct CodeSearchAstInput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct CodeSyntaxTreeInput {
-    #[arg(trim, non_empty)]
+    #[arg(trim, non_empty, path.read)]
     path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     language: Option<CodeLanguage>,
@@ -237,7 +237,6 @@ impl CodePlugin {
         filesystem_read,
         discovery,
         display = brief,
-        permission(paths = permission_search_ast),
         concurrency_safe
     )]
     async fn dispatch_search_ast(
@@ -255,7 +254,6 @@ impl CodePlugin {
         filesystem_read,
         discovery,
         display = brief,
-        permission(paths = permission_syntax_tree),
         concurrency_safe
     )]
     async fn dispatch_syntax_tree(
@@ -264,20 +262,6 @@ impl CodePlugin {
         input: CodeSyntaxTreeInput,
     ) -> SdkResult<ToolInvokeOutput> {
         self.invoke_syntax_tree(context.workspace_root, input)
-    }
-
-    async fn permission_search_ast(
-        &self,
-        input: CodeSearchAstInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        Ok(vec![PathRequest::read(input.path)])
-    }
-
-    async fn permission_syntax_tree(
-        &self,
-        input: CodeSyntaxTreeInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        Ok(vec![PathRequest::read(input.path)])
     }
 
     fn invoke_search_ast(

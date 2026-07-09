@@ -91,15 +91,37 @@ pub async fn run_plugin_ui_action(
             ))
         })?;
 
-    let result = match &action {
+    let result: Option<serde_json::Value> = match &action {
         agena::plugin::PluginUiAction::InvokeTool { tool, input, .. } => {
-            Some(invoke_plugin_tool_for_ui(
+            let output = invoke_plugin_tool_for_ui(
                 &state,
                 Some(plugin_id.as_str()),
                 tool.as_str(),
                 merge_plugin_ui_input(input.clone(), request.input),
                 request.session_id,
-            )?)
+            )?;
+            Some(serde_json::to_value(output).map_err(|error| {
+                ServerError::Internal(format!("failed to encode plugin UI tool result: {error}"))
+            })?)
+        }
+        agena::plugin::PluginUiAction::InvokeCommand { command, input } => {
+            let output = host
+                .invoke_plugin_command(
+                    plugin_id.as_str(),
+                    agena::plugin::sdk::PluginCommandInvokeInput {
+                        session_id: request.session_id,
+                        call_id: None,
+                        workspace_root: None,
+                        command_id: command.clone(),
+                        slash: None,
+                        raw: String::new(),
+                        input: merge_plugin_ui_input(input.clone(), request.input),
+                    },
+                )
+                .map_err(|error| ServerError::Internal(error.to_string()))?;
+            Some(serde_json::to_value(output).map_err(|error| {
+                ServerError::Internal(format!("failed to encode plugin command result: {error}"))
+            })?)
         }
         agena::plugin::PluginUiAction::None
         | agena::plugin::PluginUiAction::OpenRoute { .. }

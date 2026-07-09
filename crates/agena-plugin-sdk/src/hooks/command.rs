@@ -1,7 +1,196 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+// ── plugin command invocation ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginCommandInvokeInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
+    pub command_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slash: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub raw: String,
+    #[serde(default)]
+    pub input: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PluginCommandContext<'a> {
+    pub session_id: Option<i64>,
+    pub call_id: Option<i64>,
+    pub workspace_root: Option<&'a str>,
+    pub command_id: &'a str,
+    pub slash: Option<&'a str>,
+    pub raw: &'a str,
+}
+
+impl PluginCommandInvokeInput {
+    pub fn context(&self) -> PluginCommandContext<'_> {
+        PluginCommandContext {
+            session_id: self.session_id,
+            call_id: self.call_id,
+            workspace_root: self.workspace_root.as_deref(),
+            command_id: self.command_id.as_str(),
+            slash: self.slash.as_deref(),
+            raw: self.raw.as_str(),
+        }
+    }
+
+    pub fn parse_input<T>(&self) -> crate::Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        serde_json::from_value(self.input.clone())
+            .map_err(|err| crate::PluginError::invalid_params(err.to_string()))
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PluginCommandOutput {
+    #[default]
+    None,
+    Message {
+        text: String,
+    },
+    SubmitPrompt {
+        prompt: String,
+    },
+    InvokeTool {
+        tool: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input: Option<serde_json::Value>,
+        #[serde(default)]
+        submit_output_as_prompt: bool,
+    },
+    InvokeCommand {
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input: Option<serde_json::Value>,
+    },
+    OpenRoute {
+        route: String,
+    },
+    OpenUrl {
+        url: String,
+    },
+}
+
+impl PluginCommandOutput {
+    pub fn message(text: impl Into<String>) -> Self {
+        Self::Message { text: text.into() }
+    }
+
+    pub fn submit_prompt(prompt: impl Into<String>) -> Self {
+        Self::SubmitPrompt {
+            prompt: prompt.into(),
+        }
+    }
+
+    pub fn invoke_tool(tool: impl Into<String>, input: Option<serde_json::Value>) -> Self {
+        Self::InvokeTool {
+            tool: tool.into(),
+            input,
+            submit_output_as_prompt: false,
+        }
+    }
+
+    pub fn invoke_tool_with_prompt(
+        tool: impl Into<String>,
+        input: Option<serde_json::Value>,
+        submit_output_as_prompt: bool,
+    ) -> Self {
+        Self::InvokeTool {
+            tool: tool.into(),
+            input,
+            submit_output_as_prompt,
+        }
+    }
+
+    pub fn invoke_command(command: impl Into<String>, input: Option<serde_json::Value>) -> Self {
+        Self::InvokeCommand {
+            command: command.into(),
+            input,
+        }
+    }
+
+    pub fn open_route(route: impl Into<String>) -> Self {
+        Self::OpenRoute {
+            route: route.into(),
+        }
+    }
+
+    pub fn open_url(url: impl Into<String>) -> Self {
+        Self::OpenUrl { url: url.into() }
+    }
+}
+
+pub trait IntoPluginCommandOutput {
+    fn into_plugin_command_output(self) -> crate::Result<PluginCommandOutput>;
+}
+
+pub fn into_plugin_command_output<T>(value: T) -> crate::Result<PluginCommandOutput>
+where
+    T: IntoPluginCommandOutput,
+{
+    value.into_plugin_command_output()
+}
+
+impl IntoPluginCommandOutput for PluginCommandOutput {
+    fn into_plugin_command_output(self) -> crate::Result<PluginCommandOutput> {
+        Ok(self)
+    }
+}
+
+impl IntoPluginCommandOutput for () {
+    fn into_plugin_command_output(self) -> crate::Result<PluginCommandOutput> {
+        Ok(PluginCommandOutput::None)
+    }
+}
+
+impl IntoPluginCommandOutput for String {
+    fn into_plugin_command_output(self) -> crate::Result<PluginCommandOutput> {
+        Ok(PluginCommandOutput::Message { text: self })
+    }
+}
+
+impl IntoPluginCommandOutput for &str {
+    fn into_plugin_command_output(self) -> crate::Result<PluginCommandOutput> {
+        Ok(PluginCommandOutput::Message {
+            text: self.to_string(),
+        })
+    }
+}
+
+impl<T> IntoPluginCommandOutput for Option<T>
+where
+    T: IntoPluginCommandOutput,
+{
+    fn into_plugin_command_output(self) -> crate::Result<PluginCommandOutput> {
+        match self {
+            Some(value) => value.into_plugin_command_output(),
+            None => Ok(PluginCommandOutput::None),
+        }
+    }
+}
+
+impl<T, E> IntoPluginCommandOutput for std::result::Result<T, E>
+where
+    T: IntoPluginCommandOutput,
+    E: Into<crate::PluginError>,
+{
+    fn into_plugin_command_output(self) -> crate::Result<PluginCommandOutput> {
+        self.map_err(Into::into)?.into_plugin_command_output()
+    }
+}
 
 // ── command.execute.before ─────────────────────────────────────────────────
 

@@ -29,7 +29,6 @@ impl FsPlugin {
         filesystem_read,
         display = detailed,
         examples(r#"{"path":"Cargo.toml"}"#),
-        permission(paths = permission_read),
         concurrency_safe
     )]
     async fn invoke_read(
@@ -48,7 +47,6 @@ impl FsPlugin {
         discovery,
         display = detailed,
         examples(r#"{"pattern":"**/*.rs","path":"crates"}"#),
-        permission(paths = permission_glob),
         concurrency_safe
     )]
     async fn invoke_glob(
@@ -67,7 +65,6 @@ impl FsPlugin {
         discovery,
         display = detailed,
         examples(r#"{"pattern":"agena_plugin","path":"crates"}"#),
-        permission(paths = permission_grep),
         concurrency_safe
     )]
     async fn invoke_grep(
@@ -84,7 +81,7 @@ impl FsPlugin {
         mutating,
         filesystem_write,
         display = detailed,
-        permission(paths = permission_apply_patch),
+        path(requests = permission_paths_internal("apply_patch", input)?),
         concurrency_safe
     )]
     async fn invoke_apply_patch(
@@ -93,25 +90,6 @@ impl FsPlugin {
         args: ApplyPatchToolInput,
     ) -> SdkResult<ToolInvokeOutput> {
         invoke_internal(context, "apply_patch", args)
-    }
-
-    async fn permission_read(&self, args: ReadToolInput) -> SdkResult<Vec<PathRequest>> {
-        permission_paths_internal("read", args)
-    }
-
-    async fn permission_glob(&self, args: GlobToolInput) -> SdkResult<Vec<PathRequest>> {
-        permission_paths_internal("glob", args)
-    }
-
-    async fn permission_grep(&self, args: GrepToolInput) -> SdkResult<Vec<PathRequest>> {
-        permission_paths_internal("grep", args)
-    }
-
-    async fn permission_apply_patch(
-        &self,
-        args: ApplyPatchToolInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        permission_paths_internal("apply_patch", args)
     }
 }
 
@@ -128,7 +106,10 @@ fn invoke_internal<T: Serialize>(
     )
 }
 
-fn permission_paths_internal<T: Serialize>(tool: &str, input: T) -> SdkResult<Vec<PathRequest>> {
+fn permission_paths_internal<T: Serialize + ?Sized>(
+    tool: &str,
+    input: &T,
+) -> SdkResult<Vec<PathRequest>> {
     let input = json_input(input)?;
     router::permission_paths_for(tool, &input)
 }

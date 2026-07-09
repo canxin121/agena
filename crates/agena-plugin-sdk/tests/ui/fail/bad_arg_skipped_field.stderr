@@ -1,0 +1,7 @@
+error: field-level #[arg(...)] cannot be used on flattened or skipped fields; put the constraint on the flattened input shape or remove the serde skip
+ --> tests/ui/fail/bad_arg_skipped_field.rs:5:5
+  |
+5 | /     #[serde(skip)]
+6 | |     #[arg(path.read)]
+7 | |     path: String,
+  | |________________^

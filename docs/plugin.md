@@ -616,7 +616,7 @@ async fn main() -> std::io::Result<()> {
 
 - `examples/echo_plugin`: cdylib plugin。
 - `examples/echo_plugin_stdio`: stdio plugin。
-- `examples/multi_tool_plugin_stdio`: 推荐的多 tool stdio plugin 写法，覆盖方法级 `#[tool]`、`#[stream]`、动态权限和 config。
+- `examples/multi_tool_plugin_stdio`: 推荐的多 tool stdio plugin 写法，覆盖方法级 `#[tool]`、`stream = ...`、字段级权限和 config。
 
 ## 多 Tool Plugin 推荐写法
 
@@ -635,7 +635,7 @@ struct FormatInput {
 #[derive(Debug, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct WriteInput {
-    #[arg(trim, non_empty)]
+    #[arg(trim, non_empty, path.write)]
     path: String,
     #[arg(trim, non_empty)]
     text: String,
@@ -662,7 +662,7 @@ impl NotesPlugin {
         summary = "Format text.",
         output(FormatOutput),
         read_only,
-        streaming,
+        stream = format_stream,
         concurrency_safe
     )]
     async fn format(&self, input: &FormatInput) -> Result<FormatOutput> {
@@ -671,7 +671,6 @@ impl NotesPlugin {
         })
     }
 
-    #[stream(format)]
     async fn format_stream(&self, sink: ToolStreamSink, input: &FormatInput) -> Result<ToolStreamEnd> {
         // ...
     }
@@ -681,8 +680,7 @@ impl NotesPlugin {
         summary = "Write text.",
         output(WriteOutput),
         mutating,
-        filesystem_write,
-        permission(paths = write_permission_paths)
+        filesystem_write
     )]
     async fn write(&self, input: &WriteInput) -> Result<WriteOutput> {
         Ok(WriteOutput {
@@ -690,10 +688,6 @@ impl NotesPlugin {
             path: input.path.clone(),
             bytes: input.text.len(),
         })
-    }
-
-    async fn write_permission_paths(&self, input: &WriteInput) -> Result<Vec<PathRequest>> {
-        Ok(vec![PathRequest::write(input.path.clone())])
     }
 }
 ```
@@ -711,6 +705,91 @@ impl EchoPlugin {
     }
 }
 ```
+
+inline `#[arg(...)]` 不只负责 trim/校验和权限语义，也可以直接定义 wire 名和兼容别名。例如 `#[arg(name = "filePath", alias = "path", path.read)] file_path: String` 会让 schema 主字段名变成 `filePath`，同时继续接受旧的 `path` 输入，并自动把 permission jsonpath 扩展到 `$.filePath` 和 `$.path`。Studio 的 `key=value` shorthand 也会把 `path=...` 这类 alias 自动映射回主字段。
+
+对 `ToolInput` struct field，也可以直接写 `#[arg(name = "filePath", alias = "path")]`，不必再分别配 `#[serde(rename = ...)]` / `#[serde(alias = ...)]`。derive 宏会把 `filePath` 作为 schema 主字段名，同时继续接受旧的序列化字段名 `file_path` 和显式声明的 alias，并在反序列化前先把它们统一归一化回真正的 struct field。
+
+如果参数需要默认值，也可以直接写 `#[arg(default = 3)]`、`#[arg(default = String::from("guest"))]` 或 `#[arg(default)]`。inline 参数会把默认值写进隐藏 input struct；`ToolInput` struct field 也支持同样写法，宏会在反序列化前先把缺失字段补上，并同步写入 schema `default`，所以自动推导出来的 command usage 也会复用这个默认值。field 级 `#[arg(default)]` 不要和同一字段上的 `#[serde(default)]` 混用。
+
+如果 typed input 需要一个完整的权威示例，也可以直接在类型上写 `#[input(example = serde_json::json!({...}))]`。这个例子会同时成为 `ToolInput::input_example()` 的返回值，并写入根 schema `examples`，适合数组、嵌套 object 或跨字段一起才有意义的示例。
+
+如果整个 typed input 在缺省时就有一个完整默认值，也可以直接写 `#[input(default)]` 或 `#[input(default = Self { ... })]`。当 host 传进来的 input 是 `null` 时，宏会先把它替换成这个默认值，并同步写入根 schema `default`。它不会自动和一个“部分 object”做 merge；部分字段补默认值仍然建议写 field 级 `#[arg(default = ...)]`。
+
+如果某个普通 struct field 本身也是一个派生了 `ToolInput` 的嵌套输入形状，可以在字段上写 `#[input(nested_shape)]`。这样父级 `ToolInput` 会在外层解析前先对这个嵌套 object 做 inner field alias/default 归一化，解析后再把该字段重新走一遍 inner `ToolInput::parse_input()`，因此内层的 `#[arg(name/alias/default/trim/...)]`、type-level `#[input(...)]` 校验、schema metadata、声明式 `path.*` / `network.*` 权限和 tags 都会保留下来；如果外层字段自己还有 alias，这些 prefix 也会自动扩展到嵌套 jsonpath，比如 `payload.filePath` 和 `body.filePath`。外层 type-level 路径约束也会继续向内解析，所以像 `#[input(trim("body.filePath"), non_empty("payload.filePath"))]` 这类写法会自动对齐到内层真正的 parse key。对 `Vec<Inner>` 或 `Option<Vec<Inner>>` 这类数组字段，item 级路径同样可以直接写成 `payload.filePath` / `body.filePath`，宏会自动补成内部使用的 `payload[].filePath` 再落到每个 item 上。内层 parse/校验一旦报错，错误路径也会自动带上外层前缀；如果字段是数组，还会保留具体 item 下标，比如 `payload[1].filePath`。
+
+如果不想为了一个嵌套 object 单独再包一层 typed input，tool / command 的 inline 参数现在也可以直接写 `#[arg(nested_shape)]`。它会把这个参数当成隐藏 input struct 里的一个嵌套 `ToolInput` 字段处理，所以内层的 `name/alias/default/trim/...`、schema metadata、声明式 `path.*` / `network.*` 权限和 tags 也都会保留下来；如果外层 inline 参数自己还有 `name` / `alias`，这些 prefix 也会继续扩展到内层字段。
+
+如果想把一个现成的 `ToolInput` 片段直接铺平到 inline 参数生成的隐藏 input 里，也可以写 `#[arg(flatten_shape)]`。它等价于在隐藏 struct 上写一个 `#[serde(flatten)] #[input(flatten_shape)]` 字段，所以内层字段会直接提升到当前输入根上，继续复用内层 `ToolInput` 的 alias/default/schema metadata、声明式权限和 tags。这个写法只适合“纯铺平”的场景；额外的 rename/alias/default/trim/permission 配置应继续写在被 flatten 的那个 `ToolInput` 类型上。
+
+如果需要给 inline 参数补 schema 描述，可以直接写 `#[arg(description = "Path to inspect.")]`。同一个属性在 `ToolInput` struct field 上也可以使用，用来覆盖默认来自 doc comment 的 description。
+
+`#[command(...)]` 现在也支持同样的两种输入写法：可以继续接收一个派生了 `ToolInput` 的结构体，也可以像 tool 一样直接在方法参数上写 `#[arg(...)]`，让宏生成隐藏 command input schema 和解析逻辑：
+
+```rust
+#[agena_plugin(namespace = "example", name = "notes", version = env!("CARGO_PKG_VERSION"), summary = "Notes plugin.")]
+impl NotesPlugin {
+    #[command("/note-greet", id = "notes.greet", title = "Greet")]
+    fn greet(&self, #[arg(trim, non_empty, example = "Ada")] name: String) -> String {
+        format!("hello {name}")
+    }
+}
+```
+
+当 `#[command]` 只有一个普通参数且没有 `#[arg]` 时，宏仍然按“显式 input shape”语义处理。现在常见的 top-level JSON 类型已经直接实现了 `ToolInput`，所以 `fn greet(&self, name: String)`、`fn toggle(&self, enabled: bool)`、`fn ids(&self, ids: Vec<String>)` 这类单参数 command/tool 都可以直接工作；只有在你需要字段级 trim/alias/default/permission/schema metadata 时，才需要给参数加 `#[arg(...)]` 或改成显式 struct。
+
+`#[arg(example = ...)]` 接受任何 `serde_json::json!(...)` 能表示的字面量，所以除了字符串，也可以直接写 `example = 3`、`example = true`、`example = ["a", "b"]` 这类值；它们会同时进入 schema `examples` 和自动推导的 command usage。
+
+如果参数只接受固定枚举值，可以直接写 `#[arg(choices = ["cargo", "git"])]`；对派生 `ToolInput` 的结构体，也可以在类型上写 `#[input(choices("mode", "fast", "slow"))]`。这两种写法都会在运行时校验输入值，并把 schema 对应字段补成 JSON Schema `enum`，所以自动推导的 usage 会优先选第一个枚举值，例如 `/cmd cargo`。
+
+如果字符串参数需要已有语义格式校验，可以直接写 `#[arg(format = "uri")]`、`#[arg(format = "uuid")]` 这类约束；对派生 `ToolInput` 的结构体，也可以写 `#[input(format("endpoint", "uri"))]`。当前内建支持 `uri`、`uuid`、`email`、`hostname`、`ipv4`、`ipv6`，宏会在运行时校验字符串格式，并把同一个值写入 schema `format`，所以像 `#[arg(name = "endpoint", format = "uri")]` 这样的 renamed field 也会在最终 wire key 上得到正确的 schema metadata。自动推导 usage 时，这些格式还会优先生成可执行示例值，例如 `uri` 会得到 `https://example.com`，`uuid` 会得到一个固定 UUID。
+
+如果字符串参数需要正则约束，可以直接写 `#[arg(pattern = "^[a-z0-9-]+$")]`；对派生 `ToolInput` 的结构体，也可以写 `#[input(pattern("slug", "^[a-z0-9-]+$"))]`。宏会在运行时用 Rust `regex` 校验匹配结果，并把同一个模式写入 schema `pattern`，所以像 `#[arg(name = "slug", pattern = ...)]` 这类 renamed field 也会在最终 wire key 上得到正确的 schema metadata。
+
+如果字符串参数还有长度要求，可以直接写 `#[arg(min_chars = 3, max_chars = 32)]`；对派生 `ToolInput` 的结构体，也可以写 `#[input(min_chars("slug", 3), max_chars("slug", 32))]`。这些约束会在运行时按字符数校验字符串，并把 schema 上的 `minLength` / `maxLength` 同步补齐；如果同一个字段同时声明了 `non_empty` 和 `min_chars`，宏会保留更严格的 `minLength`。
+
+如果参数本身是 `Vec<String>` 这类字符串数组，也可以直接给数组项写约束：inline 参数支持 `#[arg(item_min_chars = 3, item_max_chars = 32, item_pattern = "^[a-z0-9-]+$", item_choices = ["cargo", "git"])]`，派生 `ToolInput` 既支持 field 级同名 `#[arg(...)]`，也支持类型级 `#[input(item_min_chars("tags", 3), item_pattern("tags", "^[a-z0-9-]+$"), item_choices("tags", "cargo", "git"))]`。这些 sugar 会自动落到 schema `items.minLength` / `items.maxLength` / `items.pattern` / `items.enum`，等价于手写 `tags[]` 路径约束，但作者不需要自己拼 `[]` 路径。
+
+同样地，字符串数组项也可以直接写 `item_format`：例如 `#[arg(item_format = "uuid")]` 或 `#[input(item_format("ids", "uuid"))]` 会把校验和 schema metadata 落到 `items.format`。这和手写 `ids[]` 路径上的 `format` 约束等价，但错误信息和 schema 都会直接指向数组项。
+
+如果字符串数组项需要就地规范化，也可以直接写 `item_trim` 和 `item_trim_suffix`：例如 `#[arg(item_trim, item_trim_suffix = ".rs")]` 或 `#[input(item_trim("tags"), item_trim_suffix("tags", ".rs"))]` 会把 trim / suffix 去除直接作用在 `tags[]` 上，不需要再手写自定义 normalizer。它们和已有的 `item_min_chars`、`item_pattern`、`item_format` 可以组合使用，所以像 `" cargo.rs "` 这样的输入会先被规范化，再进入后续校验。
+
+如果要求数组项本身非空，也可以直接写 `item_non_empty` 或 `item_non_empty_if_present`：例如 `#[arg(item_non_empty)]`、`#[arg(item_non_empty_if_present)]`，或者 `#[input(item_non_empty("tags"))]`、`#[input(item_non_empty_if_present("tags"))]`。这两种 sugar 会直接校验 `tags[]`，并把 schema `items.minLength` 自动补成 `1`；前者要求匹配到的数组项都非空，后者则只在该路径实际出现值时才拒绝空字符串项。
+
+数组项如果是数字或 object，也可以用同样的写法：`#[arg(item_minimum = 0, item_maximum = 10)]` / `#[input(item_minimum("counts", 0), item_maximum("counts", 10))]` 会把约束落到 `items.minimum` / `items.maximum`；`#[arg(item_min_properties = 1, item_max_properties = 4)]` / `#[input(item_min_properties("entries", 1), item_max_properties("entries", 4))]` 会把约束落到 `items.minProperties` / `items.maxProperties`。这些 sugar 同样等价于手写 `counts[]`、`entries[]` 这类路径约束，但 schema 和运行时错误都会直接指向数组项。
+
+如果字段本身就是一个直接的 `Vec<T>`，而约束语义明显只适用于数组项，宏现在也会自动把不带 `item_` 前缀的写法落到 `[]` 上。例如 `#[arg(trim, trim_suffix = ".rs", min_chars = 3, pattern = "...")] tags: Vec<String>`、`#[arg(choices = ["cargo", "git"])] tools: Vec<String>`、`#[arg(minimum = 1, maximum = 5)] counts: Vec<u32>`、`#[arg(min_properties = 1)] entries: Vec<BTreeMap<_, _>>` 都会自动约束数组项；type-level 的 `#[input(trim("tags"), pattern("tags", "..."))]`、`#[input(choices("tools", "cargo", "git"))]`、`#[input(minimum("counts", 1))]` 也一样。这个自动补 `[]` 只针对那些对整个 array 本身没有直接语义的约束；像 `non_empty`、`non_empty_if_present`、`min_items`、`max_items` 仍然保留“数组本身”的语义，所以元素级非空仍然应该继续写 `item_non_empty` / `item_non_empty_if_present`。
+
+对 `#[serde(tag = "action")]` 这类 enum `ToolInput`，同样可以把这些规则直接写在 variant 的 `#[input(...)]` 上。例如 variant 级 `trim("query")`、`item_trim("tags")`、`item_trim_suffix("tags", ".rs")`、`item_non_empty("tags")`、`item_non_empty_if_present("tags")` 都会只作用于对应 variant 的局部输入形状；如果 variant 字段本身就是直接的 `Vec<T>`，那么 `trim("tags")`、`trim_suffix("tags", ".rs")`、`min_chars("tags", 3)`、`pattern("tags", "...")`、`choices("tools", ...)`、`forbid_substrings("tags", "..")`、`distinct_trimmed("tags")` 这类写法也会像 struct 一样自动落到数组项上。variant 字段本身也支持 struct 同款的 field 级 `#[arg(...)]`，包括 `name`、`alias`、`default`、`trim`、`non_empty`、`distinct_trimmed` 等；这些配置会参与 enum 解析前的 alias 归一化和默认值补齐，并同步写入对应 branch 的 schema metadata。variant 路径还会继续解析 serde 字段名和 field 级 `#[arg(name = ...)]`，所以像 `#[serde(rename_all_fields = "camelCase")]` 下面的 `trim("file_path")`、`requires("file_path", "mode")`、`infer_when_present("file_path")`、`drop_keys("file_path")`，或者 field 上写了 `#[arg(name = "filePath", alias = "path")]` 时的同名路径，都会自动对齐到最终 wire key；`infer_when_present` / `drop_keys` 现在也支持普通 JSON path，比如 `selector.kind`、`items[].kind` 这类嵌套路径，且顶层字段如果用了 `#[arg(alias = ...)]` 或 `#[serde(alias = ...)]`，这些 alias 也会自动扩展到对应的嵌套 path。若 variant 内部有 `#[serde(flatten)] #[input(flatten_shape)]` 的嵌套 `ToolInput` 字段，或者普通字段上的 `#[input(nested_shape)]` 嵌套 `ToolInput` 字段，它的 schema metadata、field-level `#[arg(name/alias/default)]` 归一化结果、声明式 `path.*` / `network.*` 权限和 tags 都会一起提升到该 branch；前者还会继续参与 `infer_when_present` / `drop_keys` 的候选输入键和外层 type-level `trim/non_empty/requires/...` 路径解析，后者则保留自己的对象层级，但它的 inner field `name` / `alias` 仍然会扩展到像 `payload.filePath`、`body.path` 这类候选输入键，而且外层 type-level `trim/non_empty/requires/...` 这类路径约束也会继续向内解析。若这个 `nested_shape` 字段本身还是数组，那么 `infer_when_present("payload.file_path")`、`drop_keys("body.filePath")` 这类省略 `[]` 的写法也会自动落到每个 item。内层 parse/校验错误也会自动回写成 branch 上的完整外层路径；数组 nested shape 会继续保留 item 下标。由于这些权限同样只在对应 branch 生效，宏会把提升到 enum 根上的 jsonpath spec 标记成 optional，避免未选中的 variant 在权限提取阶段被误判为缺字段。宏会先做该 variant 的规范化，再执行后续校验和 schema metadata 补充，因此不需要再把这类规则提升到整个 enum 根上统一处理。
+
+如果 object / map 参数需要限制键值对数量，可以直接写 `#[arg(min_properties = 1, max_properties = 4)]`；对派生 `ToolInput` 的结构体，也可以写 `#[input(min_properties("labels", 1), max_properties("labels", 4))]`。这些约束会在运行时按 object property 数量校验，并把 schema 上的 `minProperties` / `maxProperties` 同步补齐；如果字段同时声明了 `non_empty` 和 `min_properties`，宏会保留更严格的 `minProperties`。
+
+如果数值参数需要上下界，可以直接写 `#[arg(minimum = 0, maximum = 10)]`；对派生 `ToolInput` 的结构体，也可以写 `#[input(minimum("count", 1), maximum("count", 5))]`。这些约束会在运行时校验 numeric JSON value，并把 schema 上的 `minimum` / `maximum` 同步补齐；自动推导 usage 时也会优先选 `minimum` 作为示例值，所以常见单字段输入会直接得到 `/cmd 1` 这类更可执行的默认示例。
+
+如果边界需要严格不等式，也可以直接写 `#[arg(exclusive_minimum = 0, exclusive_maximum = 10)]`；对派生 `ToolInput` 的结构体，则可以写 `#[input(exclusive_minimum("count", 0), exclusive_maximum("count", 10))]`。它们分别落到 schema `exclusiveMinimum` / `exclusiveMaximum`，运行时报错会明确区分 “greater than” 和 “less than”；数组项同理支持 `item_exclusive_minimum` / `item_exclusive_maximum`，等价于手写 `counts[]` 路径上的严格数值约束。
+
+如果约束依赖另一个字段，field 级 `#[arg(...)]` 现在也支持直接写关系规则，不必再在类型上重复当前字段路径：例如 `#[arg(requires = "mode")]`、`#[arg(conflicts_with = "stdin")]`、`#[arg(required_unless_present = "text")]`。对派生 `ToolInput`，这些写法等价于 `#[input(requires("path", "mode"))]` 这类 type-level 规则，但当前字段路径会自动补上；当字段用了 `#[arg(name = ...)]` 或 alias 时，schema 里的关系说明和运行时错误也会继续显示最终 wire key。
+
+如果约束是“当前字段加上一组 peer”的组合关系，也可以直接写 field 级 group sugar：`#[arg(exactly_one_of = ["stdin"])]` 表示“当前字段和 `stdin` 恰好填一个”，`#[arg(at_least_one_of = ["stdin", "text"])]` 表示“当前字段、`stdin`、`text` 至少填一个”。这两种写法分别等价于 type-level 的 `#[input(exactly_one_of("path", "stdin"))]` 和 `#[input(at_least_one_of("path", "stdin", "text"))]`，但当前字段路径会由宏自动补上；如果 peer 字段自己用了 rename/name/alias，宏也会把这些 peer path 解析回最终 wire key。
+
+同样地，field 级 `#[arg(forbid_substrings = ["..", "~"])]` 和 `#[arg(distinct_trimmed)]` 也可以直接用在字符串字段或字符串数组字段上，分别对应 type-level 的 `#[input(forbid_substrings("path", "..", "~"))]` 与 `#[input(distinct_trimmed("tags"))]`。当目标字段本身是 `Vec<String>` 时，这两种 type-level 写法也会自动作用到 `tags[]`，不需要手写 `[]` 路径；前者适合路径、slug、host 之类不允许出现某些片段的输入，后者会在比较前先 trim，再拒绝 `" cargo "` 和 `"cargo"` 这类语义重复值。
+
+如果 command handler 还需要 slash/raw/session/workspace 这类原始命令上下文，可以额外接收一个 `PluginCommandContext<'_>` 参数；它可以放在结构化输入参数之前或之后：
+
+```rust
+#[command("/note-greet", id = "notes.greet", title = "Greet")]
+fn greet(
+    &self,
+    input: &ManifestCommandInput,
+    context: PluginCommandContext<'_>,
+) -> String {
+    format!("hello {} via {}", input.name, context.slash.unwrap_or(context.command_id))
+}
+```
+
+如果直接接收 `PluginCommandInvokeInput`，就已经包含完整原始上下文；这时不要再额外声明 `PluginCommandContext<'_>`。
+
+`#[command]` handler 的返回值会经过 `IntoPluginCommandOutput`。除了直接返回 `PluginCommandOutput`，也可以返回 `String`、`&str`、`()`、`Option<_>` 和 `Result<_, _>`。如果 command 想继续跳转到另一个 plugin command，可以直接返回 `PluginCommandOutput::InvokeCommand { command, input }`；`Option<_>` 形式的返回值在 `None` 时会自动变成 `PluginCommandOutput::None`。
 
 旧的聚合 enum/suite 写法已经移除。插件应统一使用 `#[agena_plugin]` 的方法级写法：每个模型可见 tool 对应一个 `#[tool(...)]` 方法，宏生成隐藏 schema、manifest、静态分发、stream fallback 和 permission 分发。完整可运行版本见 `examples/multi_tool_plugin_stdio`。
 
@@ -730,6 +809,16 @@ Manifest 的 UI surface 明确拆成两个宿主面：
 
 Manifest 顶层 `commands` 是 Command Palette 和 slash command 可发现的 plugin commands。它不是 `ui.studio` 的子字段，因为 command 是 plugin 的独立能力描述；Studio/TUI 可以各自决定如何展示。
 
+对带 `input_schema` 的 command，Studio 命令面板和聊天 slash 命令会优先按结构化输入处理参数：
+
+- 如果 schema 不是 object，合法 JSON scalar/array 会直接作为 command/tool input。
+- 如果 schema 是 object，合法 JSON object 会直接作为 command/tool input。
+- 如果 schema 是多字段 object，也可以使用 `key=value` 空格分隔的轻量写法。
+- 如果 schema 是单字段 object，裸文本参数或单个 JSON scalar 会自动映射到该字段，便于 `/plugin-command hello` 或 `/plugin-command 3` 这类简单调用。
+- 其他情况会保留 legacy `{ "args": "..." }` 透传，适合自定义解析逻辑或兼容旧 command。
+
+如果 command 没有显式写 `usage`，宏会优先根据 `ToolInput::input_example()` 或 inline `#[arg(example = ...)]` 自动推导一个更适合手输的示例；如果没有显式 example，则继续从 schema 里的 `examples`、`default`、`const`、`enum` 和必填字段类型生成占位值。现在派生出来的 `ToolInput::input_example()` 在没有显式 example 时，也会自动回退到这套 schema 推导结果；而 `input_usage()` 在已经有显式 example 的情况下，也会继续用 schema 补齐缺失字段，尽量避免生成一个本身就缺少必填字段的 usage。这个补齐逻辑同样适用于来自 `flatten_shape` / `nested_shape` 片段的示例，所以内层只提供了部分 example 时，外层必填字段也会继续补齐。这样单字段输入会尽量生成 `/cmd hello` 或 `/cmd <name>`，多字段 object 会尽量生成 `/cmd key=value ...`，只有复杂值才回退成 JSON。
+
 TUI 和 Studio 的 UI contribution 类型不同，是有意的边界：TUI 只处理可在终端稳定渲染的状态栏、主题和文本块；Studio 可以渲染 manifest commands、controls、views，并把用户操作映射为统一的 `PluginUiAction`。
 
 Studio control 的 `kind` 当前支持：
@@ -748,6 +837,7 @@ Studio control 的 `kind` 当前支持：
 | --- | --- |
 | `none` | 只展示，不执行行为。 |
 | `invoke_tool` | 调用当前 plugin 的某个 tool；`input` 是默认 JSON object，前端或 API 请求里的 input 会覆盖同名字段；`submit_output_as_prompt` 为 true 时，Studio 会把 tool 输出放回聊天输入/下一轮 prompt。 |
+| `invoke_command` | 调用当前 plugin 的某个 plugin command；`input` 是默认 JSON object。command handler 返回的 `message` / `submit_prompt` / `invoke_tool` / `open_route` / `open_url` 由宿主继续解释。 |
 | `open_route` | Studio 前端打开内部 route。 |
 | `open_url` | Studio 前端打开外部 URL。 |
 | `submit_prompt` | Studio 把固定 prompt 放入聊天流程。 |
@@ -781,7 +871,7 @@ fn manifest() -> PluginManifest {
             priority: 10,
             color: None,
         })
-        .command(PluginStudioCommand {
+        .command(PluginCommandDefinition {
             id: "summarize-workspace".into(),
             title: "Summarize workspace".into(),
             description: "Run the project helper summary tool.".into(),
@@ -790,6 +880,8 @@ fn manifest() -> PluginManifest {
             aliases: vec!["workspace summary".into()],
             usage: Some("/project-summary".into()),
             location: "command_palette".into(),
+            input_schema: None,
+            handler: None,
             action: PluginUiAction::InvokeTool {
                 tool: "summarize".into(),
                 input: Some(json!({ "scope": "workspace" })),
@@ -924,23 +1016,30 @@ ToolDefinition::new("download", schema)
     .tag(ToolTag::Network);
 ```
 
-如果路径或网络目标要先解析输入、读取 plugin 状态、展开 workspace 信息后才能知道，plugin 可以实现：
+如果路径或网络目标要先解析输入、读取 plugin 状态、展开 workspace 信息后才能知道，优先把动态权限写在 `#[tool(...)]` 上。宏会先解析 tool input，再在执行 tool body 前返回这些审计项：
 
 ```rust
-async fn permission_paths(
-    &self,
-    tool_name: &str,
-    input: &serde_json::Value,
-) -> Result<Vec<PathRequest>>;
+#[tool(
+    summary = "Download a file.",
+    mutating,
+    path(write = self.output_path(input).await?),
+    network(connect = input.url.as_str())
+)]
+async fn download(&self, input: &DownloadInput) -> Result<DownloadOutput> {
+    // ...
+}
 
-async fn permission_networks(
-    &self,
-    tool_name: &str,
-    input: &serde_json::Value,
-) -> Result<Vec<NetworkRequest>>;
+#[tool(
+    summary = "Apply a patch.",
+    mutating,
+    path(requests = self.planned_patch_paths(input)?)
+)]
+async fn patch(&self, input: &PatchInput) -> Result<PatchOutput> {
+    // ...
+}
 ```
 
-这些声明和动态返回项都会在 tool body 执行前进入同一套 path/network policy。
+`path(read = ...)` / `path(write = ...)` 接收单个路径，也可以直接接收 `Option<_>` 或 `Result<Option<_>>`；`None` 会被跳过。`path(reads = ...)` / `path(writes = ...)` 接收路径集合，支持 `Vec`、数组、slice、`Option<_>` 和 `Result<_>`。`path(requests = ...)` 接收 `PathRequest`、`Vec<PathRequest>`、数组、slice、`Option<_>`、`Result<_>` 或 `()`。网络侧对应 `network(connect = ...)`、`network(connects = ...)` 和 `network(requests = ...)`。这些声明和动态返回项都会在 tool body 执行前进入同一套 path/network policy。
 
 Plugin 内部发起的额外文件或网络操作不能由 host 做强沙箱隔离。需要在 plugin 内部配合权限系统时，manifest 要声明 `PermissionCheck` capability，然后通过 host callback 主动检查：
 

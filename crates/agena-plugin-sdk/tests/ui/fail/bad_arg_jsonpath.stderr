@@ -1,0 +1,5 @@
+error: unsupported input jsonpath 'paths[*]'
+ --> tests/ui/fail/bad_arg_jsonpath.rs:5:33
+  |
+5 |     #[arg(path.read, jsonpath = "paths[*]")]
+  |                                 ^^^^^^^^^^

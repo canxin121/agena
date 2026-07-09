@@ -6,9 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 
-use crate::plugin::sdk::{
-    PluginStudioCommand, PluginUiAction, Result as SdkResult, ToolInvokeOutput,
-};
+use crate::plugin::sdk::{PluginCommandOutput, Result as SdkResult, ToolInvokeOutput};
 
 pub(crate) const SCHEMA_LAB_PLUGIN_ID: &str = "agena.schema_lab";
 
@@ -83,8 +81,7 @@ impl SchemaLabPlugin {
     version = env!("CARGO_PKG_VERSION"),
     summary = "Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor.",
     config_schema = schema_lab_config_schema(),
-    display = brief,
-    commands = schema_lab_commands()
+    display = brief
 )]
 impl SchemaLabPlugin {
     #[tool(
@@ -110,47 +107,43 @@ impl SchemaLabPlugin {
     async fn invoke_echo(&self, input: SchemaLabEchoArgs) -> SdkResult<ToolInvokeOutput> {
         self.echo(input).await
     }
-}
 
-fn schema_lab_commands() -> Vec<PluginStudioCommand> {
-    vec![
-        PluginStudioCommand {
-            id: "schema_lab.open_fixture".to_owned(),
-            title: "Schema Lab: Open Fixture".to_owned(),
-            description:
-                "Placeholder command used to populate the Commands tab for the schema lab plugin."
-                    .to_owned(),
-            category: "Demo".to_owned(),
-            slash: Some("/schema-lab".to_owned()),
-            aliases: vec!["fixture".to_owned(), "schema-demo".to_owned()],
-            usage: Some("No-op command palette entry for config editor demos.".to_owned()),
-            location: "command_palette".to_owned(),
-            action: PluginUiAction::None,
-        },
-        PluginStudioCommand {
-            id: "schema_lab.show_defaults".to_owned(),
-            title: "Schema Lab: Show Defaults".to_owned(),
-            description: "Placeholder command describing the full default config fixture."
-                .to_owned(),
-            category: "Demo".to_owned(),
-            slash: None,
-            aliases: vec!["schema-defaults".to_owned()],
-            usage: Some("No-op command used for Commands tab rendering.".to_owned()),
-            location: "command_palette".to_owned(),
-            action: PluginUiAction::None,
-        },
-        PluginStudioCommand {
-            id: "schema_lab.run_probe".to_owned(),
-            title: "Schema Lab: Run Probe".to_owned(),
-            description: "Placeholder command for testing command metadata rendering.".to_owned(),
-            category: "Demo".to_owned(),
-            slash: None,
-            aliases: vec!["schema-probe".to_owned()],
-            usage: Some("No-op command. Exists only to exercise command listings.".to_owned()),
-            location: "command_palette".to_owned(),
-            action: PluginUiAction::None,
-        },
-    ]
+    #[command(
+        id = "schema_lab.open_fixture",
+        title = "Schema Lab: Open Fixture",
+        description = "Placeholder command used to populate the Commands tab for the schema lab plugin.",
+        category = "Demo",
+        slash = "/schema-lab",
+        aliases("fixture", "schema-demo"),
+        usage = "No-op command palette entry for config editor demos."
+    )]
+    async fn command_open_fixture(&self) -> PluginCommandOutput {
+        PluginCommandOutput::None
+    }
+
+    #[command(
+        id = "schema_lab.show_defaults",
+        title = "Schema Lab: Show Defaults",
+        description = "Placeholder command describing the full default config fixture.",
+        category = "Demo",
+        aliases("schema-defaults"),
+        usage = "No-op command used for Commands tab rendering."
+    )]
+    async fn command_show_defaults(&self) -> PluginCommandOutput {
+        PluginCommandOutput::None
+    }
+
+    #[command(
+        id = "schema_lab.run_probe",
+        title = "Schema Lab: Run Probe",
+        description = "Placeholder command for testing command metadata rendering.",
+        category = "Demo",
+        aliases("schema-probe"),
+        usage = "No-op command. Exists only to exercise command listings."
+    )]
+    async fn command_run_probe(&self) -> PluginCommandOutput {
+        PluginCommandOutput::None
+    }
 }
 
 fn schema_lab_config_schema() -> JsonValue {

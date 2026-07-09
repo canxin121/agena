@@ -13,7 +13,7 @@ use crate::message::{
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostLspListServersResponse};
 use crate::plugin::sdk::{
-    HostCapability, PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
+    HostCapability, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
 };
 use crate::plugins::provided::router;
 
@@ -275,7 +275,7 @@ struct LspServerSummary {
     display = brief
 )]
 impl LspPlugin {
-    #[hook]
+    #[hook(init)]
     async fn init(
         &self,
         _ctx: crate::plugin::sdk::InitContext,
@@ -290,42 +290,12 @@ impl LspPlugin {
         ))
     }
 
-    async fn permission_servers(&self) -> SdkResult<Vec<PathRequest>> {
-        Ok(Vec::new())
-    }
-
-    async fn permission_definition(
-        &self,
-        input: LspDefinitionToolInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        Ok(vec![PathRequest::read(input.position.file_path)])
-    }
-
-    async fn permission_references(
-        &self,
-        input: LspReferencesToolInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        Ok(vec![PathRequest::read(input.position.file_path)])
-    }
-
-    async fn permission_hover(&self, input: LspHoverToolInput) -> SdkResult<Vec<PathRequest>> {
-        Ok(vec![PathRequest::read(input.position.file_path)])
-    }
-
-    async fn permission_diagnostics(
-        &self,
-        input: LspDiagnosticsToolInput,
-    ) -> SdkResult<Vec<PathRequest>> {
-        Ok(vec![PathRequest::read(input.file_path)])
-    }
-
     #[tool(
         summary = "List configured language servers.",
         read_only,
         lsp,
         capabilities(HostCapability::LspRegistry),
         display = brief,
-        permission(paths = permission_servers),
         concurrency_safe
     )]
     async fn dispatch_servers(&self) -> SdkResult<ToolInvokeOutput> {
@@ -360,7 +330,6 @@ impl LspPlugin {
         lsp,
         capabilities(HostCapability::LspRegistry),
         display = brief,
-        permission(paths = permission_definition),
         concurrency_safe
     )]
     async fn dispatch_definition(
@@ -378,7 +347,6 @@ impl LspPlugin {
         lsp,
         capabilities(HostCapability::LspRegistry),
         display = brief,
-        permission(paths = permission_references),
         concurrency_safe
     )]
     async fn dispatch_references(
@@ -396,7 +364,6 @@ impl LspPlugin {
         lsp,
         capabilities(HostCapability::LspRegistry),
         display = brief,
-        permission(paths = permission_hover),
         concurrency_safe
     )]
     async fn dispatch_hover(
@@ -414,7 +381,6 @@ impl LspPlugin {
         lsp,
         capabilities(HostCapability::LspRegistry),
         display = brief,
-        permission(paths = permission_diagnostics),
         concurrency_safe
     )]
     async fn dispatch_diagnostics(

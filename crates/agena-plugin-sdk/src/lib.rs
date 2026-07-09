@@ -39,8 +39,8 @@ pub use identity::{PluginKey, PluginKeyParseError, ToolKey, ToolKeyParseError};
 pub use macro_support::{schema_example_texts, schema_usage_text};
 pub use manifest::{
     HookSubscription, HostCapability, InputNetworkSpec, InputPathSpec, NetworkAccessSpec,
-    PathAccessSpec, PathKind, PluginManifest, PluginStudioCommand, PluginStudioControl,
-    PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView,
+    PathAccessSpec, PathKind, PluginCommandDefinition, PluginManifest, PluginStudioCommand,
+    PluginStudioControl, PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView,
     PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions, PluginUiAction,
     PluginUiContributions, PluginUiThemePalette, ToolDefinition, ToolDescriptionMode,
     ToolDisplayPreset, ToolInput, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode,

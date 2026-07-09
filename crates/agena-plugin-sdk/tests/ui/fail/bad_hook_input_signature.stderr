@@ -1,0 +1,5 @@
+error: #[hook(tool.before)] input must be `ToolBeforeInput`, got `ToolAfterInput`
+  --> tests/ui/fail/bad_hook_input_signature.rs:14:35
+   |
+14 |     fn before_tool(&self, _input: ToolAfterInput) {}
+   |                                   ^^^^^^^^^^^^^^

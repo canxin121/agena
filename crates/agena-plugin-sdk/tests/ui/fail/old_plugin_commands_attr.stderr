@@ -1,0 +1,5 @@
+error: plugin-level `commands = ...` was removed; define commands with method-level #[command(...)]
+  --> tests/ui/fail/old_plugin_commands_attr.rs:11:5
+   |
+11 |     commands = Vec::<PluginCommandDefinition>::new()
+   |     ^^^^^^^^

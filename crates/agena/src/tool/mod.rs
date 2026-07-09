@@ -2511,6 +2511,13 @@ fn extract_input_path_requests(
     for spec in specs {
         let matches = extract_jsonpath_values(input, spec.jsonpath.as_str())?;
         if matches.is_empty() {
+            if let Some(path) = spec.fallback.as_ref() {
+                requests.push(crate::plugin::sdk::PathRequest {
+                    path: path.clone(),
+                    kind: spec.kind,
+                });
+                continue;
+            }
             if spec.optional {
                 continue;
             }
@@ -2543,6 +2550,12 @@ fn extract_input_network_requests(
     for spec in specs {
         let matches = extract_jsonpath_values(input, spec.jsonpath.as_str())?;
         if matches.is_empty() {
+            if let Some(target) = spec.fallback.as_ref() {
+                requests.push(crate::plugin::sdk::NetworkRequest {
+                    target: target.clone(),
+                });
+                continue;
+            }
             if spec.optional {
                 continue;
             }

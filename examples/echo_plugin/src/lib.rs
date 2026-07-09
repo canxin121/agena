@@ -56,7 +56,7 @@ impl EchoPlugin {
         })
     }
 
-    #[hook]
+    #[hook(tool.before, tool = "echo")]
     async fn tool_execute_before(&self, input: ToolBeforeInput) -> Option<ToolBeforePatch> {
         if input.tool_name() != "echo" {
             return None;
@@ -74,7 +74,7 @@ impl EchoPlugin {
         })
     }
 
-    #[hook]
+    #[hook(tool.after, tool = "echo")]
     async fn tool_execute_after(&self, input: ToolAfterInput) -> Option<ToolAfterPatch> {
         if input.tool_name() != "echo" {
             return None;
@@ -86,7 +86,7 @@ impl EchoPlugin {
         })
     }
 
-    #[hook]
+    #[hook(shell.env)]
     async fn shell_env(&self, input: ShellEnvInput) -> ShellEnvPatch {
         let mut p = ShellEnvPatch::default();
         p.set.insert("AGENA_ECHO".into(), "1".into());
@@ -97,21 +97,21 @@ impl EchoPlugin {
         p
     }
 
-    #[hook]
+    #[hook(event)]
     async fn event(&self, _ev: EventEnvelope) {}
 
-    #[hook]
+    #[hook(run.pre)]
     async fn pre_run(&self, _input: PreRunInput) {}
 
-    #[hook]
+    #[hook(run.post)]
     async fn post_run(&self, _input: PostRunInput) {}
 
-    #[hook]
+    #[hook(permission.ask)]
     async fn permission_ask(&self, _input: PermissionAskInput) -> Option<PermissionAskDecision> {
         None
     }
 
-    #[hook]
+    #[hook(session.start)]
     async fn session_start(&self, input: SessionStartInput) -> SessionStartPatch {
         SessionStartPatch {
             additional_context: Some(format!(
@@ -122,10 +122,10 @@ impl EchoPlugin {
         }
     }
 
-    #[hook]
+    #[hook(session.end)]
     async fn session_end(&self, _input: SessionEndInput) {}
 
-    #[hook]
+    #[hook(provider.list)]
     async fn provider_list(&self, input: ProviderListInput) -> Option<ProviderListPatch> {
         let already_registered = input
             .current

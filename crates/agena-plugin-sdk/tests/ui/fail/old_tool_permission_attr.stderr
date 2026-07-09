@@ -1,0 +1,5 @@
+error: permission(...) has been removed; use path(...) or network(...)
+  --> tests/ui/fail/old_tool_permission_attr.rs:21:9
+   |
+21 |         permission(paths = echo_permission_paths)
+   |         ^^^^^^^^^^

@@ -205,7 +205,8 @@ export type PluginInspect = {
 
 export type PluginUiAction =
   | { kind: 'none' }
-  | { kind: 'invoke_tool'; tool: string; input?: Record<string, unknown> | null; submit_output_as_prompt?: boolean }
+  | { kind: 'invoke_tool'; tool: string; input?: unknown; submit_output_as_prompt?: boolean }
+  | { kind: 'invoke_command'; command: string; input?: unknown }
   | { kind: 'open_route'; route: string }
   | { kind: 'open_url'; url: string }
   | { kind: 'submit_prompt'; prompt: string }
@@ -245,6 +246,8 @@ export type PluginStudioCommand = {
   aliases?: string[]
   usage?: string | null
   location: string
+  input_schema?: Record<string, unknown> | null
+  handler?: string | null
   action: PluginUiAction
 }
 
@@ -323,11 +326,20 @@ export type PluginUiToolInvokeResponse = {
   metadata?: Record<string, string>
 }
 
+export type PluginCommandOutput =
+  | { kind: 'none' }
+  | { kind: 'message'; text: string }
+  | { kind: 'submit_prompt'; prompt: string }
+  | { kind: 'invoke_tool'; tool: string; input?: unknown; submit_output_as_prompt?: boolean }
+  | { kind: 'invoke_command'; command: string; input?: unknown }
+  | { kind: 'open_route'; route: string }
+  | { kind: 'open_url'; url: string }
+
 export type PluginUiActionRunResponse = {
   plugin_id: string
   action_id: string
   action: PluginUiAction
-  result?: PluginUiToolInvokeResponse | null
+  result?: PluginUiToolInvokeResponse | PluginCommandOutput | null
 }
 
 export type PluginLogEntry = {
@@ -1196,7 +1208,7 @@ export async function listPluginToolRegistryChanges(input?: {
 export async function invokePluginUiTool(input: {
   tool: string
   pluginId?: string
-  payload?: Record<string, unknown>
+  payload?: unknown
   sessionId?: number | null
 }): Promise<PluginUiToolInvokeResponse> {
   return await apiJson<PluginUiToolInvokeResponse>('/api/v1/plugins/ui/invoke-tool', {
@@ -1205,7 +1217,7 @@ export async function invokePluginUiTool(input: {
     body: JSON.stringify({
       tool: input.tool.trim(),
       ...(input.pluginId?.trim() ? { plugin_id: input.pluginId.trim() } : {}),
-      ...(input.payload ? { input: input.payload } : {}),
+      ...(input.payload === undefined ? {} : { input: input.payload }),
       ...(input.sessionId === null || input.sessionId === undefined ? {} : { session_id: input.sessionId }),
     }),
   })
@@ -1214,7 +1226,7 @@ export async function invokePluginUiTool(input: {
 export async function runPluginUiAction(input: {
   pluginId: string
   actionId: string
-  payload?: Record<string, unknown>
+  payload?: unknown
   sessionId?: number | null
 }): Promise<PluginUiActionRunResponse> {
   return await apiJson<PluginUiActionRunResponse>(
@@ -1223,7 +1235,7 @@ export async function runPluginUiAction(input: {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        ...(input.payload ? { input: input.payload } : {}),
+        ...(input.payload === undefined ? {} : { input: input.payload }),
         ...(input.sessionId === null || input.sessionId === undefined ? {} : { session_id: input.sessionId }),
       }),
     },

@@ -33,17 +33,17 @@ impl EchoPlugin {
         output
     }
 
-    #[hook]
+    #[hook(init)]
     async fn init(&self, _ctx: InitContext, _host: Arc<dyn HostClient>) -> Result<InitOutcome> {
         Ok(InitOutcome::ack(Plugin::manifest(self)))
     }
 
-    #[hook]
+    #[hook(shell.env)]
     async fn shell_env(&self, _input: ShellEnvInput) -> ShellEnvPatch {
         ShellEnvPatch::set("AGENA_STDIO_PLUGIN", "1")
     }
 
-    #[hook]
+    #[hook(chat.params)]
     async fn chat_params(&self, _input: ChatParamsInput) -> ChatParamsPatch {
         ChatParamsPatch {
             params: Some(json!({ "stop": ["\nHuman:"] })),

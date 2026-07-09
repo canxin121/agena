@@ -218,7 +218,7 @@ struct PluginWorkbenchPlugin {
     tool_ui_display_defaults: BTreeMap<String, PluginTextDisplayMode>,
     tool_ui_display_sources: BTreeMap<String, PluginTextDisplaySource>,
     tools: Vec<agena::plugin::ToolDefinition>,
-    commands: Vec<agena::plugin::PluginStudioCommand>,
+    commands: Vec<agena::plugin::PluginCommandDefinition>,
     config_status: PluginConfigStatus,
     status: agena::plugin::status::PluginStatus,
     inspect: Option<agena::plugin::PluginInspect>,
@@ -12362,7 +12362,7 @@ fn schema_property_count(schema: &JsonValue) -> usize {
 
 fn command_argument_count(
     plugin: &PluginWorkbenchPlugin,
-    command: &agena::plugin::PluginStudioCommand,
+    command: &agena::plugin::PluginCommandDefinition,
 ) -> usize {
     match command_schema_and_value(plugin, command) {
         Some((schema, _)) => schema_property_count(&schema),
@@ -12372,17 +12372,25 @@ fn command_argument_count(
 
 fn command_schema_and_value(
     plugin: &PluginWorkbenchPlugin,
-    command: &agena::plugin::PluginStudioCommand,
+    command: &agena::plugin::PluginCommandDefinition,
 ) -> Option<(JsonValue, JsonValue)> {
-    let agena::plugin::PluginUiAction::InvokeTool { tool, input, .. } = &command.action else {
-        return None;
-    };
-    let tool = plugin
-        .tools
-        .iter()
-        .find(|candidate| candidate.name == *tool)?;
-    let schema = tool.contract.input_schema.clone();
+    let schema = command
+        .input_schema
+        .clone()
+        .or_else(|| match &command.action {
+            agena::plugin::PluginUiAction::InvokeTool { tool, .. } => plugin
+                .tools
+                .iter()
+                .find(|candidate| candidate.name == *tool)
+                .map(|tool| tool.contract.input_schema.clone()),
+            _ => None,
+        })?;
     let mut value = default_value_for_schema(&schema, &schema);
+    let input = match &command.action {
+        agena::plugin::PluginUiAction::InvokeTool { input, .. }
+        | agena::plugin::PluginUiAction::InvokeCommand { input, .. } => input.as_ref(),
+        _ => None,
+    };
     if let Some(input) = input {
         merge_config_override(&mut value, input);
     }

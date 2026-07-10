@@ -617,6 +617,7 @@ name = "agena-web"
 version = "0.1.0"
 dependencies = [
  "backoff",
+ "base64 0.22.1",
  "blake3",
  "chrono",
  "crw-extract",

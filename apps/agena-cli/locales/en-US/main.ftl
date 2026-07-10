@@ -107,7 +107,7 @@ help-composer-line-5 = Ctrl+A/E at a line boundary can continue to the previous/
 help-composer-line-6 = F3 or Ctrl+O or Alt+O searches workspace files to attach
 help-composer-line-7 = F4 or Alt+E opens $VISUAL/$EDITOR for the composer
 help-composer-line-8 = F6 or Alt+I attaches a clipboard image
-help-composer-line-9 = Pasting a single file path attaches it, large pastes become inline placeholders, and attachments stay atomic inline elements
+help-composer-line-9 = Pasted text is inserted directly; a single file path attaches it, and attachments stay atomic inline elements
 help-composer-line-10 = Alt+Up/Down recalls sent prompts; Ctrl+L clears the composer; Alt+P opens the command palette
 help-composer-line-11 = F2 opens inline items when available, and slash commands like /model, /fork, or /rewind run from the composer
 help-section-actions = Actions
@@ -162,6 +162,15 @@ overlay-permission-fact-scope = scope={$value}
 overlay-permission-fact-operator = operator={$value}
 overlay-permission-footer = a allow once | s allow session | d deny
 overlay-permission-footer-edit-rule = {$footer} | e edit rule
+overlay-permission-footer-action = ↑/↓ select | Enter/→ confirm | Esc/← close
+overlay-permission-footer-scope = ↑/↓ select | Enter/→ apply | Esc/← back
+overlay-permission-choice-allow = Allow…
+overlay-permission-choice-deny = Deny…
+overlay-permission-choice-edit-rule = Create precise rule…
+overlay-permission-choice-once = This time only
+overlay-permission-choice-session = Current session
+overlay-permission-choice-workspace = Current workspace
+overlay-permission-choice-global = Global
 overlay-permission-choice-allow-always-session = Allow always (session)
 overlay-permission-choice-allow-always-workspace = Allow always (workspace)
 overlay-permission-choice-allow-always-global = Allow always (global)
@@ -178,6 +187,7 @@ overlay-permission-rule-delete-title = Revoke Permission Rule
 overlay-permission-rule-delete-body = Revoke persisted rule {$name}?
 overlay-permission-rule-workbench-title = Permission Rule
 overlay-permission-rule-studio-footer = b browse path | r refresh
+overlay-permission-rule-studio-footer-return = b browse path | r refresh | Esc back to permission request
 overlay-permission-rule-fields = Rule Fields
 overlay-permission-rule-empty-detail = Select a permission field to edit it.
 overlay-permission-rule-choice-subject-title = Choose Subject Kind
@@ -1360,7 +1370,6 @@ permission-rule-error-invalid-mode = permission mode must be allow, ask, or deny
 permission-rule-error-invalid-scope = scope must be session, workspace, or global
 permission-rule-error-invalid-option-format = expected key=value option, got `{$token}`
 flash-user-input-reply-sent = user input reply sent
-flash-large-paste-staged = large paste staged in composer
 flash-large-paste-no-file-view = large paste snippets can be removed, but do not have a file view
 flash-attached = attached {$path}
 flash-composer-updated = composer updated from external editor
@@ -1638,10 +1647,6 @@ bytes-gb = {$value} GB
 bytes-mb = {$value} MB
 bytes-kb = {$value} KB
 bytes-b = {$value} B
-
-paste-label = paste {$count} chars
-paste-label-append = paste {$count} chars, append on send
-paste-placeholder = [paste {$count} chars]
 
 permission-label-allow-once = allow once
 permission-label-allow-always = allow always

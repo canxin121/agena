@@ -264,6 +264,27 @@ impl WorkflowPlugin {
                 )));
             }
         }
+
+        let requested_without_namespace =
+            requested.strip_prefix("agena.").unwrap_or(requested).trim();
+        let aliases = tools
+            .iter()
+            .filter(|tool| {
+                tool.name.eq_ignore_ascii_case(requested_without_namespace)
+                    || crate::tool::legacy_underscore_tool_alias(tool.name.as_str())
+                        .eq_ignore_ascii_case(requested)
+            })
+            .collect::<Vec<_>>();
+        match aliases.as_slice() {
+            [tool] => return Ok(*tool),
+            [] => {}
+            _ => {
+                return Err(PluginError::invalid_params(format!(
+                    "tool `{requested}` is ambiguous; refresh the tool catalog and use its fully-qualified name"
+                )));
+            }
+        }
+
         let suggestions = Self::suggest_tool_names(requested, tools);
         let message = if suggestions.is_empty() {
             format!("unknown tool '{requested}'")
@@ -2607,5 +2628,22 @@ mod tests {
         let error = WorkflowPlugin::resolve_tool_descriptor("notes.format", &tools)
             .expect_err("duplicate compact names must not resolve implicitly");
         assert!(error.message.contains("ambiguous"));
+    }
+
+    #[test]
+    fn gateway_accepts_wire_and_legacy_qualified_tool_aliases() {
+        let tools = vec![ToolDescriptor {
+            name: "web.fetch".to_string(),
+            summary: None,
+            help: None,
+            examples: Vec::new(),
+            input_schema: None,
+        }];
+
+        for requested in ["web_fetch", "agena.web.fetch"] {
+            let resolved = WorkflowPlugin::resolve_tool_descriptor(requested, &tools)
+                .unwrap_or_else(|error| panic!("{requested} should resolve: {error}"));
+            assert_eq!(resolved.name, "web.fetch");
+        }
     }
 }

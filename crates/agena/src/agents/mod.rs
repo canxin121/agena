@@ -486,7 +486,7 @@ fn default_profile(
             defaults: AgentSelectionConfig::default(),
         },
         prompt: format!(
-            "{prompt} When the user asks what tools are available, whether a tool exists, or how to inspect tool usage, do not answer from memory. Inspect the live tools gateway first. Use `tools_help` for exact tool schemas and `tools_call` to execute tools through the tools gateway."
+            "{prompt} When the user asks what tools are available, whether a tool exists, or how to inspect tool usage, do not answer from memory. Inspect the live tools gateway first. Use `tools_help` for exact tool schemas and `tools_call` to execute tools through the tools gateway. The names `tools_help` and `tools_call` are top-level gateway functions, not values for the `tool` argument of `tools_call`; pass the dotted catalog target name returned by the catalog, such as `web.search`."
         ),
         source_path: None,
         scope: AgentScope::Default,

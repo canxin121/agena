@@ -740,19 +740,6 @@ pub fn attachment_placeholder_base(i18n: &I18n, path: &Path, kind: AttachmentKin
     )
 }
 
-pub fn staged_paste_label(i18n: &I18n, count: usize, append_on_send: bool) -> String {
-    let key = if append_on_send {
-        "paste-label-append"
-    } else {
-        "paste-label"
-    };
-    i18n.text_args(key, &fl_args!("count" => count as i64))
-}
-
-pub fn staged_paste_placeholder(i18n: &I18n, count: usize) -> String {
-    i18n.text_args("paste-placeholder", &fl_args!("count" => count as i64))
-}
-
 pub fn format_bytes(i18n: &I18n, bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;

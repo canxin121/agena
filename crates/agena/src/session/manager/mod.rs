@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    net::IpAddr,
     sync::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicU64, Ordering},
@@ -981,7 +982,30 @@ impl SessionManager {
             .lock()
             .ok()
             .and_then(|grants| grants.get(&key).cloned())
-            .is_some_and(|actions| actions.iter().any(|granted| granted == action))
+            .is_some_and(|actions| host_permission_grant_matches_action(&actions, action))
+    }
+
+    fn install_host_permission_grant_for_pending_tool(
+        &self,
+        state: &SessionManagerState,
+        session_id: i64,
+        pending_tool: &ResolvedPendingTool,
+        actions: Vec<PermissionAction>,
+    ) -> Option<HostPermissionGrantGuard> {
+        let scoped_executor = state
+            .tool_executor
+            .for_session_context(&pending_tool.session_runtime.execution);
+        let target = scoped_executor
+            .plugin_manager()
+            .lookup_tool(pending_tool.invocation.name.as_str())?;
+        Some(HostPermissionGrantGuard::install(
+            Arc::clone(&self.host_permission_grants),
+            session_id,
+            pending_tool.call_id,
+            target.plugin_full_name(),
+            target.tool_name().to_string(),
+            actions,
+        ))
     }
 
     pub(crate) fn reconfigure(
@@ -1004,6 +1028,51 @@ impl SessionManager {
 
     pub fn cache_stats(&self) -> SessionCacheStats {
         self.store.cache_stats()
+    }
+}
+
+fn host_permission_grant_matches_action(
+    granted_actions: &[PermissionAction],
+    requested_action: &PermissionAction,
+) -> bool {
+    if granted_actions
+        .iter()
+        .any(|granted| granted == requested_action)
+    {
+        return true;
+    }
+
+    // A plugin can resolve an approved hostname before opening its connection.
+    // Keep the explicit approval bound to this invocation, but do not ask again
+    // merely because the resolver reports the corresponding public IP address.
+    // Private and loopback addresses never use this shortcut.
+    is_public_network_access(requested_action)
+        && granted_actions
+            .iter()
+            .any(|granted| matches!(granted, PermissionAction::NetworkAccess { .. }))
+}
+
+fn is_public_network_access(action: &PermissionAction) -> bool {
+    let PermissionAction::NetworkAccess { host, .. } = action else {
+        return false;
+    };
+    let Ok(address) = host.parse::<IpAddr>() else {
+        return false;
+    };
+    match address {
+        IpAddr::V4(address) => {
+            !address.is_private()
+                && !address.is_loopback()
+                && !address.is_link_local()
+                && address.octets()[0] != 0
+                && address.octets()[0] < 224
+        }
+        IpAddr::V6(address) => {
+            !address.is_loopback()
+                && !address.is_unique_local()
+                && !address.is_unicast_link_local()
+                && !address.is_unspecified()
+        }
     }
 }
 
@@ -1860,5 +1929,33 @@ mod tests {
             panic!("gateway stream test part is not an operation");
         };
         assert_eq!(operation.model_output.text, "stream-handler");
+    }
+
+    #[test]
+    fn host_permission_grant_covers_only_public_dns_resolution() {
+        let granted = vec![PermissionAction::NetworkAccess {
+            target: "https://openai.com/".to_string(),
+            host: "openai.com".to_string(),
+            port: Some(443),
+        }];
+        let public_address = PermissionAction::NetworkAccess {
+            target: "104.18.33.45:443".to_string(),
+            host: "104.18.33.45".to_string(),
+            port: Some(443),
+        };
+        let private_address = PermissionAction::NetworkAccess {
+            target: "10.0.0.1:443".to_string(),
+            host: "10.0.0.1".to_string(),
+            port: Some(443),
+        };
+
+        assert!(host_permission_grant_matches_action(
+            &granted,
+            &public_address
+        ));
+        assert!(!host_permission_grant_matches_action(
+            &granted,
+            &private_address
+        ));
     }
 }

@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::future::Future;
+use std::net::IpAddr;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -696,6 +697,9 @@ impl WebPlugin {
             )));
         }
         for address in addresses {
+            if is_public_address(address) {
+                continue;
+            }
             let target = match address {
                 std::net::IpAddr::V4(address) => format!("{address}:{port}"),
                 std::net::IpAddr::V6(address) => format!("[{address}]:{port}"),
@@ -939,6 +943,24 @@ impl WebPlugin {
     fn store_write_permission_path(&self) -> SdkResult<String> {
         let store = self.store()?;
         Ok(store.dir().display().to_string())
+    }
+}
+
+fn is_public_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            !address.is_private()
+                && !address.is_loopback()
+                && !address.is_link_local()
+                && address.octets()[0] != 0
+                && address.octets()[0] < 224
+        }
+        IpAddr::V6(address) => {
+            !address.is_loopback()
+                && !address.is_unique_local()
+                && !address.is_unicast_link_local()
+                && !address.is_unspecified()
+        }
     }
 }
 
@@ -1307,4 +1329,25 @@ fn domain_allowed(url: &str, allow: &[String], block: &[String]) -> bool {
 fn host_matches(host: &str, pattern: &str) -> bool {
     let pattern = pattern.trim().to_ascii_lowercase();
     !pattern.is_empty() && (host == pattern || host.ends_with(&format!(".{pattern}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    use super::is_public_address;
+
+    #[test]
+    fn public_dns_addresses_do_not_need_a_second_permission_check() {
+        assert!(is_public_address(Ipv4Addr::new(104, 18, 33, 45).into()));
+        assert!(is_public_address(
+            "2606:4700::6812:212d"
+                .parse::<Ipv6Addr>()
+                .expect("valid IPv6 address")
+                .into()
+        ));
+        assert!(!is_public_address(Ipv4Addr::LOCALHOST.into()));
+        assert!(!is_public_address(Ipv4Addr::new(10, 0, 0, 1).into()));
+        assert!(!is_public_address(Ipv6Addr::LOCALHOST.into()));
+    }
 }

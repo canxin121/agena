@@ -514,6 +514,17 @@ impl SessionManager {
         match request.request.reply.kind {
             PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
                 let resolved_tool = resolve_pending_tool(&session, &pending.tool)?;
+                let granted_actions = if permission_request.requested_actions.is_empty() {
+                    vec![permission_request.action.clone()]
+                } else {
+                    permission_request.requested_actions.clone()
+                };
+                let _permission_grant = self.install_host_permission_grant_for_pending_tool(
+                    state.as_ref(),
+                    session.id,
+                    &resolved_tool,
+                    granted_actions,
+                );
                 match self.execute_pending_tool_after_approval(
                     state.as_ref(),
                     session.id,

@@ -104,6 +104,10 @@ pub(crate) fn tool_value_name(name: &str) -> String {
     }
 }
 
+pub(crate) fn legacy_underscore_tool_alias(name: &str) -> String {
+    name.trim().replace('.', "_")
+}
+
 pub(crate) fn is_model_tools_gateway(tool: &RegisteredTool) -> bool {
     tool.plugin_name() == "tools"
         && matches!(
@@ -270,6 +274,9 @@ pub(crate) fn tool_matches_model_name(registered_tool: &RegisteredTool, name: &s
     let trimmed = name.trim();
     registered_tool.model_name() == trimmed
         || tool_value_name(registered_tool.model_name().as_str()) == trimmed
+        || legacy_underscore_tool_alias(
+            tool_value_name(registered_tool.model_name().as_str()).as_str(),
+        ) == trimmed
         || gateway_model_tool_name(registered_tool)
             .is_some_and(|gateway_name| gateway_name == trimmed)
 }
@@ -2841,5 +2848,15 @@ mod tests {
         assert_eq!(resolved, external.join("new.txt"));
 
         std::fs::remove_dir_all(root).expect("remove test directories");
+    }
+
+    #[test]
+    fn legacy_underscore_aliases_do_not_change_canonical_tool_names() {
+        assert_eq!(legacy_underscore_tool_alias("web.fetch"), "web_fetch");
+        assert_eq!(
+            legacy_underscore_tool_alias("fs.apply_patch"),
+            "fs_apply_patch"
+        );
+        assert_eq!(legacy_underscore_tool_alias("tools_call"), "tools_call");
     }
 }

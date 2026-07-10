@@ -39,6 +39,40 @@ pub(super) fn render_message_detailed(
     } else {
         let mut attached_header = false;
         for part in parts {
+            if let PartContent::Text(text) = transcript_part_content(part) {
+                let blocks = markdown_blocks(text.text.as_str());
+                for (block_index, block) in blocks.iter().enumerate() {
+                    if should_suppress_markdown_block(blocks.as_slice(), block_index) {
+                        continue;
+                    }
+                    if block.leading_blank_line && lines.len() > header_start.saturating_add(1) {
+                        lines.push(RenderedLine::plain("  ".to_string(), Style::default()));
+                    }
+
+                    // Keep the message header outside Markdown selections.  A selected code
+                    // block or list should be exactly that block, both visually and on copy.
+                    let start_line = lines.len();
+                    render_markdown_block(&mut lines, "  ", &block, width);
+                    if lines.len() > start_line {
+                        nodes.push(RenderedTranscriptNode {
+                            key: TranscriptNodeKey::MarkdownBlock {
+                                message_id: message.id,
+                                part_id: part.id,
+                                block_index,
+                            },
+                            kind: block.kind,
+                            start_line,
+                            end_line: lines.len(),
+                            copy_text: block.copy_text.clone(),
+                            toggleable: false,
+                            expanded: true,
+                        });
+                        attached_header = true;
+                    }
+                }
+                continue;
+            }
+
             let start_line = if attached_header {
                 lines.len()
             } else {
@@ -93,6 +127,14 @@ struct RenderedNodeDraft {
     copy_text: String,
     toggleable: bool,
     expanded: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MarkdownBlock {
+    kind: TranscriptNodeKind,
+    source: String,
+    copy_text: String,
+    leading_blank_line: bool,
 }
 
 pub(super) fn rewind_message_preview(message: &MessageResource, i18n: &I18n) -> String {
@@ -1397,6 +1439,501 @@ fn is_markdown_ordered_list_item(line: &str) -> bool {
             .is_some_and(|separator| separator == ' ')
 }
 
+/// Splits a Markdown text part into independently navigable transcript blocks.
+///
+/// This deliberately follows the renderer's lightweight Markdown recognition
+/// rather than trying to implement a second full Markdown parser.  The source
+/// remains Markdown so rendering stays consistent, while fenced code copies as
+/// plain code (without its fence) and every other block copies its source.
+fn markdown_blocks(text: &str) -> Vec<MarkdownBlock> {
+    let sanitized = sanitize_terminal_text(text);
+    let markdown = trim_empty_line_edges(sanitized.as_str());
+    if markdown.is_empty() {
+        return Vec::new();
+    }
+
+    let lines = markdown.lines().collect::<Vec<_>>();
+    let mut blocks = Vec::new();
+    let mut index = 0_usize;
+    let mut leading_blank_line = false;
+
+    while index < lines.len() {
+        if lines[index].trim().is_empty() {
+            leading_blank_line = true;
+            index += 1;
+            continue;
+        }
+
+        let start = index;
+        let kind;
+        let copy_range;
+
+        if let Some(opening_fence) = markdown_fence_delimiter(lines[index]) {
+            kind = TranscriptNodeKind::MarkdownCode;
+            index += 1;
+            let body_start = index;
+            while index < lines.len() {
+                if markdown_fence_delimiter(lines[index]).is_some_and(|closing_fence| {
+                    closing_fence.marker == opening_fence.marker
+                        && closing_fence.len >= opening_fence.len
+                }) {
+                    break;
+                }
+                index += 1;
+            }
+            let body_end = index;
+            if index < lines.len() {
+                index += 1;
+            }
+            copy_range = body_start..body_end;
+        } else if markdown_heading(lines[index]).is_some() {
+            kind = TranscriptNodeKind::MarkdownParagraph;
+            index += 1;
+            copy_range = start..index;
+        } else if is_markdown_quote_line(lines[index]) {
+            kind = TranscriptNodeKind::MarkdownParagraph;
+            index += 1;
+            while index < lines.len() && is_markdown_quote_line(lines[index]) {
+                index += 1;
+            }
+            copy_range = start..index;
+        } else if is_markdown_thematic_break(lines[index]) {
+            kind = TranscriptNodeKind::MarkdownParagraph;
+            index += 1;
+            copy_range = start..index;
+        } else if index + 1 < lines.len()
+            && is_markdown_table_header(lines[index], lines[index + 1])
+        {
+            kind = TranscriptNodeKind::MarkdownTable;
+            index += 2;
+            while index < lines.len() && looks_like_markdown_table_row(lines[index]) {
+                index += 1;
+            }
+            copy_range = start..index;
+        } else if is_markdown_list_item(lines[index]) {
+            kind = TranscriptNodeKind::MarkdownList;
+            index += 1;
+            while index < lines.len() {
+                let line = lines[index];
+                if line.trim().is_empty() {
+                    // A blank line only remains part of the list when it
+                    // precedes another item or an indented continuation.
+                    let Some(next) = lines.get(index + 1) else {
+                        break;
+                    };
+                    if is_markdown_list_item(next) || is_indented_markdown_line(next) {
+                        index += 1;
+                        continue;
+                    }
+                    break;
+                }
+                if is_markdown_list_item(line) || is_indented_markdown_line(line) {
+                    index += 1;
+                    continue;
+                }
+                break;
+            }
+            copy_range = start..index;
+        } else {
+            kind = TranscriptNodeKind::MarkdownParagraph;
+            index += 1;
+            while index < lines.len()
+                && !lines[index].trim().is_empty()
+                && markdown_fence_delimiter(lines[index]).is_none()
+                && markdown_heading(lines[index]).is_none()
+                && !is_markdown_quote_line(lines[index])
+                && !is_markdown_thematic_break(lines[index])
+                && !(index + 1 < lines.len()
+                    && is_markdown_table_header(lines[index], lines[index + 1]))
+                && !is_markdown_list_item(lines[index])
+            {
+                index += 1;
+            }
+            copy_range = start..index;
+        }
+
+        let source = lines[start..index].join("\n");
+        if source.trim().is_empty() {
+            continue;
+        }
+        let copy_text = lines[copy_range].join("\n");
+        blocks.push(MarkdownBlock {
+            kind,
+            source,
+            copy_text,
+            leading_blank_line,
+        });
+        leading_blank_line = false;
+    }
+
+    blocks
+}
+
+fn is_markdown_list_item(line: &str) -> bool {
+    is_markdown_unordered_list_item(line) || is_markdown_ordered_list_item(line)
+}
+
+fn is_indented_markdown_line(line: &str) -> bool {
+    line.starts_with("  ") || line.starts_with('\t')
+}
+
+fn markdown_heading(line: &str) -> Option<(usize, &str)> {
+    let trimmed = line.trim_start();
+    let level = trimmed.chars().take_while(|ch| *ch == '#').count();
+    if !(1..=6).contains(&level) {
+        return None;
+    }
+    let text = trimmed.get(level..)?.strip_prefix(' ')?.trim();
+    let text = text.trim_end_matches('#').trim_end();
+    (!text.is_empty()).then_some((level, text))
+}
+
+fn is_markdown_quote_line(line: &str) -> bool {
+    markdown_quote_depth_and_text(line).is_some()
+}
+
+fn markdown_quote_depth_and_text(line: &str) -> Option<(usize, &str)> {
+    let mut depth = 0_usize;
+    let mut rest = line.trim_start();
+    while let Some(after_marker) = rest.strip_prefix('>') {
+        depth += 1;
+        rest = after_marker.strip_prefix(' ').unwrap_or(after_marker);
+    }
+    (depth > 0).then_some((depth, rest))
+}
+
+fn strip_markdown_quote_level(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix('>')?;
+    Some(rest.strip_prefix(' ').unwrap_or(rest))
+}
+
+fn is_markdown_thematic_break(line: &str) -> bool {
+    let mut marker = None;
+    let mut count = 0_usize;
+    for ch in line.chars().filter(|ch| !ch.is_whitespace()) {
+        if !matches!(ch, '-' | '*' | '_') || marker.is_some_and(|value| value != ch) {
+            return false;
+        }
+        marker = Some(ch);
+        count += 1;
+    }
+    count >= 3
+}
+
+fn render_markdown_block(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    block: &MarkdownBlock,
+    width: u16,
+) {
+    match block.kind {
+        TranscriptNodeKind::MarkdownCode => {
+            push_markdown_code_block(out, prefix, &block.source, width)
+        }
+        TranscriptNodeKind::MarkdownList => push_markdown_list(out, prefix, &block.source, width),
+        TranscriptNodeKind::MarkdownTable => {
+            let table_lines = block.source.lines().collect::<Vec<_>>();
+            push_markdown_table(out, prefix, table_lines.as_slice(), width);
+        }
+        TranscriptNodeKind::MarkdownParagraph => {
+            if let Some((level, text)) = markdown_heading(&block.source) {
+                push_markdown_heading(out, prefix, level, text, width);
+            } else if block.source.lines().all(is_markdown_quote_line) {
+                push_markdown_quote(out, prefix, &block.source, width);
+            } else if is_markdown_thematic_break(&block.source) {
+                push_markdown_rule(out, prefix, width);
+            } else {
+                push_markdown(out, prefix, &block.source, width);
+            }
+        }
+        TranscriptNodeKind::Message | TranscriptNodeKind::Reasoning | TranscriptNodeKind::Tool => {
+            push_markdown(out, prefix, &block.source, width);
+        }
+    }
+}
+
+fn should_suppress_markdown_block(blocks: &[MarkdownBlock], index: usize) -> bool {
+    let Some(block) = blocks.get(index) else {
+        return false;
+    };
+    let Some(previous) = index.checked_sub(1).and_then(|index| blocks.get(index)) else {
+        return false;
+    };
+    // A heading already carries its own visual rule.  Markdown examples often
+    // place `---` right after every heading, which otherwise produces two
+    // adjacent separators with no semantic value in the transcript.
+    markdown_heading(previous.source.as_str()).is_some()
+        && is_markdown_thematic_break(block.source.as_str())
+}
+
+fn push_markdown_heading(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    level: usize,
+    text: &str,
+    width: u16,
+) {
+    let marker = match level {
+        1 => "══",
+        2 => "──",
+        _ => "›",
+    };
+    let style = Style::default()
+        .fg(if level <= 2 { Color::Cyan } else { Color::Blue })
+        .add_modifier(Modifier::BOLD);
+    let available = width.max(1) as usize;
+    let start = format!("{prefix}{marker} {text} ");
+    if level <= 2 && UnicodeWidthStr::width(start.as_str()) < available {
+        let fill = "─".repeat(available.saturating_sub(UnicodeWidthStr::width(start.as_str())));
+        out.push(RenderedLine::plain(format!("{start}{fill}"), style));
+    } else {
+        push_wrapped_line(
+            out,
+            prefix,
+            prefix,
+            format!("{marker} {text}").as_str(),
+            style,
+            width,
+        );
+    }
+}
+
+fn push_markdown_quote(out: &mut Vec<RenderedLine>, prefix: &str, source: &str, width: u16) {
+    let inner_source = source
+        .lines()
+        .filter_map(strip_markdown_quote_level)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let inner_prefix = format!("{prefix}│ ");
+    let blocks = markdown_blocks(inner_source.as_str());
+    for block in blocks {
+        if block.leading_blank_line {
+            out.push(RenderedLine::plain(
+                inner_prefix.to_string(),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        render_markdown_block(out, inner_prefix.as_str(), &block, width);
+    }
+}
+
+fn push_markdown_rule(out: &mut Vec<RenderedLine>, prefix: &str, width: u16) {
+    let available = (width.max(1) as usize).saturating_sub(UnicodeWidthStr::width(prefix));
+    push_single_line(
+        out,
+        prefix,
+        "─".repeat(available.clamp(3, 24)).as_str(),
+        Style::default().fg(Color::DarkGray),
+        width,
+    );
+}
+
+fn push_markdown_code_block(out: &mut Vec<RenderedLine>, prefix: &str, source: &str, width: u16) {
+    let source_lines = source.lines().collect::<Vec<_>>();
+    let opening = source_lines.first().copied().unwrap_or_default();
+    let language = code_block_language(opening);
+    let has_closing_fence = source_lines
+        .last()
+        .is_some_and(|line| source_lines.len() > 1 && markdown_fence_delimiter(line).is_some());
+    let code_lines = if has_closing_fence {
+        &source_lines[1..source_lines.len().saturating_sub(1)]
+    } else {
+        &source_lines[1..]
+    };
+
+    let available = width.max(1) as usize;
+    let prefix_width = UnicodeWidthStr::width(prefix);
+    let card_width = available.saturating_sub(prefix_width);
+    if card_width < 16 {
+        push_single_line(
+            out,
+            prefix,
+            format!("[{language}]").as_str(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+            width,
+        );
+        for line in code_lines {
+            push_single_line(out, prefix, line, Style::default(), width);
+        }
+        return;
+    }
+
+    let label = truncate_display_width(language.as_str(), card_width.saturating_sub(7).max(1));
+    let top_start = format!("┌─ {label} ");
+    let top_fill = "─".repeat(
+        card_width
+            .saturating_sub(UnicodeWidthStr::width(top_start.as_str()))
+            .saturating_sub(1),
+    );
+    out.push(RenderedLine::rich(Line::from(vec![
+        Span::raw(prefix.to_string()),
+        Span::styled("┌─ ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            label,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {top_fill}┐"),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ])));
+
+    let line_count_width = code_lines.len().max(1).to_string().len();
+    let gutter_width = line_count_width.saturating_add(1);
+    let body_width = card_width.saturating_sub(gutter_width).saturating_sub(2);
+    for (index, line) in code_lines.iter().enumerate() {
+        let number = format!("{:>width$} ", index + 1, width = line_count_width);
+        let body = truncate_code_line(line.replace('\t', "    ").as_str(), body_width);
+        let padding = " ".repeat(body_width.saturating_sub(UnicodeWidthStr::width(body.as_str())));
+        out.push(RenderedLine::rich(Line::from(vec![
+            Span::raw(prefix.to_string()),
+            Span::styled("│", Style::default().fg(Color::DarkGray)),
+            Span::styled(number, Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{body}{padding}"), Style::default()),
+            Span::styled("│", Style::default().fg(Color::DarkGray)),
+        ])));
+    }
+    if code_lines.is_empty() {
+        out.push(RenderedLine::rich(Line::from(vec![
+            Span::raw(prefix.to_string()),
+            Span::styled("│", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "  (empty)".to_string() + &" ".repeat(card_width.saturating_sub(11)),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled("│", Style::default().fg(Color::DarkGray)),
+        ])));
+    }
+    out.push(RenderedLine::plain(
+        format!("{prefix}└{}┘", "─".repeat(card_width.saturating_sub(2))),
+        Style::default().fg(Color::DarkGray),
+    ));
+}
+
+fn code_block_language(opening: &str) -> String {
+    let Some(fence) = markdown_fence_delimiter(opening) else {
+        return "code".to_string();
+    };
+    let language = opening
+        .trim_start()
+        .trim_start_matches(fence.marker)
+        .trim()
+        .split_whitespace()
+        .next()
+        .unwrap_or("code");
+    if language.is_empty() {
+        "code".to_string()
+    } else {
+        language.to_string()
+    }
+}
+
+fn truncate_code_line(text: &str, width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= width {
+        return text.to_string();
+    }
+    if width <= 1 {
+        return "…".chars().take(width).collect();
+    }
+    format!("{}…", truncate_display_width(text, width.saturating_sub(1)))
+}
+
+fn push_markdown_list(out: &mut Vec<RenderedLine>, prefix: &str, source: &str, width: u16) {
+    for line in source.lines() {
+        if line.trim().is_empty() {
+            out.push(RenderedLine::plain(prefix.to_string(), Style::default()));
+            continue;
+        }
+        if let Some((indent, marker, text)) = markdown_list_item_parts(line) {
+            let depth = indent / 2;
+            let marker = display_list_marker(marker, text, depth);
+            let text = markdown_inline_text(display_list_text(text).as_str());
+            let list_prefix = format!("{prefix}{}{} ", "  ".repeat(depth), marker);
+            let continuation = format!(
+                "{prefix}{}{}",
+                "  ".repeat(depth),
+                " ".repeat(UnicodeWidthStr::width(marker.as_str()) + 1)
+            );
+            push_wrapped_line(
+                out,
+                list_prefix.as_str(),
+                continuation.as_str(),
+                text.as_str(),
+                Style::default(),
+                width,
+            );
+        } else {
+            let indent = line.len().saturating_sub(line.trim_start().len()) / 2;
+            push_wrapped_line(
+                out,
+                format!("{prefix}{}", "  ".repeat(indent)).as_str(),
+                format!("{prefix}{}", "  ".repeat(indent)).as_str(),
+                line.trim(),
+                Style::default().fg(Color::DarkGray),
+                width,
+            );
+        }
+    }
+}
+
+fn markdown_list_item_parts(line: &str) -> Option<(usize, &str, &str)> {
+    let indent = line.len().saturating_sub(line.trim_start().len());
+    let trimmed = line.trim_start();
+    for marker in ["-", "*", "+"] {
+        if let Some(text) = trimmed
+            .strip_prefix(marker)
+            .and_then(|rest| rest.strip_prefix(' '))
+        {
+            return Some((indent, marker, text));
+        }
+    }
+    let digits = trimmed.chars().take_while(|ch| ch.is_ascii_digit()).count();
+    if digits > 0
+        && trimmed
+            .get(digits..)
+            .is_some_and(|rest| rest.starts_with(". "))
+    {
+        Some((indent, &trimmed[..digits + 1], &trimmed[digits + 2..]))
+    } else {
+        None
+    }
+}
+
+fn display_list_marker(marker: &str, text: &str, depth: usize) -> String {
+    if marker.ends_with('.') {
+        marker.to_string()
+    } else if text.starts_with("[x] ") || text.starts_with("[X] ") {
+        "●".to_string()
+    } else if text.starts_with("[ ] ") {
+        "○".to_string()
+    } else {
+        ["•", "◦", "▪"][depth.min(2)].to_string()
+    }
+}
+
+fn display_list_text(text: &str) -> String {
+    text.strip_prefix("[ ] ")
+        .or_else(|| text.strip_prefix("[x] "))
+        .or_else(|| text.strip_prefix("[X] "))
+        .unwrap_or(text)
+        .to_string()
+}
+
+fn markdown_inline_text(text: &str) -> String {
+    let rendered = markdown_to_text(text);
+    let plain = rendered
+        .lines
+        .iter()
+        .map(|line| line_plain_text(&owned_line(line)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    sanitize_terminal_text(plain.as_str()).trim().to_string()
+}
+
 fn push_multiline(out: &mut Vec<RenderedLine>, prefix: &str, text: &str, style: Style, width: u16) {
     let sanitized = sanitize_terminal_text(text);
     let normalized = trim_empty_line_edges(sanitized.as_str());
@@ -1687,7 +2224,11 @@ fn push_markdown_table(out: &mut Vec<RenderedLine>, prefix: &str, lines: &[&str]
         }
     }
 
-    let separator_width = column_count.saturating_sub(1).saturating_mul(3);
+    // Three cells need two inner separators plus the two outer borders.
+    let separator_width = column_count
+        .saturating_sub(1)
+        .saturating_mul(3)
+        .saturating_add(2);
     let prefix_width = UnicodeWidthStr::width(prefix);
     let available_width = width.max(1) as usize;
     let table_width_budget = available_width.saturating_sub(prefix_width);
@@ -1712,6 +2253,15 @@ fn push_markdown_table(out: &mut Vec<RenderedLine>, prefix: &str, lines: &[&str]
     let separator_style = Style::default().fg(Color::DarkGray);
     let body_style = Style::default();
 
+    push_table_border(
+        out,
+        prefix,
+        column_widths.as_slice(),
+        "┌",
+        "┬",
+        "┐",
+        separator_style,
+    );
     render_table_row(
         out,
         prefix,
@@ -1720,7 +2270,15 @@ fn push_markdown_table(out: &mut Vec<RenderedLine>, prefix: &str, lines: &[&str]
         alignments.as_slice(),
         header_style,
     );
-    push_table_separator(out, prefix, column_widths.as_slice(), separator_style);
+    push_table_border(
+        out,
+        prefix,
+        column_widths.as_slice(),
+        "├",
+        "┼",
+        "┤",
+        separator_style,
+    );
     for row in rows.iter().skip(1) {
         render_table_row(
             out,
@@ -1731,6 +2289,15 @@ fn push_markdown_table(out: &mut Vec<RenderedLine>, prefix: &str, lines: &[&str]
             body_style,
         );
     }
+    push_table_border(
+        out,
+        prefix,
+        column_widths.as_slice(),
+        "└",
+        "┴",
+        "┘",
+        separator_style,
+    );
 }
 
 fn push_markdown_table_fallback(
@@ -1909,10 +2476,13 @@ fn render_table_row(
     let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
 
     for line_index in 0..row_height {
-        let mut spans = vec![Span::raw(prefix.to_string())];
+        let mut spans = vec![
+            Span::raw(prefix.to_string()),
+            Span::styled("│", Style::default().fg(Color::DarkGray)),
+        ];
         for (column_index, width) in widths.iter().enumerate() {
             if column_index > 0 {
-                spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
             }
             let text = wrapped_cells
                 .get(column_index)
@@ -1931,18 +2501,31 @@ fn render_table_row(
                 style,
             ));
         }
+        spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
         out.push(RenderedLine::rich(Line::from(spans)));
     }
 }
 
-fn push_table_separator(out: &mut Vec<RenderedLine>, prefix: &str, widths: &[usize], style: Style) {
-    let mut spans = vec![Span::raw(prefix.to_string())];
+fn push_table_border(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    widths: &[usize],
+    left: &str,
+    middle: &str,
+    right: &str,
+    style: Style,
+) {
+    let mut spans = vec![
+        Span::raw(prefix.to_string()),
+        Span::styled(left.to_string(), style),
+    ];
     for (index, width) in widths.iter().enumerate() {
         if index > 0 {
-            spans.push(Span::styled("-+-", style));
+            spans.push(Span::styled(format!("─{middle}─"), style));
         }
-        spans.push(Span::styled("-".repeat(*width), style));
+        spans.push(Span::styled("─".repeat(*width), style));
     }
+    spans.push(Span::styled(right.to_string(), style));
     out.push(RenderedLine::rich(Line::from(spans)));
 }
 
@@ -2271,6 +2854,145 @@ fn file_change_list_item_text(change: &agena::message::FileChangeRecord, i18n: &
         file_change_display_path(change),
         ui_text::file_change_kind_label(i18n, change.kind)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn markdown_blocks_make_code_lists_and_tables_independently_selectable() {
+        let blocks = markdown_blocks(
+            "Introduction.\n\n```rust\nlet answer = 42;\n```\n\n- first\n- second\n\n| name | value |\n| --- | ---: |\n| answer | 42 |\n\nConclusion.",
+        );
+
+        assert_eq!(blocks.len(), 5);
+        assert_eq!(blocks[0].kind, TranscriptNodeKind::MarkdownParagraph);
+        assert_eq!(blocks[1].kind, TranscriptNodeKind::MarkdownCode);
+        assert_eq!(blocks[1].source, "```rust\nlet answer = 42;\n```");
+        assert_eq!(blocks[1].copy_text, "let answer = 42;");
+        assert_eq!(blocks[2].kind, TranscriptNodeKind::MarkdownList);
+        assert_eq!(blocks[2].copy_text, "- first\n- second");
+        assert_eq!(blocks[3].kind, TranscriptNodeKind::MarkdownTable);
+        assert_eq!(
+            blocks[3].copy_text,
+            "| name | value |\n| --- | ---: |\n| answer | 42 |"
+        );
+        assert_eq!(blocks[4].kind, TranscriptNodeKind::MarkdownParagraph);
+    }
+
+    #[test]
+    fn markdown_blocks_keep_multiline_list_items_together() {
+        let blocks = markdown_blocks(
+            "- first item\n  continuation\n\n  still the first item\n- second item\n\nAfter the list.",
+        );
+
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].kind, TranscriptNodeKind::MarkdownList);
+        assert_eq!(
+            blocks[0].copy_text,
+            "- first item\n  continuation\n\n  still the first item\n- second item"
+        );
+        assert_eq!(blocks[1].kind, TranscriptNodeKind::MarkdownParagraph);
+    }
+
+    #[test]
+    fn code_blocks_render_as_bounded_numbered_cards_without_wrapping_code() {
+        let block = markdown_blocks("```rust\nlet a_very_long_identifier = 42;\n```")
+            .pop()
+            .expect("code block");
+        let mut lines = Vec::new();
+        render_markdown_block(&mut lines, "  ", &block, 28);
+
+        assert!(
+            lines
+                .first()
+                .is_some_and(|line| line.text.contains("┌─ rust"))
+        );
+        assert!(lines.get(1).is_some_and(|line| line.text.contains("1 ")));
+        assert!(lines.get(1).is_some_and(|line| line.text.contains('…')));
+        assert!(lines.last().is_some_and(|line| line.text.ends_with('┘')));
+        assert!(
+            lines
+                .iter()
+                .all(|line| UnicodeWidthStr::width(line.text.as_str()) <= 28)
+        );
+    }
+
+    #[test]
+    fn headings_quotes_lists_and_tables_have_distinct_terminal_chrome() {
+        let mut heading = Vec::new();
+        let heading_block = markdown_blocks("# Overview").pop().expect("heading block");
+        render_markdown_block(&mut heading, "  ", &heading_block, 36);
+        assert!(heading[0].text.contains("══ Overview"));
+
+        let mut quote = Vec::new();
+        let quote_block = markdown_blocks("> quoted context\n> remains visually distinct")
+            .pop()
+            .expect("quote block");
+        render_markdown_block(&mut quote, "  ", &quote_block, 36);
+        assert!(quote.iter().all(|line| line.text.starts_with("  │ ")));
+
+        let mut list = Vec::new();
+        let list_block = markdown_blocks("- [ ] pending\n  - nested\n- [x] complete")
+            .pop()
+            .expect("list block");
+        render_markdown_block(&mut list, "  ", &list_block, 36);
+        assert!(list.iter().any(|line| line.text.contains("○ pending")));
+        assert!(list.iter().any(|line| line.text.contains("◦ nested")));
+        assert!(list.iter().any(|line| line.text.contains("● complete")));
+
+        let mut table = Vec::new();
+        let table_block = markdown_blocks("| key | value |\n| --- | ---: |\n| answer | 42 |")
+            .pop()
+            .expect("table block");
+        render_markdown_block(&mut table, "  ", &table_block, 36);
+        assert!(table.first().is_some_and(|line| line.text.contains('┌')));
+        assert!(
+            table
+                .iter()
+                .any(|line| line.text.contains('│') && line.text.contains("key"))
+        );
+        assert!(table.last().is_some_and(|line| line.text.contains('└')));
+    }
+
+    #[test]
+    fn quote_blocks_preserve_inline_markdown_and_render_each_nesting_level() {
+        let block = markdown_blocks(
+            "> **保持简单，保持愚蠢。**  \n> —— Unix 哲学\n>\n> > 嵌套引用\n> > > 三层嵌套",
+        )
+        .pop()
+        .expect("quote block");
+        let mut lines = Vec::new();
+        render_markdown_block(&mut lines, "  ", &block, 52);
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.text.contains("保持简单，保持愚蠢。"))
+        );
+        assert!(lines.iter().all(|line| !line.text.contains("**")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.text.starts_with("  │ │ ") && line.text.contains("嵌套引用"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.text.starts_with("  │ │ │ ") && line.text.contains("三层嵌套"))
+        );
+    }
+
+    #[test]
+    fn thematic_rule_immediately_after_heading_is_suppressed() {
+        let blocks = markdown_blocks("## 💬 引用\n\n---\n\n> 内容");
+
+        assert_eq!(blocks.len(), 3);
+        assert!(!should_suppress_markdown_block(blocks.as_slice(), 0));
+        assert!(should_suppress_markdown_block(blocks.as_slice(), 1));
+        assert!(!should_suppress_markdown_block(blocks.as_slice(), 2));
+    }
 }
 
 fn push_limited_diff_text(

@@ -173,7 +173,7 @@ const PLAN_RUNTIME_NAMESPACE: &str = "workflow_plan_runtime";
 const PLAN_RUNTIME_AUTO_SIGNATURE_KEY: &str = "last_autorun_signature";
 const PLAN_STATUSLINE_SEGMENT_ID: &str = "plan";
 const TOOL_CATALOG_RUNTIME_NAMESPACE: &str = "workflow_tool_catalog_runtime";
-const TOOL_CATALOG_HELPED_TOOLS_KEY: &str = "helped_tools";
+const TOOL_CATALOG_HELP_PREFLIGHTS_KEY: &str = "help_preflights";
 const PLAN_REVIEW_DECISION_APPROVE: &str = "Approve";
 const PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON: &str = "Approve with autorun on";
 const PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF: &str = "Approve with autorun off";
@@ -198,6 +198,9 @@ pub(crate) struct WorkflowPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
     config: OnceLock<WorkflowPluginConfig>,
     workspace_root: OnceLock<PathBuf>,
+    /// Host storage provides no atomic read-modify-write operation. Serialize
+    /// preflight updates so concurrent gateway calls cannot lose a grant.
+    help_preflight_lock: tokio::sync::Mutex<()>,
 }
 
 #[derive(Debug, Clone)]
@@ -215,7 +218,31 @@ struct CatalogTagRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct HelpedToolsState {
-    tools: Vec<String>,
+    /// A help result authorizes exactly one subsequent call of the same
+    /// catalog target. Keeping this state in session-private storage lets a
+    /// model inspect another tool in between without losing the preflight,
+    /// while consuming it removes any ambiguity about whether a later call
+    /// was covered by stale help.
+    #[serde(default)]
+    ready_tools: BTreeMap<String, u32>,
+}
+
+impl HelpedToolsState {
+    fn grant(&mut self, tool_name: &str) {
+        let grants = self.ready_tools.entry(tool_name.to_string()).or_default();
+        *grants = grants.saturating_add(1);
+    }
+
+    fn consume(&mut self, tool_name: &str) -> bool {
+        let Some(grants) = self.ready_tools.get_mut(tool_name) else {
+            return false;
+        };
+        *grants = grants.saturating_sub(1);
+        if *grants == 0 {
+            self.ready_tools.remove(tool_name);
+        }
+        true
+    }
 }
 
 impl WorkflowPlugin {
@@ -224,6 +251,7 @@ impl WorkflowPlugin {
             host: RwLock::new(None),
             config: OnceLock::new(),
             workspace_root: OnceLock::new(),
+            help_preflight_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -269,11 +297,7 @@ impl WorkflowPlugin {
             requested.strip_prefix("agena.").unwrap_or(requested).trim();
         let aliases = tools
             .iter()
-            .filter(|tool| {
-                tool.name.eq_ignore_ascii_case(requested_without_namespace)
-                    || crate::tool::legacy_underscore_tool_alias(tool.name.as_str())
-                        .eq_ignore_ascii_case(requested)
-            })
+            .filter(|tool| tool.name.eq_ignore_ascii_case(requested_without_namespace))
             .collect::<Vec<_>>();
         match aliases.as_slice() {
             [tool] => return Ok(*tool),
@@ -613,7 +637,7 @@ impl WorkflowPlugin {
                 scope: HostStorageScope::Session,
                 visibility: HostStorageVisibility::Private,
                 namespace: TOOL_CATALOG_RUNTIME_NAMESPACE.to_string(),
-                key: TOOL_CATALOG_HELPED_TOOLS_KEY.to_string(),
+                key: TOOL_CATALOG_HELP_PREFLIGHTS_KEY.to_string(),
             })
             .await?;
         let Some(value) = response.value else {
@@ -623,33 +647,35 @@ impl WorkflowPlugin {
             .map_err(|err| PluginError::new(format!("invalid helped-tools payload: {err}")))
     }
 
-    async fn save_helped_tool(&self, tool_name: &str) -> SdkResult<()> {
-        let mut state = self.load_helped_tools_state().await?;
-        if !state.tools.iter().any(|tool| tool == tool_name) {
-            state.tools.push(tool_name.to_string());
-            state.tools.sort();
-            state.tools.dedup();
-        }
+    async fn save_help_preflights(&self, state: &HelpedToolsState) -> SdkResult<()> {
         let value =
-            serde_json::to_string(&state).map_err(|err| PluginError::new(err.to_string()))?;
+            serde_json::to_string(state).map_err(|err| PluginError::new(err.to_string()))?;
         self.host()?
             .storage_set(HostStorageSetRequest {
                 scope: HostStorageScope::Session,
                 visibility: HostStorageVisibility::Private,
                 namespace: TOOL_CATALOG_RUNTIME_NAMESPACE.to_string(),
-                key: TOOL_CATALOG_HELPED_TOOLS_KEY.to_string(),
+                key: TOOL_CATALOG_HELP_PREFLIGHTS_KEY.to_string(),
                 value,
             })
             .await
     }
 
-    async fn has_help_for_tool(&self, tool_name: &str) -> SdkResult<bool> {
-        Ok(self
-            .load_helped_tools_state()
-            .await?
-            .tools
-            .iter()
-            .any(|tool| tool == tool_name))
+    async fn save_help_preflight(&self, tool_name: &str) -> SdkResult<()> {
+        let _guard = self.help_preflight_lock.lock().await;
+        let mut state = self.load_helped_tools_state().await?;
+        state.grant(tool_name);
+        self.save_help_preflights(&state).await
+    }
+
+    async fn consume_help_preflight(&self, tool_name: &str) -> SdkResult<bool> {
+        let _guard = self.help_preflight_lock.lock().await;
+        let mut state = self.load_helped_tools_state().await?;
+        let ready = state.consume(tool_name);
+        if ready {
+            self.save_help_preflights(&state).await?;
+        }
+        Ok(ready)
     }
 
     async fn save_autorun_signature(&self, signature: &str) -> SdkResult<()> {
@@ -2389,14 +2415,12 @@ impl WorkflowPlugin {
             lines.push("Help:".to_string());
             lines.push(help.to_string());
         }
-        if let Some(schema) = descriptor.input_schema.as_ref() {
-            lines.push("Input schema:".to_string());
-            lines.push(
-                serde_json::to_string_pretty(schema)
-                    .map_err(|err| PluginError::new(err.to_string()))?,
-            );
-        }
-        self.save_helped_tool(descriptor.name.as_str()).await?;
+        lines.push(format!(
+            "Preflight: this help authorizes one `{}` call for `{}` in this session. It remains available while you inspect other tools and is consumed by that call.",
+            crate::tool::gateway_call_tool_name(),
+            descriptor.name,
+        ));
+        self.save_help_preflight(descriptor.name.as_str()).await?;
 
         Ok(ToolInvokeOutput::from_parts(
             format!("{} help", descriptor.name),
@@ -2420,9 +2444,21 @@ impl WorkflowPlugin {
         }
         let tools = self.host()?.list_tools().await?;
         let descriptor = Self::resolve_tool_descriptor(requested, &tools)?;
-        if !self.has_help_for_tool(descriptor.name.as_str()).await? {
+        if Self::is_gateway_tool(descriptor.name.as_str()) {
             return Err(PluginError::invalid_params(format!(
-                "read {} for `{}` before invoking it through {}",
+                "`{}` can invoke only catalog targets such as `web.search`; gateway function `{}` must be called directly",
+                crate::tool::gateway_call_tool_name(),
+                descriptor.name,
+            )));
+        }
+        if !self
+            .consume_help_preflight(descriptor.name.as_str())
+            .await?
+        {
+            return Err(PluginError::invalid_params(format!(
+                "`{}` requires a one-call help preflight for `{}`. Call `{}({{\"tool\":\"{}\"}})` once, then call `{}` once with that target. The preflight remains valid while inspecting other tools, but is consumed by this call.",
+                crate::tool::gateway_call_tool_name(),
+                descriptor.name,
                 crate::tool::gateway_help_tool_name(),
                 descriptor.name,
                 crate::tool::gateway_call_tool_name()
@@ -2463,6 +2499,22 @@ impl WorkflowPlugin {
             }
         }
         suggestions
+    }
+
+    fn is_gateway_tool(name: &str) -> bool {
+        matches!(
+            name.trim(),
+            "agena.tools.list"
+                | "agena.tools.search"
+                | "agena.tools.help"
+                | "agena.tools.tags"
+                | "agena.tools.call"
+                | "tools.list"
+                | "tools.search"
+                | "tools.help"
+                | "tools.tags"
+                | "tools.call"
+        )
     }
 }
 
@@ -2579,7 +2631,34 @@ fn tags_summary(tags: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CatalogToolRecord, ToolDescriptor, WorkflowPlugin};
+    use super::{CatalogToolRecord, HelpedToolsState, ToolDescriptor, WorkflowPlugin};
+
+    #[test]
+    fn each_help_preflight_authorizes_exactly_one_call_of_its_target() {
+        let mut state = HelpedToolsState::default();
+        state.grant("web.search");
+
+        assert!(state.consume("web.search"));
+        assert!(
+            !state.consume("web.search"),
+            "a second call must obtain help again"
+        );
+        assert!(
+            !state.consume("fs.glob"),
+            "help for one tool must never authorize another"
+        );
+
+        state.grant("fs.glob");
+        assert!(state.consume("fs.glob"));
+
+        state.grant("web.search");
+        state.grant("web.search");
+        assert!(state.consume("web.search"));
+        assert!(
+            state.consume("web.search"),
+            "each additional help result must authorize one additional call"
+        );
+    }
 
     #[test]
     fn filter_catalog_records_supports_multiple_tags() {
@@ -2631,7 +2710,7 @@ mod tests {
     }
 
     #[test]
-    fn gateway_accepts_wire_and_legacy_qualified_tool_aliases() {
+    fn gateway_requires_dotted_catalog_target_names() {
         let tools = vec![ToolDescriptor {
             name: "web.fetch".to_string(),
             summary: None,
@@ -2640,10 +2719,14 @@ mod tests {
             input_schema: None,
         }];
 
-        for requested in ["web_fetch", "agena.web.fetch"] {
+        for requested in ["web.fetch", "agena.web.fetch"] {
             let resolved = WorkflowPlugin::resolve_tool_descriptor(requested, &tools)
                 .unwrap_or_else(|error| panic!("{requested} should resolve: {error}"));
             assert_eq!(resolved.name, "web.fetch");
         }
+
+        let error = WorkflowPlugin::resolve_tool_descriptor("web_fetch", &tools)
+            .expect_err("underscore aliases must not silently rewrite catalog target names");
+        assert!(error.message.contains("unknown tool"));
     }
 }

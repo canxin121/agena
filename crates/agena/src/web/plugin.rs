@@ -544,9 +544,11 @@ struct CrawlRunInput {
 #[serde(deny_unknown_fields)]
 struct CrawlWebSearchInput {
     query: String,
+    /// Maximum number of results to return. `limit` remains accepted as a
+    /// backwards-compatible input alias, but is deliberately omitted from
+    /// the advertised schema so callers see one unambiguous control.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    limit: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "limit")]
     max_results: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     engine: Option<WebSearchEngineSelection>,
@@ -844,7 +846,7 @@ impl WebPlugin {
         display = detailed,
         capabilities(HostCapability::PermissionCheck),
         examples(
-            r#"{"query":"Agena plugin architecture","limit":5}"#,
+            r#"{"query":"Agena plugin architecture","max_results":5}"#,
             r#"{"query":"Rust schemars derive examples","allowed_domains":["docs.rs","github.com"]}"#
         ),
         network(connects = search_network_targets(input.engine)),
@@ -854,7 +856,7 @@ impl WebPlugin {
         let query = input.query.as_str();
         let config = self.config()?;
         let limit = clamp_limit(
-            input.limit.or(input.max_results),
+            input.max_results,
             config.search.default_limit as usize,
             config.search.max_limit as usize,
         );

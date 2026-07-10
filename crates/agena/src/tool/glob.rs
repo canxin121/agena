@@ -36,6 +36,7 @@ pub(super) fn execute(
 
     let matcher = Glob::new(&input.pattern)?.compile_matcher();
     let mut matches = Vec::new();
+    let mut truncated = false;
 
     for entry in WalkDir::new(&base_path)
         .follow_links(false)
@@ -57,6 +58,7 @@ pub(super) fn execute(
         if matcher.is_match(&relative_norm) {
             matches.push(executor.display_path(entry.path()));
             if matches.len() >= MAX_MATCHES {
+                truncated = true;
                 break;
             }
         }
@@ -71,6 +73,8 @@ pub(super) fn execute(
     };
     let output = ToolPayloadOutput::Glob {
         count: Some(matches.len() as u32),
+        paths: matches.clone(),
+        truncated,
     };
 
     let mut view = ToolExecutionView::simple(format!("Glob {}", input.pattern), output_text);
@@ -80,6 +84,8 @@ pub(super) fn execute(
         .insert("base_path".to_string(), executor.display_path(&base_path));
     view.metadata
         .insert("count".to_string(), matches.len().to_string());
+    view.metadata
+        .insert("truncated".to_string(), truncated.to_string());
 
     Ok(ToolPayloadExecution::new(output, view))
 }

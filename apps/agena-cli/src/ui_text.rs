@@ -381,22 +381,6 @@ pub fn message_tool_summary(i18n: &I18n, status: ExecutionStatus, label: &str) -
     )
 }
 
-pub fn file_changes_preview(i18n: &I18n, count: usize, paths: &str) -> String {
-    let key = if count == 1 {
-        "message-file-changes-preview-one"
-    } else {
-        "message-file-changes-preview-many"
-    };
-    i18n.text_args(key, &fl_args!("count" => count as i64, "paths" => paths))
-}
-
-pub fn file_changes_more(i18n: &I18n, count: usize) -> String {
-    i18n.text_args(
-        "message-file-changes-more",
-        &fl_args!("count" => count as i64),
-    )
-}
-
 pub fn snapshot_picker_title(i18n: &I18n) -> String {
     t(i18n, "overlay-snapshot-title")
 }

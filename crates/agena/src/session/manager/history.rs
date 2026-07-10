@@ -24,13 +24,13 @@ impl SessionManager {
             .await
     }
 
-    /// External entry: cancel the in-flight run for `session_id`. Returns
-    /// `Ok(())` if a token was signalled, `Err` if no run is active.
+    /// External entry: cancel the in-flight run for `session_id`.
+    ///
+    /// Cancellation is idempotent: a task can complete between the UI
+    /// deciding to cancel and this call reaching the manager, so the absence
+    /// of a control is a successful no-op rather than an error.
     pub async fn cancel_active_run(&self, session_id: i64) -> Result<(), AppError> {
-        self.run_registry
-            .cancel(session_id)
-            .await
-            .map_err(run_control_to_app_error)
+        cancel_active_run_result(self.run_registry.cancel(session_id).await)
     }
 
     /// External entry: inject `parts` as a steer message into the in-flight
@@ -62,14 +62,26 @@ impl SessionManager {
                 current: source.version,
             });
         }
+        if !is_completed_user_rewind_target(
+            source
+                .messages
+                .iter()
+                .find(|message| message.id == request.message_id)
+                .ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "message not found in session {}: {}",
+                        source.id, request.message_id
+                    ))
+                })?,
+        ) {
+            return Err(AppError::Internal(format!(
+                "rewind target must be a completed user message: {}",
+                request.message_id
+            )));
+        }
         let title = format!("Rewind of {}", source.title);
         self.store
-            .fork_session(
-                source,
-                Some(request.message_id),
-                title,
-                state.cache_policy(),
-            )
+            .fork_session_before_message(source, request.message_id, title, state.cache_policy())
             .await
     }
 
@@ -115,5 +127,41 @@ impl SessionManager {
     /// `(depth, id)`. Useful for tree visualisation and bulk export.
     pub async fn list_session_tree(&self, root_id: i64) -> Result<Vec<SessionSummary>, AppError> {
         self.store.list_session_tree(root_id).await
+    }
+}
+
+fn cancel_active_run_result(result: Result<(), RunControlError>) -> Result<(), AppError> {
+    match result {
+        Ok(()) | Err(RunControlError::NoActiveRun(_)) => Ok(()),
+        Err(error) => Err(run_control_to_app_error(error)),
+    }
+}
+
+fn is_completed_user_rewind_target(message: &Message) -> bool {
+    message.role == Role::User && message.state == MessageStatus::Completed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancelling_a_completed_run_is_a_successful_no_op() {
+        assert!(cancel_active_run_result(Err(RunControlError::NoActiveRun(42))).is_ok());
+        assert!(cancel_active_run_result(Err(RunControlError::SteerClosed)).is_err());
+    }
+
+    #[test]
+    fn rewind_accepts_only_completed_user_messages() {
+        let mut user = Message::prompt_text(Role::User, "undo this");
+        user.state = MessageStatus::Completed;
+        let mut assistant = Message::prompt_text(Role::Assistant, "response");
+        assistant.state = MessageStatus::Completed;
+        let mut pending_user = Message::prompt_text(Role::User, "pending");
+        pending_user.state = MessageStatus::Pending;
+
+        assert!(is_completed_user_rewind_target(&user));
+        assert!(!is_completed_user_rewind_target(&assistant));
+        assert!(!is_completed_user_rewind_target(&pending_user));
     }
 }

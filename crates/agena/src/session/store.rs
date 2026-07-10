@@ -566,6 +566,58 @@ impl SessionStore {
             .await
     }
 
+    /// Create a child branch that keeps only the persistent history before
+    /// `message_id`. Unlike [`Self::fork_session`], the supplied message is
+    /// *not* retained. This is the operation used by conversational rewind:
+    /// the selected message is the first one to retract, not the last one to
+    /// keep.
+    pub(crate) async fn fork_session_before_message(
+        &self,
+        source: Session,
+        message_id: i64,
+        title: String,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<Session, AppError> {
+        let events = self.history.list_session_events(source.id).await?;
+        if events.is_empty() {
+            return Err(AppError::Internal(format!(
+                "message not found in session {}: {message_id}",
+                source.id
+            )));
+        }
+
+        let rewind_start_seq = events
+            .iter()
+            .filter(|event| event_targets_message(&event.kind, message_id))
+            .map(|event| event.meta.seq_global)
+            .min()
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "message not found in session {}: {message_id}",
+                    source.id
+                ))
+            })?;
+        let cutoff_seq = events
+            .iter()
+            .filter(|event| event.meta.seq_global < rewind_start_seq && event.kind.is_persistent())
+            .map(|event| event.meta.seq_global)
+            .max()
+            .unwrap_or(0);
+        let items = events
+            .into_iter()
+            .filter(|event| event.meta.seq_global <= cutoff_seq && event.kind.is_persistent())
+            .map(|event| event.kind)
+            .collect::<Vec<_>>();
+
+        let child = self
+            .create_session(title, Some(source.id), cache_policy)
+            .await?;
+        // Silent: subscribers should not observe a rewind copy as fresh
+        // activity.
+        self.append_history_items_silent(child, items, cache_policy)
+            .await
+    }
+
     pub(crate) async fn usage_stats(&self, query: UsageStatsQuery) -> Result<UsageStats, AppError> {
         let generated_at = Utc::now();
         let Some(workspace_id) = self.lookup_workspace_id().await? else {

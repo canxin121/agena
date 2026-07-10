@@ -23479,8 +23479,7 @@ fn session_lineage_chain(
 }
 
 fn is_rewind_target_message(message: &MessageResource) -> bool {
-    matches!(message.role, MessageRole::User | MessageRole::Assistant)
-        && message.state == MessageStatus::Completed
+    message.role == MessageRole::User && message.state == MessageStatus::Completed
 }
 
 #[allow(clippy::too_many_arguments)]

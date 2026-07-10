@@ -216,11 +216,18 @@ impl ApiService {
 
         let scheduler_jobs = list_scheduled_jobs(manager).await;
         let pending_interactive_requests = pending_interactive_requests(session);
+        // `Session::status()` describes whether the transcript is eligible
+        // for another model turn. A rewind may therefore be
+        // `AwaitingModel` even though it only created a new history branch
+        // and no task was spawned. The API run state must instead describe
+        // an actual in-flight task, because clients use it to decide whether
+        // cancelling or steering is valid.
+        let run_state = run_state_for_active_task(manager.is_run_active(session.id).await);
 
         Ok(SessionExecutionResource {
             session: session_resource,
             blocked: session.blocked(),
-            run_state: SessionRunState::from(session.status()),
+            run_state,
             latest_event_seq: self.latest_session_event_seq(manager, session.id).await?,
             automation: session_automation_resource(&scheduler_jobs, session.id),
             execution: SessionExecutionContextResource {
@@ -254,6 +261,28 @@ impl ApiService {
             ),
             usage: session_usage_resource(manager, session).map_err(api_error_from_app)?,
         })
+    }
+}
+
+fn run_state_for_active_task(active: bool) -> SessionRunState {
+    if active {
+        SessionRunState::AwaitingModel
+    } else {
+        SessionRunState::Idle
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inactive_rewind_branch_is_not_reported_as_a_running_model_turn() {
+        assert_eq!(run_state_for_active_task(false), SessionRunState::Idle);
+        assert_eq!(
+            run_state_for_active_task(true),
+            SessionRunState::AwaitingModel
+        );
     }
 }
 

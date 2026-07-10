@@ -155,10 +155,21 @@ pub enum ToolPayloadOutput {
     Glob {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         count: Option<u32>,
+        /// Matched paths, in sorted order. Kept in the payload so discovery
+        /// results remain useful to the model as well as the transcript UI.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        paths: Vec<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        truncated: bool,
     },
     Grep {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         matches: Option<u32>,
+        /// Matching `path:line: text` records.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        results: Vec<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        truncated: bool,
     },
     Task {
         #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1619,6 +1619,12 @@ fn tool_invocation_for_definition(
 
 fn tool_invocation_label(invocation: &ToolInvocation) -> String {
     let input = serde_json::Value::from(invocation.input.clone());
+    if let Some(gateway_name) = gateway_model_tool_name(invocation.name.as_str())
+        && let Some(target) = input.get("tool").and_then(serde_json::Value::as_str)
+        && !target.trim().is_empty()
+    {
+        return format!("{gateway_name} {}", target.trim());
+    }
     for key in [
         "command",
         "file_path",
@@ -1639,6 +1645,17 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
         }
     }
     invocation.name.clone()
+}
+
+fn gateway_model_tool_name(name: &str) -> Option<&'static str> {
+    match name.trim() {
+        "agena.tools.list" | "tools.list" | "tools_list" => Some("tools_list"),
+        "agena.tools.search" | "tools.search" | "tools_search" => Some("tools_search"),
+        "agena.tools.help" | "tools.help" | "tools_help" => Some("tools_help"),
+        "agena.tools.tags" | "tools.tags" | "tools_tags" => Some("tools_tags"),
+        "agena.tools.call" | "tools.call" | "tools_call" => Some("tools_call"),
+        _ => None,
+    }
 }
 
 fn parse_custom_input(arguments_json: &str) -> Result<StructuredObject, AppError> {

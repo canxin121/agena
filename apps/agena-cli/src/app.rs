@@ -2628,6 +2628,14 @@ mod transcript_navigation_tests {
         );
     }
 
+    #[test]
+    fn transcript_only_follows_new_output_when_the_cursor_is_at_the_tail() {
+        assert!(transcript_should_follow_tail(9, 10, true));
+        assert!(!transcript_should_follow_tail(8, 10, true));
+        assert!(!transcript_should_follow_tail(9, 10, false));
+        assert!(transcript_should_follow_tail(0, 0, false));
+    }
+
     fn cursor(
         key: TranscriptNodeKey,
         direction: TranscriptMoveDirection,
@@ -22405,7 +22413,7 @@ impl TranscriptState {
         self.scroll = 0;
         self.cursor_line = 0;
         self.block_cursor = None;
-        self.follow_tail = self.is_at_bottom(width, height);
+        self.recompute_follow_tail(width, height);
     }
 
     fn scroll_by_lines(&mut self, width: u16, height: u16, delta: isize) {
@@ -22470,7 +22478,7 @@ impl TranscriptState {
             self.scroll = self.cursor_line.saturating_add(1).saturating_sub(visible);
         }
         self.clamp_scroll(width, height);
-        self.follow_tail = self.is_at_bottom(width, height);
+        self.recompute_follow_tail(width, height);
     }
 
     fn current_cursor_node<'a>(&'a mut self, width: u16) -> Option<&'a RenderedTranscriptNode> {
@@ -22550,7 +22558,7 @@ impl TranscriptState {
             height.max(1) as usize,
             direction,
         );
-        self.follow_tail = self.is_at_bottom(width, height);
+        self.recompute_follow_tail(width, height);
         let key = {
             let rendered = self.rendered(width);
             rendered.nodes.get(node_index).map(|node| node.key.clone())
@@ -22561,6 +22569,23 @@ impl TranscriptState {
             mode,
         });
     }
+
+    fn recompute_follow_tail(&mut self, width: u16, height: u16) {
+        let line_count = self.rendered(width).lines.len();
+        self.follow_tail = transcript_should_follow_tail(
+            self.cursor_line,
+            line_count,
+            self.is_at_bottom(width, height),
+        );
+    }
+}
+
+fn transcript_should_follow_tail(
+    cursor_line: usize,
+    line_count: usize,
+    viewport_at_bottom: bool,
+) -> bool {
+    line_count == 0 || (viewport_at_bottom && cursor_line >= line_count.saturating_sub(1))
 }
 
 impl RenderedLine {

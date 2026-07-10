@@ -107,6 +107,8 @@ pub(super) fn execute(
     };
     let output = ToolPayloadOutput::Grep {
         matches: Some(matches.len() as u32),
+        results: matches.clone(),
+        truncated,
     };
 
     let mut view = ToolExecutionView::simple(format!("Grep {}", input.pattern), output_text);

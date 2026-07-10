@@ -1,6 +1,9 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex as StdMutex},
+    sync::{
+        Arc, Mutex as StdMutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -346,6 +349,59 @@ struct PendingHostUserInput {
     response: oneshot::Sender<crate::plugin::sdk::host_api::AskUserResponse>,
 }
 
+struct PendingHostPermission {
+    response: oneshot::Sender<PermissionReply>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct HostPermissionGrantKey {
+    session_id: i64,
+    call_id: i64,
+    plugin_id: String,
+    tool_name: String,
+}
+
+/// A short-lived, exact-action grant for permission checks made by a target
+/// tool after a user approves an inner gateway invocation. The target itself
+/// executes with an executor-level bypass; this map covers permission checks
+/// that flow back through the plugin host during that same execution.
+struct HostPermissionGrantGuard {
+    grants: Arc<StdMutex<HashMap<HostPermissionGrantKey, Vec<PermissionAction>>>>,
+    key: HostPermissionGrantKey,
+}
+
+impl HostPermissionGrantGuard {
+    fn install(
+        grants: Arc<StdMutex<HashMap<HostPermissionGrantKey, Vec<PermissionAction>>>>,
+        session_id: i64,
+        call_id: i64,
+        plugin_id: String,
+        tool_name: String,
+        actions: Vec<PermissionAction>,
+    ) -> Self {
+        let key = HostPermissionGrantKey {
+            session_id,
+            call_id,
+            plugin_id,
+            tool_name,
+        };
+        let mut guard = grants.lock().expect("host permission grant lock poisoned");
+        guard.insert(key.clone(), actions);
+        drop(guard);
+        Self { grants, key }
+    }
+}
+
+impl Drop for HostPermissionGrantGuard {
+    fn drop(&mut self) {
+        if let Ok(mut grants) = self.grants.lock() {
+            grants.remove(&self.key);
+        }
+    }
+}
+
+static HOST_PERMISSION_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
 type HostUserInputSequenceKey = (i64, i64);
 
 struct HostUserInputSequenceGuard {
@@ -389,6 +445,8 @@ mod runs;
 mod sessions;
 mod stats;
 
+use self::replies::{AggregatedPermissionOutcome, AggregatedPermissionRequest};
+
 impl SessionManagerState {
     fn new(
         processor: SessionProcessor,
@@ -416,6 +474,36 @@ pub struct SessionManager {
     reply_session_locks: Arc<Mutex<HashMap<i64, Arc<Mutex<()>>>>>,
     host_user_input_waiters: Arc<Mutex<HashMap<String, PendingHostUserInput>>>,
     host_user_input_sequences: Arc<StdMutex<HashMap<HostUserInputSequenceKey, usize>>>,
+    host_permission_waiters: Arc<Mutex<HashMap<String, PendingHostPermission>>>,
+    host_permission_grants: Arc<StdMutex<HashMap<HostPermissionGrantKey, Vec<PermissionAction>>>>,
+}
+
+/// A one-shot execution capability created only after every permission check
+/// for a concrete session tool invocation has resolved to `Allow`.
+///
+/// Its fields are intentionally private so API surfaces cannot manufacture a
+/// post-authorization executor or invoke a generic permission bypass.
+pub struct AuthorizedToolInvocation {
+    executor: ToolExecutor,
+    invocation: ToolInvocation,
+    session_id: i64,
+}
+
+impl AuthorizedToolInvocation {
+    pub fn execute(self, call_id: i64) -> Result<ToolInvocationExecution, ToolError> {
+        self.executor
+            .execute_invocation_detailed_bypassing_permissions(
+                &self.invocation,
+                self.session_id,
+                call_id,
+            )
+    }
+}
+
+pub enum ToolInvocationAuthorization {
+    Allowed(AuthorizedToolInvocation),
+    Ask { reason: String },
+    Deny { reason: String },
 }
 
 impl SessionManager {
@@ -429,6 +517,8 @@ impl SessionManager {
             reply_session_locks: Arc::clone(&self.reply_session_locks),
             host_user_input_waiters: Arc::clone(&self.host_user_input_waiters),
             host_user_input_sequences: Arc::clone(&self.host_user_input_sequences),
+            host_permission_waiters: Arc::clone(&self.host_permission_waiters),
+            host_permission_grants: Arc::clone(&self.host_permission_grants),
         }
     }
 
@@ -468,6 +558,8 @@ impl SessionManager {
             reply_session_locks: Arc::new(Mutex::new(HashMap::new())),
             host_user_input_waiters: Arc::new(Mutex::new(HashMap::new())),
             host_user_input_sequences: Arc::new(StdMutex::new(HashMap::new())),
+            host_permission_waiters: Arc::new(Mutex::new(HashMap::new())),
+            host_permission_grants: Arc::new(StdMutex::new(HashMap::new())),
         }
     }
 
@@ -494,6 +586,49 @@ impl SessionManager {
 
     pub fn tool_executor(&self) -> ToolExecutor {
         self.execution_state().tool_executor.clone()
+    }
+
+    /// Resolve all static, persisted, and plugin-provided permission decisions
+    /// for an externally initiated session tool call without creating a user
+    /// approval request. Callers may execute only the returned opaque
+    /// capability, never a generic bypass.
+    pub async fn authorize_session_tool_invocation(
+        &self,
+        session_id: i64,
+        invocation: ToolInvocation,
+    ) -> Result<ToolInvocationAuthorization, AppError> {
+        let session = self.get_session(session_id).await?;
+        let state = self.execution_state();
+        let executor = state
+            .tool_executor
+            .for_session_context(&session.runtime.execution);
+        let checks = executor
+            .collect_permission_checks_for_invocation_in_session(&invocation, Some(session.id))
+            .map_err(tool_error_to_app_error)?;
+
+        for check in checks {
+            match self
+                .resolve_tool_permission_check(Some(session.id), &check)
+                .await?
+                .decision
+            {
+                PermissionDecision::Allow => {}
+                PermissionDecision::Ask { reason } => {
+                    return Ok(ToolInvocationAuthorization::Ask { reason });
+                }
+                PermissionDecision::Deny { reason } => {
+                    return Ok(ToolInvocationAuthorization::Deny { reason });
+                }
+            }
+        }
+
+        Ok(ToolInvocationAuthorization::Allowed(
+            AuthorizedToolInvocation {
+                executor,
+                invocation,
+                session_id: session.id,
+            },
+        ))
     }
 
     pub async fn request_host_user_input(
@@ -585,10 +720,122 @@ impl SessionManager {
         let (invocation, prepared_shell_command) = scoped_executor
             .prepare_process_invocation(&prepared.invocation, session.id, call_id)
             .map_err(tool_error_to_app_error)?;
-        self.require_immediate_tool_permissions(session.id, &scoped_executor, &invocation)
-            .await?;
+        let target = scoped_executor
+            .plugin_manager()
+            .lookup_tool(invocation.name.as_str())
+            .ok_or_else(|| {
+                AppError::Internal(format!("target tool `{}` not found", invocation.name))
+            })?;
+        let target_plugin_id = target.plugin_full_name();
+        let target_tool_name = target.tool_name().to_string();
+
+        let permission_checks = scoped_executor
+            .collect_permission_checks_for_invocation_in_session(&invocation, Some(session.id))
+            .map_err(tool_error_to_app_error)?;
+        let granted_actions = match self
+            .aggregate_permission_outcome(Some(session.id), permission_checks.as_slice())
+            .await?
+        {
+            AggregatedPermissionOutcome::Allow => None,
+            AggregatedPermissionOutcome::Deny { reason } => {
+                return Err(AppError::Internal(format!("permission denied: {reason}")));
+            }
+            AggregatedPermissionOutcome::Request(request) => {
+                let pending_tool = session
+                    .pending_tools()
+                    .into_iter()
+                    .find(|tool| {
+                        session.pending_tool_execution(tool).is_some_and(
+                            |(pending_call_id, _, _)| pending_call_id == call_id,
+                        )
+                    })
+                    .ok_or_else(|| {
+                        AppError::Internal(format!(
+                            "pending tool not found for host-invoked permission: session={session_id}, call={call_id}"
+                        ))
+                    })?;
+                let request = *request;
+                let reply = self
+                    .request_host_invoked_tool_permission(
+                        session.clone(),
+                        &pending_tool,
+                        request.clone(),
+                        state.clone(),
+                    )
+                    .await?;
+                match reply.kind {
+                    PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
+                        Some(if request.requested_actions.is_empty() {
+                            vec![request.action]
+                        } else {
+                            request.requested_actions
+                        })
+                    }
+                    PermissionReplyKind::DenyOnce | PermissionReplyKind::DenyAlways => {
+                        let reason = reply
+                            .reason
+                            .unwrap_or_else(|| "permission denied by user".to_string());
+                        return Err(AppError::Internal(format!("permission denied: {reason}")));
+                    }
+                }
+            }
+        };
+
+        let _permission_grant = granted_actions.map(|actions| {
+            HostPermissionGrantGuard::install(
+                Arc::clone(&self.host_permission_grants),
+                session_id,
+                call_id,
+                target_plugin_id,
+                target_tool_name,
+                actions,
+            )
+        });
+
+        // The model-visible operation is the outer `tools.call`, while the
+        // target reuses its call id through the host callback context. Keep
+        // that outer pending part up to date when the target is streaming.
+        let outer_pending_tool = session.pending_tools().into_iter().find(|tool| {
+            session
+                .pending_tool_execution(tool)
+                .is_some_and(|(pending_call_id, _, _)| pending_call_id == call_id)
+        });
+        if let Some(mut stream) = scoped_executor
+            .execute_invocation_streaming_after_authorization(&invocation, session_id, call_id)
+            .await
+            .map_err(tool_error_to_app_error)?
+        {
+            let stream_id = stream.stream_id.clone();
+            while let Some(chunk) = stream.chunks.recv().await {
+                let Some(delta) = chunk.text_delta.as_deref() else {
+                    continue;
+                };
+                if delta.is_empty() {
+                    continue;
+                }
+                if let Some(pending_tool) = outer_pending_tool.as_ref() {
+                    self.append_streaming_tool_output_delta(
+                        session_id,
+                        pending_tool,
+                        delta,
+                        state.clone(),
+                    )
+                    .await?;
+                }
+            }
+            return stream
+                .end
+                .await
+                .map_err(|_| {
+                    AppError::Internal(format!(
+                        "host-invoked tool stream ended without a terminal result: {stream_id}"
+                    ))
+                })?
+                .map_err(tool_error_to_app_error);
+        }
+
         tokio::task::spawn_blocking(move || {
-            scoped_executor.execute_invocation_detailed_with_prepared_shell(
+            scoped_executor.execute_invocation_detailed_bypassing_permissions_with_prepared_shell(
                 &invocation,
                 session_id,
                 call_id,
@@ -598,6 +845,47 @@ impl SessionManager {
         .await
         .map_err(|err| AppError::Internal(format!("host-invoked tool task failed: {err}")))?
         .map_err(tool_error_to_app_error)
+    }
+
+    async fn request_host_invoked_tool_permission(
+        &self,
+        session: Session,
+        pending_tool: &SessionPendingTool,
+        request: AggregatedPermissionRequest,
+        state: Arc<SessionManagerState>,
+    ) -> Result<PermissionReply, AppError> {
+        let resolved = resolve_pending_tool(&session, pending_tool)?;
+        let request_id = host_permission_request_id(session.id, resolved.call_id);
+        let response_rx = self
+            .install_host_permission_waiter(request_id.clone())
+            .await;
+        if let Err(err) = self
+            .apply_permission_request_with_id(
+                session,
+                pending_tool,
+                request_id.clone(),
+                request.action,
+                request.related_actions,
+                request.requested_actions,
+                request.reason,
+                request.explanation,
+                request.source,
+                request.scope,
+                request.operator,
+                request.risk,
+                request.trace,
+                state,
+            )
+            .await
+        {
+            self.host_permission_waiters
+                .lock()
+                .await
+                .remove(request_id.as_str());
+            return Err(err);
+        }
+        self.await_host_permission_reply(request_id.as_str(), response_rx)
+            .await
     }
 
     fn next_host_user_input_sequence(&self, session_id: i64, call_id: i64) -> usize {
@@ -647,6 +935,53 @@ impl SessionManager {
                 "host user input waiter closed before reply: {request_id}"
             ))
         })
+    }
+
+    async fn install_host_permission_waiter(
+        &self,
+        request_id: String,
+    ) -> oneshot::Receiver<PermissionReply> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.host_permission_waiters.lock().await.insert(
+            request_id,
+            PendingHostPermission {
+                response: response_tx,
+            },
+        );
+        response_rx
+    }
+
+    async fn await_host_permission_reply(
+        &self,
+        request_id: &str,
+        response_rx: oneshot::Receiver<PermissionReply>,
+    ) -> Result<PermissionReply, AppError> {
+        response_rx.await.map_err(|_| {
+            AppError::Internal(format!(
+                "host-invoked permission waiter closed before reply: {request_id}"
+            ))
+        })
+    }
+
+    pub(crate) fn has_host_permission_grant(
+        &self,
+        session_id: i64,
+        call_id: i64,
+        plugin_id: &str,
+        tool_name: &str,
+        action: &PermissionAction,
+    ) -> bool {
+        let key = HostPermissionGrantKey {
+            session_id,
+            call_id,
+            plugin_id: plugin_id.to_string(),
+            tool_name: tool_name.to_string(),
+        };
+        self.host_permission_grants
+            .lock()
+            .ok()
+            .and_then(|grants| grants.get(&key).cloned())
+            .is_some_and(|actions| actions.iter().any(|granted| granted == action))
     }
 
     pub(crate) fn reconfigure(
@@ -1186,6 +1521,11 @@ fn host_user_input_request_id(session_id: i64, call_id: i64, sequence_index: usi
     format!("host-input:{session_id}:{call_id}:{sequence_index}")
 }
 
+fn host_permission_request_id(session_id: i64, call_id: i64) -> String {
+    let sequence = HOST_PERMISSION_REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("host-permission:{session_id}:{call_id}:{sequence}")
+}
+
 fn user_input_execution(
     request: &UserInputRequest,
     reply: &UserInputReply,
@@ -1324,4 +1664,201 @@ fn validate_user_input_reply(
     }
 
     Ok(answers)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use sea_orm::Database;
+
+    use super::*;
+    use crate::plugin::sdk::ToolStreamSink;
+    use crate::{
+        agent::Agent,
+        agents::SubagentRegistry,
+        db,
+        message::{
+            ExecutionStatus, MessageMetadata, OperationPart, PartContent, StructuredObject,
+            TimeRange,
+        },
+        permission::{PermissionPolicy, ToolPermissionPolicy},
+        plugin::{
+            ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig,
+            StaticPluginRegistration, ToolPresentationConfig,
+        },
+        provider::ProviderRegistry,
+        role::Role,
+        session::{ContextGovernor, ContextPolicy, SessionProcessor},
+        tool::ToolExecutor,
+    };
+
+    #[derive(Default)]
+    struct StreamingGatewayTarget;
+
+    #[crate::plugin::sdk::agena_plugin(
+        namespace = "test",
+        name = "stream",
+        version = "0.1.0",
+        summary = "Streaming gateway regression fixture."
+    )]
+    impl StreamingGatewayTarget {
+        #[tool(
+            name = "emit",
+            summary = "Emit streaming chunks.",
+            read_only,
+            stream = emit_stream
+        )]
+        async fn emit(&self) -> String {
+            "buffered-handler".to_string()
+        }
+
+        async fn emit_stream(&self, sink: ToolStreamSink) -> String {
+            sink.text("stream-").await;
+            sink.text("handler").await;
+            "stream-terminal".to_string()
+        }
+    }
+
+    async fn test_manager() -> SessionManager {
+        let workspace_root = std::env::current_dir().expect("resolve test workspace");
+        let mut plugins_config = PluginsConfig::default();
+        plugins_config.list.insert(
+            "test.stream".to_string(),
+            ConfiguredPlugin::static_default(),
+        );
+        let plugins = PluginHost::new(PluginHostBuildConfig {
+            static_plugins: vec![StaticPluginRegistration::new(
+                "test.stream".parse().expect("valid test plugin key"),
+                StreamingGatewayTarget,
+            )],
+            config: plugins_config,
+            workspace_root: workspace_root.clone(),
+            agena_version: "test".to_string(),
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: HashMap::new(),
+        })
+        .await
+        .expect("build test plugin host");
+
+        let executor = ToolExecutor::new(
+            workspace_root.clone(),
+            Agent::new(
+                "test",
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            SubagentRegistry::default(),
+            Arc::clone(&plugins),
+            None,
+            None,
+            None,
+            ToolPresentationConfig::default(),
+        );
+        let processor = SessionProcessor::new(
+            Arc::new(ProviderRegistry::new()),
+            ContextGovernor::new(ContextPolicy::default()),
+            plugins,
+            workspace_root,
+        );
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("open in-memory database");
+        db::init_schema(&database)
+            .await
+            .expect("migrate in-memory database");
+        SessionManager::new(
+            database,
+            processor,
+            executor,
+            SessionManagerConfig::default(),
+        )
+    }
+
+    async fn install_pending_gateway_operation(
+        manager: &SessionManager,
+        mut session: Session,
+        call_id: i64,
+    ) -> Session {
+        let ids = manager
+            .store
+            .reserve_message_ids(1)
+            .await
+            .expect("reserve gateway operation message ids");
+        let invocation = ToolInvocation::new(
+            "agena.tools.call",
+            StructuredObject::try_from(serde_json::json!({
+                "tool": "stream.emit",
+                "input": {}
+            }))
+            .expect("structured gateway input"),
+        );
+        let operation =
+            OperationPart::pending(call_id, invocation, "Tool tools.call", TimeRange::default());
+        let mut message = build_message(
+            ids,
+            Role::Assistant,
+            ExecutionStatus::InProgress,
+            vec![PartContent::Operation(operation)],
+            MessageMetadata::default(),
+        );
+        message.parts[0].operation_id = Some("gateway-stream-test".to_string());
+        session.messages.push(message.clone());
+        manager
+            .persist_session_changes(
+                session,
+                vec![message],
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist pending gateway operation")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn host_invoked_streaming_target_runs_stream_handler_and_updates_gateway_operation() {
+        let manager = test_manager().await;
+        let call_id = 73;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "gateway stream regression".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create test session");
+        let session = install_pending_gateway_operation(&manager, session, call_id).await;
+
+        let execution = manager
+            .execute_host_invoked_tool(
+                session.id,
+                call_id,
+                ToolInvocation::new("test.stream.emit", StructuredObject::default()),
+            )
+            .await
+            .expect("execute streaming gateway target");
+
+        // The ordinary handler deliberately returns a different value. This
+        // proves the host path called `tool_invoke_stream`, not `tool_invoke`.
+        assert_eq!(execution.view.output_text, "stream-terminal");
+
+        let session = manager
+            .get_session(session.id)
+            .await
+            .expect("reload streamed gateway session");
+        let part = session
+            .messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .find(|part| part.operation_id.as_deref() == Some("gateway-stream-test"))
+            .expect("outer gateway operation remains present");
+        assert_eq!(part.status, ExecutionStatus::InProgress);
+        let PartContent::Operation(operation) = part.content.as_ref().expect("operation content")
+        else {
+            panic!("gateway stream test part is not an operation");
+        };
+        assert_eq!(operation.model_output.text, "stream-handler");
+    }
 }

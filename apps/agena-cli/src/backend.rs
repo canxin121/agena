@@ -2178,8 +2178,11 @@ impl ProviderConfigDraft {
 pub struct ConfigJsonSources {
     pub config_path: PathBuf,
     pub config_found: bool,
+    pub project_config_path: PathBuf,
+    pub project_config_found: bool,
     pub applied_layers: Vec<String>,
     pub file: JsonValue,
+    pub project_file: JsonValue,
     pub effective: JsonValue,
 }
 
@@ -2625,6 +2628,14 @@ impl Backend {
             .map_err(|error| anyhow!(error.to_string()))
             .context("failed to read config file settings")?
             .value;
+        let project_config_path = resolution.meta.project_config_path.clone();
+        let project_file = read_file_setting(
+            project_config_path.clone(),
+            ConfigSettingsGetInput::default(),
+        )
+        .map_err(|error| anyhow!(error.to_string()))
+        .context("failed to read workspace config file settings")?
+        .value;
         let mut effective = serde_json::to_value(&resolution.config)
             .map_err(|error| anyhow!(error.to_string()))
             .context("failed to serialize effective config")?;
@@ -2632,6 +2643,8 @@ impl Backend {
         Ok(ConfigJsonSources {
             config_path,
             config_found: resolution.meta.config_found,
+            project_config_path,
+            project_config_found: resolution.meta.project_config_found,
             applied_layers: resolution
                 .meta
                 .applied_layers
@@ -2639,6 +2652,7 @@ impl Backend {
                 .map(|layer| layer.description.clone())
                 .collect(),
             file,
+            project_file,
             effective,
         })
     }
@@ -2720,6 +2734,74 @@ impl Backend {
                 .reload()
                 .await
                 .context("failed to reload runtime after config change")?;
+        }
+        Ok(response)
+    }
+
+    pub async fn set_workspace_config_setting(
+        &self,
+        path: &str,
+        value: JsonValue,
+    ) -> Result<ConfigSettingsEditResponse> {
+        let config_path = self
+            .runtime
+            .config_resolution()
+            .meta
+            .project_config_path
+            .clone();
+        let response = set_file_setting(
+            config_path,
+            ConfigSettingsSetInput {
+                path: path.trim().to_owned(),
+                value,
+                options: ConfigSettingsEditOptions {
+                    dry_run: false,
+                    validate: true,
+                    reload: true,
+                },
+            },
+        )
+        .map_err(|error| anyhow!(error.to_string()))
+        .context("failed to set workspace config setting")?;
+
+        if response.reload_required {
+            self.runtime
+                .reload()
+                .await
+                .context("failed to reload runtime after workspace config change")?;
+        }
+        Ok(response)
+    }
+
+    pub async fn delete_workspace_config_setting(
+        &self,
+        path: &str,
+    ) -> Result<ConfigSettingsEditResponse> {
+        let config_path = self
+            .runtime
+            .config_resolution()
+            .meta
+            .project_config_path
+            .clone();
+        let response = delete_file_setting(
+            config_path,
+            ConfigSettingsDeleteInput {
+                path: path.trim().to_owned(),
+                options: ConfigSettingsEditOptions {
+                    dry_run: false,
+                    validate: true,
+                    reload: true,
+                },
+            },
+        )
+        .map_err(|error| anyhow!(error.to_string()))
+        .context("failed to delete workspace config setting")?;
+
+        if response.reload_required {
+            self.runtime
+                .reload()
+                .await
+                .context("failed to reload runtime after workspace config change")?;
         }
         Ok(response)
     }

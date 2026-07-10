@@ -91,25 +91,25 @@ Plugin tool registry 现在有三条统一观测路径，分别面向快照、�
 
 Rust SDK / 宏定义只保留 `summary` 作为 tool 的短描述；详细说明统一进入 `help`。
 
-Tool 的模型可见名称由 tool registry 决定：
+Tool registry 使用稳定的 canonical tool id：
 
-- 模型可见名称始终是 `plugin_name/tool_name`。
-- `plugin_name` 来自 manifest `name`，可以包含 `.` 等普通命名字符，但不能包含 `/`。
-- `tool_name` 是 manifest `tools[*].name`，也不能包含 `/`。
+- canonical tool id 始终是 `namespace.plugin.tool`，例如 `agena.web.fetch`。
+- plugin id 是 `namespace.plugin`，来自 manifest 的 `namespace` 和 `name`；`plugins.list` 的 key、plugin quota 和 plugin presentation 配置都使用这个 id。
+- `tool` 是 manifest `tools[*].name`。`namespace` 和 `plugin` 不能包含 `.`；`tool` 可以包含 `.`，且第二个 `.` 之后的全部内容都属于 tool 名称。
 
-因此 `agena.web` 的 `fetch` tool 暴露为 `agena.web/fetch`，不会再出现 `agena.web/web.fetch` 或裸 `web` 这种名字。
+模型只收到 gateway function tools：`tools_list`、`tools_search`、`tools_help`、`tools_tags` 和 `tools_call`。要传给 `tools_help` 或 `tools_call` 的目标名称，以 `tools_list` 返回的 `name` 为准：通常是紧凑的 `plugin.tool`（例如 `fs.read`）；若有重名冲突，列表会返回完整 canonical id（例如 `example.notes.format`）。
 
 ## Tool 说明模式和 Help
 
-Tool 的模型可见说明默认只给短 `summary`，并提示模型在需要时调用 `help` tool 获取完整帮助。
+Tool 的模型可见说明默认只给短 `summary`，并提示模型在需要时调用 `tools_help` 获取完整帮助。
 
-详细帮助不随 provider 请求一起发送，避免把大量 tool、MCP server 或 skill 的长说明塞进每次模型调用。需要完整用法时，模型可以调用：
+详细帮助不随 provider 请求一起发送，避免把大量 tool、MCP server 或 skill 的长说明塞进每次模型调用。需要完整用法时，模型可以调用 `tools_help`：
 
 ```json
-{"tool": "agena.fs/read", "include_schema": true}
+{"tool": "fs.read", "include_schema": true}
 ```
 
-其中 `tool` 是模型可见 tool 名称；如果有重名冲突，使用 registry 暴露出来的 `plugin_id/tool_name` 名称。`include_schema` 默认为 `true`，会把注册后的 input schema 一并返回。
+其中 `tool` 是 gateway 目录返回的目标名称；如果有重名冲突，使用目录返回的完整 canonical id。`include_schema` 默认为 `true`，会把注册后的 input schema 一并返回。
 
 配置优先级从高到低：
 
@@ -131,8 +131,8 @@ Tool 的模型可见说明默认只给短 `summary`，并提示模型在需要�
           "agena.mcp": "help"
         },
         "tools": {
-          "agena.fs/read": "detailed",
-          "agena.tools/help": "detailed"
+          "agena.fs.read": "detailed",
+          "agena.tools.help": "detailed"
         }
       }
     }
@@ -140,7 +140,7 @@ Tool 的模型可见说明默认只给短 `summary`，并提示模型在需要�
 }
 ```
 
-`search` tool 用于发现已注册 tools；`help` tool 用于拿到任意已注册 tool 的详细说明。Plugin 作者可以在 manifest 中设置 `docs.summary` 和 `docs.help`，也可以通过 `tool.definition` hook 改写 `docs.summary`、`docs.help`、`display.description_mode` 和 `contract.input_schema`。
+`tools_search` 用于发现已注册 tools；`tools_help` 用于拿到任意已注册 tool 的详细说明。Plugin 作者可以在 manifest 中设置 `docs.summary` 和 `docs.help`，也可以通过 `tool.definition` hook 改写 `docs.summary`、`docs.help`、`display.description_mode` 和 `contract.input_schema`。
 
 ## Provided Static Plugins
 
@@ -166,7 +166,7 @@ Runtime build 注册：
 | `agena.mcp` | 已配置 MCP server 的 tool/resource/prompt tools |
 | `agena.settings` | 读取、列出、校验和编辑当前 `agena.json` 的 settings tools |
 
-内置 static plugin 现在直接把动作拆成独立 tool。常见模型可见 tool：
+内置 static plugin 会把动作拆成独立的 registry tool。它们是通过 gateway 调用的目标；常见 action 如下：
 
 | Plugin | Tools |
 | --- | --- |
@@ -184,11 +184,11 @@ Runtime build 注册：
 | `agena.tasks` | `run` |
 | `agena.snapshot` | `enter`, `exit` |
 
-`agena.mcp` 读取 MCP server snapshot，但不再把每个 MCP capability 展开成一个模型可见 tool：
+`agena.mcp` 读取 MCP server snapshot，但不再把每个 MCP capability 展开成一个单独的 gateway function：
 
 | Tool | 作用 |
 | --- | --- |
-| `resources.list`, `resources.read`, `prompts.list`, `prompts.get`, `tools.call` | resource/prompt 读取和 MCP tool 调用 |
+| `mcp.resources.list`, `mcp.resources.read`, `mcp.prompts.list`, `mcp.prompts.get`, `mcp.tools.call` | resource/prompt 读取和 MCP tool 调用 |
 
 因此，MCP 对模型的可见面统一进入 plugin host 和 plugin tool registry，同时不会随 server/tool 数量线性膨胀。MCP 的网络权限按调用里的 `server` 动态审计。
 
@@ -222,7 +222,7 @@ Runtime build 注册：
 {
   "plugins": {
     "list": {
-      "echo": {
+      "example.echo": {
         "package": {
           "kind": "stdio",
           "command": "node",
@@ -252,7 +252,7 @@ Runtime build 注册：
       }
     },
     "list": {
-      "lint": {
+      "example.lint": {
         "package": {
           "kind": "stdio",
           "command": "node",
@@ -288,7 +288,7 @@ HTTP plugin：
 {
   "plugins": {
     "list": {
-      "cloud-policy": {
+      "example.cloud-policy": {
         "package": {
           "kind": "http",
           "url": "https://policy.example.com/agena/rpc",
@@ -312,7 +312,7 @@ cdylib plugin：
 {
   "plugins": {
     "list": {
-      "echo": {
+      "example.echo": {
         "package": {
           "kind": "cdylib",
           "path": "examples/echo_plugin/target/debug/libagena_echo_plugin.so"
@@ -332,7 +332,7 @@ Wasm plugin：
 {
   "plugins": {
     "list": {
-      "sandboxed": {
+      "example.sandboxed": {
         "package": {
           "kind": "wasm",
           "path": "./plugins/sandboxed/plugin.wasm",
@@ -373,7 +373,7 @@ Static plugin config override：
 | --- | --- |
 | `host` | plugin host 生命周期、timeout、quota、trusted key 配置。 |
 | `policy` | plugin/tool 展示策略。 |
-| `list` | plugin 声明表，key 是 plugin id。 |
+| `list` | plugin 声明表，key 是 plugin id（`namespace.plugin`，例如 `example.echo`）。 |
 
 `plugins.host` 支持：
 
@@ -429,7 +429,7 @@ Quota 用于限制 plugin 调用 host callback 的频率和并发数。默认不
         "max_concurrent": 8
       },
       "quotas": {
-        "cloud-policy": {
+        "example.cloud-policy": {
           "rate_per_sec": 5,
           "burst": 10,
           "max_concurrent": 2
@@ -451,7 +451,7 @@ Supply-chain 校验可以使用 artifact hash 和 trusted key：
       }
     },
     "list": {
-      "secure-plugin": {
+      "example.secure-plugin": {
         "package": {
           "kind": "cdylib",
           "path": "./plugins/secure/libsecure.so",
@@ -475,7 +475,7 @@ Supply-chain 校验可以使用 artifact hash 和 trusted key：
 {
   "plugins": {
     "list": {
-      "worker": {
+      "example.worker": {
         "package": {
           "kind": "stdio",
           "command": "./plugins/worker",
@@ -515,7 +515,7 @@ HTTP transport 的 auth 写在 plugin tool 内：
 {
   "plugins": {
     "list": {
-      "policy": {
+      "example.policy": {
         "package": {
           "kind": "http",
           "url": "https://policy.example.com/agena/rpc",
@@ -1065,9 +1065,9 @@ Tool 权限配置分为 tag、tool name 和 tool-specific rules：
         "shell": "ask"
       },
       "names": {
-        "shell": "ask",
-        "agena.fs/read": "ask",
-        "my-plugin.echo": "allow"
+        "agena.process.run": "ask",
+        "agena.fs.read": "ask",
+        "example.echo.echo": "allow"
       }
     }
   }
@@ -1092,12 +1092,16 @@ MCP server 配置在 `plugins.list."agena.mcp".config`，并通过 `agena.mcp` p
           "servers": {
             "filesystem": {
               "transport": "stdio",
-              "command": "npx",
-              "args": [
-                "-y",
-                "@modelcontextprotocol/server-filesystem",
-                "."
-              ]
+              "process": {
+                "command": "npx",
+                "args": [
+                  "-y",
+                  "@modelcontextprotocol/server-filesystem",
+                  "."
+                ],
+                "env": {},
+                "cwd": "."
+              }
             }
           }
         }
@@ -1121,8 +1125,10 @@ Remote HTTP:
           "servers": {
             "remote": {
               "transport": "http",
-              "url": "https://mcp.example.com",
-              "headers": {},
+              "endpoint": {
+                "url": "https://mcp.example.com",
+                "headers": {}
+              },
               "auth": {
                 "kind": "bearer_from_env",
                 "env": "MCP_TOKEN"

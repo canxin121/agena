@@ -237,9 +237,10 @@ fn bash_rule_qualifier_reverse(command: &str, rules: &[BashPatternRule]) -> Opti
 pub fn tool_action(
     tool_name: &str,
     command: Option<&str>,
+    tags: &[ToolTag],
     policy: Option<&ToolPermissionPolicy>,
 ) -> PermissionAction {
-    let qualifier = if tool_name == "bash" {
+    let qualifier = if is_shell_tool(&[tool_name], tags) {
         command.and_then(|command| bash_permission_qualifier(command, policy))
     } else {
         None
@@ -326,7 +327,7 @@ impl ToolPermissionPolicy {
         command: Option<&str>,
         tags: &[ToolTag],
     ) -> PermissionDecision {
-        if names.contains(&"bash")
+        if is_shell_tool(names, tags)
             && let Some(command) = command
         {
             if let Some(decision) = self.evaluate_bash_deny(command) {
@@ -454,6 +455,10 @@ impl ToolPermissionPolicy {
         }
         None
     }
+}
+
+fn is_shell_tool(names: &[&str], tags: &[ToolTag]) -> bool {
+    names.contains(&"bash") || tags.iter().any(|tag| matches!(tag, ToolTag::Shell))
 }
 
 pub fn combine_permission_modes(left: PermissionMode, right: PermissionMode) -> PermissionMode {
@@ -905,6 +910,43 @@ fn cidr_contains_u128(base: u128, prefix: u8, actual: u128) -> bool {
 
 fn ipv4_to_u32(addr: Ipv4Addr) -> u32 {
     u32::from_be_bytes(addr.octets())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_tag_applies_command_patterns_to_process_runner() {
+        let mut policy = ToolPermissionPolicy::new(PermissionMode::Ask);
+        policy.add_bash_overlay_rule("git status", PermissionMode::Allow);
+        policy.add_bash_overlay_rule("git push *", PermissionMode::Deny);
+
+        assert!(matches!(
+            policy.check_tool("agena.process.run", Some("git status"), &[ToolTag::Shell],),
+            PermissionDecision::Allow
+        ));
+        assert!(matches!(
+            policy.check_tool(
+                "agena.process.run",
+                Some("git push origin main"),
+                &[ToolTag::Shell],
+            ),
+            PermissionDecision::Deny { .. }
+        ));
+        assert!(matches!(
+            tool_action(
+                "agena.process.run",
+                Some("git status"),
+                &[ToolTag::Shell],
+                Some(&policy),
+            ),
+            PermissionAction::Tool {
+                qualifier: Some(_),
+                ..
+            }
+        ));
+    }
 }
 
 fn ipv6_to_u128(addr: Ipv6Addr) -> u128 {

@@ -19,6 +19,8 @@ path = "src/bin/agena-tui.rs"
 agena = { workspace = true }
 agena-api = { workspace = true }
 agena-api-server = { workspace = true, features = ["jsonrpc"] }
+agena-mcp-client = { workspace = true }
+agena-mcp-server = { workspace = true }
 agena-plugin-sdk = { workspace = true }
 agena-skills = { workspace = true }
 agena-tui-components = { workspace = true }

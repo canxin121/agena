@@ -237,6 +237,8 @@ dependencies = [
  "agena",
  "agena-api",
  "agena-api-server",
+ "agena-mcp-client",
+ "agena-mcp-server",
  "agena-plugin-sdk",
  "agena-skills",
  "agena-tui-components",

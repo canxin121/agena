@@ -33,8 +33,8 @@ pub(super) fn execute_definition(
 
     let response = super::mcp::block_on(async {
         let client = registry.client_for_path(&path).await?;
-        sync_document(&client, &path, &uri).await?;
-        client.definition(uri, pos).await
+        let sync_status = sync_document(&client, &path, &uri).await?;
+        client.definition_after_sync(uri, pos, sync_status).await
     })
     .map_err(map_lsp_err)?;
 
@@ -72,8 +72,10 @@ pub(super) fn execute_references(
 
     let response = super::mcp::block_on(async {
         let client = registry.client_for_path(&path).await?;
-        sync_document(&client, &path, &uri).await?;
-        client.references(uri, pos, include_definition).await
+        let sync_status = sync_document(&client, &path, &uri).await?;
+        client
+            .references_after_sync(uri, pos, include_definition, sync_status)
+            .await
     })
     .map_err(map_lsp_err)?;
 
@@ -112,8 +114,8 @@ pub(super) fn execute_hover(
 
     let response = super::mcp::block_on(async {
         let client = registry.client_for_path(&path).await?;
-        sync_document(&client, &path, &uri).await?;
-        client.hover(uri, pos).await
+        let sync_status = sync_document(&client, &path, &uri).await?;
+        client.hover_after_sync(uri, pos, sync_status).await
     })
     .map_err(map_lsp_err)?;
 
@@ -281,14 +283,17 @@ async fn sync_document(
     client: &agena_lsp::LspClient,
     path: &Path,
     uri: &Uri,
-) -> Result<(), agena_lsp::LspError> {
+) -> Result<agena_lsp::DocumentSyncStatus, agena_lsp::LspError> {
     let text = match tokio::fs::read_to_string(path).await {
         Ok(t) => t,
-        Err(_) => return Ok(()), // unreadable file: let the server keep
-                                 // whatever it had
+        // Unreadable file: let the server keep whatever it had. There is no
+        // new document version to wait for before issuing navigation.
+        Err(_) => return Ok(agena_lsp::DocumentSyncStatus::Unchanged),
     };
     let language_id = language_id_for_path(path);
-    client.sync_document(uri.clone(), text, &language_id).await
+    client
+        .sync_document_with_status(uri.clone(), text, &language_id)
+        .await
 }
 
 fn language_id_for_path(path: &Path) -> String {

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -668,9 +669,42 @@ impl WebPlugin {
     }
 
     async fn ensure_network_permission(&self, url: &url::Url) -> SdkResult<()> {
-        self.host()?
+        let host = url
+            .host_str()
+            .ok_or_else(|| PluginError::invalid_params("web URL has no host"))?;
+        let port = url
+            .port_or_known_default()
+            .ok_or_else(|| PluginError::invalid_params("web URL has no known port"))?;
+        let host_client = self.host()?;
+
+        // Check the requested hostname first so explicit host rules remain
+        // usable, then check every resolved address. The latter prevents a
+        // hostname rule from silently becoming a private/loopback connection
+        // through DNS resolution.
+        host_client
             .ensure_network_permission(HostNetworkPermissionCheckRequest::connect(url.as_str()))
+            .await?;
+
+        let addresses = tokio::net::lookup_host((host, port))
             .await
+            .map_err(|error| PluginError::new(format!("failed to resolve {host}: {error}")))?
+            .map(|address| address.ip())
+            .collect::<BTreeSet<_>>();
+        if addresses.is_empty() {
+            return Err(PluginError::new(format!(
+                "DNS resolution returned no addresses for {host}"
+            )));
+        }
+        for address in addresses {
+            let target = match address {
+                std::net::IpAddr::V4(address) => format!("{address}:{port}"),
+                std::net::IpAddr::V6(address) => format!("[{address}]:{port}"),
+            };
+            host_client
+                .ensure_network_permission(HostNetworkPermissionCheckRequest::connect(target))
+                .await?;
+        }
+        Ok(())
     }
 
     async fn fetch_page(
@@ -697,6 +731,11 @@ impl WebPlugin {
         let page = fetch_page_with_spider(url, &options)
             .await
             .map_err(crawl_error_to_plugin)?;
+        let final_url = url::Url::parse(page.canonical_url.as_str())
+            .map_err(|error| PluginError::new(format!("invalid final fetch URL: {error}")))?;
+        // Spider follows HTTP redirects internally. Do not return a response
+        // whose final destination would fail the same network policy.
+        self.ensure_network_permission(&final_url).await?;
         if use_cache {
             state.fetch_cache.insert(cache_key, page.clone()).await;
         }

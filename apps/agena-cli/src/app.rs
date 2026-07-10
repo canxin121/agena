@@ -783,6 +783,7 @@ enum AgentStudioEditorAction {
 #[derive(Debug, Clone)]
 enum PermissionStudioSource {
     GlobalConfig,
+    WorkspaceConfig,
     Agent { agent_name: String },
     Session { session_id: i64 },
     EffectiveSession { session_id: i64 },
@@ -831,7 +832,7 @@ struct PermissionStudioItem {
 enum PermissionStudioAction {
     Noop,
     EditMode(PermissionStudioModeTarget),
-    EditText(PermissionStudioTextTarget),
+    AddToolCommandPattern { tool_name: String },
 }
 
 #[derive(Debug, Clone)]
@@ -887,6 +888,7 @@ enum PermissionStudioEditorAction {
     AddToolTag { duplicate_from: Option<String> },
     AddToolName { duplicate_from: Option<String> },
     AddToolRule { duplicate_from: Option<String> },
+    AddToolCommandPattern { tool_name: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -899,6 +901,13 @@ enum PermissionStudioModeTarget {
     NetworkPrivate,
     NetworkLoopback,
     ToolDefault,
+    PathRuleRead { pattern: String },
+    PathRuleWrite { pattern: String },
+    NetworkRule { target: String },
+    ToolTag { key: String },
+    ToolName { key: String },
+    ToolRule { tool_name: String },
+    ToolCommandPattern { tool_name: String, pattern: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1119,13 +1128,13 @@ enum SettingsPickerAction {
     OpenPluginPolicyStudio,
     OpenProviderDefaultWizard,
     OpenAgentList,
-    OpenAgentPermissionWorkbench(String),
     OpenProviderList,
     OpenModelCatalogWorkbench,
     OpenRuntimeProviderOverride,
     OpenRuntimeModelOverride,
     ClearRuntimeModelStack,
     OpenGlobalPermissionWorkbench,
+    OpenWorkspacePermissionWorkbench,
     OpenCurrentSessionPermissionWorkbench,
     OpenSessionEffectivePermissionView(i64),
     OpenPermissionRules,
@@ -1307,6 +1316,10 @@ enum ConfirmAction {
     },
     PermissionStudioDeleteToolRule {
         tool_name: String,
+    },
+    PermissionStudioDeleteToolCommandPattern {
+        tool_name: String,
+        pattern: String,
     },
     ExitSnapshot {
         session_id: i64,
@@ -3583,6 +3596,10 @@ impl App {
                 false
             }
             KeyCode::Char('e') => self.activate_permission_studio_selection(dialog),
+            KeyCode::Char('n') => {
+                self.open_permission_studio_rename_current(dialog);
+                false
+            }
             KeyCode::Char('y') => {
                 self.open_permission_studio_duplicate_current(dialog);
                 false
@@ -4310,7 +4327,7 @@ impl App {
                 self.open_permission_studio_mode_overlay(dialog, target);
                 return false;
             }
-            PermissionStudioAction::EditText(target) => {
+            PermissionStudioAction::AddToolCommandPattern { tool_name } => {
                 if !dialog.editable {
                     self.flash_warning(permission_studio_read_only_message(
                         &self.i18n,
@@ -4318,7 +4335,10 @@ impl App {
                     ));
                     return false;
                 }
-                self.open_permission_studio_text_editor(dialog, target);
+                self.open_permission_studio_creator(
+                    dialog,
+                    PermissionStudioEditorAction::AddToolCommandPattern { tool_name },
+                );
                 return false;
             }
         }
@@ -4378,6 +4398,44 @@ impl App {
             input,
             PermissionStudioEditorAction::Text(target),
         ));
+    }
+
+    fn open_permission_studio_rename_current(&mut self, dialog: &mut PermissionStudioOverlay) {
+        if !dialog.editable {
+            self.flash_warning(permission_studio_read_only_message(
+                &self.i18n,
+                &dialog.source,
+            ));
+            return;
+        }
+        let Some(action) = dialog.state.selected_item().map(|item| item.action.clone()) else {
+            return;
+        };
+        let target = match action {
+            PermissionStudioAction::EditMode(PermissionStudioModeTarget::PathRuleRead {
+                pattern,
+            })
+            | PermissionStudioAction::EditMode(PermissionStudioModeTarget::PathRuleWrite {
+                pattern,
+            }) => PermissionStudioTextTarget::PathRulePattern { pattern },
+            PermissionStudioAction::EditMode(PermissionStudioModeTarget::NetworkRule {
+                target,
+            }) => PermissionStudioTextTarget::NetworkRuleTarget { target },
+            PermissionStudioAction::EditMode(PermissionStudioModeTarget::ToolTag { key }) => {
+                PermissionStudioTextTarget::ToolTagKey { key }
+            }
+            PermissionStudioAction::EditMode(PermissionStudioModeTarget::ToolName { key }) => {
+                PermissionStudioTextTarget::ToolNameKey { key }
+            }
+            PermissionStudioAction::EditMode(PermissionStudioModeTarget::ToolRule {
+                tool_name,
+            }) => PermissionStudioTextTarget::ToolRuleName { tool_name },
+            _ => {
+                self.flash_warning("This entry cannot be renamed; delete and recreate it instead.");
+                return;
+            }
+        };
+        self.open_permission_studio_text_editor(dialog, target);
     }
 
     fn open_permission_studio_creator(
@@ -4577,6 +4635,36 @@ impl App {
                     .get_or_insert_with(Default::default)
                     .rules
                     .insert(tool_name.clone(), rule);
+                self.persist_permission_studio(dialog, permission)?;
+                self.set_permission_studio_page_with_section(
+                    dialog,
+                    PermissionStudioPage::ToolCommandRules,
+                    Some(PermissionStudioSectionId::ToolCommandRules),
+                    PermissionStudioFocus::Items,
+                );
+            }
+            PermissionStudioEditorAction::AddToolCommandPattern { tool_name } => {
+                let pattern = parse_permission_studio_key_input(
+                    &self.i18n,
+                    "command pattern",
+                    input.as_str(),
+                )?;
+                let mut permission = dialog.permission.clone();
+                let tools = permission.tools.get_or_insert_with(Default::default);
+                let existing = tools.rules.remove(tool_name.as_str());
+                let mut entries = match existing {
+                    Some(ToolPermissionRules::Ordered(entries)) => entries,
+                    Some(ToolPermissionRules::Mode(mode)) => {
+                        let mut entries = indexmap::IndexMap::new();
+                        entries.insert("*".to_string(), mode);
+                        entries
+                    }
+                    None => indexmap::IndexMap::new(),
+                };
+                entries.insert(pattern, PermissionMode::Ask);
+                tools
+                    .rules
+                    .insert(tool_name, ToolPermissionRules::Ordered(entries));
                 self.persist_permission_studio(dialog, permission)?;
                 self.set_permission_studio_page_with_section(
                     dialog,
@@ -9190,10 +9278,13 @@ impl App {
             .map(|rules| rules.len())
             .unwrap_or_default();
         let global_permission = permission_config_from_json_value(
-            &get_json_path(&sources.effective, Some("permission")).unwrap_or(JsonValue::Null),
-        )?;
-        let global_permission_file = permission_config_from_json_value(
             &get_json_path(&sources.file, Some("permission")).unwrap_or(JsonValue::Null),
+        )?;
+        let workspace_permission = permission_config_from_json_value(
+            &get_json_path(&sources.project_file, Some("permission")).unwrap_or(JsonValue::Null),
+        )?;
+        let effective_permission = permission_config_from_json_value(
+            &get_json_path(&sources.effective, Some("permission")).unwrap_or(JsonValue::Null),
         )?;
         let current_session_permission =
             self.current_or_selected_session_id()
@@ -9245,8 +9336,9 @@ impl App {
         let permission_items = settings_studio_permission_items(
             &self.i18n,
             &sources,
-            &global_permission_file,
             &global_permission,
+            &workspace_permission,
+            &effective_permission,
             current_session_permission.as_ref(),
         );
         let mut runtime_rule_items = Vec::new();
@@ -9528,6 +9620,19 @@ impl App {
         }
     }
 
+    fn open_workspace_permission_studio(&mut self) {
+        match self.build_permission_studio_overlay(
+            PermissionStudioSource::WorkspaceConfig,
+            PermissionStudioPage::Overview,
+            Some(PermissionStudioSectionId::RootPath),
+            None,
+            PermissionStudioFocus::Navigation,
+        ) {
+            Ok(dialog) => self.current_route = Route::PermissionStudio(dialog),
+            Err(error) => self.flash_error(error),
+        }
+    }
+
     fn open_agent_permission_studio(&mut self, agent_name: &str) {
         match self.build_permission_studio_overlay(
             PermissionStudioSource::Agent {
@@ -9579,6 +9684,23 @@ impl App {
                     ui_text::t(&self.i18n, "permission-studio-source-global"),
                     true,
                     permission.clone(),
+                )
+            }
+            PermissionStudioSource::WorkspaceConfig => {
+                let sources = self
+                    .backend
+                    .config_json_sources()
+                    .map_err(|error| error.to_string())?;
+                let permission = permission_config_from_json_value(
+                    &get_json_path(&sources.project_file, Some("permission"))
+                        .unwrap_or(JsonValue::Null),
+                )?;
+                (
+                    ui_text::t(&self.i18n, "settings-permission-workspace-label"),
+                    sources.project_config_path.display().to_string(),
+                    ui_text::t(&self.i18n, "permission-studio-source-workspace"),
+                    true,
+                    permission,
                 )
             }
             PermissionStudioSource::Agent { agent_name } => {
@@ -9695,6 +9817,21 @@ impl App {
                     self.flash_success(settings_path_cleared_message(&self.i18n, "permission"));
                 } else {
                     self.block_on_async(self.backend.set_config_setting(
+                        "permission",
+                        serde_json::to_value(&permission).map_err(|error| error.to_string())?,
+                    ))
+                    .map_err(|error| error.to_string())?;
+                    self.flash_success(settings_path_updated_message(&self.i18n, "permission"));
+                }
+                self.refresh_current_transcript_execution_state();
+            }
+            PermissionStudioSource::WorkspaceConfig => {
+                if permission.is_empty() {
+                    self.block_on_async(self.backend.delete_workspace_config_setting("permission"))
+                        .map_err(|error| error.to_string())?;
+                    self.flash_success(settings_path_cleared_message(&self.i18n, "permission"));
+                } else {
+                    self.block_on_async(self.backend.set_workspace_config_setting(
                         "permission",
                         serde_json::to_value(&permission).map_err(|error| error.to_string())?,
                     ))
@@ -9904,6 +10041,7 @@ impl App {
             ));
             return;
         }
+        let selected_action = dialog.state.selected_item().map(|item| item.action.clone());
         let (title, body, action) = match &dialog.page {
             PermissionStudioPage::PathDefaults
             | PermissionStudioPage::NetworkZones
@@ -9912,7 +10050,15 @@ impl App {
                 return;
             }
             PermissionStudioPage::PathRules => {
-                let Some(label) = self.permission_studio_selected_item_label(dialog) else {
+                let Some(pattern) = selected_action.and_then(|action| match action {
+                    PermissionStudioAction::EditMode(
+                        PermissionStudioModeTarget::PathRuleRead { pattern },
+                    )
+                    | PermissionStudioAction::EditMode(
+                        PermissionStudioModeTarget::PathRuleWrite { pattern },
+                    ) => Some(pattern),
+                    _ => None,
+                }) else {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
                         "flash-permission-studio-no-selection",
@@ -9925,14 +10071,19 @@ impl App {
                         "overlay-permission-studio-delete-body",
                         &crate::fl_args!(
                             "kind" => ui_text::t(&self.i18n, "permission-studio-page-path-rules"),
-                            "value" => label.clone(),
+                            "value" => pattern.clone(),
                         ),
                     )],
-                    ConfirmAction::PermissionStudioDeletePathRule { pattern: label },
+                    ConfirmAction::PermissionStudioDeletePathRule { pattern },
                 )
             }
             PermissionStudioPage::NetworkRules => {
-                let Some(label) = self.permission_studio_selected_item_label(dialog) else {
+                let Some(target) = selected_action.and_then(|action| match action {
+                    PermissionStudioAction::EditMode(PermissionStudioModeTarget::NetworkRule {
+                        target,
+                    }) => Some(target),
+                    _ => None,
+                }) else {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
                         "flash-permission-studio-no-selection",
@@ -9945,10 +10096,10 @@ impl App {
                         "overlay-permission-studio-delete-body",
                         &crate::fl_args!(
                             "kind" => ui_text::t(&self.i18n, "permission-studio-page-network-rules"),
-                            "value" => label.clone(),
+                            "value" => target.clone(),
                         ),
                     )],
-                    ConfirmAction::PermissionStudioDeleteNetworkRule { target: label },
+                    ConfirmAction::PermissionStudioDeleteNetworkRule { target },
                 )
             }
             PermissionStudioPage::ToolTags => {
@@ -9969,7 +10120,12 @@ impl App {
                 )
             }
             PermissionStudioPage::ToolNames => {
-                let Some(label) = self.permission_studio_selected_item_label(dialog) else {
+                let Some(key) = selected_action.and_then(|action| match action {
+                    PermissionStudioAction::EditMode(PermissionStudioModeTarget::ToolName {
+                        key,
+                    }) => Some(key),
+                    _ => None,
+                }) else {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
                         "flash-permission-studio-no-selection",
@@ -9982,14 +10138,22 @@ impl App {
                         "overlay-permission-studio-delete-body",
                         &crate::fl_args!(
                             "kind" => ui_text::t(&self.i18n, "permission-studio-page-names"),
-                            "value" => label.clone(),
+                            "value" => key.clone(),
                         ),
                     )],
-                    ConfirmAction::PermissionStudioDeleteToolName { key: label },
+                    ConfirmAction::PermissionStudioDeleteToolName { key },
                 )
             }
             PermissionStudioPage::ToolCommandRules => {
-                let Some(label) = self.permission_studio_selected_item_label(dialog) else {
+                let Some((tool_name, pattern)) = selected_action.and_then(|action| match action {
+                    PermissionStudioAction::EditMode(
+                        PermissionStudioModeTarget::ToolCommandPattern { tool_name, pattern },
+                    ) => Some((tool_name, Some(pattern))),
+                    PermissionStudioAction::EditMode(PermissionStudioModeTarget::ToolRule {
+                        tool_name,
+                    }) => Some((tool_name, None)),
+                    _ => None,
+                }) else {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
                         "flash-permission-studio-no-selection",
@@ -10002,10 +10166,16 @@ impl App {
                         "overlay-permission-studio-delete-body",
                         &crate::fl_args!(
                             "kind" => ui_text::t(&self.i18n, "permission-studio-page-tool-rules"),
-                            "value" => label.clone(),
+                            "value" => pattern.clone().unwrap_or_else(|| tool_name.clone()),
                         ),
                     )],
-                    ConfirmAction::PermissionStudioDeleteToolRule { tool_name: label },
+                    match pattern {
+                        Some(pattern) => ConfirmAction::PermissionStudioDeleteToolCommandPattern {
+                            tool_name,
+                            pattern,
+                        },
+                        None => ConfirmAction::PermissionStudioDeleteToolRule { tool_name },
+                    },
                 )
             }
         };
@@ -10080,6 +10250,22 @@ impl App {
             if let Some(tools) = permission.tools.as_mut() {
                 tools.rules.remove(tool_name.as_str());
             }
+        });
+    }
+
+    fn delete_permission_studio_tool_command_pattern(&mut self, tool_name: &str, pattern: &str) {
+        let tool_name = tool_name.to_string();
+        let pattern = pattern.to_string();
+        self.delete_permission_studio_config(move |permission| {
+            let Some(tools) = permission.tools.as_mut() else {
+                return;
+            };
+            let Some(ToolPermissionRules::Ordered(entries)) =
+                tools.rules.get_mut(tool_name.as_str())
+            else {
+                return;
+            };
+            entries.shift_remove(pattern.as_str());
         });
     }
 
@@ -10159,11 +10345,6 @@ impl App {
                 self.open_agent_list("");
                 false
             }
-            SettingsPickerAction::OpenAgentPermissionWorkbench(agent_name) => {
-                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
-                self.open_agent_permission_studio(agent_name.as_str());
-                false
-            }
             SettingsPickerAction::OpenProviderList => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_provider_list("");
@@ -10193,6 +10374,11 @@ impl App {
             SettingsPickerAction::OpenGlobalPermissionWorkbench => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_global_permission_studio();
+                false
+            }
+            SettingsPickerAction::OpenWorkspacePermissionWorkbench => {
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
+                self.open_workspace_permission_studio();
                 false
             }
             SettingsPickerAction::OpenCurrentSessionPermissionWorkbench => {
@@ -14245,6 +14431,11 @@ impl App {
             ConfirmAction::PermissionStudioDeleteToolRule { tool_name } => {
                 self.delete_permission_studio_tool_rule(tool_name.as_str())
             }
+            ConfirmAction::PermissionStudioDeleteToolCommandPattern { tool_name, pattern } => self
+                .delete_permission_studio_tool_command_pattern(
+                    tool_name.as_str(),
+                    pattern.as_str(),
+                ),
             ConfirmAction::ExitSnapshot {
                 session_id,
                 discard_changes,
@@ -14545,12 +14736,32 @@ impl App {
     }
 
     fn handle_permissions_command(&mut self, args: &str) {
-        match args.trim() {
-            "" | "new" | "session" | "current" => self.open_current_session_permission_studio(),
+        let trimmed = args.trim();
+        match trimmed {
+            "" | "session" | "current" => self.open_current_session_permission_studio(),
+            "global" | "config" => self.open_global_permission_studio(),
+            "workspace" | "project" => self.open_workspace_permission_studio(),
+            "effective" => {
+                let Some(session_id) = self.current_or_selected_session_id() else {
+                    self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+                    return;
+                };
+                match self.build_permission_studio_overlay(
+                    PermissionStudioSource::EffectiveSession { session_id },
+                    PermissionStudioPage::Overview,
+                    Some(PermissionStudioSectionId::RootPath),
+                    None,
+                    PermissionStudioFocus::Navigation,
+                ) {
+                    Ok(dialog) => self.current_route = Route::PermissionStudio(dialog),
+                    Err(error) => self.flash_error(error),
+                }
+            }
+            "new" => self.open_permission_rule_studio(None, None),
             "list" | "rules" | "manage" => self.open_permission_rule_picker(""),
             other => self.flash_warning(self.i18n.text_args(
                 "flash-command-usage",
-                &crate::fl_args!("usage" => format!("/permissions [new|list] · got `{other}`")),
+                &crate::fl_args!("usage" => format!("/permissions [session|workspace|global|effective|new|list] · got `{other}`")),
             )),
         }
     }
@@ -16745,6 +16956,21 @@ fn settings_config_file_source_summary(i18n: &I18n, sources: &ConfigJsonSources)
     )
 }
 
+fn settings_workspace_config_file_source_summary(
+    i18n: &I18n,
+    sources: &ConfigJsonSources,
+) -> String {
+    let status_key = if sources.project_config_found {
+        "settings-source-file-found"
+    } else {
+        "settings-source-file-missing"
+    };
+    i18n.text_args(
+        status_key,
+        &crate::fl_args!("path" => sources.project_config_path.display().to_string()),
+    )
+}
+
 fn settings_source_rows_for_config_path(
     i18n: &I18n,
     sources: &ConfigJsonSources,
@@ -16768,6 +16994,37 @@ fn settings_source_rows_for_config_path(
         SettingsSourceRow::new(
             ui_text::t(i18n, "settings-source-row-write-target"),
             format!("{path} -> {}", sources.config_path.display()),
+        ),
+        SettingsSourceRow::new(
+            ui_text::t(i18n, "settings-source-row-layers"),
+            settings_layers_summary(sources),
+        ),
+    ]
+}
+
+fn settings_source_rows_for_workspace_config_path(
+    i18n: &I18n,
+    sources: &ConfigJsonSources,
+    path: &str,
+    workspace_summary: impl Into<String>,
+    effective_summary: impl Into<String>,
+) -> Vec<SettingsSourceRow> {
+    vec![
+        SettingsSourceRow::new(
+            ui_text::t(i18n, "settings-source-row-workspace-config-file"),
+            settings_workspace_config_file_source_summary(i18n, sources),
+        ),
+        SettingsSourceRow::new(
+            ui_text::t(i18n, "settings-source-row-workspace-value"),
+            workspace_summary,
+        ),
+        SettingsSourceRow::new(
+            ui_text::t(i18n, "settings-source-row-effective-value"),
+            effective_summary,
+        ),
+        SettingsSourceRow::new(
+            ui_text::t(i18n, "settings-source-row-write-target"),
+            format!("{path} -> {}", sources.project_config_path.display()),
         ),
         SettingsSourceRow::new(
             ui_text::t(i18n, "settings-source-row-layers"),
@@ -17408,12 +17665,19 @@ fn settings_studio_agent_browser_item(
 fn permission_layer_source_rows(
     i18n: &I18n,
     global_permission: &PermissionConfig,
+    workspace_permission: &PermissionConfig,
     session: Option<&SessionPermissionStudioState>,
 ) -> Vec<SettingsSourceRow> {
-    let mut rows = vec![SettingsSourceRow::new(
-        ui_text::t(i18n, "settings-permission-layer-global"),
-        permission_override_summary(i18n, global_permission),
-    )];
+    let mut rows = vec![
+        SettingsSourceRow::new(
+            ui_text::t(i18n, "settings-permission-layer-global"),
+            permission_override_summary(i18n, global_permission),
+        ),
+        SettingsSourceRow::new(
+            ui_text::t(i18n, "settings-permission-layer-workspace"),
+            permission_override_summary(i18n, workspace_permission),
+        ),
+    ];
     if let Some(session) = session {
         rows.push(SettingsSourceRow::new(
             session
@@ -17447,8 +17711,9 @@ fn permission_layer_source_rows(
 fn settings_studio_permission_items(
     i18n: &I18n,
     sources: &ConfigJsonSources,
-    global_file_permission: &PermissionConfig,
-    global_effective_permission: &PermissionConfig,
+    global_permission: &PermissionConfig,
+    workspace_permission: &PermissionConfig,
+    effective_permission: &PermissionConfig,
     current_session: Option<&SessionPermissionStudioState>,
 ) -> Vec<SettingsStudioItem> {
     let mut items = Vec::new();
@@ -17464,15 +17729,24 @@ fn settings_studio_permission_items(
             None,
             Some(effective_summary.clone()),
             Some(effective_summary),
-            permission_layer_source_rows(i18n, global_effective_permission, Some(session)),
+            permission_layer_source_rows(
+                i18n,
+                global_permission,
+                workspace_permission,
+                Some(session),
+            ),
             SettingsPickerAction::OpenSessionEffectivePermissionView(session.session_id),
         ));
         let session_summary = permission_override_summary(i18n, &session.permission);
         let session_effective_summary =
             permission_override_summary(i18n, &session.effective_permission);
         let session_source_rows = {
-            let mut rows =
-                permission_layer_source_rows(i18n, global_effective_permission, Some(session));
+            let mut rows = permission_layer_source_rows(
+                i18n,
+                global_permission,
+                workspace_permission,
+                Some(session),
+            );
             rows.push(SettingsSourceRow::new(
                 ui_text::t(i18n, "settings-source-row-write-target"),
                 ui_text::t(i18n, "settings-source-current-session"),
@@ -17492,58 +17766,45 @@ fn settings_studio_permission_items(
             session_source_rows,
             SettingsPickerAction::OpenCurrentSessionPermissionWorkbench,
         ));
-        if let Some(agent_name) = session.agent_name.as_deref() {
-            let agent_permission = session.agent_permission.clone().unwrap_or_default();
-            let agent_summary = permission_override_summary(i18n, &agent_permission);
-            let agent_effective_summary =
-                permission_override_summary(i18n, &session.effective_permission);
-            let agent_source_rows = vec![
-                SettingsSourceRow::new(
-                    ui_text::t(i18n, "settings-permission-layer-agent"),
-                    agent_summary.clone(),
-                ),
-                SettingsSourceRow::new(
-                    ui_text::t(i18n, "settings-source-row-write-target"),
-                    i18n.text_args(
-                        "settings-source-agent-profile",
-                        &crate::fl_args!("agent" => agent_name.to_string()),
-                    ),
-                ),
-            ];
-            items.push(SettingsStudioItem::from_parts(
-                i18n.text_args(
-                    "settings-permission-agent-label",
-                    &crate::fl_args!("agent" => agent_name.to_string()),
-                ),
-                agent_summary.clone(),
-                ui_text::t(i18n, "settings-permission-agent-detail"),
-                None,
-                Some(agent_summary),
-                Some(agent_effective_summary),
-                agent_source_rows,
-                SettingsPickerAction::OpenAgentPermissionWorkbench(agent_name.to_string()),
-            ));
-        }
     }
 
-    let file_summary = permission_override_summary(i18n, global_file_permission);
-    let effective_summary = permission_override_summary(i18n, global_effective_permission);
+    let global_summary = permission_override_summary(i18n, global_permission);
+    let workspace_summary = permission_override_summary(i18n, workspace_permission);
+    let effective_summary = permission_override_summary(i18n, effective_permission);
     let global_source_rows = settings_source_rows_for_config_path(
         i18n,
         sources,
         "permission",
-        file_summary.clone(),
+        global_summary.clone(),
         effective_summary.clone(),
     );
     items.push(SettingsStudioItem::from_parts(
         ui_text::t(i18n, "settings-permission-global-label"),
-        effective_summary.clone(),
+        global_summary.clone(),
         ui_text::t(i18n, "settings-permission-global-detail"),
         Some("permission".to_string()),
-        Some(file_summary),
+        Some(global_summary),
         Some(effective_summary),
         global_source_rows,
         SettingsPickerAction::OpenGlobalPermissionWorkbench,
+    ));
+    let workspace_effective_summary = permission_override_summary(i18n, effective_permission);
+    let workspace_source_rows = settings_source_rows_for_workspace_config_path(
+        i18n,
+        sources,
+        "permission",
+        workspace_summary.clone(),
+        workspace_effective_summary.clone(),
+    );
+    items.push(SettingsStudioItem::from_parts(
+        ui_text::t(i18n, "settings-permission-workspace-label"),
+        workspace_summary.clone(),
+        ui_text::t(i18n, "settings-permission-workspace-detail"),
+        Some("permission".to_string()),
+        Some(workspace_summary),
+        Some(workspace_effective_summary),
+        workspace_source_rows,
+        SettingsPickerAction::OpenWorkspacePermissionWorkbench,
     ));
     items
 }
@@ -18459,9 +18720,7 @@ fn permission_studio_page_label(i18n: &I18n, page: &PermissionStudioPage) -> Str
 
 fn permission_studio_selected_tool_tag_key(dialog: &PermissionStudioOverlay) -> Option<String> {
     match dialog.state.selected_item()?.action.clone() {
-        PermissionStudioAction::EditText(PermissionStudioTextTarget::ToolTagKey { key }) => {
-            Some(key)
-        }
+        PermissionStudioAction::EditMode(PermissionStudioModeTarget::ToolTag { key }) => Some(key),
         _ => None,
     }
 }
@@ -18547,19 +18806,37 @@ fn permission_studio_sections(
             rules.sort();
             let rule_items = rules
                 .into_iter()
-                .map(|pattern| PermissionStudioItem {
-                    label: pattern.clone(),
-                    value: path_rule_summary(
-                        i18n,
-                        dialog
-                            .permission
-                            .path
-                            .as_ref()
-                            .and_then(|path| path.rules.get(pattern.as_str())),
-                    ),
-                    action: PermissionStudioAction::EditText(
-                        PermissionStudioTextTarget::PathRulePattern { pattern },
-                    ),
+                .flat_map(|pattern| {
+                    let modes = dialog
+                        .permission
+                        .path
+                        .as_ref()
+                        .and_then(|path| path.rules.get(pattern.as_str()))
+                        .and_then(|rule| path_rule_modes(Some(rule)));
+                    vec![
+                        PermissionStudioItem {
+                            label: format!("{pattern} · read"),
+                            value: permission_mode_input_text(
+                                modes.as_ref().and_then(|modes| modes.read),
+                                i18n,
+                            ),
+                            action: PermissionStudioAction::EditMode(
+                                PermissionStudioModeTarget::PathRuleRead {
+                                    pattern: pattern.clone(),
+                                },
+                            ),
+                        },
+                        PermissionStudioItem {
+                            label: format!("{pattern} · write"),
+                            value: permission_mode_input_text(
+                                modes.as_ref().and_then(|modes| modes.write),
+                                i18n,
+                            ),
+                            action: PermissionStudioAction::EditMode(
+                                PermissionStudioModeTarget::PathRuleWrite { pattern },
+                            ),
+                        },
+                    ]
                 })
                 .collect::<Vec<_>>();
             vec![PermissionStudioSection {
@@ -18636,8 +18913,8 @@ fn permission_studio_sections(
                             .and_then(|network| network.rules.get(target.as_str()).copied()),
                         i18n,
                     ),
-                    action: PermissionStudioAction::EditText(
-                        PermissionStudioTextTarget::NetworkRuleTarget { target },
+                    action: PermissionStudioAction::EditMode(
+                        PermissionStudioModeTarget::NetworkRule { target },
                     ),
                 })
                 .collect::<Vec<_>>();
@@ -18679,8 +18956,8 @@ fn permission_studio_sections(
                                 .and_then(|tools| tools.tags.get(key.as_str()).copied()),
                             i18n,
                         ),
-                        action: PermissionStudioAction::EditText(
-                            PermissionStudioTextTarget::ToolTagKey { key },
+                        action: PermissionStudioAction::EditMode(
+                            PermissionStudioModeTarget::ToolTag { key },
                         ),
                     })
                     .collect::<Vec<_>>(),
@@ -18711,8 +18988,8 @@ fn permission_studio_sections(
                             .and_then(|tools| tools.names.get(key.as_str()).copied()),
                         i18n,
                     ),
-                    action: PermissionStudioAction::EditText(
-                        PermissionStudioTextTarget::ToolNameKey { key },
+                    action: PermissionStudioAction::EditMode(
+                        PermissionStudioModeTarget::ToolName { key },
                     ),
                 })
                 .collect::<Vec<_>>();
@@ -18732,19 +19009,68 @@ fn permission_studio_sections(
             keys.sort();
             let tool_rule_items = keys
                 .into_iter()
-                .map(|tool_name| PermissionStudioItem {
-                    label: tool_name.clone(),
-                    value: tool_permission_rules_summary(
-                        i18n,
-                        dialog
-                            .permission
-                            .tools
-                            .as_ref()
-                            .and_then(|tools| tools.rules.get(tool_name.as_str())),
-                    ),
-                    action: PermissionStudioAction::EditText(
-                        PermissionStudioTextTarget::ToolRuleName { tool_name },
-                    ),
+                .flat_map(|tool_name| {
+                    let rules = dialog
+                        .permission
+                        .tools
+                        .as_ref()
+                        .and_then(|tools| tools.rules.get(tool_name.as_str()));
+                    match rules {
+                        Some(ToolPermissionRules::Ordered(entries)) => {
+                            let mut items = entries
+                                .iter()
+                                .map(|(pattern, mode)| PermissionStudioItem {
+                                    label: format!("{tool_name} · {pattern}"),
+                                    value: permission_mode_label(i18n, *mode),
+                                    action: PermissionStudioAction::EditMode(
+                                        PermissionStudioModeTarget::ToolCommandPattern {
+                                            tool_name: tool_name.clone(),
+                                            pattern: pattern.clone(),
+                                        },
+                                    ),
+                                })
+                                .collect::<Vec<_>>();
+                            items.push(PermissionStudioItem {
+                                label: format!("{tool_name} · + command pattern"),
+                                value: ui_text::t(i18n, "value-add"),
+                                action: PermissionStudioAction::AddToolCommandPattern { tool_name },
+                            });
+                            items
+                        }
+                        Some(ToolPermissionRules::Mode(mode))
+                            if matches!(
+                                tool_name.as_str(),
+                                "shell" | "bash" | "agena.process.run"
+                            ) =>
+                        {
+                            vec![
+                                PermissionStudioItem {
+                                    label: format!("{tool_name} · *"),
+                                    value: permission_mode_label(i18n, *mode),
+                                    action: PermissionStudioAction::EditMode(
+                                        PermissionStudioModeTarget::ToolCommandPattern {
+                                            tool_name: tool_name.clone(),
+                                            pattern: "*".to_string(),
+                                        },
+                                    ),
+                                },
+                                PermissionStudioItem {
+                                    label: format!("{tool_name} · + command pattern"),
+                                    value: ui_text::t(i18n, "value-add"),
+                                    action: PermissionStudioAction::AddToolCommandPattern {
+                                        tool_name,
+                                    },
+                                },
+                            ]
+                        }
+                        _ => vec![PermissionStudioItem {
+                            label: tool_name.clone(),
+                            value: tool_permission_rules_summary(i18n, rules),
+                            action: PermissionStudioAction::EditMode(
+                                PermissionStudioModeTarget::ToolRule { tool_name },
+                            ),
+                        }],
+                    }
                 })
                 .collect::<Vec<_>>();
             vec![PermissionStudioSection {
@@ -18900,6 +19226,13 @@ fn permission_studio_mode_target_label(i18n: &I18n, target: &PermissionStudioMod
             PermissionStudioModeTarget::NetworkPrivate => "permission-studio-network-private",
             PermissionStudioModeTarget::NetworkLoopback => "permission-studio-network-loopback",
             PermissionStudioModeTarget::ToolDefault => "permission-studio-tool-default",
+            PermissionStudioModeTarget::PathRuleRead { .. } => "permission-studio-rule-pattern",
+            PermissionStudioModeTarget::PathRuleWrite { .. } => "permission-studio-rule-pattern",
+            PermissionStudioModeTarget::NetworkRule { .. } => "permission-studio-rule-target",
+            PermissionStudioModeTarget::ToolTag { .. }
+            | PermissionStudioModeTarget::ToolName { .. }
+            | PermissionStudioModeTarget::ToolRule { .. }
+            | PermissionStudioModeTarget::ToolCommandPattern { .. } => "permission-studio-rule-key",
         },
     )
 }
@@ -18974,6 +19307,10 @@ fn permission_studio_creator_spec(
             ),
             String::new(),
         ),
+        PermissionStudioEditorAction::AddToolCommandPattern { tool_name } => (
+            settings_edit_title(i18n, format!("{tool_name} command pattern").as_str()),
+            "Enter a shell command glob, for example `git status` or `git push *`.".to_string(),
+        ),
         _ => (String::new(), String::new()),
     }
 }
@@ -18987,6 +19324,7 @@ fn permission_studio_creator_input_text(action: &PermissionStudioEditorAction) -
         | PermissionStudioEditorAction::AddToolRule { duplicate_from } => {
             duplicate_from.clone().unwrap_or_default()
         }
+        PermissionStudioEditorAction::AddToolCommandPattern { .. } => String::new(),
         _ => String::new(),
     }
 }
@@ -19034,6 +19372,95 @@ fn apply_permission_studio_mode_input(
                 .tools
                 .get_or_insert_with(Default::default)
                 .default = mode;
+        }
+        PermissionStudioModeTarget::PathRuleRead { pattern }
+        | PermissionStudioModeTarget::PathRuleWrite { pattern } => {
+            let read = matches!(target, PermissionStudioModeTarget::PathRuleRead { .. });
+            let current = permission
+                .path
+                .as_ref()
+                .and_then(|path| path.rules.get(pattern.as_str()))
+                .and_then(|rule| path_rule_modes(Some(rule)))
+                .unwrap_or(PathAccessModes {
+                    read: Some(PermissionMode::Ask),
+                    write: Some(PermissionMode::Ask),
+                });
+            let mut next = current;
+            if read {
+                next.read = mode;
+            } else {
+                next.write = mode;
+            }
+            permission
+                .path
+                .get_or_insert_with(Default::default)
+                .rules
+                .insert(pattern.clone(), PathAccessRuleConfig::Modes(next));
+        }
+        PermissionStudioModeTarget::NetworkRule { target } => {
+            if let Some(mode) = mode {
+                permission
+                    .network
+                    .get_or_insert_with(Default::default)
+                    .rules
+                    .insert(target.clone(), mode);
+            } else if let Some(network) = permission.network.as_mut() {
+                network.rules.shift_remove(target.as_str());
+            }
+        }
+        PermissionStudioModeTarget::ToolTag { key } => {
+            if let Some(mode) = mode {
+                permission
+                    .tools
+                    .get_or_insert_with(Default::default)
+                    .tags
+                    .insert(key.clone(), mode);
+            } else if let Some(tools) = permission.tools.as_mut() {
+                tools.tags.remove(key.as_str());
+            }
+        }
+        PermissionStudioModeTarget::ToolName { key } => {
+            if let Some(mode) = mode {
+                permission
+                    .tools
+                    .get_or_insert_with(Default::default)
+                    .names
+                    .insert(key.clone(), mode);
+            } else if let Some(tools) = permission.tools.as_mut() {
+                tools.names.remove(key.as_str());
+            }
+        }
+        PermissionStudioModeTarget::ToolRule { tool_name } => {
+            if let Some(mode) = mode {
+                permission
+                    .tools
+                    .get_or_insert_with(Default::default)
+                    .rules
+                    .insert(tool_name.clone(), ToolPermissionRules::Mode(mode));
+            } else if let Some(tools) = permission.tools.as_mut() {
+                tools.rules.remove(tool_name.as_str());
+            }
+        }
+        PermissionStudioModeTarget::ToolCommandPattern { tool_name, pattern } => {
+            let tools = permission.tools.get_or_insert_with(Default::default);
+            let entries = match tools.rules.remove(tool_name.as_str()) {
+                Some(ToolPermissionRules::Ordered(entries)) => entries,
+                Some(ToolPermissionRules::Mode(existing)) => {
+                    let mut entries = indexmap::IndexMap::new();
+                    entries.insert("*".to_string(), existing);
+                    entries
+                }
+                None => indexmap::IndexMap::new(),
+            };
+            let mut entries = entries;
+            if let Some(mode) = mode {
+                entries.insert(pattern.clone(), mode);
+            } else {
+                entries.shift_remove(pattern.as_str());
+            }
+            tools
+                .rules
+                .insert(tool_name.clone(), ToolPermissionRules::Ordered(entries));
         }
     }
     normalize_permission_config(permission);
@@ -19110,7 +19537,9 @@ fn permission_studio_read_only_message(i18n: &I18n, source: &PermissionStudioSou
         PermissionStudioSource::EffectiveSession { .. } => {
             ui_text::t(i18n, "settings-permission-effective-read-only")
         }
-        PermissionStudioSource::GlobalConfig | PermissionStudioSource::Session { .. } => {
+        PermissionStudioSource::GlobalConfig
+        | PermissionStudioSource::WorkspaceConfig
+        | PermissionStudioSource::Session { .. } => {
             ui_text::t(i18n, "permission-studio-detail-read-only")
         }
     }
@@ -19521,6 +19950,47 @@ fn permission_studio_mode_target_value(
         PermissionStudioModeTarget::ToolDefault => {
             permission.tools.as_ref().and_then(|tools| tools.default)
         }
+        PermissionStudioModeTarget::PathRuleRead { pattern } => permission
+            .path
+            .as_ref()
+            .and_then(|path| path.rules.get(pattern.as_str()))
+            .and_then(|rule| path_rule_modes(Some(rule)))
+            .and_then(|modes| modes.read),
+        PermissionStudioModeTarget::PathRuleWrite { pattern } => permission
+            .path
+            .as_ref()
+            .and_then(|path| path.rules.get(pattern.as_str()))
+            .and_then(|rule| path_rule_modes(Some(rule)))
+            .and_then(|modes| modes.write),
+        PermissionStudioModeTarget::NetworkRule { target } => permission
+            .network
+            .as_ref()
+            .and_then(|network| network.rules.get(target.as_str()).copied()),
+        PermissionStudioModeTarget::ToolTag { key } => permission
+            .tools
+            .as_ref()
+            .and_then(|tools| tools.tags.get(key.as_str()).copied()),
+        PermissionStudioModeTarget::ToolName { key } => permission
+            .tools
+            .as_ref()
+            .and_then(|tools| tools.names.get(key.as_str()).copied()),
+        PermissionStudioModeTarget::ToolRule { tool_name } => permission
+            .tools
+            .as_ref()
+            .and_then(|tools| tools.rules.get(tool_name.as_str()))
+            .and_then(|rules| match rules {
+                ToolPermissionRules::Mode(mode) => Some(*mode),
+                ToolPermissionRules::Ordered(entries) => entries.get("*").copied(),
+            }),
+        PermissionStudioModeTarget::ToolCommandPattern { tool_name, pattern } => permission
+            .tools
+            .as_ref()
+            .and_then(|tools| tools.rules.get(tool_name.as_str()))
+            .and_then(|rules| match rules {
+                ToolPermissionRules::Ordered(entries) => entries.get(pattern.as_str()).copied(),
+                ToolPermissionRules::Mode(mode) if pattern == "*" => Some(*mode),
+                ToolPermissionRules::Mode(_) => None,
+            }),
     }
 }
 
@@ -24445,6 +24915,126 @@ fn permission_rule_studio_detail_text(
         PermissionRuleStudioAction::Revoke => {
             ui_text::t(i18n, "overlay-permission-rule-detail-revoke")
         }
+    }
+}
+
+#[cfg(test)]
+mod permission_studio_tests {
+    use super::*;
+
+    #[test]
+    fn rule_rows_update_their_permission_modes_in_place() {
+        let i18n = I18n::default();
+        let mut permission = PermissionConfig::default();
+
+        apply_permission_studio_mode_input(
+            &i18n,
+            &mut permission,
+            &PermissionStudioModeTarget::NetworkRule {
+                target: "api.github.com:443".to_string(),
+            },
+            "allow",
+        )
+        .expect("set network rule mode");
+        assert_eq!(
+            permission
+                .network
+                .as_ref()
+                .and_then(|network| network.rules.get("api.github.com:443"))
+                .copied(),
+            Some(PermissionMode::Allow)
+        );
+
+        apply_permission_studio_mode_input(
+            &i18n,
+            &mut permission,
+            &PermissionStudioModeTarget::PathRuleWrite {
+                pattern: "<workspace>/generated/**".to_string(),
+            },
+            "deny",
+        )
+        .expect("set path write mode");
+        let modes = permission
+            .path
+            .as_ref()
+            .and_then(|path| path.rules.get("<workspace>/generated/**"))
+            .and_then(|rule| path_rule_modes(Some(rule)))
+            .expect("path rule modes");
+        assert_eq!(modes.write, Some(PermissionMode::Deny));
+    }
+
+    #[test]
+    fn command_pattern_mode_converts_a_tool_rule_to_an_ordered_rule_set() {
+        let i18n = I18n::default();
+        let mut permission = PermissionConfig::default();
+        permission
+            .tools
+            .get_or_insert_with(Default::default)
+            .rules
+            .insert(
+                "shell".to_string(),
+                ToolPermissionRules::Mode(PermissionMode::Ask),
+            );
+
+        apply_permission_studio_mode_input(
+            &i18n,
+            &mut permission,
+            &PermissionStudioModeTarget::ToolCommandPattern {
+                tool_name: "shell".to_string(),
+                pattern: "git status".to_string(),
+            },
+            "allow",
+        )
+        .expect("set shell command pattern mode");
+
+        let Some(ToolPermissionRules::Ordered(entries)) = permission
+            .tools
+            .as_ref()
+            .and_then(|tools| tools.rules.get("shell"))
+        else {
+            panic!("tool rule should become an ordered command rule set");
+        };
+        assert_eq!(entries.get("*"), Some(&PermissionMode::Ask));
+        assert_eq!(entries.get("git status"), Some(&PermissionMode::Allow));
+    }
+
+    #[test]
+    fn settings_list_global_and_workspace_permissions_as_distinct_edit_targets() {
+        let i18n = I18n::default();
+        let sources = ConfigJsonSources {
+            config_path: "/home/test/.agena/agena.json".into(),
+            config_found: true,
+            project_config_path: "/workspace/.agena/agena.json".into(),
+            project_config_found: true,
+            applied_layers: vec!["global".to_string(), "workspace".to_string()],
+            file: JsonValue::Null,
+            project_file: JsonValue::Null,
+            effective: JsonValue::Null,
+        };
+        let permission = PermissionConfig::default();
+        let items = settings_studio_permission_items(
+            &i18n,
+            &sources,
+            &permission,
+            &permission,
+            &permission,
+            None,
+        );
+
+        assert!(matches!(
+            items.first().map(|item| &item.action),
+            Some(SettingsPickerAction::OpenGlobalPermissionWorkbench)
+        ));
+        assert!(matches!(
+            items.get(1).map(|item| &item.action),
+            Some(SettingsPickerAction::OpenWorkspacePermissionWorkbench)
+        ));
+        assert!(
+            items[1]
+                .source_rows
+                .first()
+                .is_some_and(|row| row.value.contains("/workspace/.agena/agena.json"))
+        );
     }
 }
 

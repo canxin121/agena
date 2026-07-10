@@ -40,7 +40,7 @@ cargo build --release
 {
   "plugins": {
     "list": {
-      "echo": {
+      "example.echo": {
         "package": {
           "kind": "cdylib",
           "path": "examples/echo_plugin/target/release/libagena_echo_plugin.so"
@@ -73,7 +73,7 @@ agena plugin inspect echo
 {
   "plugins": {
     "list": {
-      "echo": {
+      "example.echo": {
         "package": {
           "kind": "cdylib",
           "path": "examples/echo_plugin/target/debug/libagena_echo_plugin.so"

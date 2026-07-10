@@ -237,17 +237,32 @@ impl WorkflowPlugin {
         requested: &str,
         tools: &'a [ToolDescriptor],
     ) -> SdkResult<&'a ToolDescriptor> {
-        let mut case_insensitive: Option<&ToolDescriptor> = None;
-        for tool in tools {
-            if tool.name == requested {
-                return Ok(tool);
-            }
-            if case_insensitive.is_none() && tool.name.eq_ignore_ascii_case(requested) {
-                case_insensitive = Some(tool);
+        let exact = tools
+            .iter()
+            .filter(|tool| tool.name == requested)
+            .collect::<Vec<_>>();
+        match exact.as_slice() {
+            [tool] => return Ok(*tool),
+            [] => {}
+            _ => {
+                return Err(PluginError::invalid_params(format!(
+                    "tool `{requested}` is ambiguous; refresh the tool catalog and use its fully-qualified name"
+                )));
             }
         }
-        if let Some(tool) = case_insensitive {
-            return Ok(tool);
+
+        let case_insensitive = tools
+            .iter()
+            .filter(|tool| tool.name.eq_ignore_ascii_case(requested))
+            .collect::<Vec<_>>();
+        match case_insensitive.as_slice() {
+            [tool] => return Ok(*tool),
+            [] => {}
+            _ => {
+                return Err(PluginError::invalid_params(format!(
+                    "tool `{requested}` is ambiguous; refresh the tool catalog and use its fully-qualified name"
+                )));
+            }
         }
         let suggestions = Self::suggest_tool_names(requested, tools);
         let message = if suggestions.is_empty() {
@@ -2543,7 +2558,7 @@ fn tags_summary(tags: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CatalogToolRecord, WorkflowPlugin};
+    use super::{CatalogToolRecord, ToolDescriptor, WorkflowPlugin};
 
     #[test]
     fn filter_catalog_records_supports_multiple_tags() {
@@ -2568,5 +2583,29 @@ mod tests {
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name, "agena.fs/read");
+    }
+
+    #[test]
+    fn duplicate_gateway_tool_names_are_rejected_instead_of_picking_one() {
+        let tools = vec![
+            ToolDescriptor {
+                name: "notes.format".to_string(),
+                summary: None,
+                help: None,
+                examples: Vec::new(),
+                input_schema: None,
+            },
+            ToolDescriptor {
+                name: "notes.format".to_string(),
+                summary: None,
+                help: None,
+                examples: Vec::new(),
+                input_schema: None,
+            },
+        ];
+
+        let error = WorkflowPlugin::resolve_tool_descriptor("notes.format", &tools)
+            .expect_err("duplicate compact names must not resolve implicitly");
+        assert!(error.message.contains("ambiguous"));
     }
 }

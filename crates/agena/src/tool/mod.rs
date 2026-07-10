@@ -22,6 +22,7 @@ pub(crate) mod task;
 pub(crate) mod tool_search;
 pub(crate) mod truncation;
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -1255,23 +1256,6 @@ impl ToolExecutor {
         if !scoped_executor.tool_catalog().is_tool_enabled(&definition) {
             return Err(ToolError::UnsupportedInvocation(tool_name.to_string()));
         }
-
-        if scoped_executor.permission_mode == PermissionEnforcementMode::Enforced {
-            for check in scoped_executor.collect_permission_checks_for_invocation_in_session(
-                &invocation,
-                context.session_id,
-            )? {
-                match check.decision {
-                    PermissionDecision::Allow => {}
-                    PermissionDecision::Ask { reason } => {
-                        return Err(ToolError::PermissionAsk(reason));
-                    }
-                    PermissionDecision::Deny { reason } => {
-                        return Err(ToolError::PermissionDenied(reason));
-                    }
-                }
-            }
-        }
         let session_id = context.session_id.unwrap_or(-1);
         let call_id = context
             .call_id
@@ -1438,9 +1422,14 @@ impl ToolExecutor {
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
         let (tool_name, decision) = self.authorize_invocation(invocation)?;
         let command = shell_command_from_invocation(invocation);
+        let tags = self
+            .invocation_definition(invocation)
+            .map(|definition| invocation_effective_tags(&definition, invocation))
+            .unwrap_or_default();
         let action = crate::permission::tool_action(
             tool_name.as_str(),
             command.as_deref(),
+            tags.as_slice(),
             Some(&self.agent.tool_policy),
         );
         let mut checks = vec![ToolPermissionCheck { action, decision }];
@@ -1473,6 +1462,35 @@ impl ToolExecutor {
     }
 
     pub async fn execute_invocation_streaming(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: i64,
+        call_id: i64,
+    ) -> Result<Option<StreamingToolExecution>, ToolError> {
+        self.enforce_invocation_permissions(invocation, Some(session_id))?;
+        self.execute_invocation_streaming_inner(invocation, session_id, call_id)
+            .await
+    }
+
+    /// Run a streaming invocation after a trusted caller has resolved every
+    /// permission check, including persisted rules and any user approval.
+    ///
+    /// This is crate-visible on purpose: entry points must use the normal
+    /// method above unless they own the complete permission resolution flow.
+    pub(crate) async fn execute_invocation_streaming_after_authorization(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: i64,
+        call_id: i64,
+    ) -> Result<Option<StreamingToolExecution>, ToolError> {
+        let mut authorized = self.clone();
+        authorized.permission_mode = PermissionEnforcementMode::Bypassed;
+        authorized
+            .execute_invocation_streaming(invocation, session_id, call_id)
+            .await
+    }
+
+    async fn execute_invocation_streaming_inner(
         &self,
         invocation: &ToolInvocation,
         session_id: i64,
@@ -1573,6 +1591,7 @@ impl ToolExecutor {
         call_id: i64,
         prepared_shell_command: Option<PreparedShellCommand>,
     ) -> Result<ToolInvocationExecution, ToolError> {
+        self.enforce_invocation_permissions(invocation, Some(session_id))?;
         let result = self.execute_invocation_detailed_inner(
             invocation,
             session_id,
@@ -1642,7 +1661,7 @@ impl ToolExecutor {
         )
     }
 
-    pub fn execute_invocation_detailed_bypassing_permissions(
+    pub(crate) fn execute_invocation_detailed_bypassing_permissions(
         &self,
         invocation: &ToolInvocation,
         session_id: i64,
@@ -1653,7 +1672,7 @@ impl ToolExecutor {
         )
     }
 
-    pub fn execute_invocation_detailed_bypassing_permissions_with_prepared_shell(
+    pub(crate) fn execute_invocation_detailed_bypassing_permissions_with_prepared_shell(
         &self,
         invocation: &ToolInvocation,
         session_id: i64,
@@ -1668,6 +1687,33 @@ impl ToolExecutor {
             call_id,
             prepared_shell_command,
         )
+    }
+
+    /// Enforce the executor's static, session-scoped policy at the final
+    /// invocation boundary. Callers may gather checks for UX or to apply
+    /// persisted rules, but they cannot execute an unapproved invocation by
+    /// forgetting to do so.
+    fn enforce_invocation_permissions(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: Option<i64>,
+    ) -> Result<(), ToolError> {
+        if self.permission_mode == PermissionEnforcementMode::Bypassed {
+            return Ok(());
+        }
+
+        for check in
+            self.collect_permission_checks_for_invocation_in_session(invocation, session_id)?
+        {
+            match check.decision {
+                PermissionDecision::Allow => {}
+                PermissionDecision::Ask { reason } => return Err(ToolError::PermissionAsk(reason)),
+                PermissionDecision::Deny { reason } => {
+                    return Err(ToolError::PermissionDenied(reason));
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn shell_env_overrides(
@@ -1995,11 +2041,12 @@ impl ToolExecutor {
         base_path: &Path,
     ) -> PathBuf {
         let candidate = PathBuf::from(raw_path);
-        if candidate.is_absolute() {
+        let resolved = if candidate.is_absolute() {
             candidate
         } else {
             base_path.join(candidate)
-        }
+        };
+        canonicalize_path_for_execution(&resolved)
     }
 
     pub(crate) fn resolve_target_path_with_context(
@@ -2009,13 +2056,13 @@ impl ToolExecutor {
     ) -> PathBuf {
         let workspace_root = self.effective_workspace_root(session_context);
         if let Some(path) = resolve_managed_project_path_alias(raw_path, workspace_root) {
-            return path;
+            return canonicalize_path_for_execution(&path);
         }
         let candidate = PathBuf::from(raw_path);
         if candidate.is_absolute() {
-            return candidate;
+            return canonicalize_path_for_execution(&candidate);
         }
-        workspace_root.join(candidate)
+        canonicalize_path_for_execution(&workspace_root.join(candidate))
     }
 
     pub(crate) fn execute_shell_command(
@@ -2119,9 +2166,11 @@ impl ToolExecutor {
             return Ok(());
         }
 
+        let workspace_root = canonicalize_path_for_execution(self.workspace_root());
+        let target_path = canonicalize_path_for_execution(target_path);
         match self
             .agent
-            .authorize_path_access(access, self.workspace_root(), target_path)
+            .authorize_path_access(access, &workspace_root, &target_path)
         {
             PermissionDecision::Allow => Ok(()),
             PermissionDecision::Ask { reason } => Err(ToolError::PermissionAsk(reason)),
@@ -2135,8 +2184,10 @@ impl ToolExecutor {
         access: AccessKind,
         target_path: &Path,
     ) {
-        let workspace_root = normalize_path_for_display(self.workspace_root());
-        let target = normalize_path_for_display(target_path);
+        let canonical_workspace_root = canonicalize_path_for_execution(self.workspace_root());
+        let canonical_target_path = canonicalize_path_for_execution(target_path);
+        let workspace_root = normalize_path_for_display(&canonical_workspace_root);
+        let target = normalize_path_for_display(&canonical_target_path);
 
         checks.push(ToolPermissionCheck {
             action: PermissionAction::PathAccess {
@@ -2144,9 +2195,11 @@ impl ToolExecutor {
                 workspace_root,
                 target_path: target,
             },
-            decision: self
-                .agent
-                .authorize_path_access(access, self.workspace_root(), target_path),
+            decision: self.agent.authorize_path_access(
+                access,
+                &canonical_workspace_root,
+                &canonical_target_path,
+            ),
         });
     }
 
@@ -2183,6 +2236,36 @@ impl ToolExecutor {
 
 pub(crate) fn normalize_path_for_display(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+/// Resolve every existing component before a path is both authorized and used.
+/// For a new output path, canonicalize the nearest existing parent and append
+/// the missing suffix. This closes ordinary workspace-symlink escapes while
+/// retaining support for creating new files.
+fn canonicalize_path_for_execution(path: &Path) -> PathBuf {
+    let mut current = path.to_path_buf();
+    let mut missing = Vec::new();
+    loop {
+        match std::fs::canonicalize(&current) {
+            Ok(mut resolved) => {
+                for component in missing.iter().rev() {
+                    resolved.push(component);
+                }
+                return resolved;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let Some(name) = current.file_name().map(OsString::from) else {
+                    return path.to_path_buf();
+                };
+                let Some(parent) = current.parent() else {
+                    return path.to_path_buf();
+                };
+                missing.push(name);
+                current = parent.to_path_buf();
+            }
+            Err(_) => return path.to_path_buf(),
+        }
+    }
 }
 
 fn truncate_to_char_count(value: &str, max_chars: usize) -> String {
@@ -2656,4 +2739,107 @@ fn parse_input_jsonpath(jsonpath: &str) -> Result<Vec<InputJsonPathSegment>, Too
 enum InputJsonPathSegment {
     Key(String),
     ArrayAll,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use super::*;
+    use crate::{
+        agent::Agent,
+        agents::SubagentRegistry,
+        permission::{PermissionMode, PermissionPolicy, ToolPermissionPolicy},
+        plugin::{
+            ConfiguredPlugin, PluginHostBuildConfig, PluginsConfig, StaticPluginRegistration,
+            ToolPresentationConfig,
+        },
+    };
+
+    #[derive(Default)]
+    struct ChokePointPlugin;
+
+    #[crate::plugin::sdk::agena_plugin(
+        namespace = "test",
+        name = "choke",
+        version = "0.1.0",
+        summary = "Permission choke-point regression fixture."
+    )]
+    impl ChokePointPlugin {
+        #[tool(name = "run", summary = "Run the regression fixture.")]
+        async fn run(&self) -> String {
+            "should not execute when denied".to_string()
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn detailed_execution_enforces_permissions_without_caller_preflight() {
+        let workspace_root = std::env::current_dir().expect("resolve test workspace");
+        let mut plugins_config = PluginsConfig::default();
+        plugins_config
+            .list
+            .insert("test.choke".to_string(), ConfiguredPlugin::static_default());
+        let plugins = PluginHost::new(PluginHostBuildConfig {
+            static_plugins: vec![StaticPluginRegistration::new(
+                "test.choke".parse().expect("valid test plugin key"),
+                ChokePointPlugin,
+            )],
+            config: plugins_config,
+            workspace_root: workspace_root.clone(),
+            agena_version: "test".to_string(),
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: HashMap::new(),
+        })
+        .await
+        .expect("build test plugin host");
+        let executor = ToolExecutor::new(
+            workspace_root,
+            Agent::new(
+                "test",
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::new(PermissionMode::Ask),
+            ),
+            SubagentRegistry::default(),
+            Arc::clone(&plugins),
+            None,
+            None,
+            None,
+            ToolPresentationConfig::default(),
+        );
+        let tool_name = plugins
+            .registered_tools()
+            .into_iter()
+            .next()
+            .expect("test plugin registers one tool")
+            .model_name()
+            .to_string();
+        let invocation = ToolInvocation::new(tool_name, StructuredObject::default());
+
+        let error = executor
+            .execute_invocation_detailed(&invocation, 1, 1)
+            .expect_err("the final execution boundary must reject unapproved tools");
+
+        assert!(
+            matches!(error, ToolError::PermissionAsk(_)),
+            "expected final-boundary permission prompt, got: {error}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonical_path_resolution_follows_existing_symlink_parents() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!("agena-path-test-{}", uuid::Uuid::new_v4()));
+        let external = root.join("external");
+        std::fs::create_dir_all(&external).expect("create test directories");
+        symlink(&external, root.join("workspace-link")).expect("create test symlink");
+
+        let resolved = canonicalize_path_for_execution(&root.join("workspace-link/new.txt"));
+        assert_eq!(resolved, external.join("new.txt"));
+
+        std::fs::remove_dir_all(root).expect("remove test directories");
+    }
 }

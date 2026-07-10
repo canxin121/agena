@@ -7,6 +7,9 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use super::manifest_support::{hook_subscription_for_name, normalize_schema_json, normalize_tags};
+pub use super::manifest_support::normalize_tool_tag_name;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginManifest {
     pub schema_version: u32,
@@ -182,26 +185,6 @@ impl From<&ToolTag> for ToolTag {
     }
 }
 
-pub fn normalize_tool_tag_name(tag: impl AsRef<str>) -> Option<String> {
-    let normalized = tag
-        .as_ref()
-        .trim()
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>()
-        .split('_')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("_");
-    (!normalized.is_empty()).then_some(normalized)
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolDefinition {
     pub name: String,
@@ -225,7 +208,7 @@ pub struct ToolDefinition {
 pub struct ToolContract {
     #[serde(default)]
     pub input_schema: serde_json::Value,
-    #[serde(default, skip_serializing_if = "serde_json_value_is_empty_schema")]
+    #[serde(default, skip_serializing_if = "crate::manifest_support::serde_json_value_is_empty_schema")]
     pub output_schema: serde_json::Value,
     #[serde(default)]
     pub strict: bool,
@@ -456,22 +439,27 @@ impl ToolDefinition {
 
     pub fn effective_tags(&self) -> Vec<ToolTag> {
         let mut tags = normalize_tags(self.permissions.tags.iter().cloned());
+        let mut push_normalized_tag = |tag: ToolTag| {
+            if !tags.iter().any(|existing| existing == &tag) {
+                tags.push(tag);
+            }
+        };
         for spec in &self.permissions.input_paths {
             match spec.kind {
-                PathKind::Read => push_normalized_tag(&mut tags, ToolTag::FilesystemRead),
-                PathKind::Write => push_normalized_tag(&mut tags, ToolTag::FilesystemWrite),
+                PathKind::Read => push_normalized_tag(ToolTag::FilesystemRead),
+                PathKind::Write => push_normalized_tag(ToolTag::FilesystemWrite),
             }
         }
         for spec in &self.permissions.path_access {
             match spec.kind {
-                PathKind::Read => push_normalized_tag(&mut tags, ToolTag::FilesystemRead),
-                PathKind::Write => push_normalized_tag(&mut tags, ToolTag::FilesystemWrite),
+                PathKind::Read => push_normalized_tag(ToolTag::FilesystemRead),
+                PathKind::Write => push_normalized_tag(ToolTag::FilesystemWrite),
             }
         }
         if !self.permissions.input_networks.is_empty()
             || !self.permissions.network_access.is_empty()
         {
-            push_normalized_tag(&mut tags, ToolTag::Network);
+            push_normalized_tag(ToolTag::Network);
         }
         tags
     }
@@ -858,115 +846,9 @@ pub struct NetworkAccessSpec {
     pub target: String,
 }
 
-fn normalize_schema_json(value: serde_json::Value) -> serde_json::Value {
-    normalize_schema_json_value(value, true)
-}
-
-fn serde_json_value_is_empty_schema(value: &serde_json::Value) -> bool {
-    matches!(value, serde_json::Value::Null)
-        || value.as_object().is_some_and(|object| object.is_empty())
-}
-
-fn normalize_schema_json_value(
-    value: serde_json::Value,
-    remove_schema_metadata: bool,
-) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(mut object) => {
-            if remove_schema_metadata {
-                object.remove("$schema");
-                object.remove("title");
-            }
-            let mut cleaned = serde_json::Map::new();
-            for (key, value) in object {
-                let normalized = match key.as_str() {
-                    "properties" => match value {
-                        serde_json::Value::Object(map) => serde_json::Value::Object(
-                            map.into_iter()
-                                .map(|(nested_key, nested_value)| {
-                                    (nested_key, normalize_schema_json_value(nested_value, true))
-                                })
-                                .collect(),
-                        ),
-                        other => normalize_schema_json_value(other, true),
-                    },
-                    "required" => match value {
-                        serde_json::Value::Array(items) => serde_json::Value::Array(items),
-                        other => normalize_schema_json_value(other, true),
-                    },
-                    "$defs" | "definitions" | "patternProperties" | "dependentSchemas" => {
-                        match value {
-                            serde_json::Value::Object(map) => serde_json::Value::Object(
-                                map.into_iter()
-                                    .map(|(nested_key, nested_value)| {
-                                        (
-                                            nested_key,
-                                            normalize_schema_json_value(nested_value, true),
-                                        )
-                                    })
-                                    .collect(),
-                            ),
-                            other => normalize_schema_json_value(other, true),
-                        }
-                    }
-                    _ => normalize_schema_json_value(value, true),
-                };
-                cleaned.insert(key, normalized);
-            }
-            if !cleaned.contains_key("type") && schema_map_is_object_like(&cleaned) {
-                cleaned.insert(
-                    "type".to_string(),
-                    serde_json::Value::String("object".to_string()),
-                );
-            }
-            if cleaned
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|kind| kind == "object")
-                && !cleaned.contains_key("properties")
-            {
-                cleaned.insert(
-                    "properties".to_string(),
-                    serde_json::Value::Object(serde_json::Map::new()),
-                );
-            }
-            serde_json::Value::Object(cleaned)
-        }
-        serde_json::Value::Array(items) => serde_json::Value::Array(
-            items
-                .into_iter()
-                .map(|item| normalize_schema_json_value(item, true))
-                .collect(),
-        ),
-        other => other,
-    }
-}
-
-fn schema_map_is_object_like(map: &serde_json::Map<String, serde_json::Value>) -> bool {
-    if map
-        .get("type")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(|kind| kind == "object")
-    {
-        return true;
-    }
-    if map.contains_key("properties") || map.contains_key("required") {
-        return true;
-    }
-    ["oneOf", "anyOf", "allOf"].into_iter().any(|key| {
-        map.get(key)
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|items| !items.is_empty() && items.iter().all(schema_value_is_object_like))
-    })
-}
-
-fn schema_value_is_object_like(value: &serde_json::Value) -> bool {
-    value.as_object().is_some_and(schema_map_is_object_like)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::normalize_schema_json;
+    use crate::manifest_support::normalize_schema_json;
     use serde_json::json;
 
     #[test]
@@ -994,23 +876,6 @@ mod tests {
             Some(&json!(["valid_name", "invalid-name", "WithCaps"]))
         );
     }
-}
-
-fn push_normalized_tag(tags: &mut Vec<ToolTag>, tag: ToolTag) {
-    if !tags.iter().any(|existing| existing == &tag) {
-        tags.push(tag);
-    }
-}
-
-fn normalize_tags<I>(tags: I) -> Vec<ToolTag>
-where
-    I: IntoIterator<Item = ToolTag>,
-{
-    let mut normalized = Vec::new();
-    for tag in tags {
-        push_normalized_tag(&mut normalized, tag);
-    }
-    normalized
 }
 
 bitflags::bitflags! {
@@ -1139,12 +1004,6 @@ const HOOK_NAMES: &[(&str, HookSubscription)] = &[
     ("pre_run", HookSubscription::PRE_RUN),
     ("post_run", HookSubscription::POST_RUN),
 ];
-
-pub fn hook_subscription_for_name(name: &str) -> Option<HookSubscription> {
-    HOOK_NAMES
-        .iter()
-        .find_map(|(hook_name, flag)| (*hook_name == name).then_some(*flag))
-}
 
 impl PluginManifest {
     pub fn new(

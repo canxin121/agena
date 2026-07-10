@@ -701,8 +701,9 @@ fn thinking_collapsed_summary(status: ExecutionStatus, text: &str) -> String {
         .any(|line| !line.trim().is_empty());
     let suffix = if additional_content { " …" } else { "" };
     format!(
-        "{} thinking · {preview}{suffix}",
-        activity_status_icon(status)
+        "{} thinking · {}{suffix}",
+        activity_status_icon(status),
+        concise_text(preview, 112)
     )
 }
 
@@ -1401,27 +1402,380 @@ fn tool_execution_status_summary(part: &MessagePart, label: &str) -> String {
     format!("{} {label}", activity_status_icon(part.status))
 }
 
-fn tool_execution_collapsed_summary(
-    part: &MessagePart,
+fn tool_execution_collapsed_summary(part: &MessagePart, tool: &OperationPart, _: &I18n) -> String {
+    tool_execution_compact_summary(part.status, tool)
+}
+
+/// Build the one-line presentation for a folded operation.  The operation's
+/// title is deliberately not used as the primary label here: providers often
+/// send generic titles such as "Tool tools.call" or "Apply patch".  The
+/// invocation contains the actual target and arguments, which are much more
+/// useful when scanning a busy transcript.
+fn tool_execution_compact_summary(status: ExecutionStatus, tool: &OperationPart) -> String {
+    let (name, input) = compact_tool_identity(&tool.invocation);
+    let mut parts = vec![name.clone()];
+    if let Some(subject) = compact_tool_subject(name.as_str(), &input, tool) {
+        parts.push(subject);
+    }
+    if let Some(outcome) = compact_tool_outcome(status, name.as_str(), tool) {
+        if !parts
+            .iter()
+            .any(|part| normalized_tool_text(part) == normalized_tool_text(outcome.as_str()))
+        {
+            parts.push(outcome);
+        }
+    }
+    tool_execution_status_summary_for_status(status, parts.join(" · ").as_str())
+}
+
+/// Return the catalog target plus its arguments, unwrapping `tools.call` so a
+/// user sees `fs.grep` or `web.search`, rather than the implementation gateway
+/// that happened to dispatch it.
+fn compact_tool_identity(invocation: &ToolInvocation) -> (String, serde_json::Value) {
+    let input = serde_json::Value::from(invocation.input.clone());
+    if gateway_model_tool_name(invocation.name.as_str()) == Some("tools.call")
+        && let Some(target) = input.get("tool").and_then(serde_json::Value::as_str)
+        && !target.trim().is_empty()
+    {
+        let target_input = input
+            .get("input")
+            .cloned()
+            .filter(serde_json::Value::is_object)
+            .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+        return (compact_tool_name(target), target_input);
+    }
+    (compact_tool_name(invocation.name.as_str()), input)
+}
+
+fn compact_tool_name(name: &str) -> String {
+    match name.trim() {
+        "agena.tools.list" | "tools.list" | "tools_list" => "tools.list".to_string(),
+        "agena.tools.search" | "tools.search" | "tools_search" => "tools.search".to_string(),
+        "agena.tools.help" | "tools.help" | "tools_help" => "tools.help".to_string(),
+        "agena.tools.tags" | "tools.tags" | "tools_tags" => "tools.tags".to_string(),
+        "agena.tools.call" | "tools.call" | "tools_call" => "tools.call".to_string(),
+        "agena_web__fetch" | "web.fetch" | "web_fetch" | "fetch" => "web.fetch".to_string(),
+        "agena_web__search" | "web.search" | "web_search" | "search" => "web.search".to_string(),
+        "agena_fs_read" | "agena.fs.read" | "read" => "fs.read".to_string(),
+        "agena_fs_glob" | "agena.fs.glob" | "glob" => "fs.glob".to_string(),
+        "agena_fs_grep" | "agena.fs.grep" | "grep" => "fs.grep".to_string(),
+        "agena_fs_apply_patch" | "agena.fs.apply_patch" | "apply_patch" => {
+            "fs.apply_patch".to_string()
+        }
+        "agena_process_run" | "agena.process.run" => "process.run".to_string(),
+        "agena_process_list" | "agena.process.list" => "process.list".to_string(),
+        "agena_process_logs" | "agena.process.logs" => "process.logs".to_string(),
+        "agena_process_stop" | "agena.process.stop" => "process.stop".to_string(),
+        other => other.strip_prefix("agena.").unwrap_or(other).to_string(),
+    }
+}
+
+fn compact_tool_subject(
+    name: &str,
+    input: &serde_json::Value,
     tool: &OperationPart,
-    i18n: &I18n,
-) -> String {
-    let base_label = tool_display_label(tool);
-    let label = apply_patch_details(&tool.details)
-        .filter(|payload| !payload.changes.is_empty())
-        .map(|payload| {
+) -> Option<String> {
+    match name {
+        "fs.apply_patch" => compact_patch_summary(input, tool),
+        "fs.read" => compact_read_subject(input),
+        "fs.glob" => compact_glob_subject(input),
+        "fs.grep" => compact_grep_subject(input),
+        "web.search" => compact_string_field(input, "query").map(compact_query),
+        "web.fetch" | "web.crawl" => compact_string_field(input, "url").map(compact_url),
+        "process.run" => compact_string_field(input, "command").map(compact_command),
+        "process.logs" | "process.stop" => compact_string_field(input, "process_id"),
+        "mcp.tools.call" | "mcp.call" => compact_mcp_subject(input),
+        _ => compact_generic_subject(input),
+    }
+}
+
+fn compact_patch_summary(input: &serde_json::Value, tool: &OperationPart) -> Option<String> {
+    let patch = compact_string_field(input, "patch");
+    let changes = apply_patch_details(&tool.details)
+        .map(|payload| payload.changes)
+        .or_else(|| {
+            tool.blocks.iter().find_map(|block| match block {
+                OperationBlock::FileChanges { changes } => Some(changes.clone()),
+                _ => None,
+            })
+        })
+        .filter(|changes| !changes.is_empty());
+    let path_preview = changes
+        .as_deref()
+        .map(compact_file_change_preview)
+        .or_else(|| patch.as_deref().and_then(compact_patch_path_preview));
+    let diff = apply_patch_details(&tool.details)
+        .map(|payload| payload.diff)
+        .filter(|diff| !diff.trim().is_empty())
+        .or_else(|| {
+            tool.blocks.iter().find_map(|block| match block {
+                OperationBlock::Diff { diff, .. } if !diff.trim().is_empty() => Some(diff.clone()),
+                _ => None,
+            })
+        })
+        .or(patch);
+    let stats = diff
+        .as_deref()
+        .map(|diff| diff_stats(diff, changes.as_deref()))
+        .unwrap_or(DiffStats {
+            file_count: changes.as_ref().map_or(0, Vec::len),
+            additions: 0,
+            deletions: 0,
+            renames: 0,
+            line_count: 0,
+        });
+    let delta = compact_diff_delta(stats.additions, stats.deletions);
+    match (path_preview, delta) {
+        (Some(paths), Some(delta)) => Some(format!("{paths} · {delta}")),
+        (Some(paths), None) => Some(paths),
+        (None, Some(delta)) => Some(delta),
+        (None, None) => Some("patch".to_string()),
+    }
+}
+
+fn compact_read_subject(input: &serde_json::Value) -> Option<String> {
+    let path =
+        compact_string_field(input, "file_path").or_else(|| compact_string_field(input, "path"))?;
+    let offset = input.get("offset").and_then(serde_json::Value::as_u64);
+    let limit = input.get("limit").and_then(serde_json::Value::as_u64);
+    match (offset, limit) {
+        (Some(offset), Some(limit)) => Some(format!("{path}:{offset}–{}", offset + limit)),
+        (Some(offset), None) => Some(format!("{path}:{offset}")),
+        _ => Some(path),
+    }
+}
+
+fn compact_glob_subject(input: &serde_json::Value) -> Option<String> {
+    let pattern = compact_string_field(input, "pattern")?;
+    compact_string_field(input, "path")
+        .filter(|path| !path.is_empty())
+        .map(|path| format!("{pattern} in {path}"))
+        .or(Some(pattern))
+}
+
+fn compact_grep_subject(input: &serde_json::Value) -> Option<String> {
+    let pattern = compact_string_field(input, "pattern")?;
+    let mut subject = format!("/{pattern}/");
+    if let Some(path) = compact_string_field(input, "path").filter(|path| !path.is_empty()) {
+        subject.push_str(" in ");
+        subject.push_str(path.as_str());
+    }
+    if let Some(include) =
+        compact_string_field(input, "include").filter(|include| !include.is_empty())
+    {
+        subject.push_str(" · ");
+        subject.push_str(include.as_str());
+    }
+    Some(subject)
+}
+
+fn compact_mcp_subject(input: &serde_json::Value) -> Option<String> {
+    let server = compact_string_field(input, "server");
+    let name = compact_string_field(input, "name");
+    match (server, name) {
+        (Some(server), Some(name)) => Some(format!("{server}/{name}")),
+        (Some(server), None) => Some(server),
+        (None, Some(name)) => Some(name),
+        (None, None) => None,
+    }
+}
+
+fn compact_generic_subject(input: &serde_json::Value) -> Option<String> {
+    for key in [
+        "command",
+        "file_path",
+        "path",
+        "query",
+        "url",
+        "tool",
+        "name",
+        "server",
+        "process_id",
+        "pattern",
+        "id",
+        "action",
+        "description",
+    ] {
+        if let Some(value) = compact_string_field(input, key) {
+            return Some(match key {
+                "command" => compact_command(value),
+                "query" => compact_query(value),
+                "url" => compact_url(value),
+                _ => value,
+            });
+        }
+    }
+    None
+}
+
+fn compact_string_field(input: &serde_json::Value, key: &str) -> Option<String> {
+    input
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn compact_query(query: String) -> String {
+    format!("“{}”", concise_text(query.as_str(), 72))
+}
+
+fn compact_url(url: String) -> String {
+    concise_text(
+        url.trim_start_matches("https://")
+            .trim_start_matches("http://"),
+        96,
+    )
+}
+
+fn compact_command(command: String) -> String {
+    concise_text(command.as_str(), 96)
+}
+
+fn concise_text(text: &str, max_width: usize) -> String {
+    let normalized = sanitize_terminal_text(text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    truncate_display_width(normalized.as_str(), max_width)
+}
+
+fn compact_patch_path_preview(patch: &str) -> Option<String> {
+    let mut entries = Vec::new();
+    for line in patch.lines() {
+        let (marker, path) = if let Some(path) = line.strip_prefix("*** Add File: ") {
+            ("A", path)
+        } else if let Some(path) = line.strip_prefix("*** Update File: ") {
+            ("M", path)
+        } else if let Some(path) = line.strip_prefix("*** Delete File: ") {
+            ("D", path)
+        } else if let Some(path) = line.strip_prefix("+++ b/") {
+            ("M", path)
+        } else {
+            continue;
+        };
+        let entry = format!("{marker} {}", path.trim());
+        if !entries.contains(&entry) {
+            entries.push(entry);
+        }
+    }
+    compact_preview_entries(entries)
+}
+
+fn compact_file_change_preview(changes: &[agena::message::FileChangeRecord]) -> String {
+    let entries = changes
+        .iter()
+        .map(|change| {
             format!(
-                "{} · {}",
-                base_label,
-                ui_text::file_changes_preview(
-                    i18n,
-                    payload.changes.len(),
-                    summarize_change_paths(i18n, payload.changes.as_slice(), 3).as_str(),
-                )
+                "{} {}",
+                file_change_marker(change.kind),
+                file_change_display_path(change)
             )
         })
-        .unwrap_or(base_label);
-    tool_execution_status_summary(part, label.as_str())
+        .collect::<Vec<_>>();
+    compact_preview_entries(entries).unwrap_or_else(|| "patch".to_string())
+}
+
+fn compact_preview_entries(mut entries: Vec<String>) -> Option<String> {
+    if entries.is_empty() {
+        return None;
+    }
+    let omitted = entries.len().saturating_sub(2);
+    entries.truncate(2);
+    if omitted > 0 {
+        entries.push(format!("+{omitted} files"));
+    }
+    Some(entries.join(", "))
+}
+
+fn compact_diff_delta(additions: usize, deletions: usize) -> Option<String> {
+    let mut parts = Vec::new();
+    if additions > 0 {
+        parts.push(format!("+{additions}"));
+    }
+    if deletions > 0 {
+        parts.push(format!("−{deletions}"));
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+fn compact_tool_outcome(
+    status: ExecutionStatus,
+    name: &str,
+    tool: &OperationPart,
+) -> Option<String> {
+    match status {
+        ExecutionStatus::Failed => tool
+            .error_message()
+            .or_else(|| (!tool.summary.trim().is_empty()).then_some(tool.summary.as_str()))
+            .or_else(|| {
+                (!tool.model_output.text.trim().is_empty())
+                    .then_some(tool.model_output.text.as_str())
+            })
+            .map(|message| concise_text(message, 96)),
+        ExecutionStatus::Cancelled => Some("cancelled".to_string()),
+        ExecutionStatus::Pending
+            if tool
+                .title
+                .to_ascii_lowercase()
+                .contains("awaiting permission") =>
+        {
+            Some("awaiting approval".to_string())
+        }
+        ExecutionStatus::Pending | ExecutionStatus::InProgress => None,
+        ExecutionStatus::Completed => compact_completed_outcome(name, tool),
+    }
+}
+
+fn compact_completed_outcome(name: &str, tool: &OperationPart) -> Option<String> {
+    if name != "fs.apply_patch" {
+        if let Some(exit_code) = tool.blocks.iter().find_map(|block| match block {
+            OperationBlock::Command { exit_code, .. } => *exit_code,
+            _ => None,
+        }) {
+            return (exit_code != 0).then(|| format!("exit {exit_code}"));
+        }
+        if let Some(result_count) = tool.blocks.iter().find_map(|block| match block {
+            OperationBlock::SearchResults { results, .. } => Some(results.len()),
+            _ => None,
+        }) {
+            return Some(format!("{result_count} results"));
+        }
+        if let Some(changes) = tool.blocks.iter().find_map(|block| match block {
+            OperationBlock::FileChanges { changes } => Some(changes.len()),
+            _ => None,
+        }) {
+            return Some(format!("{changes} files changed"));
+        }
+    }
+
+    let payload = serde_json::Value::from(tool.details.payload.clone());
+    let count = payload
+        .get("count")
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| payload.get("matches").and_then(serde_json::Value::as_u64))
+        .or_else(|| {
+            payload
+                .get("matches")
+                .and_then(serde_json::Value::as_array)
+                .map(|items| items.len() as u64)
+        })
+        .or_else(|| {
+            payload
+                .get("results")
+                .and_then(serde_json::Value::as_array)
+                .map(|items| items.len() as u64)
+        });
+    count.map(|count| match name {
+        "fs.glob" => format!("{count} paths"),
+        "fs.grep" => format!("{count} matches"),
+        _ => format!("{count} items"),
+    })
+}
+
+fn tool_execution_status_summary_for_status(status: ExecutionStatus, label: &str) -> String {
+    format!("{} {label}", activity_status_icon(status))
 }
 
 fn transcript_message_parts(message: &MessageResource) -> &[MessagePart] {
@@ -3051,23 +3405,6 @@ fn diff_stats(diff: &str, changes: Option<&[agena::message::FileChangeRecord]>) 
     }
 }
 
-fn summarize_change_paths(
-    i18n: &I18n,
-    changes: &[agena::message::FileChangeRecord],
-    preview_limit: usize,
-) -> String {
-    let mut preview = changes
-        .iter()
-        .take(preview_limit)
-        .map(file_change_display_path)
-        .collect::<Vec<_>>();
-    let omitted = changes.len().saturating_sub(preview.len());
-    if omitted > 0 {
-        preview.push(ui_text::file_changes_more(i18n, omitted));
-    }
-    preview.join(", ")
-}
-
 fn file_change_display_path(change: &agena::message::FileChangeRecord) -> String {
     if change.kind == FileChangeKind::Moved {
         change
@@ -3186,7 +3523,95 @@ mod tests {
         .expect("structured input");
         let invocation = ToolInvocation::new("agena.tools.call", input);
 
-        assert_eq!(tool_invocation_label(&invocation), "tools_call web.search");
+        assert_eq!(
+            tool_invocation_label(&invocation),
+            "tools.call · web.search"
+        );
+    }
+
+    #[test]
+    fn folded_apply_patch_reports_paths_and_line_delta() {
+        let input = serde_json::json!({
+            "tool": "fs.apply_patch",
+            "input": {
+                "patch": "*** Begin Patch\n*** Update File: apps/agena-cli/src/app.rs\n@@\n-old\n+new\n*** End Patch"
+            }
+        })
+        .try_into()
+        .expect("structured input");
+        let tool = OperationPart::pending(
+            0,
+            ToolInvocation::new("agena.tools.call", input),
+            "Tool tools.call",
+            Default::default(),
+        );
+
+        assert_eq!(
+            tool_execution_compact_summary(ExecutionStatus::Completed, &tool),
+            "● fs.apply_patch · M apps/agena-cli/src/app.rs · +1 −1"
+        );
+    }
+
+    #[test]
+    fn folded_tool_unwraps_gateway_calls_and_reports_result_count() {
+        let input = serde_json::json!({
+            "tool": "fs.grep",
+            "input": { "pattern": "TODO", "path": "crates", "include": "*.rs" }
+        })
+        .try_into()
+        .expect("structured input");
+        let mut tool = OperationPart::pending(
+            0,
+            ToolInvocation::new("agena.tools.call", input),
+            "Tool tools.call",
+            Default::default(),
+        );
+        tool.details = agena::message::ToolOutput::from_json_payload(Some(
+            &serde_json::json!({ "matches": 36 }),
+        ))
+        .expect("tool output");
+
+        assert_eq!(
+            tool_execution_compact_summary(ExecutionStatus::Completed, &tool),
+            "● fs.grep · /TODO/ in crates · *.rs · 36 matches"
+        );
+    }
+
+    #[test]
+    fn folded_tool_keeps_failure_reason_on_the_same_line() {
+        let input = serde_json::json!({ "file_path": "secrets.env" })
+            .try_into()
+            .expect("structured input");
+        let mut tool = OperationPart::pending(
+            0,
+            ToolInvocation::new("agena.fs.read", input),
+            "Read file",
+            Default::default(),
+        );
+        tool.error = Some(agena::message::OperationError {
+            message: "permission denied by workspace policy".to_string(),
+            code: None,
+        });
+
+        assert_eq!(
+            tool_execution_compact_summary(ExecutionStatus::Failed, &tool),
+            "× fs.read · secrets.env · permission denied by workspace policy"
+        );
+    }
+
+    #[test]
+    fn folded_tool_makes_pending_permission_actionable() {
+        let tool = OperationPart::pending(
+            0,
+            ToolInvocation::new("agena.lsp.servers", Default::default()),
+            "Awaiting permission: tool 'agena.lsp.servers' requires confirmation",
+            Default::default(),
+        );
+
+        assert_eq!(
+            tool_execution_compact_summary(ExecutionStatus::Pending, &tool),
+            "○ lsp.servers · awaiting approval"
+        );
     }
 
     #[test]
@@ -3413,7 +3838,7 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
         && let Some(target) = input.get("tool").and_then(serde_json::Value::as_str)
         && !target.trim().is_empty()
     {
-        return format!("{gateway_name} {}", target.trim());
+        return format!("{gateway_name} · {}", target.trim());
     }
     for key in [
         "command",
@@ -3439,11 +3864,11 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
 
 fn gateway_model_tool_name(name: &str) -> Option<&'static str> {
     match name.trim() {
-        "agena.tools.list" | "tools.list" | "tools_list" => Some("tools_list"),
-        "agena.tools.search" | "tools.search" | "tools_search" => Some("tools_search"),
-        "agena.tools.help" | "tools.help" | "tools_help" => Some("tools_help"),
-        "agena.tools.tags" | "tools.tags" | "tools_tags" => Some("tools_tags"),
-        "agena.tools.call" | "tools.call" | "tools_call" => Some("tools_call"),
+        "agena.tools.list" | "tools.list" | "tools_list" => Some("tools.list"),
+        "agena.tools.search" | "tools.search" | "tools_search" => Some("tools.search"),
+        "agena.tools.help" | "tools.help" | "tools_help" => Some("tools.help"),
+        "agena.tools.tags" | "tools.tags" | "tools_tags" => Some("tools.tags"),
+        "agena.tools.call" | "tools.call" | "tools_call" => Some("tools.call"),
         _ => None,
     }
 }

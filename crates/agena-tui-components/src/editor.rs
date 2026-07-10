@@ -168,6 +168,12 @@ impl Editor {
         split_editor_lines_with_offsets(self.text.as_str()).len()
     }
 
+    /// Number of terminal rows needed when the editor is soft-wrapped to the
+    /// supplied width. Explicit newlines still start a new logical line.
+    pub fn wrapped_line_count(&self, width: u16) -> usize {
+        wrapped_editor_lines(self.text.as_str(), width).len()
+    }
+
     pub fn handle_line_input_key(&mut self, key: KeyEvent) {
         self.handle_input_key(key, false);
     }
@@ -204,6 +210,67 @@ impl Editor {
             cursor_x: min(current_col.saturating_sub(hscroll), u16::MAX as usize) as u16,
             cursor_y: min(
                 current_line_index.saturating_sub(vscroll),
+                u16::MAX as usize,
+            ) as u16,
+        }
+    }
+
+    /// Render a soft-wrapped editor viewport. This is used by the chat
+    /// composer so a long prompt grows vertically instead of horizontally
+    /// scrolling or hiding its tail.
+    pub fn render_wrapped_view(&self, width: u16, height: u16) -> EditorView {
+        let width = max(width as usize, 1);
+        let height = max(height as usize, 1);
+        let lines = wrapped_editor_lines(self.text.as_str(), width as u16);
+        let cursor_line_index = self.current_line_index();
+        let cursor_column = self.current_display_column();
+        let cursor_visual_line = lines
+            .iter()
+            .enumerate()
+            .find(|(_, line)| {
+                line.logical_line_index == cursor_line_index
+                    && cursor_column >= line.start_column
+                    && cursor_column < line.end_column
+            })
+            .map(|(index, _)| index)
+            .or_else(|| {
+                lines
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, line)| line.logical_line_index == cursor_line_index)
+                    .map(|(index, _)| index)
+            })
+            .unwrap_or(0);
+        let vscroll = cursor_visual_line.saturating_sub(height.saturating_sub(1));
+        let visible_lines = lines
+            .iter()
+            .skip(vscroll)
+            .take(height)
+            .map(|line| {
+                slice_display_window_styled(
+                    self.text.as_str(),
+                    line.range.clone(),
+                    line.start_column,
+                    width,
+                    self.elements.as_slice(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let cursor_x = cursor_column
+            .saturating_sub(
+                lines
+                    .get(cursor_visual_line)
+                    .map(|line| line.start_column)
+                    .unwrap_or_default(),
+            )
+            .min(width.saturating_sub(1));
+
+        EditorView {
+            lines: visible_lines,
+            cursor_x: min(cursor_x, u16::MAX as usize) as u16,
+            cursor_y: min(
+                cursor_visual_line.saturating_sub(vscroll),
                 u16::MAX as usize,
             ) as u16,
         }
@@ -1005,6 +1072,36 @@ fn split_editor_lines_with_offsets(text: &str) -> Vec<Range<usize>> {
     lines
 }
 
+#[derive(Debug, Clone)]
+struct WrappedEditorLine {
+    range: Range<usize>,
+    logical_line_index: usize,
+    start_column: usize,
+    end_column: usize,
+}
+
+fn wrapped_editor_lines(text: &str, width: u16) -> Vec<WrappedEditorLine> {
+    let width = usize::from(width.max(1));
+    let mut lines = Vec::new();
+    for (logical_line_index, range) in split_editor_lines_with_offsets(text)
+        .into_iter()
+        .enumerate()
+    {
+        let display_width = UnicodeWidthStr::width(&text[range.clone()]);
+        let row_count = display_width.max(1).div_ceil(width);
+        for row_index in 0..row_count {
+            let start_column = row_index.saturating_mul(width);
+            lines.push(WrappedEditorLine {
+                range: range.clone(),
+                logical_line_index,
+                start_column,
+                end_column: start_column.saturating_add(width),
+            });
+        }
+    }
+    lines
+}
+
 fn previous_grapheme_boundary(text: &str, index: usize) -> usize {
     text[..index]
         .grapheme_indices(true)
@@ -1108,6 +1205,39 @@ fn is_altgr(modifiers: KeyModifiers) -> bool {
 
 fn is_word_separator(ch: char) -> bool {
     WORD_SEPARATORS.contains(ch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrapped_view_expands_long_logical_lines_into_multiple_terminal_rows() {
+        let editor = Editor::from_text("abcdefghij\nxy".to_string());
+
+        assert_eq!(editor.wrapped_line_count(4), 4);
+        let view = editor.render_wrapped_view(4, 8);
+        let lines = view
+            .lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(lines, ["abcd", "efgh", "ij", "xy"]);
+    }
+
+    #[test]
+    fn wrapped_view_uses_terminal_display_width_for_wide_characters() {
+        let editor = Editor::from_text("你好世界".to_string());
+
+        assert_eq!(editor.wrapped_line_count(4), 2);
+        let view = editor.render_wrapped_view(4, 2);
+        assert_eq!(view.lines.len(), 2);
+    }
 }
 
 fn is_word_grapheme(grapheme: &str) -> bool {

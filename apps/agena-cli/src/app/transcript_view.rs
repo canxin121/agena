@@ -1755,7 +1755,9 @@ fn push_markdown_code_block(out: &mut Vec<RenderedLine>, prefix: &str, source: &
             width,
         );
         for line in code_lines {
-            push_single_line(out, prefix, line, Style::default(), width);
+            for segment in wrap_display_text(line.replace('\t', "    ").as_str(), card_width) {
+                push_single_line(out, prefix, segment.as_str(), Style::default(), width);
+            }
         }
         return;
     }
@@ -1787,15 +1789,31 @@ fn push_markdown_code_block(out: &mut Vec<RenderedLine>, prefix: &str, source: &
     let body_width = card_width.saturating_sub(gutter_width).saturating_sub(2);
     for (index, line) in code_lines.iter().enumerate() {
         let number = format!("{:>width$} ", index + 1, width = line_count_width);
-        let body = truncate_code_line(line.replace('\t', "    ").as_str(), body_width);
-        let padding = " ".repeat(body_width.saturating_sub(UnicodeWidthStr::width(body.as_str())));
-        out.push(RenderedLine::rich(Line::from(vec![
-            Span::raw(prefix.to_string()),
-            Span::styled("│", Style::default().fg(Color::DarkGray)),
-            Span::styled(number, Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{body}{padding}"), Style::default()),
-            Span::styled("│", Style::default().fg(Color::DarkGray)),
-        ])));
+        for (segment_index, body) in
+            wrap_display_text(line.replace('\t', "    ").as_str(), body_width)
+                .into_iter()
+                .enumerate()
+        {
+            let gutter = if segment_index == 0 {
+                number.as_str()
+            } else {
+                ""
+            };
+            let gutter_padding =
+                " ".repeat(gutter_width.saturating_sub(UnicodeWidthStr::width(gutter)));
+            let padding =
+                " ".repeat(body_width.saturating_sub(UnicodeWidthStr::width(body.as_str())));
+            out.push(RenderedLine::rich(Line::from(vec![
+                Span::raw(prefix.to_string()),
+                Span::styled("│", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{gutter}{gutter_padding}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(format!("{body}{padding}"), Style::default()),
+                Span::styled("│", Style::default().fg(Color::DarkGray)),
+            ])));
+        }
     }
     if code_lines.is_empty() {
         out.push(RenderedLine::rich(Line::from(vec![
@@ -1832,14 +1850,24 @@ fn code_block_language(opening: &str) -> String {
     }
 }
 
-fn truncate_code_line(text: &str, width: usize) -> String {
-    if UnicodeWidthStr::width(text) <= width {
-        return text.to_string();
+fn wrap_display_text(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let mut line_width = 0_usize;
+    for grapheme in text.graphemes(true) {
+        let grapheme_width = UnicodeWidthStr::width(grapheme);
+        if !line.is_empty() && line_width.saturating_add(grapheme_width) > width {
+            lines.push(std::mem::take(&mut line));
+            line_width = 0;
+        }
+        line.push_str(grapheme);
+        line_width = line_width.saturating_add(grapheme_width);
     }
-    if width <= 1 {
-        return "…".chars().take(width).collect();
+    if !line.is_empty() || lines.is_empty() {
+        lines.push(line);
     }
-    format!("{}…", truncate_display_width(text, width.saturating_sub(1)))
+    lines
 }
 
 fn push_markdown_list(out: &mut Vec<RenderedLine>, prefix: &str, source: &str, width: u16) {
@@ -2897,7 +2925,7 @@ mod tests {
     }
 
     #[test]
-    fn code_blocks_render_as_bounded_numbered_cards_without_wrapping_code() {
+    fn code_blocks_render_as_bounded_numbered_cards_that_wrap_without_truncation() {
         let block = markdown_blocks("```rust\nlet a_very_long_identifier = 42;\n```")
             .pop()
             .expect("code block");
@@ -2910,7 +2938,11 @@ mod tests {
                 .is_some_and(|line| line.text.contains("┌─ rust"))
         );
         assert!(lines.get(1).is_some_and(|line| line.text.contains("1 ")));
-        assert!(lines.get(1).is_some_and(|line| line.text.contains('…')));
+        assert!(lines.iter().all(|line| !line.text.contains('…')));
+        assert!(
+            lines.len() >= 4,
+            "long code line should span multiple card rows"
+        );
         assert!(lines.last().is_some_and(|line| line.text.ends_with('┘')));
         assert!(
             lines

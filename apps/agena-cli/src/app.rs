@@ -2139,6 +2139,11 @@ enum TranscriptNodeKey {
         message_id: i64,
         part_id: Option<i64>,
     },
+    MarkdownBlock {
+        message_id: i64,
+        part_id: i64,
+        block_index: usize,
+    },
     Reasoning {
         message_id: i64,
         part_id: i64,
@@ -2152,6 +2157,10 @@ enum TranscriptNodeKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TranscriptNodeKind {
     Message,
+    MarkdownParagraph,
+    MarkdownCode,
+    MarkdownList,
+    MarkdownTable,
     Reasoning,
     Tool,
 }
@@ -2159,6 +2168,10 @@ enum TranscriptNodeKind {
 fn transcript_node_kind_label(i18n: &I18n, kind: TranscriptNodeKind) -> String {
     let key = match kind {
         TranscriptNodeKind::Message => "transcript-node-kind-message",
+        TranscriptNodeKind::MarkdownParagraph => "transcript-node-kind-markdown",
+        TranscriptNodeKind::MarkdownCode => "transcript-node-kind-code",
+        TranscriptNodeKind::MarkdownList => "transcript-node-kind-list",
+        TranscriptNodeKind::MarkdownTable => "transcript-node-kind-table",
         TranscriptNodeKind::Reasoning => "transcript-node-kind-reasoning",
         TranscriptNodeKind::Tool => "transcript-node-kind-tool",
     };

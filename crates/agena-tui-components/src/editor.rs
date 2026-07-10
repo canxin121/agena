@@ -93,6 +93,19 @@ impl Editor {
         self.cursor
     }
 
+    /// Move the cursor to a byte position while preserving UTF-8 and inline
+    /// element boundaries. Composer history uses this to follow the familiar
+    /// shell behavior: older entries begin at their start, newer entries and
+    /// restored drafts end at their end.
+    pub fn set_cursor(&mut self, position: usize) {
+        let mut position = min(position, self.text.len());
+        while position > 0 && !self.text.is_char_boundary(position) {
+            position -= 1;
+        }
+        self.cursor = self.clamp_pos_to_nearest_boundary(position);
+        self.preferred_column = None;
+    }
+
     pub fn set_text(&mut self, text: String) {
         self.text = text;
         self.cursor = self.text.len();
@@ -1237,6 +1250,16 @@ mod tests {
         assert_eq!(editor.wrapped_line_count(4), 2);
         let view = editor.render_wrapped_view(4, 2);
         assert_eq!(view.lines.len(), 2);
+    }
+
+    #[test]
+    fn set_cursor_clamps_to_a_utf8_boundary() {
+        let mut editor = Editor::from_text("ab中文".to_string());
+        editor.set_cursor(3);
+
+        assert_eq!(editor.cursor(), 2);
+        editor.set_cursor(usize::MAX);
+        assert_eq!(editor.cursor(), editor.text().len());
     }
 }
 

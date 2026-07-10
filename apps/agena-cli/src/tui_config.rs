@@ -26,7 +26,7 @@ pub struct TuiTranscriptConfig {
 impl Default for TuiTranscriptConfig {
     fn default() -> Self {
         Self {
-            tool_output_default_expanded: true,
+            tool_output_default_expanded: false,
             thinking_default_expanded: false,
         }
     }

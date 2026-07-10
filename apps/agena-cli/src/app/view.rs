@@ -3,22 +3,21 @@ use agena_tui_components::{
     BoundedListPanelHeight, ComposerEditorSurfaceSpec, DashboardDetailOverlaySpec,
     DashboardLeadPanelSpec, DashboardListPanelHeight, DashboardListPanelState,
     DashboardSplitPanelsSpec, DashboardTextPanelHeight, DashboardTextSection,
-    DashboardWorkbenchOverlaySpec, DashboardWorkbenchSpec, DecisionDialogSpec,
-    DetailTextDialogSpec, DetailTextLine, DetailTextSpec, EditorDialogSpec, FramedSurfaceSpec,
-    HeaderBodyFooterTextSurfaceSpec, HeaderRowSpec, LineTextDialogSpec, ListPanelSection,
-    ListPanelSpec, ListWorkbenchDialogSpec, ListWorkbenchPanelState, ParagraphSection,
-    QuerySuggestionPopupSpec, QuestionFlowCustomInputSpec, QuestionFlowDialogMode,
-    QuestionFlowDialogSpec, SearchListDialogSpec, SearchPanelsDialogSpec, SearchPanelsDialogState,
-    StackedDialogSection, StackedDialogSectionHeight, StackedDialogSpec, SuggestionPopupItem,
-    SuggestionPopupSpec, SurfaceMode, TextDialogLine, TextPanelSection, TextPanelSpec,
-    VerticalSectionSize, WorkbenchOverlayDialogSpec, WorkbenchTextSection, WrappedTextSpec,
-    adaptive_detail_split, adaptive_modal_width, build_accented_two_line_list_item,
-    build_detail_two_line_list_item, build_wrapped_text_lines, format_key_value_segment,
-    inset_rect, join_inline_segments, layout_composer_surface, layout_header_body_footer_surface,
-    list_panel_height, pane_header_height, render_composer_editor_surface,
-    render_dashboard_workbench_dialog, render_decision_dialog, render_editor_dialog,
-    render_framed_surface, render_header_body_footer_text_surface, render_header_row,
-    render_line_text_dialog, render_list_panel, render_list_workbench_dialog,
+    DashboardWorkbenchOverlaySpec, DashboardWorkbenchSpec, DetailTextDialogSpec, DetailTextLine,
+    DetailTextSpec, EditorDialogSpec, FramedSurfaceSpec, HeaderBodyFooterTextSurfaceSpec,
+    HeaderRowSpec, LineTextDialogSpec, ListPanelSection, ListPanelSpec, ListWorkbenchDialogSpec,
+    ListWorkbenchPanelState, ParagraphSection, QuerySuggestionPopupSpec,
+    QuestionFlowCustomInputSpec, QuestionFlowDialogMode, QuestionFlowDialogSpec,
+    SearchListDialogSpec, SearchPanelsDialogSpec, SearchPanelsDialogState, StackedDialogSection,
+    StackedDialogSectionHeight, StackedDialogSpec, SuggestionPopupItem, SuggestionPopupSpec,
+    SurfaceMode, TextDialogLine, TextPanelSection, TextPanelSpec, VerticalSectionSize,
+    WorkbenchOverlayDialogSpec, WorkbenchTextSection, WrappedTextSpec, adaptive_detail_split,
+    adaptive_modal_width, build_accented_two_line_list_item, build_detail_two_line_list_item,
+    build_wrapped_text_lines, format_key_value_segment, inset_rect, join_inline_segments,
+    layout_composer_surface, layout_header_body_footer_surface, list_panel_height,
+    pane_header_height, render_composer_editor_surface, render_dashboard_workbench_dialog,
+    render_editor_dialog, render_framed_surface, render_header_body_footer_text_surface,
+    render_header_row, render_line_text_dialog, render_list_panel, render_list_workbench_dialog,
     render_overlay_line_input_dialog, render_query_suggestion_popup, render_question_flow_dialog,
     render_search_list_dialog, render_search_panels_dialog, render_stacked_dialog,
     render_suggestion_popup, render_text_panel, render_wrapped_text, split_vertical_sections,
@@ -874,33 +873,47 @@ impl App {
     }
 
     fn render_permission_overlay(&self, frame: &mut Frame, area: Rect, dialog: &PermissionOverlay) {
-        let body_lines = permission_overlay_body_lines(&self.i18n, dialog);
-        let choices = permission_overlay_choices(&self.i18n, dialog.page);
-        let items = choices
-            .iter()
-            .map(|label| ListItem::new(label.clone()))
-            .collect::<Vec<_>>();
-        let body = Text::from(body_lines);
+        let body = Text::from(permission_overlay_body_lines(&self.i18n, dialog));
         let footer = Text::from(permission_overlay_footer(&self.i18n, dialog.page));
-        render_decision_dialog(
+        let mut sections = vec![StackedDialogSection::Paragraph(ParagraphSection {
+            height: StackedDialogSectionHeight::AutoText { min: 4, max: 18 },
+            title: None,
+            borders: Borders::NONE,
+            body,
+            wrap: true,
+            scroll: None,
+            alignment: None,
+        })];
+        if !matches!(dialog.page, PermissionOverlayPage::Details(_)) {
+            let choices = Text::from(permission_overlay_choice_lines(&self.i18n, dialog));
+            sections.push(StackedDialogSection::Paragraph(ParagraphSection {
+                height: StackedDialogSectionHeight::AutoText { min: 3, max: 6 },
+                title: None,
+                borders: Borders::NONE,
+                body: choices,
+                wrap: true,
+                scroll: None,
+                alignment: None,
+            }));
+        }
+        sections.push(StackedDialogSection::Paragraph(ParagraphSection {
+            height: StackedDialogSectionHeight::AutoText { min: 1, max: 2 },
+            title: None,
+            borders: Borders::NONE,
+            body: footer,
+            wrap: true,
+            scroll: None,
+            alignment: None,
+        }));
+        render_stacked_dialog(
             frame,
             area,
             SurfaceMode::Overlay,
-            &DecisionDialogSpec::new(
-                permission_overlay_title(&self.i18n, dialog.page).into(),
-                &body,
-                (4, 14),
-                None,
-                items.as_slice(),
-                Some(dialog.selection.selected),
-                1,
-                (4, 8),
-                &footer,
-                (1, 1),
-                84,
-                selection_highlight_style(),
-                ">> ".into(),
-            ),
+            &StackedDialogSpec {
+                title: permission_overlay_title(&self.i18n, dialog.page).into(),
+                target_width: 84,
+                sections,
+            },
         );
     }
 
@@ -4000,48 +4013,18 @@ fn provider_studio_detail_text_spec() -> DetailTextSpec<'static> {
     DetailTextSpec::label_width(16)
 }
 
-fn append_permission_action_lines(
-    i18n: &I18n,
-    lines: &mut Vec<Line<'static>>,
-    heading_key: &str,
-    actions: &[&PermissionAction],
-) {
-    if actions.is_empty() {
-        return;
-    }
-    lines.push(Line::from(Span::styled(
-        sanitize_display_text(ui_text::t(i18n, heading_key)),
-        Style::default().add_modifier(Modifier::BOLD),
-    )));
-    for action in actions {
-        lines.push(Line::from(Span::styled(
-            format!(
-                "  {}",
-                sanitize_display_text(permission_action_label(i18n, action))
-            ),
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-}
-
 fn permission_overlay_body_lines(i18n: &I18n, dialog: &PermissionOverlay) -> Vec<Line<'static>> {
+    if matches!(dialog.page, PermissionOverlayPage::Details(_)) {
+        return permission_overlay_details_lines(i18n, dialog);
+    }
+
     let mut lines = Vec::new();
-    lines.push(Line::from(Span::styled(
-        sanitize_display_text(i18n.text_args(
-            "overlay-permission-request-id",
-            &crate::fl_args!("request_id" => dialog.request.request_id.clone()),
-        )),
-        Style::default().fg(Color::DarkGray),
-    )));
-    lines.push(Line::from(sanitize_display_text(permission_action_label(
-        i18n,
-        &dialog.request.action,
-    ))));
+    append_permission_primary_action_lines(i18n, &mut lines, &dialog.request.action);
     let requested_actions = permission_requested_actions_for_display(
         Some(&dialog.request.action),
         dialog.request.requested_actions.as_slice(),
     );
-    append_permission_action_lines(
+    append_permission_secondary_action_lines(
         i18n,
         &mut lines,
         "overlay-permission-requested-actions",
@@ -4052,57 +4035,250 @@ fn permission_overlay_body_lines(i18n: &I18n, dialog: &PermissionOverlay) -> Vec
         dialog.request.related_actions.as_slice(),
         dialog.request.requested_actions.as_slice(),
     );
-    append_permission_action_lines(
+    append_permission_secondary_action_lines(
         i18n,
         &mut lines,
         "overlay-permission-related-actions",
         related_actions.as_slice(),
     );
-    lines.push(Line::from(sanitize_display_text(i18n.text_args(
-        "overlay-permission-reason",
-        &crate::fl_args!("reason" => sanitize_display_text(dialog.request.reason.as_str())),
-    ))));
-    if !dialog.request.explanation.trim().is_empty() {
-        lines.push(Line::from(sanitize_display_text(i18n.text_args(
-            "overlay-permission-explanation",
-            &crate::fl_args!(
-                "explanation" => sanitize_display_text(dialog.request.explanation.as_str())
-            ),
-        ))));
+    append_permission_field_line(
+        i18n,
+        &mut lines,
+        "overlay-permission-field-reason",
+        permission_request_explanation(&dialog.request),
+        Style::default(),
+    );
+    lines.push(Line::from(Span::styled(
+        i18n.text_args(
+            "overlay-permission-fact-risk",
+            &crate::fl_args!("value" => permission_risk_label(i18n, dialog.request.risk)),
+        ),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines
+}
+
+fn permission_overlay_choice_lines(i18n: &I18n, dialog: &PermissionOverlay) -> Vec<Line<'static>> {
+    let heading = match dialog.page {
+        PermissionOverlayPage::Action => "overlay-permission-decision-heading",
+        PermissionOverlayPage::Scope(_) => "overlay-permission-scope-heading",
+        PermissionOverlayPage::Details(_) => return Vec::new(),
+    };
+    let mut lines = vec![Line::from(Span::styled(
+        sanitize_display_text(ui_text::t(i18n, heading)),
+        Style::default().add_modifier(Modifier::BOLD),
+    ))];
+    for (index, label) in permission_overlay_choices(i18n, dialog.page)
+        .into_iter()
+        .enumerate()
+    {
+        let selected = index == dialog.selection.selected;
+        let style = if selected {
+            selection_highlight_style()
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(Span::styled(
+            format!("{}{}", if selected { ">> " } else { "   " }, label),
+            style,
+        )));
     }
-    let mut facts = Vec::new();
-    facts.push(i18n.text_args(
-        "overlay-permission-fact-risk",
-        &crate::fl_args!("value" => permission_risk_label(i18n, dialog.request.risk)),
-    ));
+    lines
+}
+
+fn append_permission_primary_action_lines(
+    i18n: &I18n,
+    lines: &mut Vec<Line<'static>>,
+    action: &PermissionAction,
+) {
+    match action {
+        PermissionAction::Tool {
+            tool_name,
+            qualifier,
+        } => {
+            append_permission_field_line(
+                i18n,
+                lines,
+                "overlay-permission-field-tool",
+                tool_name,
+                Style::default().add_modifier(Modifier::BOLD),
+            );
+            if let Some(qualifier) = qualifier
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
+                append_permission_field_line(
+                    i18n,
+                    lines,
+                    "overlay-permission-field-target",
+                    qualifier,
+                    Style::default(),
+                );
+            }
+        }
+        PermissionAction::PathAccess {
+            access_kind,
+            workspace_root,
+            target_path,
+        } => {
+            append_permission_field_line(
+                i18n,
+                lines,
+                "overlay-permission-field-access",
+                permission_rule_path_access_kind_display(i18n, access_kind),
+                Style::default().add_modifier(Modifier::BOLD),
+            );
+            append_permission_field_line(
+                i18n,
+                lines,
+                "overlay-permission-field-path",
+                target_path,
+                Style::default().add_modifier(Modifier::BOLD),
+            );
+            if !workspace_root.trim().is_empty() && workspace_root != target_path {
+                append_permission_field_line(
+                    i18n,
+                    lines,
+                    "overlay-permission-field-workspace",
+                    workspace_root,
+                    Style::default().fg(Color::DarkGray),
+                );
+            }
+        }
+        PermissionAction::NetworkAccess { target, host, port } => {
+            let endpoint = if target.trim().is_empty() {
+                match port {
+                    Some(port) => format!("{host}:{port}"),
+                    None => host.clone(),
+                }
+            } else {
+                target.clone()
+            };
+            append_permission_field_line(
+                i18n,
+                lines,
+                "overlay-permission-field-network",
+                endpoint,
+                Style::default().add_modifier(Modifier::BOLD),
+            );
+            let host_label = match port {
+                Some(port) => format!("{host}:{port}"),
+                None => host.clone(),
+            };
+            if host_label != target.trim() {
+                append_permission_field_line(
+                    i18n,
+                    lines,
+                    "overlay-permission-field-host",
+                    host_label,
+                    Style::default().fg(Color::DarkGray),
+                );
+            }
+        }
+    }
+}
+
+fn append_permission_field_line(
+    i18n: &I18n,
+    lines: &mut Vec<Line<'static>>,
+    label_key: &str,
+    value: impl AsRef<str>,
+    value_style: Style,
+) {
+    lines.push(Line::from(Span::styled(
+        sanitize_display_text(ui_text::t(i18n, label_key)),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", sanitize_display_text(value)),
+        value_style,
+    )));
+}
+
+fn append_permission_secondary_action_lines(
+    i18n: &I18n,
+    lines: &mut Vec<Line<'static>>,
+    heading_key: &str,
+    actions: &[&PermissionAction],
+) {
+    if actions.is_empty() {
+        return;
+    }
+    lines.push(Line::from(Span::styled(
+        sanitize_display_text(ui_text::t(i18n, heading_key)),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.extend(actions.iter().map(|action| {
+        Line::from(Span::styled(
+            format!(
+                "  {}",
+                sanitize_display_text(permission_action_label(i18n, action))
+            ),
+            Style::default(),
+        ))
+    }));
+}
+
+fn permission_request_explanation(request: &PermissionRequest) -> &str {
+    let explanation = request.explanation.trim();
+    if explanation.is_empty() {
+        request.reason.trim()
+    } else {
+        explanation
+    }
+}
+
+fn permission_overlay_details_lines(i18n: &I18n, dialog: &PermissionOverlay) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    append_permission_field_line(
+        i18n,
+        &mut lines,
+        "overlay-permission-detail-request-id",
+        &dialog.request.request_id,
+        Style::default().fg(Color::DarkGray),
+    );
     if let Some(source) = dialog.request.source.as_deref() {
-        facts.push(i18n.text_args(
-            "overlay-permission-fact-source",
-            &crate::fl_args!("value" => sanitize_display_text(source)),
-        ));
+        append_permission_field_line(
+            i18n,
+            &mut lines,
+            "overlay-permission-detail-source",
+            source,
+            Style::default().fg(Color::DarkGray),
+        );
     }
     if let Some(scope) = dialog.request.scope {
-        facts.push(i18n.text_args(
-            "overlay-permission-fact-scope",
-            &crate::fl_args!("value" => permission_request_scope_label(i18n, scope)),
-        ));
+        append_permission_field_line(
+            i18n,
+            &mut lines,
+            "overlay-permission-detail-scope",
+            permission_request_scope_label(i18n, scope),
+            Style::default().fg(Color::DarkGray),
+        );
     }
     if let Some(operator) = dialog.request.operator.as_deref() {
-        facts.push(i18n.text_args(
-            "overlay-permission-fact-operator",
-            &crate::fl_args!("value" => sanitize_display_text(operator)),
-        ));
+        append_permission_field_line(
+            i18n,
+            &mut lines,
+            "overlay-permission-detail-operator",
+            operator,
+            Style::default().fg(Color::DarkGray),
+        );
     }
-    if !facts.is_empty() {
-        lines.push(Line::from(join_inline_segments(facts)));
+    if !dialog.request.trace.is_empty() {
+        lines.push(Line::from(Span::styled(
+            sanitize_display_text(ui_text::t(i18n, "overlay-permission-detail-trace")),
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.extend(dialog.request.trace.iter().map(|step| {
+            Line::from(Span::styled(
+                format!(
+                    "  {}",
+                    sanitize_display_text(permission_trace_step_label(i18n, step))
+                ),
+                Style::default().fg(Color::DarkGray),
+            ))
+        }));
     }
-    if let Some(session_id) = dialog.request.session_id {
-        lines.push(Line::from(sanitize_display_text(i18n.text_args(
-            "overlay-permission-session",
-            &crate::fl_args!("session" => session_id),
-        ))));
-    }
-    append_permission_trace_lines(i18n, &mut lines, &dialog.request.trace);
     lines
 }
 
@@ -4177,5 +4353,96 @@ mod permission_path_display_tests {
     #[test]
     fn extremely_narrow_path_columns_still_keep_the_tail() {
         assert_eq!(ellipsize_from_start("long-final-segment", 8), "…segment");
+    }
+}
+
+#[cfg(test)]
+mod permission_overlay_presentation_tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn overlay(action: PermissionAction) -> PermissionOverlay {
+        PermissionOverlay {
+            session_id: 99,
+            request: PermissionRequest {
+                request_id: "call_sensitive_request".to_string(),
+                session_id: Some(99),
+                action,
+                related_actions: Vec::new(),
+                requested_actions: Vec::new(),
+                reason: "policy requires confirmation".to_string(),
+                explanation: "The tool will update the current workspace.".to_string(),
+                source: Some("static_policy".to_string()),
+                scope: Some(PermissionScope::Workspace),
+                operator: None,
+                risk: PermissionRiskLevel::Medium,
+                trace: vec![DecisionTraceStep {
+                    source_kind: PolicySourceKind::StaticPolicy,
+                    source: Some("static_policy".to_string()),
+                    scope: None,
+                    operator: None,
+                    summary: "confirmation required".to_string(),
+                }],
+                created_at: Utc::now(),
+            },
+            page: PermissionOverlayPage::Action,
+            selection: SelectionCursor::default(),
+        }
+    }
+
+    fn rendered(lines: Vec<Line<'static>>) -> String {
+        lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn overview_focuses_on_the_approved_target_and_hides_audit_noise() {
+        let i18n = I18n::default();
+        let dialog = overlay(PermissionAction::Tool {
+            tool_name: "agena.tools.tags".to_string(),
+            qualifier: Some("workspace=/repo".to_string()),
+        });
+        let text = rendered(permission_overlay_body_lines(&i18n, &dialog));
+
+        assert!(text.contains("agena.tools.tags"));
+        assert!(text.contains("workspace=/repo"));
+        assert!(text.contains("The tool will update the current workspace."));
+        assert!(!text.contains("call_sensitive_request"));
+        assert!(!text.contains("static_policy"));
+        assert!(!text.contains("99"));
+    }
+
+    #[test]
+    fn network_overview_shows_the_full_requested_url() {
+        let i18n = I18n::default();
+        let dialog = overlay(PermissionAction::NetworkAccess {
+            target: "https://api.example.test/v1/private?scope=write".to_string(),
+            host: "api.example.test".to_string(),
+            port: Some(443),
+        });
+        let text = rendered(permission_overlay_body_lines(&i18n, &dialog));
+
+        assert!(text.contains("https://api.example.test/v1/private?scope=write"));
+        assert!(text.contains("api.example.test:443"));
+    }
+
+    #[test]
+    fn details_are_available_only_when_explicitly_requested() {
+        let i18n = I18n::default();
+        let mut dialog = overlay(PermissionAction::Tool {
+            tool_name: "shell".to_string(),
+            qualifier: None,
+        });
+        dialog.page = PermissionOverlayPage::Details(PermissionOverlayDetailsReturn::Action);
+        let text = rendered(permission_overlay_body_lines(&i18n, &dialog));
+
+        assert!(text.contains("call_sensitive_request"));
+        assert!(text.contains("static_policy"));
+        assert!(text.contains("confirmation required"));
+        assert!(!text.contains("99"));
     }
 }

@@ -347,10 +347,12 @@ struct ResolvedPendingTool {
 }
 
 struct PendingHostUserInput {
+    session_id: i64,
     response: oneshot::Sender<crate::plugin::sdk::host_api::AskUserResponse>,
 }
 
 struct PendingHostPermission {
+    session_id: i64,
     response: oneshot::Sender<PermissionReply>,
 }
 
@@ -672,7 +674,7 @@ impl SessionManager {
                 return host_user_input_response(&existing.request, reply);
             }
             let response_rx = self
-                .install_host_user_input_waiter(existing.request.request_id.clone())
+                .install_host_user_input_waiter(session_id, existing.request.request_id.clone())
                 .await;
             return self
                 .await_host_user_input_reply(existing.request.request_id.as_str(), response_rx)
@@ -681,7 +683,7 @@ impl SessionManager {
 
         let request_id = host_user_input_request_id(session_id, call_id, sequence_index);
         let response_rx = self
-            .install_host_user_input_waiter(request_id.clone())
+            .install_host_user_input_waiter(session_id, request_id.clone())
             .await;
         if let Err(err) = self
             .apply_user_input_request_with_id(
@@ -858,7 +860,7 @@ impl SessionManager {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let request_id = host_permission_request_id(session.id, resolved.call_id);
         let response_rx = self
-            .install_host_permission_waiter(request_id.clone())
+            .install_host_permission_waiter(session.id, request_id.clone())
             .await;
         if let Err(err) = self
             .apply_permission_request_with_id(
@@ -914,12 +916,14 @@ impl SessionManager {
 
     async fn install_host_user_input_waiter(
         &self,
+        session_id: i64,
         request_id: String,
     ) -> oneshot::Receiver<crate::plugin::sdk::host_api::AskUserResponse> {
         let (response_tx, response_rx) = oneshot::channel();
         self.host_user_input_waiters.lock().await.insert(
             request_id,
             PendingHostUserInput {
+                session_id,
                 response: response_tx,
             },
         );
@@ -940,16 +944,68 @@ impl SessionManager {
 
     async fn install_host_permission_waiter(
         &self,
+        session_id: i64,
         request_id: String,
     ) -> oneshot::Receiver<PermissionReply> {
         let (response_tx, response_rx) = oneshot::channel();
         self.host_permission_waiters.lock().await.insert(
             request_id,
             PendingHostPermission {
+                session_id,
                 response: response_tx,
             },
         );
         response_rx
+    }
+
+    async fn cancel_host_interactive_waiters(&self, session_id: i64) {
+        let permission_waiters = {
+            let mut waiters = self.host_permission_waiters.lock().await;
+            let request_ids = waiters
+                .iter()
+                .filter_map(|(request_id, waiter)| {
+                    (waiter.session_id == session_id).then_some(request_id.clone())
+                })
+                .collect::<Vec<_>>();
+            request_ids
+                .into_iter()
+                .filter_map(|request_id| {
+                    waiters
+                        .remove(request_id.as_str())
+                        .map(|waiter| (request_id, waiter))
+                })
+                .collect::<Vec<_>>()
+        };
+        for (request_id, waiter) in permission_waiters {
+            let _ = waiter.response.send(PermissionReply {
+                request_id,
+                kind: PermissionReplyKind::DenyOnce,
+                reason: Some("run cancelled by user".to_string()),
+                scope: None,
+            });
+        }
+
+        let input_waiters = {
+            let mut waiters = self.host_user_input_waiters.lock().await;
+            let request_ids = waiters
+                .iter()
+                .filter_map(|(request_id, waiter)| {
+                    (waiter.session_id == session_id).then_some(request_id.clone())
+                })
+                .collect::<Vec<_>>();
+            request_ids
+                .into_iter()
+                .filter_map(|request_id| waiters.remove(request_id.as_str()))
+                .collect::<Vec<_>>()
+        };
+        for waiter in input_waiters {
+            let _ = waiter
+                .response
+                .send(crate::plugin::sdk::host_api::AskUserResponse {
+                    cancelled: true,
+                    ..Default::default()
+                });
+        }
     }
 
     async fn await_host_permission_reply(

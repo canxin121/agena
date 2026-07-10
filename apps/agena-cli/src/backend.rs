@@ -4317,18 +4317,15 @@ impl Backend {
                     continue;
                 }
                 let event = event.expect("event should exist after lag handling");
-                let triggers_refresh = matches!(
-                    event.kind,
-                    EventKind::ToolCallCompleted(_)
-                        | EventKind::RunCompleted(_)
-                        | EventKind::RunAborted(_)
-                        | EventKind::SystemNoticeAppended(_)
-                        | EventKind::ExecutionFailed(_)
-                );
+                let triggers_refresh = session_event_requires_refresh(&event.kind);
+                let force_refresh = permission_event_requires_forced_refresh(&event.kind);
                 let live = LiveEvent {
                     event: Some(event),
                     triggers_refresh,
-                    force_refresh: false,
+                    // A permission event is itself the state transition the
+                    // UI needs to observe. Do not let an already-recorded
+                    // event watermark turn this into an empty refresh.
+                    force_refresh,
                 };
                 if tx.send(live).is_err() {
                     break;
@@ -5186,6 +5183,32 @@ impl Backend {
     fn memory_store(&self) -> MemoryStore {
         MemoryStore::for_workspace(&self.workspace_root)
     }
+}
+
+fn session_event_requires_refresh(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::ToolCallCompleted(_)
+            | EventKind::RunCompleted(_)
+            | EventKind::RunAborted(_)
+            | EventKind::SystemNoticeAppended(_)
+            | EventKind::ExecutionFailed(_)
+            // Permission replies can leave a host-invoked gateway call
+            // running while its target resumes. Always re-read the session
+            // state so the UI does not retain an old `awaiting approval`
+            // snapshot. Requests receive the same treatment; the request
+            // event is the authoritative signal when a part update arrives
+            // late or is coalesced by the event bus.
+            | EventKind::PermissionRequested(_)
+            | EventKind::PermissionReplied(_)
+    )
+}
+
+fn permission_event_requires_forced_refresh(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::PermissionRequested(_) | EventKind::PermissionReplied(_)
+    )
 }
 
 fn build_file_index(workspace_root: &Path) -> Vec<PathBuf> {

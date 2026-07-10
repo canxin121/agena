@@ -17,8 +17,8 @@ use agena::{
     config::get_json_path,
     event::{DomainEvent, EventKind as AgenaSessionEvent},
     message::{
-        AttachmentKind, MessagePart, MessageStatus, OperationPart, PartContent, ToolInvocation,
-        UserInputQuestion, UserInputReply, UserInputReplyKind, UserInputRequest,
+        AttachmentKind, ExecutionStatus, MessagePart, MessageStatus, OperationPart, PartContent,
+        ToolInvocation, UserInputQuestion, UserInputReply, UserInputReplyKind, UserInputRequest,
     },
     model::ModelRef,
     permission::{
@@ -1268,6 +1268,13 @@ enum PendingInteractiveKind {
 enum PermissionOverlayPage {
     Action,
     Scope(PermissionOverlayDecision),
+    Details(PermissionOverlayDetailsReturn),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionOverlayDetailsReturn {
+    Action,
+    Scope(PermissionOverlayDecision),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2127,14 +2134,40 @@ enum TranscriptMoveDirection {
     Down,
 }
 
+fn transcript_message_navigation_direction(code: KeyCode) -> Option<TranscriptMoveDirection> {
+    match code {
+        KeyCode::Left | KeyCode::Char('h') => Some(TranscriptMoveDirection::Up),
+        KeyCode::Right | KeyCode::Char('l') => Some(TranscriptMoveDirection::Down),
+        _ => None,
+    }
+}
+
+fn transcript_vertical_navigation_direction(code: KeyCode) -> Option<TranscriptMoveDirection> {
+    match code {
+        KeyCode::Up | KeyCode::Char('k') => Some(TranscriptMoveDirection::Up),
+        KeyCode::Down | KeyCode::Char('j') => Some(TranscriptMoveDirection::Down),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TranscriptBlockCursor {
     key: TranscriptNodeKey,
     direction: TranscriptMoveDirection,
+    mode: TranscriptBlockSelectionMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TranscriptBlockSelectionMode {
+    Entering,
+    Leaving,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum TranscriptNodeKey {
+    Message {
+        message_id: i64,
+    },
     MessagePart {
         message_id: i64,
         part_id: Option<i64>,
@@ -2143,6 +2176,11 @@ enum TranscriptNodeKey {
         message_id: i64,
         part_id: i64,
         block_index: usize,
+    },
+    ActivitySummary {
+        message_id: i64,
+        first_part_id: i64,
+        last_part_id: i64,
     },
     Reasoning {
         message_id: i64,
@@ -2154,6 +2192,23 @@ enum TranscriptNodeKey {
     },
 }
 
+impl TranscriptNodeKey {
+    fn message_id(&self) -> i64 {
+        match self {
+            Self::Message { message_id }
+            | Self::MessagePart { message_id, .. }
+            | Self::MarkdownBlock { message_id, .. }
+            | Self::ActivitySummary { message_id, .. }
+            | Self::Reasoning { message_id, .. }
+            | Self::Tool { message_id, .. } => *message_id,
+        }
+    }
+
+    fn is_message_container(&self) -> bool {
+        matches!(self, Self::Message { .. })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TranscriptNodeKind {
     Message,
@@ -2161,6 +2216,7 @@ enum TranscriptNodeKind {
     MarkdownCode,
     MarkdownList,
     MarkdownTable,
+    Activity,
     Reasoning,
     Tool,
 }
@@ -2172,6 +2228,7 @@ fn transcript_node_kind_label(i18n: &I18n, kind: TranscriptNodeKind) -> String {
         TranscriptNodeKind::MarkdownCode => "transcript-node-kind-code",
         TranscriptNodeKind::MarkdownList => "transcript-node-kind-list",
         TranscriptNodeKind::MarkdownTable => "transcript-node-kind-table",
+        TranscriptNodeKind::Activity => "transcript-node-kind-activity",
         TranscriptNodeKind::Reasoning => "transcript-node-kind-reasoning",
         TranscriptNodeKind::Tool => "transcript-node-kind-tool",
     };
@@ -2187,6 +2244,691 @@ struct RenderedTranscriptNode {
     copy_text: String,
     toggleable: bool,
     expanded: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TranscriptVerticalNavigationStep {
+    SelectNode {
+        node_index: usize,
+        mode: TranscriptBlockSelectionMode,
+    },
+    MoveToLine(usize),
+}
+
+fn transcript_vertical_navigation_step(
+    nodes: &[RenderedTranscriptNode],
+    cursor_line: usize,
+    selected_cursor: Option<&TranscriptBlockCursor>,
+    direction: TranscriptMoveDirection,
+) -> Option<TranscriptVerticalNavigationStep> {
+    let message_parent_at_cursor = || {
+        nodes.iter().enumerate().find_map(|(index, node)| {
+            (node.key.is_message_container()
+                && cursor_line >= node.start_line
+                && cursor_line < node.end_line)
+                .then_some(index)
+        })
+    };
+    let previous_message_parent = |before_line: usize| {
+        nodes
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, node)| node.key.is_message_container() && node.end_line <= before_line)
+            .map(|(index, _)| index)
+    };
+    let next_message_parent = |after_line: usize| {
+        nodes
+            .iter()
+            .enumerate()
+            .find(|(_, node)| node.key.is_message_container() && node.start_line > after_line)
+            .map(|(index, _)| index)
+    };
+    let first_child = |message_id: i64| {
+        nodes.iter().enumerate().find(|(_, node)| {
+            !node.key.is_message_container() && node.key.message_id() == message_id
+        })
+    };
+    let last_child = |message_id: i64| {
+        nodes.iter().enumerate().rev().find(|(_, node)| {
+            !node.key.is_message_container() && node.key.message_id() == message_id
+        })
+    };
+
+    let selected_index =
+        selected_cursor.and_then(|cursor| nodes.iter().position(|node| node.key == cursor.key));
+    let Some(selected_index) = selected_index else {
+        return message_parent_at_cursor()
+            .map(|node_index| TranscriptVerticalNavigationStep::SelectNode {
+                node_index,
+                mode: TranscriptBlockSelectionMode::Entering,
+            })
+            .or_else(|| {
+                match direction {
+                    TranscriptMoveDirection::Up => previous_message_parent(cursor_line),
+                    TranscriptMoveDirection::Down => next_message_parent(cursor_line),
+                }
+                .map(|node_index| TranscriptVerticalNavigationStep::SelectNode {
+                    node_index,
+                    mode: TranscriptBlockSelectionMode::Entering,
+                })
+            });
+    };
+    let selected = &nodes[selected_index];
+    let message_id = selected.key.message_id();
+    let selected_cursor = selected_cursor.expect("selected index requires a cursor");
+
+    if selected.key.is_message_container() {
+        if selected_cursor.mode == TranscriptBlockSelectionMode::Leaving {
+            return match direction {
+                TranscriptMoveDirection::Down => first_child(message_id)
+                    .map(|(_, node)| TranscriptVerticalNavigationStep::MoveToLine(node.start_line))
+                    .or_else(|| {
+                        next_message_parent(selected.end_line.saturating_sub(1)).map(|node_index| {
+                            TranscriptVerticalNavigationStep::SelectNode {
+                                node_index,
+                                mode: TranscriptBlockSelectionMode::Entering,
+                            }
+                        })
+                    }),
+                TranscriptMoveDirection::Up => {
+                    previous_message_parent(selected.start_line).map(|previous_parent| {
+                        let previous_message_id = nodes[previous_parent].key.message_id();
+                        last_child(previous_message_id)
+                            .map(
+                                |(node_index, _)| TranscriptVerticalNavigationStep::SelectNode {
+                                    node_index,
+                                    mode: TranscriptBlockSelectionMode::Entering,
+                                },
+                            )
+                            .unwrap_or(TranscriptVerticalNavigationStep::SelectNode {
+                                node_index: previous_parent,
+                                mode: TranscriptBlockSelectionMode::Entering,
+                            })
+                    })
+                }
+            };
+        }
+        return match direction {
+            TranscriptMoveDirection::Down => first_child(message_id)
+                .map(
+                    |(node_index, _)| TranscriptVerticalNavigationStep::SelectNode {
+                        node_index,
+                        mode: TranscriptBlockSelectionMode::Entering,
+                    },
+                )
+                .or_else(|| {
+                    next_message_parent(selected.end_line.saturating_sub(1)).map(|node_index| {
+                        TranscriptVerticalNavigationStep::SelectNode {
+                            node_index,
+                            mode: TranscriptBlockSelectionMode::Entering,
+                        }
+                    })
+                }),
+            TranscriptMoveDirection::Up => last_child(message_id).map(|(node_index, _)| {
+                TranscriptVerticalNavigationStep::SelectNode {
+                    node_index,
+                    mode: TranscriptBlockSelectionMode::Entering,
+                }
+            }),
+        };
+    }
+
+    let enter_selected_block = match selected_cursor.mode {
+        TranscriptBlockSelectionMode::Entering => direction == selected_cursor.direction,
+        TranscriptBlockSelectionMode::Leaving => direction != selected_cursor.direction,
+    };
+    if enter_selected_block {
+        return Some(TranscriptVerticalNavigationStep::MoveToLine(
+            match direction {
+                TranscriptMoveDirection::Up => selected.end_line.saturating_sub(1),
+                TranscriptMoveDirection::Down => selected.start_line,
+            },
+        ));
+    }
+
+    match direction {
+        TranscriptMoveDirection::Up => nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| {
+                !node.key.is_message_container() && node.key.message_id() == message_id
+            })
+            .filter(|(index, _)| *index < selected_index)
+            .last()
+            .map(|(_, node)| {
+                TranscriptVerticalNavigationStep::MoveToLine(node.end_line.saturating_sub(1))
+            })
+            .or_else(|| {
+                nodes
+                    .iter()
+                    .enumerate()
+                    .find(|(_, node)| {
+                        node.key.is_message_container() && node.key.message_id() == message_id
+                    })
+                    .map(
+                        |(node_index, _)| TranscriptVerticalNavigationStep::SelectNode {
+                            node_index,
+                            mode: TranscriptBlockSelectionMode::Leaving,
+                        },
+                    )
+            }),
+        TranscriptMoveDirection::Down => nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| {
+                !node.key.is_message_container() && node.key.message_id() == message_id
+            })
+            .find(|(index, _)| *index > selected_index)
+            .map(
+                |(node_index, _)| TranscriptVerticalNavigationStep::SelectNode {
+                    node_index,
+                    mode: TranscriptBlockSelectionMode::Entering,
+                },
+            )
+            .or_else(|| {
+                next_message_parent(selected.end_line.saturating_sub(1)).map(|node_index| {
+                    TranscriptVerticalNavigationStep::SelectNode {
+                        node_index,
+                        mode: TranscriptBlockSelectionMode::Entering,
+                    }
+                })
+            }),
+    }
+}
+
+fn transcript_vertical_line_navigation_step(
+    nodes: &[RenderedTranscriptNode],
+    cursor_line: usize,
+    direction: TranscriptMoveDirection,
+) -> Option<TranscriptVerticalNavigationStep> {
+    let (current_index, current) = nodes.iter().enumerate().find(|(_, node)| {
+        !node.key.is_message_container()
+            && cursor_line >= node.start_line
+            && cursor_line < node.end_line
+    })?;
+    let message_id = current.key.message_id();
+
+    match direction {
+        TranscriptMoveDirection::Up if cursor_line > current.start_line => Some(
+            TranscriptVerticalNavigationStep::MoveToLine(cursor_line.saturating_sub(1)),
+        ),
+        TranscriptMoveDirection::Up => nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| {
+                !node.key.is_message_container() && node.key.message_id() == message_id
+            })
+            .filter(|(index, _)| *index < current_index)
+            .last()
+            .map(
+                |(node_index, _)| TranscriptVerticalNavigationStep::SelectNode {
+                    node_index,
+                    mode: TranscriptBlockSelectionMode::Entering,
+                },
+            )
+            .or_else(|| {
+                nodes
+                    .iter()
+                    .enumerate()
+                    .find(|(_, node)| {
+                        node.key.is_message_container() && node.key.message_id() == message_id
+                    })
+                    .map(
+                        |(node_index, _)| TranscriptVerticalNavigationStep::SelectNode {
+                            node_index,
+                            mode: TranscriptBlockSelectionMode::Leaving,
+                        },
+                    )
+            }),
+        TranscriptMoveDirection::Down if cursor_line + 1 < current.end_line => Some(
+            TranscriptVerticalNavigationStep::MoveToLine(cursor_line.saturating_add(1)),
+        ),
+        TranscriptMoveDirection::Down => nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| {
+                !node.key.is_message_container() && node.key.message_id() == message_id
+            })
+            .find(|(index, _)| *index > current_index)
+            .map(
+                |(node_index, _)| TranscriptVerticalNavigationStep::SelectNode {
+                    node_index,
+                    mode: TranscriptBlockSelectionMode::Entering,
+                },
+            )
+            .or_else(|| {
+                nodes
+                    .iter()
+                    .enumerate()
+                    .find(|(_, node)| {
+                        node.key.is_message_container() && node.start_line >= current.end_line
+                    })
+                    .map(
+                        |(node_index, _)| TranscriptVerticalNavigationStep::SelectNode {
+                            node_index,
+                            mode: TranscriptBlockSelectionMode::Entering,
+                        },
+                    )
+            }),
+    }
+}
+
+fn transcript_message_navigation_target(
+    nodes: &[RenderedTranscriptNode],
+    cursor_line: usize,
+    selected_key: Option<&TranscriptNodeKey>,
+    direction: TranscriptMoveDirection,
+) -> Option<usize> {
+    let message_parent_at_cursor = || {
+        nodes.iter().enumerate().find_map(|(index, node)| {
+            (node.key.is_message_container()
+                && cursor_line >= node.start_line
+                && cursor_line < node.end_line)
+                .then_some(index)
+        })
+    };
+    let previous_message_parent = |before_line: usize| {
+        nodes
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, node)| node.key.is_message_container() && node.end_line <= before_line)
+            .map(|(index, _)| index)
+    };
+    let next_message_parent = |after_line: usize| {
+        nodes
+            .iter()
+            .enumerate()
+            .find(|(_, node)| node.key.is_message_container() && node.start_line > after_line)
+            .map(|(index, _)| index)
+    };
+
+    let selected_index =
+        selected_key.and_then(|key| nodes.iter().position(|node| node.key == *key));
+    let Some(selected_index) = selected_index else {
+        return message_parent_at_cursor().or_else(|| match direction {
+            TranscriptMoveDirection::Up => previous_message_parent(cursor_line),
+            TranscriptMoveDirection::Down => next_message_parent(cursor_line),
+        });
+    };
+    let selected = &nodes[selected_index];
+    let message_parent = if selected.key.is_message_container() {
+        selected_index
+    } else {
+        nodes.iter().position(|node| {
+            node.key.is_message_container() && node.key.message_id() == selected.key.message_id()
+        })?
+    };
+    match direction {
+        TranscriptMoveDirection::Up => previous_message_parent(nodes[message_parent].start_line),
+        TranscriptMoveDirection::Down => {
+            next_message_parent(nodes[message_parent].end_line.saturating_sub(1))
+        }
+    }
+}
+
+fn transcript_selection_scroll_position(
+    total_lines: usize,
+    start_line: usize,
+    end_line: usize,
+    viewport_height: usize,
+    direction: TranscriptMoveDirection,
+) -> usize {
+    let viewport_height = viewport_height.max(1);
+    let max_scroll = total_lines.saturating_sub(viewport_height);
+    let selection_height = end_line.saturating_sub(start_line);
+    let desired = if selection_height <= viewport_height {
+        // Prefer the beginning of a selection that fits. At the final
+        // message `max_scroll` naturally shifts it upward just enough to keep
+        // its full range visible.
+        start_line
+    } else {
+        match direction {
+            TranscriptMoveDirection::Up => end_line.saturating_sub(viewport_height),
+            TranscriptMoveDirection::Down => start_line,
+        }
+    };
+    desired.min(max_scroll)
+}
+
+#[cfg(test)]
+mod transcript_navigation_tests {
+    use super::*;
+
+    fn node(key: TranscriptNodeKey, start_line: usize, end_line: usize) -> RenderedTranscriptNode {
+        RenderedTranscriptNode {
+            kind: TranscriptNodeKind::Message,
+            key,
+            start_line,
+            end_line,
+            copy_text: String::new(),
+            toggleable: false,
+            expanded: true,
+        }
+    }
+
+    #[test]
+    fn transcript_arrow_and_vim_keys_share_navigation_bindings() {
+        assert_eq!(
+            transcript_message_navigation_direction(KeyCode::Left),
+            transcript_message_navigation_direction(KeyCode::Char('h'))
+        );
+        assert_eq!(
+            transcript_message_navigation_direction(KeyCode::Right),
+            transcript_message_navigation_direction(KeyCode::Char('l'))
+        );
+        assert_eq!(
+            transcript_vertical_navigation_direction(KeyCode::Up),
+            transcript_vertical_navigation_direction(KeyCode::Char('k'))
+        );
+        assert_eq!(
+            transcript_vertical_navigation_direction(KeyCode::Down),
+            transcript_vertical_navigation_direction(KeyCode::Char('j'))
+        );
+    }
+
+    fn cursor(
+        key: TranscriptNodeKey,
+        direction: TranscriptMoveDirection,
+        mode: TranscriptBlockSelectionMode,
+    ) -> TranscriptBlockCursor {
+        TranscriptBlockCursor {
+            key,
+            direction,
+            mode,
+        }
+    }
+
+    #[test]
+    fn vertical_navigation_visits_messages_and_children_in_order() {
+        let first_code = TranscriptNodeKey::MarkdownBlock {
+            message_id: 10,
+            part_id: 1,
+            block_index: 0,
+        };
+        let first_list = TranscriptNodeKey::MarkdownBlock {
+            message_id: 10,
+            part_id: 1,
+            block_index: 1,
+        };
+        let first_message = TranscriptNodeKey::Message { message_id: 10 };
+        let second_message = TranscriptNodeKey::Message { message_id: 11 };
+        let nodes = vec![
+            node(first_code.clone(), 1, 3),
+            node(first_list.clone(), 3, 5),
+            node(first_message.clone(), 0, 5),
+            node(
+                TranscriptNodeKey::MessagePart {
+                    message_id: 11,
+                    part_id: Some(2),
+                },
+                6,
+                7,
+            ),
+            node(second_message.clone(), 5, 7),
+        ];
+
+        assert_eq!(
+            transcript_vertical_navigation_step(
+                nodes.as_slice(),
+                2,
+                None,
+                TranscriptMoveDirection::Down,
+            ),
+            Some(TranscriptVerticalNavigationStep::SelectNode {
+                node_index: 2,
+                mode: TranscriptBlockSelectionMode::Entering,
+            }),
+            "the first down-navigation press selects the complete message"
+        );
+        assert_eq!(
+            transcript_vertical_navigation_step(
+                nodes.as_slice(),
+                0,
+                Some(&cursor(
+                    first_message.clone(),
+                    TranscriptMoveDirection::Down,
+                    TranscriptBlockSelectionMode::Entering,
+                )),
+                TranscriptMoveDirection::Down,
+            ),
+            Some(TranscriptVerticalNavigationStep::SelectNode {
+                node_index: 0,
+                mode: TranscriptBlockSelectionMode::Entering,
+            }),
+            "the next down-navigation press enters the first child"
+        );
+        assert_eq!(
+            transcript_vertical_navigation_step(
+                nodes.as_slice(),
+                1,
+                Some(&cursor(
+                    first_code.clone(),
+                    TranscriptMoveDirection::Down,
+                    TranscriptBlockSelectionMode::Entering,
+                )),
+                TranscriptMoveDirection::Down,
+            ),
+            Some(TranscriptVerticalNavigationStep::MoveToLine(1)),
+            "the next down-navigation press enters the selected child"
+        );
+        assert_eq!(
+            transcript_vertical_line_navigation_step(
+                nodes.as_slice(),
+                1,
+                TranscriptMoveDirection::Down,
+            ),
+            Some(TranscriptVerticalNavigationStep::MoveToLine(2)),
+            "inside a child, down-navigation advances one rendered line"
+        );
+        assert_eq!(
+            transcript_vertical_line_navigation_step(
+                nodes.as_slice(),
+                2,
+                TranscriptMoveDirection::Down,
+            ),
+            Some(TranscriptVerticalNavigationStep::SelectNode {
+                node_index: 1,
+                mode: TranscriptBlockSelectionMode::Entering,
+            }),
+            "leaving the final line selects the following child first"
+        );
+        assert_eq!(
+            transcript_vertical_navigation_step(
+                nodes.as_slice(),
+                3,
+                Some(&cursor(
+                    first_list.clone(),
+                    TranscriptMoveDirection::Down,
+                    TranscriptBlockSelectionMode::Entering,
+                )),
+                TranscriptMoveDirection::Down,
+            ),
+            Some(TranscriptVerticalNavigationStep::MoveToLine(3)),
+            "a selected child enters at its first line"
+        );
+        assert_eq!(
+            transcript_vertical_navigation_step(
+                nodes.as_slice(),
+                3,
+                Some(&cursor(
+                    first_list.clone(),
+                    TranscriptMoveDirection::Up,
+                    TranscriptBlockSelectionMode::Entering,
+                )),
+                TranscriptMoveDirection::Up,
+            ),
+            Some(TranscriptVerticalNavigationStep::MoveToLine(4)),
+            "up-navigation enters a selected block at its final line"
+        );
+        assert_eq!(
+            transcript_vertical_line_navigation_step(
+                nodes.as_slice(),
+                3,
+                TranscriptMoveDirection::Up,
+            ),
+            Some(TranscriptVerticalNavigationStep::SelectNode {
+                node_index: 0,
+                mode: TranscriptBlockSelectionMode::Entering,
+            }),
+            "crossing upward selects the previous child before entering it"
+        );
+        assert_eq!(
+            transcript_vertical_navigation_step(
+                nodes.as_slice(),
+                2,
+                Some(&cursor(
+                    first_code.clone(),
+                    TranscriptMoveDirection::Up,
+                    TranscriptBlockSelectionMode::Entering,
+                )),
+                TranscriptMoveDirection::Up,
+            ),
+            Some(TranscriptVerticalNavigationStep::MoveToLine(2)),
+            "the next upward press enters the previous child at its last line"
+        );
+        assert_eq!(
+            transcript_vertical_line_navigation_step(
+                nodes.as_slice(),
+                1,
+                TranscriptMoveDirection::Up,
+            ),
+            Some(TranscriptVerticalNavigationStep::SelectNode {
+                node_index: 2,
+                mode: TranscriptBlockSelectionMode::Leaving,
+            }),
+            "only the first child exits upward to the enclosing message"
+        );
+        assert_eq!(
+            transcript_vertical_navigation_step(
+                nodes.as_slice(),
+                0,
+                Some(&cursor(
+                    first_message,
+                    TranscriptMoveDirection::Up,
+                    TranscriptBlockSelectionMode::Entering,
+                )),
+                TranscriptMoveDirection::Up,
+            ),
+            Some(TranscriptVerticalNavigationStep::SelectNode {
+                node_index: 1,
+                mode: TranscriptBlockSelectionMode::Entering,
+            }),
+            "up-navigation selects the current message's final block before entering it"
+        );
+        assert_eq!(
+            transcript_vertical_navigation_step(
+                nodes.as_slice(),
+                4,
+                Some(&cursor(
+                    first_list,
+                    TranscriptMoveDirection::Up,
+                    TranscriptBlockSelectionMode::Entering,
+                )),
+                TranscriptMoveDirection::Up,
+            ),
+            Some(TranscriptVerticalNavigationStep::MoveToLine(4)),
+            "the next up-navigation press enters that block at its final line"
+        );
+        assert_eq!(
+            transcript_vertical_navigation_step(
+                nodes.as_slice(),
+                0,
+                Some(&cursor(
+                    second_message,
+                    TranscriptMoveDirection::Up,
+                    TranscriptBlockSelectionMode::Entering,
+                )),
+                TranscriptMoveDirection::Up,
+            ),
+            Some(TranscriptVerticalNavigationStep::SelectNode {
+                node_index: 3,
+                mode: TranscriptBlockSelectionMode::Entering,
+            }),
+            "the same rule applies to every message"
+        );
+    }
+
+    #[test]
+    fn horizontal_navigation_only_visits_complete_messages() {
+        let first_child = TranscriptNodeKey::MarkdownBlock {
+            message_id: 10,
+            part_id: 1,
+            block_index: 0,
+        };
+        let first_message = TranscriptNodeKey::Message { message_id: 10 };
+        let second_message = TranscriptNodeKey::Message { message_id: 11 };
+        let nodes = vec![
+            node(first_child.clone(), 1, 4),
+            node(first_message.clone(), 0, 4),
+            node(
+                TranscriptNodeKey::MessagePart {
+                    message_id: 11,
+                    part_id: Some(2),
+                },
+                5,
+                6,
+            ),
+            node(second_message.clone(), 4, 6),
+        ];
+
+        assert_eq!(
+            transcript_message_navigation_target(
+                nodes.as_slice(),
+                2,
+                None,
+                TranscriptMoveDirection::Down,
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            transcript_message_navigation_target(
+                nodes.as_slice(),
+                0,
+                Some(&first_message),
+                TranscriptMoveDirection::Down,
+            ),
+            Some(3)
+        );
+        assert_eq!(
+            transcript_message_navigation_target(
+                nodes.as_slice(),
+                2,
+                Some(&first_child),
+                TranscriptMoveDirection::Down,
+            ),
+            Some(3),
+            "horizontal navigation skips children"
+        );
+        assert_eq!(
+            transcript_message_navigation_target(
+                nodes.as_slice(),
+                4,
+                Some(&second_message),
+                TranscriptMoveDirection::Up,
+            ),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn message_selection_scrolls_to_keep_first_and_last_messages_fully_visible() {
+        assert_eq!(
+            transcript_selection_scroll_position(30, 0, 6, 10, TranscriptMoveDirection::Down),
+            0
+        );
+        assert_eq!(
+            transcript_selection_scroll_position(30, 24, 30, 10, TranscriptMoveDirection::Down),
+            20,
+            "the final message shifts upward instead of clipping below the viewport"
+        );
+        assert_eq!(
+            transcript_selection_scroll_position(30, 5, 22, 10, TranscriptMoveDirection::Up),
+            12,
+            "a selection taller than the viewport aligns its end when moving upward"
+        );
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -2384,6 +3126,9 @@ impl App {
         self.flush_input_buffers_if_due(now);
         self.refresh_status_line_if_due(now);
         self.poll_provider_studio_auth_if_due(now);
+        if self.transcript.has_animated_activity() {
+            self.transcript.invalidate_render();
+        }
 
         if let Some(error) = self.pending_draft_store_error.take() {
             self.report_draft_store_error(error);
@@ -2454,22 +3199,26 @@ impl App {
         self.flush_input_buffers_if_due(Instant::now());
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
-            if let Some(session_id) = self.active_run_session_id() {
-                self.request_cancel_run(session_id);
-                self.last_ctrl_c_at = None;
-                return;
-            }
             let now = Instant::now();
             let double = self
                 .last_ctrl_c_at
-                .map(|prev| now.duration_since(prev) <= self.double_esc_window)
+                .map(|previous| now.duration_since(previous) <= self.double_esc_window)
                 .unwrap_or(false);
             if double {
+                // A stuck plugin-host callback cannot observe cancellation
+                // until its waiter is released. Never let that prevent a
+                // user from leaving the TUI entirely.
                 self.should_quit = true;
-            } else {
-                self.last_ctrl_c_at = Some(now);
-                self.flash_warning(ui_text::t(&self.i18n, "flash-quit-confirm"));
+                return;
             }
+            if let Some(session_id) = self.active_run_session_id() {
+                self.request_cancel_run(session_id);
+                self.last_ctrl_c_at = Some(now);
+                self.flash_warning(ui_text::t(&self.i18n, "flash-run-cancelling-quit"));
+                return;
+            }
+            self.last_ctrl_c_at = Some(now);
+            self.flash_warning(ui_text::t(&self.i18n, "flash-quit-confirm"));
             return;
         }
 
@@ -3372,6 +4121,35 @@ impl App {
         key: KeyEvent,
         dialog: &mut PermissionOverlay,
     ) -> bool {
+        if matches!(key.code, KeyCode::Char('i')) {
+            dialog.page = match dialog.page {
+                PermissionOverlayPage::Action => {
+                    PermissionOverlayPage::Details(PermissionOverlayDetailsReturn::Action)
+                }
+                PermissionOverlayPage::Scope(decision) => {
+                    PermissionOverlayPage::Details(PermissionOverlayDetailsReturn::Scope(decision))
+                }
+                PermissionOverlayPage::Details(PermissionOverlayDetailsReturn::Action) => {
+                    PermissionOverlayPage::Action
+                }
+                PermissionOverlayPage::Details(PermissionOverlayDetailsReturn::Scope(decision)) => {
+                    PermissionOverlayPage::Scope(decision)
+                }
+            };
+            dialog.selection.selected = 0;
+            return false;
+        }
+        if let PermissionOverlayPage::Details(return_to) = dialog.page {
+            if matches!(key.code, KeyCode::Esc | KeyCode::Left) {
+                dialog.page = match return_to {
+                    PermissionOverlayDetailsReturn::Action => PermissionOverlayPage::Action,
+                    PermissionOverlayDetailsReturn::Scope(decision) => {
+                        PermissionOverlayPage::Scope(decision)
+                    }
+                };
+            }
+            return false;
+        }
         let choice_count = permission_overlay_choices(&self.i18n, dialog.page).len();
         match key.code {
             KeyCode::Esc | KeyCode::Left => match dialog.page {
@@ -3381,6 +4159,7 @@ impl App {
                     dialog.selection.selected = 0;
                     false
                 }
+                PermissionOverlayPage::Details(_) => unreachable!("details are handled above"),
             },
             KeyCode::Up => {
                 dialog.selection.move_by(choice_count, -1);
@@ -5758,32 +6537,20 @@ impl App {
             KeyCode::Enter | KeyCode::Char('o') | KeyCode::Char(' ')
         ) {
             self.toggle_transcript_cursor_node();
-        } else if matches!(key.code, KeyCode::Char('h')) {
+        } else if let Some(direction) = transcript_message_navigation_direction(key.code) {
             let count = self.transcript_motion_count();
             self.transcript
-                .move_by_blocks(width, height, TranscriptMoveDirection::Up, count);
-            self.maybe_request_older_messages();
-        } else if matches!(key.code, KeyCode::Char('l')) {
+                .move_by_blocks(width, height, direction, count);
+            if direction == TranscriptMoveDirection::Up {
+                self.maybe_request_older_messages();
+            }
+        } else if let Some(direction) = transcript_vertical_navigation_direction(key.code) {
             let count = self.transcript_motion_count();
             self.transcript
-                .move_by_blocks(width, height, TranscriptMoveDirection::Down, count);
-        } else if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) {
-            let count = self.transcript_motion_count();
-            self.transcript.scroll_by_lines_with_blocks(
-                width,
-                height,
-                TranscriptMoveDirection::Up,
-                count,
-            );
-            self.maybe_request_older_messages();
-        } else if matches!(key.code, KeyCode::Down | KeyCode::Char('j')) {
-            let count = self.transcript_motion_count();
-            self.transcript.scroll_by_lines_with_blocks(
-                width,
-                height,
-                TranscriptMoveDirection::Down,
-                count,
-            );
+                .scroll_by_lines_with_blocks(width, height, direction, count);
+            if direction == TranscriptMoveDirection::Up {
+                self.maybe_request_older_messages();
+            }
         } else if matches!(key.code, KeyCode::PageUp)
             || matches!(key.code, KeyCode::Char('b'))
                 && key.modifiers.contains(KeyModifiers::CONTROL)
@@ -21393,90 +22160,55 @@ impl TranscriptState {
         height: u16,
         direction: TranscriptMoveDirection,
     ) {
-        let total_lines = self.rendered(width).lines.len();
-        if total_lines == 0 {
-            self.block_cursor = None;
-            self.cursor_line = 0;
-            return;
-        }
-
-        let current_line = min(self.cursor_line, total_lines.saturating_sub(1));
-        if let Some(block_cursor) = self.block_cursor.as_ref() {
-            let highlighted_key = block_cursor.key.clone();
-            let highlighted_direction = block_cursor.direction;
-            if let Some(current_node) = self.current_cursor_node_cloned(width) {
-                if current_node.key == highlighted_key && highlighted_direction == direction {
-                    self.block_cursor = None;
-                    self.set_cursor_line(width, height, current_line);
-                    return;
-                }
-            }
-        }
-
-        let next_line = match direction {
-            TranscriptMoveDirection::Up => current_line.saturating_sub(1),
-            TranscriptMoveDirection::Down => min(
-                current_line.saturating_add(1),
-                total_lines.saturating_sub(1),
-            ),
-        };
-        if next_line == current_line {
-            self.block_cursor = None;
-            self.set_cursor_line(width, height, current_line);
-            return;
-        }
-
-        let (current_node, next_node) = {
+        let selected_cursor = self.block_cursor.clone();
+        let cursor_line = self.cursor_line;
+        let step = {
             let rendered = self.rendered(width);
-            (
-                rendered
-                    .line_nodes
-                    .get(current_line)
-                    .and_then(|value| *value),
-                rendered.line_nodes.get(next_line).and_then(|value| *value),
-            )
+            if selected_cursor.is_some() {
+                transcript_vertical_navigation_step(
+                    rendered.nodes.as_slice(),
+                    cursor_line,
+                    selected_cursor.as_ref(),
+                    direction,
+                )
+            } else {
+                transcript_vertical_line_navigation_step(
+                    rendered.nodes.as_slice(),
+                    cursor_line,
+                    direction,
+                )
+                .or_else(|| {
+                    transcript_vertical_navigation_step(
+                        rendered.nodes.as_slice(),
+                        cursor_line,
+                        None,
+                        direction,
+                    )
+                })
+            }
         };
-        if let Some(next_node_index) = next_node
-            && current_node != Some(next_node_index)
-        {
-            self.set_block_cursor(width, height, next_node_index, direction);
-            return;
+        match step {
+            Some(TranscriptVerticalNavigationStep::SelectNode { node_index, mode }) => {
+                self.set_block_cursor_with_mode(width, height, node_index, direction, mode);
+            }
+            Some(TranscriptVerticalNavigationStep::MoveToLine(line)) => {
+                self.set_cursor_line(width, height, line);
+            }
+            None => {}
         }
-
-        self.block_cursor = None;
-        self.set_cursor_line(width, height, next_line);
     }
 
     fn step_block(&mut self, width: u16, height: u16, direction: TranscriptMoveDirection) {
-        let target_node = match self.current_highlighted_node_index(width) {
-            Some(current) => {
-                let rendered = self.rendered(width);
-                match direction {
-                    TranscriptMoveDirection::Up => current.checked_sub(1),
-                    TranscriptMoveDirection::Down => {
-                        (current + 1 < rendered.nodes.len()).then_some(current + 1)
-                    }
-                }
-            }
-            None => {
-                let cursor_line = self.cursor_line;
-                let rendered = self.rendered(width);
-                match direction {
-                    TranscriptMoveDirection::Up => rendered
-                        .nodes
-                        .iter()
-                        .enumerate()
-                        .rev()
-                        .find(|(_, node)| node.end_line <= cursor_line)
-                        .map(|(index, _)| index),
-                    TranscriptMoveDirection::Down => rendered
-                        .nodes
-                        .iter()
-                        .enumerate()
-                        .find(|(_, node)| node.start_line > cursor_line)
-                        .map(|(index, _)| index),
-                }
-            }
+        let selected_key = self.block_cursor.as_ref().map(|cursor| cursor.key.clone());
+        let cursor_line = self.cursor_line;
+        let target_node = {
+            let rendered = self.rendered(width);
+            transcript_message_navigation_target(
+                rendered.nodes.as_slice(),
+                cursor_line,
+                selected_key.as_ref(),
+                direction,
+            )
         };
         if let Some(target_node) = target_node {
             self.set_block_cursor(width, height, target_node, direction);
@@ -21575,6 +22307,12 @@ impl TranscriptState {
                     }),
             );
             let added_lines = lines.len().saturating_sub(base_line);
+            let message_copy_text = nodes[base_node..]
+                .iter()
+                .map(|node| node.copy_text.as_str())
+                .filter(|text| !text.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n");
             line_nodes.extend((0..added_lines).map(|offset| {
                 nodes
                     .iter()
@@ -21586,6 +22324,20 @@ impl TranscriptState {
                     })
                     .map(|(index, _)| index)
             }));
+            // Keep a message-level parent after its leaf nodes. `line_nodes`
+            // deliberately continues to point at leaves, so line navigation
+            // stays precise while h/l can first select the whole reply.
+            nodes.push(RenderedTranscriptNode {
+                key: TranscriptNodeKey::Message {
+                    message_id: message.id,
+                },
+                kind: TranscriptNodeKind::Message,
+                start_line: base_line,
+                end_line: lines.len(),
+                copy_text: message_copy_text,
+                toggleable: false,
+                expanded: true,
+            });
         }
 
         let search_matches = if self.search_query.trim().is_empty() {
@@ -21614,6 +22366,20 @@ impl TranscriptState {
 
     fn invalidate_render(&mut self) {
         self.rendered = None;
+    }
+
+    fn has_animated_activity(&self) -> bool {
+        self.messages.iter().any(|message| {
+            message.parts.as_deref().is_some_and(|parts| {
+                parts.iter().any(|part| {
+                    part.status == ExecutionStatus::InProgress
+                        && matches!(
+                            part.content.as_ref(),
+                            Some(PartContent::Reasoning(_) | PartContent::Operation(_))
+                        )
+                })
+            })
+        })
     }
 
     fn clamp_scroll(&mut self, width: u16, height: u16) {
@@ -21747,22 +22513,53 @@ impl TranscriptState {
         node_index: usize,
         direction: TranscriptMoveDirection,
     ) {
-        let target_line = {
+        self.set_block_cursor_with_mode(
+            width,
+            height,
+            node_index,
+            direction,
+            TranscriptBlockSelectionMode::Entering,
+        );
+    }
+
+    fn set_block_cursor_with_mode(
+        &mut self,
+        width: u16,
+        height: u16,
+        node_index: usize,
+        direction: TranscriptMoveDirection,
+        mode: TranscriptBlockSelectionMode,
+    ) {
+        let (start_line, end_line, target_line) = {
             let rendered = self.rendered(width);
             let Some(node) = rendered.nodes.get(node_index) else {
                 return;
             };
-            match direction {
+            let target_line = match direction {
                 TranscriptMoveDirection::Up => node.end_line.saturating_sub(1),
                 TranscriptMoveDirection::Down => node.start_line,
-            }
+            };
+            (node.start_line, node.end_line, target_line)
         };
         self.set_cursor_line(width, height, target_line);
+        let total_lines = self.rendered(width).lines.len();
+        self.scroll = transcript_selection_scroll_position(
+            total_lines,
+            start_line,
+            end_line,
+            height.max(1) as usize,
+            direction,
+        );
+        self.follow_tail = self.is_at_bottom(width, height);
         let key = {
             let rendered = self.rendered(width);
             rendered.nodes.get(node_index).map(|node| node.key.clone())
         };
-        self.block_cursor = key.map(|key| TranscriptBlockCursor { key, direction });
+        self.block_cursor = key.map(|key| TranscriptBlockCursor {
+            key,
+            direction,
+            mode,
+        });
     }
 }
 
@@ -22141,6 +22938,9 @@ fn permission_overlay_choice(
                 scope: Some(PermissionScope::Global),
             },
         },
+        PermissionOverlayPage::Details(_) => {
+            unreachable!("permission details do not have selectable choices")
+        }
     }
 }
 
@@ -22221,6 +23021,7 @@ fn permission_overlay_choices(i18n: &I18n, page: PermissionOverlayPage) -> Vec<S
     let count = match page {
         PermissionOverlayPage::Action => 3,
         PermissionOverlayPage::Scope(_) => 4,
+        PermissionOverlayPage::Details(_) => 0,
     };
     (0..count)
         .map(|selected| {
@@ -22245,6 +23046,12 @@ fn permission_overlay_title(i18n: &I18n, page: PermissionOverlayPage) -> String 
                 permission_overlay_decision_label(i18n, PermissionOverlayDecision::Deny)
             )
         }
+        PermissionOverlayPage::Details(_) => {
+            format!(
+                "{base} · {}",
+                ui_text::t(i18n, "overlay-permission-details-title")
+            )
+        }
     }
 }
 
@@ -22252,6 +23059,7 @@ fn permission_overlay_footer(i18n: &I18n, page: PermissionOverlayPage) -> String
     match page {
         PermissionOverlayPage::Action => ui_text::t(i18n, "overlay-permission-footer-action"),
         PermissionOverlayPage::Scope(_) => ui_text::t(i18n, "overlay-permission-footer-scope"),
+        PermissionOverlayPage::Details(_) => ui_text::t(i18n, "overlay-permission-footer-details"),
     }
 }
 
@@ -22283,12 +23091,16 @@ fn permission_action_label(i18n: &I18n, action: &PermissionAction) -> String {
                 "path" => target_path.clone(),
             ),
         ),
-        PermissionAction::NetworkAccess { host, port, .. } => i18n.text_args(
+        PermissionAction::NetworkAccess { target, host, port } => i18n.text_args(
             "overlay-permission-action-network",
             &crate::fl_args!(
-                "target" => match port {
-                    Some(port) => format!("{host}:{port}"),
-                    None => host.clone(),
+                "target" => if target.trim().is_empty() {
+                    match port {
+                        Some(port) => format!("{host}:{port}"),
+                        None => host.clone(),
+                    }
+                } else {
+                    target.clone()
                 }
             ),
         ),
@@ -23131,22 +23943,6 @@ fn permission_trace_step_label(i18n: &I18n, step: &DecisionTraceStep) -> String 
         ));
     }
     format!("- {} — {}", join_inline_segments(facts), step.summary)
-}
-
-fn append_permission_trace_lines(
-    i18n: &I18n,
-    lines: &mut Vec<Line<'static>>,
-    trace: &[DecisionTraceStep],
-) {
-    if trace.is_empty() {
-        return;
-    }
-    lines.push(Line::from("Trace:"));
-    lines.extend(
-        trace
-            .iter()
-            .map(|step| Line::from(permission_trace_step_label(i18n, step))),
-    );
 }
 
 fn permission_scope_label(i18n: &I18n, scope: PermissionScope) -> String {

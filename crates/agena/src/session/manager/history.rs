@@ -30,7 +30,13 @@ impl SessionManager {
     /// deciding to cancel and this call reaching the manager, so the absence
     /// of a control is a successful no-op rather than an error.
     pub async fn cancel_active_run(&self, session_id: i64) -> Result<(), AppError> {
-        cancel_active_run_result(self.run_registry.cancel(session_id).await)
+        let result = self.run_registry.cancel(session_id).await;
+        // A plugin-hosted tool can be suspended in a host permission or
+        // user-input callback. A cancellation token is only observed between
+        // run-loop iterations, so release those one-shot waiters as well;
+        // otherwise Ctrl+C leaves the executor blocked forever.
+        self.cancel_host_interactive_waiters(session_id).await;
+        cancel_active_run_result(result)
     }
 
     /// External entry: inject `parts` as a steer message into the in-flight

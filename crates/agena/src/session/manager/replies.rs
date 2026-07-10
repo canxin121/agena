@@ -1325,8 +1325,13 @@ impl SessionManager {
         // `parallel_tool_calls: false` is a model-request contract, not just
         // a provider hint. Keep provider-emitted calls in their transcript
         // order even when every individual tool is otherwise safe to fan out.
-        // This also gives gateway calls a single host callback chain at a time.
-        if !should_execute_pending_tools_concurrently(&options.request_override) {
+        // Gateway `agena.tools.call` invocations are also always serialized:
+        // their host callbacks identify the outer pending operation, and a
+        // concurrent fan-out can attach a nested approval to the wrong call
+        // or overwrite its pending request state.
+        if !should_execute_pending_tools_concurrently(&options.request_override)
+            || pending_tools_include_gateway_call(&session, pending_tools.as_slice())
+        {
             if let Some(tool) = session.next_pending_tool() {
                 return self.resolve_pending_tool(session, tool, state).await;
             }
@@ -3218,6 +3223,17 @@ impl SessionManager {
     pub(super) fn execution_state(&self) -> Arc<SessionManagerState> {
         self.execution.load_full()
     }
+}
+
+fn pending_tools_include_gateway_call(
+    session: &Session,
+    pending_tools: &[SessionPendingTool],
+) -> bool {
+    pending_tools.iter().any(|pending| {
+        session
+            .pending_tool_execution(pending)
+            .is_some_and(|(_, invocation, _)| invocation.name == "agena.tools.call")
+    })
 }
 
 async fn responses_api_request_metadata(

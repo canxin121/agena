@@ -6,6 +6,8 @@ use tui_markdown::from_str as markdown_to_text;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+const COLLAPSED_ACTIVITY_VISIBLE_TAIL: usize = 5;
+
 pub(super) fn render_message_detailed(
     message: &MessageResource,
     width: u16,
@@ -37,8 +39,85 @@ pub(super) fn render_message_detailed(
             expanded: true,
         });
     } else {
-        let mut attached_header = false;
-        for part in parts {
+        let mut part_index = 0_usize;
+        while part_index < parts.len() {
+            // A permission/user-input request is lifecycle state for the
+            // operation carrying the same operation id. Rendering both
+            // records creates the misleading impression that one tool call
+            // was parsed as two independent calls. The operation already
+            // carries the current title and status (for example, "Awaiting
+            // permission: runtime.get"), and remains the single selectable
+            // transcript item for that call.
+            if interactive_request_is_embedded_in_operation(parts, part_index) {
+                part_index += 1;
+                continue;
+            }
+            if let Some(run_end) =
+                collapsed_activity_run_end(message, parts, part_index, defaults, expansions)
+            {
+                let run = &parts[part_index..run_end];
+                if run.len() > COLLAPSED_ACTIVITY_VISIBLE_TAIL {
+                    let key = TranscriptNodeKey::ActivitySummary {
+                        message_id: message.id,
+                        first_part_id: run[0].id,
+                        last_part_id: run.last().expect("non-empty activity run").id,
+                    };
+                    let expanded = expansions.get(&key).copied().unwrap_or(false);
+                    let hidden_count = run.len().saturating_sub(COLLAPSED_ACTIVITY_VISIBLE_TAIL);
+                    // Message headers belong exclusively to the message-level
+                    // parent selection. An activity summary must never make
+                    // the adjacent `assistant` header look selected.
+                    let start_line = lines.len();
+                    let summary = i18n.text_args(
+                        if expanded {
+                            "message-activity-run-expanded"
+                        } else {
+                            "message-activity-run-collapsed"
+                        },
+                        &crate::fl_args!("count" => (if expanded { run.len() } else { hidden_count }) as i64),
+                    );
+                    push_single_line(
+                        &mut lines,
+                        "  ",
+                        summary.as_str(),
+                        Style::default().fg(Color::DarkGray),
+                        width,
+                    );
+                    nodes.push(RenderedTranscriptNode {
+                        key,
+                        kind: TranscriptNodeKind::Activity,
+                        start_line,
+                        end_line: lines.len(),
+                        copy_text: run
+                            .iter()
+                            .take(if expanded { run.len() } else { hidden_count })
+                            .filter_map(|part| activity_part_copy_text(part, i18n))
+                            .collect::<Vec<_>>()
+                            .join("\n\n"),
+                        toggleable: true,
+                        expanded,
+                    });
+                    let first_visible =
+                        collapsed_activity_visible_start(part_index, run_end, expanded);
+                    for part in &parts[first_visible..run_end] {
+                        append_rendered_part_node(
+                            message, part, width, &mut lines, &mut nodes, i18n, defaults,
+                            expansions,
+                        );
+                    }
+                } else {
+                    for part in run {
+                        append_rendered_part_node(
+                            message, part, width, &mut lines, &mut nodes, i18n, defaults,
+                            expansions,
+                        );
+                    }
+                }
+                part_index = run_end;
+                continue;
+            }
+
+            let part = &parts[part_index];
             if let PartContent::Text(text) = transcript_part_content(part) {
                 let blocks = markdown_blocks(text.text.as_str());
                 for (block_index, block) in blocks.iter().enumerate() {
@@ -67,35 +146,44 @@ pub(super) fn render_message_detailed(
                             toggleable: false,
                             expanded: true,
                         });
-                        attached_header = true;
                     }
                 }
+                part_index += 1;
                 continue;
             }
 
-            let start_line = if attached_header {
-                lines.len()
-            } else {
-                header_start
-            };
-            let node =
-                render_part_node(message, part, width, &mut lines, i18n, defaults, expansions);
-            if lines.len() > start_line {
-                nodes.push(RenderedTranscriptNode {
-                    key: node.key,
-                    kind: node.kind,
-                    start_line,
-                    end_line: lines.len(),
-                    copy_text: node.copy_text,
-                    toggleable: node.toggleable,
-                    expanded: node.expanded,
-                });
-                attached_header = true;
-            }
+            append_rendered_part_node(
+                message, part, width, &mut lines, &mut nodes, i18n, defaults, expansions,
+            );
+            part_index += 1;
         }
     }
 
     RenderedMessageBlock { lines, nodes }
+}
+
+fn interactive_request_is_embedded_in_operation(parts: &[MessagePart], index: usize) -> bool {
+    let Some(request_part) = parts.get(index) else {
+        return false;
+    };
+    let Some(operation_id) = request_part.operation_id.as_deref() else {
+        return false;
+    };
+    matches!(
+        transcript_part_content(request_part),
+        PartContent::Request(RequestPart::Permission(_))
+            | PartContent::Request(RequestPart::UserInput(_))
+    ) && parts
+        .iter()
+        .enumerate()
+        .any(|(candidate_index, candidate)| {
+            candidate_index != index
+                && candidate.operation_id.as_deref() == Some(operation_id)
+                && matches!(
+                    transcript_part_content(candidate),
+                    PartContent::Operation(_)
+                )
+        })
 }
 
 pub(super) fn render_message_export(
@@ -127,6 +215,95 @@ struct RenderedNodeDraft {
     copy_text: String,
     toggleable: bool,
     expanded: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_rendered_part_node(
+    message: &MessageResource,
+    part: &MessagePart,
+    width: u16,
+    lines: &mut Vec<RenderedLine>,
+    nodes: &mut Vec<RenderedTranscriptNode>,
+    i18n: &I18n,
+    defaults: TranscriptDetailDefaults,
+    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+) {
+    // Like Markdown blocks, non-text parts start after the message header so
+    // selecting the first thinking/tool part never highlights `assistant`.
+    let start_line = lines.len();
+    let node = render_part_node(message, part, width, lines, i18n, defaults, expansions);
+    if lines.len() > start_line {
+        nodes.push(RenderedTranscriptNode {
+            key: node.key,
+            kind: node.kind,
+            start_line,
+            end_line: lines.len(),
+            copy_text: node.copy_text,
+            toggleable: node.toggleable,
+            expanded: node.expanded,
+        });
+    }
+}
+
+fn collapsed_activity_run_end(
+    message: &MessageResource,
+    parts: &[MessagePart],
+    start: usize,
+    defaults: TranscriptDetailDefaults,
+    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+) -> Option<usize> {
+    is_collapsed_activity_part(message, parts.get(start)?, defaults, expansions).then(|| {
+        let mut end = start.saturating_add(1);
+        while parts
+            .get(end)
+            .is_some_and(|part| is_collapsed_activity_part(message, part, defaults, expansions))
+        {
+            end = end.saturating_add(1);
+        }
+        end
+    })
+}
+
+fn collapsed_activity_visible_start(start: usize, end: usize, expanded: bool) -> usize {
+    if expanded {
+        start
+    } else {
+        end.saturating_sub(COLLAPSED_ACTIVITY_VISIBLE_TAIL)
+            .max(start)
+    }
+}
+
+fn is_collapsed_activity_part(
+    message: &MessageResource,
+    part: &MessagePart,
+    defaults: TranscriptDetailDefaults,
+    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+) -> bool {
+    match transcript_part_content(part) {
+        PartContent::Reasoning(_) => !expansions
+            .get(&TranscriptNodeKey::Reasoning {
+                message_id: message.id,
+                part_id: part.id,
+            })
+            .copied()
+            .unwrap_or(defaults.thinking_expanded),
+        PartContent::Operation(_) => !expansions
+            .get(&TranscriptNodeKey::Tool {
+                message_id: message.id,
+                part_id: part.id,
+            })
+            .copied()
+            .unwrap_or(defaults.tool_output_expanded),
+        _ => false,
+    }
+}
+
+fn activity_part_copy_text(part: &MessagePart, i18n: &I18n) -> Option<String> {
+    match transcript_part_content(part) {
+        PartContent::Reasoning(reasoning) => Some(reasoning.preferred_text()),
+        PartContent::Operation(tool) => Some(tool_output_copy_text(part, tool, i18n)),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -373,15 +550,15 @@ fn render_part_node(
                 .copied()
                 .unwrap_or(defaults.thinking_expanded);
             let summary = reasoning.preferred_text();
-            push_section_heading(
-                out,
-                "  thinking",
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-                width,
-            );
             if expanded {
+                push_section_heading(
+                    out,
+                    "  thinking",
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
+                    width,
+                );
                 push_multiline(
                     out,
                     "    ",
@@ -390,13 +567,12 @@ fn render_part_node(
                     width,
                 );
             } else {
-                push_collapsible_text(
+                push_single_line(
                     out,
-                    "    ",
-                    summary.as_str(),
+                    "  ",
+                    thinking_collapsed_summary(part.status, summary.as_str()).as_str(),
                     Style::default().fg(Color::DarkGray),
                     width,
-                    i18n,
                 );
             }
             RenderedNodeDraft {
@@ -511,6 +687,25 @@ fn render_part_node(
     }
 }
 
+fn thinking_collapsed_summary(status: ExecutionStatus, text: &str) -> String {
+    let normalized = trim_empty_line_edges(sanitize_terminal_text(text).as_str());
+    let preview = normalized
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    let additional_content = normalized
+        .lines()
+        .skip_while(|line| line.trim().is_empty())
+        .skip(1)
+        .any(|line| !line.trim().is_empty());
+    let suffix = if additional_content { " …" } else { "" };
+    format!(
+        "{} thinking · {preview}{suffix}",
+        activity_status_icon(status)
+    )
+}
+
 fn render_tool_execution(
     part: &MessagePart,
     tool: &OperationPart,
@@ -520,7 +715,7 @@ fn render_tool_execution(
     expanded: bool,
 ) {
     let label = tool_display_label(tool);
-    let (message_key, color) = tool_status_key_and_color(part.status);
+    let color = tool_status_color(part.status);
     if !expanded {
         push_single_line(
             out,
@@ -534,7 +729,7 @@ fn render_tool_execution(
     push_multiline(
         out,
         "  ",
-        &i18n.text_args(message_key, &crate::fl_args!("label" => label)),
+        tool_execution_status_summary(part, label.as_str()).as_str(),
         Style::default().fg(color),
         width,
     );
@@ -1171,14 +1366,39 @@ fn tool_output_copy_text(part: &MessagePart, tool: &OperationPart, i18n: &I18n) 
         .join("\n\n")
 }
 
-fn tool_status_key_and_color(status: ExecutionStatus) -> (&'static str, Color) {
+fn tool_status_color(status: ExecutionStatus) -> Color {
     match status {
-        ExecutionStatus::Pending => ("message-tool-pending", Color::Magenta),
-        ExecutionStatus::InProgress => ("message-tool-running", Color::Magenta),
-        ExecutionStatus::Completed => ("message-tool-done", Color::Green),
-        ExecutionStatus::Failed => ("message-tool-failed", Color::Red),
-        ExecutionStatus::Cancelled => ("message-tool-cancelled", Color::DarkGray),
+        ExecutionStatus::Pending | ExecutionStatus::InProgress => Color::Magenta,
+        ExecutionStatus::Completed => Color::Green,
+        ExecutionStatus::Failed => Color::Red,
+        ExecutionStatus::Cancelled => Color::DarkGray,
     }
+}
+
+fn activity_status_icon(status: ExecutionStatus) -> &'static str {
+    match status {
+        ExecutionStatus::Pending => "○",
+        ExecutionStatus::InProgress => spinner_frame(current_spinner_millis()),
+        ExecutionStatus::Completed => "●",
+        ExecutionStatus::Failed => "×",
+        ExecutionStatus::Cancelled => "–",
+    }
+}
+
+fn current_spinner_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
+fn spinner_frame(elapsed_millis: u128) -> &'static str {
+    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    FRAMES[((elapsed_millis / 100) % FRAMES.len() as u128) as usize]
+}
+
+fn tool_execution_status_summary(part: &MessagePart, label: &str) -> String {
+    format!("{} {label}", activity_status_icon(part.status))
 }
 
 fn tool_execution_collapsed_summary(
@@ -1201,7 +1421,7 @@ fn tool_execution_collapsed_summary(
             )
         })
         .unwrap_or(base_label);
-    ui_text::message_tool_summary(i18n, part.status, label.as_str())
+    tool_execution_status_summary(part, label.as_str())
 }
 
 fn transcript_message_parts(message: &MessageResource) -> &[MessagePart] {
@@ -1646,7 +1866,10 @@ fn render_markdown_block(
                 push_markdown(out, prefix, &block.source, width);
             }
         }
-        TranscriptNodeKind::Message | TranscriptNodeKind::Reasoning | TranscriptNodeKind::Tool => {
+        TranscriptNodeKind::Message
+        | TranscriptNodeKind::Activity
+        | TranscriptNodeKind::Reasoning
+        | TranscriptNodeKind::Tool => {
             push_markdown(out, prefix, &block.source, width);
         }
     }
@@ -2922,6 +3145,93 @@ mod tests {
             "- first item\n  continuation\n\n  still the first item\n- second item"
         );
         assert_eq!(blocks[1].kind, TranscriptNodeKind::MarkdownParagraph);
+    }
+
+    #[test]
+    fn collapsed_thinking_is_a_single_line_preview() {
+        let preview = thinking_collapsed_summary(
+            ExecutionStatus::Completed,
+            "\nfirst thought\nsecond thought\n",
+        );
+
+        assert_eq!(preview, "● thinking · first thought …");
+        assert!(!preview.contains('\n'));
+    }
+
+    #[test]
+    fn collapsed_activity_runs_only_keep_the_latest_few_blocks_visible() {
+        assert_eq!(collapsed_activity_visible_start(4, 12, false), 7);
+        assert_eq!(collapsed_activity_visible_start(4, 12, true), 4);
+        assert_eq!(collapsed_activity_visible_start(4, 6, false), 4);
+    }
+
+    #[test]
+    fn activity_status_icons_use_a_single_width_spinner_and_stable_terminal_symbols() {
+        assert_eq!(spinner_frame(0), "⠋");
+        assert_eq!(spinner_frame(100), "⠙");
+        assert_eq!(spinner_frame(900), "⠏");
+        assert_eq!(activity_status_icon(ExecutionStatus::Pending), "○");
+        assert_eq!(activity_status_icon(ExecutionStatus::Completed), "●");
+        assert_eq!(activity_status_icon(ExecutionStatus::Failed), "×");
+        assert_eq!(activity_status_icon(ExecutionStatus::Cancelled), "–");
+    }
+
+    #[test]
+    fn permission_request_for_a_tool_is_rendered_as_part_of_that_tool_not_a_second_call() {
+        let now = Utc::now();
+        let operation_id = "call_outer".to_string();
+        let mut operation = MessagePart::from_content(
+            10,
+            7,
+            now,
+            ExecutionStatus::Pending,
+            PartContent::Operation(OperationPart::pending(
+                0,
+                ToolInvocation::new("agena.tools.call", Default::default()),
+                "Awaiting permission: runtime.get",
+                Default::default(),
+            )),
+        );
+        operation.operation_id = Some(operation_id.clone());
+
+        let request = PermissionRequest {
+            request_id: "host-permission:7:0:1".to_string(),
+            session_id: Some(7),
+            action: PermissionAction::Tool {
+                tool_name: "agena.runtime.get".to_string(),
+                qualifier: None,
+            },
+            related_actions: Vec::new(),
+            requested_actions: Vec::new(),
+            reason: "approval required".to_string(),
+            explanation: String::new(),
+            source: None,
+            scope: None,
+            operator: None,
+            risk: PermissionRiskLevel::Medium,
+            trace: Vec::new(),
+            created_at: now,
+        };
+        let mut permission = MessagePart::from_content(
+            11,
+            7,
+            now,
+            ExecutionStatus::Pending,
+            PartContent::Request(RequestPart::Permission(
+                agena::message::InteractiveRequestPart::pending(request),
+            )),
+        );
+        permission.operation_id = Some(operation_id);
+
+        let parts = vec![operation, permission];
+        assert!(!interactive_request_is_embedded_in_operation(
+            parts.as_slice(),
+            0
+        ));
+        assert!(interactive_request_is_embedded_in_operation(
+            parts.as_slice(),
+            1
+        ));
     }
 
     #[test]

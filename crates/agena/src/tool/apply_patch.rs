@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use diff::Result as DiffResult;
 use serde::{Deserialize, Serialize};
@@ -81,7 +81,7 @@ pub fn execute(
     for op in ops {
         match op {
             PatchOp::Add { path, content } => {
-                let absolute = absolute_path(executor.workspace_root(), &path);
+                let absolute = executor.resolve_target_path(&path);
                 executor.ensure_edit_permission(&absolute)?;
                 ensure_parent(&absolute)?;
                 if absolute.exists() {
@@ -105,7 +105,7 @@ pub fn execute(
                 });
             }
             PatchOp::Delete { path } => {
-                let absolute = absolute_path(executor.workspace_root(), &path);
+                let absolute = executor.resolve_target_path(&path);
                 executor.ensure_edit_permission(&absolute)?;
                 if !absolute.exists() {
                     return Err(ToolError::InvalidPatch(format!(
@@ -133,7 +133,7 @@ pub fn execute(
                 move_to,
                 hunks,
             } => {
-                let source = absolute_path(executor.workspace_root(), &path);
+                let source = executor.resolve_target_path(&path);
                 executor.ensure_edit_permission(&source)?;
                 if !source.exists() {
                     return Err(ToolError::InvalidPatch(format!(
@@ -145,7 +145,7 @@ pub fn execute(
                 let updated = apply_hunks(&path, &original, &hunks)?;
 
                 if let Some(target_path) = move_to {
-                    let target = absolute_path(executor.workspace_root(), &target_path);
+                    let target = executor.resolve_target_path(&target_path);
                     executor.ensure_edit_permission(&target)?;
                     ensure_parent(&target)?;
                     if source != target && target.exists() {
@@ -496,15 +496,6 @@ fn describe_planned_op(op: &PatchOp) -> String {
             Some(target) => format!("parsed move {path} -> {target}"),
             None => format!("parsed update {path}"),
         },
-    }
-}
-
-fn absolute_path(workspace_root: &Path, file_path: &str) -> PathBuf {
-    let path = PathBuf::from(file_path);
-    if path.is_absolute() {
-        path
-    } else {
-        workspace_root.join(path)
     }
 }
 

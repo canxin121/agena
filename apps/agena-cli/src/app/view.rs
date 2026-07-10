@@ -32,7 +32,7 @@ use ratatui::{
     widgets::{Borders, ListItem, Paragraph, Wrap},
 };
 use tui_markdown::from_str as markdown_to_text;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 impl App {
     pub(super) fn draw(&mut self, frame: &mut Frame) {
@@ -2031,7 +2031,9 @@ impl App {
                 row_style
             };
             let marker = if is_selected { ">> " } else { "   " };
-            let left = format!("{marker}{}", item.label);
+            let label_width = (left_width as usize).saturating_sub(UnicodeWidthStr::width(marker));
+            let label = permission_studio_table_label(item, section.id, label_width);
+            let left = format!("{marker}{label}");
             lines.push(Line::from(Span::styled(
                 settings_compact_fixed_columns(
                     &[
@@ -3832,6 +3834,113 @@ fn settings_compact_fixed_columns(columns: &[(&str, usize)], width: u16) -> Stri
     out
 }
 
+fn permission_studio_table_label(
+    item: &PermissionStudioItem,
+    section_id: PermissionStudioSectionId,
+    max_width: usize,
+) -> String {
+    if section_id != PermissionStudioSectionId::PathRules {
+        return item.label.clone();
+    }
+
+    let (pattern, access) = match &item.action {
+        PermissionStudioAction::EditMode(PermissionStudioModeTarget::PathRuleRead { pattern }) => {
+            (pattern.as_str(), "read")
+        }
+        PermissionStudioAction::EditMode(PermissionStudioModeTarget::PathRuleWrite { pattern }) => {
+            (pattern.as_str(), "write")
+        }
+        _ => return item.label.clone(),
+    };
+    compact_permission_path_rule_label(pattern, access, max_width)
+}
+
+fn compact_permission_path_rule_label(pattern: &str, access: &str, max_width: usize) -> String {
+    let suffix = format!(" · {access}");
+    let suffix_width = UnicodeWidthStr::width(suffix.as_str());
+    if max_width <= suffix_width {
+        return truncate_display_text(suffix.as_str(), max_width);
+    }
+    let path_budget = max_width.saturating_sub(suffix_width);
+    format!(
+        "{}{}",
+        compact_permission_path_pattern(pattern, path_budget),
+        suffix
+    )
+}
+
+/// Keeps the right-most path components visible because those usually identify a rule.
+///
+/// A normal left truncation turns paths beneath one workspace into indistinguishable rows.
+/// This preserves a meaningful root marker when it fits and replaces only the shared middle
+/// with an ellipsis: `/…/generated/client/**` or `<workspace>/…/src/**`.
+fn compact_permission_path_pattern(pattern: &str, max_width: usize) -> String {
+    let pattern = sanitize_display_text(pattern);
+    if UnicodeWidthStr::width(pattern.as_str()) <= max_width {
+        return pattern;
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+
+    let (root, remainder) = if let Some(remainder) = pattern.strip_prefix("<workspace>/") {
+        ("<workspace>", remainder)
+    } else if let Some(remainder) = pattern.strip_prefix("~/") {
+        ("~", remainder)
+    } else if let Some(remainder) = pattern.strip_prefix('/') {
+        ("/", remainder)
+    } else {
+        ("", pattern.as_str())
+    };
+    let components = remainder
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .collect::<Vec<_>>();
+    if components.len() < 2 {
+        return ellipsize_from_start(pattern.as_str(), max_width);
+    }
+
+    let root_ellipsis = match root {
+        "<workspace>" => "<workspace>/…",
+        "~" => "~/…",
+        "/" => "/…",
+        _ => "…",
+    };
+    for start in 0..components.len() {
+        let tail = components[start..].join("/");
+        let candidate = format!("{root_ellipsis}/{tail}");
+        if UnicodeWidthStr::width(candidate.as_str()) <= max_width {
+            return candidate;
+        }
+    }
+    ellipsize_from_start(components.last().copied().unwrap_or_default(), max_width)
+}
+
+fn ellipsize_from_start(text: &str, max_width: usize) -> String {
+    if UnicodeWidthStr::width(text) <= max_width {
+        return text.to_string();
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    if max_width == 1 {
+        return "…".to_string();
+    }
+
+    let content_width = max_width.saturating_sub(1);
+    let mut tail = String::new();
+    let mut width = 0_usize;
+    for character in text.chars().rev() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if width.saturating_add(character_width) > content_width {
+            break;
+        }
+        tail.insert(0, character);
+        width = width.saturating_add(character_width);
+    }
+    format!("…{tail}")
+}
+
 fn settings_compact_pad_to_width(text: &str, width: usize) -> String {
     let cleaned = sanitize_display_text(text);
     let clipped = truncate_display_text(cleaned.as_str(), width);
@@ -4020,5 +4129,47 @@ fn permission_request_scope_label(i18n: &I18n, scope: PermissionScope) -> String
         PermissionScope::Session => ui_text::t(i18n, "value-session"),
         PermissionScope::Workspace => ui_text::t(i18n, "value-workspace"),
         PermissionScope::Global => ui_text::t(i18n, "value-global"),
+    }
+}
+
+#[cfg(test)]
+mod permission_path_display_tests {
+    use super::*;
+
+    #[test]
+    fn compact_path_rules_keep_distinguishing_suffixes_visible() {
+        let generated = compact_permission_path_pattern(
+            "/home/canxin/agena/projects/home-canxin-Git-ai/generated/client/**",
+            34,
+        );
+        let fixtures = compact_permission_path_pattern(
+            "/home/canxin/agena/projects/home-canxin-Git-ai/fixtures/mcp/**",
+            34,
+        );
+
+        assert_ne!(generated, fixtures);
+        assert!(generated.contains("generated/client/**"));
+        assert!(fixtures.contains("fixtures/mcp/**"));
+        assert!(generated.starts_with("/…/"));
+        assert!(fixtures.starts_with("/…/"));
+    }
+
+    #[test]
+    fn compact_workspace_paths_keep_the_workspace_marker_and_access_kind() {
+        let label = compact_permission_path_rule_label(
+            "<workspace>/very/long/shared/prefix/src/generated/**",
+            "write",
+            42,
+        );
+
+        assert!(label.starts_with("<workspace>/…/"));
+        assert!(label.contains("src/generated/**"));
+        assert!(label.ends_with(" · write"));
+        assert!(UnicodeWidthStr::width(label.as_str()) <= 42);
+    }
+
+    #[test]
+    fn extremely_narrow_path_columns_still_keep_the_tail() {
+        assert_eq!(ellipsize_from_start("long-final-segment", 8), "…segment");
     }
 }

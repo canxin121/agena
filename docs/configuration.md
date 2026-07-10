@@ -1304,12 +1304,12 @@ Network target 会先分到三类默认策略：`loopback` 匹配 `localhost`、
         "network": "ask"
       },
       "names": {
-        "shell": "ask",
-        "agena.fs/read": "ask",
-        "my-plugin.echo": "ask"
+        "agena.process.run": "ask",
+        "agena.fs.read": "ask",
+        "example.echo.echo": "ask"
       },
       "rules": {
-        "my-plugin.echo": {
+        "example.echo.echo": {
           "*": "ask"
         },
         "shell": {
@@ -1364,11 +1364,11 @@ Network target 会先分到三类默认策略：`loopback` 匹配 `localhost`、
 - `retrieval.limit`: 自动回忆最多注入多少条命中。
 - `retrieval.min_query_chars`: 用户消息短于这个长度时跳过自动回忆。
 
-`plugins.list."agena.memory".config` 会驱动 `agena.memory` 插件；模型可见 tools 是 `search`、`get`、`list`、`write`、`delete`。检索索引是工作区本地的 Tantivy 索引，不需要单独配置服务地址。`search` 和自动回忆会按需从 memory 文件重建索引，因此始终以磁盘上的 memory 文件为准。
+`plugins.list."agena.memory".config` 会驱动 `agena.memory` 插件；它注册 `search`、`get`、`list`、`write`、`delete` action，模型通过 gateway 调用它们。检索索引是工作区本地的 Tantivy 索引，不需要单独配置服务地址。`search` 和自动回忆会按需从 memory 文件重建索引，因此始终以磁盘上的 memory 文件为准。
 
 ## Workflow Tool Search
 
-`agena.tools/search` 现在使用进程内 Tantivy 索引。每次搜索都会基于当前已注册的 tools catalog 在本地重建索引，因此不依赖 Meilisearch 或其他外部服务。检索会混合精确匹配、ngram、子串、简易模糊匹配和联想补召回；`list`/`search` 默认返回 50 条、最大 100 条；`tag` 之外也支持 `tags` 传多个 tag 做交集过滤。
+`agena.tools.search` 现在使用进程内 Tantivy 索引。每次搜索都会基于当前已注册的 tools catalog 在本地重建索引，因此不依赖 Meilisearch 或其他外部服务。检索会混合精确匹配、ngram、子串、简易模糊匹配和联想补召回；`list`/`search` 默认返回 50 条、最大 100 条；`tag` 之外也支持 `tags` 传多个 tag 做交集过滤。
 
 旧的 external search backend 配置已经移除。当前版本不会读取 `tool_search.url`、`tool_search.api_key`、`tool_search.index` 这些字段。
 
@@ -1401,7 +1401,7 @@ Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力
         "max_concurrent": 8
       },
       "quotas": {
-        "echo": {
+        "example.echo": {
           "rate_per_sec": 5,
           "burst": 10,
           "max_concurrent": 2
@@ -1412,7 +1412,7 @@ Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力
       }
     },
     "list": {
-      "echo": {
+      "example.echo": {
         "package": {
           "kind": "stdio",
           "command": "node",
@@ -1456,12 +1456,12 @@ Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力
 - `quotas`
 - `trusted_keys`
 
-`plugins.policy.tool_presentation` 控制模型请求里的 tool 说明是完整发送，还是只发送短说明并引导调用 `tools help`。
+`plugins.policy.tool_presentation` 控制模型请求里的 tool 说明是完整发送，还是只发送短说明并引导调用 `tools_help`。
 
 Tool presentation 支持全局、按 plugin、按 tool 覆盖。模式值：
 
 - `detailed`: 使用 tool manifest / `tool.definition` hook 给出的完整 `description`。
-- `help`: 只发送短说明和 help 引导，完整用法通过 `help` tool 读取。
+- `help`: 只发送短说明和 help 引导，完整用法通过 `tools_help` 读取。
 
 ```json
 {
@@ -1474,8 +1474,8 @@ Tool presentation 支持全局、按 plugin、按 tool 覆盖。模式值：
           "agena.mcp": "help"
         },
         "tools": {
-          "agena.fs/read": "detailed",
-          "agena.tools/help": "detailed"
+          "agena.fs.read": "detailed",
+          "agena.tools.help": "detailed"
         }
       }
     }
@@ -1483,7 +1483,7 @@ Tool presentation 支持全局、按 plugin、按 tool 覆盖。模式值：
 }
 ```
 
-按 tool 覆盖可以使用模型可见名（如 `agena.fs/read`）、`plugin_id/tool_name`（如 `agena.tools/help`），或无冲突的原始 tool 名。具体 tool 覆盖优先于 plugin 覆盖；plugin 覆盖优先于 manifest 的 `description_mode`；最后才使用 `default_mode`。
+按 tool 覆盖使用 canonical tool id（如 `agena.fs.read`）；plugin 覆盖使用 plugin id（如 `agena.tools`）。模型实际调用 gateway 时则使用 gateway 目录返回的名称（通常为 `fs.read`），不要把它用于配置。具体 tool 覆盖优先于 plugin 覆盖；plugin 覆盖优先于 manifest 的 `description_mode`；最后才使用 `default_mode`。
 
 Plugin transport kind：
 
@@ -1507,7 +1507,7 @@ Plugin transport kind：
           "init": "5s"
         }
       },
-      "native": {
+      "example.native": {
         "package": {
           "kind": "cdylib",
           "path": "./plugins/native/libnative.so",
@@ -1524,7 +1524,7 @@ Plugin transport kind：
           "tool_invoke": "20s"
         }
       },
-      "worker": {
+      "example.worker": {
         "package": {
           "kind": "stdio",
           "command": "node",
@@ -1550,7 +1550,7 @@ Plugin transport kind：
           "tool_invoke": "45s"
         }
       },
-      "policy": {
+      "example.policy": {
         "package": {
           "kind": "http",
           "url": "https://policy.example.com/agena/rpc",
@@ -1566,7 +1566,7 @@ Plugin transport kind：
           "fast": "2s"
         }
       },
-      "sandboxed": {
+      "example.sandboxed": {
         "package": {
           "kind": "wasm",
           "path": "./plugins/sandboxed/plugin.wasm",
@@ -1618,7 +1618,7 @@ Quota 字段：
         "max_concurrent": 8
       },
       "quotas": {
-        "cloud-policy": {
+        "example.cloud-policy": {
           "rate_per_sec": 5,
           "burst": 10,
           "max_concurrent": 2
@@ -1673,14 +1673,16 @@ Stdio:
           "servers": {
             "filesystem": {
               "transport": "stdio",
-              "command": "npx",
-              "args": [
-                "-y",
-                "@modelcontextprotocol/server-filesystem",
-                "."
-              ],
-              "env": {},
-              "cwd": "."
+              "process": {
+                "command": "npx",
+                "args": [
+                  "-y",
+                  "@modelcontextprotocol/server-filesystem",
+                  "."
+                ],
+                "env": {},
+                "cwd": "."
+              }
             }
           }
         }
@@ -1704,8 +1706,10 @@ HTTP:
           "servers": {
             "remote": {
               "transport": "http",
-              "url": "https://mcp.example.com",
-              "headers": {},
+              "endpoint": {
+                "url": "https://mcp.example.com",
+                "headers": {}
+              },
               "auth": {
                 "kind": "bearer_from_env",
                 "env": "MCP_TOKEN"
@@ -1726,20 +1730,20 @@ stdio
 http
 ```
 
-`stdio` 字段：
+`stdio` server 的字段：
 
 ```text
-command
-args
-env
-cwd
+process.command
+process.args
+process.env
+process.cwd
 ```
 
-`http` 字段：
+`http` server 的字段：
 
 ```text
-url
-headers
+endpoint.url
+endpoint.headers
 auth
 ```
 
@@ -1773,16 +1777,22 @@ LSP server 配置位于 `plugins.list."agena.lsp".config`：
         "config": {
           "servers": {
             "rust": {
-              "command": "rust-analyzer",
-              "args": [],
-              "env": {},
-              "file_extensions": [
-                "rs"
-              ],
-              "root_markers": [
-                "Cargo.toml"
-              ],
-              "initialization_options": {}
+              "process": {
+                "command": "rust-analyzer",
+                "args": [],
+                "env": {}
+              },
+              "routing": {
+                "file_extensions": [
+                  "rs"
+                ],
+                "root_markers": [
+                  "Cargo.toml"
+                ]
+              },
+              "session": {
+                "initialization_options": {}
+              }
             }
           }
         }
@@ -1792,18 +1802,18 @@ LSP server 配置位于 `plugins.list."agena.lsp".config`：
 }
 ```
 
-LSP 字段：
+LSP server 字段：
 
 ```text
-command
-args
-env
-file_extensions
-root_markers
-initialization_options
+process.command
+process.args
+process.env
+routing.file_extensions
+routing.root_markers
+session.initialization_options
 ```
 
-`file_extensions` 不带前导 `.`；写空数组表示该 server 匹配所有文件。`root_markers` 是用于识别项目根目录的文件名列表。`initialization_options` 是传给 language server 的 JSON object。
+`file_extensions` 不带前导 `.`；写空数组表示该 server 匹配所有文件。`root_markers` 是用于识别项目根目录的文件名列表。`initialization_options` 是传给 language server 的 JSON object。可选的 `defaults.env`、`defaults.root_markers` 和 `defaults.initialization_options` 会作为所有 server 的回退值；每个 server 的 `process`、`routing`、`session` 都是独立嵌套对象。
 
 LSP registry 是 lazy-spawn 的。相关 tool 首次触及匹配文件时才会启动对应 server。
 

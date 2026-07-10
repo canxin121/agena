@@ -70,7 +70,7 @@ impl ToolStreamAccumulator {
         provider_id: &str,
         input: ToolStreamInput,
     ) -> Result<Vec<ToolStreamUpdate>, AppError> {
-        let stream_key = self.resolve_stream_key(provider_id, &input.stream_key_candidates)?;
+        let stream_key = self.resolve_stream_key(provider_id, &input)?;
         let was_new = !self.pending.contains_key(&stream_key);
         let state = self.pending.entry(stream_key.clone()).or_default();
 
@@ -141,17 +141,43 @@ impl ToolStreamAccumulator {
     fn resolve_stream_key(
         &mut self,
         provider_id: &str,
-        candidates: &[ProviderStreamKey],
+        input: &ToolStreamInput,
     ) -> Result<ProviderStreamKey, AppError> {
+        let candidates = input.stream_key_candidates.as_slice();
         if candidates.is_empty() {
             return Err(AppError::Provider(format!(
                 "{provider_id} returned tool event without stream key candidates"
             )));
         }
 
-        let key = candidates
-            .iter()
-            .find_map(|candidate| self.aliases.get(candidate.as_ref()).cloned())
+        // A model call id is authoritative. Do not let a reused positional
+        // index alias a different call id into an earlier call; OpenAI-style
+        // providers may legitimately reuse an index across separate calls.
+        let authoritative = input.model_call_id.as_ref().and_then(|model_call_id| {
+            candidates.iter().find(|candidate| {
+                candidate
+                    .as_ref()
+                    .split_once(':')
+                    .is_some_and(|(_, value)| value == model_call_id.as_ref())
+            })
+        });
+        let key = authoritative
+            .and_then(|candidate| {
+                self.aliases
+                    .get(candidate.as_ref())
+                    .cloned()
+                    .or_else(|| {
+                        self.pending
+                            .contains_key(candidate)
+                            .then(|| candidate.clone())
+                    })
+                    .or_else(|| Some(candidate.clone()))
+            })
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .find_map(|candidate| self.aliases.get(candidate.as_ref()).cloned())
+            })
             .or_else(|| {
                 candidates
                     .iter()
@@ -224,4 +250,122 @@ fn snapshot_delta(current: &mut String, snapshot: &str) -> Option<SnapshotEffect
     current.clear();
     current.push_str(snapshot);
     Some(SnapshotEffect::Replace(snapshot.to_owned()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ToolStreamAccumulator, ToolStreamInput, ToolStreamInputKind, ToolStreamUpdate};
+
+    fn input(
+        kind: ToolStreamInputKind,
+        keys: &[&str],
+        call_id: Option<&str>,
+        arguments: Option<&str>,
+    ) -> ToolStreamInput {
+        ToolStreamInput {
+            kind,
+            stream_key_candidates: keys
+                .iter()
+                .map(|key| key.parse().expect("non-empty stream key"))
+                .collect(),
+            provider_item_id: None,
+            model_call_id: call_id.map(|id| id.parse().expect("non-empty call id")),
+            name: Some("tools_call".to_string()),
+            arguments: arguments.map(ToOwned::to_owned),
+        }
+    }
+
+    #[test]
+    fn aliases_changing_indices_by_the_shared_call_id() {
+        let mut accumulator = ToolStreamAccumulator::new();
+
+        let first = accumulator
+            .ingest(
+                "cline",
+                input(
+                    ToolStreamInputKind::Delta,
+                    &["id:call_shared", "idx:0"],
+                    Some("call_shared"),
+                    Some(r#"{"tool":"skills."#),
+                ),
+            )
+            .expect("first tool chunk");
+        assert_eq!(
+            first,
+            vec![ToolStreamUpdate::ArgumentsDelta {
+                stream_key: "id:call_shared".to_string(),
+                id: Some("call_shared".to_string()),
+                name: Some("tools_call".to_string()),
+                arguments_delta: r#"{"tool":"skills."#.to_string(),
+            }]
+        );
+
+        let continuation = accumulator
+            .ingest(
+                "cline",
+                input(
+                    ToolStreamInputKind::Delta,
+                    &["id:call_shared", "idx:6"],
+                    Some("call_shared"),
+                    Some(r#"list","input":{}}"#),
+                ),
+            )
+            .expect("continued tool chunk");
+        assert_eq!(
+            continuation,
+            vec![ToolStreamUpdate::ArgumentsDelta {
+                stream_key: "id:call_shared".to_string(),
+                id: Some("call_shared".to_string()),
+                name: Some("tools_call".to_string()),
+                arguments_delta: r#"list","input":{}}"#.to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn preserves_distinct_call_ids_with_identical_arguments() {
+        let mut accumulator = ToolStreamAccumulator::new();
+        let arguments = r#"{"tool":"skills.list","input":{}}"#;
+
+        let first = accumulator
+            .ingest(
+                "cline",
+                input(
+                    ToolStreamInputKind::Delta,
+                    &["id:call_one", "idx:0"],
+                    Some("call_one"),
+                    Some(arguments),
+                ),
+            )
+            .expect("first call");
+        let second = accumulator
+            .ingest(
+                "cline",
+                input(
+                    ToolStreamInputKind::Delta,
+                    &["id:call_two", "idx:0"],
+                    Some("call_two"),
+                    Some(arguments),
+                ),
+            )
+            .expect("second call");
+
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        let ToolStreamUpdate::ArgumentsDelta {
+            stream_key: first_key,
+            ..
+        } = &first[0]
+        else {
+            panic!("first update should be an argument delta");
+        };
+        let ToolStreamUpdate::ArgumentsDelta {
+            stream_key: second_key,
+            ..
+        } = &second[0]
+        else {
+            panic!("second update should be an argument delta");
+        };
+        assert_ne!(first_key, second_key);
+    }
 }

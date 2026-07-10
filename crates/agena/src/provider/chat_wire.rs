@@ -38,6 +38,12 @@ pub(crate) struct ChatCompletionRequest {
     pub prompt_cache_key: Option<String>,
     #[serde(rename = "promptCacheKey", skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key_camel_case: Option<String>,
+    /// OpenAI-compatible switch controlling whether the model may return
+    /// more than one function call in a turn. Omitted unless the caller
+    /// explicitly selected a policy so existing provider defaults remain
+    /// unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<ChatStreamOptions>,
@@ -329,19 +335,6 @@ pub(crate) struct ChatInputTokensDetails {
     pub cached_tokens: Option<u64>,
 }
 
-// ─── Stream accumulator ───────────────────────────────────────────────────────
-
-#[derive(Debug, Default)]
-pub(crate) struct ChatToolCallStreamState {
-    pub id: Option<String>,
-    pub name: Option<String>,
-    pub arguments: String,
-    /// Set once the first ToolCallDelta has been emitted for this call.
-    /// Used to detect parameterless tool calls that need a registration
-    /// delta so the shared aggregator does not drop them.
-    pub announced: bool,
-}
-
 // ─── Utility helpers ──────────────────────────────────────────────────────────
 
 pub(crate) fn extract_text_from_content(value: &Value) -> String {
@@ -386,6 +379,45 @@ pub(crate) fn assistant_reasoning_field_from_delta_or_message(
         value.reasoning_content.as_ref(),
         value.reasoning_details.as_ref(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ChatCompletionRequest;
+
+    fn request(parallel_tool_calls: Option<bool>) -> ChatCompletionRequest {
+        ChatCompletionRequest {
+            model: "test-model".to_string(),
+            messages: Vec::new(),
+            tools: None,
+            temperature: None,
+            max_tokens: None,
+            cache_control: None,
+            prompt_cache_key: None,
+            prompt_cache_key_camel_case: None,
+            parallel_tool_calls,
+            stream: true,
+            stream_options: None,
+            stop: Vec::new(),
+            top_p: None,
+            seed: None,
+            response_format: None,
+            reasoning_effort: None,
+            verbosity: None,
+        }
+    }
+
+    #[test]
+    fn serializes_explicit_parallel_tool_call_policy_without_forcing_a_default() {
+        let disabled = serde_json::to_value(request(Some(false))).expect("serialize request");
+        assert_eq!(
+            disabled.get("parallel_tool_calls"),
+            Some(&serde_json::Value::Bool(false))
+        );
+
+        let unspecified = serde_json::to_value(request(None)).expect("serialize request");
+        assert!(unspecified.get("parallel_tool_calls").is_none());
+    }
 }
 
 pub(crate) fn extract_reasoning_text_from_delta_or_message(

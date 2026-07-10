@@ -208,6 +208,12 @@ fn mode_request_override_for_adapter(
     merged
 }
 
+fn should_execute_pending_tools_concurrently(
+    request_override: &ModelSpeedModeRequestOverride,
+) -> bool {
+    request_override.parallel_tool_calls() != Some(false)
+}
+
 impl SessionManager {
     fn lookup_pending_reply<P>(
         &self,
@@ -471,6 +477,40 @@ impl SessionManager {
             )
             .await?;
 
+        if request_id.starts_with("host-permission:") {
+            if let Some(waiter) = self
+                .host_permission_waiters
+                .lock()
+                .await
+                .remove(request_id.as_str())
+            {
+                let _ = waiter.response.send(request.request.reply.clone());
+                return Ok(session);
+            }
+
+            let reason =
+                "host-invoked permission continuation is unavailable; retry the tool".to_string();
+            session = self
+                .apply_tool_failure_with_rules(
+                    session,
+                    &pending.tool,
+                    reason,
+                    Vec::new(),
+                    state.clone(),
+                )
+                .await?;
+            return self
+                .continue_reply_session(
+                    session,
+                    request.request.session_id,
+                    request.request.options,
+                    RunSource::PermissionReply,
+                    state,
+                    "permission continuation task failed",
+                )
+                .await;
+        }
+
         match request.request.reply.kind {
             PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
                 let resolved_tool = resolve_pending_tool(&session, &pending.tool)?;
@@ -727,7 +767,7 @@ impl SessionManager {
             let pending_tools = session.pending_tools();
             if !pending_tools.is_empty() {
                 session = self
-                    .resolve_pending_tools(session, pending_tools, state.clone())
+                    .resolve_pending_tools(session, pending_tools, &current_options, state.clone())
                     .await?;
                 continue;
             }
@@ -1268,8 +1308,20 @@ impl SessionManager {
         &self,
         mut session: Session,
         pending_tools: Vec<SessionPendingTool>,
+        options: &SessionRunOptions,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
+        // `parallel_tool_calls: false` is a model-request contract, not just
+        // a provider hint. Keep provider-emitted calls in their transcript
+        // order even when every individual tool is otherwise safe to fan out.
+        // This also gives gateway calls a single host callback chain at a time.
+        if !should_execute_pending_tools_concurrently(&options.request_override) {
+            if let Some(tool) = session.next_pending_tool() {
+                return self.resolve_pending_tool(session, tool, state).await;
+            }
+            return Ok(session);
+        }
+
         let mut resolved_tools = Vec::new();
         for pending_tool in pending_tools {
             let Some(resolved) = self
@@ -1481,7 +1533,7 @@ impl SessionManager {
                     &pending_tool.invocation,
                     pending_tool.advertised_tool_identity.as_deref(),
                 )?;
-                scoped_executor.execute_invocation_detailed(
+                scoped_executor.execute_invocation_detailed_bypassing_permissions(
                     &pending_tool.invocation,
                     session_id,
                     pending_tool.call_id,
@@ -1651,7 +1703,12 @@ impl SessionManager {
 
         let streaming_tool = match state
             .tool_executor
-            .execute_invocation_streaming(&resolved.invocation, session.id, resolved.call_id)
+            .for_session_context(&session.runtime.execution)
+            .execute_invocation_streaming_after_authorization(
+                &resolved.invocation,
+                session.id,
+                resolved.call_id,
+            )
             .await
         {
             Ok(stream) => stream,
@@ -1707,7 +1764,7 @@ impl SessionManager {
         }
     }
 
-    pub(crate) async fn resolve_tool_permission_check(
+    pub async fn resolve_tool_permission_check(
         &self,
         session_id: Option<i64>,
         check: &ToolPermissionCheck,
@@ -1933,40 +1990,49 @@ impl SessionManager {
         Ok(AggregatedPermissionOutcome::Allow)
     }
 
-    pub(super) async fn require_immediate_tool_permissions(
-        &self,
-        session_id: i64,
-        executor: &ToolExecutor,
-        invocation: &ToolInvocation,
-    ) -> Result<(), AppError> {
-        for check in executor
-            .collect_permission_checks_for_invocation_in_session(invocation, Some(session_id))
-            .map_err(tool_error_to_app_error)?
-        {
-            match self
-                .resolve_permission_decision(Some(session_id), &check)
-                .await?
-                .decision
-            {
-                PermissionDecision::Allow => {}
-                PermissionDecision::Ask { reason } => {
-                    return Err(AppError::Internal(format!(
-                        "permission confirmation required: {reason}"
-                    )));
-                }
-                PermissionDecision::Deny { reason } => {
-                    return Err(AppError::Internal(format!("permission denied: {reason}")));
-                }
-            }
-        }
-        Ok(())
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn apply_permission_request(
         &self,
+        session: Session,
+        pending_tool: &SessionPendingTool,
+        action: PermissionAction,
+        related_actions: Vec<PermissionAction>,
+        requested_actions: Vec<PermissionAction>,
+        reason: String,
+        explanation: String,
+        source: Option<String>,
+        scope: Option<PermissionScope>,
+        operator: Option<String>,
+        risk: crate::permission::PermissionRiskLevel,
+        trace: Vec<crate::permission::DecisionTraceStep>,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        let request_id = resolve_pending_tool(&session, pending_tool)?.operation_id;
+        self.apply_permission_request_with_id(
+            session,
+            pending_tool,
+            request_id,
+            action,
+            related_actions,
+            requested_actions,
+            reason,
+            explanation,
+            source,
+            scope,
+            operator,
+            risk,
+            trace,
+            state,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn apply_permission_request_with_id(
+        &self,
         mut session: Session,
         pending_tool: &SessionPendingTool,
+        request_id: String,
         action: PermissionAction,
         related_actions: Vec<PermissionAction>,
         requested_actions: Vec<PermissionAction>,
@@ -1981,7 +2047,7 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let request = PermissionRequest {
-            request_id: resolved.operation_id.clone(),
+            request_id,
             session_id: Some(session.id),
             action,
             related_actions: related_actions.clone(),
@@ -2038,7 +2104,7 @@ impl SessionManager {
             vec![assistant_message],
             vec![EventKind::PermissionRequested(PermissionRequestedEvent {
                 session_id,
-                request_id: resolved.operation_id.clone(),
+                request_id: request.request_id.clone(),
                 action: request.action.clone(),
                 related_actions,
                 requested_actions,
@@ -2151,45 +2217,7 @@ impl SessionManager {
             }
 
             session = self
-                .store
-                .load_session(session.id, state.cache_policy())
-                .await?;
-            let tool_part_ref = session
-                .resolve_part_ref(&pending_tool.part)
-                .ok_or_else(|| {
-                    AppError::Internal(format!(
-                        "streaming tool part not found: message={}, part={}",
-                        pending_tool.part.message_id, pending_tool.part.part_id
-                    ))
-                })?;
-            let tool_part = session.part_mut(&tool_part_ref).ok_or_else(|| {
-                AppError::Internal(format!(
-                    "streaming tool part not found: message={}, part={}",
-                    pending_tool.part.message_id, pending_tool.part.part_id
-                ))
-            })?;
-            if !tool_part.append_tool_output_delta(delta) {
-                return Err(AppError::Internal(format!(
-                    "streaming tool part refused output delta: message={}, part={}",
-                    pending_tool.part.message_id, pending_tool.part.part_id
-                )));
-            }
-            if matches!(
-                tool_part.status,
-                ExecutionStatus::Pending | ExecutionStatus::InProgress
-            ) {
-                tool_part.status = ExecutionStatus::InProgress;
-            }
-
-            let assistant_message = session.messages[tool_part_ref.message_index].clone();
-            session = self
-                .persist_session_changes(
-                    session,
-                    vec![assistant_message],
-                    Vec::new(),
-                    None,
-                    state.clone(),
-                )
+                .append_streaming_tool_output_delta(session.id, pending_tool, delta, state.clone())
                 .await?;
         }
 
@@ -2226,6 +2254,46 @@ impl SessionManager {
             .load_session(session.id, state.cache_policy())
             .await?;
         self.apply_tool_success(session, pending_tool, execution, None, state)
+            .await
+    }
+
+    /// Persist one text chunk for a pending tool operation. This is shared by
+    /// ordinary direct streaming invocations and streaming targets executed
+    /// through the tools.call gateway.
+    pub(super) async fn append_streaming_tool_output_delta(
+        &self,
+        session_id: i64,
+        pending_tool: &SessionPendingTool,
+        delta: &str,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        let mut session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        let tool_part_ref = session
+            .resolve_part_ref(&pending_tool.part)
+            .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
+        {
+            let tool_part = session
+                .part_mut(&tool_part_ref)
+                .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
+            if !tool_part.append_tool_output_delta(delta) {
+                return Err(AppError::Internal(format!(
+                    "streaming tool part refused output delta: message={}, part={}",
+                    pending_tool.part.message_id, pending_tool.part.part_id
+                )));
+            }
+            if matches!(
+                tool_part.status,
+                ExecutionStatus::Pending | ExecutionStatus::InProgress
+            ) {
+                tool_part.status = ExecutionStatus::InProgress;
+            }
+        }
+
+        let assistant_message = assistant_message_for_part(&session, &pending_tool.part)?;
+        self.persist_session_changes(session, vec![assistant_message], Vec::new(), None, state)
             .await
     }
 
@@ -3109,7 +3177,7 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&pending_tool.session_runtime.execution);
-        scoped_executor.execute_invocation_detailed_with_prepared_shell(
+        scoped_executor.execute_invocation_detailed_bypassing_permissions_with_prepared_shell(
             &pending_tool.invocation,
             session_id,
             pending_tool.call_id,
@@ -3196,4 +3264,27 @@ fn join_runtime_context_lines(lines: &[String]) -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_execute_pending_tools_concurrently;
+    use crate::model::ModelSpeedModeRequestOverride;
+
+    #[test]
+    fn explicit_parallel_false_serializes_pending_tool_execution() {
+        let mut disabled = ModelSpeedModeRequestOverride::default();
+        disabled.set_parallel_tool_calls(Some(false));
+        assert!(!should_execute_pending_tools_concurrently(&disabled));
+
+        let enabled = {
+            let mut request_override = ModelSpeedModeRequestOverride::default();
+            request_override.set_parallel_tool_calls(Some(true));
+            request_override
+        };
+        assert!(should_execute_pending_tools_concurrently(&enabled));
+        assert!(should_execute_pending_tools_concurrently(
+            &ModelSpeedModeRequestOverride::default()
+        ));
+    }
 }

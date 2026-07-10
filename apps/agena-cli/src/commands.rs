@@ -149,7 +149,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         id: CommandId::Permissions,
         name: "permissions",
         aliases: &["permission"],
-        arguments: "[new|list]",
+        arguments: "[session|workspace|global|effective|new|list]",
         summary_key: "command-permissions-summary",
     },
     CommandSpec {

@@ -281,6 +281,8 @@ impl SessionProcessor {
                         complete_part_status(&mut assistant, part_id)?;
                     }
 
+                    let stream_key =
+                        pending_tool_call_stream_key(&mut pending_calls, stream_key, id.as_deref());
                     let pending = pending_calls.entry(stream_key).or_default();
                     if let Some(id) = id {
                         pending.id = Some(id);
@@ -322,6 +324,8 @@ impl SessionProcessor {
                         complete_part_status(&mut assistant, part_id)?;
                     }
 
+                    let stream_key =
+                        pending_tool_call_stream_key(&mut pending_calls, stream_key, id.as_deref());
                     let pending = pending_calls.entry(stream_key).or_default();
                     if let Some(id) = id {
                         pending.id = Some(id);
@@ -1345,6 +1349,56 @@ struct PendingToolCall {
     history_call_id: Option<ToolCallId>,
 }
 
+/// Pick a stable pending-call key for one provider stream event.
+///
+/// Provider adapters normally keep `stream_key` stable, but a compatible
+/// gateway can change its positional stream key while retaining the same
+/// provider call id. The call id is the protocol identity, so it wins over a
+/// transient stream key. Conversely, different non-empty call ids must stay
+/// independent even when an adapter accidentally reuses a stream key: models
+/// are allowed to intentionally invoke the same tool with the same input more
+/// than once as long as they issue distinct call ids.
+fn pending_tool_call_stream_key(
+    pending_calls: &mut BTreeMap<String, PendingToolCall>,
+    stream_key: String,
+    provider_call_id: Option<&str>,
+) -> String {
+    let Some(provider_call_id) = provider_call_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return stream_key;
+    };
+
+    if let Some(existing_key) = pending_calls.iter().find_map(|(key, pending)| {
+        (pending.id.as_deref() == Some(provider_call_id)).then(|| key.clone())
+    }) {
+        return existing_key;
+    }
+
+    let canonical_key = format!("id:{provider_call_id}");
+    if pending_calls.contains_key(canonical_key.as_str()) {
+        return canonical_key;
+    }
+
+    // If an earlier fragment did not include the provider id, retain its
+    // materialized operation and history state by moving it under the newly
+    // available canonical id instead of creating a second pending operation.
+    let can_rekey_existing_stream = pending_calls
+        .get(stream_key.as_str())
+        .is_some_and(|pending| {
+            pending.id.as_deref().is_none() || pending.id.as_deref() == Some(provider_call_id)
+        });
+    if can_rekey_existing_stream && stream_key != canonical_key {
+        let pending = pending_calls
+            .remove(stream_key.as_str())
+            .expect("checked pending stream key exists");
+        pending_calls.insert(canonical_key.clone(), pending);
+    }
+
+    canonical_key
+}
+
 #[derive(Debug, Default, Clone)]
 struct PendingNativeToolCall {
     part_id: Option<i64>,
@@ -1616,4 +1670,76 @@ where
     }
 
     Ok(parsed)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::{PendingToolCall, pending_tool_call_stream_key};
+
+    #[test]
+    fn provider_call_id_merges_changing_adapter_stream_keys() {
+        let mut pending = BTreeMap::<String, PendingToolCall>::new();
+
+        let first =
+            pending_tool_call_stream_key(&mut pending, "idx:0".to_string(), Some("call_shared"));
+        assert_eq!(first, "id:call_shared");
+        pending.insert(
+            first.clone(),
+            PendingToolCall {
+                id: Some("call_shared".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let replay =
+            pending_tool_call_stream_key(&mut pending, "idx:6".to_string(), Some("call_shared"));
+        assert_eq!(replay, first);
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn distinct_provider_call_ids_do_not_merge_even_when_stream_key_repeats() {
+        let mut pending = BTreeMap::<String, PendingToolCall>::new();
+
+        let first =
+            pending_tool_call_stream_key(&mut pending, "idx:0".to_string(), Some("call_one"));
+        pending.insert(
+            first.clone(),
+            PendingToolCall {
+                id: Some("call_one".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let second =
+            pending_tool_call_stream_key(&mut pending, "idx:0".to_string(), Some("call_two"));
+        assert_ne!(first, second);
+        pending.insert(
+            second.clone(),
+            PendingToolCall {
+                id: Some("call_two".to_string()),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(pending.len(), 2);
+        assert!(pending.contains_key(first.as_str()));
+        assert!(pending.contains_key(second.as_str()));
+    }
+
+    #[test]
+    fn provider_id_rekeys_an_earlier_idless_stream_without_a_second_call() {
+        let mut pending = BTreeMap::<String, PendingToolCall>::new();
+        pending.insert("idx:0".to_string(), PendingToolCall::default());
+
+        let key =
+            pending_tool_call_stream_key(&mut pending, "idx:0".to_string(), Some("call_shared"));
+
+        assert_eq!(key, "id:call_shared");
+        assert_eq!(pending.len(), 1);
+        assert!(pending.contains_key("id:call_shared"));
+        assert!(!pending.contains_key("idx:0"));
+    }
 }

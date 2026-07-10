@@ -619,39 +619,111 @@ pub(super) fn host_status_to_sdk(
 }
 
 pub(super) mod active_invocations {
-    //! Reentrancy guard for plugin → host → plugin invocations. We track
-    //! the *task-local* set of plugin ids currently being invoked so that a
-    //! plugin cannot recurse into itself via the host callback.
+    //! Reentrancy guard for plugin → host → plugin invocations.
+    //!
+    //! A guard must follow the logical host invocation, not the executor
+    //! thread. Plugin callbacks can await, migrate between Tokio workers, and
+    //! enter nested plugin-host runtimes. A `thread_local!` guard therefore
+    //! both leaked when it was dropped on a different worker and made
+    //! unrelated calls on one worker look recursive. The session/call pair is
+    //! stable throughout a host callback chain, so it is the correct scope.
 
-    use std::cell::RefCell;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::{LazyLock, Mutex};
 
-    thread_local! {
-        static ACTIVE: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    struct InvocationScope {
+        session_id: i64,
+        call_id: i64,
     }
 
-    pub fn contains(id: &str) -> bool {
-        ACTIVE.with(|set| set.borrow().contains(id))
-    }
+    static ACTIVE: LazyLock<Mutex<HashMap<InvocationScope, HashSet<String>>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
 
-    pub fn current_plugin() -> Option<String> {
-        ACTIVE.with(|set| set.borrow().iter().next().cloned())
+    pub struct Guard {
+        scope: InvocationScope,
+        plugin_id: String,
     }
-
-    pub struct Guard(String);
 
     impl Drop for Guard {
         fn drop(&mut self) {
-            ACTIVE.with(|set| {
-                set.borrow_mut().remove(&self.0);
-            });
+            let Ok(mut active) = ACTIVE.lock() else {
+                return;
+            };
+            let Some(plugins) = active.get_mut(&self.scope) else {
+                return;
+            };
+            plugins.remove(self.plugin_id.as_str());
+            if plugins.is_empty() {
+                active.remove(&self.scope);
+            }
         }
     }
 
-    pub fn enter(id: String) -> Guard {
-        ACTIVE.with(|set| {
-            set.borrow_mut().insert(id.clone());
-        });
-        Guard(id)
+    /// Atomically enter a target plugin for one logical host invocation.
+    /// Returns `None` only when that exact invocation already has the target
+    /// plugin on its call chain.
+    pub fn try_enter(session_id: i64, call_id: i64, plugin_id: String) -> Option<Guard> {
+        let scope = InvocationScope {
+            session_id,
+            call_id,
+        };
+        let mut active = ACTIVE.lock().ok()?;
+        let plugins = active.entry(scope).or_default();
+        if !plugins.insert(plugin_id.clone()) {
+            return None;
+        }
+        Some(Guard { scope, plugin_id })
+    }
+
+    #[cfg(test)]
+    fn is_active(session_id: i64, call_id: i64, plugin_id: &str) -> bool {
+        let scope = InvocationScope {
+            session_id,
+            call_id,
+        };
+        ACTIVE
+            .lock()
+            .ok()
+            .and_then(|active| active.get(&scope).cloned())
+            .is_some_and(|plugins| plugins.contains(plugin_id))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{is_active, try_enter};
+
+        #[test]
+        fn reentrancy_is_scoped_to_one_session_call_chain() {
+            let first = try_enter(9_001, 101, "example.target".to_string())
+                .expect("enter first invocation");
+            assert!(is_active(9_001, 101, "example.target"));
+
+            assert!(try_enter(9_001, 101, "example.target".to_string()).is_none());
+            let other_call = try_enter(9_001, 102, "example.target".to_string())
+                .expect("same target is valid for a distinct call");
+            let other_session = try_enter(9_002, 101, "example.target".to_string())
+                .expect("same target is valid for a distinct session");
+
+            drop(other_call);
+            drop(other_session);
+            drop(first);
+            assert!(!is_active(9_001, 101, "example.target"));
+            assert!(try_enter(9_001, 101, "example.target".to_string()).is_some());
+        }
+
+        #[test]
+        fn guard_cleanup_is_not_bound_to_the_entry_thread() {
+            let guard =
+                try_enter(9_003, 103, "example.target".to_string()).expect("enter invocation");
+            assert!(is_active(9_003, 103, "example.target"));
+
+            std::thread::spawn(move || drop(guard))
+                .join()
+                .expect("drop guard from another thread");
+
+            assert!(!is_active(9_003, 103, "example.target"));
+            assert!(try_enter(9_003, 103, "example.target".to_string()).is_some());
+        }
     }
 }

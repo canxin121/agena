@@ -27,12 +27,50 @@ use crate::protocol::{
 use crate::transport::LspTransport;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+// LSP's `ContentModified` error code. A server may report this while it is
+// catching up with a `didOpen`/`didChange` notification.
+const CONTENT_MODIFIED_ERROR_CODE: i64 = -32_801;
+
+/// Rust-analyzer (and other servers that build a project index lazily) can
+/// accept an LSP request immediately after `didOpen` while its semantic model
+/// is still empty. In that brief window it answers definition/reference/hover
+/// with a valid-but-empty result. Retrying only after a document was opened or
+/// changed keeps ordinary negative lookups fast while making the first
+/// navigation request useful.
+const POST_SYNC_NAVIGATION_RETRY_DELAYS: &[Duration] = &[
+    Duration::from_millis(50),
+    Duration::from_millis(100),
+    Duration::from_millis(200),
+    Duration::from_millis(400),
+    Duration::from_millis(800),
+    Duration::from_millis(1_000),
+    Duration::from_millis(1_500),
+    Duration::from_millis(2_000),
+];
 
 /// Notification surfaced by a server (e.g. `textDocument/publishDiagnostics`).
 #[derive(Debug, Clone)]
 pub struct ServerNotification {
     pub method: String,
     pub params: Value,
+}
+
+/// How a [`LspClient::sync_document_with_status`] call affected the server's
+/// document state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentSyncStatus {
+    /// The document was not known to the server and was opened with `didOpen`.
+    Opened,
+    /// The document was already open and was refreshed with `didChange`.
+    Changed,
+    /// The server already has the same document contents.
+    Unchanged,
+}
+
+impl DocumentSyncStatus {
+    fn needs_navigation_retry(self) -> bool {
+        matches!(self, Self::Opened | Self::Changed)
+    }
 }
 
 pub struct LspClient {
@@ -152,6 +190,21 @@ impl LspClient {
     /// and the content hash differs, and is a no-op otherwise. Safe to
     /// call before every LSP request.
     pub async fn sync_document(&self, uri: Uri, text: String, language_id: &str) -> LspResult<()> {
+        self.sync_document_with_status(uri, text, language_id)
+            .await
+            .map(|_| ())
+    }
+
+    /// Synchronize a document and report whether the server needs to process
+    /// a new version. Callers that issue semantic navigation immediately can
+    /// pass the returned status to the `*_after_sync` methods below, which
+    /// retry transient empty responses while the server builds its index.
+    pub async fn sync_document_with_status(
+        &self,
+        uri: Uri,
+        text: String,
+        language_id: &str,
+    ) -> LspResult<DocumentSyncStatus> {
         let hash = hash_str(&text);
         let entry = self.inner.open_docs.get(&uri).map(|r| r.value().clone());
         match entry {
@@ -170,9 +223,11 @@ impl LspClient {
                         text,
                     },
                 };
-                self.notify("textDocument/didOpen", params).await
+                self.notify("textDocument/didOpen", params)
+                    .await
+                    .map(|_| DocumentSyncStatus::Opened)
             }
-            Some(prev) if prev.content_hash == hash => Ok(()),
+            Some(prev) if prev.content_hash == hash => Ok(DocumentSyncStatus::Unchanged),
             Some(prev) => {
                 let new_version = prev.version.saturating_add(1);
                 self.inner.open_docs.insert(
@@ -194,7 +249,9 @@ impl LspClient {
                         text,
                     }],
                 };
-                self.notify("textDocument/didChange", params).await
+                self.notify("textDocument/didChange", params)
+                    .await
+                    .map(|_| DocumentSyncStatus::Changed)
             }
         }
     }
@@ -226,6 +283,22 @@ impl LspClient {
         self.request_opt("textDocument/definition", params).await
     }
 
+    /// Resolve a definition after a document synchronization. A freshly
+    /// opened or changed document can briefly produce a valid empty response
+    /// while a language server performs background analysis; retry that
+    /// narrow case rather than exposing a misleading negative result.
+    pub async fn definition_after_sync(
+        &self,
+        uri: Uri,
+        position: Position,
+        sync_status: DocumentSyncStatus,
+    ) -> LspResult<Option<GotoDefinitionResponse>> {
+        self.retry_navigation_after_sync(sync_status, || {
+            self.definition(uri.clone(), position.clone())
+        })
+        .await
+    }
+
     pub async fn references(
         &self,
         uri: Uri,
@@ -246,6 +319,22 @@ impl LspClient {
         self.request_opt("textDocument/references", params).await
     }
 
+    /// Find references after synchronizing the document. See
+    /// [`Self::definition_after_sync`] for why freshly synced documents retry
+    /// transient empty semantic results.
+    pub async fn references_after_sync(
+        &self,
+        uri: Uri,
+        position: Position,
+        include_declaration: bool,
+        sync_status: DocumentSyncStatus,
+    ) -> LspResult<Option<Vec<Location>>> {
+        self.retry_navigation_after_sync(sync_status, || {
+            self.references(uri.clone(), position.clone(), include_declaration)
+        })
+        .await
+    }
+
     pub async fn hover(&self, uri: Uri, position: Position) -> LspResult<Option<Hover>> {
         let params = HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -255,6 +344,43 @@ impl LspClient {
             work_done_progress_params: WorkDoneProgressParams::default(),
         };
         self.request_opt("textDocument/hover", params).await
+    }
+
+    /// Fetch hover information after synchronizing the document. See
+    /// [`Self::definition_after_sync`] for retry semantics.
+    pub async fn hover_after_sync(
+        &self,
+        uri: Uri,
+        position: Position,
+        sync_status: DocumentSyncStatus,
+    ) -> LspResult<Option<Hover>> {
+        self.retry_navigation_after_sync(sync_status, || self.hover(uri.clone(), position.clone()))
+            .await
+    }
+
+    async fn retry_navigation_after_sync<T, F, Fut>(
+        &self,
+        sync_status: DocumentSyncStatus,
+        mut request: F,
+    ) -> LspResult<Option<T>>
+    where
+        T: NavigationResult,
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = LspResult<Option<T>>>,
+    {
+        let mut result = request().await;
+        if !sync_status.needs_navigation_retry() || !should_retry_navigation(&result) {
+            return result;
+        }
+
+        for delay in POST_SYNC_NAVIGATION_RETRY_DELAYS {
+            tokio::time::sleep(*delay).await;
+            result = request().await;
+            if !should_retry_navigation(&result) {
+                break;
+            }
+        }
+        result
     }
 
     async fn request<P, R>(&self, method: &str, params: P) -> LspResult<R>
@@ -324,6 +450,41 @@ impl LspClient {
             params: Some(serde_json::to_value(params)?),
         };
         self.inner.transport.send(serde_json::to_value(&n)?).await
+    }
+}
+
+trait NavigationResult {
+    fn is_empty_navigation_result(&self) -> bool;
+}
+
+impl NavigationResult for GotoDefinitionResponse {
+    fn is_empty_navigation_result(&self) -> bool {
+        match self {
+            Self::Scalar(_) => false,
+            Self::Array(locations) => locations.is_empty(),
+            Self::Link(links) => links.is_empty(),
+        }
+    }
+}
+
+impl NavigationResult for Vec<Location> {
+    fn is_empty_navigation_result(&self) -> bool {
+        self.is_empty()
+    }
+}
+
+impl NavigationResult for Hover {
+    fn is_empty_navigation_result(&self) -> bool {
+        false
+    }
+}
+
+fn should_retry_navigation<T: NavigationResult>(result: &LspResult<Option<T>>) -> bool {
+    match result {
+        Ok(None) => true,
+        Ok(Some(value)) => value.is_empty_navigation_result(),
+        Err(LspError::Server { code, .. }) => *code == CONTENT_MODIFIED_ERROR_CODE,
+        Err(_) => false,
     }
 }
 
@@ -406,4 +567,96 @@ fn hash_str(text: &str) -> u64 {
     let mut h = DefaultHasher::new();
     text.hash(&mut h);
     h.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use serde_json::json;
+    use tokio::time::timeout;
+
+    use super::*;
+    use crate::{
+        protocol::{InboundMessage, JsonRpcResponse, RequestId},
+        transport::InMemoryTransport,
+    };
+
+    fn response(id: i64, result: serde_json::Value) -> InboundMessage {
+        InboundMessage::Response(JsonRpcResponse {
+            jsonrpc: JSONRPC_VERSION.to_string(),
+            id: RequestId::Number(id),
+            result: Some(result),
+            error: None,
+        })
+    }
+
+    fn request_id(payload: &serde_json::Value) -> i64 {
+        payload
+            .get("id")
+            .and_then(serde_json::Value::as_i64)
+            .expect("client should send a JSON-RPC request id")
+    }
+
+    #[tokio::test]
+    async fn definition_after_open_retries_an_empty_initial_response() {
+        let (transport, mut outbound, inbound) = InMemoryTransport::pair();
+        let client = LspClient::new(transport);
+        let uri: Uri = "file:///workspace/src/lib.rs".parse().unwrap();
+        let position = Position::new(2, 28);
+        let status = client
+            .sync_document_with_status(uri.clone(), "pub fn probe() {}\n".to_string(), "rust")
+            .await
+            .unwrap();
+        assert_eq!(status, DocumentSyncStatus::Opened);
+        let did_open = outbound.recv().await.expect("didOpen notification");
+        assert_eq!(
+            did_open.get("method").and_then(serde_json::Value::as_str),
+            Some("textDocument/didOpen")
+        );
+
+        let task = tokio::spawn({
+            let client = client.clone();
+            let uri = uri.clone();
+            async move {
+                client
+                    .definition_after_sync(uri, position, status)
+                    .await
+                    .unwrap()
+            }
+        });
+
+        let first = outbound.recv().await.expect("first definition request");
+        assert_eq!(
+            first.get("method").and_then(serde_json::Value::as_str),
+            Some("textDocument/definition")
+        );
+        inbound
+            .send(response(request_id(&first), json!([])))
+            .unwrap();
+
+        let retry = timeout(Duration::from_secs(1), outbound.recv())
+            .await
+            .expect("retry should be scheduled after an empty response")
+            .expect("retry definition request");
+        assert_eq!(
+            retry.get("method").and_then(serde_json::Value::as_str),
+            Some("textDocument/definition")
+        );
+        inbound
+            .send(response(
+                request_id(&retry),
+                json!({
+                    "uri": uri,
+                    "range": {
+                        "start": { "line": 0, "character": 7 },
+                        "end": { "line": 0, "character": 12 }
+                    }
+                }),
+            ))
+            .unwrap();
+
+        let response = task.await.unwrap().expect("definition response");
+        assert!(matches!(response, GotoDefinitionResponse::Scalar(_)));
+    }
 }

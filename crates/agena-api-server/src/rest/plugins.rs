@@ -60,7 +60,8 @@ pub async fn invoke_plugin_ui_tool(
             .input
             .unwrap_or_else(|| serde_json::json!({})),
         request.context.session_id,
-    )?;
+    )
+    .await?;
     Ok(Json(response))
 }
 
@@ -99,12 +100,55 @@ pub async fn run_plugin_ui_action(
                 tool.as_str(),
                 merge_plugin_ui_input(input.clone(), request.input),
                 request.session_id,
-            )?;
+            )
+            .await?;
             Some(serde_json::to_value(output).map_err(|error| {
                 ServerError::Internal(format!("failed to encode plugin UI tool result: {error}"))
             })?)
         }
         agena::plugin::PluginUiAction::InvokeCommand { command, input } => {
+            let session_id = request.session_id.ok_or_else(|| {
+                ServerError::BadRequest(
+                    "plugin UI command invocation requires a session_id; anonymous execution is disabled"
+                        .to_string(),
+                )
+            })?;
+            let manager = state.session_manager()?;
+            let session = manager.get_session(session_id).await?;
+            let executor = manager
+                .tool_executor()
+                .for_session_context(&session.runtime().execution);
+            let permission_name = format!("plugin.command.{plugin_id}.{command}");
+            let check = agena::tool::ToolPermissionCheck {
+                action: agena::permission::tool_action(
+                    permission_name.as_str(),
+                    None,
+                    &[],
+                    Some(&executor.agent().tool_policy),
+                ),
+                decision: executor.agent().authorize_tool_names(
+                    &[permission_name.as_str()],
+                    None,
+                    &[],
+                ),
+            };
+            match manager
+                .resolve_tool_permission_check(Some(session.id), &check)
+                .await?
+                .decision
+            {
+                agena::permission::PermissionDecision::Allow => {}
+                agena::permission::PermissionDecision::Ask { reason } => {
+                    return Err(ServerError::Conflict(format!(
+                        "plugin UI command cannot create a permission approval request and was not executed: {reason}"
+                    )));
+                }
+                agena::permission::PermissionDecision::Deny { reason } => {
+                    return Err(ServerError::Conflict(format!(
+                        "plugin UI command denied by permission policy: {reason}"
+                    )));
+                }
+            }
             let output = host
                 .invoke_plugin_command(
                     plugin_id.as_str(),
@@ -173,7 +217,7 @@ fn merge_plugin_ui_input(
     }
 }
 
-fn invoke_plugin_tool_for_ui(
+async fn invoke_plugin_tool_for_ui(
     state: &AppState,
     plugin_id: Option<&str>,
     tool_name: &str,
@@ -186,6 +230,12 @@ fn invoke_plugin_tool_for_ui(
     }
 
     let manager = state.session_manager()?;
+    let session_id = session_id.ok_or_else(|| {
+        ServerError::BadRequest(
+            "plugin UI tool invocation requires a session_id; anonymous execution is disabled"
+                .to_string(),
+        )
+    })?;
     let snapshot = state.runtime().current_snapshot();
     let host = snapshot.plugin_manager();
     let entry = match plugin_id {
@@ -263,30 +313,24 @@ fn invoke_plugin_tool_for_ui(
         entry.plugin_full_name(),
         structured,
     );
-    let executor = manager.tool_executor();
-
-    for check in executor
-        .collect_permission_checks_for_invocation(&invocation)
-        .map_err(|error| ServerError::BadRequest(error.to_string()))?
+    let execution = match manager
+        .authorize_session_tool_invocation(session_id, invocation)
+        .await?
     {
-        match check.decision {
-            agena::permission::PermissionDecision::Allow => {}
-            agena::permission::PermissionDecision::Ask { reason } => {
-                return Err(ServerError::Conflict(format!(
-                    "plugin UI tool requires permission confirmation: {reason}"
-                )));
-            }
-            agena::permission::PermissionDecision::Deny { reason } => {
-                return Err(ServerError::Conflict(format!(
-                    "plugin UI tool denied by permission policy: {reason}"
-                )));
-            }
+        agena::session::ToolInvocationAuthorization::Allowed(authorized) => authorized
+            .execute(-1)
+            .map_err(|error| ServerError::Internal(error.to_string()))?,
+        agena::session::ToolInvocationAuthorization::Ask { reason } => {
+            return Err(ServerError::Conflict(format!(
+                "plugin UI tool cannot create a permission approval request and was not executed: {reason}"
+            )));
         }
-    }
-
-    let execution = executor
-        .execute_invocation_detailed(&invocation, session_id.unwrap_or(-1), -1)
-        .map_err(|error| ServerError::Internal(error.to_string()))?;
+        agena::session::ToolInvocationAuthorization::Deny { reason } => {
+            return Err(ServerError::Conflict(format!(
+                "plugin UI tool denied by permission policy: {reason}"
+            )));
+        }
+    };
     Ok(agena::plugin::PluginUiToolInvokeResponse {
         plugin_id: entry.plugin_key().clone(),
         tool: entry.model_name(),

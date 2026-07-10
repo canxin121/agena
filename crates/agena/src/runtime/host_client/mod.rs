@@ -3,7 +3,11 @@
 //! JSON-RPC; the `HostHandle` in `agena-plugin-host` routes those calls
 //! through this client.
 
-use std::{collections::BTreeMap, future::Future, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    future::Future,
+    sync::Arc,
+};
 
 use agena_plugin_sdk::PluginKey;
 use async_trait::async_trait;
@@ -294,12 +298,33 @@ impl RuntimeHostClient {
         &self,
         check: crate::tool::ToolPermissionCheck,
     ) -> Result<HostPermissionCheckResponse, PluginError> {
-        let session_id = current_host_callback_context()
+        let callback_context = current_host_callback_context();
+        let session_id = callback_context
+            .as_ref()
             .and_then(|context| context.session_id)
             .filter(|session_id| *session_id >= 0);
         let Some(manager) = self.optional_session_manager() else {
             return Ok(host_permission_check_response_from_decision(check.decision));
         };
+        if let Some(context) = callback_context
+            && let (Some(session_id), Some(call_id), Some(plugin_id), Some(tool_name)) = (
+                context.session_id.filter(|session_id| *session_id >= 0),
+                context.call_id.filter(|call_id| *call_id >= 0),
+                context.plugin_id.as_deref(),
+                context.tool_name.as_deref(),
+            )
+            && manager.has_host_permission_grant(
+                session_id,
+                call_id,
+                plugin_id,
+                tool_name,
+                &check.action,
+            )
+        {
+            return Ok(host_permission_check_response_from_decision(
+                crate::permission::PermissionDecision::Allow,
+            ));
+        }
         let resolution = manager
             .resolve_tool_permission_check(session_id, &check)
             .await
@@ -390,7 +415,6 @@ impl HostClient for RuntimeHostClient {
         let publisher = manager.event_publisher();
         let plugin_id = current_host_callback_context()
             .and_then(|context| context.plugin_id)
-            .or_else(active_invocations::current_plugin)
             .unwrap_or_else(|| "<unknown>".into());
         let plugin_id = plugin_id.parse().unwrap_or_else(|_| {
             crate::plugin::PluginKey::new("unknown", "unknown").expect("static plugin key")
@@ -480,9 +504,30 @@ impl HostClient for RuntimeHostClient {
         input: serde_json::Value,
     ) -> Result<ToolInvokeOutput, PluginError> {
         let host = self.plugin_manager();
-        let resolution = host
-            .lookup_tool(&tool)
-            .ok_or_else(|| PluginError::new(format!("tool `{tool}` not found")))?;
+        let resolution = if let Some(resolution) = host.lookup_tool(&tool) {
+            resolution
+        } else {
+            let mut candidates = host
+                .registered_tools()
+                .into_iter()
+                .filter(|candidate| crate::tool::tool_matches_model_name(candidate, tool.as_str()))
+                .collect::<Vec<_>>();
+            candidates.sort_by_key(|candidate| candidate.model_name());
+            match candidates.as_slice() {
+                [] => return Err(PluginError::new(format!("tool `{tool}` not found"))),
+                [resolution] => resolution.clone(),
+                _ => {
+                    let names = candidates
+                        .iter()
+                        .map(|candidate| format!("`{}`", candidate.model_name()))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(PluginError::invalid_params(format!(
+                        "tool `{tool}` is ambiguous; use one of {names}"
+                    )));
+                }
+            }
+        };
 
         let caller = self.callback_context()?;
         let plugin_id = resolution.plugin_full_name();
@@ -490,13 +535,11 @@ impl HostClient for RuntimeHostClient {
             .plugin_id
             .as_ref()
             .is_some_and(|current| current == &plugin_id)
-            || active_invocations::contains(&plugin_id)
         {
             return Err(PluginError::new(format!(
                 "host->plugin invoke would re-enter plugin `{plugin_id}` (cycle detected)"
             )));
         }
-        let _guard = active_invocations::enter(plugin_id.clone());
 
         let session_id = caller
             .session_id
@@ -504,7 +547,13 @@ impl HostClient for RuntimeHostClient {
         let call_id = caller.call_id.unwrap_or(-1);
         let structured = StructuredObject::try_from(input)
             .map_err(|err| PluginError::invalid_params(format!("invoke_tool input: {err}")))?;
-        let invocation = ToolInvocation::new(tool, structured);
+        let invocation = ToolInvocation::new(resolution.model_name(), structured);
+        let _guard = active_invocations::try_enter(session_id, call_id, plugin_id.clone())
+            .ok_or_else(|| {
+                PluginError::new(format!(
+                    "host->plugin invoke would re-enter plugin `{plugin_id}` (cycle detected)"
+                ))
+            })?;
         let execution = self
             .session_manager()?
             .execute_host_invoked_tool(session_id, call_id, invocation)
@@ -603,11 +652,33 @@ impl HostClient for RuntimeHostClient {
 
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, PluginError> {
         let (executor, _) = self.callback_scoped_tool_executor().await?;
-        Ok(executor
+        let tools = executor
             .detailed_tools()
             .into_iter()
             .filter(|tool| !crate::tool::is_model_tools_gateway(tool))
-            .map(render_tool_descriptor)
+            .collect::<Vec<_>>();
+        let mut compact_name_counts = HashMap::<String, usize>::new();
+        for tool in &tools {
+            *compact_name_counts
+                .entry(crate::tool::tool_value_name(tool.model_name().as_str()))
+                .or_default() += 1;
+        }
+        Ok(tools
+            .into_iter()
+            .map(|tool| {
+                let full_name = tool.model_name().to_string();
+                let compact_name = crate::tool::tool_value_name(full_name.as_str());
+                let mut descriptor = render_tool_descriptor(tool);
+                if compact_name_counts
+                    .get(compact_name.as_str())
+                    .copied()
+                    .unwrap_or_default()
+                    > 1
+                {
+                    descriptor.name = full_name;
+                }
+                descriptor
+            })
             .collect())
     }
 

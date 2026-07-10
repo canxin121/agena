@@ -778,12 +778,7 @@ impl PluginHost {
 
     fn tool_invoke_timeout(&self, registered_tool: &RegisteredTool) -> Duration {
         let base = self.timeouts.tool_invoke_or(Duration::from_secs(300));
-        if registered_tool
-            .definition
-            .capabilities
-            .iter()
-            .any(|capability| *capability == HostCapability::AskUser)
-        {
+        if requires_long_lived_tool_invoke_timeout(&registered_tool.definition.capabilities) {
             return base.max(Duration::from_secs(60 * 60 * 24));
         }
         base
@@ -1868,6 +1863,34 @@ impl PluginHost {
                     .then(|| registry.lookup_tool_by_key(&tool_key).cloned())
                     .flatten()
             })
+    }
+}
+
+fn requires_long_lived_tool_invoke_timeout(capabilities: &[HostCapability]) -> bool {
+    capabilities.iter().any(|capability| {
+        matches!(
+            capability,
+            HostCapability::AskUser | HostCapability::InvokeTool | HostCapability::SpawnSubtask
+        )
+    })
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::{HostCapability, requires_long_lived_tool_invoke_timeout};
+
+    #[test]
+    fn subtask_and_interactive_callbacks_receive_long_lived_timeouts() {
+        for capability in [
+            HostCapability::AskUser,
+            HostCapability::InvokeTool,
+            HostCapability::SpawnSubtask,
+        ] {
+            assert!(requires_long_lived_tool_invoke_timeout(&[capability]));
+        }
+        assert!(!requires_long_lived_tool_invoke_timeout(&[
+            HostCapability::PermissionCheck
+        ]));
     }
 }
 

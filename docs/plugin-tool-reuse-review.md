@@ -73,7 +73,7 @@
 为什么这个替换值得做：
 
 - 协议对外兼容性比功能创新更重要。
-- `agena.mcp` 已经把模型可见面收敛成统一 `mcp` tool，这让底层替换不会影响模型调用面。
+- `agena.mcp` 已经把 MCP capability 收敛为一组稳定的 gateway target（如 `mcp.resources.list`、`mcp.prompts.get`、`mcp.tools.call`），这让底层替换不会影响模型调用面。
 - 你们还提供了 MCP server 输出能力，双端都自己维护时，规范升级成本会翻倍。
 
 建议替换策略：
@@ -89,7 +89,7 @@
 
 不建议替换的部分：
 
-- 不要把 `agena.mcp` 的单一入口 tool API 改回“一台 server 一个 tool”。
+- 不要把 `agena.mcp` 的 gateway target API 改回“一台 server 一个 tool”。
 - 不要把 MCP server 配置和 host capability 管理交给外部 SDK；这些仍然应该是 Agena runtime 自己的边界。
 
 ### 2. `agena.process` 的执行后端应该抽象，优先接 sandbox，不优先继续自研隔离
@@ -136,7 +136,7 @@
 建议增强项：
 
 - 给 `agena.mcp` 增加浏览器 server preset，降低配置成本。
-- 给 `agena.skills` 内置几条 browser 相关 skill，指导模型先 `mcp list_prompts` / `call` 再执行页面动作。
+- 给 `agena.skills` 内置几条 browser 相关 skill，指导模型先用 `tools_call` 调用 `mcp.prompts.list` / `mcp.tools.call`，再执行页面动作。
 - 在权限/风险层给 browser 类 MCP server 单独打标签，避免它和普通 read-only MCP server 混在一起。
 
 这条路线的好处是：

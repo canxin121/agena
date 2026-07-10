@@ -76,7 +76,11 @@ impl ToolsPlugin {
         read_only,
         discovery,
         ui_display = detailed,
-        capabilities(HostCapability::ListTools),
+        capabilities(
+            HostCapability::ListTools,
+            HostCapability::ToolRegistry,
+            HostCapability::PluginStorage
+        ),
         concurrency_safe
     )]
     async fn help(&self, input: &ToolsHelpInput) -> SdkResult<ToolInvokeOutput> {
@@ -99,9 +103,42 @@ impl ToolsPlugin {
         summary = "Invoke a tool after reading its help.",
         discovery,
         ui_display = detailed,
-        capabilities(HostCapability::InvokeTool)
+        capabilities(
+            HostCapability::ListTools,
+            HostCapability::InvokeTool,
+            HostCapability::PluginStorage
+        )
     )]
     async fn call(&self, input: &ToolCallInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_tool_call(input).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ToolsPlugin;
+    use crate::plugin::sdk::{HostCapability, Plugin};
+
+    fn capabilities_for(tool_name: &str) -> Vec<HostCapability> {
+        ToolsPlugin::new()
+            .manifest()
+            .tools
+            .into_iter()
+            .find(|tool| tool.name == tool_name)
+            .unwrap_or_else(|| panic!("missing tools plugin tool `{tool_name}`"))
+            .capabilities
+    }
+
+    #[test]
+    fn help_and_call_declare_every_host_capability_they_use() {
+        let help = capabilities_for("help");
+        assert!(help.contains(&HostCapability::ListTools));
+        assert!(help.contains(&HostCapability::ToolRegistry));
+        assert!(help.contains(&HostCapability::PluginStorage));
+
+        let call = capabilities_for("call");
+        assert!(call.contains(&HostCapability::ListTools));
+        assert!(call.contains(&HostCapability::InvokeTool));
+        assert!(call.contains(&HostCapability::PluginStorage));
     }
 }

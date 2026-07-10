@@ -24,7 +24,7 @@ cargo build -p agena-multi-tool-plugin-stdio
 {
   "plugins": {
     "list": {
-      "notes": {
+      "example.notes": {
         "package": {
           "kind": "stdio",
           "command": "target/debug/agena-multi-tool-plugin-stdio"

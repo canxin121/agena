@@ -118,8 +118,8 @@
         "shell": "ask"
       },
       "names": {
-        "bash": "ask",
-        "apply_patch": "ask"
+        "agena.process.run": "ask",
+        "agena.fs.apply_patch": "ask"
       }
     }
   },
@@ -163,7 +163,7 @@
           "kind": "static"
         }
       },
-      "agena.shell": {
+      "agena.process": {
         "package": {
           "kind": "static"
         }
@@ -198,33 +198,55 @@
           "kind": "static"
         },
         "config": {
-          "fetch_enabled": true,
-          "default_max_pages": 10,
-          "max_pages_limit": 100,
-          "default_max_depth": 1,
-          "max_depth_limit": 4,
-          "default_same_host_only": true,
-          "request_delay_ms": 400,
-          "fetch_timeout_secs": 30,
-          "max_body_bytes": 5242880,
-          "respect_robots_txt": true,
-          "document_cache_ttl_secs": 86400,
-          "fetch_cache_ttl_secs": 900,
-          "fetch_cache_capacity": 128,
-          "store_max_documents": 200,
-          "store_max_bytes": 104857600,
-          "default_chunk_chars": 1800,
-          "near_duplicate_hamming_distance": 3,
-          "search_default_limit": 5,
-          "search_max_limit": 20,
-          "list_default_limit": 20,
-          "list_max_limit": 100,
-          "browser_enabled": false,
-          "browser_executable_path": null,
-          "browser_wait_for_network_idle": true,
-          "browser_wait_timeout_secs": 10,
-          "browser_wait_for_selector": null,
-          "browser_wait_for_delay_ms": 0
+          "fetch": {
+            "enabled": true,
+            "request": {
+              "delay_ms": 400,
+              "timeout_secs": 30,
+              "max_body_bytes": 5242880,
+              "respect_robots_txt": true
+            },
+            "cache": {
+              "ttl_secs": 900,
+              "capacity": 128
+            }
+          },
+          "crawl": {
+            "defaults": {
+              "max_pages": 10,
+              "max_depth": 1,
+              "same_host_only": true
+            },
+            "limits": {
+              "max_pages": 100,
+              "max_depth": 4
+            },
+            "indexing": {
+              "document_cache_ttl_secs": 86400,
+              "chunk_chars": 1800,
+              "near_duplicate_hamming_distance": 3
+            }
+          },
+          "search": {
+            "default_limit": 5,
+            "max_limit": 20
+          },
+          "store": {
+            "retention": {
+              "max_documents": 200,
+              "max_bytes": 104857600
+            }
+          },
+          "browser": {
+            "enabled": false,
+            "executable_path": null,
+            "wait": {
+              "for_network_idle": true,
+              "timeout_secs": 10,
+              "for_selector": null,
+              "delay_ms": 0
+            }
+          }
         }
       },
       "agena.mcp": {
@@ -235,7 +257,10 @@
           "servers": {
             "docs": {
               "transport": "http",
-              "url": "https://developers.openai.com/mcp",
+              "endpoint": {
+                "url": "https://developers.openai.com/mcp",
+                "headers": {}
+              },
               "auth": {
                 "kind": "bearer_from_env",
                 "env": "DOCS_MCP_TOKEN"
@@ -414,34 +439,6 @@
         "openai": {
           "enabled": true,
           "backend": "chatgpt_codex"
-        }
-      }
-    },
-    "atomgit": {
-      "defaults": {
-        "adapter": "openai",
-        "model": "Kimi-K2-Instruct"
-      },
-      "auth": {
-        "mode": "credential",
-        "issuer": "atomgit",
-        "credential": {
-          "type": "oauth",
-          "issuer": "atomgit",
-          "refresh": "atomgit-refresh-token",
-          "access": "atomgit-access-token",
-          "expires_at_ms": 4102444800000,
-          "account_id": "atomgit-user"
-        }
-      },
-      "adapters": {
-        "openai": {
-          "enabled": true,
-          "models": {
-            "Kimi-K2-Instruct": {
-              "enabled": true
-            }
-          }
         }
       }
     },

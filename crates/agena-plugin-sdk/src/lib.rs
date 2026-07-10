@@ -12,10 +12,12 @@ pub mod attachment;
 pub mod error;
 pub mod hooks;
 pub mod host_api;
+mod host_api_agents;
 pub mod identity;
 #[doc(hidden)]
 pub mod macro_support;
 pub mod manifest;
+mod manifest_support;
 pub mod plugin;
 pub mod prelude;
 pub mod rpc;

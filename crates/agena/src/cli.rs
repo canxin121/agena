@@ -12,7 +12,7 @@ use std::{
 };
 
 use agena_mcp_client::protocol::{
-    CallToolParams, CallToolResult, ContentBlock, GetPromptParams, GetPromptResult,
+    CallToolParams, CallToolResult, ContentBlock, GetPromptParams, GetPromptResult, PromptArgument,
     PromptDescriptor, PromptMessage, ReadResourceParams, ReadResourceResult, ResourceContents,
     ResourceDescriptor, ToolDescriptor,
 };
@@ -1856,7 +1856,7 @@ impl AgenaCli {
         );
         let input = ToolPayloadInput::ApplyPatch(ApplyPatchToolInput { patch }).into_invocation();
         let execution = executor
-            .execute_invocation_detailed_bypassing_permissions(&input, -1, -1)
+            .execute_invocation_detailed(&input, -1, -1)
             .map_err(|err| AppError::Config(err.to_string()))?;
         let patch = execution.apply_patch.ok_or_else(|| {
             AppError::Internal("apply_patch tool did not return patch metadata".to_owned())
@@ -2841,7 +2841,6 @@ impl AgenaCli {
         );
         Ok(AgenaMcpBackend {
             executor,
-            plugins,
             session_manager,
             workspace_root: runtime.workspace_root().to_path_buf(),
             next_call_id: Arc::new(AtomicI64::new(1)),
@@ -2859,7 +2858,6 @@ impl AgenaCli {
 #[derive(Clone)]
 struct AgenaMcpBackend {
     executor: ToolExecutor,
-    plugins: Arc<crate::plugin::PluginHost>,
     session_manager: Option<Arc<SessionManager>>,
     workspace_root: PathBuf,
     next_call_id: Arc<AtomicI64>,
@@ -2977,54 +2975,29 @@ impl McpServerBackend for AgenaMcpBackend {
     }
 
     async fn list_prompts(&self) -> Result<Vec<PromptDescriptor>, McpServerError> {
-        let mut prompts = self
-            .plugins
-            .registered_tools()
-            .into_iter()
-            .filter(|entry| matches!(entry.plugin_full_name().as_str(), "agena.skills"))
-            .map(|entry| PromptDescriptor {
-                name: entry.model_name(),
-                description: entry.summary_text().map(ToString::to_string),
-                arguments: Vec::new(),
-            })
-            .collect::<Vec<_>>();
-        prompts.sort_by(|left, right| left.name.cmp(&right.name));
-        Ok(prompts)
+        let invocation = ToolInvocation::new("agena.skills.list", StructuredObject::default());
+        let execution = self
+            .executor
+            .execute_invocation_detailed(&invocation, -1, -1)
+            .map_err(|err| McpServerError::Backend(err.to_string()))?;
+        let payload = execution.output.to_json_payload().ok_or_else(|| {
+            McpServerError::Backend("skills.list did not return a JSON payload".to_string())
+        })?;
+        skill_prompt_descriptors(payload)
     }
 
     async fn get_prompt(&self, params: GetPromptParams) -> Result<GetPromptResult, McpServerError> {
-        let entry = self
-            .plugins
-            .lookup_tool(params.name.as_str())
-            .ok_or_else(|| McpServerError::NotFound(params.name.clone()))?;
-        if !matches!(entry.plugin_full_name().as_str(), "agena.skills") {
-            return Err(McpServerError::NotFound(params.name));
-        }
-
-        let args = params.arguments.and_then(|arguments| {
-            if arguments.is_empty() {
-                None
-            } else {
-                Some(
-                    arguments
-                        .into_iter()
-                        .map(|(key, value)| format!("- {key}: {value}"))
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                )
-            }
-        });
+        let prompt_name = params.name;
         let invocation = ToolInvocation::new(
-            entry.model_name(),
-            StructuredObject::try_from(serde_json::json!({ "args": args }))
-                .map_err(McpServerError::InvalidParams)?,
+            "agena.skills.run",
+            skill_prompt_invocation_input(prompt_name.as_str(), params.arguments)?,
         );
         let execution = self
             .executor
             .execute_invocation_detailed(&invocation, -1, -1)
             .map_err(|err| McpServerError::Backend(err.to_string()))?;
         Ok(GetPromptResult {
-            description: entry.summary_text().map(ToString::to_string),
+            description: Some(format!("Render skill or command prompt `{prompt_name}`.")),
             messages: vec![PromptMessage {
                 role: "user".to_owned(),
                 content: ContentBlock::Text {
@@ -3032,6 +3005,133 @@ impl McpServerBackend for AgenaMcpBackend {
                 },
             }],
         })
+    }
+}
+
+fn skill_prompt_descriptors(
+    payload: serde_json::Value,
+) -> Result<Vec<PromptDescriptor>, McpServerError> {
+    let entries = payload
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            McpServerError::Backend("skills.list payload is missing `tools`".to_string())
+        })?;
+    let mut prompts = entries
+        .iter()
+        .map(|entry| {
+            let name = entry
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| {
+                    McpServerError::Backend(
+                        "skills.list payload contains an item without a name".to_string(),
+                    )
+                })?;
+            let description = entry
+                .get("summary")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned);
+            Ok(PromptDescriptor {
+                name: name.to_string(),
+                description,
+                arguments: vec![PromptArgument {
+                    name: "args".to_string(),
+                    description: Some(
+                        "Optional arguments inserted into the skill prompt.".to_string(),
+                    ),
+                    required: false,
+                }],
+            })
+        })
+        .collect::<Result<Vec<_>, McpServerError>>()?;
+    prompts.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(prompts)
+}
+
+fn skill_prompt_invocation_input(
+    name: &str,
+    arguments: Option<BTreeMap<String, String>>,
+) -> Result<StructuredObject, McpServerError> {
+    let args = match arguments {
+        None => None,
+        Some(arguments) if arguments.is_empty() => None,
+        Some(mut arguments) => {
+            let args = arguments.remove("args").ok_or_else(|| {
+                McpServerError::InvalidParams(
+                    "skill prompts accept only the optional `args` argument".to_string(),
+                )
+            })?;
+            if !arguments.is_empty() {
+                return Err(McpServerError::InvalidParams(
+                    "skill prompts accept only the optional `args` argument".to_string(),
+                ));
+            }
+            Some(args)
+        }
+    };
+    StructuredObject::try_from(serde_json::json!({ "name": name, "args": args }))
+        .map_err(McpServerError::InvalidParams)
+}
+
+#[cfg(test)]
+mod mcp_skill_prompt_tests {
+    use super::{skill_prompt_descriptors, skill_prompt_invocation_input};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn skills_are_exposed_as_mcp_prompts_with_an_optional_args_argument() {
+        let prompts = skill_prompt_descriptors(serde_json::json!({
+            "tools": [
+                {"name": "review", "summary": "Review a change", "kind": "skill"},
+                {"name": "commit", "summary": "Prepare a commit", "kind": "command"}
+            ]
+        }))
+        .expect("valid skills list payload");
+
+        assert_eq!(
+            prompts
+                .iter()
+                .map(|prompt| prompt.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["commit", "review"]
+        );
+        assert_eq!(prompts[0].arguments.len(), 1);
+        assert_eq!(prompts[0].arguments[0].name, "args");
+        assert!(!prompts[0].arguments[0].required);
+    }
+
+    #[test]
+    fn mcp_prompt_arguments_map_to_skills_run_input() {
+        let input = skill_prompt_invocation_input(
+            "review",
+            Some(BTreeMap::from([(
+                String::from("args"),
+                String::from("focus on tests"),
+            )])),
+        )
+        .expect("args is supported");
+
+        assert_eq!(
+            serde_json::Value::from(input),
+            serde_json::json!({"name": "review", "args": "focus on tests"})
+        );
+    }
+
+    #[test]
+    fn mcp_prompt_rejects_unknown_arguments() {
+        let error = skill_prompt_invocation_input(
+            "review",
+            Some(BTreeMap::from([(
+                String::from("unexpected"),
+                String::from("value"),
+            )])),
+        )
+        .expect_err("unknown arguments must be rejected");
+
+        assert!(error.to_string().contains("only the optional `args`"));
     }
 }
 

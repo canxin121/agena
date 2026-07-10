@@ -751,6 +751,7 @@ impl OpenAiAdapter {
                 .then(prompt_cache::PromptCacheControl::ephemeral),
             prompt_cache_key: prompt_cache_key.clone(),
             prompt_cache_key_camel_case: prompt_cache_key.clone(),
+            parallel_tool_calls: request.request_override.parallel_tool_calls(),
             stream: false,
             stream_options: None,
             stop: request.stop_sequences.clone(),
@@ -858,6 +859,7 @@ impl OpenAiAdapter {
                 .then(prompt_cache::PromptCacheControl::ephemeral),
             prompt_cache_key: prompt_cache_key.clone(),
             prompt_cache_key_camel_case: prompt_cache_key.clone(),
+            parallel_tool_calls: request.request_override.parallel_tool_calls(),
             stream: true,
             stream_options: Some(ChatStreamOptions {
                 include_usage: true,
@@ -922,7 +924,12 @@ impl OpenAiAdapter {
         let model_name = ModelId::new(model);
 
         let stream = async_stream::try_stream! {
-            let mut pending_tool_calls: std::collections::BTreeMap<String, chat_wire::ChatToolCallStreamState> = std::collections::BTreeMap::new();
+            // Chat-compatible providers usually identify a tool call by a
+            // stable `id`, but some gateways also vary (or replay) the
+            // positional `index` while streaming one logical call. Reuse the
+            // Responses-path accumulator so id and index are aliases rather
+            // than separate model-visible operations.
+            let mut tool_stream = ToolStreamAccumulator::new();
             let mut stream_usage: Option<CompletionUsage> = None;
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_has_content = false;
@@ -998,57 +1005,14 @@ impl OpenAiAdapter {
                         "chat stream tool_call delta",
                         raw_tool,
                     )?;
-                    let id = utils::normalize_optional_text(tool.id.clone());
-                    let key = tool
-                        .index
-                        .map(|idx| format!("idx:{idx}"))
-                        .or_else(|| id.as_ref().map(|value| format!("id:{value}")))
-                        .ok_or_else(|| {
-                            AppError::Provider(
-                                "openai chat stream tool_call delta missing index/id".to_owned(),
-                            )
-                        })?;
-
-                    let state = pending_tool_calls.entry(key.clone()).or_default();
-                    if let Some(id) = id {
-                        state.id = Some(id);
-                    }
-                    let mut emitted_any = false;
-                    if let Some(function) = tool.function {
-                        if let Some(name) = utils::normalize_optional_text(function.name) {
-                            state.name = Some(name);
-                        }
-                        if let Some(args) = function.arguments
-                            && !args.is_empty() {
-                                state.arguments.push_str(args.as_str());
-                                stream_has_content = true;
-                                emitted_any = true;
-                                state.announced = true;
-                                yield CompletionStreamEvent::ToolCallDelta {
-                                    provider_id: provider_id.clone(),
-                                    model: model_name.clone(),
-                                    stream_key: key.clone(),
-                                    id: state.id.clone(),
-                                    name: state.name.clone(),
-                                    arguments_delta: args,
-                                };
-                            }
-                    }
-                    // Register the call with the aggregator the first
-                    // time we have its name available, even if no
-                    // arguments arrived this chunk — a parameterless
-                    // call may never carry args.
-                    if !state.announced && !emitted_any && state.name.is_some() {
-                        state.announced = true;
+                    let input = chat_tool_stream_input(provider_name.as_str(), tool)?;
+                    for update in tool_stream.ingest(provider_name.as_str(), input)? {
                         stream_has_content = true;
-                        yield CompletionStreamEvent::ToolCallDelta {
-                            provider_id: provider_id.clone(),
-                            model: model_name.clone(),
-                            stream_key: key.clone(),
-                            id: state.id.clone(),
-                            name: state.name.clone(),
-                            arguments_delta: String::new(),
-                        };
+                        yield completion_event_from_tool_stream_update(
+                            &provider_id,
+                            &model_name,
+                            update,
+                        );
                     }
                 }
 
@@ -3499,6 +3463,60 @@ fn openai_chat_tool_name(name: &str) -> String {
     name.trim().to_string()
 }
 
+/// Normalize one OpenAI Chat tool-call chunk into the same alias-aware stream
+/// representation used by the Responses API.  A call id is authoritative,
+/// while an index remains an alias for providers that omit either field on
+/// some chunks.  Keeping both candidates prevents a compatible gateway from
+/// turning a single call into several operations when it changes the index.
+fn chat_tool_stream_input(
+    provider_id: &str,
+    tool: chat_wire::ChatToolCallWire,
+) -> Result<ToolStreamInput, AppError> {
+    let call_id = utils::normalize_optional_text(tool.id);
+    let mut candidate_keys = Vec::new();
+    if let Some(call_id) = call_id.as_ref() {
+        candidate_keys.push(format!("id:{call_id}"));
+    }
+    if let Some(index) = tool.index {
+        candidate_keys.push(format!("idx:{index}"));
+    }
+    let stream_key_candidates = candidate_keys
+        .into_iter()
+        .filter_map(|key| key.parse().ok())
+        .collect::<Vec<_>>();
+    if stream_key_candidates.is_empty() {
+        return Err(AppError::Provider(format!(
+            "{provider_id} returned chat tool_call delta without index/id"
+        )));
+    }
+
+    let (name, arguments) = tool
+        .function
+        .map(|function| {
+            (
+                utils::normalize_optional_text(function.name),
+                utils::optional_non_empty(function.arguments),
+            )
+        })
+        .unwrap_or_default();
+
+    Ok(ToolStreamInput {
+        // Standard OpenAI Chat streams carry argument deltas. A parameterless
+        // function needs a registration event so the session processor does
+        // not drop it before the stream completes.
+        kind: arguments
+            .as_deref()
+            .is_some_and(|value| !value.is_empty())
+            .then_some(ToolStreamInputKind::Delta)
+            .unwrap_or(ToolStreamInputKind::Start),
+        stream_key_candidates,
+        provider_item_id: None,
+        model_call_id: call_id.and_then(|id| id.parse().ok()),
+        name,
+        arguments,
+    })
+}
+
 fn responses_native_tool_name(name: &str) -> Option<OpenAiResponsesWireToolName> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -4910,4 +4928,43 @@ fn model_supports_input_modality(input_modality: &str, modality: ModelInputModal
 
 fn clamp_u64_to_u32(value: u64) -> u32 {
     value.min(u32::MAX as u64) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ToolStreamInputKind, chat_tool_stream_input};
+    use crate::provider::chat_wire::{ChatFunctionCallWire, ChatToolCallWire};
+
+    #[test]
+    fn chat_tool_stream_input_keeps_id_and_index_as_aliases() {
+        let input = chat_tool_stream_input(
+            "cline",
+            ChatToolCallWire {
+                index: Some(6),
+                id: Some("call_shared".to_string()),
+                function: Some(ChatFunctionCallWire {
+                    name: Some("tools_call".to_string()),
+                    arguments: Some(r#"{"tool":"skills.list","input":{}}"#.to_string()),
+                }),
+            },
+        )
+        .expect("valid chat tool chunk");
+
+        let keys: Vec<&str> = input
+            .stream_key_candidates
+            .iter()
+            .map(AsRef::as_ref)
+            .collect();
+        assert_eq!(keys, vec!["id:call_shared", "idx:6"]);
+        assert_eq!(
+            input.model_call_id.as_ref().map(AsRef::as_ref),
+            Some("call_shared")
+        );
+        assert_eq!(input.name.as_deref(), Some("tools_call"));
+        assert_eq!(
+            input.arguments.as_deref(),
+            Some(r#"{"tool":"skills.list","input":{}}"#)
+        );
+        assert_eq!(input.kind, ToolStreamInputKind::Delta);
+    }
 }

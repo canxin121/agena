@@ -1,5 +1,10 @@
 use std::path::{Path, PathBuf};
 
+#[cfg(not(target_os = "android"))]
+use std::io::Write;
+
+#[cfg(not(target_os = "android"))]
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use tempfile::Builder;
 
 #[cfg(target_os = "linux")]
@@ -36,6 +41,18 @@ impl std::fmt::Display for ClipboardTextError {
 }
 
 impl std::error::Error for ClipboardTextError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardCopyMethod {
+    Native,
+    Osc52,
+}
+
+impl ClipboardCopyMethod {
+    pub const fn is_unconfirmed_terminal_request(self) -> bool {
+        matches!(self, Self::Osc52)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncodedImageFormat {
@@ -90,16 +107,57 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
 }
 
 #[cfg(not(target_os = "android"))]
-pub fn set_clipboard_text(text: &str) -> Result<(), ClipboardTextError> {
-    let mut clipboard =
-        arboard::Clipboard::new().map_err(|error| ClipboardTextError(error.to_string()))?;
-    clipboard
-        .set_text(text.to_string())
-        .map_err(|error| ClipboardTextError(error.to_string()))
+pub fn set_clipboard_text(text: &str) -> Result<ClipboardCopyMethod, ClipboardTextError> {
+    // `arboard` talks to the machine running Agena. Over SSH that is the
+    // server, where X11/Wayland is usually absent or unreachable. OSC 52 is
+    // interpreted by the user's terminal emulator instead, so it reaches the
+    // local clipboard without X11 forwarding.
+    if is_remote_terminal_session() {
+        set_clipboard_text_via_osc52(text)?;
+        return Ok(ClipboardCopyMethod::Osc52);
+    }
+
+    let native_result = (|| {
+        let mut clipboard = arboard::Clipboard::new()?;
+        clipboard.set_text(text.to_string())
+    })();
+    match native_result {
+        Ok(()) => Ok(ClipboardCopyMethod::Native),
+        Err(native_error) => {
+            set_clipboard_text_via_osc52(text).map_err(|osc52_error| {
+                ClipboardTextError(format!(
+                    "native clipboard failed: {native_error}; terminal clipboard fallback failed: {osc52_error}"
+                ))
+            })?;
+            Ok(ClipboardCopyMethod::Osc52)
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn is_remote_terminal_session() -> bool {
+    std::env::var_os("SSH_TTY").is_some() || std::env::var_os("SSH_CONNECTION").is_some()
+}
+
+#[cfg(not(target_os = "android"))]
+fn set_clipboard_text_via_osc52(text: &str) -> Result<(), ClipboardTextError> {
+    let sequence = osc52_copy_sequence(text);
+    let mut stdout = std::io::stdout().lock();
+    stdout
+        .write_all(sequence.as_slice())
+        .and_then(|()| stdout.flush())
+        .map_err(|error| ClipboardTextError(format!("could not write OSC 52 sequence: {error}")))
+}
+
+#[cfg(not(target_os = "android"))]
+fn osc52_copy_sequence(text: &str) -> Vec<u8> {
+    // `c` selects the standard clipboard. The payload is base64 encoded so
+    // copied text cannot escape the terminal control sequence.
+    format!("\x1b]52;c;{}\x07", STANDARD.encode(text.as_bytes())).into_bytes()
 }
 
 #[cfg(target_os = "android")]
-pub fn set_clipboard_text(_: &str) -> Result<(), ClipboardTextError> {
+pub fn set_clipboard_text(_: &str) -> Result<ClipboardCopyMethod, ClipboardTextError> {
     Err(ClipboardTextError(
         "clipboard text copy is unsupported on Android".to_string(),
     ))
@@ -300,4 +358,17 @@ fn try_dump_windows_clipboard_image() -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(all(test, not(target_os = "android")))]
+mod tests {
+    use super::osc52_copy_sequence;
+
+    #[test]
+    fn osc52_copy_sequence_targets_the_local_terminal_clipboard() {
+        assert_eq!(
+            osc52_copy_sequence("copied from Agena"),
+            b"\x1b]52;c;Y29waWVkIGZyb20gQWdlbmE=\x07"
+        );
+    }
 }

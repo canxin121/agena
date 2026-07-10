@@ -28,6 +28,7 @@ pub enum CommandId {
     Deny,
     DenyAlways,
     Attach,
+    Download,
     Editor,
     Image,
     Copy,
@@ -265,6 +266,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary_key: "command-attach-summary",
     },
     CommandSpec {
+        id: CommandId::Download,
+        name: "download",
+        aliases: &["dl"],
+        arguments: "<workspace-path>",
+        summary_key: "command-download-summary",
+    },
+    CommandSpec {
         id: CommandId::Editor,
         name: "editor",
         aliases: &["edit"],
@@ -422,4 +430,20 @@ fn command_name_exact_match(spec: &CommandSpec, query: &str) -> bool {
 
 fn command_name_prefix_match(spec: &CommandSpec, query: &str) -> bool {
     spec.name.starts_with(query) || spec.aliases.iter().any(|alias| alias.starts_with(query))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CommandId, parse_command};
+
+    #[test]
+    fn parses_iterm2_download_command_and_alias() {
+        let command = parse_command("/download artifacts/build.zip").expect("download command");
+        assert_eq!(command.spec.id, CommandId::Download);
+        assert_eq!(command.args, "artifacts/build.zip");
+
+        let alias = parse_command("/dl notes.txt").expect("download alias");
+        assert_eq!(alias.spec.id, CommandId::Download);
+        assert_eq!(alias.args, "notes.txt");
+    }
 }

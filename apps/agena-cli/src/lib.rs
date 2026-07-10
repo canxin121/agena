@@ -6,6 +6,7 @@ mod composer_queue;
 mod external_editor;
 mod external_pager;
 mod i18n;
+mod iterm2;
 mod keybindings;
 mod short_link;
 mod terminal;

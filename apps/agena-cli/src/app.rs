@@ -65,13 +65,15 @@ use crate::backend::{
     provider_native_tools_preset_from_config,
 };
 use crate::clipboard::{
-    normalize_pasted_path, paste_image_to_temp_png, pasted_image_format, set_clipboard_text,
+    ClipboardCopyMethod, normalize_pasted_path, paste_image_to_temp_png, pasted_image_format,
+    set_clipboard_text,
 };
 use crate::commands::{self, CommandId, CommandSpec};
 use crate::composer_queue::{ComposerQueue, QueuePriority, QueuedMessage};
 use crate::external_editor::{edit_text, open_path};
 use crate::external_pager::page_text;
 use crate::i18n::{I18n, SUPPORTED_LOCALES};
+use crate::iterm2;
 use crate::keybindings::{ComposerAction, ComposerKeyBindings};
 use crate::terminal;
 use crate::tui_config::{TuiConfig, TuiStatusLineConfig};
@@ -661,6 +663,8 @@ enum AppMessage {
 enum UiAction {
     EditComposerExternally,
     AttachClipboardImage,
+    AttachIterm2Files { images_only: bool },
+    DownloadIterm2File { path: PathBuf },
     ExportTranscript { path: Option<PathBuf> },
     OpenPath { path: PathBuf },
     PageTranscript,
@@ -2514,6 +2518,21 @@ fn transcript_vertical_line_navigation_step(
     }
 }
 
+/// Line navigation owns the boundaries of message children. If there is no
+/// next/previous child or message at such a boundary, do not fall through to
+/// message navigation: that would select the enclosing message at its opposite
+/// edge and make Down from a final line appear to wrap to the first line.
+fn transcript_should_fall_back_to_message_navigation(
+    nodes: &[RenderedTranscriptNode],
+    cursor_line: usize,
+) -> bool {
+    !nodes.iter().any(|node| {
+        !node.key.is_message_container()
+            && cursor_line >= node.start_line
+            && cursor_line < node.end_line
+    })
+}
+
 fn transcript_message_navigation_target(
     nodes: &[RenderedTranscriptNode],
     cursor_line: usize,
@@ -2573,16 +2592,24 @@ fn transcript_selection_scroll_position(
     start_line: usize,
     end_line: usize,
     viewport_height: usize,
+    current_scroll: usize,
     direction: TranscriptMoveDirection,
 ) -> usize {
     let viewport_height = viewport_height.max(1);
     let max_scroll = total_lines.saturating_sub(viewport_height);
     let selection_height = end_line.saturating_sub(start_line);
     let desired = if selection_height <= viewport_height {
-        // Prefer the beginning of a selection that fits. At the final
-        // message `max_scroll` naturally shifts it upward just enough to keep
-        // its full range visible.
-        start_line
+        // Do not pin each newly selected block to the top of the viewport.
+        // Keep the current context intact until the complete selection no
+        // longer fits, then scroll only by the minimum amount needed.
+        let current_scroll = current_scroll.min(max_scroll);
+        if start_line < current_scroll {
+            start_line
+        } else if end_line > current_scroll.saturating_add(viewport_height) {
+            end_line.saturating_sub(viewport_height)
+        } else {
+            current_scroll
+        }
     } else {
         match direction {
             TranscriptMoveDirection::Up => end_line.saturating_sub(viewport_height),
@@ -2859,6 +2886,31 @@ mod transcript_navigation_tests {
     }
 
     #[test]
+    fn final_line_of_the_final_message_does_not_wrap_to_its_first_line() {
+        let final_child = TranscriptNodeKey::MarkdownBlock {
+            message_id: 10,
+            part_id: 1,
+            block_index: 0,
+        };
+        let final_message = TranscriptNodeKey::Message { message_id: 10 };
+        let nodes = vec![node(final_child, 1, 4), node(final_message, 0, 4)];
+
+        assert_eq!(
+            transcript_vertical_line_navigation_step(
+                nodes.as_slice(),
+                3,
+                TranscriptMoveDirection::Down,
+            ),
+            None,
+            "there is no child or later message below the last rendered line"
+        );
+        assert!(
+            !transcript_should_fall_back_to_message_navigation(nodes.as_slice(), 3),
+            "the caller must not re-enter the enclosing message at its first line"
+        );
+    }
+
+    #[test]
     fn horizontal_navigation_only_visits_complete_messages() {
         let first_child = TranscriptNodeKey::MarkdownBlock {
             message_id: 10,
@@ -2923,18 +2975,46 @@ mod transcript_navigation_tests {
     #[test]
     fn message_selection_scrolls_to_keep_first_and_last_messages_fully_visible() {
         assert_eq!(
-            transcript_selection_scroll_position(30, 0, 6, 10, TranscriptMoveDirection::Down),
+            transcript_selection_scroll_position(30, 0, 6, 10, 0, TranscriptMoveDirection::Down,),
             0
         );
         assert_eq!(
-            transcript_selection_scroll_position(30, 24, 30, 10, TranscriptMoveDirection::Down),
+            transcript_selection_scroll_position(30, 24, 30, 10, 0, TranscriptMoveDirection::Down,),
             20,
             "the final message shifts upward instead of clipping below the viewport"
         );
         assert_eq!(
-            transcript_selection_scroll_position(30, 5, 22, 10, TranscriptMoveDirection::Up),
+            transcript_selection_scroll_position(30, 5, 22, 10, 5, TranscriptMoveDirection::Up,),
             12,
             "a selection taller than the viewport aligns its end when moving upward"
+        );
+    }
+
+    #[test]
+    fn block_selection_keeps_the_viewport_stable_until_it_would_clip() {
+        assert_eq!(
+            transcript_selection_scroll_position(
+                100,
+                15,
+                17,
+                10,
+                10,
+                TranscriptMoveDirection::Down,
+            ),
+            10,
+            "a complete selection already in view must not jump to the top"
+        );
+        assert_eq!(
+            transcript_selection_scroll_position(
+                100,
+                20,
+                23,
+                10,
+                10,
+                TranscriptMoveDirection::Down,
+            ),
+            13,
+            "scroll only enough to keep the selection's final line visible"
         );
     }
 }
@@ -5974,8 +6054,10 @@ impl App {
             KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(item) = dialog.selected_item() {
                     match set_clipboard_text(item.copy_text.as_str()) {
-                        Ok(()) => self
-                            .flash_success(ui_text::t(&self.i18n, "flash-timeline-event-copied")),
+                        Ok(method) => self.flash_clipboard_copy_success(
+                            method,
+                            ui_text::t(&self.i18n, "flash-timeline-event-copied"),
+                        ),
                         Err(error) => self.flash_error(self.i18n.text_args(
                             "flash-clipboard-copy-failed",
                             &crate::fl_args!("error" => error.to_string()),
@@ -6634,16 +6716,27 @@ impl App {
         }
     }
 
+    fn flash_clipboard_copy_success(&mut self, method: ClipboardCopyMethod, success: String) {
+        if method.is_unconfirmed_terminal_request() {
+            self.flash_info("Clipboard request sent to terminal (OSC 52).".to_string());
+        } else {
+            self.flash_success(success);
+        }
+    }
+
     fn copy_transcript_cursor_node(&mut self) {
         let width = self.layout.transcript_body.width;
         let Some(node) = self.transcript.current_cursor_node_cloned(width) else {
             return;
         };
         match set_clipboard_text(node.copy_text.as_str()) {
-            Ok(()) => self.flash_success(self.i18n.text_args(
-                "flash-transcript-node-copied",
-                &crate::fl_args!("kind" => transcript_node_kind_label(&self.i18n, node.kind)),
-            )),
+            Ok(method) => self.flash_clipboard_copy_success(
+                method,
+                self.i18n.text_args(
+                    "flash-transcript-node-copied",
+                    &crate::fl_args!("kind" => transcript_node_kind_label(&self.i18n, node.kind)),
+                ),
+            ),
             Err(error) => self.flash_error(self.i18n.text_args(
                 "flash-clipboard-copy-failed",
                 &crate::fl_args!("error" => error.to_string()),
@@ -6723,7 +6816,7 @@ impl App {
                 }
                 ComposerAction::AttachFile => {
                     self.reset_prompt_history_recall();
-                    self.open_file_attach_overlay();
+                    self.request_file_attachment(false);
                     return;
                 }
                 ComposerAction::ExternalEditor => {
@@ -6734,7 +6827,7 @@ impl App {
                 }
                 ComposerAction::AttachClipboardImage => {
                     self.reset_prompt_history_recall();
-                    self.pending_ui_action = Some(UiAction::AttachClipboardImage);
+                    self.request_file_attachment(true);
                     return;
                 }
                 ComposerAction::OpenPendingUserInput => {
@@ -9953,6 +10046,87 @@ impl App {
 
     fn open_file_attach_overlay(&mut self) {
         self.overlay = Some(Overlay::FileAttach(self.build_file_attach_overlay()));
+    }
+
+    fn request_file_attachment(&mut self, images_only: bool) {
+        // The iTerm2 utility owns its terminal request/response protocol and
+        // opens the native file picker on the local Mac, even though Agena is
+        // running in the remote SSH session. If it is not installed, retain
+        // the existing workspace picker (or native clipboard-image path).
+        if iterm2::upload_utility().is_some() {
+            self.pending_ui_action = Some(UiAction::AttachIterm2Files { images_only });
+        } else if images_only {
+            self.pending_ui_action = Some(UiAction::AttachClipboardImage);
+        } else {
+            self.open_file_attach_overlay();
+        }
+    }
+
+    fn request_iterm2_download(&mut self, raw_path: &str) {
+        let raw_path = raw_path.trim();
+        if raw_path.is_empty() {
+            self.flash_warning("Usage: /download <workspace-path>".to_string());
+            return;
+        }
+        if iterm2::download_utility().is_none() {
+            self.flash_warning(
+                "iTerm2 download utility `it2dl` is unavailable; install iTerm2 Shell Integration and Utilities on this remote account."
+                    .to_string(),
+            );
+            return;
+        }
+        let requested = Path::new(raw_path);
+        if requested.is_absolute() {
+            self.flash_warning("Use a path relative to the current workspace.".to_string());
+            return;
+        }
+
+        let workspace = match fs::canonicalize(self.backend.workspace_root()) {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                self.flash_error(format!("Could not access the current workspace: {error}"));
+                return;
+            }
+        };
+        let path = self.backend.resolve_workspace_path(requested);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                self.flash_warning(format!(
+                    "Could not access download path {}: {error}",
+                    path.display()
+                ));
+                return;
+            }
+        };
+        if metadata.file_type().is_symlink() {
+            self.flash_warning("Symbolic links cannot be downloaded.".to_string());
+            return;
+        }
+        if !metadata.is_file() {
+            self.flash_warning("Only regular workspace files can be downloaded.".to_string());
+            return;
+        }
+
+        let canonical_path = match fs::canonicalize(&path) {
+            Ok(path) => path,
+            Err(error) => {
+                self.flash_warning(format!(
+                    "Could not resolve download path {}: {error}",
+                    path.display()
+                ));
+                return;
+            }
+        };
+        if !canonical_path.starts_with(workspace) {
+            self.flash_warning(
+                "Only files inside the current workspace can be downloaded.".to_string(),
+            );
+            return;
+        }
+        self.pending_ui_action = Some(UiAction::DownloadIterm2File {
+            path: canonical_path,
+        });
     }
 
     fn open_rename_session_overlay(&mut self) {
@@ -15235,14 +15409,15 @@ impl App {
             CommandId::DenyAlways => self.reply_permission(PermissionReplyKind::DenyAlways),
             CommandId::Attach => {
                 self.focus = Focus::Composer;
-                self.open_file_attach_overlay();
+                self.request_file_attachment(false);
             }
+            CommandId::Download => self.request_iterm2_download(args),
             CommandId::Editor => {
                 self.composer.flush_all_pending_input();
                 self.pending_ui_action = Some(UiAction::EditComposerExternally);
             }
             CommandId::Image => {
-                self.pending_ui_action = Some(UiAction::AttachClipboardImage);
+                self.request_file_attachment(true);
             }
             CommandId::Copy => self.copy_loaded_transcript(),
             CommandId::CopyMessage => self.copy_last_assistant_message(),
@@ -16651,6 +16826,10 @@ impl App {
                 self.attach_clipboard_image();
                 Ok(())
             }
+            UiAction::AttachIterm2Files { images_only } => {
+                self.attach_iterm2_files(terminal, images_only)
+            }
+            UiAction::DownloadIterm2File { path } => self.download_iterm2_file(terminal, &path),
             UiAction::ExportTranscript { path } => {
                 self.export_transcript_to_editor(terminal, path.as_deref())
             }
@@ -16729,6 +16908,101 @@ impl App {
         }
     }
 
+    fn attach_iterm2_files<B: RatatuiBackend>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+        images_only: bool,
+    ) -> Result<()> {
+        let destination =
+            env::temp_dir().join(format!("agena-iterm-upload-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&destination).map_err(|error| {
+            anyhow::anyhow!("could not create iTerm2 upload directory: {error}")
+        })?;
+
+        terminal
+            .flush()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        terminal::suspend_stdio_terminal()?;
+        let result = iterm2::request_upload(destination.as_path())
+            .and_then(|()| iterm2::uploaded_regular_files(destination.as_path()));
+        terminal::resume_terminal(terminal)?;
+
+        let files = match result {
+            Ok(files) => files,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&destination);
+                self.flash_warning(error);
+                return Ok(());
+            }
+        };
+
+        let mut attached = 0_usize;
+        let mut skipped = 0_usize;
+        for path in files {
+            if images_only {
+                match self.backend.prepare_attachment_from_path(path.as_path()) {
+                    Ok(attachment) if attachment.kind == AttachmentKind::Image => {}
+                    Ok(_) => {
+                        skipped += 1;
+                        let _ = fs::remove_file(path);
+                        continue;
+                    }
+                    Err(error) => {
+                        skipped += 1;
+                        self.flash_warning(error.to_string());
+                        let _ = fs::remove_file(path);
+                        continue;
+                    }
+                }
+            }
+            match self.stage_attachment_from_path(path.as_path(), true) {
+                Ok(()) => attached += 1,
+                Err(error) => {
+                    skipped += 1;
+                    self.flash_warning(error);
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
+
+        if attached == 0 {
+            let _ = fs::remove_dir_all(&destination);
+            self.flash_warning(if images_only {
+                "No supported image was selected in iTerm2.".to_string()
+            } else {
+                "No supported file was selected in iTerm2.".to_string()
+            });
+        } else if skipped > 0 {
+            self.flash_warning(format!(
+                "Attached {attached} file(s); skipped {skipped} unsupported file(s)."
+            ));
+        }
+        Ok(())
+    }
+
+    fn download_iterm2_file<B: RatatuiBackend>(
+        &mut self,
+        terminal: &mut Terminal<B>,
+        path: &Path,
+    ) -> Result<()> {
+        terminal
+            .flush()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        terminal::suspend_stdio_terminal()?;
+        let result = iterm2::request_download(path);
+        terminal::resume_terminal(terminal)?;
+        match result {
+            Ok(()) => self.flash_success(format!(
+                "Downloaded {} through iTerm2.",
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("file")
+            )),
+            Err(error) => self.flash_error(error),
+        }
+        Ok(())
+    }
+
     fn copy_loaded_transcript(&mut self) {
         let text = self.transcript_export_text();
         if text.trim().is_empty() {
@@ -16737,7 +17011,10 @@ impl App {
         }
 
         match set_clipboard_text(text.as_str()) {
-            Ok(()) => self.flash_success(ui_text::t(&self.i18n, "flash-copied-loaded-transcript")),
+            Ok(method) => self.flash_clipboard_copy_success(
+                method,
+                ui_text::t(&self.i18n, "flash-copied-loaded-transcript"),
+            ),
             Err(error) => self.flash_error(self.i18n.text_args(
                 "flash-clipboard-copy-failed",
                 &crate::fl_args!("error" => error.to_string()),
@@ -16763,7 +17040,10 @@ impl App {
         };
 
         match set_clipboard_text(text.as_str()) {
-            Ok(()) => self.flash_success(ui_text::t(&self.i18n, "flash-copied-assistant-message")),
+            Ok(method) => self.flash_clipboard_copy_success(
+                method,
+                ui_text::t(&self.i18n, "flash-copied-assistant-message"),
+            ),
             Err(error) => self.flash_error(self.i18n.text_args(
                 "flash-clipboard-copy-failed",
                 &crate::fl_args!("error" => error.to_string()),
@@ -16779,7 +17059,10 @@ impl App {
         }
 
         match set_clipboard_text(text.as_str()) {
-            Ok(()) => self.flash_success(ui_text::t(&self.i18n, "flash-copied-visible-transcript")),
+            Ok(method) => self.flash_clipboard_copy_success(
+                method,
+                ui_text::t(&self.i18n, "flash-copied-visible-transcript"),
+            ),
             Err(error) => self.flash_error(self.i18n.text_args(
                 "flash-clipboard-copy-failed",
                 &crate::fl_args!("error" => error.to_string()),
@@ -22186,12 +22469,19 @@ impl TranscriptState {
                     direction,
                 )
                 .or_else(|| {
-                    transcript_vertical_navigation_step(
+                    transcript_should_fall_back_to_message_navigation(
                         rendered.nodes.as_slice(),
                         cursor_line,
-                        None,
-                        direction,
                     )
+                    .then(|| {
+                        transcript_vertical_navigation_step(
+                            rendered.nodes.as_slice(),
+                            cursor_line,
+                            None,
+                            direction,
+                        )
+                    })
+                    .flatten()
                 })
             }
         };
@@ -22556,6 +22846,7 @@ impl TranscriptState {
             start_line,
             end_line,
             height.max(1) as usize,
+            self.scroll,
             direction,
         );
         self.recompute_follow_tail(width, height);

@@ -73,7 +73,7 @@ pub(crate) struct ToolTagsInput {
 fn tool_call_input_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
     serde_json::json!({
         "type": "object",
-        "description": "Arguments for the target tool. Read `tools_help` for the exact schema before calling."
+        "description": "Arguments for the target tool. Read `tools_help` for the exact schema before calling. The `tool` value must be a catalog target such as `web.search`, not a gateway function name such as `tools_help` or `tools_call`."
     })
     .try_into()
     .expect("valid schema")

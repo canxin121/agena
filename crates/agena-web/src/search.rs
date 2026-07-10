@@ -7,6 +7,7 @@
 use std::time::Duration;
 use std::{fmt, str::FromStr};
 
+use base64::{Engine as _, engine::general_purpose};
 use reqwest::header::{
     ACCEPT, ACCEPT_LANGUAGE, CACHE_CONTROL, CONNECTION, HeaderMap, HeaderValue, PRAGMA, REFERER,
     UPGRADE_INSECURE_REQUESTS, USER_AGENT,
@@ -323,12 +324,9 @@ fn parse_bing_results(html: &str, limit: usize) -> Vec<WebSearchResult> {
         let Some(link) = el.select(&sel_h2a).next() else {
             continue;
         };
-        let Some(url) = link.value().attr("href").and_then(normalize_result_url) else {
+        let Some(url) = link.value().attr("href").and_then(normalize_bing_url) else {
             continue;
         };
-        if url.contains("bing.com/search") || url.contains("bing.com/ck/a") {
-            continue;
-        }
         if !seen.insert(url.clone()) {
             continue;
         }
@@ -472,6 +470,48 @@ fn normalize_duckduckgo_url(raw_href: &str) -> Option<String> {
     normalize_result_url(raw)
 }
 
+fn normalize_bing_url(raw_href: &str) -> Option<String> {
+    let raw = raw_href.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    let parsed = url::Url::parse(raw).ok()?;
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    if host == "bing.com" || host.ends_with(".bing.com") {
+        if let Some((_, target)) = parsed.query_pairs().find(|(name, _)| name == "u")
+            && let Some(decoded) = decode_bing_target(target.as_ref())
+        {
+            return normalize_result_url(decoded.as_str());
+        }
+        return None;
+    }
+
+    normalize_result_url(raw)
+}
+
+fn decode_bing_target(value: &str) -> Option<String> {
+    // Bing's result links encode the destination in the `u` parameter. Current
+    // SERPs prefix a URL-safe base64 payload with `a1` (for example,
+    // `u=a1aHR0cHM6Ly9leGFtcGxlLmNvbQ`). Returning the wrapper itself is not
+    // useful: it is an internal Bing URL and is filtered from results.
+    let encoded = value.strip_prefix("a1").unwrap_or(value);
+    [
+        &general_purpose::URL_SAFE_NO_PAD,
+        &general_purpose::URL_SAFE,
+        &general_purpose::STANDARD_NO_PAD,
+        &general_purpose::STANDARD,
+    ]
+    .into_iter()
+    .find_map(|engine| {
+        engine
+            .decode(encoded)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+    })
+    .filter(|target| target.starts_with("http://") || target.starts_with("https://"))
+}
+
 fn normalize_result_url(raw: &str) -> Option<String> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -486,4 +526,46 @@ fn normalize_whitespace(value: &str) -> String {
 
 fn selector(value: &str) -> Selector {
     Selector::parse(value).expect("static CSS selector parses")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_bing_results, parse_duckduckgo_results};
+
+    #[test]
+    fn parse_bing_results_decodes_redirect_urls() {
+        let results = parse_bing_results(
+            r#"
+                <ol id="b_results">
+                  <li class="b_algo">
+                    <h2><a href="https://www.bing.com/ck/a?u=a1aHR0cHM6Ly9vcGVuYWkuY29tL2luZGV4L2dwdC01LTYv">GPT-5.6</a></h2>
+                    <div class="b_caption"><p>OpenAI's next-generation model.</p></div>
+                    <cite>https://openai.com</cite>
+                  </li>
+                </ol>
+            "#,
+            8,
+        );
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].url, "https://openai.com/index/gpt-5-6/");
+        assert_eq!(results[0].title, "GPT-5.6");
+    }
+
+    #[test]
+    fn parse_duckduckgo_results_keeps_direct_result_urls() {
+        let results = parse_duckduckgo_results(
+            r#"
+                <div class="result results_links results_links_deep web-result">
+                  <a class="result__a" href="https://openai.com/index/gpt-5-6/">GPT-5.6</a>
+                  <a class="result__snippet">OpenAI's next-generation model.</a>
+                  <a class="result__url">openai.com</a>
+                </div>
+            "#,
+            8,
+        );
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].url, "https://openai.com/index/gpt-5-6/");
+    }
 }

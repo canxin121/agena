@@ -107,7 +107,7 @@ help-composer-line-5 = 在行边界处，Ctrl+A/E 可继续跨到上一行或下
 help-composer-line-6 = F3、Ctrl+O 或 Alt+O 搜索工作区文件并附加
 help-composer-line-7 = F4 或 Alt+E 用 $VISUAL/$EDITOR 打开外部编辑器
 help-composer-line-8 = F6 或 Alt+I 附加剪贴板图片
-help-composer-line-9 = 粘贴单个文件路径会直接附加，大段粘贴会变成内联占位符，附件保持原子化
+help-composer-line-9 = 粘贴文本会直接插入输入框；粘贴单个文件路径会直接附加，附件保持原子化
 help-composer-line-10 = Alt+Up/Down 召回已发送提示词；Ctrl+L 清空输入框；Alt+P 打开命令面板
 help-composer-line-11 = F2 在可用时打开内联项目列表，/model、/fork、/rewind 这类 slash 命令可直接在输入框执行
 help-section-actions = 操作
@@ -162,6 +162,15 @@ overlay-permission-fact-scope = 作用域={$value}
 overlay-permission-fact-operator = 操作人={$value}
 overlay-permission-footer = a 允许一次 | s 会话内允许 | d 拒绝
 overlay-permission-footer-edit-rule = {$footer} | e 编辑规则
+overlay-permission-footer-action = ↑/↓ 选择 | Enter/→ 确认 | Esc/← 关闭
+overlay-permission-footer-scope = ↑/↓ 选择 | Enter/→ 应用 | Esc/← 返回上一级
+overlay-permission-choice-allow = 允许…
+overlay-permission-choice-deny = 拒绝…
+overlay-permission-choice-edit-rule = 创建精确规则…
+overlay-permission-choice-once = 仅这一次
+overlay-permission-choice-session = 当前会话
+overlay-permission-choice-workspace = 当前工作区
+overlay-permission-choice-global = 全局
 overlay-permission-choice-allow-always-session = 始终允许（当前会话）
 overlay-permission-choice-allow-always-workspace = 始终允许（当前工作区）
 overlay-permission-choice-allow-always-global = 始终允许（全局）
@@ -178,6 +187,7 @@ overlay-permission-rule-delete-title = 撤销权限规则
 overlay-permission-rule-delete-body = 撤销持久化规则 {$name}？
 overlay-permission-rule-workbench-title = 权限规则
 overlay-permission-rule-studio-footer = b 浏览路径 | r 刷新
+overlay-permission-rule-studio-footer-return = b 浏览路径 | r 刷新 | Esc 返回权限请求
 overlay-permission-rule-fields = 规则字段
 overlay-permission-rule-empty-detail = 选择一个权限字段以查看或编辑。
 overlay-permission-rule-choice-subject-title = 选择规则对象类型
@@ -1360,7 +1370,6 @@ permission-rule-error-invalid-mode = 权限模式必须是 allow、ask 或 deny
 permission-rule-error-invalid-scope = scope 必须是 session、workspace 或 global
 permission-rule-error-invalid-option-format = 需要 key=value 形式的选项，收到 `{$token}`
 flash-user-input-reply-sent = 用户输入回复已发送
-flash-large-paste-staged = 大段粘贴已暂存到输入框
 flash-large-paste-no-file-view = 大段粘贴片段可以移除，但没有可打开的文件视图
 flash-attached = 已附加 {$path}
 flash-composer-updated = 输入框内容已从外部编辑器更新
@@ -1638,10 +1647,6 @@ bytes-gb = {$value} GB
 bytes-mb = {$value} MB
 bytes-kb = {$value} KB
 bytes-b = {$value} B
-
-paste-label = 粘贴 {$count} 个字符
-paste-label-append = 粘贴 {$count} 个字符，发送时追加
-paste-placeholder = [粘贴 {$count} 个字符]
 
 permission-label-allow-once = 允许一次
 permission-label-allow-always = 始终允许

@@ -110,7 +110,6 @@ const TIMELINE_EVENT_LIMIT: u64 = 200;
 const UI_TICK_MS: u64 = 32;
 const REFRESH_INTERVAL_MS: u64 = 250;
 const DRAFT_PERSIST_INTERVAL_MS: u64 = 250;
-const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 const TOOL_CARD_PREVIEW_LINES: usize = 8;
 const TOOL_CARD_PREVIEW_CHARS: usize = 2_500;
 const TOOL_EXPANDED_PREVIEW_LINES: usize = 40;
@@ -677,7 +676,6 @@ enum Overlay {
     SettingsValueEdit(SettingsValueEditOverlay),
     RuntimeSettingEdit(RuntimeSettingEditOverlay),
     Choice(ChoiceOverlay),
-    PermissionRuleEdit(PermissionRuleEditOverlay),
     FileAttach(FileAttachOverlay),
     PathBrowser(PathBrowserOverlay),
     Permission(PermissionOverlay),
@@ -1159,14 +1157,6 @@ enum RuntimeSettingId {
     System,
 }
 
-#[derive(Debug, Clone)]
-struct PermissionRuleEditOverlay {
-    rule_id: Option<i64>,
-    state: InputDialogState<()>,
-    return_query: String,
-    return_overlay: Option<Box<Overlay>>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PermissionRuleDraft {
     subject_kind: PermissionRuleSubjectKind,
@@ -1194,6 +1184,7 @@ enum PermissionRuleSubjectKind {
 struct PermissionRuleStudioOverlay {
     rule_id: Option<i64>,
     draft: PermissionRuleDraft,
+    return_to_permission: bool,
     workbench: ListWorkbenchState<PermissionRuleStudioItem, PermissionRuleStudioEditor>,
 }
 
@@ -1251,6 +1242,7 @@ struct UserInputOverlay {
 struct PermissionOverlay {
     session_id: i64,
     request: PermissionRequest,
+    page: PermissionOverlayPage,
     selection: SelectionCursor,
 }
 
@@ -1272,10 +1264,26 @@ enum PendingInteractiveKind {
     UserInput,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct PermissionOverlayChoice {
-    kind: PermissionReplyKind,
-    scope: Option<PermissionScope>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionOverlayPage {
+    Action,
+    Scope(PermissionOverlayDecision),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionOverlayDecision {
+    Allow,
+    Deny,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionOverlayChoice {
+    OpenScope(PermissionOverlayDecision),
+    Reply {
+        kind: PermissionReplyKind,
+        scope: Option<PermissionScope>,
+    },
+    EditRule,
 }
 
 #[derive(Debug, Clone)]
@@ -2606,31 +2614,6 @@ impl App {
             return;
         }
 
-        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('p')) {
-            self.open_permission_overlay();
-            return;
-        }
-
-        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('a')) {
-            self.reply_permission(PermissionReplyKind::AllowOnce);
-            return;
-        }
-
-        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('A')) {
-            self.reply_permission(PermissionReplyKind::AllowAlways);
-            return;
-        }
-
-        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('d')) {
-            self.reply_permission(PermissionReplyKind::DenyOnce);
-            return;
-        }
-
-        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('D')) {
-            self.reply_permission(PermissionReplyKind::DenyAlways);
-            return;
-        }
-
         match self.focus {
             Focus::Sessions => self.handle_sessions_key(key),
             Focus::Transcript => self.handle_transcript_key(key),
@@ -2695,9 +2678,6 @@ impl App {
                 self.handle_runtime_setting_edit_overlay_key(key, dialog)
             }
             Overlay::Choice(dialog) => self.handle_choice_overlay_key(key, dialog),
-            Overlay::PermissionRuleEdit(dialog) => {
-                self.handle_permission_rule_edit_overlay_key(key, dialog)
-            }
             Overlay::FileAttach(dialog) => self.handle_file_attach_overlay_key(key, dialog),
             Overlay::PathBrowser(dialog) => self.handle_path_browser_overlay_key(key, dialog),
             Overlay::Permission(dialog) => self.handle_permission_overlay_key(key, dialog),
@@ -3379,62 +3359,67 @@ impl App {
         key: KeyEvent,
         dialog: &mut PermissionOverlay,
     ) -> bool {
-        let choice_count = permission_overlay_choices(&self.i18n).len();
+        let choice_count = permission_overlay_choices(&self.i18n, dialog.page).len();
         match key.code {
-            KeyCode::Esc => true,
-            _ if dialog.selection.handle_navigation_key(key, choice_count, 8) => false,
-            KeyCode::Enter => {
-                let choice = permission_overlay_choice(dialog.selection.selected);
-                self.submit_permission_reply(
-                    dialog.session_id,
-                    dialog.request.clone(),
-                    choice.kind,
-                    choice.scope,
-                    permission_overlay_choice_label(&self.i18n, choice),
-                );
-                true
-            }
-            KeyCode::Char('a') => {
-                self.submit_permission_reply(
-                    dialog.session_id,
-                    dialog.request.clone(),
-                    PermissionReplyKind::AllowOnce,
-                    None,
-                    ui_text::permission_reply_label(&self.i18n, PermissionReplyKind::AllowOnce),
-                );
-                true
-            }
-            KeyCode::Char('s') | KeyCode::Char('A') => {
-                self.submit_permission_reply(
-                    dialog.session_id,
-                    dialog.request.clone(),
-                    PermissionReplyKind::AllowAlways,
-                    Some(PermissionScope::Session),
-                    ui_text::permission_reply_label(&self.i18n, PermissionReplyKind::AllowAlways),
-                );
-                true
-            }
-            KeyCode::Char('d') => {
-                self.submit_permission_reply(
-                    dialog.session_id,
-                    dialog.request.clone(),
-                    PermissionReplyKind::DenyOnce,
-                    None,
-                    ui_text::permission_reply_label(&self.i18n, PermissionReplyKind::DenyOnce),
-                );
-                true
-            }
-            KeyCode::Char('e') => {
-                let return_overlay = Overlay::Permission(dialog.clone());
-                self.overlay_stack.push(return_overlay.clone());
-                self.open_permission_rule_editor_from_request(&dialog.request);
-                if let Some(Overlay::PermissionRuleEdit(edit)) = self.overlay.as_mut() {
-                    edit.return_overlay = Some(Box::new(return_overlay));
+            KeyCode::Esc | KeyCode::Left => match dialog.page {
+                PermissionOverlayPage::Action => true,
+                PermissionOverlayPage::Scope(_) => {
+                    dialog.page = PermissionOverlayPage::Action;
+                    dialog.selection.selected = 0;
+                    false
                 }
-                true
+            },
+            KeyCode::Up => {
+                dialog.selection.move_by(choice_count, -1);
+                false
             }
+            KeyCode::Down => {
+                dialog.selection.move_by(choice_count, 1);
+                false
+            }
+            KeyCode::Enter | KeyCode::Right => self.activate_permission_overlay_choice(dialog),
             _ => false,
         }
+    }
+
+    fn activate_permission_overlay_choice(&mut self, dialog: &mut PermissionOverlay) -> bool {
+        let choice = permission_overlay_choice(dialog.page, dialog.selection.selected);
+        match choice {
+            PermissionOverlayChoice::OpenScope(decision) => {
+                dialog.page = PermissionOverlayPage::Scope(decision);
+                dialog.selection.selected = 0;
+                false
+            }
+            PermissionOverlayChoice::Reply { kind, scope } => {
+                self.submit_permission_reply(
+                    dialog.session_id,
+                    dialog.request.clone(),
+                    kind,
+                    scope,
+                    permission_overlay_reply_label(&self.i18n, kind, scope),
+                );
+                true
+            }
+            PermissionOverlayChoice::EditRule => {
+                self.open_permission_rule_studio_from_overlay(dialog);
+                true
+            }
+        }
+    }
+
+    fn open_permission_rule_studio_from_overlay(&mut self, dialog: &PermissionOverlay) {
+        let mut studio = self.build_permission_rule_studio_overlay(
+            None,
+            ui_text::t(&self.i18n, "overlay-permission-rule-workbench-title"),
+            permission_rule_draft_from_request(&dialog.request),
+            None,
+        );
+        studio.return_to_permission = true;
+        studio.workbench.footer =
+            ui_text::t(&self.i18n, "overlay-permission-rule-studio-footer-return");
+        self.overlay = Some(Overlay::Permission(dialog.clone()));
+        self.route_stack.push(Route::Main);
+        self.current_route = Route::PermissionRuleStudio(studio);
     }
 
     fn handle_session_rename_overlay_key(
@@ -3786,8 +3771,10 @@ impl App {
                 );
             }
             PermissionRuleStudioAction::Save => {
-                if let Err(error) = self.commit_permission_rule_studio_save(dialog) {
-                    self.flash_error(error);
+                match self.commit_permission_rule_studio_save(dialog) {
+                    Ok(()) if dialog.return_to_permission => return true,
+                    Ok(()) => {}
+                    Err(error) => self.flash_error(error),
                 }
             }
             PermissionRuleStudioAction::Revoke => {
@@ -4778,53 +4765,6 @@ impl App {
         }
     }
 
-    fn handle_permission_rule_edit_overlay_key(
-        &mut self,
-        key: KeyEvent,
-        dialog: &mut PermissionRuleEditOverlay,
-    ) -> bool {
-        match drive_input_dialog_key(&mut dialog.state, key) {
-            InputDialogKeyResult::Close => true,
-            InputDialogKeyResult::Submit(_, input) => {
-                let draft = match parse_permission_rule_input(&self.i18n, input.as_str()) {
-                    Ok(parsed) => parsed,
-                    Err(error) => {
-                        self.flash_warning(error);
-                        return false;
-                    }
-                };
-                let label = permission_rule_draft_label(&self.i18n, &draft);
-                let params = permission_rule_params_from_draft(&draft);
-                let result = match dialog.rule_id {
-                    Some(rule_id) => {
-                        self.block_on_async(self.backend.replace_permission_rule(rule_id, params))
-                    }
-                    None => self.block_on_async(self.backend.create_permission_rule(params)),
-                };
-                match result {
-                    Ok(rule) => {
-                        self.flash_success(self.i18n.text_args(
-                            "flash-permission-rule-saved",
-                            &crate::fl_args!("name" => permission_rule_label(&self.i18n, &rule)),
-                        ));
-                        if let Some(return_overlay) = dialog.return_overlay.take() {
-                            self.overlay_stack.pop();
-                            self.overlay = Some(*return_overlay);
-                        } else {
-                            self.refresh_permission_rules_route(dialog.return_query.as_str());
-                        }
-                        true
-                    }
-                    Err(error) => {
-                        self.flash_error(format!("{}: {}", label, error));
-                        false
-                    }
-                }
-            }
-            InputDialogKeyResult::Continue => false,
-        }
-    }
-
     fn handle_file_attach_overlay_key(
         &mut self,
         key: KeyEvent,
@@ -5636,10 +5576,6 @@ impl App {
                     dialog.input.insert_str(text.as_str());
                     Self::sync_choice_overlay_input(dialog, true);
                 }
-                Overlay::PermissionRuleEdit(dialog) => {
-                    dialog.state.input.flush_all_pending_input();
-                    dialog.state.input.insert_str(text.as_str());
-                }
                 Overlay::FileAttach(dialog) => {
                     dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
@@ -5731,12 +5667,12 @@ impl App {
                 return;
             }
 
-            let char_count = text.chars().count();
-            if char_count > LARGE_PASTE_CHAR_THRESHOLD {
-                self.stage_large_paste(text);
-            } else {
-                self.composer.insert_str(text.as_str());
-            }
+            // Bracketed-paste capable terminals deliver one `Event::Paste`,
+            // while other terminals deliver the same clipboard contents as a
+            // burst of key events. Insert both paths as ordinary composer
+            // text so the visible result never depends on terminal support
+            // or a hidden character-count threshold.
+            self.composer.insert_str(text.as_str());
             self.after_composer_text_mutated();
         }
     }
@@ -8733,6 +8669,7 @@ impl App {
         PermissionOverlay {
             session_id,
             request,
+            page: PermissionOverlayPage::Action,
             selection: SelectionCursor::default(),
         }
     }
@@ -12121,6 +12058,7 @@ impl App {
         PermissionRuleStudioOverlay {
             rule_id,
             draft,
+            return_to_permission: false,
             workbench: ListWorkbenchState::new(
                 title,
                 footer,
@@ -12171,22 +12109,6 @@ impl App {
 
     fn refresh_permission_rule_studio(&mut self, dialog: &mut PermissionRuleStudioOverlay) {
         refresh_permission_rule_studio_dialog(&self.i18n, dialog);
-    }
-
-    fn open_permission_rule_editor_from_request(&mut self, request: &PermissionRequest) {
-        let draft = permission_rule_draft_from_request(request);
-        let input = Editor::from_text(render_permission_rule_draft(&draft));
-        self.overlay = Some(Overlay::PermissionRuleEdit(PermissionRuleEditOverlay {
-            rule_id: None,
-            state: InputDialogState::new(
-                ui_text::t(&self.i18n, "overlay-permission-rule-create-title"),
-                ui_text::t(&self.i18n, "overlay-permission-rule-prompt"),
-                input,
-                (),
-            ),
-            return_query: String::new(),
-            return_overlay: None,
-        }));
     }
 
     fn open_revoke_permission_rule_confirm(
@@ -15441,9 +15363,6 @@ impl App {
                     dialog.input.flush_pending_input_if_due(now);
                     Self::sync_choice_overlay_input(dialog, false);
                 }
-                Overlay::PermissionRuleEdit(dialog) => {
-                    dialog.state.input.flush_pending_input_if_due(now);
-                }
                 Overlay::FileAttach(dialog) => dialog.input.flush_pending_input_if_due(now),
                 Overlay::PathBrowser(dialog) => {
                     dialog.input.flush_pending_input_if_due(now);
@@ -15500,22 +15419,6 @@ impl App {
                 true
             }
         }
-    }
-
-    fn stage_large_paste(&mut self, text: String) {
-        let char_count = text.chars().count();
-        let label = ui_text::staged_paste_label(&self.i18n, char_count, text.contains('\n'));
-        let placeholder = self.make_unique_composer_placeholder(ui_text::staged_paste_placeholder(
-            &self.i18n, char_count,
-        ));
-        self.composer.insert_element(placeholder.as_str());
-        self.composer_items
-            .push(ComposerItem::LargePaste(StagedPaste {
-                placeholder,
-                label,
-                text,
-            }));
-        self.flash_success(ui_text::t(&self.i18n, "flash-large-paste-staged"));
     }
 
     fn stage_attachment_from_path(&mut self, path: &Path, is_temp: bool) -> UiResult<()> {
@@ -22179,45 +22082,96 @@ fn permission_request_fingerprint(request: &PermissionRequest) -> String {
     .to_string()
 }
 
-fn permission_overlay_choice(selected: usize) -> PermissionOverlayChoice {
-    match selected {
-        0 => PermissionOverlayChoice {
-            kind: PermissionReplyKind::AllowOnce,
-            scope: None,
+fn permission_overlay_choice(
+    page: PermissionOverlayPage,
+    selected: usize,
+) -> PermissionOverlayChoice {
+    match page {
+        PermissionOverlayPage::Action => match selected {
+            0 => PermissionOverlayChoice::OpenScope(PermissionOverlayDecision::Allow),
+            1 => PermissionOverlayChoice::OpenScope(PermissionOverlayDecision::Deny),
+            _ => PermissionOverlayChoice::EditRule,
         },
-        1 => PermissionOverlayChoice {
-            kind: PermissionReplyKind::AllowAlways,
-            scope: Some(PermissionScope::Session),
+        PermissionOverlayPage::Scope(PermissionOverlayDecision::Allow) => match selected {
+            0 => PermissionOverlayChoice::Reply {
+                kind: PermissionReplyKind::AllowOnce,
+                scope: None,
+            },
+            1 => PermissionOverlayChoice::Reply {
+                kind: PermissionReplyKind::AllowAlways,
+                scope: Some(PermissionScope::Session),
+            },
+            2 => PermissionOverlayChoice::Reply {
+                kind: PermissionReplyKind::AllowAlways,
+                scope: Some(PermissionScope::Workspace),
+            },
+            _ => PermissionOverlayChoice::Reply {
+                kind: PermissionReplyKind::AllowAlways,
+                scope: Some(PermissionScope::Global),
+            },
         },
-        2 => PermissionOverlayChoice {
-            kind: PermissionReplyKind::AllowAlways,
-            scope: Some(PermissionScope::Workspace),
-        },
-        3 => PermissionOverlayChoice {
-            kind: PermissionReplyKind::AllowAlways,
-            scope: Some(PermissionScope::Global),
-        },
-        4 => PermissionOverlayChoice {
-            kind: PermissionReplyKind::DenyOnce,
-            scope: None,
-        },
-        5 => PermissionOverlayChoice {
-            kind: PermissionReplyKind::DenyAlways,
-            scope: Some(PermissionScope::Session),
-        },
-        6 => PermissionOverlayChoice {
-            kind: PermissionReplyKind::DenyAlways,
-            scope: Some(PermissionScope::Workspace),
-        },
-        _ => PermissionOverlayChoice {
-            kind: PermissionReplyKind::DenyAlways,
-            scope: Some(PermissionScope::Global),
+        PermissionOverlayPage::Scope(PermissionOverlayDecision::Deny) => match selected {
+            0 => PermissionOverlayChoice::Reply {
+                kind: PermissionReplyKind::DenyOnce,
+                scope: None,
+            },
+            1 => PermissionOverlayChoice::Reply {
+                kind: PermissionReplyKind::DenyAlways,
+                scope: Some(PermissionScope::Session),
+            },
+            2 => PermissionOverlayChoice::Reply {
+                kind: PermissionReplyKind::DenyAlways,
+                scope: Some(PermissionScope::Workspace),
+            },
+            _ => PermissionOverlayChoice::Reply {
+                kind: PermissionReplyKind::DenyAlways,
+                scope: Some(PermissionScope::Global),
+            },
         },
     }
 }
 
 fn permission_overlay_choice_label(i18n: &I18n, choice: PermissionOverlayChoice) -> String {
-    match (choice.kind, choice.scope) {
+    match choice {
+        PermissionOverlayChoice::OpenScope(PermissionOverlayDecision::Allow) => {
+            ui_text::t(i18n, "overlay-permission-choice-allow")
+        }
+        PermissionOverlayChoice::OpenScope(PermissionOverlayDecision::Deny) => {
+            ui_text::t(i18n, "overlay-permission-choice-deny")
+        }
+        PermissionOverlayChoice::EditRule => {
+            ui_text::t(i18n, "overlay-permission-choice-edit-rule")
+        }
+        PermissionOverlayChoice::Reply {
+            kind: PermissionReplyKind::AllowOnce,
+            ..
+        }
+        | PermissionOverlayChoice::Reply {
+            kind: PermissionReplyKind::DenyOnce,
+            ..
+        } => ui_text::t(i18n, "overlay-permission-choice-once"),
+        PermissionOverlayChoice::Reply {
+            scope: Some(PermissionScope::Session),
+            ..
+        } => ui_text::t(i18n, "overlay-permission-choice-session"),
+        PermissionOverlayChoice::Reply {
+            scope: Some(PermissionScope::Workspace),
+            ..
+        } => ui_text::t(i18n, "overlay-permission-choice-workspace"),
+        PermissionOverlayChoice::Reply {
+            scope: Some(PermissionScope::Global),
+            ..
+        } => ui_text::t(i18n, "overlay-permission-choice-global"),
+        PermissionOverlayChoice::Reply { .. } => ui_text::t(i18n, "overlay-permission-choice-once"),
+    }
+}
+
+fn permission_overlay_reply_label(
+    i18n: &I18n,
+    kind: PermissionReplyKind,
+    scope: Option<PermissionScope>,
+) -> String {
+    match (kind, scope) {
         (PermissionReplyKind::AllowAlways, Some(PermissionScope::Session)) => {
             ui_text::t(i18n, "overlay-permission-choice-allow-always-session")
         }
@@ -22236,21 +22190,56 @@ fn permission_overlay_choice_label(i18n: &I18n, choice: PermissionOverlayChoice)
         (PermissionReplyKind::DenyAlways, Some(PermissionScope::Global)) => {
             ui_text::t(i18n, "overlay-permission-choice-deny-always-global")
         }
-        _ => ui_text::permission_reply_label(i18n, choice.kind),
+        _ => ui_text::permission_reply_label(i18n, kind),
     }
 }
 
-fn permission_overlay_choices(i18n: &I18n) -> [String; 8] {
-    [
-        permission_overlay_choice_label(i18n, permission_overlay_choice(0)),
-        permission_overlay_choice_label(i18n, permission_overlay_choice(1)),
-        permission_overlay_choice_label(i18n, permission_overlay_choice(2)),
-        permission_overlay_choice_label(i18n, permission_overlay_choice(3)),
-        permission_overlay_choice_label(i18n, permission_overlay_choice(4)),
-        permission_overlay_choice_label(i18n, permission_overlay_choice(5)),
-        permission_overlay_choice_label(i18n, permission_overlay_choice(6)),
-        permission_overlay_choice_label(i18n, permission_overlay_choice(7)),
-    ]
+fn permission_overlay_decision_label(i18n: &I18n, decision: PermissionOverlayDecision) -> String {
+    ui_text::t(
+        i18n,
+        match decision {
+            PermissionOverlayDecision::Allow => "value-allow",
+            PermissionOverlayDecision::Deny => "value-deny",
+        },
+    )
+}
+
+fn permission_overlay_choices(i18n: &I18n, page: PermissionOverlayPage) -> Vec<String> {
+    let count = match page {
+        PermissionOverlayPage::Action => 3,
+        PermissionOverlayPage::Scope(_) => 4,
+    };
+    (0..count)
+        .map(|selected| {
+            permission_overlay_choice_label(i18n, permission_overlay_choice(page, selected))
+        })
+        .collect()
+}
+
+fn permission_overlay_title(i18n: &I18n, page: PermissionOverlayPage) -> String {
+    let base = ui_text::t(i18n, "overlay-permission-title");
+    match page {
+        PermissionOverlayPage::Action => base,
+        PermissionOverlayPage::Scope(PermissionOverlayDecision::Allow) => {
+            format!(
+                "{base} · {}",
+                permission_overlay_decision_label(i18n, PermissionOverlayDecision::Allow)
+            )
+        }
+        PermissionOverlayPage::Scope(PermissionOverlayDecision::Deny) => {
+            format!(
+                "{base} · {}",
+                permission_overlay_decision_label(i18n, PermissionOverlayDecision::Deny)
+            )
+        }
+    }
+}
+
+fn permission_overlay_footer(i18n: &I18n, page: PermissionOverlayPage) -> String {
+    match page {
+        PermissionOverlayPage::Action => ui_text::t(i18n, "overlay-permission-footer-action"),
+        PermissionOverlayPage::Scope(_) => ui_text::t(i18n, "overlay-permission-footer-scope"),
+    }
 }
 
 fn permission_action_label(i18n: &I18n, action: &PermissionAction) -> String {
@@ -24919,6 +24908,130 @@ fn permission_rule_studio_detail_text(
 }
 
 #[cfg(test)]
+mod permission_overlay_tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn request_for(action: PermissionAction, session_id: Option<i64>) -> PermissionRequest {
+        PermissionRequest {
+            request_id: "request-1".to_string(),
+            session_id,
+            action,
+            related_actions: Vec::new(),
+            requested_actions: Vec::new(),
+            reason: "test request".to_string(),
+            explanation: String::new(),
+            source: None,
+            scope: None,
+            operator: None,
+            risk: PermissionRiskLevel::Medium,
+            trace: Vec::new(),
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn root_menu_groups_decisions_before_asking_for_scope() {
+        let i18n = I18n::default();
+        let choices = permission_overlay_choices(&i18n, PermissionOverlayPage::Action);
+
+        assert_eq!(choices.len(), 3);
+        assert_eq!(
+            permission_overlay_choice(PermissionOverlayPage::Action, 0),
+            PermissionOverlayChoice::OpenScope(PermissionOverlayDecision::Allow)
+        );
+        assert_eq!(
+            permission_overlay_choice(PermissionOverlayPage::Action, 1),
+            PermissionOverlayChoice::OpenScope(PermissionOverlayDecision::Deny)
+        );
+        assert_eq!(
+            permission_overlay_choice(PermissionOverlayPage::Action, 2),
+            PermissionOverlayChoice::EditRule
+        );
+    }
+
+    #[test]
+    fn scope_menu_maps_allow_and_deny_to_the_correct_reply_kinds() {
+        assert_eq!(
+            permission_overlay_choice(
+                PermissionOverlayPage::Scope(PermissionOverlayDecision::Allow),
+                0,
+            ),
+            PermissionOverlayChoice::Reply {
+                kind: PermissionReplyKind::AllowOnce,
+                scope: None,
+            }
+        );
+        assert_eq!(
+            permission_overlay_choice(
+                PermissionOverlayPage::Scope(PermissionOverlayDecision::Allow),
+                2,
+            ),
+            PermissionOverlayChoice::Reply {
+                kind: PermissionReplyKind::AllowAlways,
+                scope: Some(PermissionScope::Workspace),
+            }
+        );
+        assert_eq!(
+            permission_overlay_choice(
+                PermissionOverlayPage::Scope(PermissionOverlayDecision::Deny),
+                3,
+            ),
+            PermissionOverlayChoice::Reply {
+                kind: PermissionReplyKind::DenyAlways,
+                scope: Some(PermissionScope::Global),
+            }
+        );
+    }
+
+    #[test]
+    fn custom_rule_studio_draft_preserves_the_pending_request_details() {
+        let tool = permission_rule_draft_from_request(&request_for(
+            PermissionAction::Tool {
+                tool_name: "shell".to_string(),
+                qualifier: Some("git push origin main".to_string()),
+            },
+            Some(42),
+        ));
+        assert_eq!(tool.subject_kind, PermissionRuleSubjectKind::Tool);
+        assert_eq!(tool.tool_name, "shell");
+        assert_eq!(tool.qualifier, "git push origin main");
+        assert_eq!(tool.scope, "session");
+        assert_eq!(tool.session_id, "42");
+        assert_eq!(tool.mode, PermissionMode::Allow);
+
+        let path = permission_rule_draft_from_request(&request_for(
+            PermissionAction::PathAccess {
+                access_kind: "write".to_string(),
+                workspace_root: "/workspace".to_string(),
+                target_path: "/workspace/.agena/agena.json".to_string(),
+            },
+            None,
+        ));
+        assert_eq!(path.subject_kind, PermissionRuleSubjectKind::PathAccess);
+        assert_eq!(path.path_access_kind, "write");
+        assert_eq!(path.workspace_root, "/workspace");
+        assert_eq!(path.target_path, "/workspace/.agena/agena.json");
+        assert_eq!(path.scope, "workspace");
+
+        let network = permission_rule_draft_from_request(&request_for(
+            PermissionAction::NetworkAccess {
+                target: "https://api.github.com/repos".to_string(),
+                host: "api.github.com".to_string(),
+                port: Some(443),
+            },
+            None,
+        ));
+        assert_eq!(
+            network.subject_kind,
+            PermissionRuleSubjectKind::NetworkAccess
+        );
+        assert_eq!(network.network_target, "https://api.github.com/repos");
+        assert_eq!(network.scope, "workspace");
+    }
+}
+
+#[cfg(test)]
 mod permission_studio_tests {
     use super::*;
 
@@ -25038,79 +25151,6 @@ mod permission_studio_tests {
     }
 }
 
-fn render_permission_rule_draft(draft: &PermissionRuleDraft) -> String {
-    match draft.subject_kind {
-        PermissionRuleSubjectKind::Tool => {
-            let mut parts = vec![
-                "tool".to_string(),
-                shell_quote_or_dash(draft.tool_name.trim()),
-                permission_mode_name(draft.mode).to_string(),
-                format!("scope={}", draft.scope.trim()),
-            ];
-            if !draft.qualifier.trim().is_empty() {
-                parts.push(format!(
-                    "qualifier={}",
-                    shell_quote_or_dash(draft.qualifier.trim())
-                ));
-            }
-            if draft.scope.trim() == "session" && !draft.session_id.trim().is_empty() {
-                parts.push(format!("session={}", draft.session_id.trim()));
-            }
-            parts.join(" ")
-        }
-        PermissionRuleSubjectKind::PathAccess => {
-            let mut parts = vec![
-                "path".to_string(),
-                shell_quote_or_dash(draft.path_access_kind.trim()),
-                shell_quote_or_dash(draft.target_path.trim()),
-                permission_mode_name(draft.mode).to_string(),
-                format!("scope={}", draft.scope.trim()),
-            ];
-            if !draft.workspace_root.trim().is_empty() {
-                parts.push(format!(
-                    "workspace_root={}",
-                    shell_quote_or_dash(draft.workspace_root.trim())
-                ));
-            }
-            if draft.scope.trim() == "session" && !draft.session_id.trim().is_empty() {
-                parts.push(format!("session={}", draft.session_id.trim()));
-            }
-            parts.join(" ")
-        }
-        PermissionRuleSubjectKind::NetworkAccess => {
-            let mut parts = vec![
-                "network".to_string(),
-                shell_quote_or_dash(draft.network_target.trim()),
-                permission_mode_name(draft.mode).to_string(),
-                format!("scope={}", draft.scope.trim()),
-            ];
-            if draft.scope.trim() == "session" && !draft.session_id.trim().is_empty() {
-                parts.push(format!("session={}", draft.session_id.trim()));
-            }
-            parts.join(" ")
-        }
-    }
-}
-
-fn render_permission_rule_preview(i18n: &I18n, input: &str) -> String {
-    match parse_permission_rule_input(i18n, input) {
-        Ok(draft) => permission_rule_preview_lines(i18n, &draft).join("\n"),
-        Err(error) => i18n.text_args(
-            "overlay-permission-rule-preview-invalid",
-            &crate::fl_args!("error" => error),
-        ),
-    }
-}
-
-fn permission_rule_edit_help() -> String {
-    [
-        "tool <tool_name> <allow|ask|deny> [qualifier=<text>] [scope=session|workspace|global] [session=<id>]",
-        "path <read|write|read_write> <target_path> <allow|ask|deny> [scope=session|workspace|global] [session=<id>] [workspace_root=<path>]",
-        "network <target|host:port|url> <allow|ask|deny> [scope=session|workspace|global] [session=<id>]",
-    ]
-    .join("\n")
-}
-
 fn permission_rule_params_from_draft(draft: &PermissionRuleDraft) -> UpsertPermissionRuleParams {
     match draft.subject_kind {
         PermissionRuleSubjectKind::Tool => UpsertPermissionRuleParams {
@@ -25173,158 +25213,6 @@ fn permission_rule_params_from_draft(draft: &PermissionRuleDraft) -> UpsertPermi
     }
 }
 
-fn parse_permission_rule_input(
-    i18n: &I18n,
-    input: &str,
-) -> std::result::Result<PermissionRuleDraft, String> {
-    let tokens = shlex::split(input)
-        .ok_or_else(|| ui_text::t(i18n, "permission-rule-error-invalid-shell-args"))?;
-    if tokens.len() < 4 {
-        return Err(ui_text::t(
-            i18n,
-            "permission-rule-error-expected-structured",
-        ));
-    }
-    let subject = tokens[0].to_ascii_lowercase();
-    let draft = match subject.as_str() {
-        "tool" => {
-            let tool_name = tokens[1].clone();
-            let mode = parse_permission_mode_token(i18n, tokens[2].as_str())?;
-            let mut qualifier = String::new();
-            let mut scope = "workspace".to_string();
-            let mut session_id = String::new();
-            for token in &tokens[3..] {
-                let (key, value) = split_permission_rule_option(i18n, token)?;
-                match key {
-                    "qualifier" => qualifier = value.to_string(),
-                    "scope" => scope = parse_permission_scope_token(i18n, value)?.to_string(),
-                    "session" => session_id = value.to_string(),
-                    _ => {
-                        return Err(i18n.text_args(
-                            "permission-rule-error-unknown-option",
-                            &crate::fl_args!("key" => key.to_string()),
-                        ));
-                    }
-                }
-            }
-            if tool_name.trim().is_empty() {
-                return Err(ui_text::t(i18n, "permission-rule-error-tool-name-required"));
-            }
-            PermissionRuleDraft {
-                subject_kind: PermissionRuleSubjectKind::Tool,
-                tool_name,
-                qualifier,
-                path_access_kind: "read".to_string(),
-                workspace_root: String::new(),
-                target_path: String::new(),
-                network_target: String::new(),
-                network_host: String::new(),
-                network_port: String::new(),
-                scope,
-                session_id,
-                mode,
-            }
-        }
-        "path" => {
-            let path_access_kind = tokens[1].clone();
-            let target_path = tokens[2].clone();
-            let mode = parse_permission_mode_token(i18n, tokens[3].as_str())?;
-            let mut workspace_root = String::new();
-            let mut scope = "workspace".to_string();
-            let mut session_id = String::new();
-            for token in &tokens[4..] {
-                let (key, value) = split_permission_rule_option(i18n, token)?;
-                match key {
-                    "scope" => scope = parse_permission_scope_token(i18n, value)?.to_string(),
-                    "session" => session_id = value.to_string(),
-                    "workspace_root" => workspace_root = value.to_string(),
-                    _ => {
-                        return Err(i18n.text_args(
-                            "permission-rule-error-unknown-option",
-                            &crate::fl_args!("key" => key.to_string()),
-                        ));
-                    }
-                }
-            }
-            if path_access_kind.trim().is_empty() {
-                return Err(ui_text::t(
-                    i18n,
-                    "permission-rule-error-path-access-kind-required",
-                ));
-            }
-            if target_path.trim().is_empty() {
-                return Err(ui_text::t(
-                    i18n,
-                    "permission-rule-error-target-path-required",
-                ));
-            }
-            PermissionRuleDraft {
-                subject_kind: PermissionRuleSubjectKind::PathAccess,
-                tool_name: String::new(),
-                qualifier: String::new(),
-                path_access_kind,
-                workspace_root,
-                target_path,
-                network_target: String::new(),
-                network_host: String::new(),
-                network_port: String::new(),
-                scope,
-                session_id,
-                mode,
-            }
-        }
-        "network" => {
-            let network_target = tokens[1].clone();
-            let mode = parse_permission_mode_token(i18n, tokens[2].as_str())?;
-            let mut scope = "workspace".to_string();
-            let mut session_id = String::new();
-            for token in &tokens[3..] {
-                let (key, value) = split_permission_rule_option(i18n, token)?;
-                match key {
-                    "scope" => scope = parse_permission_scope_token(i18n, value)?.to_string(),
-                    "session" => session_id = value.to_string(),
-                    _ => {
-                        return Err(i18n.text_args(
-                            "permission-rule-error-unknown-option",
-                            &crate::fl_args!("key" => key.to_string()),
-                        ));
-                    }
-                }
-            }
-            if network_target.trim().is_empty() {
-                return Err(ui_text::t(
-                    i18n,
-                    "permission-rule-error-network-target-required",
-                ));
-            }
-            PermissionRuleDraft {
-                subject_kind: PermissionRuleSubjectKind::NetworkAccess,
-                tool_name: String::new(),
-                qualifier: String::new(),
-                path_access_kind: "read".to_string(),
-                workspace_root: String::new(),
-                target_path: String::new(),
-                network_target,
-                network_host: String::new(),
-                network_port: String::new(),
-                scope,
-                session_id,
-                mode,
-            }
-        }
-        _ => {
-            return Err(ui_text::t(i18n, "permission-rule-error-invalid-subject"));
-        }
-    };
-    if draft.scope == "session" && draft.session_id.trim().is_empty() {
-        return Err(ui_text::t(
-            i18n,
-            "permission-rule-error-session-token-required",
-        ));
-    }
-    Ok(draft)
-}
-
 fn parse_permission_mode_token(
     i18n: &I18n,
     token: &str,
@@ -25334,40 +25222,6 @@ fn parse_permission_mode_token(
         "ask" => Ok(PermissionMode::Ask),
         "deny" => Ok(PermissionMode::Deny),
         _ => Err(ui_text::t(i18n, "permission-rule-error-invalid-mode")),
-    }
-}
-
-fn parse_permission_scope_token(
-    i18n: &I18n,
-    token: &str,
-) -> std::result::Result<&'static str, String> {
-    match token.to_ascii_lowercase().as_str() {
-        "session" => Ok("session"),
-        "workspace" => Ok("workspace"),
-        "global" => Ok("global"),
-        _ => Err(ui_text::t(i18n, "permission-rule-error-invalid-scope")),
-    }
-}
-
-fn split_permission_rule_option<'a>(
-    i18n: &I18n,
-    token: &'a str,
-) -> std::result::Result<(&'a str, &'a str), String> {
-    token.split_once('=').ok_or_else(|| {
-        i18n.text_args(
-            "permission-rule-error-invalid-option-format",
-            &crate::fl_args!("token" => token.to_string()),
-        )
-    })
-}
-
-fn shell_quote_or_dash(value: &str) -> String {
-    if value.is_empty() {
-        "<required>".to_string()
-    } else {
-        shlex::try_quote(value)
-            .map(|quoted| quoted.into_owned())
-            .unwrap_or_else(|_| value.to_string())
     }
 }
 

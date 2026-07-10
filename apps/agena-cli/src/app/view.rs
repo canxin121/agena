@@ -4,8 +4,7 @@ use agena_tui_components::{
     DashboardLeadPanelSpec, DashboardListPanelHeight, DashboardListPanelState,
     DashboardSplitPanelsSpec, DashboardTextPanelHeight, DashboardTextSection,
     DashboardWorkbenchOverlaySpec, DashboardWorkbenchSpec, DecisionDialogSpec,
-    DetailTextDialogSpec, DetailTextLine, DetailTextSpec, EditorDialogSpec,
-    EditorPreviewDialogSpec, EditorPreviewHelpSpec, FramedSurfaceSpec,
+    DetailTextDialogSpec, DetailTextLine, DetailTextSpec, EditorDialogSpec, FramedSurfaceSpec,
     HeaderBodyFooterTextSurfaceSpec, HeaderRowSpec, LineTextDialogSpec, ListPanelSection,
     ListPanelSpec, ListWorkbenchDialogSpec, ListWorkbenchPanelState, ParagraphSection,
     QuerySuggestionPopupSpec, QuestionFlowCustomInputSpec, QuestionFlowDialogMode,
@@ -18,8 +17,8 @@ use agena_tui_components::{
     inset_rect, join_inline_segments, layout_composer_surface, layout_header_body_footer_surface,
     list_panel_height, pane_header_height, render_composer_editor_surface,
     render_dashboard_workbench_dialog, render_decision_dialog, render_editor_dialog,
-    render_editor_preview_dialog, render_framed_surface, render_header_body_footer_text_surface,
-    render_header_row, render_line_text_dialog, render_list_panel, render_list_workbench_dialog,
+    render_framed_surface, render_header_body_footer_text_surface, render_header_row,
+    render_line_text_dialog, render_list_panel, render_list_workbench_dialog,
     render_overlay_line_input_dialog, render_query_suggestion_popup, render_question_flow_dialog,
     render_search_list_dialog, render_search_panels_dialog, render_stacked_dialog,
     render_suggestion_popup, render_text_panel, render_wrapped_text, split_vertical_sections,
@@ -214,7 +213,7 @@ impl App {
 
     fn render_composer(&self, frame: &mut Frame, area: Rect) {
         let status_rows = u16::from(!self.composer_status_parts().is_empty());
-        let item_rows = u16::from(!self.composer_items.is_empty());
+        let item_rows = u16::from(self.has_composer_item_summary_row());
         let layout =
             layout_composer_surface(area, status_rows, item_rows, self.composer_popup_rows());
 
@@ -420,8 +419,12 @@ impl App {
         }
 
         let mut spans = Vec::new();
+        let mut visible_items = 0;
         for (index, item) in self.composer_items.iter().enumerate() {
-            if index > 0 {
+            if !composer_item_needs_summary_chip(item) {
+                continue;
+            }
+            if visible_items > 0 {
                 spans.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
             }
             let style = if self.selected_composer_item == Some(index) {
@@ -430,6 +433,7 @@ impl App {
                 self.composer_item_style(item)
             };
             spans.push(Span::styled(format!("[{}]", item.short_label()), style));
+            visible_items += 1;
         }
 
         frame.render_widget(
@@ -559,6 +563,16 @@ impl App {
                 .fg(self.theme_color("flash_warning", Color::Magenta))
                 .add_modifier(Modifier::BOLD),
         }
+    }
+
+    /// Large pastes are already represented by an inline, atomic editor
+    /// element. Rendering another chip above the editor repeats the same
+    /// character count on a second line, so reserve the summary row for file
+    /// attachments only.
+    fn has_composer_item_summary_row(&self) -> bool {
+        self.composer_items
+            .iter()
+            .any(composer_item_needs_summary_chip)
     }
 
     fn flash_style(&self, level: FlashLevel) -> Style {
@@ -738,9 +752,6 @@ impl App {
             Overlay::Choice(dialog) => {
                 self.render_choice_overlay(frame, area, dialog);
             }
-            Overlay::PermissionRuleEdit(dialog) => {
-                self.render_permission_rule_edit_overlay(frame, area, dialog);
-            }
             Overlay::FileAttach(dialog) => {
                 self.render_file_attach_overlay(frame, area, dialog);
             }
@@ -820,45 +831,6 @@ impl App {
         self.render_overlay(frame, area);
     }
 
-    fn render_permission_rule_edit_overlay(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        dialog: &PermissionRuleEditOverlay,
-    ) {
-        let prompt_body = Text::from(sanitize_display_text(dialog.state.prompt.as_str()));
-        let help_body = Text::from(permission_rule_edit_help());
-        let preview_body = Text::from(render_permission_rule_preview(
-            &self.i18n,
-            dialog.state.input.text(),
-        ));
-        let result = render_editor_preview_dialog(
-            frame,
-            area,
-            SurfaceMode::Overlay,
-            &EditorPreviewDialogSpec::new(
-                sanitize_display_text(dialog.state.title.as_str()).into(),
-                82,
-                &prompt_body,
-                (1, 2),
-                Some(EditorPreviewHelpSpec::new(
-                    &help_body,
-                    (3, 6),
-                    true,
-                    Borders::BOTTOM,
-                )),
-                &dialog.state.input,
-                Borders::BOTTOM,
-                &preview_body,
-                (2, 8),
-                true,
-            ),
-        );
-        if let Some(cursor) = result.cursor {
-            frame.set_cursor_position(cursor);
-        }
-    }
-
     fn render_file_attach_overlay(
         &self,
         frame: &mut Frame,
@@ -903,24 +875,19 @@ impl App {
 
     fn render_permission_overlay(&self, frame: &mut Frame, area: Rect, dialog: &PermissionOverlay) {
         let body_lines = permission_overlay_body_lines(&self.i18n, dialog);
-        let choices = permission_overlay_choices(&self.i18n);
+        let choices = permission_overlay_choices(&self.i18n, dialog.page);
         let items = choices
             .iter()
             .map(|label| ListItem::new(label.clone()))
             .collect::<Vec<_>>();
         let body = Text::from(body_lines);
-        let footer = Text::from(self.i18n.text_args(
-            "overlay-permission-footer-edit-rule",
-            &crate::fl_args!(
-                "footer" => ui_text::t(&self.i18n, "overlay-permission-footer")
-            ),
-        ));
+        let footer = Text::from(permission_overlay_footer(&self.i18n, dialog.page));
         render_decision_dialog(
             frame,
             area,
             SurfaceMode::Overlay,
             &DecisionDialogSpec::new(
-                ui_text::t(&self.i18n, "overlay-permission-title").into(),
+                permission_overlay_title(&self.i18n, dialog.page).into(),
                 &body,
                 (4, 14),
                 None,
@@ -2691,12 +2658,16 @@ impl App {
 
     fn composer_height(&self) -> u16 {
         let line_count = max(1, self.composer.logical_line_count());
-        let item_rows = u16::from(!self.composer_items.is_empty());
+        let item_rows = u16::from(self.has_composer_item_summary_row());
         let status_rows = u16::from(!self.composer_status_parts().is_empty());
         let popup_rows = self.composer_popup_rows();
         let chrome_rows = 2_u16 + item_rows + popup_rows + status_rows;
         min(12, line_count as u16 + chrome_rows)
     }
+}
+
+fn composer_item_needs_summary_chip(item: &ComposerItem) -> bool {
+    matches!(item, ComposerItem::Attachment(_))
 }
 
 fn model_catalog_list_subtitle(i18n: &I18n, entry: &CatalogModelResource) -> String {
@@ -4129,6 +4100,30 @@ fn permission_request_scope_label(i18n: &I18n, scope: PermissionScope) -> String
         PermissionScope::Session => ui_text::t(i18n, "value-session"),
         PermissionScope::Workspace => ui_text::t(i18n, "value-workspace"),
         PermissionScope::Global => ui_text::t(i18n, "value-global"),
+    }
+}
+
+#[cfg(test)]
+mod composer_item_summary_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn large_pastes_are_shown_only_by_their_inline_placeholder() {
+        let paste = ComposerItem::LargePaste(StagedPaste {
+            placeholder: "[paste 1001 chars]".to_string(),
+            label: "paste 1001 chars".to_string(),
+            text: "x".repeat(1001),
+        });
+        let attachment = ComposerItem::Attachment(StagedAttachment {
+            path: PathBuf::from("notes.txt"),
+            placeholder: "[notes.txt]".to_string(),
+            label: "notes.txt".to_string(),
+            is_temp: false,
+        });
+
+        assert!(!composer_item_needs_summary_chip(&paste));
+        assert!(composer_item_needs_summary_chip(&attachment));
     }
 }
 

@@ -1,1 +1,6450 @@
-include!("backend.rs.inc");
+use std::{
+    collections::HashSet,
+    collections::hash_map::DefaultHasher,
+    env, fs,
+    hash::{Hash, Hasher},
+    path::{Path, PathBuf},
+    process::Command,
+    sync::{Arc, OnceLock},
+};
+
+use crate::short_link::shorten_url_for_display;
+use agena::event::{EventFilter, Scope, bus::SubscriptionItem};
+use agena::permission::PermissionScope;
+use agena::{
+    agents::AgentDescriptor,
+    config::{
+        ConfigSettingsDeleteInput, ConfigSettingsEditOptions, ConfigSettingsEditResponse,
+        ConfigSettingsGetInput, ConfigSettingsPatchInput, ConfigSettingsPathInput,
+        ConfigSettingsSetInput, OpenAiApiModeConfig, OpenAiBackendConfig, ProcessEnvironment,
+        ProviderAdapterDefinition, ProviderAdapterOverlay, ProviderApiSubtype, ProviderAuthConfig,
+        ProviderAuthMode, ProviderAuthOverlay, ProviderCapabilityFamilyConfig,
+        ProviderModelOverlay, ProviderNativeToolRoute, ProviderNativeToolsConfig, ProviderOverlay,
+        ProviderSecretSourceConfig, ProviderSecretSourceOverlay, StreamTransportMode,
+        delete_file_setting, draft_bedrock_sigv4_provider_adapter_models_target,
+        draft_cline_api_provider_adapter_models_target,
+        draft_credential_provider_adapter_models_target,
+        draft_gitlab_provider_adapter_models_target, draft_none_provider_adapter_models_target,
+        draft_provider_adapter_models_target, list_provider_adapter_models_with_config,
+        parse_settings_path, patch_file_settings, provider_model_overlay_from_catalog_definition,
+        read_file_setting, saved_provider_adapter_models_target, set_file_setting,
+    },
+    event::{DomainEvent, EventKind},
+    memory::MemoryStore,
+    message::{
+        AttachmentItem, AttachmentKind, AttachmentSource, EnterSnapshotToolInput,
+        ExitSnapshotToolInput, PartContent, ToolInvocation, UserInputReply,
+    },
+    model::{ModelCapabilities, ModelId, ModelMetadata, ModelRef, ProviderId},
+    model_catalog::{
+        CatalogModelDefinition, ModelCatalogProviderRecord, catalog_definition_from_model,
+        decorate_provider_models,
+    },
+    permission::PermissionReplyKind,
+    provider::ProviderModel,
+    provider::auth::{
+        AuthData, CredentialIssuer, exchange_gitlab_oauth_code, exchange_openai_oauth_code,
+        parse_oauth_callback_url, poll_copilot_device_code, poll_openai_headless_device_code,
+        start_copilot_device_code, start_gitlab_oauth, start_openai_browser_oauth,
+        start_openai_headless_device_code,
+    },
+    runtime::AgenaRuntime,
+    tool,
+};
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct SnapshotCommandOutput {
+    #[serde(default)]
+    pub action: Option<String>,
+    pub path: String,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub backend: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+fn parse_snapshot_payload(payload: Option<serde_json::Value>) -> Result<SnapshotCommandOutput> {
+    let payload = payload.ok_or_else(|| anyhow!("snapshot tool returned no payload"))?;
+    serde_json::from_value(payload).map_err(|error| anyhow!(error.to_string()))
+}
+
+fn provider_native_tools_summary_resource(
+    provider: &agena::config::ResolvedProviderConfig,
+) -> ProviderNativeToolsSummaryResource {
+    let (enabled, default_bindings) = provider
+        .defaults
+        .adapter
+        .as_ref()
+        .zip(provider.defaults.model.as_ref())
+        .and_then(|(adapter_id, model_id)| {
+            provider
+                .models
+                .get(format!("{adapter_id}/{model_id}").as_str())
+        })
+        .map(|model| (model.native_tools.enabled, model.native_tool_bindings()))
+        .unwrap_or((false, Vec::new()));
+    ProviderNativeToolsSummaryResource {
+        enabled,
+        model_count: provider
+            .models
+            .values()
+            .filter(|model| model.native_tools.enabled)
+            .count(),
+        bindings: default_bindings
+            .into_iter()
+            .map(|binding| ProviderNativeToolBindingResource {
+                tool: binding.tool.config_key().to_owned(),
+                route: serde_json::to_string(&binding.route)
+                    .unwrap_or_default()
+                    .trim_matches('"')
+                    .to_owned(),
+            })
+            .collect(),
+    }
+}
+
+pub(crate) fn provider_native_tools_config_for_preset(
+    preset: ProviderNativeToolsPreset,
+    custom: &ProviderNativeToolsConfig,
+) -> ProviderNativeToolsConfig {
+    match preset {
+        ProviderNativeToolsPreset::Disabled => ProviderNativeToolsConfig::default(),
+        ProviderNativeToolsPreset::OpenAiHostedDefaults => ProviderNativeToolsConfig {
+            enabled: true,
+            routes: agena::config::ProviderNativeToolRoutesConfig {
+                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                image_generation: Some(ProviderNativeToolRoute::ProviderHosted),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ProviderNativeToolsPreset::AnthropicHostedDefaults => ProviderNativeToolsConfig {
+            enabled: true,
+            routes: agena::config::ProviderNativeToolRoutesConfig {
+                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ProviderNativeToolsPreset::GeminiHostedDefaults => ProviderNativeToolsConfig {
+            enabled: true,
+            routes: agena::config::ProviderNativeToolRoutesConfig {
+                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                code_execution: Some(ProviderNativeToolRoute::ProviderHosted),
+                url_context: Some(ProviderNativeToolRoute::ProviderHosted),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ProviderNativeToolsPreset::Custom => custom.clone(),
+    }
+}
+
+pub(crate) fn provider_native_tools_preset_from_config(
+    config: &ProviderNativeToolsConfig,
+) -> ProviderNativeToolsPreset {
+    if *config
+        == provider_native_tools_config_for_preset(
+            ProviderNativeToolsPreset::OpenAiHostedDefaults,
+            &ProviderNativeToolsConfig::default(),
+        )
+    {
+        ProviderNativeToolsPreset::OpenAiHostedDefaults
+    } else if *config
+        == provider_native_tools_config_for_preset(
+            ProviderNativeToolsPreset::AnthropicHostedDefaults,
+            &ProviderNativeToolsConfig::default(),
+        )
+    {
+        ProviderNativeToolsPreset::AnthropicHostedDefaults
+    } else if *config
+        == provider_native_tools_config_for_preset(
+            ProviderNativeToolsPreset::GeminiHostedDefaults,
+            &ProviderNativeToolsConfig::default(),
+        )
+    {
+        ProviderNativeToolsPreset::GeminiHostedDefaults
+    } else if config.is_empty() {
+        ProviderNativeToolsPreset::Disabled
+    } else {
+        ProviderNativeToolsPreset::Custom
+    }
+}
+
+pub(crate) fn provider_native_tools_suggested_preset_for_draft(
+    draft: &ProviderConfigDraft,
+    adapter_id: &str,
+) -> Option<ProviderNativeToolsPreset> {
+    match (draft.auth_kind.credential_issuer(), adapter_id.trim()) {
+        (Some(CredentialIssuer::OpenaiChatgpt), "openai") => {
+            Some(ProviderNativeToolsPreset::OpenAiHostedDefaults)
+        }
+        (Some(CredentialIssuer::GoogleAdc), "openai") => {
+            Some(ProviderNativeToolsPreset::GeminiHostedDefaults)
+        }
+        _ => None,
+    }
+}
+
+fn apply_provider_native_tools_defaults_to_model_value(
+    draft: &ProviderConfigDraft,
+    adapter_id: &str,
+    model_value: &mut JsonValue,
+) -> std::result::Result<(), ProviderStudioSaveError> {
+    let Some(preset) = provider_native_tools_suggested_preset_for_draft(draft, adapter_id) else {
+        return Ok(());
+    };
+    let model_object = model_value
+        .as_object_mut()
+        .ok_or(ProviderStudioSaveError::ProviderModelConfigMustBeObject)?;
+    if model_object.contains_key("native_tools") {
+        return Ok(());
+    }
+    model_object.insert(
+        "native_tools".to_owned(),
+        serde_json::to_value(provider_native_tools_config_for_preset(
+            preset,
+            &ProviderNativeToolsConfig::default(),
+        ))
+        .map_err(ProviderStudioSaveError::other)?,
+    );
+    Ok(())
+}
+
+use agena_api::{
+    commands::{
+        Command as ApiCommand, CommandResult, CompactSessionParams, ContinueRunParams,
+        CreateSessionParams, ReplacePermissionRuleParams, ReplyPermissionParams,
+        ReplyUserInputParams, RewindSessionParams, SubmitMessageParams, UpdateSessionParams,
+        UpsertPermissionRuleParams,
+    },
+    pagination::PaginatedResponse,
+    queries::{
+        GetSessionParams, ListMessagesParams, ListPermissionRulesParams, ListSessionsParams, Query,
+        QueryResult,
+    },
+    resource::{
+        MessageResource, PartLoadMode, PermissionReply, PermissionRuleResource,
+        ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
+        ProviderAdapterSummaryResource, ProviderDefaultsResource,
+        ProviderNativeToolBindingResource, ProviderNativeToolsSummaryResource,
+        ProviderSummaryResource, RunOptions, SessionExecutionResource, SessionResource,
+        WorkspaceResource,
+    },
+};
+use agena_api_server::{
+    dispatch,
+    local_api::{
+        CatalogModelResource, ModelCatalogListResponse,
+        ModelCatalogResponse as LocalModelCatalogResponse, ModelCatalogSourceKind, normalize_limit,
+    },
+    state::AppState,
+};
+use anyhow::{Context, Result, anyhow};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use ignore::WalkBuilder;
+use mime_guess::MimeGuess;
+use sea_orm::DatabaseConnection;
+use serde_json::{Map as JsonMap, Value as JsonValue, json};
+use tokio::sync::mpsc;
+
+const MAX_ATTACHMENT_BYTES: usize = 50 * 1024 * 1024;
+
+#[derive(Debug, Clone)]
+pub struct SessionRefresh {
+    pub latest_event_seq: Option<i64>,
+    pub event_count: usize,
+    pub execution: Option<SessionExecutionResource>,
+    pub latest_messages: Option<PaginatedResponse<MessageResource>>,
+}
+
+#[derive(Debug, Clone)]
+struct GitStatusResource {
+    git_available: bool,
+    repo: bool,
+    gh_available: bool,
+    branch: Option<String>,
+    staged_files: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct InspectorRow {
+    pub label: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionPermissionStudioState {
+    pub session_id: i64,
+    pub session_title: String,
+    pub agent_name: Option<String>,
+    pub agent_permission: Option<agena::agent::PermissionConfig>,
+    pub permission: agena::agent::PermissionConfig,
+    pub effective_permission: agena::agent::PermissionConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderDraftAuthKind {
+    Unset,
+    None,
+    ApiPending,
+    Api,
+    ClineApi,
+    Gitlab,
+    Credential(Option<CredentialIssuer>),
+    BedrockSigv4,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderDraftAdapterRule {
+    pub adapter_id: &'static str,
+    pub detail_key: &'static str,
+    pub requires_base_url: bool,
+    pub supports_draft_model_listing: bool,
+}
+
+const NONE_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
+    adapter_id: "ollama",
+    detail_key: "provider-adapter-rule-none-ollama-detail",
+    requires_base_url: false,
+    supports_draft_model_listing: true,
+}];
+
+const API_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
+    ProviderDraftAdapterRule {
+        adapter_id: "openai",
+        detail_key: "provider-adapter-rule-api-openai-detail",
+        requires_base_url: true,
+        supports_draft_model_listing: true,
+    },
+    ProviderDraftAdapterRule {
+        adapter_id: "anthropic",
+        detail_key: "provider-adapter-rule-api-anthropic-detail",
+        requires_base_url: true,
+        supports_draft_model_listing: true,
+    },
+    ProviderDraftAdapterRule {
+        adapter_id: "gemini",
+        detail_key: "provider-adapter-rule-api-gemini-detail",
+        requires_base_url: true,
+        supports_draft_model_listing: true,
+    },
+];
+
+const CLINE_API_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
+    adapter_id: "openai",
+    detail_key: "provider-adapter-rule-cline-api-openai-detail",
+    requires_base_url: false,
+    supports_draft_model_listing: true,
+}];
+
+const GITLAB_AUTH_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
+    ProviderDraftAdapterRule {
+        adapter_id: "openai",
+        detail_key: "provider-adapter-rule-gitlab-auth-openai-detail",
+        requires_base_url: false,
+        supports_draft_model_listing: true,
+    },
+    ProviderDraftAdapterRule {
+        adapter_id: "anthropic",
+        detail_key: "provider-adapter-rule-gitlab-auth-anthropic-detail",
+        requires_base_url: false,
+        supports_draft_model_listing: true,
+    },
+];
+
+const OPENAI_CHATGPT_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
+    adapter_id: "openai",
+    detail_key: "provider-adapter-rule-openai-chatgpt-openai-detail",
+    requires_base_url: false,
+    supports_draft_model_listing: true,
+}];
+
+const GITHUB_COPILOT_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
+    ProviderDraftAdapterRule {
+        adapter_id: "openai",
+        detail_key: "provider-adapter-rule-github-copilot-openai-detail",
+        requires_base_url: false,
+        supports_draft_model_listing: true,
+    },
+    ProviderDraftAdapterRule {
+        adapter_id: "anthropic",
+        detail_key: "provider-adapter-rule-github-copilot-anthropic-detail",
+        requires_base_url: false,
+        supports_draft_model_listing: true,
+    },
+];
+
+const GITLAB_CREDENTIAL_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
+    ProviderDraftAdapterRule {
+        adapter_id: "openai",
+        detail_key: "provider-adapter-rule-gitlab-credential-openai-detail",
+        requires_base_url: false,
+        supports_draft_model_listing: true,
+    },
+    ProviderDraftAdapterRule {
+        adapter_id: "anthropic",
+        detail_key: "provider-adapter-rule-gitlab-credential-anthropic-detail",
+        requires_base_url: false,
+        supports_draft_model_listing: true,
+    },
+];
+
+const GOOGLE_ADC_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
+    adapter_id: "openai",
+    detail_key: "provider-adapter-rule-google-adc-openai-detail",
+    requires_base_url: true,
+    supports_draft_model_listing: true,
+}];
+
+const SAP_AI_CORE_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
+    adapter_id: "openai",
+    detail_key: "provider-adapter-rule-sap-ai-core-openai-detail",
+    requires_base_url: true,
+    supports_draft_model_listing: true,
+}];
+
+const BEDROCK_SIGV4_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
+    adapter_id: "amazon_bedrock",
+    detail_key: "provider-adapter-rule-bedrock-sigv4-amazon-bedrock-detail",
+    requires_base_url: false,
+    supports_draft_model_listing: true,
+}];
+
+const DEFAULT_LOCAL_OAUTH_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
+const LEGACY_LOCAL_OAUTH_REDIRECT_URIS: &[&str] = &[
+    "http://127.0.0.1:1455/callback",
+    "http://127.0.0.1:1455/auth/callback",
+];
+const DEFAULT_GITLAB_INSTANCE_URL: &str = "https://gitlab.com";
+const CLINE_API_OPENAI_PROTOCOL_PATH: &str = "/api/v1";
+const CLINE_API_MODELS_URL: &str = "https://api.cline.bot/api/v1/ai/cline/recommended-models";
+
+fn cline_api_protocol_paths() -> agena::config::ProviderProtocolPathsConfig {
+    agena::config::ProviderProtocolPathsConfig {
+        openai: CLINE_API_OPENAI_PROTOCOL_PATH.to_owned(),
+        ..Default::default()
+    }
+}
+
+fn draft_secret_source_value(source: Option<&ProviderSecretSourceConfig>) -> String {
+    match source {
+        Some(ProviderSecretSourceConfig::Inline(value))
+        | Some(ProviderSecretSourceConfig::Env(value)) => value.clone(),
+        None => String::new(),
+    }
+}
+
+impl ProviderDraftAuthKind {
+    pub fn label(&self) -> String {
+        match self {
+            Self::Unset => "unset".to_owned(),
+            Self::None => "none".to_owned(),
+            Self::ApiPending => "api".to_owned(),
+            Self::Api => "api".to_owned(),
+            Self::ClineApi => "cline_api".to_owned(),
+            Self::Gitlab => "gitlab_api".to_owned(),
+            Self::Credential(Some(issuer)) => {
+                format!("credential:{}", credential_issuer_label(*issuer))
+            }
+            Self::Credential(None) => "credential".to_owned(),
+            Self::BedrockSigv4 => "bedrock_sigv4".to_owned(),
+        }
+    }
+
+    pub fn supports_draft_model_listing(&self) -> bool {
+        self.adapter_rules()
+            .iter()
+            .any(|rule| rule.supports_draft_model_listing)
+    }
+
+    pub fn mode_label(&self) -> &'static str {
+        match self {
+            Self::Unset => "",
+            Self::None => "none",
+            Self::ApiPending | Self::Api | Self::ClineApi | Self::Gitlab | Self::BedrockSigv4 => {
+                "api"
+            }
+            Self::Credential(_) => "credential",
+        }
+    }
+
+    pub fn subtype_label(&self) -> &'static str {
+        match self {
+            Self::Unset | Self::None | Self::ApiPending | Self::Credential(None) => "",
+            Self::Api => "custom",
+            Self::ClineApi => "cline_api",
+            Self::Gitlab => "gitlab_api",
+            Self::Credential(Some(issuer)) => credential_issuer_label(*issuer),
+            Self::BedrockSigv4 => "bedrock_sigv4",
+        }
+    }
+
+    pub fn credential_issuer(&self) -> Option<CredentialIssuer> {
+        match self {
+            Self::Credential(Some(issuer)) => Some(*issuer),
+            _ => None,
+        }
+    }
+
+    pub fn adapter_rules(&self) -> &'static [ProviderDraftAdapterRule] {
+        match self {
+            Self::Unset => &[],
+            Self::None => NONE_ADAPTER_RULES,
+            Self::ApiPending => &[],
+            Self::Api => API_ADAPTER_RULES,
+            Self::ClineApi => CLINE_API_ADAPTER_RULES,
+            Self::Gitlab => GITLAB_AUTH_ADAPTER_RULES,
+            Self::Credential(None) => &[],
+            Self::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => OPENAI_CHATGPT_ADAPTER_RULES,
+            Self::Credential(Some(CredentialIssuer::GithubCopilot)) => GITHUB_COPILOT_ADAPTER_RULES,
+            Self::Credential(Some(CredentialIssuer::Gitlab)) => GITLAB_CREDENTIAL_ADAPTER_RULES,
+            Self::Credential(Some(CredentialIssuer::GoogleAdc)) => GOOGLE_ADC_ADAPTER_RULES,
+            Self::Credential(Some(CredentialIssuer::SapAiCore)) => SAP_AI_CORE_ADAPTER_RULES,
+            Self::BedrockSigv4 => BEDROCK_SIGV4_ADAPTER_RULES,
+        }
+    }
+
+    pub fn adapter_rule(&self, adapter_id: &str) -> Option<&'static ProviderDraftAdapterRule> {
+        let adapter_id = adapter_id.trim();
+        self.adapter_rules()
+            .iter()
+            .find(|rule| rule.adapter_id == adapter_id)
+    }
+
+    pub fn supports_adapter(&self, adapter_id: &str) -> bool {
+        self.adapter_rule(adapter_id).is_some()
+    }
+
+    pub fn parse_category(value: &str, current: Self) -> Result<Self> {
+        let normalized = value.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "" => Ok(Self::Unset),
+            "none" => Ok(Self::None),
+            "api" => Ok(match current {
+                Self::ClineApi => Self::ClineApi,
+                Self::Gitlab => Self::Gitlab,
+                Self::BedrockSigv4 => Self::BedrockSigv4,
+                Self::Api => Self::Api,
+                Self::ApiPending | Self::Unset | Self::None | Self::Credential(_) => {
+                    Self::ApiPending
+                }
+            }),
+            "credential" => Ok(match current {
+                Self::Credential(Some(issuer)) => Self::Credential(Some(issuer)),
+                Self::Credential(None)
+                | Self::Unset
+                | Self::None
+                | Self::ApiPending
+                | Self::Api
+                | Self::ClineApi
+                | Self::Gitlab
+                | Self::BedrockSigv4 => Self::Credential(None),
+            }),
+            _ => Err(anyhow!(
+                "unsupported auth_mode `{}`; expected none, api, or credential",
+                value.trim()
+            )),
+        }
+    }
+
+    pub fn parse_subtype(value: &str, current: Self) -> Result<Self> {
+        let normalized = value.trim().to_ascii_lowercase();
+        match current {
+            Self::ApiPending | Self::Api | Self::ClineApi | Self::Gitlab | Self::BedrockSigv4 => {
+                match normalized.as_str() {
+                    "" => Ok(Self::ApiPending),
+                    "custom" => Ok(Self::Api),
+                    "cline_api" => Ok(Self::ClineApi),
+                    "gitlab_api" => Ok(Self::Gitlab),
+                    "bedrock_sigv4" => Ok(Self::BedrockSigv4),
+                    _ => Err(anyhow!(
+                        "unsupported api auth subtype `{}`; expected custom, cline_api, gitlab_api, or bedrock_sigv4",
+                        value.trim()
+                    )),
+                }
+            }
+            Self::Credential(_) => {
+                if normalized.is_empty() {
+                    Ok(Self::Credential(None))
+                } else {
+                    parse_credential_issuer(normalized.as_str())
+                        .map(|issuer| Self::Credential(Some(issuer)))
+                }
+            }
+            Self::Unset | Self::None => Err(anyhow!(
+                "auth subtype is only available after selecting api or credential auth"
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProviderDraftSecretSourceKind {
+    #[default]
+    Unset,
+    Inline,
+    Env,
+}
+
+impl ProviderDraftSecretSourceKind {
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Unset => "",
+            Self::Inline => "inline",
+            Self::Env => "env",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" => Ok(Self::Unset),
+            "inline" => Ok(Self::Inline),
+            "env" => Ok(Self::Env),
+            other => Err(anyhow!(
+                "unsupported secret source `{other}`; expected inline or env"
+            )),
+        }
+    }
+
+    pub fn from_secret_source(source: Option<&ProviderSecretSourceConfig>) -> Self {
+        match source {
+            Some(ProviderSecretSourceConfig::Inline(_)) => Self::Inline,
+            Some(ProviderSecretSourceConfig::Env(_)) => Self::Env,
+            None => Self::Unset,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProviderOAuthTokensDraft {
+    pub refresh_token: String,
+    pub access_token: String,
+    pub expires_at_ms: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProviderBrowserAuthSessionDraft {
+    pub authorize_url: String,
+    pub display_url: Option<String>,
+    pub state: String,
+    pub pkce_verifier: String,
+}
+
+impl ProviderBrowserAuthSessionDraft {
+    pub fn display_authorize_url(&self) -> &str {
+        self.display_url
+            .as_deref()
+            .unwrap_or(self.authorize_url.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProviderDeviceAuthSessionDraft {
+    pub verification_url: String,
+    pub display_url: Option<String>,
+    pub user_code: String,
+    pub device_code: String,
+    pub interval_seconds: u64,
+}
+
+impl ProviderDeviceAuthSessionDraft {
+    pub fn display_verification_url(&self) -> &str {
+        self.display_url
+            .as_deref()
+            .unwrap_or(self.verification_url.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderDraftInteractiveLoginKind {
+    Browser,
+    Device,
+}
+
+impl ProviderDraftInteractiveLoginKind {
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Browser => "browser",
+            Self::Device => "device",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "browser" => Some(Self::Browser),
+            "device" => Some(Self::Device),
+            _ => None,
+        }
+    }
+}
+
+impl Default for ProviderDraftInteractiveLoginKind {
+    fn default() -> Self {
+        Self::Device
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OpenAiChatgptCredentialDraft {
+    pub login_kind: ProviderDraftInteractiveLoginKind,
+    pub redirect_uri: String,
+    pub callback_url: String,
+    pub tokens: ProviderOAuthTokensDraft,
+    pub account_id: String,
+    pub browser: Option<ProviderBrowserAuthSessionDraft>,
+    pub device: Option<ProviderDeviceAuthSessionDraft>,
+}
+
+impl OpenAiChatgptCredentialDraft {
+    fn clear_pending(&mut self) {
+        self.callback_url.clear();
+        self.browser = None;
+        self.device = None;
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GithubCopilotCredentialDraft {
+    pub enterprise_domain: String,
+    pub tokens: ProviderOAuthTokensDraft,
+    pub device: Option<ProviderDeviceAuthSessionDraft>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GitlabCredentialDraft {
+    pub redirect_uri: String,
+    pub callback_url: String,
+    pub tokens: ProviderOAuthTokensDraft,
+    pub browser: Option<ProviderBrowserAuthSessionDraft>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProviderCredentialDraftBundle {
+    pub openai_chatgpt: OpenAiChatgptCredentialDraft,
+    pub github_copilot: GithubCopilotCredentialDraft,
+    pub gitlab: GitlabCredentialDraft,
+}
+
+impl ProviderCredentialDraftBundle {
+    fn normalize_shape(&mut self) {
+        if self.openai_chatgpt.redirect_uri.trim().is_empty()
+            || LEGACY_LOCAL_OAUTH_REDIRECT_URIS
+                .iter()
+                .any(|legacy| self.openai_chatgpt.redirect_uri.trim() == *legacy)
+        {
+            self.openai_chatgpt.redirect_uri = DEFAULT_LOCAL_OAUTH_REDIRECT_URI.to_owned();
+        }
+        if self.gitlab.redirect_uri.trim().is_empty() {
+            self.gitlab.redirect_uri = DEFAULT_LOCAL_OAUTH_REDIRECT_URI.to_owned();
+        }
+    }
+
+    fn active_tokens(&self, issuer: Option<CredentialIssuer>) -> Option<&ProviderOAuthTokensDraft> {
+        match issuer {
+            Some(CredentialIssuer::OpenaiChatgpt) => Some(&self.openai_chatgpt.tokens),
+            Some(CredentialIssuer::GithubCopilot) => Some(&self.github_copilot.tokens),
+            Some(CredentialIssuer::Gitlab) => Some(&self.gitlab.tokens),
+            Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => None,
+        }
+    }
+
+    fn active_tokens_mut(
+        &mut self,
+        issuer: Option<CredentialIssuer>,
+    ) -> Option<&mut ProviderOAuthTokensDraft> {
+        match issuer {
+            Some(CredentialIssuer::OpenaiChatgpt) => Some(&mut self.openai_chatgpt.tokens),
+            Some(CredentialIssuer::GithubCopilot) => Some(&mut self.github_copilot.tokens),
+            Some(CredentialIssuer::Gitlab) => Some(&mut self.gitlab.tokens),
+            Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => None,
+        }
+    }
+
+    fn redirect_uri(&self, issuer: Option<CredentialIssuer>) -> Option<&str> {
+        match issuer {
+            Some(CredentialIssuer::OpenaiChatgpt) => {
+                Some(self.openai_chatgpt.redirect_uri.as_str())
+            }
+            Some(CredentialIssuer::Gitlab) => Some(self.gitlab.redirect_uri.as_str()),
+            _ => None,
+        }
+    }
+
+    fn callback_url(&self, issuer: Option<CredentialIssuer>) -> Option<&str> {
+        match issuer {
+            Some(CredentialIssuer::OpenaiChatgpt) => {
+                Some(self.openai_chatgpt.callback_url.as_str())
+            }
+            Some(CredentialIssuer::Gitlab) => Some(self.gitlab.callback_url.as_str()),
+            _ => None,
+        }
+    }
+
+    fn account_id(&self, issuer: Option<CredentialIssuer>) -> Option<&str> {
+        match issuer {
+            Some(CredentialIssuer::OpenaiChatgpt) => Some(self.openai_chatgpt.account_id.as_str()),
+            _ => None,
+        }
+    }
+
+    fn set_redirect_uri(&mut self, issuer: Option<CredentialIssuer>, value: String) {
+        match issuer {
+            Some(CredentialIssuer::OpenaiChatgpt) => self.openai_chatgpt.redirect_uri = value,
+            Some(CredentialIssuer::Gitlab) => self.gitlab.redirect_uri = value,
+            _ => {}
+        }
+    }
+
+    fn set_callback_url(&mut self, issuer: Option<CredentialIssuer>, value: String) {
+        match issuer {
+            Some(CredentialIssuer::OpenaiChatgpt) => self.openai_chatgpt.callback_url = value,
+            Some(CredentialIssuer::Gitlab) => self.gitlab.callback_url = value,
+            _ => {}
+        }
+    }
+
+    fn set_account_id(&mut self, issuer: Option<CredentialIssuer>, value: String) {
+        match issuer {
+            Some(CredentialIssuer::OpenaiChatgpt) => self.openai_chatgpt.account_id = value,
+            _ => {}
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ProviderDraftAuthMessage {
+    OpenaiBrowserStarted,
+    OpenaiDeviceStarted { user_code: String },
+    CopilotDeviceStarted { user_code: String },
+    GitlabBrowserStarted,
+    OpenaiPending,
+    OpenaiCredentialCaptured,
+    CopilotPending,
+    CopilotCredentialCaptured,
+    GitlabCredentialCaptured,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProviderDraftAuthField {
+    RedirectUri,
+    InstanceUrl,
+    CallbackUrl,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProviderDraftAuthError {
+    UnsupportedInteractiveLogin,
+    StartBrowserAuthFirst,
+    StartDeviceAuthFirst,
+    RequiredField(ProviderDraftAuthField),
+    Other(String),
+}
+
+impl ProviderDraftAuthError {
+    fn other(error: impl ToString) -> Self {
+        Self::Other(error.to_string())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderDraftAuthActionResult {
+    pub draft: ProviderConfigDraft,
+    pub message: ProviderDraftAuthMessage,
+    pub clipboard_text: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProviderStudioSaveResult {
+    ProviderDraftSaved {
+        provider_id: String,
+        default_adapter: String,
+        default_model: Option<String>,
+    },
+    AdapterMatchesSaved {
+        provider_id: String,
+        adapter_id: String,
+        listed_model_count: usize,
+        matched_model_count: usize,
+    },
+    ModelSaved {
+        provider_id: String,
+        adapter_id: String,
+        model_id: String,
+    },
+    ConfiguredModelSaved {
+        provider_id: String,
+        adapter_id: String,
+        model_id: String,
+    },
+    ProviderDeleted {
+        provider_id: String,
+    },
+    AdapterDeleted {
+        provider_id: String,
+        adapter_id: String,
+        removed_model_count: usize,
+    },
+    ModelDeleted {
+        provider_id: String,
+        adapter_id: String,
+        model_id: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum ProviderStudioSaveField {
+    ProviderId,
+    DefaultAdapter,
+    AdapterId,
+    ModelId,
+    AuthMode,
+    AuthSubtype,
+    CredentialIssuer,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProviderStudioSaveValidationError {
+    FieldRequired(ProviderStudioSaveField),
+    UnsupportedDefaultAdapter {
+        auth_kind: ProviderDraftAuthKind,
+        adapter: String,
+        supported: String,
+    },
+    UnsupportedAdapters {
+        auth_kind: ProviderDraftAuthKind,
+        adapters: Vec<String>,
+        supported: String,
+    },
+    ApiBaseUrlRequired,
+    GitlabApiKeyOrEnvRequired,
+    CredentialBaseUrlRequired {
+        issuer: CredentialIssuer,
+    },
+    CredentialServiceKeyEnvRequired {
+        issuer: CredentialIssuer,
+    },
+    BedrockKeyPairRequired,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProviderStudioSaveError {
+    Validation(ProviderStudioSaveValidationError),
+    ExistingProviderSettingsMustBeObject,
+    ProviderAdapterMustBeObject { adapter_id: String },
+    ProviderModelConfigMustBeObject,
+    ConfiguredProviderAdapterSettingsMustBeObject,
+    ConfiguredProviderAdapterModelsMustBeObject,
+    Other(String),
+}
+
+impl ProviderStudioSaveError {
+    fn other(error: impl ToString) -> Self {
+        Self::Other(error.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProviderDraftAuthDetails {
+    pub base_url: String,
+    pub instance_url: String,
+    pub secret_source_kind: ProviderDraftSecretSourceKind,
+    pub secret_source_value: String,
+    pub credential_issuer: String,
+    pub region: String,
+    pub profile: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: String,
+    pub service_key_env: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderNativeToolsPreset {
+    Disabled,
+    OpenAiHostedDefaults,
+    AnthropicHostedDefaults,
+    GeminiHostedDefaults,
+    Custom,
+}
+
+impl ProviderNativeToolsPreset {
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::OpenAiHostedDefaults => "openai_hosted_defaults",
+            Self::AnthropicHostedDefaults => "anthropic_hosted_defaults",
+            Self::GeminiHostedDefaults => "gemini_hosted_defaults",
+            Self::Custom => "custom",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "disabled" => Some(Self::Disabled),
+            "openai_hosted_defaults" => Some(Self::OpenAiHostedDefaults),
+            "anthropic_hosted_defaults" => Some(Self::AnthropicHostedDefaults),
+            "gemini_hosted_defaults" => Some(Self::GeminiHostedDefaults),
+            "custom" => Some(Self::Custom),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderConfigDraft {
+    pub source_provider_id: Option<String>,
+    pub provider_id: String,
+    pub auth_kind: ProviderDraftAuthKind,
+    pub auth: ProviderDraftAuthDetails,
+    pub credential_drafts: ProviderCredentialDraftBundle,
+    pub default_adapter: String,
+    pub default_model: String,
+}
+
+impl ProviderConfigDraft {
+    pub fn new_empty() -> Self {
+        Self {
+            source_provider_id: None,
+            provider_id: String::new(),
+            auth_kind: ProviderDraftAuthKind::Unset,
+            auth: ProviderDraftAuthDetails::default(),
+            credential_drafts: ProviderCredentialDraftBundle::default(),
+            default_adapter: String::new(),
+            default_model: String::new(),
+        }
+    }
+
+    fn normalized_shape(
+        auth_kind: &ProviderDraftAuthKind,
+        mut auth: ProviderDraftAuthDetails,
+        mut credential_drafts: ProviderCredentialDraftBundle,
+        mut default_adapter: String,
+        mut default_model: String,
+    ) -> (
+        ProviderDraftAuthDetails,
+        ProviderCredentialDraftBundle,
+        String,
+        String,
+    ) {
+        credential_drafts.normalize_shape();
+        auth.credential_issuer = auth_kind
+            .credential_issuer()
+            .map(credential_issuer_label)
+            .unwrap_or_default()
+            .to_owned();
+
+        match auth_kind {
+            ProviderDraftAuthKind::Unset => {
+                auth.base_url.clear();
+                auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
+                auth.secret_source_value.clear();
+                auth.region.clear();
+                auth.profile.clear();
+                auth.access_key_id.clear();
+                auth.secret_access_key.clear();
+                auth.session_token.clear();
+                auth.service_key_env.clear();
+            }
+            ProviderDraftAuthKind::None => {
+                auth.base_url.clear();
+                auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
+                auth.secret_source_value.clear();
+                auth.region.clear();
+                auth.profile.clear();
+                auth.access_key_id.clear();
+                auth.secret_access_key.clear();
+                auth.session_token.clear();
+                auth.service_key_env.clear();
+            }
+            ProviderDraftAuthKind::ApiPending => {
+                auth.region.clear();
+                auth.profile.clear();
+                auth.access_key_id.clear();
+                auth.secret_access_key.clear();
+                auth.session_token.clear();
+                auth.service_key_env.clear();
+            }
+            ProviderDraftAuthKind::Api => {
+                auth.region.clear();
+                auth.profile.clear();
+                auth.access_key_id.clear();
+                auth.secret_access_key.clear();
+                auth.session_token.clear();
+                auth.service_key_env.clear();
+            }
+            ProviderDraftAuthKind::ClineApi => {
+                auth.base_url.clear();
+                auth.region.clear();
+                auth.profile.clear();
+                auth.access_key_id.clear();
+                auth.secret_access_key.clear();
+                auth.session_token.clear();
+                auth.service_key_env.clear();
+            }
+            ProviderDraftAuthKind::Gitlab => {
+                auth.base_url.clear();
+                auth.region.clear();
+                auth.profile.clear();
+                auth.access_key_id.clear();
+                auth.secret_access_key.clear();
+                auth.session_token.clear();
+                auth.service_key_env.clear();
+                if auth.instance_url.trim().is_empty() {
+                    auth.instance_url = DEFAULT_GITLAB_INSTANCE_URL.to_owned();
+                }
+            }
+            ProviderDraftAuthKind::Credential(None) => {
+                auth.base_url.clear();
+                auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
+                auth.secret_source_value.clear();
+                auth.region.clear();
+                auth.profile.clear();
+                auth.access_key_id.clear();
+                auth.secret_access_key.clear();
+                auth.session_token.clear();
+                auth.service_key_env.clear();
+            }
+            ProviderDraftAuthKind::Credential(Some(issuer)) => {
+                auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
+                auth.secret_source_value.clear();
+                auth.region.clear();
+                auth.profile.clear();
+                auth.access_key_id.clear();
+                auth.secret_access_key.clear();
+                auth.session_token.clear();
+                if !issuer.uses_http_endpoint() {
+                    auth.base_url.clear();
+                }
+                if *issuer == CredentialIssuer::Gitlab && auth.instance_url.trim().is_empty() {
+                    auth.instance_url = DEFAULT_GITLAB_INSTANCE_URL.to_owned();
+                }
+                if issuer.requires_service_key_env() {
+                    if auth.service_key_env.trim().is_empty() {
+                        auth.service_key_env = "AICORE_SERVICE_KEY".to_owned();
+                    }
+                } else {
+                    auth.service_key_env.clear();
+                }
+            }
+            ProviderDraftAuthKind::BedrockSigv4 => {
+                auth.secret_source_kind = ProviderDraftSecretSourceKind::Unset;
+                auth.secret_source_value.clear();
+                auth.service_key_env.clear();
+            }
+        }
+
+        if !default_adapter.trim().is_empty()
+            && !auth_kind.supports_adapter(default_adapter.as_str())
+        {
+            default_adapter.clear();
+        }
+        if default_adapter.trim().is_empty() {
+            default_model.clear();
+        }
+        (auth, credential_drafts, default_adapter, default_model)
+    }
+
+    pub fn normalize_shape(&mut self) {
+        let (auth, credential_drafts, default_adapter, default_model) = Self::normalized_shape(
+            &self.auth_kind,
+            std::mem::take(&mut self.auth),
+            std::mem::take(&mut self.credential_drafts),
+            std::mem::take(&mut self.default_adapter),
+            std::mem::take(&mut self.default_model),
+        );
+        self.auth = auth;
+        self.credential_drafts = credential_drafts;
+        self.default_adapter = default_adapter;
+        self.default_model = default_model;
+    }
+
+    pub fn from_resolved(
+        provider_id: &str,
+        provider: &agena::config::ResolvedProviderConfig,
+    ) -> Self {
+        let (
+            auth_kind,
+            base_url,
+            instance_url,
+            secret_source_kind,
+            secret_source_value,
+            credential_issuer,
+            region,
+            profile,
+            access_key_id,
+            secret_access_key,
+            session_token,
+            service_key_env,
+            credential_drafts,
+        ) = match &provider.auth {
+            ProviderAuthConfig::Api(api) => match api {
+                agena::config::ProviderApiAuthConfig::Custom { .. } => (
+                    ProviderDraftAuthKind::Api,
+                    api.custom_base_url().unwrap_or_default().to_owned(),
+                    String::new(),
+                    ProviderDraftSecretSourceKind::from_secret_source(api.api_key_source()),
+                    draft_secret_source_value(api.api_key_source()),
+                    credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    ProviderCredentialDraftBundle::default(),
+                ),
+                agena::config::ProviderApiAuthConfig::ClineApi { api_key } => (
+                    ProviderDraftAuthKind::ClineApi,
+                    String::new(),
+                    String::new(),
+                    ProviderDraftSecretSourceKind::from_secret_source(api_key.as_ref()),
+                    draft_secret_source_value(api_key.as_ref()),
+                    credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    ProviderCredentialDraftBundle::default(),
+                ),
+                agena::config::ProviderApiAuthConfig::Gitlab {
+                    access,
+                    instance_url,
+                    ..
+                } => (
+                    ProviderDraftAuthKind::Gitlab,
+                    String::new(),
+                    instance_url.clone().unwrap_or_default(),
+                    ProviderDraftSecretSourceKind::from_secret_source(access.api_key_source()),
+                    draft_secret_source_value(access.api_key_source()),
+                    credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    ProviderCredentialDraftBundle::default(),
+                ),
+                agena::config::ProviderApiAuthConfig::BedrockSigv4 {
+                    base_url,
+                    region,
+                    profile,
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                } => (
+                    ProviderDraftAuthKind::BedrockSigv4,
+                    base_url.clone(),
+                    String::new(),
+                    ProviderDraftSecretSourceKind::Unset,
+                    String::new(),
+                    credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                    region.clone(),
+                    profile.clone().unwrap_or_default(),
+                    access_key_id.clone().unwrap_or_default(),
+                    secret_access_key.clone().unwrap_or_default(),
+                    session_token.clone().unwrap_or_default(),
+                    String::new(),
+                    ProviderCredentialDraftBundle::default(),
+                ),
+            },
+            ProviderAuthConfig::None => (
+                ProviderDraftAuthKind::None,
+                String::new(),
+                String::new(),
+                ProviderDraftSecretSourceKind::Unset,
+                String::new(),
+                credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                ProviderCredentialDraftBundle::default(),
+            ),
+            ProviderAuthConfig::Credential(config) => {
+                let issuer = config.issuer();
+                let instance_url = config
+                    .gitlab()
+                    .and_then(|gitlab| gitlab.instance_url.clone())
+                    .unwrap_or_default();
+                (
+                    ProviderDraftAuthKind::Credential(Some(issuer)),
+                    config.base_url().unwrap_or_default().to_owned(),
+                    instance_url,
+                    ProviderDraftSecretSourceKind::Unset,
+                    String::new(),
+                    credential_issuer_label(issuer).to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    config.service_key_env().unwrap_or_default().to_owned(),
+                    provider_credential_drafts(issuer, config.credential()),
+                )
+            }
+        };
+
+        let (auth, credential_drafts, default_adapter, default_model) = Self::normalized_shape(
+            &auth_kind,
+            ProviderDraftAuthDetails {
+                base_url,
+                instance_url,
+                secret_source_kind,
+                secret_source_value,
+                credential_issuer,
+                region,
+                profile,
+                access_key_id,
+                secret_access_key,
+                session_token,
+                service_key_env,
+            },
+            credential_drafts,
+            provider.defaults.adapter.clone().unwrap_or_default(),
+            provider.defaults.model.clone().unwrap_or_default(),
+        );
+
+        Self {
+            source_provider_id: Some(provider_id.to_owned()),
+            provider_id: provider_id.to_owned(),
+            auth_kind,
+            auth,
+            credential_drafts,
+            default_adapter,
+            default_model,
+        }
+    }
+
+    fn to_provider_overlay_for_save(
+        &self,
+        default_adapter: &str,
+        default_model: Option<&str>,
+        adapters: std::collections::BTreeMap<String, ProviderAdapterOverlay>,
+        include_defaults: bool,
+    ) -> std::result::Result<ProviderOverlay, ProviderStudioSaveError> {
+        Ok(ProviderOverlay {
+            enabled: Some(true),
+            defaults: include_defaults.then(|| agena::config::ProviderDefaultsOverlay {
+                adapter: Some(default_adapter.to_owned()),
+                model: default_model.map(ToOwned::to_owned),
+                ..Default::default()
+            }),
+            auth: Some(self.to_auth_overlay_for_save()?),
+            adapters,
+        })
+    }
+
+    fn to_auth_overlay_for_save(
+        &self,
+    ) -> std::result::Result<ProviderAuthOverlay, ProviderStudioSaveError> {
+        let credential = self
+            .oauth_auth_data()
+            .map_err(ProviderStudioSaveError::other)?;
+        let mode = Some(self.to_provider_auth_mode_for_save()?);
+
+        let (
+            subtype,
+            base_url,
+            api_key,
+            access,
+            instance_url,
+            issuer,
+            credential,
+            profile,
+            access_key_id,
+            secret_access_key,
+            session_token,
+            region,
+            service_key_env,
+        ) = match self.auth_kind {
+            ProviderDraftAuthKind::Unset => {
+                return Err(ProviderStudioSaveError::Validation(
+                    ProviderStudioSaveValidationError::FieldRequired(
+                        ProviderStudioSaveField::AuthMode,
+                    ),
+                ));
+            }
+            ProviderDraftAuthKind::None => (
+                None, None, None, None, None, None, None, None, None, None, None, None, None,
+            ),
+            ProviderDraftAuthKind::ApiPending => {
+                return Err(ProviderStudioSaveError::Validation(
+                    ProviderStudioSaveValidationError::FieldRequired(
+                        ProviderStudioSaveField::AuthSubtype,
+                    ),
+                ));
+            }
+            ProviderDraftAuthKind::Api => (
+                Some(ProviderApiSubtype::Custom),
+                trimmed_owned(self.auth.base_url.as_str()),
+                self.secret_source_overlay(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            ProviderDraftAuthKind::ClineApi => (
+                Some(ProviderApiSubtype::ClineApi),
+                None,
+                self.secret_source_overlay(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            ProviderDraftAuthKind::Gitlab => (
+                Some(ProviderApiSubtype::Gitlab),
+                None,
+                None,
+                self.secret_source_overlay()
+                    .map(|source| agena::config::ProviderGitlabApiAccessOverlay::ApiKey { source }),
+                trimmed_owned(self.auth.instance_url.as_str()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            ProviderDraftAuthKind::Credential(None) => {
+                return Err(ProviderStudioSaveError::Validation(
+                    ProviderStudioSaveValidationError::FieldRequired(
+                        ProviderStudioSaveField::CredentialIssuer,
+                    ),
+                ));
+            }
+            ProviderDraftAuthKind::Credential(Some(_)) => {
+                let issuer = parse_credential_issuer(self.auth.credential_issuer.as_str())
+                    .map_err(ProviderStudioSaveError::other)?;
+                (
+                    None,
+                    issuer
+                        .uses_http_endpoint()
+                        .then(|| trimmed_owned(self.auth.base_url.as_str()))
+                        .flatten(),
+                    None,
+                    None,
+                    (issuer == CredentialIssuer::Gitlab)
+                        .then(|| trimmed_owned(self.auth.instance_url.as_str()))
+                        .flatten(),
+                    Some(issuer),
+                    credential,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    issuer
+                        .requires_service_key_env()
+                        .then(|| trimmed_owned(self.auth.service_key_env.as_str()))
+                        .flatten(),
+                )
+            }
+            ProviderDraftAuthKind::BedrockSigv4 => (
+                Some(ProviderApiSubtype::BedrockSigv4),
+                trimmed_owned(self.auth.base_url.as_str()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                trimmed_owned(self.auth.profile.as_str()),
+                trimmed_owned(self.auth.access_key_id.as_str()),
+                trimmed_owned(self.auth.secret_access_key.as_str()),
+                trimmed_owned(self.auth.session_token.as_str()),
+                trimmed_owned(self.auth.region.as_str()),
+                None,
+            ),
+        };
+
+        Ok(ProviderAuthOverlay {
+            mode,
+            subtype,
+            base_url,
+            protocol_paths: None,
+            api_key,
+            access,
+            instance_url,
+            ai_gateway_url: None,
+            ai_gateway_headers: std::collections::BTreeMap::new(),
+            feature_flags: std::collections::BTreeMap::new(),
+            issuer,
+            credential,
+            profile,
+            access_key_id,
+            secret_access_key,
+            session_token,
+            region,
+            service_key_env,
+        })
+    }
+
+    fn to_provider_auth_mode_for_save(
+        &self,
+    ) -> std::result::Result<ProviderAuthMode, ProviderStudioSaveError> {
+        match self.auth_kind {
+            ProviderDraftAuthKind::Unset => Err(ProviderStudioSaveError::Validation(
+                ProviderStudioSaveValidationError::FieldRequired(ProviderStudioSaveField::AuthMode),
+            )),
+            ProviderDraftAuthKind::None => Ok(ProviderAuthMode::None),
+            ProviderDraftAuthKind::ApiPending
+            | ProviderDraftAuthKind::Api
+            | ProviderDraftAuthKind::ClineApi => Ok(ProviderAuthMode::Api),
+            ProviderDraftAuthKind::Gitlab => Ok(ProviderAuthMode::Api),
+            ProviderDraftAuthKind::Credential(_) => Ok(ProviderAuthMode::Credential),
+            ProviderDraftAuthKind::BedrockSigv4 => Ok(ProviderAuthMode::Api),
+        }
+    }
+
+    fn secret_source_overlay(&self) -> Option<ProviderSecretSourceOverlay> {
+        let value = optional_non_empty(self.auth.secret_source_value.as_str())?.to_owned();
+        match self.auth.secret_source_kind {
+            ProviderDraftSecretSourceKind::Unset => None,
+            ProviderDraftSecretSourceKind::Inline => {
+                Some(ProviderSecretSourceOverlay::Inline(value))
+            }
+            ProviderDraftSecretSourceKind::Env => Some(ProviderSecretSourceOverlay::Env(value)),
+        }
+    }
+
+    fn secret_source_inline_value(&self) -> Option<&str> {
+        matches!(
+            self.auth.secret_source_kind,
+            ProviderDraftSecretSourceKind::Inline
+        )
+        .then_some(self.auth.secret_source_value.as_str())
+    }
+
+    fn secret_source_env_value(&self) -> Option<&str> {
+        matches!(
+            self.auth.secret_source_kind,
+            ProviderDraftSecretSourceKind::Env
+        )
+        .then_some(self.auth.secret_source_value.as_str())
+    }
+
+    fn oauth_auth_data(&self) -> Result<Option<AuthData>> {
+        match self.auth_kind {
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => {
+                let tokens = &self.credential_drafts.openai_chatgpt.tokens;
+                if optional_non_empty(tokens.refresh_token.as_str()).is_none()
+                    && optional_non_empty(tokens.access_token.as_str()).is_none()
+                {
+                    return Ok(None);
+                }
+                Ok(Some(AuthData::OAuth {
+                    issuer: Some(CredentialIssuer::OpenaiChatgpt),
+                    refresh: tokens.refresh_token.clone(),
+                    access: tokens.access_token.clone(),
+                    id_token: None,
+                    expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
+                    account_id: optional_non_empty(
+                        self.credential_drafts.openai_chatgpt.account_id.as_str(),
+                    )
+                    .map(ToOwned::to_owned),
+                    chatgpt_account_is_fedramp: false,
+                    enterprise_url: None,
+                    user: None,
+                }))
+            }
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot)) => {
+                let tokens = &self.credential_drafts.github_copilot.tokens;
+                if optional_non_empty(tokens.refresh_token.as_str()).is_none()
+                    && optional_non_empty(tokens.access_token.as_str()).is_none()
+                {
+                    return Ok(None);
+                }
+                Ok(Some(AuthData::OAuth {
+                    issuer: Some(CredentialIssuer::GithubCopilot),
+                    refresh: tokens.refresh_token.clone(),
+                    access: tokens.access_token.clone(),
+                    id_token: None,
+                    expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
+                    account_id: None,
+                    chatgpt_account_is_fedramp: false,
+                    enterprise_url: optional_non_empty(
+                        self.credential_drafts
+                            .github_copilot
+                            .enterprise_domain
+                            .as_str(),
+                    )
+                    .map(ToOwned::to_owned),
+                    user: None,
+                }))
+            }
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab)) => {
+                let tokens = &self.credential_drafts.gitlab.tokens;
+                if optional_non_empty(tokens.refresh_token.as_str()).is_none()
+                    && optional_non_empty(tokens.access_token.as_str()).is_none()
+                {
+                    return Ok(None);
+                }
+                Ok(Some(AuthData::OAuth {
+                    issuer: Some(CredentialIssuer::Gitlab),
+                    refresh: tokens.refresh_token.clone(),
+                    access: tokens.access_token.clone(),
+                    id_token: None,
+                    expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
+                    account_id: None,
+                    chatgpt_account_is_fedramp: false,
+                    enterprise_url: None,
+                    user: None,
+                }))
+            }
+            ProviderDraftAuthKind::Credential(Some(
+                CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore,
+            ))
+            | ProviderDraftAuthKind::Unset
+            | ProviderDraftAuthKind::None
+            | ProviderDraftAuthKind::ApiPending
+            | ProviderDraftAuthKind::Api
+            | ProviderDraftAuthKind::ClineApi
+            | ProviderDraftAuthKind::Gitlab
+            | ProviderDraftAuthKind::Credential(None)
+            | ProviderDraftAuthKind::BedrockSigv4 => Ok(None),
+        }
+    }
+
+    fn credential_auth_data_for_listing(
+        &self,
+        issuer: CredentialIssuer,
+    ) -> Result<Option<AuthData>> {
+        match issuer {
+            CredentialIssuer::OpenaiChatgpt
+            | CredentialIssuer::GithubCopilot
+            | CredentialIssuer::Gitlab => {
+                let credential = self.oauth_auth_data()?.ok_or_else(|| {
+                    anyhow!(
+                        "draft {} model listing requires OAuth tokens; start auth first or enter tokens manually",
+                        credential_issuer_label(issuer)
+                    )
+                })?;
+                Ok(Some(credential))
+            }
+            CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore => Ok(None),
+        }
+    }
+
+    fn active_credential_issuer(&self) -> Option<CredentialIssuer> {
+        self.auth_kind.credential_issuer()
+    }
+
+    pub(crate) fn active_tokens(&self) -> Option<&ProviderOAuthTokensDraft> {
+        self.credential_drafts
+            .active_tokens(self.active_credential_issuer())
+    }
+
+    fn active_tokens_mut(&mut self) -> Option<&mut ProviderOAuthTokensDraft> {
+        self.credential_drafts
+            .active_tokens_mut(self.active_credential_issuer())
+    }
+
+    pub(crate) fn redirect_uri(&self) -> Option<&str> {
+        self.credential_drafts
+            .redirect_uri(self.active_credential_issuer())
+    }
+
+    pub(crate) fn callback_url(&self) -> Option<&str> {
+        self.credential_drafts
+            .callback_url(self.active_credential_issuer())
+    }
+
+    pub(crate) fn account_id(&self) -> Option<&str> {
+        self.credential_drafts
+            .account_id(self.active_credential_issuer())
+    }
+
+    pub(crate) fn set_redirect_uri(&mut self, value: String) {
+        self.credential_drafts
+            .set_redirect_uri(self.active_credential_issuer(), value);
+    }
+
+    pub(crate) fn set_callback_url(&mut self, value: String) {
+        self.credential_drafts
+            .set_callback_url(self.active_credential_issuer(), value);
+    }
+
+    pub(crate) fn set_refresh_token(&mut self, value: String) {
+        if let Some(tokens) = self.active_tokens_mut() {
+            tokens.refresh_token = value;
+        }
+    }
+
+    pub(crate) fn set_access_token(&mut self, value: String) {
+        if let Some(tokens) = self.active_tokens_mut() {
+            tokens.access_token = value;
+        }
+    }
+
+    pub(crate) fn set_expires_at_ms(&mut self, value: String) {
+        if let Some(tokens) = self.active_tokens_mut() {
+            tokens.expires_at_ms = value;
+        }
+    }
+
+    pub(crate) fn set_account_id(&mut self, value: String) {
+        self.credential_drafts
+            .set_account_id(self.active_credential_issuer(), value);
+    }
+
+    pub(crate) fn interactive_login_kind(&self) -> Option<ProviderDraftInteractiveLoginKind> {
+        match self.active_credential_issuer() {
+            Some(CredentialIssuer::OpenaiChatgpt) => {
+                Some(self.credential_drafts.openai_chatgpt.login_kind)
+            }
+            Some(CredentialIssuer::GithubCopilot) => {
+                Some(ProviderDraftInteractiveLoginKind::Device)
+            }
+            Some(CredentialIssuer::Gitlab) => Some(ProviderDraftInteractiveLoginKind::Browser),
+            Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => None,
+        }
+    }
+
+    pub(crate) fn set_interactive_login_kind(&mut self, kind: ProviderDraftInteractiveLoginKind) {
+        if self.active_credential_issuer() == Some(CredentialIssuer::OpenaiChatgpt)
+            && self.credential_drafts.openai_chatgpt.login_kind != kind
+        {
+            self.credential_drafts.openai_chatgpt.login_kind = kind;
+            self.credential_drafts.openai_chatgpt.clear_pending();
+        }
+    }
+
+    pub(crate) fn supports_interactive_auth(&self) -> bool {
+        matches!(
+            self.auth_kind,
+            ProviderDraftAuthKind::Credential(Some(
+                CredentialIssuer::OpenaiChatgpt
+                    | CredentialIssuer::GithubCopilot
+                    | CredentialIssuer::Gitlab
+            ))
+        )
+    }
+
+    pub(crate) fn supports_saved_model_listing(&self) -> bool {
+        self.auth_kind.supports_draft_model_listing()
+    }
+
+    pub(crate) fn tokens_present(&self) -> bool {
+        self.active_tokens().is_some_and(|tokens| {
+            !tokens.refresh_token.trim().is_empty() || !tokens.access_token.trim().is_empty()
+        })
+    }
+
+    fn validate_for_adapters(
+        &self,
+        adapter_ids: &std::collections::BTreeSet<String>,
+    ) -> Result<()> {
+        let default_adapter = required_trimmed(self.default_adapter.as_str(), "defaults.adapter")?;
+        if !self.auth_kind.supports_adapter(default_adapter) {
+            return Err(anyhow!(
+                "auth {} does not support defaults.adapter `{default_adapter}`; expected one of {}",
+                self.auth_kind.label(),
+                supported_provider_draft_adapter_list(&self.auth_kind),
+            ));
+        }
+
+        let incompatible = adapter_ids
+            .iter()
+            .filter(|adapter_id| !self.auth_kind.supports_adapter(adapter_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !incompatible.is_empty() {
+            return Err(anyhow!(
+                "auth {} does not support adapter(s): {}; expected one of {}",
+                self.auth_kind.label(),
+                incompatible.join(", "),
+                supported_provider_draft_adapter_list(&self.auth_kind),
+            ));
+        }
+
+        match self.auth_kind {
+            ProviderDraftAuthKind::Unset => {
+                return Err(anyhow!("provider auth_mode is required"));
+            }
+            ProviderDraftAuthKind::None => {}
+            ProviderDraftAuthKind::ApiPending => {
+                return Err(anyhow!("api auth requires auth_subtype"));
+            }
+            ProviderDraftAuthKind::Api => {
+                let requires_base_url = adapter_ids.iter().any(|adapter_id| {
+                    self.auth_kind
+                        .adapter_rule(adapter_id.as_str())
+                        .map(|rule| rule.requires_base_url)
+                        .unwrap_or(false)
+                });
+                if requires_base_url && optional_non_empty(self.auth.base_url.as_str()).is_none() {
+                    return Err(anyhow!(
+                        "api auth requires base_url when using openai, anthropic, or gemini adapters"
+                    ));
+                }
+            }
+            ProviderDraftAuthKind::ClineApi => {}
+            ProviderDraftAuthKind::Gitlab => {
+                if self.secret_source_overlay().is_none() {
+                    return Err(anyhow!("gitlab_api auth requires an api key source"));
+                }
+            }
+            ProviderDraftAuthKind::Credential(None) => {
+                return Err(anyhow!("credential auth requires credential_issuer"));
+            }
+            ProviderDraftAuthKind::Credential(Some(issuer)) => {
+                if issuer.uses_http_endpoint()
+                    && optional_non_empty(self.auth.base_url.as_str()).is_none()
+                {
+                    return Err(anyhow!(
+                        "credential issuer `{}` requires base_url",
+                        credential_issuer_label(issuer)
+                    ));
+                }
+                if issuer.requires_service_key_env()
+                    && optional_non_empty(self.auth.service_key_env.as_str()).is_none()
+                {
+                    return Err(anyhow!(
+                        "credential issuer `{}` requires service_key_env",
+                        credential_issuer_label(issuer)
+                    ));
+                }
+            }
+            ProviderDraftAuthKind::BedrockSigv4 => {
+                let has_access_key_id =
+                    optional_non_empty(self.auth.access_key_id.as_str()).is_some();
+                let has_secret_access_key =
+                    optional_non_empty(self.auth.secret_access_key.as_str()).is_some();
+                if has_access_key_id ^ has_secret_access_key {
+                    return Err(anyhow!(
+                        "bedrock_sigv4 requires access_key_id and secret_access_key together"
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_for_adapters_for_save(
+        &self,
+        adapter_ids: &std::collections::BTreeSet<String>,
+    ) -> std::result::Result<(), ProviderStudioSaveValidationError> {
+        let default_adapter = optional_non_empty(self.default_adapter.as_str()).ok_or(
+            ProviderStudioSaveValidationError::FieldRequired(
+                ProviderStudioSaveField::DefaultAdapter,
+            ),
+        )?;
+        if !self.auth_kind.supports_adapter(default_adapter) {
+            return Err(
+                ProviderStudioSaveValidationError::UnsupportedDefaultAdapter {
+                    auth_kind: self.auth_kind.clone(),
+                    adapter: default_adapter.to_owned(),
+                    supported: supported_provider_draft_adapter_list(&self.auth_kind),
+                },
+            );
+        }
+
+        let incompatible = adapter_ids
+            .iter()
+            .filter(|adapter_id| !self.auth_kind.supports_adapter(adapter_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !incompatible.is_empty() {
+            return Err(ProviderStudioSaveValidationError::UnsupportedAdapters {
+                auth_kind: self.auth_kind.clone(),
+                adapters: incompatible,
+                supported: supported_provider_draft_adapter_list(&self.auth_kind),
+            });
+        }
+
+        match self.auth_kind {
+            ProviderDraftAuthKind::Unset => {
+                return Err(ProviderStudioSaveValidationError::FieldRequired(
+                    ProviderStudioSaveField::AuthMode,
+                ));
+            }
+            ProviderDraftAuthKind::None => {}
+            ProviderDraftAuthKind::ApiPending => {
+                return Err(ProviderStudioSaveValidationError::FieldRequired(
+                    ProviderStudioSaveField::AuthSubtype,
+                ));
+            }
+            ProviderDraftAuthKind::Api => {
+                let requires_base_url = adapter_ids.iter().any(|adapter_id| {
+                    self.auth_kind
+                        .adapter_rule(adapter_id.as_str())
+                        .map(|rule| rule.requires_base_url)
+                        .unwrap_or(false)
+                });
+                if requires_base_url && optional_non_empty(self.auth.base_url.as_str()).is_none() {
+                    return Err(ProviderStudioSaveValidationError::ApiBaseUrlRequired);
+                }
+            }
+            ProviderDraftAuthKind::ClineApi => {}
+            ProviderDraftAuthKind::Gitlab => {
+                if self.secret_source_overlay().is_none() {
+                    return Err(ProviderStudioSaveValidationError::GitlabApiKeyOrEnvRequired);
+                }
+            }
+            ProviderDraftAuthKind::Credential(None) => {
+                return Err(ProviderStudioSaveValidationError::FieldRequired(
+                    ProviderStudioSaveField::CredentialIssuer,
+                ));
+            }
+            ProviderDraftAuthKind::Credential(Some(issuer)) => {
+                if issuer.uses_http_endpoint()
+                    && optional_non_empty(self.auth.base_url.as_str()).is_none()
+                {
+                    return Err(
+                        ProviderStudioSaveValidationError::CredentialBaseUrlRequired { issuer },
+                    );
+                }
+                if issuer.requires_service_key_env()
+                    && optional_non_empty(self.auth.service_key_env.as_str()).is_none()
+                {
+                    return Err(
+                        ProviderStudioSaveValidationError::CredentialServiceKeyEnvRequired {
+                            issuer,
+                        },
+                    );
+                }
+            }
+            ProviderDraftAuthKind::BedrockSigv4 => {
+                let has_access_key_id =
+                    optional_non_empty(self.auth.access_key_id.as_str()).is_some();
+                let has_secret_access_key =
+                    optional_non_empty(self.auth.secret_access_key.as_str()).is_some();
+                if has_access_key_id ^ has_secret_access_key {
+                    return Err(ProviderStudioSaveValidationError::BedrockKeyPairRequired);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_listing_request(&self, adapter_ids: &[String]) -> Result<()> {
+        let selected = adapter_ids
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
+            return Err(anyhow!(
+                "draft adapter model listing requires at least one explicit adapter"
+            ));
+        }
+        let unsupported = selected
+            .iter()
+            .filter(|adapter_id| {
+                self.auth_kind
+                    .adapter_rule(adapter_id)
+                    .map(|rule| !rule.supports_draft_model_listing)
+                    .unwrap_or(true)
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        if !unsupported.is_empty() {
+            return Err(anyhow!(
+                "draft adapter model listing only supports adapters with live model discovery for the current auth; unsupported: {}",
+                unsupported.join(", ")
+            ));
+        }
+        self.validate_for_adapters(
+            &selected
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect::<std::collections::BTreeSet<_>>(),
+        )
+    }
+
+    fn build_listing_target(
+        &self,
+        adapter_ids: &[String],
+    ) -> Result<agena::config::ProviderAdapterModelsTarget> {
+        if !self.auth_kind.supports_draft_model_listing() {
+            return Err(anyhow!(
+                "draft adapter model listing requires an auth/adapter combination with live model discovery; current auth is {}",
+                self.auth_kind.label()
+            ));
+        }
+        self.validate_listing_request(adapter_ids)?;
+        let mut target = match self.auth_kind {
+            ProviderDraftAuthKind::None => draft_none_provider_adapter_models_target(
+                Some(self.provider_id.as_str()),
+                adapter_ids,
+            )
+            .map_err(map_provider_adapter_models_config_error),
+            ProviderDraftAuthKind::ApiPending => unreachable!("validated auth subtype first"),
+            ProviderDraftAuthKind::Api => draft_provider_adapter_models_target(
+                Some(self.provider_id.as_str()),
+                self.auth.base_url.as_str(),
+                provider_draft_protocol_paths_for_listing(self),
+                self.secret_source_inline_value(),
+                self.secret_source_env_value(),
+                adapter_ids,
+            )
+            .map_err(map_provider_adapter_models_config_error),
+            ProviderDraftAuthKind::ClineApi => draft_cline_api_provider_adapter_models_target(
+                Some(self.provider_id.as_str()),
+                self.secret_source_inline_value(),
+                self.secret_source_env_value(),
+                adapter_ids,
+            )
+            .map_err(map_provider_adapter_models_config_error),
+            ProviderDraftAuthKind::Gitlab => draft_gitlab_provider_adapter_models_target(
+                Some(self.provider_id.as_str()),
+                self.secret_source_inline_value(),
+                self.secret_source_env_value(),
+                adapter_ids,
+            )
+            .map_err(map_provider_adapter_models_config_error),
+            ProviderDraftAuthKind::Credential(Some(issuer)) => {
+                let credential = self.credential_auth_data_for_listing(issuer)?;
+                draft_credential_provider_adapter_models_target(
+                    Some(self.provider_id.as_str()),
+                    issuer,
+                    credential,
+                    Some(self.auth.base_url.as_str()),
+                    provider_draft_protocol_paths_for_listing(self),
+                    Some(self.auth.service_key_env.as_str()),
+                    Some(self.auth.instance_url.as_str()),
+                    adapter_ids,
+                )
+                .map_err(map_provider_adapter_models_config_error)
+            }
+            ProviderDraftAuthKind::BedrockSigv4 => {
+                draft_bedrock_sigv4_provider_adapter_models_target(
+                    Some(self.provider_id.as_str()),
+                    Some(self.auth.base_url.as_str()),
+                    Some(self.auth.region.as_str()),
+                    Some(self.auth.profile.as_str()),
+                    Some(self.auth.access_key_id.as_str()),
+                    Some(self.auth.secret_access_key.as_str()),
+                    Some(self.auth.session_token.as_str()),
+                    adapter_ids,
+                )
+                .map_err(map_provider_adapter_models_config_error)
+            }
+            ProviderDraftAuthKind::Unset | ProviderDraftAuthKind::Credential(None) => {
+                unreachable!("listing guard ensures only supported draft auth kinds reach here")
+            }
+        }?;
+        apply_known_provider_listing_defaults(self, &mut target);
+        Ok(target)
+    }
+
+    pub(crate) fn request_fingerprint(&self, adapter_ids: &[String]) -> String {
+        let mut hasher = DefaultHasher::new();
+        self.source_provider_id
+            .as_deref()
+            .unwrap_or("<new>")
+            .trim()
+            .hash(&mut hasher);
+        self.provider_id.trim().hash(&mut hasher);
+        self.auth_kind.label().hash(&mut hasher);
+        self.auth.base_url.trim().hash(&mut hasher);
+        self.auth.instance_url.trim().hash(&mut hasher);
+        self.auth.secret_source_kind.token().hash(&mut hasher);
+        self.auth.secret_source_value.trim().hash(&mut hasher);
+        self.auth.credential_issuer.trim().hash(&mut hasher);
+        self.credential_drafts
+            .openai_chatgpt
+            .login_kind
+            .token()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .openai_chatgpt
+            .redirect_uri
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .openai_chatgpt
+            .callback_url
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .openai_chatgpt
+            .tokens
+            .refresh_token
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .openai_chatgpt
+            .tokens
+            .access_token
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .openai_chatgpt
+            .tokens
+            .expires_at_ms
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .openai_chatgpt
+            .account_id
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .github_copilot
+            .enterprise_domain
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .github_copilot
+            .tokens
+            .refresh_token
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .github_copilot
+            .tokens
+            .access_token
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .github_copilot
+            .tokens
+            .expires_at_ms
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .gitlab
+            .redirect_uri
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .gitlab
+            .callback_url
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .gitlab
+            .tokens
+            .refresh_token
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .gitlab
+            .tokens
+            .access_token
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .gitlab
+            .tokens
+            .expires_at_ms
+            .trim()
+            .hash(&mut hasher);
+        self.auth.region.trim().hash(&mut hasher);
+        self.auth.profile.trim().hash(&mut hasher);
+        self.auth.access_key_id.trim().hash(&mut hasher);
+        self.auth.secret_access_key.trim().hash(&mut hasher);
+        self.auth.session_token.trim().hash(&mut hasher);
+        self.auth.service_key_env.trim().hash(&mut hasher);
+        self.default_adapter.trim().hash(&mut hasher);
+        self.default_model.trim().hash(&mut hasher);
+        let mut normalized_adapter_ids = adapter_ids
+            .iter()
+            .map(|adapter_id| adapter_id.trim())
+            .filter(|adapter_id| !adapter_id.is_empty())
+            .collect::<Vec<_>>();
+        normalized_adapter_ids.sort_unstable();
+        normalized_adapter_ids.hash(&mut hasher);
+        format!("{:016x}", hasher.finish())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigJsonSources {
+    pub config_path: PathBuf,
+    pub config_found: bool,
+    pub project_config_path: PathBuf,
+    pub project_config_found: bool,
+    pub applied_layers: Vec<String>,
+    pub file: JsonValue,
+    pub project_file: JsonValue,
+    pub effective: JsonValue,
+}
+
+fn set_effective_config_alias(root: &mut JsonValue, segments: &[&str], value: JsonValue) {
+    if segments.is_empty() {
+        *root = value;
+        return;
+    }
+    if !root.is_object() {
+        *root = JsonValue::Object(JsonMap::new());
+    }
+    let mut cursor = root;
+    for segment in &segments[..segments.len().saturating_sub(1)] {
+        let object = cursor.as_object_mut().expect("effective config object");
+        cursor = object
+            .entry((*segment).to_owned())
+            .or_insert_with(|| JsonValue::Object(JsonMap::new()));
+        if !cursor.is_object() {
+            *cursor = JsonValue::Object(JsonMap::new());
+        }
+    }
+    let object = cursor.as_object_mut().expect("effective config object");
+    object.insert(segments[segments.len() - 1].to_owned(), value);
+}
+
+fn augment_effective_config_json(
+    effective: &mut JsonValue,
+    config: &agena::config::ResolvedConfig,
+) {
+    if let Some(provider) = config.default_selection.provider.as_ref() {
+        set_effective_config_alias(
+            effective,
+            &["providers", "default"],
+            JsonValue::String(provider.clone()),
+        );
+    }
+    if let Some(agent) = config.default_agent.as_ref() {
+        set_effective_config_alias(
+            effective,
+            &["agents", "default"],
+            JsonValue::String(agent.clone()),
+        );
+    }
+}
+
+fn plugin_config_setting_target(path: &str) -> Result<Option<(String, Vec<String>)>> {
+    let segments = parse_settings_path(path).map_err(|error| anyhow!(error.to_string()))?;
+    if segments.len() < 4
+        || segments.first().is_none_or(|segment| segment != "plugins")
+        || segments.get(1).is_none_or(|segment| segment != "list")
+        || segments.get(3).is_none_or(|segment| segment != "config")
+    {
+        return Ok(None);
+    }
+    Ok(Some((segments[2].clone(), segments[4..].to_vec())))
+}
+
+fn default_static_plugin_record() -> JsonValue {
+    json!({
+        "enabled": true,
+        "package": { "kind": "static" },
+        "config": null
+    })
+}
+
+fn plugin_record_for_config_edit(sources: &ConfigJsonSources, plugin_id: &str) -> JsonValue {
+    let path = format!("plugins.list.{}", quoted_settings_segment(plugin_id));
+    agena::config::get_json_path(&sources.file, Some(path.as_str()))
+        .ok()
+        .filter(|value| value.is_object())
+        .or_else(|| {
+            agena::config::get_json_path(&sources.effective, Some(path.as_str()))
+                .ok()
+                .filter(|value| value.is_object())
+        })
+        .unwrap_or_else(default_static_plugin_record)
+}
+
+fn normalize_plugin_record_for_config_edit(record: &mut JsonValue) -> Result<&mut JsonValue> {
+    if !record.is_object() {
+        *record = default_static_plugin_record();
+    }
+    let object = record
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("plugin config record must be an object"))?;
+    object
+        .entry("enabled".to_owned())
+        .or_insert(JsonValue::Bool(true));
+    object
+        .entry("package".to_owned())
+        .or_insert_with(|| json!({ "kind": "static" }));
+    Ok(object
+        .entry("config".to_owned())
+        .or_insert_with(|| JsonValue::Object(JsonMap::new())))
+}
+
+fn set_nested_json_value(root: &mut JsonValue, segments: &[String], value: JsonValue) {
+    if segments.is_empty() {
+        *root = value;
+        return;
+    }
+    if !root.is_object() {
+        *root = JsonValue::Object(JsonMap::new());
+    }
+    let mut cursor = root;
+    for segment in &segments[..segments.len().saturating_sub(1)] {
+        let object = cursor.as_object_mut().expect("nested settings object");
+        cursor = object
+            .entry(segment.clone())
+            .or_insert_with(|| JsonValue::Object(JsonMap::new()));
+        if !cursor.is_object() {
+            *cursor = JsonValue::Object(JsonMap::new());
+        }
+    }
+    let object = cursor.as_object_mut().expect("nested settings object");
+    object.insert(segments[segments.len() - 1].clone(), value);
+}
+
+fn remove_nested_json_value(root: &mut JsonValue, segments: &[String]) -> bool {
+    if segments.is_empty() {
+        let deleted = !root.is_null();
+        *root = JsonValue::Null;
+        return deleted;
+    }
+    let mut cursor = root;
+    for segment in &segments[..segments.len().saturating_sub(1)] {
+        let Some(next) = cursor
+            .as_object_mut()
+            .and_then(|object| object.get_mut(segment.as_str()))
+        else {
+            return false;
+        };
+        cursor = next;
+    }
+    cursor
+        .as_object_mut()
+        .and_then(|object| object.remove(segments[segments.len() - 1].as_str()))
+        .is_some()
+}
+
+/// Push notification emitted by the unified bus for the active session.
+/// Indicates whether the change requires reloading messages.
+#[derive(Debug, Clone)]
+pub struct LiveEvent {
+    /// Concrete event payload when the subscriber kept up with the bus.
+    /// `None` means the receiver lagged and the UI should force-refresh
+    /// from persisted state instead of trying to apply an incremental patch.
+    pub event: Option<DomainEvent>,
+    /// True for events that materially change session state — the UI should
+    /// trigger a `refresh_session` after handling.
+    pub triggers_refresh: bool,
+    /// True when the UI should ignore incremental assumptions and force a
+    /// replay from persisted state (for example after bus lag).
+    pub force_refresh: bool,
+}
+
+#[derive(Clone)]
+pub struct Backend {
+    runtime: AgenaRuntime,
+    app_state: AppState,
+    workspace_root: PathBuf,
+    file_index: Arc<OnceLock<Vec<PathBuf>>>,
+}
+
+impl Backend {
+    pub fn new(
+        runtime: AgenaRuntime,
+        db: Arc<DatabaseConnection>,
+        workspace_root: PathBuf,
+    ) -> Self {
+        Self {
+            app_state: AppState::new(runtime.clone(), db),
+            runtime,
+            workspace_root,
+            file_index: Arc::new(OnceLock::new()),
+        }
+    }
+
+    pub async fn list_workspace_sessions(&self, roots_only: bool) -> Result<Vec<SessionResource>> {
+        let workspace_id = self.current_workspace_id().await?;
+        self.list_sessions_query(ListSessionsParams {
+            cursor: None,
+            limit: Some(200),
+            workspace_id: Some(workspace_id),
+            parent_id: None,
+            roots: roots_only,
+            search: None,
+        })
+        .await
+        .context("failed to list workspace sessions")
+    }
+
+    pub async fn list_workspace_sessions_page(
+        &self,
+        roots_only: bool,
+        search: Option<&str>,
+        cursor: Option<String>,
+        limit: u64,
+    ) -> Result<PaginatedResponse<SessionResource>> {
+        let workspace_id = self.current_workspace_id().await?;
+        match dispatch::dispatch_query(
+            &self.app_state,
+            Query::ListSessions(ListSessionsParams {
+                cursor,
+                limit: Some(limit),
+                workspace_id: Some(workspace_id),
+                parent_id: None,
+                roots: roots_only,
+                search: search.map(str::to_string),
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            QueryResult::Sessions(page) => Ok(page),
+            other => Err(anyhow!("unexpected query result: {:?}", other)),
+        }
+        .context("failed to list workspace sessions page")
+    }
+
+    pub async fn create_session(
+        &self,
+        title: String,
+        parent_id: Option<i64>,
+    ) -> Result<SessionResource> {
+        let workspace = self
+            .resolve_workspace_resource(true)
+            .await
+            .context("failed to resolve workspace for agena-tui")?;
+
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::CreateSession(CreateSessionParams {
+                workspace_id: workspace.id,
+                title,
+                parent_id,
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Session(session) => Ok(session),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to create session")
+    }
+
+    pub async fn rename_session(&self, session_id: i64, title: String) -> Result<SessionResource> {
+        let existing = self
+            .get_session(session_id)
+            .await
+            .context("failed to load session before rename")?
+            .ok_or_else(|| anyhow!("session not found: {session_id}"))?;
+
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::UpdateSession(UpdateSessionParams {
+                session_id,
+                title,
+                parent_id: existing.parent_id,
+                expected_version: Some(existing.version),
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Session(session) => Ok(session),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to rename session")
+    }
+
+    pub fn list_providers(&self) -> Vec<ProviderSummaryResource> {
+        let snapshot = self.runtime.current_snapshot();
+        let registry = snapshot.provider_registry();
+        let mut providers = registry
+            .provider_ids()
+            .into_iter()
+            .filter_map(|provider_id| {
+                registry.get(provider_id.as_str()).map(|provider| {
+                    let configured = snapshot
+                        .config_resolution()
+                        .config
+                        .providers
+                        .get(provider_id.as_str());
+                    ProviderSummaryResource {
+                        defaults: ProviderDefaultsResource {
+                            adapter: provider.default_adapter().map(ToString::to_string),
+                            model: provider.default_model().to_string(),
+                            thinking_mode: configured
+                                .and_then(|provider| provider.defaults.thinking_mode.clone()),
+                            speed_mode: configured
+                                .and_then(|provider| provider.defaults.speed_mode.clone()),
+                            verbosity: configured
+                                .and_then(|provider| provider.defaults.verbosity.clone()),
+                            parallel_tool_calls: configured
+                                .and_then(|provider| provider.defaults.parallel_tool_calls),
+                        },
+                        adapters: Vec::new(),
+                        native_tools: configured.map(provider_native_tools_summary_resource),
+                        provider_id,
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        providers.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
+        providers
+    }
+
+    pub fn list_agent_names(&self) -> Vec<String> {
+        let snapshot = self.runtime.current_snapshot();
+        let mut names = snapshot.agents().names();
+        names.sort();
+        names
+    }
+
+    pub fn list_agent_descriptors(&self) -> Vec<AgentDescriptor> {
+        self.runtime.current_snapshot().agents().list_descriptors()
+    }
+
+    pub fn get_agent_profile(&self, name: &str) -> Option<agena::agents::AgentProfile> {
+        self.runtime.current_snapshot().agents().get(name.trim())
+    }
+
+    pub fn config_has_agent(&self, name: &str) -> bool {
+        self.runtime
+            .current_snapshot()
+            .config_resolution()
+            .config
+            .agents
+            .contains_key(name.trim())
+    }
+
+    pub fn config_agent_names(&self) -> HashSet<String> {
+        self.runtime
+            .current_snapshot()
+            .config_resolution()
+            .config
+            .agents
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    pub fn default_agent_name(&self) -> Option<String> {
+        let snapshot = self.runtime.current_snapshot();
+        let configured = snapshot
+            .config_resolution()
+            .config
+            .default_agent
+            .clone()
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        let mut agents = snapshot.agents().list_descriptors();
+        agents.sort_by(|left, right| left.name.cmp(&right.name));
+
+        if !configured.is_empty() && agents.iter().any(|agent| agent.name == configured) {
+            return Some(configured);
+        }
+
+        agents.into_iter().map(|agent| agent.name).next()
+    }
+
+    pub fn list_aws_profile_names(&self) -> Vec<String> {
+        let credentials_path = env::var("AWS_SHARED_CREDENTIALS_FILE")
+            .ok()
+            .map(PathBuf::from)
+            .or_else(|| {
+                env::var("HOME")
+                    .ok()
+                    .map(|home| PathBuf::from(home).join(".aws/credentials"))
+            });
+        let config_path = env::var("AWS_CONFIG_FILE")
+            .ok()
+            .map(PathBuf::from)
+            .or_else(|| {
+                env::var("HOME")
+                    .ok()
+                    .map(|home| PathBuf::from(home).join(".aws/config"))
+            });
+        let mut profiles = std::collections::BTreeSet::new();
+        for path in [credentials_path, config_path].into_iter().flatten() {
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
+            profiles.extend(parse_aws_profile_names(text.as_str()));
+        }
+        profiles.into_iter().collect()
+    }
+
+    pub fn list_configured_providers(&self) -> Vec<ProviderSummaryResource> {
+        let snapshot = self.runtime.current_snapshot();
+        let mut providers = snapshot
+            .config_resolution()
+            .config
+            .providers
+            .iter()
+            .map(|(provider_id, provider)| ProviderSummaryResource {
+                provider_id: provider_id.clone(),
+                defaults: ProviderDefaultsResource {
+                    adapter: provider.defaults.adapter.clone(),
+                    model: provider.defaults.model.clone().unwrap_or_default(),
+                    thinking_mode: provider.defaults.thinking_mode.clone(),
+                    speed_mode: provider.defaults.speed_mode.clone(),
+                    verbosity: provider.defaults.verbosity.clone(),
+                    parallel_tool_calls: provider.defaults.parallel_tool_calls,
+                },
+                adapters: provider
+                    .adapters
+                    .iter()
+                    .map(|(adapter_id, adapter)| ProviderAdapterSummaryResource {
+                        adapter_id: adapter_id.clone(),
+                        enabled: adapter.enabled,
+                        configured_model_count: provider
+                            .models
+                            .keys()
+                            .filter(|model_id| {
+                                model_id
+                                    .split_once('/')
+                                    .map(|(route_adapter_id, _)| route_adapter_id == adapter_id)
+                                    .unwrap_or(false)
+                            })
+                            .count(),
+                    })
+                    .collect(),
+                native_tools: Some(provider_native_tools_summary_resource(provider)),
+            })
+            .collect::<Vec<_>>();
+        providers.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
+        providers
+    }
+
+    pub fn config_path(&self) -> PathBuf {
+        self.runtime.config_resolution().meta.config_path.clone()
+    }
+
+    pub fn config_json_sources(&self) -> Result<ConfigJsonSources> {
+        let snapshot = self.runtime.current_snapshot();
+        let resolution = snapshot.config_resolution();
+        let config_path = resolution.meta.config_path.clone();
+        let file = read_file_setting(config_path.clone(), ConfigSettingsGetInput::default())
+            .map_err(|error| anyhow!(error.to_string()))
+            .context("failed to read config file settings")?
+            .value;
+        let project_config_path = resolution.meta.project_config_path.clone();
+        let project_file = read_file_setting(
+            project_config_path.clone(),
+            ConfigSettingsGetInput::default(),
+        )
+        .map_err(|error| anyhow!(error.to_string()))
+        .context("failed to read workspace config file settings")?
+        .value;
+        let mut effective = serde_json::to_value(&resolution.config)
+            .map_err(|error| anyhow!(error.to_string()))
+            .context("failed to serialize effective config")?;
+        augment_effective_config_json(&mut effective, &resolution.config);
+        Ok(ConfigJsonSources {
+            config_path,
+            config_found: resolution.meta.config_found,
+            project_config_path,
+            project_config_found: resolution.meta.project_config_found,
+            applied_layers: resolution
+                .meta
+                .applied_layers
+                .iter()
+                .map(|layer| layer.description.clone())
+                .collect(),
+            file,
+            project_file,
+            effective,
+        })
+    }
+
+    pub async fn set_config_setting(
+        &self,
+        path: &str,
+        value: JsonValue,
+    ) -> Result<ConfigSettingsEditResponse> {
+        if let Some((plugin_id, config_segments)) = plugin_config_setting_target(path)? {
+            return self
+                .set_plugin_config_setting(plugin_id.as_str(), config_segments.as_slice(), value)
+                .await;
+        }
+        self.set_config_setting_direct(path, value).await
+    }
+
+    async fn set_config_setting_direct(
+        &self,
+        path: &str,
+        value: JsonValue,
+    ) -> Result<ConfigSettingsEditResponse> {
+        let config_path = self.runtime.config_resolution().meta.config_path.clone();
+        let response = set_file_setting(
+            config_path,
+            ConfigSettingsSetInput {
+                path: path.trim().to_owned(),
+                value,
+                options: ConfigSettingsEditOptions {
+                    dry_run: false,
+                    validate: true,
+                    reload: true,
+                },
+            },
+        )
+        .map_err(|error| anyhow!(error.to_string()))
+        .context("failed to set config setting")?;
+
+        if response.reload_required {
+            self.runtime
+                .reload()
+                .await
+                .context("failed to reload runtime after config change")?;
+        }
+        Ok(response)
+    }
+
+    pub async fn reload_runtime(&self) -> Result<()> {
+        self.runtime
+            .reload()
+            .await
+            .context("failed to reload runtime after agent source change")?;
+        Ok(())
+    }
+
+    pub async fn delete_config_setting(&self, path: &str) -> Result<ConfigSettingsEditResponse> {
+        if let Some((plugin_id, config_segments)) = plugin_config_setting_target(path)? {
+            return self
+                .delete_plugin_config_setting(plugin_id.as_str(), config_segments.as_slice())
+                .await;
+        }
+        let config_path = self.runtime.config_resolution().meta.config_path.clone();
+        let response = delete_file_setting(
+            config_path,
+            ConfigSettingsDeleteInput {
+                path: path.trim().to_owned(),
+                options: ConfigSettingsEditOptions {
+                    dry_run: false,
+                    validate: true,
+                    reload: true,
+                },
+            },
+        )
+        .map_err(|error| anyhow!(error.to_string()))
+        .context("failed to delete config setting")?;
+
+        if response.reload_required {
+            self.runtime
+                .reload()
+                .await
+                .context("failed to reload runtime after config change")?;
+        }
+        Ok(response)
+    }
+
+    pub async fn set_workspace_config_setting(
+        &self,
+        path: &str,
+        value: JsonValue,
+    ) -> Result<ConfigSettingsEditResponse> {
+        let config_path = self
+            .runtime
+            .config_resolution()
+            .meta
+            .project_config_path
+            .clone();
+        let response = set_file_setting(
+            config_path,
+            ConfigSettingsSetInput {
+                path: path.trim().to_owned(),
+                value,
+                options: ConfigSettingsEditOptions {
+                    dry_run: false,
+                    validate: true,
+                    reload: true,
+                },
+            },
+        )
+        .map_err(|error| anyhow!(error.to_string()))
+        .context("failed to set workspace config setting")?;
+
+        if response.reload_required {
+            self.runtime
+                .reload()
+                .await
+                .context("failed to reload runtime after workspace config change")?;
+        }
+        Ok(response)
+    }
+
+    pub async fn delete_workspace_config_setting(
+        &self,
+        path: &str,
+    ) -> Result<ConfigSettingsEditResponse> {
+        let config_path = self
+            .runtime
+            .config_resolution()
+            .meta
+            .project_config_path
+            .clone();
+        let response = delete_file_setting(
+            config_path,
+            ConfigSettingsDeleteInput {
+                path: path.trim().to_owned(),
+                options: ConfigSettingsEditOptions {
+                    dry_run: false,
+                    validate: true,
+                    reload: true,
+                },
+            },
+        )
+        .map_err(|error| anyhow!(error.to_string()))
+        .context("failed to delete workspace config setting")?;
+
+        if response.reload_required {
+            self.runtime
+                .reload()
+                .await
+                .context("failed to reload runtime after workspace config change")?;
+        }
+        Ok(response)
+    }
+
+    async fn set_plugin_config_setting(
+        &self,
+        plugin_id: &str,
+        config_segments: &[String],
+        value: JsonValue,
+    ) -> Result<ConfigSettingsEditResponse> {
+        let sources = self.config_json_sources()?;
+        let mut record = plugin_record_for_config_edit(&sources, plugin_id);
+        let config = normalize_plugin_record_for_config_edit(&mut record)?;
+        set_nested_json_value(config, config_segments, value);
+        let path = format!("plugins.list.{}", quoted_settings_segment(plugin_id));
+        self.set_config_setting_direct(path.as_str(), record).await
+    }
+
+    async fn delete_plugin_config_setting(
+        &self,
+        plugin_id: &str,
+        config_segments: &[String],
+    ) -> Result<ConfigSettingsEditResponse> {
+        let sources = self.config_json_sources()?;
+        let mut record = plugin_record_for_config_edit(&sources, plugin_id);
+        let config = normalize_plugin_record_for_config_edit(&mut record)?;
+        remove_nested_json_value(config, config_segments);
+        let path = format!("plugins.list.{}", quoted_settings_segment(plugin_id));
+        self.set_config_setting_direct(path.as_str(), record).await
+    }
+
+    pub fn provider_config_draft(&self, provider_id: Option<&str>) -> Result<ProviderConfigDraft> {
+        let Some(provider_id) = provider_id.map(str::trim).filter(|value| !value.is_empty()) else {
+            let mut draft = ProviderConfigDraft::new_empty();
+            draft.normalize_shape();
+            return Ok(draft);
+        };
+
+        let snapshot = self.runtime.current_snapshot();
+        let provider = snapshot
+            .config_resolution()
+            .config
+            .providers
+            .get(provider_id)
+            .ok_or_else(|| anyhow!("provider not found: {provider_id}"))?;
+        Ok(ProviderConfigDraft::from_resolved(provider_id, provider))
+    }
+
+    pub async fn start_provider_draft_auth(
+        &self,
+        draft: ProviderConfigDraft,
+    ) -> std::result::Result<ProviderDraftAuthActionResult, ProviderDraftAuthError> {
+        start_provider_draft_auth(draft).await
+    }
+
+    pub async fn continue_provider_draft_auth(
+        &self,
+        draft: ProviderConfigDraft,
+    ) -> std::result::Result<ProviderDraftAuthActionResult, ProviderDraftAuthError> {
+        continue_provider_draft_auth(draft).await
+    }
+
+    fn configured_provider_adapter_ids(
+        &self,
+        provider_id: Option<&str>,
+    ) -> std::collections::BTreeSet<String> {
+        let Some(provider_id) = provider_id.map(str::trim).filter(|value| !value.is_empty()) else {
+            return std::collections::BTreeSet::new();
+        };
+        let snapshot = self.runtime.current_snapshot();
+        snapshot
+            .config_resolution()
+            .config
+            .providers
+            .get(provider_id)
+            .map(|provider| provider.adapters.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn configured_provider_model_routes(
+        &self,
+        provider_id: Option<&str>,
+    ) -> Vec<(String, String)> {
+        let Some(provider_id) = provider_id.map(str::trim).filter(|value| !value.is_empty()) else {
+            return Vec::new();
+        };
+        let snapshot = self.runtime.current_snapshot();
+        let Some(provider) = snapshot
+            .config_resolution()
+            .config
+            .providers
+            .get(provider_id)
+        else {
+            return Vec::new();
+        };
+        provider
+            .models
+            .keys()
+            .filter_map(|route| {
+                route
+                    .split_once('/')
+                    .map(|(adapter_id, model_id)| (adapter_id.to_owned(), model_id.to_owned()))
+            })
+            .collect()
+    }
+
+    pub fn configured_provider_adapter_models(
+        &self,
+        provider_id: Option<&str>,
+    ) -> Vec<ProviderAdapterModelsResource> {
+        let Some(provider_id) = provider_id.map(str::trim).filter(|value| !value.is_empty()) else {
+            return Vec::new();
+        };
+        let snapshot = self.runtime.current_snapshot();
+        let Some(provider) = snapshot
+            .config_resolution()
+            .config
+            .providers
+            .get(provider_id)
+        else {
+            return Vec::new();
+        };
+
+        let mut adapter_ids = provider.adapters.keys().cloned().collect::<Vec<_>>();
+        adapter_ids.sort();
+        adapter_ids
+            .into_iter()
+            .map(|adapter_id| {
+                let mut model_ids = provider
+                    .models
+                    .keys()
+                    .filter_map(|route| {
+                        route
+                            .split_once('/')
+                            .and_then(|(route_adapter_id, model_id)| {
+                                (route_adapter_id == adapter_id).then(|| model_id.to_owned())
+                            })
+                    })
+                    .collect::<Vec<_>>();
+                model_ids.sort();
+                ProviderAdapterModelsResource {
+                    adapter_id: adapter_id.clone(),
+                    enabled: provider
+                        .adapters
+                        .get(adapter_id.as_str())
+                        .map(|adapter| adapter.enabled)
+                        .unwrap_or(true),
+                    resolved_base_url: None,
+                    models: model_ids
+                        .into_iter()
+                        .map(|model_id| ProviderModel::new(adapter_id.as_str(), model_id))
+                        .collect(),
+                    error: None,
+                }
+            })
+            .collect()
+    }
+
+    fn effective_provider_draft_adapter_ids(
+        &self,
+        draft: &ProviderConfigDraft,
+        extra_adapter_ids: &[String],
+    ) -> std::collections::BTreeSet<String> {
+        let mut adapter_ids =
+            self.configured_provider_adapter_ids(draft.source_provider_id.as_deref());
+        adapter_ids.extend(
+            extra_adapter_ids
+                .iter()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+        );
+        if let Some(default_adapter) = optional_non_empty(draft.default_adapter.as_str()) {
+            adapter_ids.insert(default_adapter.to_owned());
+        }
+        adapter_ids
+    }
+
+    pub async fn list_provider_models(&self, provider_id: &str) -> Result<Vec<ProviderModel>> {
+        self.runtime
+            .current_snapshot()
+            .list_provider_models(provider_id)
+            .await
+            .context("failed to list provider models")
+    }
+
+    pub fn list_local_provider_models(&self, provider_id: &str) -> Result<Vec<ProviderModel>> {
+        let provider_id = provider_id.trim();
+        if provider_id.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let snapshot = self.runtime.current_snapshot();
+        let Some(configured) = snapshot
+            .config_resolution()
+            .config
+            .providers
+            .get(provider_id)
+        else {
+            return Ok(Vec::new());
+        };
+
+        let mut enabled_adapter_ids = configured
+            .adapters
+            .iter()
+            .filter(|(_, adapter)| adapter.enabled)
+            .map(|(adapter_id, _)| adapter_id.clone())
+            .collect::<Vec<_>>();
+        enabled_adapter_ids.sort();
+
+        let default_adapter = configured
+            .defaults
+            .adapter
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .filter(|adapter_id| {
+                configured
+                    .adapters
+                    .get(*adapter_id)
+                    .map(|adapter| adapter.enabled)
+                    .unwrap_or(false)
+            })
+            .map(ToOwned::to_owned)
+            .or_else(|| (enabled_adapter_ids.len() == 1).then(|| enabled_adapter_ids[0].clone()));
+
+        let mut seen = std::collections::BTreeSet::new();
+        let mut models = Vec::new();
+
+        for route in configured.models.keys() {
+            let Some((adapter_id, model_id)) = route.split_once('/') else {
+                continue;
+            };
+            let adapter_id = adapter_id.trim();
+            let model_id = model_id.trim();
+            if adapter_id.is_empty()
+                || model_id.is_empty()
+                || !configured
+                    .adapters
+                    .get(adapter_id)
+                    .map(|adapter| adapter.enabled)
+                    .unwrap_or(false)
+            {
+                continue;
+            }
+            if seen.insert((adapter_id.to_owned(), model_id.to_owned())) {
+                models.push(ProviderModel {
+                    provider_id: ProviderId::new(provider_id),
+                    adapter_id: Some(agena::model::AdapterId::new(adapter_id)),
+                    id: ModelId::new(model_id),
+                    catalog_model_id: None,
+                    display_name: None,
+                    capabilities: ModelCapabilities::default(),
+                    metadata: ModelMetadata::default(),
+                    thinking_modes: std::collections::BTreeMap::new(),
+                    speed_modes: std::collections::BTreeMap::new(),
+                });
+            }
+        }
+
+        if let Some(default_model) = configured
+            .defaults
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let default_key = (
+                default_adapter.clone().unwrap_or_default(),
+                default_model.to_owned(),
+            );
+            if seen.insert(default_key) {
+                let model = default_adapter
+                    .as_deref()
+                    .map(|adapter_id| ProviderModel {
+                        provider_id: ProviderId::new(provider_id),
+                        adapter_id: Some(agena::model::AdapterId::new(adapter_id)),
+                        id: ModelId::new(default_model),
+                        catalog_model_id: None,
+                        display_name: None,
+                        capabilities: ModelCapabilities::default(),
+                        metadata: ModelMetadata::default(),
+                        thinking_modes: std::collections::BTreeMap::new(),
+                        speed_modes: std::collections::BTreeMap::new(),
+                    })
+                    .unwrap_or_else(|| ProviderModel::new(provider_id, default_model));
+                models.push(model);
+            }
+        }
+
+        let provider = snapshot
+            .provider_registry()
+            .get(provider_id)
+            .ok_or_else(|| anyhow!("provider not found: {provider_id}"))?;
+        let provider_record = snapshot
+            .model_catalog()
+            .effective_provider_record(&enabled_adapter_ids)
+            .unwrap_or_default();
+        let local_provider_record = ModelCatalogProviderRecord {
+            models: provider_record.models,
+            appendable_model_ids: Default::default(),
+        };
+
+        Ok(decorate_provider_models(
+            provider.as_ref(),
+            &local_provider_record,
+            models,
+        ))
+    }
+
+    pub fn list_model_catalog_models(
+        &self,
+        query: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<ModelCatalogListResponse> {
+        let snapshot = self.runtime.current_snapshot();
+        let catalog = snapshot.model_catalog_response();
+        let summary = local_model_catalog_summary(&catalog);
+        let models = local_model_catalog_models(&catalog);
+        let search = query.trim().to_lowercase();
+        let available_origins = {
+            let mut origins = models
+                .iter()
+                .filter_map(|model| {
+                    let origin = model.origin.clone().unwrap_or_default();
+                    let trimmed = origin.trim();
+                    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            origins.sort();
+            origins
+        };
+        let filtered = models
+            .into_iter()
+            .filter(|model| {
+                search.is_empty() || local_model_catalog_model_search_text(model).contains(&search)
+            })
+            .collect::<Vec<_>>();
+        let total = filtered.len();
+        let limit = normalize_limit(Some(limit as u64)) as usize;
+        let items = filtered
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .collect::<Vec<_>>();
+        Ok(ModelCatalogListResponse {
+            summary,
+            total,
+            offset,
+            limit,
+            available_origins,
+            items,
+        })
+    }
+
+    pub fn lookup_model_catalog_models(&self, model_ids: &[String]) -> Vec<CatalogModelResource> {
+        let requested = model_ids
+            .iter()
+            .flat_map(|model_id| {
+                let raw = model_id.trim().to_owned();
+                if raw.is_empty() {
+                    return Vec::new();
+                }
+                let canonical = agena::model_catalog::canonical_model_catalog_id(raw.as_str());
+                if canonical.is_empty() || canonical == raw {
+                    vec![raw]
+                } else {
+                    vec![raw, canonical]
+                }
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let snapshot = self.runtime.current_snapshot();
+        let catalog = snapshot.model_catalog_response();
+        local_model_catalog_models(&catalog)
+            .into_iter()
+            .filter(|model| requested.contains(model.model_id.as_str()))
+            .collect()
+    }
+
+    pub fn resolved_model_for_run_options(&self, request: &RunOptions) -> Result<ModelRef> {
+        if let Some(model) = request.model.as_ref() {
+            return Ok(model.clone());
+        }
+
+        self.runtime
+            .current_snapshot()
+            .resolve_default_model()
+            .context("failed to resolve default model selection")?
+            .ok_or_else(|| anyhow!("no providers configured"))
+    }
+
+    pub fn runtime_thinking_mode_rows(&self, request: &RunOptions) -> Result<Vec<InspectorRow>> {
+        let snapshot = self.runtime.current_snapshot();
+        let registry = snapshot.provider_registry();
+        let model = self.resolved_model_for_run_options(request)?;
+        let mut rows = registry
+            .model_thinking_modes(&model)
+            .context("failed to resolve think modes for current model")?
+            .into_iter()
+            .map(|(name, mode)| InspectorRow {
+                label: name,
+                detail: summarize_named_mode(
+                    mode.display_name.as_deref(),
+                    mode.description.as_deref(),
+                ),
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.label.cmp(&right.label));
+        Ok(rows)
+    }
+
+    pub fn runtime_speed_mode_rows(&self, request: &RunOptions) -> Result<Vec<InspectorRow>> {
+        let snapshot = self.runtime.current_snapshot();
+        let registry = snapshot.provider_registry();
+        let model = self.resolved_model_for_run_options(request)?;
+        let mut rows = registry
+            .model_speed_modes(&model)
+            .context("failed to resolve speed modes for current model")?
+            .into_iter()
+            .map(|(name, mode)| InspectorRow {
+                label: name,
+                detail: summarize_named_mode(
+                    mode.display_name.as_deref(),
+                    mode.description.as_deref(),
+                ),
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.label.cmp(&right.label));
+        Ok(rows)
+    }
+
+    pub fn runtime_verbosity_values(&self, request: &RunOptions) -> Result<Vec<String>> {
+        let snapshot = self.runtime.current_snapshot();
+        let registry = snapshot.provider_registry();
+        let model = self.resolved_model_for_run_options(request)?;
+        let metadata = registry
+            .model_metadata(&model)
+            .context("failed to resolve verbosity metadata for current model")?;
+        Ok(metadata.supported_verbosity_levels_for_model(&model.model_id))
+    }
+
+    pub async fn refresh_model_catalog(&self) -> Result<()> {
+        let snapshot = self.runtime.current_snapshot();
+        let source_providers = snapshot.catalog_source_provider_registry();
+        snapshot
+            .model_catalog()
+            .refresh_from_registry(
+                source_providers.as_ref(),
+                Some(snapshot.config_resolution()),
+            )
+            .await
+            .context("failed to refresh model catalog")?;
+        Ok(())
+    }
+
+    pub async fn list_draft_provider_adapter_models(
+        &self,
+        draft: &ProviderConfigDraft,
+        adapter_ids: &[String],
+    ) -> Result<ProviderAdapterModelsResponse> {
+        let mut draft = draft.clone();
+        draft.normalize_shape();
+        let target = draft.build_listing_target(adapter_ids)?;
+        self.list_provider_adapter_models_with_target(target).await
+    }
+
+    pub async fn list_saved_provider_adapter_models(
+        &self,
+        provider_id: &str,
+        adapter_ids: &[String],
+    ) -> Result<ProviderAdapterModelsResponse> {
+        let provider_id = provider_id.trim();
+        let snapshot = self.runtime.current_snapshot();
+        let resolved = snapshot
+            .config_resolution()
+            .config
+            .providers
+            .get(provider_id)
+            .ok_or_else(|| anyhow!("provider not found: {provider_id}"))?;
+        let target = saved_provider_adapter_models_target(provider_id, resolved, adapter_ids)
+            .map_err(map_provider_adapter_models_config_error)?;
+        self.list_provider_adapter_models_with_target(target).await
+    }
+
+    pub async fn save_provider_draft(
+        &self,
+        draft: ProviderConfigDraft,
+        adapter_model_lists: &[ProviderAdapterModelsResource],
+        selected_adapter_ids: &[String],
+        selected_model_keys: &std::collections::BTreeSet<String>,
+    ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
+        let mut draft = draft;
+        draft.normalize_shape();
+        let provider_id = required_provider_save_field(
+            draft.provider_id.as_str(),
+            ProviderStudioSaveField::ProviderId,
+        )
+        .map_err(ProviderStudioSaveError::Validation)?;
+        let requested_default_adapter =
+            optional_non_empty(draft.default_adapter.as_str()).map(str::to_owned);
+        let requested_default_model =
+            optional_non_empty(draft.default_model.as_str()).map(str::to_owned);
+        let effective_adapter_ids =
+            self.effective_provider_draft_adapter_ids(&draft, selected_adapter_ids);
+        draft
+            .validate_for_adapters_for_save(&effective_adapter_ids)
+            .map_err(ProviderStudioSaveError::Validation)?;
+
+        let catalog_entries = self.lookup_model_catalog_models(
+            &adapter_model_lists
+                .iter()
+                .flat_map(|adapter_models| {
+                    adapter_models
+                        .models
+                        .iter()
+                        .map(catalog_lookup_id_for_provider_model)
+                })
+                .chain(requested_default_model.iter().cloned())
+                .collect::<Vec<_>>(),
+        );
+        let selected = selected_adapter_ids
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        let mut provider_value = self
+            .read_file_provider_settings(provider_id)
+            .map_err(ProviderStudioSaveError::other)?
+            .unwrap_or_else(|| JsonValue::Object(JsonMap::new()));
+        let provider_object = provider_value
+            .as_object_mut()
+            .ok_or(ProviderStudioSaveError::ExistingProviderSettingsMustBeObject)?;
+        let mut adapters = provider_object
+            .remove("adapters")
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        for adapter_id in &effective_adapter_ids {
+            adapters
+                .entry(adapter_id.clone())
+                .or_insert_with(|| json!({ "enabled": true }));
+        }
+
+        for adapter_models in adapter_model_lists {
+            let adapter_id = adapter_models.adapter_id.as_str();
+            if adapter_models.error.is_some() || !selected.contains(adapter_id) {
+                continue;
+            }
+
+            let mut adapter_value = adapters
+                .remove(adapter_id)
+                .unwrap_or_else(|| JsonValue::Object(JsonMap::new()));
+            let adapter_object = adapter_value.as_object_mut().ok_or_else(|| {
+                ProviderStudioSaveError::ProviderAdapterMustBeObject {
+                    adapter_id: adapter_id.to_owned(),
+                }
+            })?;
+            let configured_models = adapter_models
+                .models
+                .iter()
+                .filter(|model| {
+                    provider_model_selection_contains(
+                        selected_model_keys,
+                        adapter_id,
+                        model.id.as_ref(),
+                    )
+                })
+                .map(|model| {
+                    let mut model_value = provider_model_json_for_model_id(
+                        &catalog_entries,
+                        model.id.as_ref(),
+                        Some(model),
+                    );
+                    apply_provider_native_tools_defaults_to_model_value(
+                        &draft,
+                        adapter_id,
+                        &mut model_value,
+                    )?;
+                    Ok((model.id.to_string(), model_value))
+                })
+                .collect::<std::result::Result<JsonMap<_, _>, ProviderStudioSaveError>>()?;
+            adapter_object.insert("enabled".to_owned(), JsonValue::Bool(true));
+            adapter_object.insert("models".to_owned(), JsonValue::Object(configured_models));
+            adapters.insert(adapter_id.to_owned(), adapter_value);
+        }
+
+        apply_provider_auth_required_adapter_defaults_to_json_adapters(&draft, &mut adapters)?;
+
+        let (default_adapter, default_model) = resolve_provider_defaults_from_value_for_save(
+            &adapters,
+            requested_default_adapter.as_deref(),
+            requested_default_model.as_deref(),
+        )?;
+
+        if let Some(default_model) = default_model.as_deref() {
+            let default_provider_model = adapter_model_lists
+                .iter()
+                .find(|adapter_models| adapter_models.adapter_id == default_adapter)
+                .and_then(|adapter_models| {
+                    adapter_models
+                        .models
+                        .iter()
+                        .find(|model| model.id.as_ref() == default_model)
+                        .cloned()
+                });
+            let default_model_value = provider_model_json_for_model_id(
+                &catalog_entries,
+                default_model,
+                default_provider_model.as_ref(),
+            );
+            let mut default_model_value = default_model_value;
+            apply_provider_native_tools_defaults_to_model_value(
+                &draft,
+                default_adapter.as_str(),
+                &mut default_model_value,
+            )?;
+            adapters
+                .entry(default_adapter.clone())
+                .or_insert_with(|| json!({ "enabled": true }));
+            ensure_provider_model_entry(
+                adapters
+                    .get_mut(default_adapter.as_str())
+                    .expect("default adapter must exist"),
+                default_model,
+                default_model_value,
+            )
+            .map_err(ProviderStudioSaveError::other)?;
+        }
+
+        provider_object.insert("enabled".to_owned(), JsonValue::Bool(true));
+        let mut defaults = JsonMap::new();
+        defaults.insert(
+            "adapter".to_owned(),
+            JsonValue::String(default_adapter.clone()),
+        );
+        if let Some(default_model) = default_model.as_ref() {
+            defaults.insert("model".to_owned(), JsonValue::String(default_model.clone()));
+        }
+        provider_object.insert("defaults".to_owned(), JsonValue::Object(defaults));
+        provider_object.insert(
+            "auth".to_owned(),
+            JsonValue::Object(build_provider_auth_patch_value_for_save(&draft)?),
+        );
+        provider_object.insert("adapters".to_owned(), JsonValue::Object(adapters));
+        self.set_provider_settings(provider_id, provider_value)
+            .await
+            .map_err(ProviderStudioSaveError::other)?;
+        Ok(ProviderStudioSaveResult::ProviderDraftSaved {
+            provider_id: provider_id.to_owned(),
+            default_adapter,
+            default_model,
+        })
+    }
+
+    pub async fn save_provider_adapter_matches(
+        &self,
+        draft: ProviderConfigDraft,
+        adapter_models: ProviderAdapterModelsResource,
+    ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
+        let mut draft = draft;
+        draft.normalize_shape();
+        let provider_id = required_provider_save_field(
+            draft.provider_id.as_str(),
+            ProviderStudioSaveField::ProviderId,
+        )
+        .map_err(ProviderStudioSaveError::Validation)?;
+        let adapter_id = required_provider_save_field(
+            adapter_models.adapter_id.as_str(),
+            ProviderStudioSaveField::AdapterId,
+        )
+        .map_err(ProviderStudioSaveError::Validation)?;
+        let effective_adapter_ids =
+            self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
+        draft
+            .validate_for_adapters_for_save(&effective_adapter_ids)
+            .map_err(ProviderStudioSaveError::Validation)?;
+        let catalog_entries = self.lookup_model_catalog_models(
+            &adapter_models
+                .models
+                .iter()
+                .map(catalog_lookup_id_for_provider_model)
+                .collect::<Vec<_>>(),
+        );
+        let configured_models = adapter_models
+            .models
+            .iter()
+            .map(|model| {
+                let mut model_value = provider_model_json_for_model_id(
+                    &catalog_entries,
+                    model.id.as_ref(),
+                    Some(model),
+                );
+                apply_provider_native_tools_defaults_to_model_value(
+                    &draft,
+                    adapter_id,
+                    &mut model_value,
+                )?;
+                Ok((model.id.to_string(), model_value))
+            })
+            .collect::<std::result::Result<JsonMap<_, _>, ProviderStudioSaveError>>()?;
+        let matched_model_count = adapter_models
+            .models
+            .iter()
+            .filter(|model| {
+                preferred_catalog_model_for_provider_model(&catalog_entries, model).is_some()
+            })
+            .count();
+        let provider_patch = build_provider_patch_value_for_save(
+            &draft,
+            optional_non_empty(draft.default_adapter.as_str()).unwrap_or(adapter_id),
+            Some(optional_non_empty(draft.default_model.as_str()).unwrap_or("default")),
+            json!({
+                adapter_id: {
+                    "enabled": true,
+                    "models": configured_models,
+                }
+            }),
+            false,
+        )?;
+        self.patch_provider_settings(provider_id, provider_patch)
+            .await
+            .map_err(ProviderStudioSaveError::other)?;
+        Ok(ProviderStudioSaveResult::AdapterMatchesSaved {
+            provider_id: provider_id.to_owned(),
+            adapter_id: adapter_id.to_owned(),
+            listed_model_count: adapter_models.models.len(),
+            matched_model_count,
+        })
+    }
+
+    pub async fn save_provider_model(
+        &self,
+        draft: ProviderConfigDraft,
+        adapter_id: &str,
+        model_id: &str,
+        provider_model: Option<ProviderModel>,
+        set_default: bool,
+    ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
+        let mut draft = draft;
+        draft.normalize_shape();
+        let provider_id = required_provider_save_field(
+            draft.provider_id.as_str(),
+            ProviderStudioSaveField::ProviderId,
+        )
+        .map_err(ProviderStudioSaveError::Validation)?;
+        let adapter_id =
+            required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
+                .map_err(ProviderStudioSaveError::Validation)?;
+        let model_id = required_provider_save_field(model_id, ProviderStudioSaveField::ModelId)
+            .map_err(ProviderStudioSaveError::Validation)?;
+        let effective_adapter_ids =
+            self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
+        draft
+            .validate_for_adapters_for_save(&effective_adapter_ids)
+            .map_err(ProviderStudioSaveError::Validation)?;
+        let catalog_entries =
+            self.lookup_model_catalog_models(&[catalog_lookup_id_for_model_id(model_id)]);
+        let mut model_value =
+            provider_model_json_for_model_id(&catalog_entries, model_id, provider_model.as_ref());
+        apply_provider_native_tools_defaults_to_model_value(&draft, adapter_id, &mut model_value)?;
+        let default_adapter = if set_default {
+            adapter_id
+        } else {
+            optional_non_empty(draft.default_adapter.as_str()).unwrap_or(adapter_id)
+        };
+        let default_model = if set_default {
+            model_id
+        } else {
+            optional_non_empty(draft.default_model.as_str()).unwrap_or(model_id)
+        };
+        let provider_patch = build_provider_patch_value_for_save(
+            &draft,
+            default_adapter,
+            Some(default_model),
+            json!({
+                adapter_id: {
+                    "enabled": true,
+                    "models": {
+                        model_id: model_value,
+                    }
+                }
+            }),
+            set_default || draft.source_provider_id.is_none(),
+        )?;
+        self.patch_provider_settings(provider_id, provider_patch)
+            .await
+            .map_err(ProviderStudioSaveError::other)?;
+        Ok(ProviderStudioSaveResult::ModelSaved {
+            provider_id: provider_id.to_owned(),
+            adapter_id: adapter_id.to_owned(),
+            model_id: model_id.to_owned(),
+        })
+    }
+
+    pub fn provider_model_draft_value(
+        &self,
+        draft: &ProviderConfigDraft,
+        adapter_id: &str,
+        model_id: &str,
+        provider_model: Option<&ProviderModel>,
+    ) -> Result<JsonValue> {
+        let adapter_id = required_trimmed(adapter_id, "adapter_id")?;
+        let model_id = required_trimmed(model_id, "model_id")?;
+        if let Some(provider_id) = draft.source_provider_id.as_deref() {
+            let path = provider_model_settings_path(provider_id, adapter_id, model_id);
+            let configured = read_file_setting(
+                self.runtime.config_resolution().meta.config_path.clone(),
+                ConfigSettingsGetInput {
+                    target: ConfigSettingsPathInput { path: Some(path) },
+                    source: agena::config::ConfigSettingsSource::File,
+                },
+            )
+            .map_err(|error| anyhow!(error.to_string()))
+            .context("failed to read configured provider model")?
+            .value;
+            if !configured.is_null() {
+                return Ok(configured);
+            }
+        }
+
+        let catalog_entries = self.lookup_model_catalog_models(
+            &[model_id.to_owned()]
+                .into_iter()
+                .chain(provider_model.map(catalog_lookup_id_for_provider_model))
+                .collect::<Vec<_>>(),
+        );
+        Ok(provider_model_json_for_model_id(
+            &catalog_entries,
+            model_id,
+            provider_model,
+        ))
+    }
+
+    fn read_file_provider_settings(&self, provider_id: &str) -> Result<Option<JsonValue>> {
+        let configured = read_file_setting(
+            self.runtime.config_resolution().meta.config_path.clone(),
+            ConfigSettingsGetInput {
+                target: ConfigSettingsPathInput {
+                    path: Some(provider_settings_path(provider_id)),
+                },
+                source: agena::config::ConfigSettingsSource::File,
+            },
+        )
+        .map_err(|error| anyhow!(error.to_string()))
+        .context("failed to read configured provider")?
+        .value;
+        if configured.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(configured))
+        }
+    }
+
+    pub async fn save_provider_model_value(
+        &self,
+        draft: ProviderConfigDraft,
+        adapter_id: &str,
+        model_id: &str,
+        model_value: JsonValue,
+        set_default: bool,
+    ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
+        let mut draft = draft;
+        draft.normalize_shape();
+        let provider_id = required_provider_save_field(
+            draft.provider_id.as_str(),
+            ProviderStudioSaveField::ProviderId,
+        )
+        .map_err(ProviderStudioSaveError::Validation)?;
+        let adapter_id =
+            required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
+                .map_err(ProviderStudioSaveError::Validation)?;
+        let model_id = required_provider_save_field(model_id, ProviderStudioSaveField::ModelId)
+            .map_err(ProviderStudioSaveError::Validation)?;
+        let JsonValue::Object(_) = &model_value else {
+            return Err(ProviderStudioSaveError::ProviderModelConfigMustBeObject);
+        };
+        let effective_adapter_ids =
+            self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
+        draft
+            .validate_for_adapters_for_save(&effective_adapter_ids)
+            .map_err(ProviderStudioSaveError::Validation)?;
+        let default_adapter = if set_default {
+            adapter_id
+        } else {
+            optional_non_empty(draft.default_adapter.as_str()).unwrap_or(adapter_id)
+        };
+        let default_model = if set_default {
+            model_id
+        } else {
+            optional_non_empty(draft.default_model.as_str()).unwrap_or(model_id)
+        };
+        let include_defaults = set_default || draft.source_provider_id.is_none();
+        let existing_adapter = draft
+            .source_provider_id
+            .as_deref()
+            .map(|provider_id| {
+                read_file_setting(
+                    self.runtime.config_resolution().meta.config_path.clone(),
+                    ConfigSettingsGetInput {
+                        target: ConfigSettingsPathInput {
+                            path: Some(provider_adapter_settings_path(provider_id, adapter_id)),
+                        },
+                        source: agena::config::ConfigSettingsSource::File,
+                    },
+                )
+                .map_err(ProviderStudioSaveError::other)
+                .map(|response| response.value)
+            })
+            .transpose()?;
+        let model_overlay = serde_json::from_value::<ProviderModelOverlay>(model_value)
+            .map_err(ProviderStudioSaveError::other)?;
+        let mut adapter_patch = merge_provider_model_adapter_patch_for_save(
+            existing_adapter,
+            model_id,
+            provider_model_overlay_to_json(model_overlay),
+        )?;
+        apply_provider_auth_required_adapter_defaults_to_json_value(
+            &draft,
+            adapter_id,
+            &mut adapter_patch,
+        )?;
+        let mut provider_patch = JsonMap::new();
+        provider_patch.insert("enabled".to_owned(), JsonValue::Bool(true));
+        provider_patch.insert(
+            "auth".to_owned(),
+            JsonValue::Object(build_provider_auth_patch_value_for_save(&draft)?),
+        );
+        provider_patch.insert(
+            "adapters".to_owned(),
+            json!({
+                adapter_id: adapter_patch,
+            }),
+        );
+        if include_defaults {
+            provider_patch.insert(
+                "defaults".to_owned(),
+                json!({
+                    "adapter": default_adapter,
+                    "model": default_model,
+                }),
+            );
+        }
+        self.patch_provider_settings(provider_id, JsonValue::Object(provider_patch))
+            .await
+            .map_err(ProviderStudioSaveError::other)?;
+        Ok(ProviderStudioSaveResult::ConfiguredModelSaved {
+            provider_id: provider_id.to_owned(),
+            adapter_id: adapter_id.to_owned(),
+            model_id: model_id.to_owned(),
+        })
+    }
+
+    pub async fn delete_provider_model(
+        &self,
+        draft: ProviderConfigDraft,
+        adapter_id: &str,
+        model_id: &str,
+    ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
+        let mut draft = draft;
+        draft.normalize_shape();
+        let provider_id = required_provider_save_field(
+            draft.provider_id.as_str(),
+            ProviderStudioSaveField::ProviderId,
+        )
+        .map_err(ProviderStudioSaveError::Validation)?;
+        let adapter_id =
+            required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
+                .map_err(ProviderStudioSaveError::Validation)?;
+        let model_id = required_provider_save_field(model_id, ProviderStudioSaveField::ModelId)
+            .map_err(ProviderStudioSaveError::Validation)?;
+        let effective_adapter_ids =
+            self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
+        draft
+            .validate_for_adapters_for_save(&effective_adapter_ids)
+            .map_err(ProviderStudioSaveError::Validation)?;
+
+        let mut provider_value = self
+            .read_file_provider_settings(provider_id)
+            .map_err(ProviderStudioSaveError::other)?
+            .ok_or(ProviderStudioSaveError::ExistingProviderSettingsMustBeObject)?;
+        let provider_object = provider_value
+            .as_object_mut()
+            .ok_or(ProviderStudioSaveError::ExistingProviderSettingsMustBeObject)?;
+        let updates_default = provider_defaults_point_to(provider_object, adapter_id, model_id);
+        let current_default_adapter = provider_defaults_adapter(provider_object)
+            .map(ToOwned::to_owned)
+            .or_else(|| optional_non_empty(draft.default_adapter.as_str()).map(ToOwned::to_owned))
+            .unwrap_or_else(|| adapter_id.to_owned());
+        let next_default = {
+            let adapters = provider_object
+                .get_mut("adapters")
+                .and_then(JsonValue::as_object_mut)
+                .ok_or(ProviderStudioSaveError::ConfiguredProviderAdapterSettingsMustBeObject)?;
+            let adapter = adapters
+                .get_mut(adapter_id)
+                .and_then(JsonValue::as_object_mut)
+                .ok_or_else(|| ProviderStudioSaveError::ProviderAdapterMustBeObject {
+                    adapter_id: adapter_id.to_owned(),
+                })?;
+            let models = adapter
+                .get_mut("models")
+                .and_then(JsonValue::as_object_mut)
+                .ok_or(ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject)?;
+            models.remove(model_id);
+
+            if updates_default {
+                Some(resolve_provider_defaults_from_value_for_save(
+                    adapters,
+                    Some(current_default_adapter.as_str()),
+                    None,
+                )?)
+            } else {
+                None
+            }
+        };
+
+        if let Some((next_adapter, next_model)) = next_default {
+            let mut defaults = JsonMap::new();
+            defaults.insert("adapter".to_owned(), JsonValue::String(next_adapter));
+            if let Some(next_model) = next_model {
+                defaults.insert("model".to_owned(), JsonValue::String(next_model));
+            }
+            provider_object.insert("defaults".to_owned(), JsonValue::Object(defaults));
+        }
+
+        self.set_provider_settings(provider_id, provider_value)
+            .await
+            .map_err(ProviderStudioSaveError::other)?;
+        Ok(ProviderStudioSaveResult::ModelDeleted {
+            provider_id: provider_id.to_owned(),
+            adapter_id: adapter_id.to_owned(),
+            model_id: model_id.to_owned(),
+        })
+    }
+
+    pub async fn delete_provider(
+        &self,
+        provider_id: &str,
+    ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
+        let provider_id =
+            required_provider_save_field(provider_id, ProviderStudioSaveField::ProviderId)
+                .map_err(ProviderStudioSaveError::Validation)?;
+        let provider_value = self
+            .read_file_provider_settings(provider_id)
+            .map_err(ProviderStudioSaveError::other)?
+            .ok_or(ProviderStudioSaveError::ExistingProviderSettingsMustBeObject)?;
+        if !provider_value.is_object() {
+            return Err(ProviderStudioSaveError::ExistingProviderSettingsMustBeObject);
+        }
+
+        let configured_default_provider = read_file_setting(
+            self.runtime.config_resolution().meta.config_path.clone(),
+            ConfigSettingsGetInput {
+                target: ConfigSettingsPathInput {
+                    path: Some("providers.default".to_owned()),
+                },
+                source: agena::config::ConfigSettingsSource::File,
+            },
+        )
+        .map_err(|error| anyhow!(error.to_string()))
+        .context("failed to read configured default provider")
+        .map_err(ProviderStudioSaveError::other)?
+        .value;
+        let clears_default_provider = configured_default_provider
+            .as_str()
+            .map(str::trim)
+            .is_some_and(|configured| configured == provider_id);
+        if clears_default_provider {
+            self.delete_config_setting("providers.default")
+                .await
+                .map_err(ProviderStudioSaveError::other)?;
+        }
+        self.delete_config_setting(provider_settings_path(provider_id).as_str())
+            .await
+            .map_err(ProviderStudioSaveError::other)?;
+        Ok(ProviderStudioSaveResult::ProviderDeleted {
+            provider_id: provider_id.to_owned(),
+        })
+    }
+
+    pub async fn delete_provider_adapter(
+        &self,
+        draft: ProviderConfigDraft,
+        adapter_id: &str,
+    ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
+        let mut draft = draft;
+        draft.normalize_shape();
+        let provider_id = required_provider_save_field(
+            draft.provider_id.as_str(),
+            ProviderStudioSaveField::ProviderId,
+        )
+        .map_err(ProviderStudioSaveError::Validation)?;
+        let adapter_id =
+            required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
+                .map_err(ProviderStudioSaveError::Validation)?;
+
+        let mut provider_value = self
+            .read_file_provider_settings(provider_id)
+            .map_err(ProviderStudioSaveError::other)?
+            .ok_or(ProviderStudioSaveError::ExistingProviderSettingsMustBeObject)?;
+        let provider_object = provider_value
+            .as_object_mut()
+            .ok_or(ProviderStudioSaveError::ExistingProviderSettingsMustBeObject)?;
+        let (removed_model_count, delete_provider_after) = {
+            let adapters = provider_object
+                .get_mut("adapters")
+                .and_then(JsonValue::as_object_mut)
+                .ok_or(ProviderStudioSaveError::ConfiguredProviderAdapterSettingsMustBeObject)?;
+            let removed_adapter_value = adapters.remove(adapter_id).ok_or_else(|| {
+                ProviderStudioSaveError::ProviderAdapterMustBeObject {
+                    adapter_id: adapter_id.to_owned(),
+                }
+            })?;
+            let removed_adapter = removed_adapter_value.as_object().ok_or_else(|| {
+                ProviderStudioSaveError::ProviderAdapterMustBeObject {
+                    adapter_id: adapter_id.to_owned(),
+                }
+            })?;
+            let removed_model_count = match removed_adapter.get("models") {
+                Some(JsonValue::Object(models)) => models.len(),
+                Some(JsonValue::Null) | None => 0,
+                Some(_) => {
+                    return Err(
+                        ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject,
+                    );
+                }
+            };
+            (removed_model_count, adapters.is_empty())
+        };
+        if delete_provider_after {
+            return self.delete_provider(provider_id).await;
+        }
+
+        let requested_default_adapter = provider_defaults_adapter(provider_object)
+            .filter(|candidate| *candidate != adapter_id)
+            .or_else(|| {
+                optional_non_empty(draft.default_adapter.as_str())
+                    .filter(|candidate| *candidate != adapter_id)
+            });
+        let (next_adapter, next_model) = {
+            let adapters = provider_object
+                .get("adapters")
+                .and_then(JsonValue::as_object)
+                .ok_or(ProviderStudioSaveError::ConfiguredProviderAdapterSettingsMustBeObject)?;
+            resolve_provider_defaults_from_value_for_save(
+                adapters,
+                requested_default_adapter,
+                optional_non_empty(draft.default_model.as_str()),
+            )?
+        };
+        let mut defaults = JsonMap::new();
+        defaults.insert("adapter".to_owned(), JsonValue::String(next_adapter));
+        if let Some(next_model) = next_model {
+            defaults.insert("model".to_owned(), JsonValue::String(next_model));
+        }
+        provider_object.insert("defaults".to_owned(), JsonValue::Object(defaults));
+
+        self.set_provider_settings(provider_id, provider_value)
+            .await
+            .map_err(ProviderStudioSaveError::other)?;
+        Ok(ProviderStudioSaveResult::AdapterDeleted {
+            provider_id: provider_id.to_owned(),
+            adapter_id: adapter_id.to_owned(),
+            removed_model_count,
+        })
+    }
+
+    async fn list_provider_adapter_models_with_target(
+        &self,
+        target: agena::config::ProviderAdapterModelsTarget,
+    ) -> Result<ProviderAdapterModelsResponse> {
+        let resolution = self.runtime.config_resolution();
+        let adapter_models = list_provider_adapter_models_with_config(
+            &resolution.config,
+            &target,
+            &ProcessEnvironment,
+        )
+        .await
+        .context("failed to list provider adapter models")?;
+        Ok(ProviderAdapterModelsResponse {
+            provider_id: adapter_models.provider_id,
+            adapters: adapter_models
+                .adapters
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        })
+    }
+
+    async fn patch_provider_settings(
+        &self,
+        provider_id: &str,
+        provider_patch: JsonValue,
+    ) -> Result<ConfigSettingsEditResponse> {
+        let config_path = self.runtime.config_resolution().meta.config_path.clone();
+        let response = patch_file_settings(
+            config_path,
+            ConfigSettingsPatchInput {
+                target: ConfigSettingsPathInput {
+                    path: Some("providers".to_owned()),
+                },
+                changes: json!({
+                    provider_id: provider_patch,
+                }),
+                options: ConfigSettingsEditOptions {
+                    dry_run: false,
+                    validate: true,
+                    reload: true,
+                },
+            },
+        )
+        .map_err(|error| anyhow!("failed to patch provider settings: {error}"))?;
+
+        if response.reload_required {
+            self.runtime
+                .reload()
+                .await
+                .context("failed to reload runtime after provider settings change")?;
+        }
+        Ok(response)
+    }
+
+    async fn set_provider_settings(
+        &self,
+        provider_id: &str,
+        provider_value: JsonValue,
+    ) -> Result<ConfigSettingsEditResponse> {
+        let config_path = self.runtime.config_resolution().meta.config_path.clone();
+        let response = set_file_setting(
+            config_path,
+            ConfigSettingsSetInput {
+                path: format!("providers.{}", quoted_settings_segment(provider_id)),
+                value: provider_value,
+                options: ConfigSettingsEditOptions {
+                    dry_run: false,
+                    validate: true,
+                    reload: true,
+                },
+            },
+        )
+        .map_err(|error| anyhow!("failed to save provider settings: {error}"))?;
+
+        if response.reload_required {
+            self.runtime
+                .reload()
+                .await
+                .context("failed to reload runtime after provider settings change")?;
+        }
+        Ok(response)
+    }
+
+    pub async fn list_child_sessions(&self, parent_id: i64) -> Result<Vec<SessionResource>> {
+        let workspace_id = self.current_workspace_id().await?;
+        self.list_sessions_query(ListSessionsParams {
+            cursor: None,
+            limit: Some(200),
+            workspace_id: Some(workspace_id),
+            parent_id: Some(parent_id),
+            roots: false,
+            search: None,
+        })
+        .await
+        .context("failed to list child sessions")
+    }
+
+    pub async fn get_session(&self, session_id: i64) -> Result<Option<SessionResource>> {
+        match dispatch::dispatch_query(
+            &self.app_state,
+            Query::GetSession(GetSessionParams { session_id }),
+        )
+        .await
+        {
+            Ok(QueryResult::Session(session)) => Ok(Some(session)),
+            Ok(other) => Err(anyhow!("unexpected query result: {:?}", other))
+                .context("failed to fetch session"),
+            Err(agena_api_server::error::ServerError::NotFound(_)) => Ok(None),
+            Err(error) => Err(api_error(error).context("failed to fetch session")),
+        }
+    }
+
+    pub async fn list_session_subtree(&self, session_id: i64) -> Result<Vec<SessionResource>> {
+        let root = self.resolve_session_root(session_id).await?;
+        let mut items = vec![root.clone()];
+        let mut seen = HashSet::from([root.id]);
+        let mut stack = vec![root.id];
+
+        while let Some(parent_id) = stack.pop() {
+            let children = self
+                .list_sessions_query(ListSessionsParams {
+                    cursor: None,
+                    limit: Some(200),
+                    workspace_id: Some(root.workspace_id),
+                    parent_id: Some(parent_id),
+                    roots: false,
+                    search: None,
+                })
+                .await
+                .with_context(|| {
+                    format!("failed to list subtree children for session {parent_id}")
+                })?;
+            for child in children {
+                if seen.insert(child.id) {
+                    stack.push(child.id);
+                    items.push(child);
+                }
+            }
+        }
+
+        Ok(items)
+    }
+
+    pub async fn list_session_timeline(
+        &self,
+        session_id: i64,
+        limit: u64,
+    ) -> Result<Vec<DomainEvent>> {
+        let manager = self.session_manager()?;
+        let mut all = manager
+            .list_session_events(session_id)
+            .await
+            .context("failed to list session events")?;
+        all.sort_by(|a, b| a.meta.seq_global.cmp(&b.meta.seq_global));
+        if all.len() > limit as usize {
+            all = all.split_off(all.len() - limit as usize);
+        }
+        Ok(all)
+    }
+
+    pub async fn list_all_messages(&self, session_id: i64) -> Result<Vec<MessageResource>> {
+        let mut cursor = None;
+        let mut messages = Vec::new();
+
+        loop {
+            let page = self
+                .list_messages_with_parts(session_id, cursor.clone(), 200, PartLoadMode::Full)
+                .await
+                .context("failed to list full session message history")?;
+            cursor = page.page.next_cursor.clone();
+            messages.extend(page.items);
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        messages.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(messages)
+    }
+
+    pub async fn get_session_state(&self, session_id: i64) -> Result<SessionExecutionResource> {
+        match dispatch::dispatch_query(
+            &self.app_state,
+            Query::GetSessionState(GetSessionParams { session_id }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            QueryResult::SessionState(state) => Ok(state),
+            other => Err(anyhow!("unexpected query result: {:?}", other)),
+        }
+        .context("failed to load session state")
+    }
+
+    pub async fn get_session_permission_studio_state(
+        &self,
+        session_id: i64,
+    ) -> Result<SessionPermissionStudioState> {
+        let execution = self.get_session_state(session_id).await?;
+        let session = self
+            .session_manager()?
+            .get_session(session_id)
+            .await
+            .with_context(|| format!("failed to load session {session_id}"))?;
+        let agent_name = execution.execution.agent_profile.clone();
+        let agent_permission = agent_name
+            .as_deref()
+            .and_then(|name| self.get_agent_profile(name))
+            .map(|profile| profile.frontmatter.permission);
+        Ok(SessionPermissionStudioState {
+            session_id,
+            session_title: execution.session.title.clone(),
+            agent_name,
+            agent_permission,
+            permission: session.runtime().execution.selection.permission.clone(),
+            effective_permission: execution.execution.effective_permission.clone(),
+        })
+    }
+
+    pub async fn list_messages(
+        &self,
+        session_id: i64,
+        cursor: Option<String>,
+        limit: u64,
+    ) -> Result<PaginatedResponse<MessageResource>> {
+        // The transcript view should render history with the same shape and
+        // styling as live events, so it always loads full parts here.
+        self.list_messages_with_parts(session_id, cursor, limit, PartLoadMode::Full)
+            .await
+    }
+
+    pub async fn list_messages_with_parts(
+        &self,
+        session_id: i64,
+        cursor: Option<String>,
+        limit: u64,
+        parts: PartLoadMode,
+    ) -> Result<PaginatedResponse<MessageResource>> {
+        match dispatch::dispatch_query(
+            &self.app_state,
+            Query::ListMessages(ListMessagesParams {
+                session_id,
+                cursor,
+                limit: Some(limit),
+                parts,
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            QueryResult::Messages(page) => Ok(page),
+            other => Err(anyhow!("unexpected query result: {:?}", other)),
+        }
+        .context("failed to list session messages")
+    }
+
+    pub async fn refresh_session(
+        &self,
+        session_id: i64,
+        after_seq: Option<i64>,
+        latest_message_limit: u64,
+        force: bool,
+    ) -> Result<SessionRefresh> {
+        let manager = self.session_manager()?;
+        let all_events = manager
+            .list_session_events(session_id)
+            .await
+            .context("failed to fetch latest session event sequence")?;
+        let latest_event_seq = all_events.iter().map(|event| event.meta.seq_global).max();
+        let changed = force
+            || match (after_seq, latest_event_seq) {
+                (None, Some(_)) => true,
+                (Some(after), Some(current)) => current > after,
+                _ => false,
+            };
+
+        if !changed {
+            return Ok(SessionRefresh {
+                latest_event_seq,
+                event_count: 0,
+                execution: None,
+                latest_messages: None,
+            });
+        }
+
+        let event_count = match after_seq {
+            Some(after) => all_events
+                .iter()
+                .filter(|event| event.meta.seq_global > after)
+                .take(256)
+                .count(),
+            None => 0,
+        };
+
+        let execution = self.get_session_state(session_id).await?;
+        let latest_messages = self
+            .list_messages_with_parts(session_id, None, latest_message_limit, PartLoadMode::Full)
+            .await
+            .context("failed to refresh latest message window")?;
+
+        Ok(SessionRefresh {
+            latest_event_seq,
+            event_count,
+            execution: Some(execution),
+            latest_messages: Some(latest_messages),
+        })
+    }
+
+    /// Subscribe to live events for a session via the unified
+    /// [`agena_event::EventBus`]. Callers receive a [`LiveEvent`] for every
+    /// domain event the session emits, in real time.
+    ///
+    /// Returns `None` when the runtime has no session manager configured
+    /// (e.g. a database-less smoke test).
+    pub fn subscribe_session_events(
+        &self,
+        session_id: i64,
+    ) -> Option<mpsc::UnboundedReceiver<LiveEvent>> {
+        let manager = self.runtime.session_manager()?;
+        let bus = manager.event_bus();
+        let (tx, rx) = mpsc::unbounded_channel::<LiveEvent>();
+        let mut subscription = bus.subscribe(EventFilter::new(Scope::Session { session_id }));
+        tokio::spawn(async move {
+            while let Some(item) = subscription.recv().await {
+                let event = match item {
+                    SubscriptionItem::Event(event) => Some((*event).clone()),
+                    SubscriptionItem::Lagged(_) => None,
+                };
+                if event.is_none() {
+                    let live = LiveEvent {
+                        event: None,
+                        triggers_refresh: true,
+                        force_refresh: true,
+                    };
+                    if tx.send(live).is_err() {
+                        break;
+                    }
+                    continue;
+                }
+                let event = event.expect("event should exist after lag handling");
+                let triggers_refresh = session_event_requires_refresh(&event.kind);
+                let force_refresh = permission_event_requires_forced_refresh(&event.kind);
+                let live = LiveEvent {
+                    event: Some(event),
+                    triggers_refresh,
+                    // A permission event is itself the state transition the
+                    // UI needs to observe. Do not let an already-recorded
+                    // event watermark turn this into an empty refresh.
+                    force_refresh,
+                };
+                if tx.send(live).is_err() {
+                    break;
+                }
+            }
+        });
+        Some(rx)
+    }
+
+    pub async fn submit_parts_message_with_options(
+        &self,
+        session_id: i64,
+        parts: Vec<PartContent>,
+        request: RunOptions,
+    ) -> Result<SessionExecutionResource> {
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::SubmitMessage(SubmitMessageParams {
+                session_id,
+                options: request,
+                parts,
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Execution(state) => Ok(state),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to submit user message")
+    }
+
+    pub fn prepare_attachment_from_path(&self, path: &Path) -> Result<AttachmentItem> {
+        let resolved = self.resolve_workspace_path(path);
+
+        if !resolved.exists() {
+            return Err(anyhow!(
+                "attachment path does not exist: {}",
+                resolved.display()
+            ));
+        }
+        if !resolved.is_file() {
+            return Err(anyhow!(
+                "attachment path is not a file: {}",
+                resolved.display()
+            ));
+        }
+
+        let bytes = fs::read(&resolved)
+            .with_context(|| format!("failed to read attachment {}", resolved.display()))?;
+        if bytes.is_empty() {
+            return Err(anyhow!("attachment is empty: {}", resolved.display()));
+        }
+        if bytes.len() > MAX_ATTACHMENT_BYTES {
+            return Err(anyhow!(
+                "attachments larger than {} bytes are not supported: {}",
+                MAX_ATTACHMENT_BYTES,
+                resolved.display()
+            ));
+        }
+
+        let filename = resolved
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+            .unwrap_or_else(|| resolved.display().to_string());
+        let mime = detect_mime(&resolved, &bytes);
+        let kind = AttachmentKind::detect(mime.as_str(), Some(filename.as_str()));
+        let (width, height) = match kind {
+            AttachmentKind::Image => detect_dimensions(&bytes),
+            _ => (None, None),
+        };
+
+        Ok(AttachmentItem {
+            kind,
+            mime,
+            source: AttachmentSource::Base64 {
+                data: STANDARD.encode(&bytes),
+            },
+            filename: Some(filename),
+            title: None,
+            size_bytes: Some(bytes.len() as u64),
+            sha256: None,
+            width,
+            height,
+            duration_ms: None,
+            page_count: None,
+        })
+    }
+
+    pub fn resolve_workspace_path(&self, path: &Path) -> PathBuf {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.workspace_root.join(path)
+        }
+    }
+
+    pub fn memory_index_path(&self) -> Result<PathBuf> {
+        let store = self.memory_store();
+        store
+            .ensure_exists()
+            .context("failed to create memory directory")?;
+        let path = store.dir().join("MEMORY.md");
+        if !path.exists() {
+            fs::write(&path, "")
+                .with_context(|| format!("failed to create memory index {}", path.display()))?;
+        }
+        Ok(path)
+    }
+
+    pub fn memory_entry_path(&self, name: &str) -> Result<PathBuf> {
+        self.memory_store()
+            .get(name)
+            .with_context(|| format!("failed to load memory `{name}`"))
+            .map(|entry| entry.path)
+    }
+
+    pub fn forget_memory(&self, name: &str) -> Result<()> {
+        self.memory_store()
+            .forget(name)
+            .with_context(|| format!("failed to forget memory `{name}`"))
+    }
+
+    pub fn search_workspace_files(&self, query: &str, limit: usize) -> Result<Vec<PathBuf>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let trimmed = query.trim();
+        let query_lower = trimmed.to_lowercase();
+        let index = self
+            .file_index
+            .get_or_init(|| build_file_index(&self.workspace_root));
+
+        let mut matches = index
+            .iter()
+            .filter_map(|path| {
+                let score = file_search_score(path, query_lower.as_str())?;
+                Some((score, path.clone()))
+            })
+            .collect::<Vec<_>>();
+
+        if let Some(path) = direct_path_candidate(&self.workspace_root, trimmed) {
+            let already_present = matches.iter().any(|(_, existing)| existing == &path);
+            if !already_present {
+                matches.push(((0, 0, 0), path));
+            }
+        }
+
+        matches.sort_by(|(score_a, path_a), (score_b, path_b)| {
+            score_a
+                .cmp(score_b)
+                .then_with(|| {
+                    path_a
+                        .components()
+                        .count()
+                        .cmp(&path_b.components().count())
+                })
+                .then_with(|| path_a.as_os_str().len().cmp(&path_b.as_os_str().len()))
+                .then_with(|| path_a.cmp(path_b))
+        });
+        matches.truncate(limit);
+        Ok(matches.into_iter().map(|(_, path)| path).collect())
+    }
+
+    pub async fn continue_session_with_options(
+        &self,
+        session_id: i64,
+        request: RunOptions,
+    ) -> Result<SessionExecutionResource> {
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::ContinueRun(ContinueRunParams {
+                session_id,
+                options: request,
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Execution(state) => Ok(state),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to continue session")
+    }
+
+    pub async fn compact_session_with_options(
+        &self,
+        session_id: i64,
+        request: RunOptions,
+    ) -> Result<SessionExecutionResource> {
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::CompactSession(CompactSessionParams {
+                session_id,
+                options: request,
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Execution(state) => Ok(state),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to compact session")
+    }
+
+    pub async fn set_session_permission(
+        &self,
+        session_id: i64,
+        permission: agena::agent::PermissionConfig,
+    ) -> Result<SessionExecutionResource> {
+        self.session_manager()?
+            .set_session_permission(session_id, permission)
+            .await
+            .with_context(|| format!("failed to set permission for session {session_id}"))?;
+        self.get_session_state(session_id).await
+    }
+
+    /// Best-effort cancel of the in-flight run for `session_id`. Forwards
+    /// to `SessionManager::cancel_active_run`; the manager owns the
+    /// `CancellationToken` for the spawned run task. If no run is
+    /// active this is a no-op.
+    pub async fn cancel_run(&self, session_id: i64) -> Result<()> {
+        self.session_manager()?
+            .cancel_active_run(session_id)
+            .await
+            .context("failed to cancel active run")
+    }
+
+    /// Inject `parts` as a steer message into the in-flight run. Returns
+    /// `Err` when there is no active run or the run is in a phase that
+    /// no longer accepts steers (the caller should re-queue).
+    pub async fn steer_input(&self, session_id: i64, parts: Vec<PartContent>) -> Result<()> {
+        self.session_manager()?
+            .steer_input(session_id, parts)
+            .await
+            .context("failed to steer run")
+    }
+
+    pub async fn reply_permission_with_options(
+        &self,
+        session_id: i64,
+        request_id: String,
+        kind: PermissionReplyKind,
+        scope: Option<PermissionScope>,
+        request: RunOptions,
+    ) -> Result<SessionExecutionResource> {
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::ReplyPermission(ReplyPermissionParams {
+                session_id,
+                options: request,
+                reply: PermissionReply {
+                    request_id,
+                    kind,
+                    reason: None,
+                    scope,
+                },
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Execution(state) => Ok(state),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to reply to permission request")
+    }
+
+    pub async fn reply_user_input_with_options(
+        &self,
+        session_id: i64,
+        reply: UserInputReply,
+        request: RunOptions,
+    ) -> Result<SessionExecutionResource> {
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::ReplyUserInput(ReplyUserInputParams {
+                session_id,
+                options: request,
+                reply,
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Execution(state) => Ok(state),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to submit user input reply")
+    }
+
+    pub async fn rewind_session_to_message(
+        &self,
+        session_id: i64,
+        message_id: i64,
+    ) -> Result<SessionExecutionResource> {
+        let expected_version = self
+            .get_session(session_id)
+            .await?
+            .ok_or_else(|| anyhow!("session not found: {session_id}"))?
+            .version;
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::RewindSession(RewindSessionParams {
+                session_id,
+                message_id,
+                expected_version: Some(expected_version),
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Execution(state) => Ok(state),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to rewind session to message")
+    }
+
+    pub fn plugin_statusline_segments(&self) -> Vec<agena::plugin::HostStatuslineSegment> {
+        self.runtime
+            .current_snapshot()
+            .plugin_manager()
+            .statusline_segments()
+    }
+
+    pub fn plugin_tui_content_blocks(
+        &self,
+    ) -> Vec<agena::plugin::PluginTuiContentBlockCatalogItem> {
+        self.runtime
+            .current_snapshot()
+            .plugin_manager()
+            .tui_content_blocks()
+    }
+
+    pub fn workspace_root(&self) -> &Path {
+        &self.workspace_root
+    }
+
+    pub fn workspace_name(&self) -> String {
+        self.workspace_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| self.workspace_root.display().to_string())
+    }
+
+    pub fn plugin_theme_palettes(&self) -> Vec<agena::plugin::HostThemePalette> {
+        self.runtime
+            .current_snapshot()
+            .plugin_manager()
+            .theme_palettes()
+    }
+
+    pub fn plugin_statuses(&self) -> Vec<agena::plugin::status::PluginStatus> {
+        self.runtime
+            .current_snapshot()
+            .plugin_manager()
+            .plugin_statuses()
+    }
+
+    pub fn plugin_inspect(&self, plugin_id: &str) -> Option<agena::plugin::PluginInspect> {
+        self.runtime
+            .current_snapshot()
+            .plugin_manager()
+            .plugin_inspect(plugin_id)
+    }
+
+    pub fn plugin_logs(
+        &self,
+        plugin_id: &str,
+        after_seq: Option<u64>,
+        limit: usize,
+    ) -> Vec<agena::plugin::PluginLogRecord> {
+        self.runtime
+            .current_snapshot()
+            .plugin_manager()
+            .plugin_logs(plugin_id, after_seq, limit)
+    }
+
+    pub fn runtime_tool_rows(&self) -> Vec<InspectorRow> {
+        let mut rows = self
+            .runtime
+            .current_snapshot()
+            .plugin_manager()
+            .registered_tools()
+            .into_iter()
+            .map(|entry| {
+                let detail = format!(
+                    "{} | {}",
+                    entry.plugin_full_name(),
+                    entry
+                        .definition
+                        .summary_text()
+                        .or_else(|| entry.definition.help_text())
+                        .unwrap_or("")
+                );
+                InspectorRow {
+                    label: entry.model_name(),
+                    detail,
+                }
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.label.cmp(&right.label));
+        rows
+    }
+
+    pub async fn list_permission_rules(&self) -> Result<Vec<PermissionRuleResource>> {
+        match dispatch::dispatch_query(
+            &self.app_state,
+            Query::ListPermissionRules(ListPermissionRulesParams {
+                cursor: None,
+                limit: Some(200),
+                search: None,
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            QueryResult::PermissionRules(page) => {
+                let mut rules = page.items;
+                rules.sort_by(|left, right| left.action_key.cmp(&right.action_key));
+                Ok(rules)
+            }
+            other => Err(anyhow!("unexpected query result: {:?}", other)),
+        }
+        .context("failed to list permission rules")
+    }
+
+    pub async fn create_permission_rule(
+        &self,
+        params: UpsertPermissionRuleParams,
+    ) -> Result<PermissionRuleResource> {
+        match dispatch::dispatch_command(&self.app_state, ApiCommand::UpsertPermissionRule(params))
+            .await
+            .map_err(api_error)?
+        {
+            CommandResult::PermissionRule(rule) => Ok(rule),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to create permission rule")
+    }
+
+    pub async fn replace_permission_rule(
+        &self,
+        rule_id: i64,
+        params: UpsertPermissionRuleParams,
+    ) -> Result<PermissionRuleResource> {
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::ReplacePermissionRule(ReplacePermissionRuleParams {
+                rule_id,
+                rule: params,
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::PermissionRule(rule) => Ok(rule),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to replace permission rule")
+    }
+
+    pub async fn revoke_permission_rule(&self, rule_id: i64) -> Result<PermissionRuleResource> {
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::RevokePermissionRule(agena_api::commands::RevokePermissionRuleParams {
+                rule_id,
+                reason: None,
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::PermissionRule(rule) => Ok(rule),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to revoke permission rule")
+    }
+
+    pub fn snapshot_inspector_rows(&self) -> Vec<InspectorRow> {
+        let Some(manager) = self.runtime.session_manager() else {
+            return vec![InspectorRow {
+                label: "session_runtime".to_string(),
+                detail: "unavailable".to_string(),
+            }];
+        };
+        let executor = manager.tool_executor();
+        let Some(registry) = executor.snapshot_registry() else {
+            return vec![InspectorRow {
+                label: "snapshot_registry".to_string(),
+                detail: "unavailable".to_string(),
+            }];
+        };
+        let active = tool::snapshot_list_active(registry);
+        let managed = tool::snapshot_list_managed(&self.workspace_root, registry);
+        let capabilities = tool::snapshot_backend_capabilities(&self.workspace_root);
+        let mut rows = vec![
+            InspectorRow {
+                label: "preferred_backend".to_string(),
+                detail: capabilities
+                    .preferred_backend
+                    .map(|backend| backend.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+            },
+            InspectorRow {
+                label: "rift_backend".to_string(),
+                detail: format!(
+                    "available={} | {}",
+                    capabilities.rift.available, capabilities.rift.detail
+                ),
+            },
+            InspectorRow {
+                label: "git_backend".to_string(),
+                detail: format!(
+                    "available={} | {}",
+                    capabilities.git.available, capabilities.git.detail
+                ),
+            },
+            InspectorRow {
+                label: "active_sessions".to_string(),
+                detail: active.len().to_string(),
+            },
+            InspectorRow {
+                label: "managed_dirs".to_string(),
+                detail: managed.len().to_string(),
+            },
+        ];
+        rows.extend(active.into_iter().map(|entry| InspectorRow {
+            label: format!("session #{}", entry.session_id),
+            detail: format!(
+                "{} | backend={} | branch={} | created_here={}",
+                entry.path.display(),
+                entry.backend,
+                entry.branch,
+                entry.created_here
+            ),
+        }));
+        rows.extend(managed.into_iter().map(|entry| {
+            let session_id = entry
+                .session_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            let branch = entry
+                .branch
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
+            let stale = entry.is_stale();
+            InspectorRow {
+                label: entry.path.display().to_string(),
+                detail: format!(
+                    "session={} | backend={} | branch={} | git_registered={} | rift_registered={} | stale={}",
+                    session_id,
+                    entry.backend
+                        .map(|backend| backend.to_string())
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    branch,
+                    entry.registered_with_git,
+                    entry.registered_with_rift,
+                    stale
+                ),
+            }
+        }));
+        rows
+    }
+
+    pub fn enter_snapshot(
+        &self,
+        session_id: i64,
+        name: Option<String>,
+        path: Option<String>,
+    ) -> Result<SnapshotCommandOutput> {
+        let manager = self.session_manager()?;
+        let output = manager
+            .tool_executor()
+            .execute_tool_payload_for_host(
+                "enter_snapshot",
+                serde_json::to_value(EnterSnapshotToolInput { name, path })?,
+                Some(session_id),
+                None,
+                None,
+            )
+            .map_err(|error| anyhow!(error.to_string()))?;
+        parse_snapshot_payload(output.payload)
+    }
+
+    pub fn exit_snapshot(
+        &self,
+        session_id: i64,
+        action: String,
+        discard_changes: bool,
+    ) -> Result<SnapshotCommandOutput> {
+        let manager = self.session_manager()?;
+        let output = manager
+            .tool_executor()
+            .execute_tool_payload_for_host(
+                "exit_snapshot",
+                serde_json::to_value(ExitSnapshotToolInput {
+                    action,
+                    discard_changes,
+                })?,
+                Some(session_id),
+                None,
+                None,
+            )
+            .map_err(|error| anyhow!(error.to_string()))?;
+        parse_snapshot_payload(output.payload)
+    }
+
+    pub fn runtime_tool_exists(&self, name: &str) -> bool {
+        self.runtime
+            .current_snapshot()
+            .plugin_manager()
+            .lookup_tool(name)
+            .is_some()
+    }
+
+    pub fn runtime_tool_prompt(&self, session_id: i64, name: &str, args: &str) -> Result<String> {
+        let manager = self.session_manager()?;
+        let invocation = ToolInvocation::new(
+            name.to_string(),
+            serde_json::from_value::<agena::message::StructuredObject>(json!({
+                "args": if args.trim().is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::Value::String(args.trim().to_string())
+                }
+            }))
+            .map_err(|error| anyhow!(error))?,
+        );
+        let execution = manager
+            .tool_executor()
+            .execute_invocation_detailed(&invocation, session_id, -1)
+            .map_err(|error| anyhow!(error.to_string()))?;
+        Ok(execution.view.output_text)
+    }
+
+    pub async fn create_commit(&self, message: String) -> Result<(String, String)> {
+        let status = self
+            .git_status()
+            .await
+            .context("failed to load git status")?;
+        if !status.git_available {
+            return Err(anyhow!("git is not available in PATH"));
+        }
+        if !status.repo {
+            return Err(anyhow!(
+                "not a git repository: {}",
+                self.workspace_root.display()
+            ));
+        }
+        if status.staged_files == 0 {
+            return Err(anyhow!("no staged changes to commit"));
+        }
+
+        let output = Command::new("git")
+            .args(["commit", "-m", message.as_str()])
+            .current_dir(&self.workspace_root)
+            .output()
+            .context("failed to execute git commit")?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "git commit failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+
+        let commit = git_command_output(&self.workspace_root, ["rev-parse", "HEAD"])?;
+        let summary = git_command_output(&self.workspace_root, ["log", "-1", "--pretty=%s"])?;
+        Ok((commit, summary))
+    }
+
+    pub async fn create_pr(
+        &self,
+        title: String,
+        body: Option<String>,
+        base: Option<String>,
+        head: Option<String>,
+    ) -> Result<String> {
+        let status = self
+            .git_status()
+            .await
+            .context("failed to load git status")?;
+        if !status.git_available {
+            return Err(anyhow!("git is not available in PATH"));
+        }
+        if !status.gh_available {
+            return Err(anyhow!("gh is not available in PATH"));
+        }
+        if !status.repo {
+            return Err(anyhow!(
+                "not a git repository: {}",
+                self.workspace_root.display()
+            ));
+        }
+
+        let branch = head
+            .clone()
+            .or(status.branch.clone())
+            .ok_or_else(|| anyhow!("could not determine current branch"))?;
+
+        let mut command = Command::new("gh");
+        command.arg("pr").arg("create").arg("--title").arg(title);
+        command.arg("--body").arg(body.unwrap_or_default());
+        if let Some(base) = base {
+            command.arg("--base").arg(base);
+        }
+        command.arg("--head").arg(branch);
+        command.current_dir(&self.workspace_root);
+
+        let output = command.output().context("failed to execute gh pr create")?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "gh pr create failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    async fn resolve_workspace_resource(
+        &self,
+        create_if_missing: bool,
+    ) -> Result<WorkspaceResource> {
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::ResolveWorkspace(agena_api::commands::ResolveWorkspaceParams {
+                path: self.workspace_root.to_string_lossy().to_string(),
+                create_if_missing,
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Workspace(workspace) => Ok(workspace),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to resolve workspace")
+    }
+
+    async fn git_status(&self) -> Result<GitStatusResource> {
+        let workspace_root = self.runtime.workspace_root().to_path_buf();
+        let git_available = command_available("git");
+        let gh_available = command_available("gh");
+
+        if self.runtime.session_manager().is_none() {
+            return Ok(GitStatusResource {
+                git_available,
+                repo: false,
+                gh_available,
+                branch: None,
+                staged_files: 0,
+            });
+        }
+
+        if !git_available {
+            return Ok(GitStatusResource {
+                git_available,
+                repo: false,
+                gh_available,
+                branch: None,
+                staged_files: 0,
+            });
+        }
+
+        let repo = git_success(&workspace_root, ["rev-parse", "--is-inside-work-tree"]);
+        if !repo {
+            return Ok(GitStatusResource {
+                git_available,
+                repo,
+                gh_available,
+                branch: None,
+                staged_files: 0,
+            });
+        }
+
+        let branch = git_command_output(&workspace_root, ["branch", "--show-current"])?;
+        let status = git_command_output(&workspace_root, ["status", "--porcelain"])?;
+        let (staged_files, _, _, _) = summarize_git_status(status.as_str());
+
+        Ok(GitStatusResource {
+            git_available,
+            repo,
+            gh_available,
+            branch: non_empty(Some(branch.as_str())).map(ToOwned::to_owned),
+            staged_files,
+        })
+    }
+
+    async fn current_workspace_id(&self) -> Result<i64> {
+        Ok(self
+            .resolve_workspace_resource(true)
+            .await
+            .context("failed to resolve current workspace")?
+            .id)
+    }
+
+    async fn list_sessions_query(&self, query: ListSessionsParams) -> Result<Vec<SessionResource>> {
+        let mut cursor = query.cursor.clone();
+        let limit = query.limit.unwrap_or(200);
+        let mut items = Vec::new();
+
+        loop {
+            let page = match dispatch::dispatch_query(
+                &self.app_state,
+                Query::ListSessions(ListSessionsParams {
+                    cursor: cursor.clone(),
+                    limit: Some(limit),
+                    workspace_id: query.workspace_id,
+                    parent_id: query.parent_id,
+                    roots: query.roots,
+                    search: query.search.clone(),
+                }),
+            )
+            .await
+            .map_err(api_error)?
+            {
+                QueryResult::Sessions(page) => page,
+                other => return Err(anyhow!("unexpected query result: {:?}", other)),
+            };
+            cursor = page.page.next_cursor.clone();
+            items.extend(page.items);
+            if !page.page.has_more || cursor.is_none() {
+                break;
+            }
+        }
+
+        Ok(items)
+    }
+
+    async fn resolve_session_root(&self, session_id: i64) -> Result<SessionResource> {
+        let mut current = self
+            .get_session(session_id)
+            .await?
+            .ok_or_else(|| anyhow!("session not found: {session_id}"))?;
+        while let Some(parent_id) = current.parent_id {
+            current = self
+                .get_session(parent_id)
+                .await?
+                .ok_or_else(|| anyhow!("session not found: {parent_id}"))?;
+        }
+        Ok(current)
+    }
+
+    fn session_manager(&self) -> Result<Arc<agena::session::SessionManager>> {
+        self.runtime
+            .session_manager()
+            .ok_or_else(|| anyhow!("session runtime is not available"))
+    }
+
+    fn memory_store(&self) -> MemoryStore {
+        MemoryStore::for_workspace(&self.workspace_root)
+    }
+}
+
+fn session_event_requires_refresh(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::ToolCallCompleted(_)
+            | EventKind::RunCompleted(_)
+            | EventKind::RunAborted(_)
+            | EventKind::SystemNoticeAppended(_)
+            | EventKind::ExecutionFailed(_)
+            // Permission replies can leave a host-invoked gateway call
+            // running while its target resumes. Always re-read the session
+            // state so the UI does not retain an old `awaiting approval`
+            // snapshot. Requests receive the same treatment; the request
+            // event is the authoritative signal when a part update arrives
+            // late or is coalesced by the event bus.
+            | EventKind::PermissionRequested(_)
+            | EventKind::PermissionReplied(_)
+    )
+}
+
+fn permission_event_requires_forced_refresh(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::PermissionRequested(_) | EventKind::PermissionReplied(_)
+    )
+}
+
+fn build_file_index(workspace_root: &Path) -> Vec<PathBuf> {
+    let mut builder = WalkBuilder::new(workspace_root);
+    builder
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .ignore(true)
+        .follow_links(false)
+        .parents(true)
+        .require_git(false);
+
+    let mut files = builder
+        .build()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+        .filter_map(|entry| {
+            entry
+                .path()
+                .strip_prefix(workspace_root)
+                .ok()
+                .map(Path::to_path_buf)
+        })
+        .collect::<Vec<_>>();
+
+    files.sort();
+    files
+}
+
+fn file_search_score(path: &Path, query_lower: &str) -> Option<(u8, usize, usize)> {
+    if query_lower.is_empty() {
+        return Some((4, path.components().count(), path.as_os_str().len()));
+    }
+
+    let path_text = path.to_string_lossy();
+    let path_lower = path_text.to_lowercase();
+    let filename_lower = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+
+    if filename_lower == query_lower {
+        return Some((0, filename_lower.len(), path_lower.len()));
+    }
+    if filename_lower.starts_with(query_lower) {
+        return Some((1, filename_lower.len(), path_lower.len()));
+    }
+    if let Some(index) = filename_lower.find(query_lower) {
+        return Some((2, index, path_lower.len()));
+    }
+
+    path_lower
+        .find(query_lower)
+        .map(|index| (3, index, path_lower.len()))
+}
+
+fn direct_path_candidate(workspace_root: &Path, query: &str) -> Option<PathBuf> {
+    if query.is_empty() {
+        return None;
+    }
+
+    let typed = Path::new(query);
+    let resolved = if typed.is_absolute() {
+        typed.to_path_buf()
+    } else {
+        workspace_root.join(typed)
+    };
+    if !resolved.is_file() {
+        return None;
+    }
+
+    resolved
+        .strip_prefix(workspace_root)
+        .map(Path::to_path_buf)
+        .ok()
+        .or(Some(resolved))
+}
+
+fn api_error(error: impl std::fmt::Display) -> anyhow::Error {
+    anyhow!(error.to_string())
+}
+
+fn optional_non_empty(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+fn required_trimmed<'a>(value: &'a str, field: &str) -> Result<&'a str> {
+    optional_non_empty(value).ok_or_else(|| anyhow!("{field} is required"))
+}
+
+fn provider_credential_drafts(
+    issuer: CredentialIssuer,
+    credential: Option<&AuthData>,
+) -> ProviderCredentialDraftBundle {
+    let Some(AuthData::OAuth {
+        refresh,
+        access,
+        expires_at_ms,
+        account_id,
+        enterprise_url,
+        user: _,
+        ..
+    }) = credential
+    else {
+        return ProviderCredentialDraftBundle::default();
+    };
+
+    let tokens = ProviderOAuthTokensDraft {
+        refresh_token: refresh.clone(),
+        access_token: access.clone(),
+        expires_at_ms: (*expires_at_ms).to_string(),
+    };
+    match issuer {
+        CredentialIssuer::OpenaiChatgpt => ProviderCredentialDraftBundle {
+            openai_chatgpt: OpenAiChatgptCredentialDraft {
+                tokens,
+                account_id: account_id.clone().unwrap_or_default(),
+                ..OpenAiChatgptCredentialDraft::default()
+            },
+            github_copilot: GithubCopilotCredentialDraft::default(),
+            gitlab: GitlabCredentialDraft::default(),
+        },
+        CredentialIssuer::GithubCopilot => ProviderCredentialDraftBundle {
+            openai_chatgpt: OpenAiChatgptCredentialDraft::default(),
+            github_copilot: GithubCopilotCredentialDraft {
+                enterprise_domain: enterprise_url.clone().unwrap_or_default(),
+                tokens,
+                device: None,
+            },
+            gitlab: GitlabCredentialDraft::default(),
+        },
+        CredentialIssuer::Gitlab => ProviderCredentialDraftBundle {
+            openai_chatgpt: OpenAiChatgptCredentialDraft::default(),
+            github_copilot: GithubCopilotCredentialDraft::default(),
+            gitlab: GitlabCredentialDraft {
+                tokens,
+                ..GitlabCredentialDraft::default()
+            },
+        },
+        CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore => {
+            ProviderCredentialDraftBundle::default()
+        }
+    }
+}
+
+fn update_oauth_tokens_from_response(
+    tokens: &mut ProviderOAuthTokensDraft,
+    response: &agena::provider::auth::OAuthTokenResponse,
+) {
+    tokens.refresh_token = response.refresh.clone();
+    tokens.access_token = response.access.clone();
+    tokens.expires_at_ms = response.expires_at_ms.to_string();
+}
+
+async fn start_provider_draft_auth(
+    mut draft: ProviderConfigDraft,
+) -> std::result::Result<ProviderDraftAuthActionResult, ProviderDraftAuthError> {
+    draft.normalize_shape();
+    match draft.auth_kind {
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => {
+            match draft.credential_drafts.openai_chatgpt.login_kind {
+                ProviderDraftInteractiveLoginKind::Browser => {
+                    let redirect_uri = required_provider_auth_field(
+                        draft.credential_drafts.openai_chatgpt.redirect_uri.as_str(),
+                        ProviderDraftAuthField::RedirectUri,
+                    )?;
+                    let start = start_openai_browser_oauth(redirect_uri)
+                        .map_err(ProviderDraftAuthError::other)?;
+                    let display_url = shorten_url_for_display(start.authorize_url.as_str()).await;
+                    draft.credential_drafts.openai_chatgpt.clear_pending();
+                    draft.credential_drafts.openai_chatgpt.browser =
+                        Some(ProviderBrowserAuthSessionDraft {
+                            authorize_url: start.authorize_url.clone(),
+                            display_url,
+                            state: start.state.clone(),
+                            pkce_verifier: start.pkce_verifier,
+                        });
+                    Ok(ProviderDraftAuthActionResult {
+                        draft,
+                        message: ProviderDraftAuthMessage::OpenaiBrowserStarted,
+                        clipboard_text: Some(start.authorize_url),
+                    })
+                }
+                ProviderDraftInteractiveLoginKind::Device => {
+                    let start = start_openai_headless_device_code()
+                        .await
+                        .map_err(ProviderDraftAuthError::other)?;
+                    let display_url =
+                        shorten_url_for_display(start.verification_url.as_str()).await;
+                    draft.credential_drafts.openai_chatgpt.clear_pending();
+                    draft.credential_drafts.openai_chatgpt.device =
+                        Some(ProviderDeviceAuthSessionDraft {
+                            verification_url: start.verification_url.clone(),
+                            display_url,
+                            user_code: start.user_code.clone(),
+                            device_code: start.device_code,
+                            interval_seconds: start.interval_seconds,
+                        });
+                    Ok(ProviderDraftAuthActionResult {
+                        draft,
+                        message: ProviderDraftAuthMessage::OpenaiDeviceStarted {
+                            user_code: start.user_code,
+                        },
+                        clipboard_text: Some(start.verification_url),
+                    })
+                }
+            }
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot)) => {
+            let domain = optional_non_empty(
+                draft
+                    .credential_drafts
+                    .github_copilot
+                    .enterprise_domain
+                    .as_str(),
+            )
+            .unwrap_or("github.com");
+            let start = start_copilot_device_code(domain)
+                .await
+                .map_err(ProviderDraftAuthError::other)?;
+            let display_url = shorten_url_for_display(start.verification_url.as_str()).await;
+            draft.credential_drafts.github_copilot.device = Some(ProviderDeviceAuthSessionDraft {
+                verification_url: start.verification_url.clone(),
+                display_url,
+                user_code: start.user_code.clone(),
+                device_code: start.device_code,
+                interval_seconds: start.interval_seconds,
+            });
+            Ok(ProviderDraftAuthActionResult {
+                draft,
+                message: ProviderDraftAuthMessage::CopilotDeviceStarted {
+                    user_code: start.user_code,
+                },
+                clipboard_text: Some(start.verification_url),
+            })
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab)) => {
+            let instance_url = required_provider_auth_field(
+                draft.auth.instance_url.as_str(),
+                ProviderDraftAuthField::InstanceUrl,
+            )?;
+            let redirect_uri = required_provider_auth_field(
+                draft.credential_drafts.gitlab.redirect_uri.as_str(),
+                ProviderDraftAuthField::RedirectUri,
+            )?;
+            let start = start_gitlab_oauth(instance_url, redirect_uri)
+                .map_err(ProviderDraftAuthError::other)?;
+            let display_url = shorten_url_for_display(start.authorize_url.as_str()).await;
+            draft.credential_drafts.gitlab.callback_url.clear();
+            draft.credential_drafts.gitlab.browser = Some(ProviderBrowserAuthSessionDraft {
+                authorize_url: start.authorize_url.clone(),
+                display_url,
+                state: start.state.clone(),
+                pkce_verifier: start.pkce_verifier,
+            });
+            Ok(ProviderDraftAuthActionResult {
+                draft,
+                message: ProviderDraftAuthMessage::GitlabBrowserStarted,
+                clipboard_text: Some(start.authorize_url),
+            })
+        }
+        _ => Err(ProviderDraftAuthError::UnsupportedInteractiveLogin),
+    }
+}
+
+fn required_provider_auth_field<'a>(
+    value: &'a str,
+    field: ProviderDraftAuthField,
+) -> std::result::Result<&'a str, ProviderDraftAuthError> {
+    optional_non_empty(value).ok_or(ProviderDraftAuthError::RequiredField(field))
+}
+
+async fn continue_provider_draft_auth(
+    mut draft: ProviderConfigDraft,
+) -> std::result::Result<ProviderDraftAuthActionResult, ProviderDraftAuthError> {
+    draft.normalize_shape();
+    match draft.auth_kind {
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => {
+            match draft.credential_drafts.openai_chatgpt.login_kind {
+                ProviderDraftInteractiveLoginKind::Browser => {
+                    let session = draft
+                        .credential_drafts
+                        .openai_chatgpt
+                        .browser
+                        .clone()
+                        .ok_or(ProviderDraftAuthError::StartBrowserAuthFirst)?;
+                    let redirect_uri = required_provider_auth_field(
+                        draft.credential_drafts.openai_chatgpt.redirect_uri.as_str(),
+                        ProviderDraftAuthField::RedirectUri,
+                    )?;
+                    let callback_url = required_provider_auth_field(
+                        draft.credential_drafts.openai_chatgpt.callback_url.as_str(),
+                        ProviderDraftAuthField::CallbackUrl,
+                    )?;
+                    let callback =
+                        parse_oauth_callback_url(callback_url, Some(session.state.as_str()))
+                            .map_err(ProviderDraftAuthError::other)?;
+                    let token = exchange_openai_oauth_code(
+                        callback.code.as_str(),
+                        session.pkce_verifier.as_str(),
+                        redirect_uri,
+                    )
+                    .await
+                    .map_err(ProviderDraftAuthError::other)?;
+                    update_oauth_tokens_from_response(
+                        &mut draft.credential_drafts.openai_chatgpt.tokens,
+                        &token,
+                    );
+                    draft.credential_drafts.openai_chatgpt.account_id =
+                        token.account_id.unwrap_or_default();
+                    draft.credential_drafts.openai_chatgpt.clear_pending();
+                    Ok(ProviderDraftAuthActionResult {
+                        draft,
+                        message: ProviderDraftAuthMessage::OpenaiCredentialCaptured,
+                        clipboard_text: None,
+                    })
+                }
+                ProviderDraftInteractiveLoginKind::Device => {
+                    let session = draft
+                        .credential_drafts
+                        .openai_chatgpt
+                        .device
+                        .clone()
+                        .ok_or(ProviderDraftAuthError::StartDeviceAuthFirst)?;
+                    let Some(token) = poll_openai_headless_device_code(
+                        session.device_code.as_str(),
+                        session.user_code.as_str(),
+                    )
+                    .await
+                    .map_err(ProviderDraftAuthError::other)?
+                    else {
+                        return Ok(ProviderDraftAuthActionResult {
+                            draft,
+                            message: ProviderDraftAuthMessage::OpenaiPending,
+                            clipboard_text: None,
+                        });
+                    };
+                    update_oauth_tokens_from_response(
+                        &mut draft.credential_drafts.openai_chatgpt.tokens,
+                        &token,
+                    );
+                    draft.credential_drafts.openai_chatgpt.account_id =
+                        token.account_id.unwrap_or_default();
+                    draft.credential_drafts.openai_chatgpt.clear_pending();
+                    Ok(ProviderDraftAuthActionResult {
+                        draft,
+                        message: ProviderDraftAuthMessage::OpenaiCredentialCaptured,
+                        clipboard_text: None,
+                    })
+                }
+            }
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot)) => {
+            let session = draft
+                .credential_drafts
+                .github_copilot
+                .device
+                .clone()
+                .ok_or(ProviderDraftAuthError::StartDeviceAuthFirst)?;
+            let domain = optional_non_empty(
+                draft
+                    .credential_drafts
+                    .github_copilot
+                    .enterprise_domain
+                    .as_str(),
+            )
+            .unwrap_or("github.com");
+            let Some(token) = poll_copilot_device_code(domain, session.device_code.as_str())
+                .await
+                .map_err(ProviderDraftAuthError::other)?
+            else {
+                return Ok(ProviderDraftAuthActionResult {
+                    draft,
+                    message: ProviderDraftAuthMessage::CopilotPending,
+                    clipboard_text: None,
+                });
+            };
+            update_oauth_tokens_from_response(
+                &mut draft.credential_drafts.github_copilot.tokens,
+                &token,
+            );
+            draft.credential_drafts.github_copilot.device = None;
+            Ok(ProviderDraftAuthActionResult {
+                draft,
+                message: ProviderDraftAuthMessage::CopilotCredentialCaptured,
+                clipboard_text: None,
+            })
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab)) => {
+            let session = draft
+                .credential_drafts
+                .gitlab
+                .browser
+                .clone()
+                .ok_or(ProviderDraftAuthError::StartBrowserAuthFirst)?;
+            let instance_url = required_provider_auth_field(
+                draft.auth.instance_url.as_str(),
+                ProviderDraftAuthField::InstanceUrl,
+            )?;
+            let redirect_uri = required_provider_auth_field(
+                draft.credential_drafts.gitlab.redirect_uri.as_str(),
+                ProviderDraftAuthField::RedirectUri,
+            )?;
+            let callback_url = required_provider_auth_field(
+                draft.credential_drafts.gitlab.callback_url.as_str(),
+                ProviderDraftAuthField::CallbackUrl,
+            )?;
+            let callback = parse_oauth_callback_url(callback_url, Some(session.state.as_str()))
+                .map_err(ProviderDraftAuthError::other)?;
+            let token = exchange_gitlab_oauth_code(
+                instance_url,
+                callback.code.as_str(),
+                session.pkce_verifier.as_str(),
+                redirect_uri,
+            )
+            .await
+            .map_err(ProviderDraftAuthError::other)?;
+            update_oauth_tokens_from_response(&mut draft.credential_drafts.gitlab.tokens, &token);
+            draft.credential_drafts.gitlab.callback_url.clear();
+            draft.credential_drafts.gitlab.browser = None;
+            Ok(ProviderDraftAuthActionResult {
+                draft,
+                message: ProviderDraftAuthMessage::GitlabCredentialCaptured,
+                clipboard_text: None,
+            })
+        }
+        _ => Err(ProviderDraftAuthError::UnsupportedInteractiveLogin),
+    }
+}
+
+fn local_model_catalog_summary(
+    catalog: &agena::model_catalog::ModelCatalogResponse,
+) -> LocalModelCatalogResponse {
+    LocalModelCatalogResponse {
+        refreshing: false,
+        last_refresh_at: catalog.last_refresh_at,
+        last_successful_source: catalog.last_successful_source,
+        last_error: catalog.last_error.clone(),
+        model_count: catalog.models.len(),
+    }
+}
+
+fn local_model_catalog_models(
+    catalog: &agena::model_catalog::ModelCatalogResponse,
+) -> Vec<CatalogModelResource> {
+    catalog
+        .models
+        .iter()
+        .cloned()
+        .map(|model| CatalogModelResource::from_record(model, catalog.last_successful_source))
+        .collect()
+}
+
+fn local_model_catalog_model_search_text(model: &CatalogModelResource) -> String {
+    let thinking_mode_text = model
+        .thinking_modes
+        .iter()
+        .flat_map(|(name, mode)| {
+            [
+                name.clone(),
+                mode.display_name.clone().unwrap_or_default(),
+                mode.description.clone().unwrap_or_default(),
+                mode.thinking
+                    .as_ref()
+                    .and_then(|value| serde_json::to_string(value).ok())
+                    .unwrap_or_default(),
+            ]
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let speed_mode_text = model
+        .speed_modes
+        .iter()
+        .flat_map(|(name, mode)| {
+            [
+                name.clone(),
+                mode.display_name.clone().unwrap_or_default(),
+                mode.description.clone().unwrap_or_default(),
+                serde_json::to_string(&mode.request_override).unwrap_or_default(),
+                serde_json::to_string(&mode.adapter_overrides).unwrap_or_default(),
+            ]
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    [
+        model.model_id.clone(),
+        model.display_name.clone().unwrap_or_default(),
+        model.origin.clone().unwrap_or_default(),
+        model.description.clone().unwrap_or_default(),
+        model
+            .context_window_tokens
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        model
+            .max_input_tokens
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        model
+            .max_output_tokens
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        match model.source {
+            ModelCatalogSourceKind::Generated => "generated".to_owned(),
+            ModelCatalogSourceKind::Cache => "cache".to_owned(),
+        },
+        model.source_label.clone().unwrap_or_default(),
+        model
+            .lifecycle
+            .map(|value| match value {
+                agena::model::ModelLifecycle::Active => "active",
+                agena::model::ModelLifecycle::Preview => "preview",
+                agena::model::ModelLifecycle::Beta => "beta",
+                agena::model::ModelLifecycle::Alpha => "alpha",
+                agena::model::ModelLifecycle::Experimental => "experimental",
+                agena::model::ModelLifecycle::Deprecated => "deprecated",
+            })
+            .unwrap_or_default()
+            .to_owned(),
+        thinking_mode_text,
+        speed_mode_text,
+    ]
+    .into_iter()
+    .filter(|value| !value.trim().is_empty())
+    .collect::<Vec<_>>()
+    .join("\n")
+    .to_lowercase()
+}
+
+fn preferred_catalog_model_for_model_id<'a>(
+    models: &'a [CatalogModelResource],
+    model_id: &str,
+) -> Option<&'a CatalogModelResource> {
+    preferred_catalog_model_for_lookup_ids(models, &[model_id.to_owned()])
+}
+
+fn preferred_catalog_model_for_lookup_ids<'a>(
+    models: &'a [CatalogModelResource],
+    model_ids: &[String],
+) -> Option<&'a CatalogModelResource> {
+    let lookup_ids = model_ids
+        .iter()
+        .map(|model_id| model_id.trim())
+        .filter(|model_id| !model_id.is_empty())
+        .collect::<Vec<_>>();
+    models
+        .iter()
+        .filter(|model| {
+            lookup_ids
+                .iter()
+                .any(|model_id| model.model_id == *model_id)
+        })
+        .min_by_key(|model| model.model_id.as_str())
+}
+
+fn preferred_catalog_model_for_provider_model<'a>(
+    models: &'a [CatalogModelResource],
+    provider_model: &ProviderModel,
+) -> Option<&'a CatalogModelResource> {
+    preferred_catalog_model_for_lookup_ids(
+        models,
+        &[
+            provider_model.id.to_string(),
+            catalog_lookup_id_for_provider_model(provider_model),
+        ],
+    )
+}
+
+fn catalog_lookup_id_for_model_id(model_id: &str) -> String {
+    agena::model_catalog::canonical_model_catalog_id(model_id)
+}
+
+fn catalog_lookup_id_for_provider_model(provider_model: &ProviderModel) -> String {
+    provider_model
+        .catalog_model_id
+        .as_ref()
+        .map(ToString::to_string)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| catalog_lookup_id_for_model_id(provider_model.id.as_ref()))
+}
+
+fn provider_model_json_for_model_id(
+    catalog_entries: &[CatalogModelResource],
+    model_id: &str,
+    provider_model: Option<&ProviderModel>,
+) -> JsonValue {
+    provider_model_overlay_to_json(provider_model_overlay_for_model_id(
+        catalog_entries,
+        model_id,
+        provider_model,
+    ))
+}
+
+fn provider_model_overlay_for_model_id(
+    catalog_entries: &[CatalogModelResource],
+    model_id: &str,
+    provider_model: Option<&ProviderModel>,
+) -> ProviderModelOverlay {
+    preferred_catalog_model_for_model_id(catalog_entries, model_id)
+        .or_else(|| {
+            let lookup_id = catalog_lookup_id_for_model_id(model_id);
+            (lookup_id != model_id)
+                .then(|| preferred_catalog_model_for_model_id(catalog_entries, lookup_id.as_str()))
+                .flatten()
+        })
+        .map(catalog_model_to_provider_model_overlay)
+        .or_else(|| {
+            provider_model.and_then(|provider_model| {
+                preferred_catalog_model_for_provider_model(catalog_entries, provider_model)
+                    .map(catalog_model_to_provider_model_overlay)
+                    .or_else(|| Some(provider_model_to_provider_model_overlay(provider_model)))
+            })
+        })
+        .unwrap_or_default()
+}
+
+fn provider_model_overlay_to_json(overlay: ProviderModelOverlay) -> JsonValue {
+    if overlay.definition.is_empty() {
+        return JsonValue::Object(JsonMap::new());
+    }
+
+    match serde_json::to_value(overlay) {
+        Ok(JsonValue::Object(mut value)) => {
+            if matches!(value.get("enabled"), Some(JsonValue::Bool(true))) {
+                value.remove("enabled");
+            }
+            JsonValue::Object(value)
+        }
+        Ok(other) => other,
+        Err(_) => JsonValue::Object(JsonMap::new()),
+    }
+}
+
+fn catalog_model_to_provider_model_overlay(model: &CatalogModelResource) -> ProviderModelOverlay {
+    provider_model_overlay_from_catalog_definition(&catalog_model_to_catalog_definition(model))
+}
+
+fn catalog_model_to_catalog_definition(model: &CatalogModelResource) -> CatalogModelDefinition {
+    CatalogModelDefinition::from_fields(
+        model.lifecycle,
+        model.context_window_tokens,
+        model.max_input_tokens,
+        model.max_output_tokens,
+        model.description.clone(),
+        model.knowledge_cutoff.clone(),
+        model.release_date.clone(),
+        model.last_updated.clone(),
+        model.open_weights,
+        model.default_thinking_mode.clone(),
+        model.supports_parallel_tool_calls,
+        model.supports_verbosity,
+        model.default_verbosity.clone(),
+        model.default_temperature.clone(),
+        model.default_top_p.clone(),
+        model.default_top_k,
+        model.assistant_reasoning_interleaved,
+        model.assistant_reasoning_field.clone(),
+        model.output_modalities.clone(),
+        model.pricing.clone(),
+        model.display_name.clone(),
+        model.origin.clone(),
+        model.thinking_modes.clone(),
+        model.speed_modes.clone(),
+        sanitized_catalog_capability_patch(&model.capabilities),
+    )
+}
+
+fn sanitized_catalog_capability_patch(
+    patch: &agena::provider::ModelCapabilityPatch,
+) -> agena::provider::ModelCapabilityPatch {
+    let mut patch = patch.clone();
+    patch.input = sanitize_selection_patch(patch.input.take());
+    patch.features = sanitize_selection_patch(patch.features.take());
+
+    patch
+}
+
+fn sanitize_selection_patch<T: Clone + PartialEq>(
+    patch: Option<agena::provider::CapabilitySelectionPatch<T>>,
+) -> Option<agena::provider::CapabilitySelectionPatch<T>> {
+    let patch = patch?;
+    match patch {
+        agena::provider::CapabilitySelectionPatch::Supported(mut supported) => {
+            dedupe_vec(&mut supported);
+            agena::provider::CapabilitySelectionPatch::optional_from_supported_unsupported(
+                supported,
+                Vec::new(),
+            )
+        }
+        agena::provider::CapabilitySelectionPatch::Patch(mut values) => {
+            dedupe_vec(&mut values.supported);
+            dedupe_vec(&mut values.unsupported);
+            values
+                .unsupported
+                .retain(|value| !values.supported.contains(value));
+            agena::provider::CapabilitySelectionPatch::optional_from_supported_unsupported(
+                values.supported,
+                values.unsupported,
+            )
+        }
+    }
+}
+
+fn provider_model_to_provider_model_overlay(model: &ProviderModel) -> ProviderModelOverlay {
+    provider_model_overlay_from_catalog_definition(&catalog_definition_from_model(model))
+}
+
+fn dedupe_vec<T: PartialEq>(values: &mut Vec<T>) {
+    let mut index = 0;
+    while index < values.len() {
+        let mut next = index + 1;
+        while next < values.len() {
+            if values[index] == values[next] {
+                values.remove(next);
+            } else {
+                next += 1;
+            }
+        }
+        index += 1;
+    }
+}
+
+fn ensure_provider_model_entry(
+    adapter_value: &mut JsonValue,
+    model_id: &str,
+    model_value: JsonValue,
+) -> Result<()> {
+    let adapter = adapter_value
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("adapter patch must be an object"))?;
+    adapter.insert("enabled".to_owned(), JsonValue::Bool(true));
+    if !adapter.contains_key("models") {
+        adapter.insert("models".to_owned(), JsonValue::Object(JsonMap::new()));
+    }
+    let models = adapter
+        .get_mut("models")
+        .and_then(JsonValue::as_object_mut)
+        .ok_or_else(|| anyhow!("adapter models patch must be an object"))?;
+    models.insert(model_id.to_owned(), model_value);
+    Ok(())
+}
+
+fn map_provider_adapter_models_config_error(error: agena::config::ConfigError) -> anyhow::Error {
+    match error {
+        agena::config::ConfigError::Validation(message)
+        | agena::config::ConfigError::App(agena::AppError::Config(message)) => anyhow!(message),
+        other => anyhow!(other.to_string()),
+    }
+}
+
+fn supported_provider_draft_adapter_list(auth_kind: &ProviderDraftAuthKind) -> String {
+    let supported = auth_kind
+        .adapter_rules()
+        .iter()
+        .map(|rule| rule.adapter_id)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if supported.is_empty() {
+        "no adapters until auth details are selected".to_owned()
+    } else {
+        supported
+    }
+}
+
+fn parse_oauth_expires_at_ms(value: &str) -> Result<i64> {
+    optional_non_empty(value)
+        .map(|value| {
+            value
+                .parse::<i64>()
+                .map_err(|_| anyhow!("expires_at_ms must be an integer"))
+        })
+        .transpose()
+        .map(|value| value.unwrap_or(0))
+}
+
+fn build_provider_patch_value_for_save(
+    draft: &ProviderConfigDraft,
+    default_adapter: &str,
+    default_model: Option<&str>,
+    adapters: JsonValue,
+    include_defaults: bool,
+) -> std::result::Result<JsonValue, ProviderStudioSaveError> {
+    let adapters = serde_json::from_value::<
+        std::collections::BTreeMap<String, ProviderAdapterOverlay>,
+    >(adapters)
+    .map_err(ProviderStudioSaveError::other)?;
+    let mut adapters = adapters;
+    apply_provider_auth_required_adapter_defaults_to_overlay_adapters(draft, &mut adapters);
+    let overlay = draft.to_provider_overlay_for_save(
+        default_adapter,
+        default_model,
+        adapters,
+        include_defaults,
+    )?;
+    serde_json::to_value(overlay).map_err(ProviderStudioSaveError::other)
+}
+
+fn build_provider_auth_patch_value_for_save(
+    draft: &ProviderConfigDraft,
+) -> std::result::Result<JsonMap<String, JsonValue>, ProviderStudioSaveError> {
+    serde_json::to_value(draft.to_auth_overlay_for_save()?)
+        .map_err(ProviderStudioSaveError::other)
+        .and_then(|value| match value {
+            JsonValue::Object(object) => Ok(object),
+            _ => Err(ProviderStudioSaveError::other(
+                "provider auth overlay must serialize as an object",
+            )),
+        })
+}
+
+fn provider_draft_protocol_paths_for_listing(
+    draft: &ProviderConfigDraft,
+) -> agena::config::ProviderProtocolPathsConfig {
+    if matches!(draft.auth_kind, ProviderDraftAuthKind::ClineApi) {
+        cline_api_protocol_paths()
+    } else {
+        agena::config::ProviderProtocolPathsConfig::default()
+    }
+}
+
+fn apply_known_provider_listing_defaults(
+    draft: &ProviderConfigDraft,
+    target: &mut agena::config::ProviderAdapterModelsTarget,
+) {
+    if !matches!(draft.auth_kind, ProviderDraftAuthKind::ClineApi) {
+        return;
+    }
+
+    if let Some(adapter) = target.adapters.get_mut("openai")
+        && let ProviderAdapterDefinition::OpenAi(config) = &mut adapter.definition
+    {
+        config.options.api_mode = OpenAiApiModeConfig::Chat;
+        config.options.api_mode_explicit = true;
+        config.options.models_url = Some(CLINE_API_MODELS_URL.to_owned());
+    }
+}
+
+fn apply_provider_auth_required_adapter_defaults_to_overlay_adapters(
+    draft: &ProviderConfigDraft,
+    adapters: &mut std::collections::BTreeMap<String, ProviderAdapterOverlay>,
+) {
+    if let Some(adapter) = adapters.get_mut("openai") {
+        apply_provider_auth_required_adapter_defaults_to_overlay(draft, "openai", adapter);
+    }
+}
+
+fn apply_provider_auth_required_adapter_defaults_to_overlay(
+    draft: &ProviderConfigDraft,
+    adapter_id: &str,
+    adapter: &mut ProviderAdapterOverlay,
+) {
+    if matches!(draft.auth_kind, ProviderDraftAuthKind::ClineApi) && adapter_id == "openai" {
+        adapter.api_mode = Some(OpenAiApiModeConfig::Chat);
+        adapter.models_url = Some(CLINE_API_MODELS_URL.to_owned());
+    }
+
+    match (draft.auth_kind.credential_issuer(), adapter_id) {
+        (Some(CredentialIssuer::OpenaiChatgpt), "openai") => {
+            adapter.backend = Some(OpenAiBackendConfig::ChatgptCodex);
+            adapter.api_mode = Some(OpenAiApiModeConfig::Responses);
+            adapter.stream_mode = Some(StreamTransportMode::Sse);
+            adapter.realtime_ws_url = None;
+        }
+        (Some(CredentialIssuer::GoogleAdc), "openai") => {
+            adapter.capability_family = Some(ProviderCapabilityFamilyConfig::Gemini);
+        }
+        _ => {}
+    }
+}
+
+fn apply_provider_auth_required_adapter_defaults_to_json_adapters(
+    draft: &ProviderConfigDraft,
+    adapters: &mut JsonMap<String, JsonValue>,
+) -> std::result::Result<(), ProviderStudioSaveError> {
+    if let Some(adapter_value) = adapters.get_mut("openai") {
+        apply_provider_auth_required_adapter_defaults_to_json_value(draft, "openai", adapter_value)
+    } else {
+        Ok(())
+    }
+}
+
+fn apply_provider_auth_required_adapter_defaults_to_json_value(
+    draft: &ProviderConfigDraft,
+    adapter_id: &str,
+    adapter_value: &mut JsonValue,
+) -> std::result::Result<(), ProviderStudioSaveError> {
+    let adapter_object = adapter_value.as_object_mut().ok_or_else(|| {
+        ProviderStudioSaveError::ProviderAdapterMustBeObject {
+            adapter_id: adapter_id.to_owned(),
+        }
+    })?;
+    apply_provider_auth_required_adapter_defaults_to_json_object(draft, adapter_id, adapter_object);
+    Ok(())
+}
+
+fn apply_provider_auth_required_adapter_defaults_to_json_object(
+    draft: &ProviderConfigDraft,
+    adapter_id: &str,
+    adapter: &mut JsonMap<String, JsonValue>,
+) {
+    if matches!(draft.auth_kind, ProviderDraftAuthKind::ClineApi) && adapter_id == "openai" {
+        adapter.insert("api_mode".to_owned(), JsonValue::String("chat".to_owned()));
+        adapter.insert(
+            "models_url".to_owned(),
+            JsonValue::String(CLINE_API_MODELS_URL.to_owned()),
+        );
+    }
+
+    match (draft.auth_kind.credential_issuer(), adapter_id) {
+        (Some(CredentialIssuer::OpenaiChatgpt), "openai") => {
+            adapter.insert(
+                "backend".to_owned(),
+                JsonValue::String("chatgpt_codex".to_owned()),
+            );
+            adapter.insert(
+                "api_mode".to_owned(),
+                JsonValue::String("responses".to_owned()),
+            );
+            adapter.insert(
+                "stream_mode".to_owned(),
+                JsonValue::String("sse".to_owned()),
+            );
+            adapter.remove("realtime_ws_url");
+        }
+        (Some(CredentialIssuer::GoogleAdc), "openai") => {
+            adapter.insert(
+                "capability_family".to_owned(),
+                JsonValue::String("gemini".to_owned()),
+            );
+        }
+        _ => {}
+    }
+}
+
+fn provider_model_settings_path(provider_id: &str, adapter_id: &str, model_id: &str) -> String {
+    format!(
+        "providers.{}.adapters.{}.models.{}",
+        quoted_settings_segment(provider_id),
+        quoted_settings_segment(adapter_id),
+        quoted_settings_segment(model_id),
+    )
+}
+
+fn provider_adapter_settings_path(provider_id: &str, adapter_id: &str) -> String {
+    format!(
+        "providers.{}.adapters.{}",
+        quoted_settings_segment(provider_id),
+        quoted_settings_segment(adapter_id),
+    )
+}
+
+fn provider_settings_path(provider_id: &str) -> String {
+    format!("providers.{}", quoted_settings_segment(provider_id))
+}
+
+fn merge_provider_model_adapter_patch_for_save(
+    existing_adapter: Option<JsonValue>,
+    model_id: &str,
+    model_value: JsonValue,
+) -> std::result::Result<JsonValue, ProviderStudioSaveError> {
+    let mut adapter = match existing_adapter {
+        Some(JsonValue::Object(object)) => object,
+        Some(JsonValue::Null) | None => JsonMap::new(),
+        Some(_) => {
+            return Err(ProviderStudioSaveError::ConfiguredProviderAdapterSettingsMustBeObject);
+        }
+    };
+    adapter.insert("enabled".to_owned(), JsonValue::Bool(true));
+    let models = adapter
+        .entry("models".to_owned())
+        .or_insert_with(|| JsonValue::Object(JsonMap::new()));
+    let Some(models_object) = models.as_object_mut() else {
+        return Err(ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject);
+    };
+    models_object.insert(model_id.to_owned(), model_value);
+    Ok(JsonValue::Object(adapter))
+}
+
+fn provider_defaults_point_to(
+    provider: &JsonMap<String, JsonValue>,
+    adapter_id: &str,
+    model_id: &str,
+) -> bool {
+    let Some(defaults) = provider.get("defaults").and_then(JsonValue::as_object) else {
+        return false;
+    };
+    defaults.get("adapter").and_then(JsonValue::as_str) == Some(adapter_id)
+        && defaults.get("model").and_then(JsonValue::as_str) == Some(model_id)
+}
+
+fn provider_defaults_adapter(provider: &JsonMap<String, JsonValue>) -> Option<&str> {
+    provider
+        .get("defaults")
+        .and_then(JsonValue::as_object)
+        .and_then(|defaults| defaults.get("adapter"))
+        .and_then(JsonValue::as_str)
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn provider_model_selection_contains(
+    selected_model_keys: &std::collections::BTreeSet<String>,
+    adapter_id: &str,
+    model_id: &str,
+) -> bool {
+    selected_model_keys.contains(format!("{adapter_id}\u{1f}{model_id}").as_str())
+}
+
+fn resolve_provider_defaults_from_value_for_save(
+    adapters: &JsonMap<String, JsonValue>,
+    requested_default_adapter: Option<&str>,
+    requested_default_model: Option<&str>,
+) -> std::result::Result<(String, Option<String>), ProviderStudioSaveError> {
+    let default_adapter = requested_default_adapter
+        .filter(|default_adapter| adapters.contains_key(*default_adapter))
+        .map(ToOwned::to_owned)
+        .ok_or(ProviderStudioSaveError::Validation(
+            ProviderStudioSaveValidationError::FieldRequired(
+                ProviderStudioSaveField::DefaultAdapter,
+            ),
+        ))?;
+
+    if let Some(default_model) = requested_default_model
+        && provider_value_contains_model(adapters, default_adapter.as_str(), default_model)
+    {
+        return Ok((default_adapter, Some(default_model.to_owned())));
+    }
+    Ok((default_adapter, None))
+}
+
+fn required_provider_save_field<'a>(
+    value: &'a str,
+    field: ProviderStudioSaveField,
+) -> std::result::Result<&'a str, ProviderStudioSaveValidationError> {
+    optional_non_empty(value).ok_or(ProviderStudioSaveValidationError::FieldRequired(field))
+}
+
+fn provider_value_contains_model(
+    adapters: &JsonMap<String, JsonValue>,
+    adapter_id: &str,
+    model_id: &str,
+) -> bool {
+    adapters
+        .get(adapter_id)
+        .and_then(|adapter| adapter.get("models"))
+        .and_then(JsonValue::as_object)
+        .is_some_and(|models| models.contains_key(model_id))
+}
+
+fn quoted_settings_segment(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+pub(crate) fn credential_issuer_label(issuer: CredentialIssuer) -> &'static str {
+    match issuer {
+        CredentialIssuer::OpenaiChatgpt => "openai_chatgpt",
+        CredentialIssuer::GithubCopilot => "github_copilot",
+        CredentialIssuer::Gitlab => "gitlab",
+        CredentialIssuer::GoogleAdc => "google_adc",
+        CredentialIssuer::SapAiCore => "sap_ai_core",
+    }
+}
+
+fn parse_credential_issuer(value: &str) -> Result<CredentialIssuer> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "openai_chatgpt" => Ok(CredentialIssuer::OpenaiChatgpt),
+        "github_copilot" => Ok(CredentialIssuer::GithubCopilot),
+        "gitlab" => Ok(CredentialIssuer::Gitlab),
+        "google_adc" => Ok(CredentialIssuer::GoogleAdc),
+        "sap_ai_core" => Ok(CredentialIssuer::SapAiCore),
+        _ => Err(anyhow!(
+            "unsupported credential issuer `{}`; expected openai_chatgpt, github_copilot, gitlab, google_adc, or sap_ai_core",
+            value.trim()
+        )),
+    }
+}
+
+fn summarize_named_mode(display_name: Option<&str>, description: Option<&str>) -> String {
+    match (
+        display_name
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+        description.map(str::trim).filter(|value| !value.is_empty()),
+    ) {
+        (Some(display_name), Some(description)) => format!("{display_name} · {description}"),
+        (Some(display_name), None) => display_name.to_owned(),
+        (None, Some(description)) => description.to_owned(),
+        (None, None) => "configured mode".to_owned(),
+    }
+}
+
+fn parse_aws_profile_names(text: &str) -> Vec<String> {
+    let mut names = std::collections::BTreeSet::new();
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if !line.starts_with('[') || !line.ends_with(']') {
+            continue;
+        }
+        let section = line.trim_start_matches('[').trim_end_matches(']').trim();
+        if section.eq_ignore_ascii_case("default") {
+            names.insert("default".to_owned());
+            continue;
+        }
+        if let Some(profile) = section.strip_prefix("profile ") {
+            let profile = profile.trim();
+            if !profile.is_empty() {
+                names.insert(profile.to_owned());
+            }
+            continue;
+        }
+        if !section.contains(' ') && !section.contains('.') {
+            names.insert(section.to_owned());
+        }
+    }
+    names.into_iter().collect()
+}
+
+fn command_available(command: &str) -> bool {
+    Command::new(command)
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+fn git_success<const N: usize>(workspace_root: &Path, args: [&str; N]) -> bool {
+    Command::new("git")
+        .args(args)
+        .current_dir(workspace_root)
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then_some(trimmed)
+    })
+}
+
+fn trimmed_owned(value: &str) -> Option<String> {
+    non_empty(Some(value)).map(ToOwned::to_owned)
+}
+
+fn summarize_git_status(status: &str) -> (u64, u64, u64, u64) {
+    let mut staged = 0_u64;
+    let mut unstaged = 0_u64;
+    let mut untracked = 0_u64;
+    let mut changed = 0_u64;
+
+    for line in status.lines().filter(|line| !line.is_empty()) {
+        changed += 1;
+        let bytes = line.as_bytes();
+        let x = bytes.first().copied().unwrap_or(b' ');
+        let y = bytes.get(1).copied().unwrap_or(b' ');
+        if x == b'?' && y == b'?' {
+            untracked += 1;
+            continue;
+        }
+        if x != b' ' {
+            staged += 1;
+        }
+        if y != b' ' {
+            unstaged += 1;
+        }
+    }
+
+    (staged, unstaged, untracked, changed)
+}
+
+fn git_command_output<const N: usize>(workspace_root: &Path, args: [&str; N]) -> Result<String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(workspace_root)
+        .output()
+        .context("failed to execute git command")?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn detect_dimensions(bytes: &[u8]) -> (Option<u32>, Option<u32>) {
+    match imagesize::blob_size(bytes) {
+        Ok(size) => (
+            u32::try_from(size.width).ok(),
+            u32::try_from(size.height).ok(),
+        ),
+        Err(_) => (None, None),
+    }
+}
+
+fn detect_mime(path: &Path, bytes: &[u8]) -> String {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return "image/png".to_string();
+    }
+    if bytes.len() >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff {
+        return "image/jpeg".to_string();
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return "image/gif".to_string();
+    }
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return "image/webp".to_string();
+    }
+    if bytes.starts_with(b"BM") {
+        return "image/bmp".to_string();
+    }
+    if bytes.starts_with(b"%PDF-") {
+        return "application/pdf".to_string();
+    }
+    if std::str::from_utf8(bytes).is_ok() {
+        return MimeGuess::from_path(path)
+            .first_raw()
+            .filter(|mime| {
+                mime.starts_with("text/")
+                    || matches!(
+                        *mime,
+                        "application/json"
+                            | "application/xml"
+                            | "application/yaml"
+                            | "application/x-yaml"
+                            | "application/javascript"
+                    )
+            })
+            .map(str::to_owned)
+            .unwrap_or_else(|| "text/plain".to_string());
+    }
+
+    MimeGuess::from_path(path)
+        .first_raw()
+        .map(str::to_owned)
+        .unwrap_or_else(|| "application/octet-stream".to_string())
+}

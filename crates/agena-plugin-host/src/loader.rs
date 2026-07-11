@@ -1,1 +1,1010 @@
-include!("loader.rs.inc");
+//! Loader for one configured plugin.
+
+use regex::Regex;
+use serde_json::{Map as JsonMap, Value as JsonValue};
+use std::path::Path;
+use std::sync::Arc;
+
+use crate::config::{ConfiguredPlugin, PluginPackage, PluginSignature};
+use crate::error::{HostError, TransportError};
+use crate::host::{HostHandle, LoadedPlugin};
+use crate::registry::{effective_capabilities_for_manifest, per_tool_capabilities};
+use crate::sdk::rpc::method;
+use crate::sdk::{InitContext, InitOutcome, PluginKey, PluginManifest};
+use crate::transport::{
+    PluginTransport, cdylib::CdylibTransport, http::HttpTransport, stdio::StdioTransport,
+};
+
+pub struct StaticRegistration {
+    pub builder: Box<dyn FnOnce() -> Arc<dyn PluginTransport> + Send + Sync>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn load_entry(
+    plugin_id: &str,
+    configured_plugin: &ConfiguredPlugin,
+    static_registry: &mut std::collections::HashMap<PluginKey, StaticRegistration>,
+    host_handle: Arc<HostHandle>,
+    agena_version: &str,
+    workspace_root: &Path,
+    env_lookup: &(dyn Fn(&str) -> Option<String> + Send + Sync),
+    trusted_keys: &std::collections::BTreeMap<String, String>,
+) -> Result<LoadedPlugin, HostError> {
+    let transport: Arc<dyn PluginTransport> = match &configured_plugin.package {
+        PluginPackage::Static { .. } => {
+            let plugin_key: PluginKey = plugin_id.parse().map_err(|err| HostError::Load {
+                plugin: plugin_id.to_string(),
+                message: format!("invalid plugin id `{plugin_id}`: {err}"),
+            })?;
+            let registration =
+                static_registry
+                    .remove(&plugin_key)
+                    .ok_or_else(|| HostError::Load {
+                        plugin: plugin_id.to_string(),
+                        message: format!("no static plugin registered with id `{plugin_id}`"),
+                    })?;
+            (registration.builder)()
+        }
+        PluginPackage::Cdylib {
+            path,
+            sha256,
+            signature,
+            ..
+        } => {
+            let resolved = if path.is_absolute() {
+                path.clone()
+            } else {
+                workspace_root.join(path)
+            };
+            #[cfg(feature = "signing")]
+            {
+                if let Some(expected) = sha256 {
+                    verify_sha256(&resolved, expected).map_err(|e| HostError::Load {
+                        plugin: plugin_id.to_string(),
+                        message: e,
+                    })?;
+                }
+                if let Some(sig) = signature {
+                    verify_signature(&resolved, sig, trusted_keys).map_err(|e| {
+                        HostError::Load {
+                            plugin: plugin_id.to_string(),
+                            message: e,
+                        }
+                    })?;
+                }
+            }
+            #[cfg(not(feature = "signing"))]
+            {
+                if sha256.is_some() || signature.is_some() {
+                    return Err(HostError::Load {
+                        plugin: plugin_id.to_string(),
+                        message:
+                            "plugin signing fields are set but the `signing` feature is disabled"
+                                .into(),
+                    });
+                }
+                let _ = (sha256, signature, trusted_keys);
+            }
+            let t = CdylibTransport::load(&resolved).map_err(|e| HostError::Load {
+                plugin: plugin_id.to_string(),
+                message: e.to_string(),
+            })?;
+            Arc::new(t)
+        }
+        PluginPackage::Stdio {
+            command,
+            args,
+            env,
+            cwd,
+            restart,
+            sha256,
+            ..
+        } => {
+            #[cfg(feature = "signing")]
+            {
+                if let Some(expected) = sha256 {
+                    let cmd_path = std::path::Path::new(command);
+                    if cmd_path.exists() {
+                        verify_sha256(cmd_path, expected).map_err(|e| HostError::Load {
+                            plugin: plugin_id.to_string(),
+                            message: e,
+                        })?;
+                    }
+                }
+            }
+            #[cfg(not(feature = "signing"))]
+            {
+                if sha256.is_some() {
+                    return Err(HostError::Load {
+                        plugin: plugin_id.to_string(),
+                        message: "stdio.sha256 set but the `signing` feature is disabled".into(),
+                    });
+                }
+                let _ = sha256;
+            }
+            let env_map: std::collections::HashMap<String, String> =
+                env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let host_handler = host_handle.host_handler_for(plugin_id.to_string());
+            let status_sink = host_handle.status_registry();
+            let log_sink = host_handle.log_store();
+            let plugin_key: PluginKey = plugin_id.parse().map_err(|err| HostError::Load {
+                plugin: plugin_id.to_string(),
+                message: format!("invalid plugin id `{plugin_id}`: {err}"),
+            })?;
+            let t = StdioTransport::spawn_with_policy_and_status(
+                command,
+                args,
+                &env_map,
+                cwd.as_ref(),
+                Some(host_handler),
+                restart.clone(),
+                Some(plugin_key),
+                Some(status_sink),
+                Some(log_sink),
+            )
+            .await
+            .map_err(|e| HostError::Load {
+                plugin: plugin_id.to_string(),
+                message: e.to_string(),
+            })?;
+            Arc::new(t)
+        }
+        PluginPackage::Http { url, auth, .. } => {
+            let t = HttpTransport::new(
+                url.clone(),
+                auth.clone(),
+                env_lookup,
+                host_handle.callback_url(plugin_id).is_some(),
+            );
+            Arc::new(t)
+        }
+        #[cfg(feature = "wasm")]
+        PluginPackage::Wasm { path, sha256, .. } => {
+            let resolved = if path.is_absolute() {
+                path.clone()
+            } else {
+                workspace_root.join(path)
+            };
+            // Optional supply-chain check before loading.
+            if let Some(expected) = sha256 {
+                verify_sha256(&resolved, expected).map_err(|e| HostError::Load {
+                    plugin: plugin_id.to_string(),
+                    message: e,
+                })?;
+            }
+            let t = crate::transport::wasm::WasmTransport::load(&resolved).map_err(|e| {
+                HostError::Load {
+                    plugin: plugin_id.to_string(),
+                    message: e.to_string(),
+                }
+            })?;
+            Arc::new(t)
+        }
+        #[cfg(not(feature = "wasm"))]
+        PluginPackage::Wasm { .. } => {
+            return Err(HostError::Load {
+                plugin: plugin_id.to_string(),
+                message: "wasm transport requires the `wasm` feature".into(),
+            });
+        }
+    };
+
+    transport
+        .attach_host(host_handle.scoped_host_client(plugin_id.to_string()))
+        .await
+        .map_err(|e| HostError::Load {
+            plugin: plugin_id.to_string(),
+            message: e.to_string(),
+        })?;
+
+    let prefetched_manifest_value = transport
+        .dispatch(
+            method::META_MANIFEST,
+            serde_json::Value::Object(Default::default()),
+        )
+        .await
+        .map_err(|e| HostError::Init {
+            plugin: plugin_id.to_string(),
+            message: format!("{e}"),
+        })?;
+    let prefetched_manifest: PluginManifest = serde_json::from_value(prefetched_manifest_value)
+        .map_err(|e| HostError::Init {
+            plugin: plugin_id.to_string(),
+            message: e.to_string(),
+        })?;
+    let plugin_key: PluginKey = plugin_id.parse().map_err(|err| HostError::Init {
+        plugin: plugin_id.to_string(),
+        message: format!("invalid plugin id `{plugin_id}`: {err}"),
+    })?;
+    host_handle.set_plugin_manifest_name(plugin_key.clone(), prefetched_manifest.name.clone());
+    host_handle
+        .set_plugin_capabilities(
+            plugin_key.clone(),
+            effective_capabilities_for_manifest(
+                &prefetched_manifest.tools,
+                &prefetched_manifest.plugin_capabilities,
+            ),
+        )
+        .await;
+    host_handle
+        .set_plugin_tool_capabilities(
+            plugin_key.clone(),
+            per_tool_capabilities(&prefetched_manifest.tools),
+        )
+        .await;
+
+    let init_ctx = InitContext {
+        agena_version: agena_version.to_string(),
+        workspace_root: workspace_root.to_path_buf(),
+        plugin_id: plugin_key.clone(),
+        host_callback_url: host_handle.callback_url(plugin_id),
+        host_callback_token: host_handle.callback_token(plugin_id).await,
+        config: configured_plugin.config().clone(),
+        protocol_version: crate::sdk::rpc::PROTOCOL_VERSION,
+    };
+
+    let init_params = serde_json::to_value(&init_ctx).map_err(|e| HostError::Init {
+        plugin: plugin_id.to_string(),
+        message: e.to_string(),
+    })?;
+
+    let outcome_value = transport
+        .dispatch(method::META_INIT, init_params)
+        .await
+        .map_err(|e| HostError::Init {
+            plugin: plugin_id.to_string(),
+            message: format!("{e}"),
+        })?;
+
+    let outcome: InitOutcome =
+        serde_json::from_value(outcome_value).map_err(|e| HostError::Init {
+            plugin: plugin_id.to_string(),
+            message: e.to_string(),
+        })?;
+
+    validate_manifest_config(plugin_id, &outcome.manifest, configured_plugin.config())?;
+
+    let trust_level = plugin_trust_level(configured_plugin, trusted_keys);
+    let provenance = plugin_provenance(configured_plugin, trusted_keys);
+
+    Ok(LoadedPlugin::new(
+        configured_plugin.kind_str(),
+        configured_plugin.clone(),
+        transport,
+        outcome.manifest,
+        trust_level,
+        provenance,
+    ))
+}
+
+fn plugin_trust_level(
+    configured_plugin: &ConfiguredPlugin,
+    trusted_keys: &std::collections::BTreeMap<String, String>,
+) -> String {
+    match &configured_plugin.package {
+        PluginPackage::Static { .. } => "static".to_string(),
+        PluginPackage::Cdylib {
+            signature, sha256, ..
+        } => {
+            if has_trusted_signature(signature.as_ref(), trusted_keys) {
+                "verified".to_string()
+            } else if sha256.is_some() {
+                "checksummed".to_string()
+            } else {
+                "unverified".to_string()
+            }
+        }
+        PluginPackage::Stdio { sha256, .. } => {
+            if sha256.is_some() {
+                "checksummed".to_string()
+            } else {
+                "unverified".to_string()
+            }
+        }
+        PluginPackage::Http { .. } => "remote".to_string(),
+        PluginPackage::Wasm { sha256, .. } => {
+            if sha256.is_some() {
+                "checksummed".to_string()
+            } else {
+                "unverified".to_string()
+            }
+        }
+    }
+}
+
+fn plugin_provenance(
+    configured_plugin: &ConfiguredPlugin,
+    trusted_keys: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut provenance = vec![format!("transport:{}", configured_plugin.kind_str())];
+    match &configured_plugin.package {
+        PluginPackage::Static { .. } => provenance.push("static registration".to_string()),
+        PluginPackage::Cdylib {
+            path,
+            sha256,
+            signature,
+            ..
+        } => {
+            provenance.push(format!("path:{}", path.display()));
+            if sha256.is_some() {
+                provenance.push("sha256 configured".to_string());
+            }
+            if let Some(signature) = signature {
+                provenance.push(format!("signature key:{}", signature.key_id));
+                if trusted_keys.contains_key(&signature.key_id) {
+                    provenance.push("signature key trusted".to_string());
+                }
+            }
+        }
+        PluginPackage::Stdio {
+            command,
+            sha256,
+            cwd,
+            ..
+        } => {
+            provenance.push(format!("command:{}", command));
+            if let Some(cwd) = cwd {
+                provenance.push(format!("cwd:{}", cwd.display()));
+            }
+            if sha256.is_some() {
+                provenance.push("sha256 configured".to_string());
+            }
+        }
+        PluginPackage::Http { url, .. } => {
+            provenance.push(format!("url:{}", url));
+        }
+        PluginPackage::Wasm { path, sha256, .. } => {
+            provenance.push(format!("path:{}", path.display()));
+            if sha256.is_some() {
+                provenance.push("sha256 configured".to_string());
+            }
+        }
+    }
+    provenance
+}
+
+fn has_trusted_signature(
+    signature: Option<&PluginSignature>,
+    trusted_keys: &std::collections::BTreeMap<String, String>,
+) -> bool {
+    signature.is_some_and(|signature| trusted_keys.contains_key(&signature.key_id))
+}
+
+#[allow(clippy::result_large_err)]
+fn validate_manifest_config(
+    plugin_id: &str,
+    manifest: &PluginManifest,
+    config: &JsonValue,
+) -> Result<(), HostError> {
+    if config.is_null() {
+        return Ok(());
+    }
+    let Some(schema) = manifest.config_schema.as_ref() else {
+        return Ok(());
+    };
+    validate_schema_value("$", schema, schema, config).map_err(|message| {
+        HostError::Config(format!(
+            "plugin `{plugin_id}` config does not match manifest schema: {message}"
+        ))
+    })
+}
+
+fn validate_schema_value(
+    path: &str,
+    root: &JsonValue,
+    schema: &JsonValue,
+    value: &JsonValue,
+) -> Result<(), String> {
+    let schema = resolve_schema(root, schema);
+    match schema {
+        JsonValue::Bool(true) => return Ok(()),
+        JsonValue::Bool(false) => {
+            return Err(format!("{path}: schema rejects this value"));
+        }
+        JsonValue::Object(_) => {}
+        _ => return Ok(()),
+    }
+
+    let schema_obj = schema.as_object().expect("object already checked");
+
+    if let Some(all_of) = schema_obj.get("allOf").and_then(JsonValue::as_array) {
+        for branch in all_of {
+            validate_schema_value(path, root, branch, value)?;
+        }
+    }
+
+    if let Some(any_of) = schema_obj.get("anyOf").and_then(JsonValue::as_array) {
+        let matching = any_of
+            .iter()
+            .find(|branch| schema_matches(root, branch, value))
+            .ok_or_else(|| format!("{path}: value must match at least one allowed shape"))?;
+        validate_schema_value(path, root, matching, value)?;
+    }
+
+    if let Some(one_of) = schema_obj.get("oneOf").and_then(JsonValue::as_array) {
+        let matching = one_of
+            .iter()
+            .filter(|branch| schema_matches(root, branch, value))
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return Err(format!(
+                "{path}: value must match exactly one allowed shape"
+            ));
+        }
+        validate_schema_value(path, root, matching[0], value)?;
+    }
+
+    if let Some(expected) = schema_obj.get("const")
+        && expected != value
+    {
+        return Err(format!("{path}: value must equal {expected}"));
+    }
+
+    if let Some(variants) = schema_obj.get("enum").and_then(|v| v.as_array())
+        && !variants.iter().any(|candidate| candidate == value)
+    {
+        return Err(format!(
+            "{path}: value is not one of the allowed enum variants"
+        ));
+    }
+
+    if let Some(expected_type) = schema_obj.get("type") {
+        validate_schema_type(path, expected_type, value)?;
+    }
+
+    if let Some(if_schema) = schema_obj.get("if") {
+        let target = if schema_matches(root, if_schema, value) {
+            schema_obj.get("then")
+        } else {
+            schema_obj.get("else")
+        };
+        if let Some(target_schema) = target {
+            validate_schema_value(path, root, target_schema, value)?;
+        }
+    }
+
+    if let Some(required) = schema_obj.get("required").and_then(|v| v.as_array()) {
+        let object = value
+            .as_object()
+            .ok_or_else(|| format!("{path}: required fields require an object value"))?;
+        for field in required {
+            let Some(field) = field.as_str() else {
+                continue;
+            };
+            if !object.contains_key(field) {
+                return Err(format!("{path}: missing required property '{field}'"));
+            }
+        }
+    }
+
+    if let Some(object) = value.as_object() {
+        validate_object_schema(path, root, &schema, schema_obj, object)?;
+    }
+
+    if let Some(items) = value.as_array() {
+        validate_array_schema(path, root, &schema, schema_obj, items)?;
+    }
+
+    if let Some(text) = value.as_str() {
+        validate_string_schema(path, schema_obj, text)?;
+    }
+
+    if let Some(number) = value.as_f64() {
+        validate_number_schema(path, schema_obj, number)?;
+    }
+
+    Ok(())
+}
+
+fn validate_object_schema(
+    path: &str,
+    root: &JsonValue,
+    schema: &JsonValue,
+    schema_object: &JsonMap<String, JsonValue>,
+    value: &JsonMap<String, JsonValue>,
+) -> Result<(), String> {
+    if let Some(patterns) = schema_object
+        .get("patternProperties")
+        .and_then(JsonValue::as_object)
+    {
+        for pattern in patterns.keys() {
+            validate_regex_pattern(pattern).map_err(|error| {
+                format!("{path}: invalid patternProperties regex `{pattern}`: {error}")
+            })?;
+        }
+    }
+    if let Some(min_properties) = schema_object
+        .get("minProperties")
+        .and_then(JsonValue::as_u64)
+        && value.len() < min_properties as usize
+    {
+        return Err(format!(
+            "{path}: object must contain at least {min_properties} field(s)"
+        ));
+    }
+    if let Some(max_properties) = schema_object
+        .get("maxProperties")
+        .and_then(JsonValue::as_u64)
+        && value.len() > max_properties as usize
+    {
+        return Err(format!(
+            "{path}: object must contain at most {max_properties} field(s)"
+        ));
+    }
+    if let Some(property_names_schema) = schema_object.get("propertyNames") {
+        for key in value.keys() {
+            validate_schema_value(
+                format!("{path}.{key}").as_str(),
+                root,
+                property_names_schema,
+                &JsonValue::String(key.clone()),
+            )?;
+        }
+    }
+    for (key, child_value) in value {
+        let child_path = format!("{path}.{key}");
+        if let Some(child_schema) = object_property_schema(root, schema, key) {
+            validate_schema_value(&child_path, root, &child_schema, child_value)?;
+        } else if schema_object.get("additionalProperties") == Some(&JsonValue::Bool(false)) {
+            return Err(format!("{path}: unexpected property '{key}'"));
+        } else if let Some(additional) = schema_object.get("additionalProperties")
+            && !matches!(additional, JsonValue::Bool(true))
+        {
+            validate_schema_value(&child_path, root, additional, child_value)?;
+        }
+    }
+    if let Some(dependencies) = schema_object
+        .get("dependentRequired")
+        .and_then(JsonValue::as_object)
+    {
+        for (trigger, required_fields) in dependencies {
+            if !value.contains_key(trigger) {
+                continue;
+            }
+            for required in required_fields
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(JsonValue::as_str)
+            {
+                if !value.contains_key(required) {
+                    return Err(format!(
+                        "{path}: missing required property '{required}' because '{trigger}' is set"
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(dependencies) = schema_object
+        .get("dependentSchemas")
+        .and_then(JsonValue::as_object)
+    {
+        for (trigger, dependency_schema) in dependencies {
+            if value.contains_key(trigger) {
+                validate_schema_value(
+                    path,
+                    root,
+                    dependency_schema,
+                    &JsonValue::Object(value.clone()),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_array_schema(
+    path: &str,
+    root: &JsonValue,
+    schema: &JsonValue,
+    schema_object: &JsonMap<String, JsonValue>,
+    value: &[JsonValue],
+) -> Result<(), String> {
+    if let Some(min_items) = schema_object.get("minItems").and_then(JsonValue::as_u64)
+        && value.len() < min_items as usize
+    {
+        return Err(format!(
+            "{path}: array must contain at least {min_items} item(s)"
+        ));
+    }
+    if let Some(max_items) = schema_object.get("maxItems").and_then(JsonValue::as_u64)
+        && value.len() > max_items as usize
+    {
+        return Err(format!(
+            "{path}: array must contain at most {max_items} item(s)"
+        ));
+    }
+    if schema_object
+        .get("uniqueItems")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false)
+    {
+        let mut seen = std::collections::BTreeSet::new();
+        for item in value {
+            if !seen.insert(item.to_string()) {
+                return Err(format!("{path}: array contains duplicate items"));
+            }
+        }
+    }
+    if let Some(contains_schema) = schema_object.get("contains") {
+        let matches = value
+            .iter()
+            .filter(|item| schema_matches(root, contains_schema, item))
+            .count();
+        let min_contains = schema_object
+            .get("minContains")
+            .and_then(JsonValue::as_u64)
+            .unwrap_or(1);
+        let max_contains = schema_object.get("maxContains").and_then(JsonValue::as_u64);
+        if matches < min_contains as usize {
+            return Err(format!(
+                "{path}: array must contain at least {min_contains} matching item(s)"
+            ));
+        }
+        if let Some(max_contains) = max_contains
+            && matches > max_contains as usize
+        {
+            return Err(format!(
+                "{path}: array must contain at most {max_contains} matching item(s)"
+            ));
+        }
+    }
+    for (index, item) in value.iter().enumerate() {
+        if let Some(item_schema) = array_item_schema(root, schema, index) {
+            validate_schema_value(
+                format!("{path}[{index}]").as_str(),
+                root,
+                &item_schema,
+                item,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_string_schema(
+    path: &str,
+    schema_object: &JsonMap<String, JsonValue>,
+    text: &str,
+) -> Result<(), String> {
+    if let Some(min_length) = schema_object.get("minLength").and_then(JsonValue::as_u64)
+        && text.chars().count() < min_length as usize
+    {
+        return Err(format!(
+            "{path}: string is shorter than minLength {min_length}"
+        ));
+    }
+    if let Some(max_length) = schema_object.get("maxLength").and_then(JsonValue::as_u64)
+        && text.chars().count() > max_length as usize
+    {
+        return Err(format!(
+            "{path}: string is longer than maxLength {max_length}"
+        ));
+    }
+    if let Some(format) = schema_object.get("format").and_then(JsonValue::as_str)
+        && !format_is_valid(format, text)
+    {
+        return Err(format!("{path}: string must match format {format}"));
+    }
+    if let Some(pattern) = schema_object.get("pattern").and_then(JsonValue::as_str) {
+        match pattern_matches(pattern, text) {
+            Ok(true) => {}
+            Ok(false) => return Err(format!("{path}: string must match pattern {pattern}")),
+            Err(error) => {
+                return Err(format!(
+                    "{path}: invalid regex pattern `{pattern}`: {error}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_number_schema(
+    path: &str,
+    schema_object: &JsonMap<String, JsonValue>,
+    number: f64,
+) -> Result<(), String> {
+    if let Some(minimum) = schema_object.get("minimum").and_then(JsonValue::as_f64)
+        && number < minimum
+    {
+        return Err(format!("{path}: value must be >= {minimum}"));
+    }
+    if let Some(maximum) = schema_object.get("maximum").and_then(JsonValue::as_f64)
+        && number > maximum
+    {
+        return Err(format!("{path}: value must be <= {maximum}"));
+    }
+    if let Some(minimum) = schema_object
+        .get("exclusiveMinimum")
+        .and_then(JsonValue::as_f64)
+        && number <= minimum
+    {
+        return Err(format!("{path}: value must be > {minimum}"));
+    }
+    if let Some(maximum) = schema_object
+        .get("exclusiveMaximum")
+        .and_then(JsonValue::as_f64)
+        && number >= maximum
+    {
+        return Err(format!("{path}: value must be < {maximum}"));
+    }
+    if let Some(multiple_of) = schema_object.get("multipleOf").and_then(JsonValue::as_f64)
+        && multiple_of > 0.0
+    {
+        let quotient = number / multiple_of;
+        if (quotient - quotient.round()).abs() > f64::EPSILON {
+            return Err(format!("{path}: value must be a multiple of {multiple_of}"));
+        }
+    }
+    Ok(())
+}
+
+fn schema_matches(root: &JsonValue, schema: &JsonValue, value: &JsonValue) -> bool {
+    validate_schema_value("$match", root, schema, value).is_ok()
+}
+
+fn resolve_schema<'a>(root: &'a JsonValue, schema: &'a JsonValue) -> &'a JsonValue {
+    let Some(reference) = schema.get("$ref").and_then(JsonValue::as_str) else {
+        return schema;
+    };
+    if !reference.starts_with("#/") {
+        return schema;
+    }
+    let mut cursor = root;
+    for segment in reference.trim_start_matches("#/").split('/') {
+        let segment = segment.replace("~1", "/").replace("~0", "~");
+        let Some(next) = cursor.get(segment.as_str()) else {
+            return schema;
+        };
+        cursor = next;
+    }
+    cursor
+}
+
+fn combine_schema_constraints(mut schemas: Vec<JsonValue>) -> Option<JsonValue> {
+    match schemas.len() {
+        0 => None,
+        1 => schemas.pop(),
+        _ => {
+            let mut object = JsonMap::new();
+            object.insert("allOf".to_owned(), JsonValue::Array(schemas));
+            Some(JsonValue::Object(object))
+        }
+    }
+}
+
+fn object_property_schema(root: &JsonValue, schema: &JsonValue, key: &str) -> Option<JsonValue> {
+    let schema = resolve_schema(root, schema);
+    let mut matches = Vec::new();
+    let mut matched_named_or_pattern = false;
+
+    if let Some(properties) = schema.get("properties").and_then(JsonValue::as_object)
+        && let Some(child) = properties.get(key)
+    {
+        matches.push(child.clone());
+        matched_named_or_pattern = true;
+    }
+    if let Some(patterns) = schema
+        .get("patternProperties")
+        .and_then(JsonValue::as_object)
+    {
+        for (pattern, child) in patterns {
+            if pattern_key_matches(pattern, key) {
+                matches.push(child.clone());
+                matched_named_or_pattern = true;
+            }
+        }
+    }
+    if !matched_named_or_pattern {
+        match schema.get("additionalProperties") {
+            Some(JsonValue::Object(object)) => matches.push(JsonValue::Object(object.clone())),
+            Some(other) if !matches!(other, JsonValue::Bool(true) | JsonValue::Bool(false)) => {
+                matches.push(other.clone());
+            }
+            _ => {}
+        }
+    }
+    combine_schema_constraints(matches)
+}
+
+fn array_item_schema(root: &JsonValue, schema: &JsonValue, index: usize) -> Option<JsonValue> {
+    let schema = resolve_schema(root, schema);
+    if let Some(prefix) = schema.get("prefixItems").and_then(JsonValue::as_array)
+        && let Some(item) = prefix.get(index)
+    {
+        return Some(item.clone());
+    }
+    schema.get("items").cloned()
+}
+
+fn validate_schema_type(path: &str, expected: &JsonValue, value: &JsonValue) -> Result<(), String> {
+    let matches = match expected {
+        JsonValue::String(kind) => value_matches_type(kind, value),
+        JsonValue::Array(kinds) => kinds
+            .iter()
+            .filter_map(|kind| kind.as_str())
+            .any(|kind| value_matches_type(kind, value)),
+        _ => true,
+    };
+    if matches {
+        Ok(())
+    } else {
+        Err(format!("{path}: value does not match declared schema type"))
+    }
+}
+
+fn value_matches_type(kind: &str, value: &JsonValue) -> bool {
+    match kind {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "number" => value.is_number(),
+        _ => true,
+    }
+}
+
+fn hostname_format_is_valid(text: &str) -> bool {
+    let text = text.trim_end_matches('.');
+    if text.is_empty()
+        || text.len() > 253
+        || text.contains('/')
+        || text.chars().any(char::is_whitespace)
+    {
+        return false;
+    }
+    text.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .chars()
+                .all(|char| char.is_ascii_alphanumeric() || char == '-')
+    })
+}
+
+fn email_format_is_valid(text: &str) -> bool {
+    let Some((local, domain)) = text.split_once('@') else {
+        return false;
+    };
+    if local.is_empty()
+        || domain.is_empty()
+        || text.chars().any(char::is_whitespace)
+        || text.matches('@').count() != 1
+        || local.starts_with('.')
+        || local.ends_with('.')
+        || local.contains("..")
+    {
+        return false;
+    }
+    let local_valid = local.chars().all(|char| {
+        char.is_ascii_alphanumeric()
+            || matches!(
+                char,
+                '!' | '#'
+                    | '$'
+                    | '%'
+                    | '&'
+                    | '\''
+                    | '*'
+                    | '+'
+                    | '-'
+                    | '/'
+                    | '='
+                    | '?'
+                    | '^'
+                    | '_'
+                    | '`'
+                    | '{'
+                    | '|'
+                    | '}'
+                    | '~'
+                    | '.'
+            )
+    });
+    local_valid && (hostname_format_is_valid(domain) || domain.eq_ignore_ascii_case("localhost"))
+}
+
+fn format_is_valid(format: &str, text: &str) -> bool {
+    match format {
+        "uri" | "url" => url::Url::parse(text).is_ok(),
+        "email" => email_format_is_valid(text),
+        "hostname" => hostname_format_is_valid(text),
+        "ipv4" => text.parse::<std::net::Ipv4Addr>().is_ok(),
+        "ipv6" => text.parse::<std::net::Ipv6Addr>().is_ok(),
+        "uuid" => uuid::Uuid::parse_str(text).is_ok(),
+        _ => true,
+    }
+}
+
+fn validate_regex_pattern(pattern: &str) -> Result<(), regex::Error> {
+    Regex::new(pattern).map(|_| ())
+}
+
+fn pattern_matches(pattern: &str, text: &str) -> Result<bool, regex::Error> {
+    Regex::new(pattern).map(|regex| regex.is_match(text))
+}
+
+fn pattern_key_matches(pattern: &str, key: &str) -> bool {
+    pattern_matches(pattern, key).unwrap_or(false)
+}
+
+pub async fn shutdown_transport(transport: Arc<dyn PluginTransport>) -> Result<(), TransportError> {
+    let _ = transport
+        .dispatch(
+            method::META_SHUTDOWN,
+            serde_json::Value::Object(Default::default()),
+        )
+        .await;
+    transport.close().await
+}
+
+/// Verify the sha256 of a file against an expected hex digest. Used by both
+/// the wasm transport (for safety) and the signing helpers.
+#[cfg(any(feature = "wasm", feature = "signing"))]
+pub fn verify_sha256(path: &std::path::Path, expected_hex: &str) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).map_err(|e| format!("read `{}`: {e}", path.display()))?;
+    let digest = Sha256::digest(&bytes);
+    let got = hex::encode(digest);
+    if got.eq_ignore_ascii_case(expected_hex) {
+        Ok(())
+    } else {
+        Err(format!(
+            "sha256 mismatch for `{}`: expected {}, got {}",
+            path.display(),
+            expected_hex,
+            got
+        ))
+    }
+}
+
+/// Verify an ed25519 signature over the file bytes against a trusted key.
+#[cfg(feature = "signing")]
+pub fn verify_signature(
+    path: &std::path::Path,
+    sig: &crate::config::PluginSignature,
+    trusted_keys: &std::collections::BTreeMap<String, String>,
+) -> Result<(), String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("read `{}`: {e}", path.display()))?;
+    verify_signature_bytes(&bytes, sig, trusted_keys).map_err(|e| {
+        format!(
+            "signature verification failed for `{}`: {e}",
+            path.display()
+        )
+    })
+}
+
+/// Verify an ed25519 signature against in-memory bytes. Used by the marketplace
+/// after a download but before the artifact lands on disk.
+#[cfg(feature = "signing")]
+pub fn verify_signature_bytes(
+    bytes: &[u8],
+    sig: &crate::config::PluginSignature,
+    trusted_keys: &std::collections::BTreeMap<String, String>,
+) -> Result<(), String> {
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    let key_hex = trusted_keys
+        .get(&sig.key_id)
+        .ok_or_else(|| format!("unknown trusted key id `{}`", sig.key_id))?;
+    let key_bytes = hex::decode(key_hex)
+        .map_err(|e| format!("trusted key `{}` is not valid hex: {e}", sig.key_id))?;
+    let key_array: [u8; 32] = key_bytes
+        .try_into()
+        .map_err(|_| format!("trusted key `{}` must be 32 bytes", sig.key_id))?;
+    let verifier = VerifyingKey::from_bytes(&key_array)
+        .map_err(|e| format!("invalid ed25519 public key `{}`: {e}", sig.key_id))?;
+    let sig_bytes =
+        hex::decode(&sig.signature).map_err(|e| format!("signature is not valid hex: {e}"))?;
+    let sig_array: [u8; 64] = sig_bytes
+        .try_into()
+        .map_err(|_| "signature must be 64 bytes".to_string())?;
+    let signature = Signature::from_bytes(&sig_array);
+    verifier
+        .verify(bytes, &signature)
+        .map_err(|e| e.to_string())
+}

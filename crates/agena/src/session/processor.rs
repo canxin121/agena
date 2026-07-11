@@ -1,1 +1,1762 @@
-include!("processor.rs.inc");
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use chrono::{DateTime, Utc};
+use futures_util::StreamExt;
+use tracing::Instrument;
+
+use crate::error::AppError;
+use crate::event::{
+    ErrorInfo, EventKind, EventPublisher, MessagePartDeltaEvent, MessagePartUpdatedEvent,
+    PartDeltaField, PublishContext, StreamErrorEvent,
+};
+use crate::message::{
+    AssistantReasoningField, ExecutionStatus, Message, MessageMetadata, MessagePart,
+    MessageProviderState, MessageSource, MessageStatus, OperationBlock, OperationPart, PartContent,
+    ReasoningPart, StructuredObject, TimeRange, ToolInvocation,
+};
+use crate::model::ModelRef;
+use crate::plugin::registry::RegisteredTool;
+use crate::provider::{
+    CompletionFinishReason, CompletionRequest, CompletionStreamEvent, ProviderRegistry,
+};
+use crate::role::Role;
+
+use super::history::{
+    FinishReason, MessageId as HistoryMessageId, MessageIdAllocator, RunBuffer, RunId, ToolCallId,
+};
+use super::{context_governor::ContextGovernor, store::ProcessorPartIdAllocator};
+
+const REASONING_PLACEHOLDER: &str = "(no reasoning recorded)";
+
+#[derive(Clone)]
+pub(crate) struct SessionRunRequest {
+    pub run_id: RunId,
+    pub session_id: i64,
+    pub model: ModelRef,
+    pub model_thinking_mode: Option<String>,
+    pub model_speed_mode: Option<String>,
+    pub completion: CompletionRequest,
+    pub next_message_id: i64,
+    pub part_ids: ProcessorPartIdAllocator,
+    pub next_call_id: i64,
+    /// Live publisher used to push streaming events ("running") onto the
+    /// unified bus while the run is in flight. `None` keeps test harnesses
+    /// terse — they observe the buffered `client_events` on the result.
+    pub event_publisher: Option<Arc<EventPublisher>>,
+    /// Optional cancel handle. When the token fires the stream loop
+    /// terminates between provider events and surfaces a `RunAbortReason::
+    /// Cancelled`-shaped terminal error. `None` runs the turn to completion.
+    pub cancel: Option<tokio_util::sync::CancellationToken>,
+}
+
+#[derive(Debug)]
+pub(crate) struct SessionRunResult {
+    pub assistant_message_id: i64,
+    pub state: Vec<Message>,
+    /// UI-projection events buffered during the run (also pushed onto the
+    /// bus when `event_publisher` was set).
+    pub client_events: Vec<EventKind>,
+    pub provider_metadata: Option<serde_json::Value>,
+    pub terminal_error: Option<AppError>,
+    /// Append-only history events emitted by the run buffer. Routed by the
+    /// manager into `SessionStore::append_history_items`.
+    pub history_items: Vec<EventKind>,
+    /// The run id used by `history_items` — the manager wraps this with
+    /// `RunStarted` / `RunCompleted` / `RunAborted` boundary events.
+    pub run_id: RunId,
+}
+
+#[derive(Clone)]
+pub struct SessionProcessor {
+    provider_registry: Arc<ProviderRegistry>,
+    context_governor: ContextGovernor,
+    plugins: Arc<crate::plugin::PluginHost>,
+    workspace_root: PathBuf,
+}
+
+impl SessionProcessor {
+    pub fn new(
+        provider_registry: Arc<ProviderRegistry>,
+        context_governor: ContextGovernor,
+        plugins: Arc<crate::plugin::PluginHost>,
+        workspace_root: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            provider_registry,
+            context_governor,
+            plugins,
+            workspace_root: workspace_root.into(),
+        }
+    }
+
+    pub(crate) fn provider_registry(&self) -> &Arc<ProviderRegistry> {
+        &self.provider_registry
+    }
+
+    /// Apply the `chat.params` plugin hook chain to a [`CompletionRequest`]
+    /// before sending it to the provider.
+    async fn apply_chat_params_hook(
+        &self,
+        provider_id: &str,
+        model_id: &str,
+        request: &mut CompletionRequest,
+    ) {
+        let plugins = &self.plugins;
+        if plugins.is_empty() {
+            return;
+        }
+        let mut params = serde_json::Map::new();
+        if let Some(t) = request.temperature {
+            params.insert("temperature".into(), serde_json::json!(t));
+        }
+        if let Some(m) = request.max_output_tokens {
+            params.insert("max_output_tokens".into(), serde_json::json!(m));
+        }
+        let input = crate::plugin::ChatParamsInput {
+            provider: provider_id.to_string(),
+            model: model_id.to_string(),
+            params: serde_json::Value::Object(params),
+        };
+        match plugins.dispatch_chat_params(input).await {
+            Ok(updated) => {
+                if let Some(t) = updated.params.get("temperature").and_then(|v| v.as_f64()) {
+                    request.temperature = Some(t as f32);
+                }
+                if let Some(m) = updated
+                    .params
+                    .get("max_output_tokens")
+                    .and_then(|v| v.as_u64())
+                {
+                    request.max_output_tokens = Some(m as u32);
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "agena_plugin_host::chat_params",
+                    "chat.params hook failed: {err}"
+                );
+            }
+        }
+    }
+
+    pub(crate) async fn run_turn(
+        &self,
+        mut run: SessionRunRequest,
+    ) -> Result<SessionRunResult, AppError> {
+        let processor_span = tracing::info_span!(
+            "session.processor_turn",
+            session_id = run.session_id,
+            provider_id = %run.model.provider_id,
+            model_id = %run.model.model_id,
+        );
+        let mut client_events = Vec::new();
+        // Provider-visible prompt content is append-only for prompt-cache
+        // affinity. Mutating chat hooks can rewrite/drop/reorder system and
+        // message content, so they are not applied on the provider request path.
+        self.apply_chat_params_hook(
+            run.model.provider_id.as_ref(),
+            run.model.model_id.as_ref(),
+            &mut run.completion,
+        )
+        .await;
+        let stream_result = self
+            .provider_registry
+            .complete_stream(&run.model, run.completion.clone())
+            .instrument(processor_span.clone())
+            .await;
+        crate::metrics::record_provider_stream();
+        crate::metrics::record_provider_call(stream_result.is_ok());
+        let mut stream = stream_result?;
+
+        let assistant_message_id = run.next_message_id;
+        run.next_message_id += 1;
+
+        let assistant_metadata = MessageMetadata {
+            source: MessageSource::Assistant,
+            parent_message_id: run.completion.messages.last().map(|message| message.id),
+            generated_by_call_id: None,
+            model_provider_id: run.model.provider_id.to_string(),
+            model_adapter_id: run.model.adapter_id.as_ref().map(ToString::to_string),
+            model_id: run.completion.model.to_string(),
+            model_thinking_mode: run.model_thinking_mode.clone(),
+            model_speed_mode: run.model_speed_mode.clone(),
+        };
+
+        let started_at = Utc::now();
+        let mut assistant = Message {
+            id: assistant_message_id,
+            role: Role::Assistant,
+            state: MessageStatus::Pending,
+            parts: Vec::new(),
+            created_at: started_at,
+            metadata: assistant_metadata.clone(),
+            provider_state: None,
+            usage: None,
+        };
+
+        let run_id = run.run_id;
+        let mut run_buffer = RunBuffer::new(run_id);
+        let mut id_provider = FixedAssistantId::new(assistant_message_id);
+        run_buffer.begin_assistant(&mut id_provider);
+        if let Err(err) = run_buffer.set_metadata(assistant_metadata.clone()) {
+            return Err(AppError::Internal(err.to_string()));
+        }
+
+        let mut active_text_part: Option<i64> = None;
+        let mut active_reasoning_part: Option<i64> = None;
+        let mut pending_calls: BTreeMap<String, PendingToolCall> = BTreeMap::new();
+        let mut pending_native_calls: BTreeMap<String, PendingNativeToolCall> = BTreeMap::new();
+        let mut part_delta_sequences = BTreeMap::<i64, u64>::new();
+        let mut provider_err: Option<AppError> = None;
+        let mut usage = None;
+        let mut finish_reason_enum = FinishReason::Stop;
+        let mut provider_metadata = None;
+        let mut visible_text = String::new();
+        let mut reasoning_text = String::new();
+        let mut saw_tool_call = false;
+        let mut saw_native_tool_call = false;
+
+        let cancel = run.cancel.clone();
+        loop {
+            let next = match cancel.as_ref() {
+                Some(token) => tokio::select! {
+                    biased;
+                    _ = token.cancelled() => None,
+                    item = stream.next() => item,
+                },
+                None => stream.next().await,
+            };
+            let Some(item) = next else { break };
+            match item {
+                Ok(CompletionStreamEvent::TextDelta { delta, .. }) => {
+                    visible_text.push_str(delta.as_str());
+                    if let Some(part_id) = active_reasoning_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
+                    let part_id = match active_text_part {
+                        Some(part_id) => part_id,
+                        None => {
+                            let part_id = run.part_ids.reserve().await?;
+                            self.start_text_part(&mut assistant, part_id, Utc::now())?;
+                            self.emit_part_updated(&run, &assistant, part_id).await?;
+                            active_text_part = Some(part_id);
+                            part_id
+                        }
+                    };
+
+                    self.append_text_delta(&mut assistant, part_id, delta.as_str())?;
+                    run_buffer
+                        .push_text_delta(delta.as_str())
+                        .map_err(|err| AppError::Internal(err.to_string()))?;
+
+                    let seq = part_delta_sequences.entry(part_id).or_default();
+                    *seq += 1;
+                    self.emit_part_delta(
+                        &run,
+                        &assistant,
+                        part_id,
+                        None,
+                        PartDeltaField::Text,
+                        delta,
+                        *seq,
+                    )
+                    .await?;
+                }
+                Ok(CompletionStreamEvent::ToolCallDelta {
+                    stream_key,
+                    id,
+                    name,
+                    arguments_delta,
+                    ..
+                }) => {
+                    saw_tool_call = true;
+                    if let Some(part_id) = active_text_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
+                    if let Some(part_id) = active_reasoning_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
+
+                    let stream_key =
+                        pending_tool_call_stream_key(&mut pending_calls, stream_key, id.as_deref());
+                    let pending = pending_calls.entry(stream_key).or_default();
+                    if let Some(id) = id {
+                        pending.id = Some(id);
+                    }
+                    if let Some(name) = name {
+                        pending.name = Some(canonical_tool_name_from_model_name(
+                            name.as_str(),
+                            run.completion.tools.as_slice(),
+                        ));
+                    }
+                    pending.arguments_json.push_str(arguments_delta.as_str());
+                    self.ensure_pending_tool_call_part(
+                        &mut run,
+                        &mut assistant,
+                        &mut run_buffer,
+                        pending,
+                    )
+                    .await?;
+                    if !arguments_delta.is_empty()
+                        && let Some(history_call_id) = pending.history_call_id.as_ref()
+                    {
+                        run_buffer
+                            .append_tool_arguments(history_call_id, arguments_delta.as_str())
+                            .map_err(|err| AppError::Internal(err.to_string()))?;
+                    }
+                }
+                Ok(CompletionStreamEvent::ToolCallSnapshot {
+                    stream_key,
+                    id,
+                    name,
+                    arguments_json,
+                    ..
+                }) => {
+                    saw_tool_call = true;
+                    if let Some(part_id) = active_text_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
+                    if let Some(part_id) = active_reasoning_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
+
+                    let stream_key =
+                        pending_tool_call_stream_key(&mut pending_calls, stream_key, id.as_deref());
+                    let pending = pending_calls.entry(stream_key).or_default();
+                    if let Some(id) = id {
+                        pending.id = Some(id);
+                    }
+                    if let Some(name) = name {
+                        pending.name = Some(canonical_tool_name_from_model_name(
+                            name.as_str(),
+                            run.completion.tools.as_slice(),
+                        ));
+                    }
+                    pending.arguments_json = arguments_json.clone();
+                    self.ensure_pending_tool_call_part(
+                        &mut run,
+                        &mut assistant,
+                        &mut run_buffer,
+                        pending,
+                    )
+                    .await?;
+                    if let Some(history_call_id) = pending.history_call_id.as_ref() {
+                        run_buffer
+                            .replace_tool_arguments(history_call_id, arguments_json)
+                            .map_err(|err| AppError::Internal(err.to_string()))?;
+                    }
+                }
+                Ok(CompletionStreamEvent::NativeToolCallStarted {
+                    stream_key,
+                    id,
+                    invocation,
+                    title,
+                    raw,
+                    ..
+                }) => {
+                    saw_native_tool_call = true;
+                    if let Some(part_id) = active_text_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
+                    if let Some(part_id) = active_reasoning_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
+
+                    let pending = pending_native_calls.entry(stream_key).or_default();
+                    pending.id = id;
+                    pending.invocation = Some(invocation);
+                    pending.title = title;
+                    pending.raw = raw;
+                    self.ensure_native_tool_call_part(&mut run, &mut assistant, pending)
+                        .await?;
+                }
+                Ok(CompletionStreamEvent::NativeToolCallCompleted {
+                    stream_key,
+                    id,
+                    invocation,
+                    title,
+                    output_text,
+                    blocks,
+                    details,
+                    raw,
+                    ..
+                }) => {
+                    saw_native_tool_call = true;
+                    if let Some(part_id) = active_text_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
+                    if let Some(part_id) = active_reasoning_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
+
+                    let pending = pending_native_calls.remove(&stream_key).unwrap_or_default();
+                    self.complete_native_tool_call_part(
+                        &mut run,
+                        &mut assistant,
+                        pending,
+                        id,
+                        invocation,
+                        title,
+                        output_text,
+                        blocks,
+                        details,
+                        raw,
+                    )
+                    .await?;
+                }
+                Ok(CompletionStreamEvent::Completed {
+                    finish_reason,
+                    usage: usage_value,
+                    provider_metadata: completed_provider_metadata,
+                    ..
+                }) => {
+                    usage = usage_value.map(Into::into);
+                    if let Some(reason) = finish_reason.as_ref() {
+                        finish_reason_enum = map_finish_reason(reason);
+                    }
+                    provider_metadata = completed_provider_metadata;
+                }
+                Ok(CompletionStreamEvent::ThinkingDelta { delta, .. }) => {
+                    reasoning_text.push_str(delta.as_str());
+                    if let Some(part_id) = active_text_part.take() {
+                        complete_part_status(&mut assistant, part_id)?;
+                    }
+                    let part_id = match active_reasoning_part {
+                        Some(part_id) => part_id,
+                        None => {
+                            let part_id = run.part_ids.reserve().await?;
+                            self.start_reasoning_part(&mut assistant, part_id, Utc::now())?;
+                            self.emit_part_updated(&run, &assistant, part_id).await?;
+                            active_reasoning_part = Some(part_id);
+                            part_id
+                        }
+                    };
+
+                    self.append_reasoning_delta(&mut assistant, part_id, delta.as_str())?;
+                    run_buffer
+                        .push_reasoning_delta(delta.as_str())
+                        .map_err(|err| AppError::Internal(err.to_string()))?;
+
+                    let seq = part_delta_sequences.entry(part_id).or_default();
+                    *seq += 1;
+                    self.emit_part_delta(
+                        &run,
+                        &assistant,
+                        part_id,
+                        None,
+                        PartDeltaField::ReasoningSummary,
+                        delta,
+                        *seq,
+                    )
+                    .await?;
+                }
+                Err(err) => {
+                    provider_err = Some(err);
+                    break;
+                }
+            }
+        }
+
+        // If the cancel token tripped, the loop above broke without an
+        // explicit provider error. Surface a synthetic terminal error so
+        // the caller knows the run was cancelled rather than completed.
+        if provider_err.is_none()
+            && let Some(token) = cancel.as_ref()
+            && token.is_cancelled()
+        {
+            provider_err = Some(AppError::Internal("run cancelled by user".to_string()));
+        }
+
+        if let Some(part_id) = active_text_part {
+            complete_part_status(&mut assistant, part_id)?;
+        }
+        if let Some(part_id) = active_reasoning_part {
+            complete_part_status(&mut assistant, part_id)?;
+        }
+
+        if provider_err.is_none()
+            && visible_text.trim().is_empty()
+            && !saw_tool_call
+            && !saw_native_tool_call
+            && !reasoning_text.trim().is_empty()
+            && reasoning_text.trim() != REASONING_PLACEHOLDER
+        {
+            let part_id = run.part_ids.reserve().await?;
+            self.start_text_part(&mut assistant, part_id, Utc::now())?;
+            self.emit_part_updated(&run, &assistant, part_id).await?;
+            self.append_text_delta(&mut assistant, part_id, reasoning_text.as_str())?;
+            run_buffer
+                .push_text_delta(reasoning_text.as_str())
+                .map_err(|err| AppError::Internal(err.to_string()))?;
+
+            let seq = part_delta_sequences.entry(part_id).or_default();
+            *seq += 1;
+            self.emit_part_delta(
+                &run,
+                &assistant,
+                part_id,
+                None,
+                PartDeltaField::Text,
+                reasoning_text,
+                *seq,
+            )
+            .await?;
+            complete_part_status(&mut assistant, part_id)?;
+        }
+
+        self.finalize_pending_tool_calls(&mut run, &mut assistant, &mut run_buffer, pending_calls)
+            .await?;
+
+        if let Some(err) = provider_err {
+            assistant.state = MessageStatus::Failed;
+
+            client_events.push(EventKind::StreamError(StreamErrorEvent {
+                session_id: run.session_id,
+                error: ErrorInfo {
+                    code: "provider_stream_error".to_string(),
+                    message: err.to_string(),
+                },
+                ts_ms: Utc::now().timestamp_millis(),
+            }));
+            // Even on failure the buffer has accumulated state we can still
+            // commit; downstream callers may inspect it for diagnostics.
+            let mut history_items = run_buffer
+                .commit(
+                    &mut crate::session::history::SequentialIdAllocator::starting_at(
+                        run.next_message_id.saturating_add(1),
+                    ),
+                )
+                .unwrap_or_default();
+            sync_assistant_completion_event(history_items.as_mut_slice(), &assistant);
+            return Ok(SessionRunResult {
+                assistant_message_id,
+                state: vec![assistant],
+                client_events,
+                provider_metadata,
+                terminal_error: Some(err),
+                history_items,
+                run_id,
+            });
+        }
+
+        // Successful run: drive terminal state on the message snapshot and
+        // reflect the same finish/usage on the run buffer for history.
+        if assistant.state == MessageStatus::Pending {
+            let _ = assistant.transition_state(MessageStatus::InProgress);
+        }
+        let _ = assistant.transition_state(MessageStatus::Completed);
+        assistant.usage = usage.clone();
+        assistant.provider_state = provider_metadata
+            .as_ref()
+            .and_then(message_provider_state_from_provider_metadata);
+        run_buffer
+            .set_provider_state(assistant.provider_state.clone())
+            .map_err(|err| AppError::Internal(err.to_string()))?;
+
+        if let Some(usage_ref) = usage {
+            run_buffer
+                .set_usage(usage_ref)
+                .map_err(|err| AppError::Internal(err.to_string()))?;
+        }
+        run_buffer
+            .set_finish_reason(finish_reason_enum)
+            .map_err(|err| AppError::Internal(err.to_string()))?;
+
+        let mut history_items = run_buffer
+            .commit(
+                &mut crate::session::history::SequentialIdAllocator::starting_at(
+                    run.next_message_id.saturating_add(1),
+                ),
+            )
+            .map_err(|err| AppError::Internal(err.to_string()))?;
+        sync_assistant_completion_event(history_items.as_mut_slice(), &assistant);
+
+        Ok(SessionRunResult {
+            assistant_message_id,
+            state: vec![assistant],
+            client_events,
+            provider_metadata,
+            terminal_error: None,
+            history_items,
+            run_id,
+        })
+    }
+
+    pub(crate) fn prompt_exceeds_budget(
+        &self,
+        messages: &[Message],
+        max_prompt_chars: usize,
+    ) -> bool {
+        self.context_governor
+            .prompt_exceeds_budget(messages, max_prompt_chars)
+    }
+
+    pub(crate) fn max_prompt_chars(&self) -> usize {
+        self.context_governor.max_prompt_chars()
+    }
+
+    pub(crate) fn supports_prompt_continuation(&self, model: &ModelRef) -> bool {
+        self.provider_registry
+            .supports_prompt_continuation(model)
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn prompt_cache_shape(
+        &self,
+        model: &ModelRef,
+    ) -> Result<Option<crate::provider::PromptCacheShape>, AppError> {
+        self.provider_registry.prompt_cache_shape(model)
+    }
+
+    pub(crate) fn model_metadata(
+        &self,
+        model: &ModelRef,
+    ) -> Result<crate::provider::ModelMetadata, AppError> {
+        self.provider_registry.model_metadata(model)
+    }
+
+    fn start_text_part(
+        &self,
+        assistant: &mut Message,
+        part_id: i64,
+        created_at: DateTime<Utc>,
+    ) -> Result<(), AppError> {
+        let mut part = MessagePart::from_content(
+            part_id,
+            assistant.id,
+            created_at,
+            ExecutionStatus::Pending,
+            PartContent::text(String::new()),
+        );
+        part.part_index = assistant.parts.len() as i32;
+        assistant.parts.push(part);
+        if assistant.state == MessageStatus::Pending {
+            let _ = assistant.transition_state(MessageStatus::InProgress);
+        }
+        Ok(())
+    }
+
+    fn start_reasoning_part(
+        &self,
+        assistant: &mut Message,
+        part_id: i64,
+        created_at: DateTime<Utc>,
+    ) -> Result<(), AppError> {
+        let mut part = MessagePart::from_content(
+            part_id,
+            assistant.id,
+            created_at,
+            ExecutionStatus::Pending,
+            PartContent::Reasoning(ReasoningPart {
+                summary: Vec::new(),
+                raw_content: Vec::new(),
+                encrypted_content: None,
+            }),
+        );
+        part.part_index = assistant.parts.len() as i32;
+        assistant.parts.push(part);
+        if assistant.state == MessageStatus::Pending {
+            let _ = assistant.transition_state(MessageStatus::InProgress);
+        }
+        Ok(())
+    }
+
+    fn append_text_delta(
+        &self,
+        assistant: &mut Message,
+        part_id: i64,
+        delta: &str,
+    ) -> Result<(), AppError> {
+        let part = assistant
+            .parts
+            .iter_mut()
+            .find(|part| part.id == part_id)
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "active text part missing from assistant snapshot: {part_id}"
+                ))
+            })?;
+        if part.status == ExecutionStatus::Pending {
+            part.transition_status(ExecutionStatus::InProgress)
+                .map_err(|err| AppError::Internal(err.to_string()))?;
+        }
+        if !part.append_text_delta(delta) {
+            return Err(AppError::Internal(format!(
+                "failed to append text delta to part {part_id}: kind mismatch"
+            )));
+        }
+        Ok(())
+    }
+
+    fn append_reasoning_delta(
+        &self,
+        assistant: &mut Message,
+        part_id: i64,
+        delta: &str,
+    ) -> Result<(), AppError> {
+        let part = assistant
+            .parts
+            .iter_mut()
+            .find(|part| part.id == part_id)
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "active reasoning part missing from assistant snapshot: {part_id}"
+                ))
+            })?;
+        if part.status == ExecutionStatus::Pending {
+            part.transition_status(ExecutionStatus::InProgress)
+                .map_err(|err| AppError::Internal(err.to_string()))?;
+        }
+        if !part.append_reasoning_summary_delta(delta.to_string()) {
+            return Err(AppError::Internal(format!(
+                "failed to append reasoning delta to part {part_id}: kind mismatch"
+            )));
+        }
+        Ok(())
+    }
+
+    async fn ensure_pending_tool_call_part(
+        &self,
+        run: &mut SessionRunRequest,
+        assistant: &mut Message,
+        run_buffer: &mut RunBuffer,
+        pending: &mut PendingToolCall,
+    ) -> Result<(), AppError> {
+        let mut should_emit = false;
+        if pending.part_id.is_none() {
+            let part_id = run.part_ids.reserve().await?;
+            let call_id = run.next_call_id;
+            run.next_call_id += 1;
+            let start = Utc::now();
+            let invocation = placeholder_tool_invocation(
+                pending.name.as_deref(),
+                run.completion.tools.as_slice(),
+            );
+            let mut operation = OperationPart::pending(
+                call_id,
+                invocation,
+                tool_execution_title(pending.name.as_deref()),
+                TimeRange {
+                    start_ms: start.timestamp_millis(),
+                    end_ms: None,
+                },
+            );
+            if let Some(identity) = pending.name.as_deref().and_then(|name| {
+                tool_definition_identity_from_model_name(name, run.completion.tools.as_slice())
+            }) {
+                operation.set_advertised_tool_identity(identity);
+            }
+
+            let mut part = MessagePart::from_content(
+                part_id,
+                assistant.id,
+                start,
+                ExecutionStatus::Pending,
+                PartContent::Operation(operation),
+            );
+            part.part_index = assistant.parts.len() as i32;
+            assistant.parts.push(part);
+            if assistant.state == MessageStatus::Pending {
+                let _ = assistant.transition_state(MessageStatus::InProgress);
+            }
+
+            pending.part_id = Some(part_id);
+            pending.call_id = Some(call_id);
+            pending.started_at_ms = Some(start.timestamp_millis());
+            should_emit = true;
+
+            // Mirror into RunBuffer with a stable history-side call id.
+            // Prefer the provider-supplied id when present; otherwise fall
+            // back to a synthetic one derived from the integer call_id so it
+            // remains stable for the lifetime of this run.
+            let history_call_id = match pending.id.as_deref() {
+                Some(id) if !id.trim().is_empty() => ToolCallId::new(id),
+                _ => ToolCallId::new(format!("call_{call_id}")),
+            };
+            run_buffer
+                .start_tool_call(history_call_id.clone())
+                .map_err(|err| AppError::Internal(err.to_string()))?;
+            if let Some(name) = pending.name.as_deref() {
+                run_buffer
+                    .name_tool_call(&history_call_id, name)
+                    .map_err(|err| AppError::Internal(err.to_string()))?;
+            }
+            pending.history_call_id = Some(history_call_id);
+        } else if pending.history_call_id.is_some() {
+            if let Some(provider_call_id) = pending.id.as_deref().filter(|id| !id.trim().is_empty())
+            {
+                let next_history_call_id = ToolCallId::new(provider_call_id);
+                let should_replace = pending
+                    .history_call_id
+                    .as_ref()
+                    .is_some_and(|history_call_id| history_call_id != &next_history_call_id);
+                if should_replace {
+                    let current_history_call_id =
+                        pending.history_call_id.clone().expect("checked above");
+                    run_buffer
+                        .replace_tool_call_id(
+                            &current_history_call_id,
+                            next_history_call_id.clone(),
+                        )
+                        .map_err(|err| AppError::Internal(err.to_string()))?;
+                    pending.history_call_id = Some(next_history_call_id);
+                }
+            }
+
+            if let Some(history_call_id) = pending.history_call_id.as_ref()
+                && let Some(name) = pending.name.as_deref()
+            {
+                // A second name fragment can arrive after the part already exists.
+                // Re-set the name; RunBuffer accepts repeated assignment.
+                run_buffer
+                    .name_tool_call(history_call_id, name)
+                    .map_err(|err| AppError::Internal(err.to_string()))?;
+            }
+        }
+
+        if let (Some(part_id), Some(operation_id)) = (
+            pending.part_id,
+            pending
+                .id
+                .as_ref()
+                .filter(|id| !id.trim().is_empty())
+                .cloned(),
+        ) {
+            let part = assistant
+                .parts
+                .iter_mut()
+                .find(|part| part.id == part_id)
+                .ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "tool part missing from assistant snapshot: {part_id}"
+                    ))
+                })?;
+            if part.operation_id.as_deref() != Some(operation_id.as_str()) {
+                part.operation_id = Some(operation_id);
+                should_emit = true;
+            }
+        }
+
+        if should_emit && let Some(part_id) = pending.part_id {
+            self.emit_part_updated(run, assistant, part_id).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn finalize_pending_tool_calls(
+        &self,
+        run: &mut SessionRunRequest,
+        assistant: &mut Message,
+        run_buffer: &mut RunBuffer,
+        pending_calls: BTreeMap<String, PendingToolCall>,
+    ) -> Result<(), AppError> {
+        for mut pending in pending_calls.into_values() {
+            self.ensure_pending_tool_call_part(run, assistant, run_buffer, &mut pending)
+                .await?;
+
+            let tool_name = pending.name.unwrap_or_else(|| "unknown".to_string());
+            let invocation = parse_tool_invocation_lossy(
+                run.session_id,
+                tool_name.as_str(),
+                pending.arguments_json.as_str(),
+                run.completion.tools.as_slice(),
+            );
+            let Some(part_id) = pending.part_id else {
+                continue;
+            };
+            let call_id = pending.call_id.unwrap_or(0);
+
+            let part = assistant
+                .parts
+                .iter_mut()
+                .find(|part| part.id == part_id)
+                .ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "tool part missing from assistant snapshot: {part_id}"
+                    ))
+                })?;
+            let mut operation = OperationPart::pending(
+                call_id,
+                invocation,
+                tool_execution_title(Some(tool_name.as_str())),
+                TimeRange {
+                    start_ms: pending.started_at_ms.unwrap_or_default(),
+                    end_ms: None,
+                },
+            );
+            if let Some(identity) = tool_definition_identity_from_model_name(
+                tool_name.as_str(),
+                run.completion.tools.as_slice(),
+            ) {
+                operation.set_advertised_tool_identity(identity);
+            }
+            part.set_content(PartContent::Operation(operation));
+
+            // Re-assert name on RunBuffer (final, authoritative). The
+            // accumulated `arguments_json` was already streamed in chunks via
+            // `append_tool_arguments`; we don't repeat it here.
+            if let Some(history_call_id) = pending.history_call_id.as_ref() {
+                run_buffer
+                    .name_tool_call(history_call_id, tool_name.as_str())
+                    .map_err(|err| AppError::Internal(err.to_string()))?;
+            }
+
+            self.emit_part_updated(run, assistant, part_id).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn ensure_native_tool_call_part(
+        &self,
+        run: &mut SessionRunRequest,
+        assistant: &mut Message,
+        pending: &mut PendingNativeToolCall,
+    ) -> Result<(), AppError> {
+        let invocation = pending
+            .invocation
+            .clone()
+            .unwrap_or_else(|| ToolInvocation::new("native_tool", StructuredObject::default()));
+        let operation_title = native_tool_execution_title(
+            pending.title.as_str(),
+            invocation.name.as_str(),
+            &invocation.input,
+        );
+        let raw = pending.raw.clone();
+        let operation_id = pending
+            .id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let now = Utc::now();
+        let mut should_emit = false;
+
+        if pending.part_id.is_none() {
+            let part_id = run.part_ids.reserve().await?;
+            let call_id = run.next_call_id;
+            run.next_call_id += 1;
+            let start = now;
+            let mut operation = OperationPart::pending(
+                call_id,
+                invocation,
+                operation_title,
+                TimeRange {
+                    start_ms: start.timestamp_millis(),
+                    end_ms: None,
+                },
+            );
+            operation.set_provider_native_only(true);
+            operation.raw = raw.clone();
+            operation.result.raw = raw;
+
+            let mut part = MessagePart::from_content(
+                part_id,
+                assistant.id,
+                start,
+                ExecutionStatus::InProgress,
+                PartContent::Operation(operation),
+            );
+            part.part_index = assistant.parts.len() as i32;
+            part.operation_id = operation_id.clone();
+            assistant.parts.push(part);
+            if assistant.state == MessageStatus::Pending {
+                let _ = assistant.transition_state(MessageStatus::InProgress);
+            }
+
+            pending.part_id = Some(part_id);
+            pending.call_id = Some(call_id);
+            pending.started_at_ms = Some(start.timestamp_millis());
+            should_emit = true;
+        } else if let Some(part_id) = pending.part_id {
+            let part = assistant
+                .parts
+                .iter_mut()
+                .find(|part| part.id == part_id)
+                .ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "native tool part missing from assistant snapshot: {part_id}"
+                    ))
+                })?;
+            let started_at_ms = pending
+                .started_at_ms
+                .unwrap_or_else(|| now.timestamp_millis());
+            let mut operation = OperationPart::pending(
+                pending.call_id.unwrap_or_default(),
+                invocation,
+                operation_title,
+                TimeRange {
+                    start_ms: started_at_ms,
+                    end_ms: None,
+                },
+            );
+            operation.set_provider_native_only(true);
+            operation.raw = raw.clone();
+            operation.result.raw = raw;
+            part.set_content(PartContent::Operation(operation));
+            if part.status == ExecutionStatus::Pending {
+                part.transition_status(ExecutionStatus::InProgress)
+                    .map_err(|err| AppError::Internal(err.to_string()))?;
+            }
+            if part.operation_id != operation_id {
+                part.operation_id = operation_id.clone();
+            }
+            should_emit = true;
+        }
+
+        if should_emit && let Some(part_id) = pending.part_id {
+            self.emit_part_updated(run, assistant, part_id).await?;
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn complete_native_tool_call_part(
+        &self,
+        run: &mut SessionRunRequest,
+        assistant: &mut Message,
+        mut pending: PendingNativeToolCall,
+        id: Option<String>,
+        invocation: ToolInvocation,
+        title: String,
+        output_text: String,
+        blocks: Vec<crate::message::OperationBlock>,
+        details: crate::message::ToolOutput,
+        raw: Option<serde_json::Value>,
+    ) -> Result<(), AppError> {
+        pending.id = id;
+        pending.invocation = Some(invocation.clone());
+        pending.title = title.clone();
+        pending.raw = raw.clone();
+        self.ensure_native_tool_call_part(run, assistant, &mut pending)
+            .await?;
+
+        let artifact_key = pending
+            .id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| format!("native-tool-{}", pending.call_id.unwrap_or_default()));
+        let blocks = self
+            .persist_native_tool_media(run.session_id, artifact_key.as_str(), blocks)
+            .await;
+
+        let Some(part_id) = pending.part_id else {
+            return Ok(());
+        };
+        let part = assistant
+            .parts
+            .iter_mut()
+            .find(|part| part.id == part_id)
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "native tool part missing from assistant snapshot: {part_id}"
+                ))
+            })?;
+        let mut operation = OperationPart::completed(
+            pending.call_id.unwrap_or_default(),
+            invocation.clone(),
+            output_text,
+            blocks,
+            Vec::new(),
+            details,
+            TimeRange {
+                start_ms: pending
+                    .started_at_ms
+                    .unwrap_or_else(|| Utc::now().timestamp_millis()),
+                end_ms: Some(Utc::now().timestamp_millis()),
+            },
+        );
+        if !title.trim().is_empty() {
+            operation.set_title(title);
+        }
+        operation.set_provider_native_only(true);
+        operation.raw = raw.clone();
+        operation.result.raw = raw;
+        part.set_content(PartContent::Operation(operation));
+        if part.status != ExecutionStatus::Completed {
+            part.transition_status(ExecutionStatus::Completed)
+                .map_err(|err| AppError::Internal(err.to_string()))?;
+        }
+        if let Some(operation_id) = pending
+            .id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            part.operation_id = Some(operation_id.to_owned());
+        }
+
+        self.emit_part_updated(run, assistant, part_id).await?;
+        Ok(())
+    }
+
+    async fn persist_native_tool_media(
+        &self,
+        session_id: i64,
+        call_id: &str,
+        blocks: Vec<OperationBlock>,
+    ) -> Vec<OperationBlock> {
+        let workspace_root = self.workspace_root.as_path();
+
+        let mut media_index = 0usize;
+        let mut persisted = Vec::with_capacity(blocks.len());
+        for block in blocks {
+            match block {
+                OperationBlock::Media {
+                    mime_type,
+                    mut artifact,
+                } => {
+                    let next_block = match persist_generated_media_artifact(
+                        workspace_root,
+                        session_id,
+                        call_id,
+                        media_index,
+                        mime_type.as_str(),
+                        artifact.name.as_deref(),
+                        artifact.uri.as_str(),
+                    )
+                    .await
+                    {
+                        Ok(Some(saved)) => {
+                            media_index += 1;
+                            artifact.uri = saved.path;
+                            artifact.size_bytes = Some(saved.size_bytes);
+                            if artifact.name.is_none() {
+                                artifact.name = Some(saved.filename);
+                            }
+                            OperationBlock::Media {
+                                mime_type,
+                                artifact,
+                            }
+                        }
+                        Ok(None) => OperationBlock::Media {
+                            mime_type,
+                            artifact,
+                        },
+                        Err(err) => {
+                            tracing::warn!(
+                                session_id,
+                                call_id,
+                                "failed to persist provider-native media artifact: {err}"
+                            );
+                            OperationBlock::Media {
+                                mime_type,
+                                artifact,
+                            }
+                        }
+                    };
+                    persisted.push(next_block);
+                }
+                other => persisted.push(other),
+            }
+        }
+        persisted
+    }
+
+    async fn emit_part_updated(
+        &self,
+        run: &SessionRunRequest,
+        assistant: &Message,
+        part_id: i64,
+    ) -> Result<(), AppError> {
+        let Some(publisher) = run.event_publisher.as_ref() else {
+            return Ok(());
+        };
+
+        let part = assistant
+            .parts
+            .iter()
+            .find(|part| part.id == part_id)
+            .cloned()
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "part snapshot not found for stream event: {part_id}"
+                ))
+            })?;
+        let kind = EventKind::MessagePartUpdated(MessagePartUpdatedEvent {
+            session_id: run.session_id,
+            message_id: assistant.id,
+            message_role: assistant.role,
+            message_state: assistant.state,
+            message_created_at: assistant.created_at,
+            part,
+            ts_ms: Utc::now().timestamp_millis(),
+        });
+        publisher
+            .publish(PublishContext::for_session(run.session_id), kind)
+            .await
+            .map_err(|err| AppError::Internal(format!("publish part-updated failed: {err}")))?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn emit_part_delta(
+        &self,
+        run: &SessionRunRequest,
+        assistant: &Message,
+        part_id: i64,
+        call_id: Option<i64>,
+        field: PartDeltaField,
+        delta: String,
+        seq: u64,
+    ) -> Result<(), AppError> {
+        let Some(publisher) = run.event_publisher.as_ref() else {
+            return Ok(());
+        };
+
+        let _ = assistant; // assistant snapshot is no longer needed: events
+        // carry their own routing context.
+        let kind = EventKind::MessagePartDelta(MessagePartDeltaEvent {
+            session_id: run.session_id,
+            message_id: assistant.id,
+            part_id,
+            call_id,
+            field,
+            delta,
+            seq,
+            ts_ms: Utc::now().timestamp_millis(),
+        });
+        publisher
+            .publish(PublishContext::for_session(run.session_id), kind)
+            .await
+            .map_err(|err| AppError::Internal(format!("publish part-delta failed: {err}")))?;
+        Ok(())
+    }
+}
+
+/// Adapter that returns a single, pre-allocated `MessageId` to satisfy the
+/// `RunBuffer` API. The processor reserves message ids via the global session
+/// allocator before opening the buffer, so the buffer must adopt that id
+/// rather than mint its own.
+struct FixedAssistantId {
+    next: Option<HistoryMessageId>,
+}
+
+impl FixedAssistantId {
+    fn new(message_id: i64) -> Self {
+        Self {
+            next: Some(HistoryMessageId(message_id)),
+        }
+    }
+}
+
+impl MessageIdAllocator for FixedAssistantId {
+    fn next_message_id(&mut self) -> HistoryMessageId {
+        self.next
+            .take()
+            .expect("FixedAssistantId only yields one id per run")
+    }
+}
+
+fn complete_part_status(assistant: &mut Message, part_id: i64) -> Result<(), AppError> {
+    let part = assistant
+        .parts
+        .iter_mut()
+        .find(|part| part.id == part_id)
+        .ok_or_else(|| {
+            AppError::Internal(format!(
+                "completing missing part on assistant snapshot: {part_id}"
+            ))
+        })?;
+    if part.status == ExecutionStatus::InProgress {
+        part.transition_status(ExecutionStatus::Completed)
+            .map_err(|err| AppError::Internal(err.to_string()))?;
+    }
+    Ok(())
+}
+
+fn sync_assistant_completion_event(history_items: &mut [EventKind], assistant: &Message) {
+    for event in history_items {
+        let EventKind::AssistantMessageCompleted(payload) = event else {
+            continue;
+        };
+        if payload.message_id.raw() != assistant.id {
+            continue;
+        }
+        payload.parts = assistant.parts.clone();
+        payload.usage = assistant.usage.clone();
+        payload.metadata = assistant.metadata.clone();
+        payload.provider_state = assistant.provider_state.clone();
+    }
+}
+
+fn map_finish_reason(reason: &CompletionFinishReason) -> FinishReason {
+    match reason {
+        CompletionFinishReason::Stop => FinishReason::Stop,
+        CompletionFinishReason::ToolCalls => FinishReason::ToolCalls,
+        CompletionFinishReason::Length => FinishReason::MaxTokens,
+        CompletionFinishReason::ContentFilter => FinishReason::ContentFilter,
+        CompletionFinishReason::Other(_) => FinishReason::Other,
+    }
+}
+
+fn message_provider_state_from_provider_metadata(
+    provider_metadata: &serde_json::Value,
+) -> Option<MessageProviderState> {
+    let assistant_reasoning_field =
+        provider_metadata_string_field(provider_metadata, "assistant_reasoning_field")
+            .and_then(|value| value.as_str())
+            .and_then(|value| match value {
+                "reasoning_content" => Some(AssistantReasoningField::ReasoningContent),
+                "reasoning_details" => Some(AssistantReasoningField::ReasoningDetails),
+                _ => None,
+            });
+    let response_id = provider_metadata_string_field(provider_metadata, "response_id")
+        .and_then(|value| value.as_str())
+        .map(ToOwned::to_owned);
+    let state = MessageProviderState {
+        assistant_reasoning_field,
+        response_id,
+    };
+    (!state.is_empty()).then_some(state)
+}
+
+fn provider_metadata_string_field<'a>(
+    provider_metadata: &'a serde_json::Value,
+    field: &str,
+) -> Option<&'a serde_json::Value> {
+    provider_metadata
+        .as_object()
+        .and_then(|metadata| metadata.get(field))
+        .or_else(|| {
+            provider_metadata
+                .as_object()
+                .and_then(|metadata| metadata.get("provider_metadata"))
+                .and_then(serde_json::Value::as_object)
+                .and_then(|metadata| metadata.get(field))
+        })
+}
+
+#[derive(Debug, Default, Clone)]
+struct PendingToolCall {
+    part_id: Option<i64>,
+    call_id: Option<i64>,
+    started_at_ms: Option<i64>,
+    id: Option<String>,
+    name: Option<String>,
+    arguments_json: String,
+    /// History-side call identifier propagated to `RunBuffer`. Set the first
+    /// time the part is materialized and reused for every subsequent argument
+    /// fragment so chunks land on the right tool.
+    history_call_id: Option<ToolCallId>,
+}
+
+/// Pick a stable pending-call key for one provider stream event.
+///
+/// Provider adapters normally keep `stream_key` stable, but a compatible
+/// gateway can change its positional stream key while retaining the same
+/// provider call id. The call id is the protocol identity, so it wins over a
+/// transient stream key. Conversely, different non-empty call ids must stay
+/// independent even when an adapter accidentally reuses a stream key: models
+/// are allowed to intentionally invoke the same tool with the same input more
+/// than once as long as they issue distinct call ids.
+fn pending_tool_call_stream_key(
+    pending_calls: &mut BTreeMap<String, PendingToolCall>,
+    stream_key: String,
+    provider_call_id: Option<&str>,
+) -> String {
+    let Some(provider_call_id) = provider_call_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return stream_key;
+    };
+
+    if let Some(existing_key) = pending_calls.iter().find_map(|(key, pending)| {
+        (pending.id.as_deref() == Some(provider_call_id)).then(|| key.clone())
+    }) {
+        return existing_key;
+    }
+
+    let canonical_key = format!("id:{provider_call_id}");
+    if pending_calls.contains_key(canonical_key.as_str()) {
+        return canonical_key;
+    }
+
+    // If an earlier fragment did not include the provider id, retain its
+    // materialized operation and history state by moving it under the newly
+    // available canonical id instead of creating a second pending operation.
+    let can_rekey_existing_stream = pending_calls
+        .get(stream_key.as_str())
+        .is_some_and(|pending| {
+            pending.id.as_deref().is_none() || pending.id.as_deref() == Some(provider_call_id)
+        });
+    if can_rekey_existing_stream && stream_key != canonical_key {
+        let pending = pending_calls
+            .remove(stream_key.as_str())
+            .expect("checked pending stream key exists");
+        pending_calls.insert(canonical_key.clone(), pending);
+    }
+
+    canonical_key
+}
+
+#[derive(Debug, Default, Clone)]
+struct PendingNativeToolCall {
+    part_id: Option<i64>,
+    call_id: Option<i64>,
+    started_at_ms: Option<i64>,
+    id: Option<String>,
+    invocation: Option<ToolInvocation>,
+    title: String,
+    raw: Option<serde_json::Value>,
+}
+
+#[derive(Debug)]
+struct PersistedMediaArtifact {
+    path: String,
+    filename: String,
+    size_bytes: u64,
+}
+
+async fn persist_generated_media_artifact(
+    workspace_root: &Path,
+    session_id: i64,
+    call_id: &str,
+    media_index: usize,
+    mime_type: &str,
+    filename_hint: Option<&str>,
+    uri: &str,
+) -> Result<Option<PersistedMediaArtifact>, AppError> {
+    let Some((decoded_mime, encoded)) = parse_base64_data_url(uri) else {
+        return Ok(None);
+    };
+    let effective_mime = if decoded_mime.is_empty() {
+        mime_type.trim()
+    } else {
+        decoded_mime.as_str()
+    };
+    if !effective_mime.starts_with("image/") {
+        return Ok(None);
+    }
+
+    let bytes = BASE64_STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|err| AppError::Internal(format!("invalid generated image payload: {err}")))?;
+    let extension = generated_media_extension(filename_hint, effective_mime);
+    let artifact_id = if media_index == 0 {
+        call_id.to_string()
+    } else {
+        format!("{call_id}-{media_index}")
+    };
+    let path = crate::project_paths::generated_image_artifact_path(
+        workspace_root,
+        session_id,
+        artifact_id.as_str(),
+        extension.as_str(),
+    );
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(&path, bytes.as_slice()).await?;
+
+    let filename = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("generated-image.{extension}"));
+    Ok(Some(PersistedMediaArtifact {
+        path: path.to_string_lossy().to_string(),
+        filename,
+        size_bytes: bytes.len() as u64,
+    }))
+}
+
+fn parse_base64_data_url(url: &str) -> Option<(String, String)> {
+    let trimmed = url.trim();
+    let payload = trimmed.strip_prefix("data:")?;
+    let (metadata, encoded) = payload.split_once(',')?;
+    let metadata = metadata.trim();
+    let encoded = encoded.trim();
+    if encoded.is_empty() {
+        return None;
+    }
+    let mime = metadata.strip_suffix(";base64")?.trim().to_owned();
+    Some((mime, encoded.to_owned()))
+}
+
+fn generated_media_extension(filename_hint: Option<&str>, mime_type: &str) -> String {
+    if let Some(extension) = filename_hint
+        .and_then(|value| Path::new(value).extension())
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return extension.to_ascii_lowercase();
+    }
+
+    mime_type
+        .trim()
+        .strip_prefix("image/")
+        .filter(|value| !value.is_empty())
+        .unwrap_or("png")
+        .to_ascii_lowercase()
+}
+
+fn tool_execution_title(name: Option<&str>) -> String {
+    format!("Tool {}", name.unwrap_or("unknown").trim())
+}
+
+fn native_tool_execution_title(title: &str, tool_name: &str, input: &StructuredObject) -> String {
+    let trimmed = title.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_owned();
+    }
+
+    let invocation = ToolInvocation::new(tool_name.to_owned(), input.clone());
+    tool_invocation_label(&invocation)
+}
+
+fn placeholder_tool_invocation(
+    name: Option<&str>,
+    available_tools: &[RegisteredTool],
+) -> ToolInvocation {
+    let requested_name = name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown");
+    let Some(tool) = available_tools
+        .iter()
+        .find(|tool| crate::tool::tool_matches_model_name(tool, requested_name))
+    else {
+        return ToolInvocation {
+            name: requested_name.to_string(),
+            plugin_name: None,
+            input: StructuredObject::default(),
+        };
+    };
+
+    tool_invocation_for_definition(tool, StructuredObject::default())
+}
+
+pub(crate) fn parse_tool_invocation(
+    name: &str,
+    arguments_json: &str,
+    available_tools: &[RegisteredTool],
+) -> Result<ToolInvocation, AppError> {
+    let trimmed_name = name.trim();
+    let tool = tool_for_model_name(trimmed_name, available_tools).ok_or_else(|| {
+        AppError::Provider(format!("unsupported tool call from model: {trimmed_name}"))
+    })?;
+
+    let parsed = parse_custom_input(arguments_json)?;
+    Ok(tool_invocation_for_definition(tool, parsed))
+}
+
+fn parse_tool_invocation_lossy(
+    session_id: i64,
+    name: &str,
+    arguments_json: &str,
+    available_tools: &[RegisteredTool],
+) -> ToolInvocation {
+    let trimmed_name = name.trim();
+    if tool_for_model_name(trimmed_name, available_tools).is_none() {
+        tracing::debug!(
+            target: "agena::session::processor",
+            session_id,
+            tool = %trimmed_name,
+            "model requested unsupported tool; preserving call for tool-failure handling"
+        );
+        return placeholder_tool_invocation(Some(trimmed_name), available_tools);
+    }
+
+    match parse_tool_invocation(trimmed_name, arguments_json, available_tools) {
+        Ok(invocation) => invocation,
+        Err(err) => {
+            tracing::warn!(
+                target: "agena::session::processor",
+                session_id,
+                tool = %trimmed_name,
+                error = %err,
+                arguments_len = arguments_json.len(),
+                "tool arguments could not be parsed; falling back to empty input for tool-failure handling"
+            );
+            placeholder_tool_invocation(Some(trimmed_name), available_tools)
+        }
+    }
+}
+
+fn tool_for_model_name<'a>(
+    name: &str,
+    available_tools: &'a [RegisteredTool],
+) -> Option<&'a RegisteredTool> {
+    available_tools
+        .iter()
+        .find(|tool| crate::tool::tool_matches_model_name(tool, name))
+}
+
+fn tool_definition_identity_from_model_name(
+    name: &str,
+    available_tools: &[RegisteredTool],
+) -> Option<String> {
+    tool_for_model_name(name, available_tools).map(RegisteredTool::definition_identity)
+}
+
+fn canonical_tool_name_from_model_name(name: &str, available_tools: &[RegisteredTool]) -> String {
+    tool_for_model_name(name, available_tools)
+        .map(RegisteredTool::model_name)
+        .unwrap_or_else(|| name.trim().to_owned())
+}
+
+fn tool_invocation_for_definition(
+    tool: &RegisteredTool,
+    input: StructuredObject,
+) -> ToolInvocation {
+    ToolInvocation {
+        name: tool.model_name(),
+        plugin_name: Some(tool.plugin_full_name().clone()),
+        input,
+    }
+}
+
+fn tool_invocation_label(invocation: &ToolInvocation) -> String {
+    let input = serde_json::Value::from(invocation.input.clone());
+    if let Some(gateway_name) = gateway_model_tool_name(invocation.name.as_str())
+        && let Some(target) = input.get("tool").and_then(serde_json::Value::as_str)
+        && !target.trim().is_empty()
+    {
+        return format!("{gateway_name} {}", target.trim());
+    }
+    for key in [
+        "command",
+        "file_path",
+        "path",
+        "pattern",
+        "query",
+        "url",
+        "description",
+        "action",
+        "id",
+        "expression",
+        "notebook_path",
+    ] {
+        if let Some(value) = input.get(key).and_then(serde_json::Value::as_str)
+            && !value.trim().is_empty()
+        {
+            return format!("{} {}", invocation.name, value.trim());
+        }
+    }
+    invocation.name.clone()
+}
+
+fn gateway_model_tool_name(name: &str) -> Option<&'static str> {
+    match name.trim() {
+        "agena.tools.list" | "tools.list" | "tools_list" => Some("tools_list"),
+        "agena.tools.search" | "tools.search" | "tools_search" => Some("tools_search"),
+        "agena.tools.help" | "tools.help" | "tools_help" => Some("tools_help"),
+        "agena.tools.tags" | "tools.tags" | "tools_tags" => Some("tools_tags"),
+        "agena.tools.call" | "tools.call" | "tools_call" => Some("tools_call"),
+        _ => None,
+    }
+}
+
+fn parse_custom_input(arguments_json: &str) -> Result<StructuredObject, AppError> {
+    let value = parse_json_body::<serde_json::Value>(arguments_json)?;
+    StructuredObject::try_from(value)
+        .map_err(|err| AppError::Internal(format!("invalid custom tool input: {err}")))
+}
+
+fn parse_json_body<T>(arguments_json: &str) -> Result<T, AppError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let body = if arguments_json.trim().is_empty() {
+        "{}"
+    } else {
+        arguments_json
+    };
+
+    let mut deserializer = serde_json::Deserializer::from_str(body);
+    let parsed =
+        <T as serde::Deserialize>::deserialize(&mut deserializer).map_err(AppError::from)?;
+
+    if let Err(err) = deserializer.end() {
+        tracing::warn!(
+            error = %err,
+            arguments_len = body.len(),
+            "tool arguments included trailing content; ignored suffix after valid JSON prefix"
+        );
+    }
+
+    Ok(parsed)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::{PendingToolCall, pending_tool_call_stream_key};
+
+    #[test]
+    fn provider_call_id_merges_changing_adapter_stream_keys() {
+        let mut pending = BTreeMap::<String, PendingToolCall>::new();
+
+        let first =
+            pending_tool_call_stream_key(&mut pending, "idx:0".to_string(), Some("call_shared"));
+        assert_eq!(first, "id:call_shared");
+        pending.insert(
+            first.clone(),
+            PendingToolCall {
+                id: Some("call_shared".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let replay =
+            pending_tool_call_stream_key(&mut pending, "idx:6".to_string(), Some("call_shared"));
+        assert_eq!(replay, first);
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn distinct_provider_call_ids_do_not_merge_even_when_stream_key_repeats() {
+        let mut pending = BTreeMap::<String, PendingToolCall>::new();
+
+        let first =
+            pending_tool_call_stream_key(&mut pending, "idx:0".to_string(), Some("call_one"));
+        pending.insert(
+            first.clone(),
+            PendingToolCall {
+                id: Some("call_one".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let second =
+            pending_tool_call_stream_key(&mut pending, "idx:0".to_string(), Some("call_two"));
+        assert_ne!(first, second);
+        pending.insert(
+            second.clone(),
+            PendingToolCall {
+                id: Some("call_two".to_string()),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(pending.len(), 2);
+        assert!(pending.contains_key(first.as_str()));
+        assert!(pending.contains_key(second.as_str()));
+    }
+
+    #[test]
+    fn provider_id_rekeys_an_earlier_idless_stream_without_a_second_call() {
+        let mut pending = BTreeMap::<String, PendingToolCall>::new();
+        pending.insert("idx:0".to_string(), PendingToolCall::default());
+
+        let key =
+            pending_tool_call_stream_key(&mut pending, "idx:0".to_string(), Some("call_shared"));
+
+        assert_eq!(key, "id:call_shared");
+        assert_eq!(pending.len(), 1);
+        assert!(pending.contains_key("id:call_shared"));
+        assert!(!pending.contains_key("idx:0"));
+    }
+}

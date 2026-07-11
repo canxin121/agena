@@ -17,6 +17,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Char('N') if !ctrl && !alt => Some(A::SearchPrevious),
             K::Char('n') if !ctrl && !alt => Some(A::SearchNext),
             K::Char('r') if !ctrl && !alt => Some(A::Continue),
+            K::Char('U') if !ctrl && !alt => Some(A::OpenUsage),
             _ => None,
         },
         KeyContext::Sessions => match key.code {

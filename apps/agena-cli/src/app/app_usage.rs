@@ -1,9 +1,10 @@
 use agena::session::{SessionUsageBreakdown, UsagePeriod, UsageStatsQuery};
 
 use super::{
-    App, AppMessage, Focus, KeyCode, KeyEvent, KeyModifiers, Route, UsageDashboardSort,
-    UsageDashboardState, UsageDashboardView, Utc,
+    App, AppMessage, Focus, KeyEvent, Route, UsageDashboardSort, UsageDashboardState,
+    UsageDashboardView, Utc,
 };
+use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 
 pub(super) const USAGE_PERIODS: [UsagePeriod; 9] = [
     UsagePeriod::Today,
@@ -109,74 +110,71 @@ impl App {
         key: KeyEvent,
         state: &mut UsageDashboardState,
     ) -> bool {
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            return false;
-        }
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => return true,
-            KeyCode::Left | KeyCode::Char('h') => {
+        match resolve_tui_key(KeyContext::Usage, key) {
+            Some(KeyAction::Close) => return true,
+            Some(KeyAction::PreviousPeriod) => {
                 state.period = cycle_usage_period(state.period, -1);
                 reset_usage_selection(state);
                 self.spawn_usage_stats_request(state);
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            Some(KeyAction::NextPeriod) => {
                 state.period = cycle_usage_period(state.period, 1);
                 reset_usage_selection(state);
                 self.spawn_usage_stats_request(state);
             }
-            KeyCode::Tab => {
+            Some(KeyAction::NextTab) => {
                 state.view = state.view.cycle(1);
                 reset_usage_selection(state);
             }
-            KeyCode::BackTab => {
+            Some(KeyAction::PreviousTab) => {
                 state.view = state.view.cycle(-1);
                 reset_usage_selection(state);
             }
-            KeyCode::Char('1') => set_usage_view(state, UsageDashboardView::Overview),
-            KeyCode::Char('2') => set_usage_view(state, UsageDashboardView::Daily),
-            KeyCode::Char('3') => set_usage_view(state, UsageDashboardView::Providers),
-            KeyCode::Char('4') => set_usage_view(state, UsageDashboardView::Models),
-            KeyCode::Char('5') => set_usage_view(state, UsageDashboardView::Sessions),
-            KeyCode::Up | KeyCode::Char('k') => move_usage_selection(state, -1),
-            KeyCode::Down | KeyCode::Char('j') => move_usage_selection(state, 1),
-            KeyCode::Home | KeyCode::Char('g') => {
+            Some(KeyAction::SelectView(1)) => set_usage_view(state, UsageDashboardView::Overview),
+            Some(KeyAction::SelectView(2)) => set_usage_view(state, UsageDashboardView::Daily),
+            Some(KeyAction::SelectView(3)) => set_usage_view(state, UsageDashboardView::Providers),
+            Some(KeyAction::SelectView(4)) => set_usage_view(state, UsageDashboardView::Models),
+            Some(KeyAction::SelectView(5)) => set_usage_view(state, UsageDashboardView::Sessions),
+            Some(KeyAction::MoveUp) => move_usage_selection(state, -1),
+            Some(KeyAction::MoveDown) => move_usage_selection(state, 1),
+            Some(KeyAction::Home) => {
                 state.selected = 0;
                 state.scroll = 0;
             }
-            KeyCode::End | KeyCode::Char('G') => {
+            Some(KeyAction::End) => {
                 state.selected = usage_dashboard_row_count(state).saturating_sub(1);
             }
-            KeyCode::Char('s') => {
+            Some(KeyAction::CycleSort) => {
                 state.sort = state.sort.next();
                 reset_usage_selection(state);
             }
-            KeyCode::Char('a') => {
+            Some(KeyAction::ToggleSubagents) => {
                 state.include_subagents = !state.include_subagents;
                 reset_usage_selection(state);
                 self.spawn_usage_stats_request(state);
             }
-            KeyCode::Char('p') => {
+            Some(KeyAction::NextProvider) => {
                 cycle_provider_filter(state, 1);
                 reset_usage_selection(state);
                 self.spawn_usage_stats_request(state);
             }
-            KeyCode::Char('P') => {
+            Some(KeyAction::PreviousProvider) => {
                 cycle_provider_filter(state, -1);
                 reset_usage_selection(state);
                 self.spawn_usage_stats_request(state);
             }
-            KeyCode::Char('m') => {
+            Some(KeyAction::NextModel) => {
                 cycle_model_filter(state, 1);
                 reset_usage_selection(state);
                 self.spawn_usage_stats_request(state);
             }
-            KeyCode::Char('M') => {
+            Some(KeyAction::PreviousModel) => {
                 cycle_model_filter(state, -1);
                 reset_usage_selection(state);
                 self.spawn_usage_stats_request(state);
             }
-            KeyCode::Char('r') => self.spawn_usage_stats_request(state),
-            KeyCode::Enter if state.view == UsageDashboardView::Sessions => {
+            Some(KeyAction::Refresh) => self.spawn_usage_stats_request(state),
+            Some(KeyAction::Open) if state.view == UsageDashboardView::Sessions => {
                 if let Some(session) = selected_usage_session(state) {
                     let session_id = session.session_id;
                     let title = session.title.clone();
@@ -185,7 +183,7 @@ impl App {
                     return true;
                 }
             }
-            _ => {}
+            Some(_) | None => {}
         }
         false
     }

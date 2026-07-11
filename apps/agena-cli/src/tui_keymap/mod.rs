@@ -9,6 +9,7 @@ mod composer;
 mod core;
 mod plugin;
 mod studio;
+mod usage;
 
 use crossterm::event::KeyEvent;
 
@@ -35,6 +36,7 @@ pub enum KeyContext {
     PermissionPrompt,
     UserInputQuestion,
     UserInputReview,
+    Usage,
     SettingsStudio,
     AgentStudio,
     PermissionStudio,
@@ -68,6 +70,7 @@ pub enum KeyAction {
     SearchPrevious,
     New,
     Continue,
+    OpenUsage,
     ModeAll,
     ModeRoots,
     ModeSubtree,
@@ -135,6 +138,15 @@ pub enum KeyAction {
     Detailed,
     Summary,
     ClearOverride,
+    PreviousPeriod,
+    NextPeriod,
+    SelectView(u8),
+    CycleSort,
+    ToggleSubagents,
+    PreviousProvider,
+    NextProvider,
+    PreviousModel,
+    NextModel,
 }
 
 pub fn resolve(context: KeyContext, key: KeyEvent) -> Option<KeyAction> {
@@ -158,6 +170,7 @@ pub fn resolve(context: KeyContext, key: KeyEvent) -> Option<KeyAction> {
         | KeyContext::PermissionPrompt
         | KeyContext::UserInputQuestion
         | KeyContext::UserInputReview => core::resolve(context, key),
+        KeyContext::Usage => usage::resolve(key),
         KeyContext::SettingsStudio
         | KeyContext::AgentStudio
         | KeyContext::PermissionStudio
@@ -266,14 +279,55 @@ mod tests {
     }
 
     #[test]
+    fn usage_dashboard_keys_are_registered_by_context() {
+        assert_eq!(
+            resolve(
+                KeyContext::Main,
+                key(KeyCode::Char('U'), KeyModifiers::SHIFT)
+            ),
+            Some(KeyAction::OpenUsage)
+        );
+        assert_eq!(
+            resolve(KeyContext::Usage, key(KeyCode::Left, KeyModifiers::NONE)),
+            resolve(
+                KeyContext::Usage,
+                key(KeyCode::Char('h'), KeyModifiers::NONE)
+            )
+        );
+        assert_eq!(
+            resolve(KeyContext::Usage, key(KeyCode::Up, KeyModifiers::NONE)),
+            resolve(
+                KeyContext::Usage,
+                key(KeyCode::Char('k'), KeyModifiers::NONE)
+            )
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Usage,
+                key(KeyCode::Char('3'), KeyModifiers::NONE)
+            ),
+            Some(KeyAction::SelectView(3))
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Usage,
+                key(KeyCode::Char('r'), KeyModifiers::CONTROL)
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn visible_shortcut_hints_track_the_central_keymap() {
         let english = crate::i18n::I18n::english();
         let transcript = crate::ui_text::t(&english, "status-transcript");
         let composer = crate::ui_text::t(&english, "status-composer");
         let global = crate::ui_text::t(&english, "status-global");
+        let actions = crate::ui_text::t(&english, "help-actions-line-2");
 
         assert!(transcript.contains("i insert"));
         assert!(composer.contains("Esc view"));
+        assert!(actions.contains("U opens usage analytics"));
         for removed in ["Alt+S", "Alt+P", "q quit"] {
             assert!(!global.contains(removed));
         }

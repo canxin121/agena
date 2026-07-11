@@ -77,6 +77,10 @@ impl App {
                     self.continue_current_session();
                     return;
                 }
+                KeyAction::OpenUsage => {
+                    self.open_usage_dashboard("");
+                    return;
+                }
                 _ => {}
             }
         }

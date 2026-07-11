@@ -84,7 +84,7 @@ pub(in crate::app) fn append_rendered_part_node(
     expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
 ) {
     // Like Markdown blocks, non-text parts start after the message header so
-    // selecting the first thinking/tool part never highlights `assistant`.
+    // selecting the first activity part never highlights `assistant`.
     let start_line = lines.len();
     let node = render_part_node(message, part, width, lines, i18n, defaults, expansions);
     if lines.len() > start_line {
@@ -106,19 +106,23 @@ pub(in crate::app) fn collapsed_activity_run_end(
 ) -> Option<usize> {
     is_activity_part(parts.get(start)?).then(|| {
         let mut end = start.saturating_add(1);
-        while parts.get(end).is_some_and(is_activity_part) {
+        while parts.get(end).is_some_and(|part| {
+            is_activity_part(part) || is_invisible_activity_run_bridge(parts, end)
+        }) {
             end = end.saturating_add(1);
         }
         end
     })
 }
 
-pub(in crate::app) fn collapsed_activity_visible_start(
-    start: usize,
-    end: usize,
-    expanded: bool,
-) -> usize {
-    if expanded { start } else { end }
+pub(in crate::app) const COLLAPSED_ACTIVITY_VISIBLE_COUNT: usize = 5;
+
+fn is_invisible_activity_run_bridge(parts: &[MessagePart], index: usize) -> bool {
+    interactive_request_is_embedded_in_operation(parts, index)
+        || matches!(
+            parts.get(index).map(transcript_part_content),
+            Some(PartContent::Text(text)) if text.ignored || text.text.trim().is_empty()
+        )
 }
 
 pub(in crate::app) fn is_activity_part(part: &MessagePart) -> bool {
@@ -222,8 +226,7 @@ pub(in crate::app) fn render_transcript_export_markdown(
                 u16::MAX,
                 i18n,
                 TranscriptDetailDefaults {
-                    tool_output_expanded: true,
-                    thinking_expanded: false,
+                    activity_expanded: true,
                 },
             )
             .into_iter()
@@ -372,14 +375,14 @@ pub(in crate::app) fn render_part_node(
             }
         }
         PartContent::Reasoning(reasoning) => {
-            let key = TranscriptNodeKey::Reasoning {
+            let key = TranscriptNodeKey::ActivityPart {
                 message_id: message.id,
                 part_id: part.id,
             };
             let expanded = expansions
                 .get(&key)
                 .copied()
-                .unwrap_or(defaults.thinking_expanded);
+                .unwrap_or(defaults.activity_expanded);
             let summary = reasoning.preferred_text();
             if expanded {
                 push_section_heading(
@@ -408,25 +411,25 @@ pub(in crate::app) fn render_part_node(
             }
             RenderedNodeDraft {
                 key,
-                kind: TranscriptNodeKind::Reasoning,
+                kind: TranscriptNodeKind::Activity,
                 copy_text: summary,
                 toggleable: true,
                 expanded,
             }
         }
         PartContent::Operation(tool) => {
-            let key = TranscriptNodeKey::Tool {
+            let key = TranscriptNodeKey::ActivityPart {
                 message_id: message.id,
                 part_id: part.id,
             };
             let expanded = expansions
                 .get(&key)
                 .copied()
-                .unwrap_or(defaults.tool_output_expanded);
+                .unwrap_or(defaults.activity_expanded);
             render_tool_execution(part, tool, out, width, i18n, expanded);
             RenderedNodeDraft {
                 key,
-                kind: TranscriptNodeKind::Tool,
+                kind: TranscriptNodeKind::Activity,
                 copy_text: tool_output_copy_text(part, tool, i18n),
                 toggleable: true,
                 expanded,

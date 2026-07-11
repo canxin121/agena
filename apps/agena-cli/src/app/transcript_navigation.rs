@@ -50,11 +50,7 @@ pub(in crate::app) enum TranscriptNodeKey {
         first_part_id: i64,
         last_part_id: i64,
     },
-    Reasoning {
-        message_id: i64,
-        part_id: i64,
-    },
-    Tool {
+    ActivityPart {
         message_id: i64,
         part_id: i64,
     },
@@ -67,8 +63,7 @@ impl TranscriptNodeKey {
             | Self::MessagePart { message_id, .. }
             | Self::MarkdownBlock { message_id, .. }
             | Self::ActivitySummary { message_id, .. }
-            | Self::Reasoning { message_id, .. }
-            | Self::Tool { message_id, .. } => *message_id,
+            | Self::ActivityPart { message_id, .. } => *message_id,
         }
     }
 
@@ -85,8 +80,6 @@ pub(in crate::app) enum TranscriptNodeKind {
     MarkdownList,
     MarkdownTable,
     Activity,
-    Reasoning,
-    Tool,
 }
 
 pub(in crate::app) fn transcript_node_kind_label(i18n: &I18n, kind: TranscriptNodeKind) -> String {
@@ -97,8 +90,6 @@ pub(in crate::app) fn transcript_node_kind_label(i18n: &I18n, kind: TranscriptNo
         TranscriptNodeKind::MarkdownList => "transcript-node-kind-list",
         TranscriptNodeKind::MarkdownTable => "transcript-node-kind-table",
         TranscriptNodeKind::Activity => "transcript-node-kind-activity",
-        TranscriptNodeKind::Reasoning => "transcript-node-kind-reasoning",
-        TranscriptNodeKind::Tool => "transcript-node-kind-tool",
     };
     ui_text::t(i18n, key)
 }

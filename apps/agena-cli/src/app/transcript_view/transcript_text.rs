@@ -443,10 +443,7 @@ pub(in crate::app) fn render_markdown_block(
                 push_markdown(out, prefix, &block.source, width);
             }
         }
-        TranscriptNodeKind::Message
-        | TranscriptNodeKind::Activity
-        | TranscriptNodeKind::Reasoning
-        | TranscriptNodeKind::Tool => {
+        TranscriptNodeKind::Message | TranscriptNodeKind::Activity => {
             push_markdown(out, prefix, &block.source, width);
         }
     }

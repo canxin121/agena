@@ -167,11 +167,7 @@ impl App {
                     u16::MAX,
                     &self.i18n,
                     TranscriptDetailDefaults {
-                        tool_output_expanded: true,
-                        thinking_expanded: self
-                            .transcript
-                            .detail_expanded_by_default
-                            .thinking_expanded,
+                        activity_expanded: true,
                     },
                 )
                 .into_iter()

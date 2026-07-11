@@ -188,8 +188,7 @@ pub(crate) struct RenderedLine {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TranscriptDetailDefaults {
-    pub(crate) tool_output_expanded: bool,
-    pub(crate) thinking_expanded: bool,
+    pub(crate) activity_expanded: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -23,15 +23,13 @@ pub struct TuiStatusLineConfig {
 
 #[derive(Debug, Clone)]
 pub struct TuiTranscriptConfig {
-    pub tool_output_default_expanded: bool,
-    pub thinking_default_expanded: bool,
+    pub activity_default_expanded: bool,
 }
 
 impl Default for TuiTranscriptConfig {
     fn default() -> Self {
         Self {
-            tool_output_default_expanded: false,
-            thinking_default_expanded: false,
+            activity_default_expanded: false,
         }
     }
 }

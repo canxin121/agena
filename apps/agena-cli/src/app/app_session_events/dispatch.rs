@@ -369,7 +369,7 @@ impl App {
                 self.flash_error(error);
                 // Pause draining: a failed run typically means the user
                 // wants to inspect the error rather than fire the next
-                // queued message blindly. They can press Up to recover
+                // queued message blindly. They can press Ctrl+Up to recover
                 // the queue contents.
             }
         }

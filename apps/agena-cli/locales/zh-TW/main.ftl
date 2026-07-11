@@ -30,7 +30,7 @@ composer-placeholder = 輸入給 Agena。Alt+Up 歷史。/ 指令。F3 附件。
 status-global = / 向下搜尋 | ? 向上搜尋 | Ctrl+C 連按兩次離開
 status-sessions = 工作階段：/sessions [查詢]
 status-transcript = 查看：i 進入插入 | j/k 捲動 | / 搜尋 | c 複製上一則 | y 複製
-status-composer = 插入：Esc 返回查看 | Ctrl+Enter 立即送出 | Ctrl+J 換行 | Alt+Up/Down 歷史 | / 指令
+status-composer = 插入：Esc 返回查看 | Ctrl+Enter 立即送出 | Ctrl+J 換行 | Ctrl+R/Alt+Up 歷史 | Ctrl+Up 取回佇列訊息 | / 指令
 
 help-title = 說明
 help-header = Agena TUI
@@ -56,9 +56,9 @@ help-composer-line-6 = F3、Ctrl+O 或 Alt+O 搜尋工作區檔案並附加
 help-composer-line-7 = F4 或 Alt+E 用 $VISUAL/$EDITOR 開啟外部編輯器
 help-composer-line-8 = F6 或 Alt+I 附加剪貼簿圖片
 help-composer-line-9 = 貼上的文字會直接插入輸入區；貼上單一檔案路徑會直接附加，附件保持原子化
-help-composer-line-10 = Alt+Up/Down 召回已送出的提示詞
+help-composer-line-10 = Ctrl+R 或 Alt+Up 開啟歷史；Ctrl+Up 取回佇列訊息
 help-section-actions = 操作
-help-actions-line-1 = n 建立工作階段
+help-actions-line-1 = Ctrl+N 建立工作階段；n/N 跳轉搜尋結果
 help-actions-line-2 = r 繼續被阻擋或待處理的工作階段；U 開啟用量統計
 help-actions-line-3 = a/A/d/D 回覆第一個待處理權限請求
 help-actions-line-4 = 在輸入區用 Alt+U 開啟第一個待處理使用者輸入請求
@@ -81,8 +81,8 @@ overlay-user-input-title = 待處理使用者輸入
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = 允許自訂值
 overlay-user-input-reply-format = 回覆格式：question_id=value;other_id=value1,value2
-overlay-user-input-cancel-hint = Ctrl+D 取消此請求
-overlay-user-input-footer = Ctrl+D 取消
+overlay-user-input-cancel-hint = Ctrl+X 取消此請求
+overlay-user-input-footer = Ctrl+X 取消
 
 flash-terminal-event-error = 終端事件錯誤：{$error}
 flash-created-session = 已建立工作階段 {$title}

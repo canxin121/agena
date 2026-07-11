@@ -66,6 +66,7 @@ impl App {
                     }
                     false
                 }
+                Some(KeyAction::CancelRequest) => self.cancel_user_input_overlay(dialog),
                 _ => {
                     dialog.custom_input.handle_line_input_key(key);
                     false

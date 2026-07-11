@@ -30,7 +30,7 @@ composer-placeholder = Message pour Agena. Alt+Up historique. / commandes. F3 fi
 status-global = / cherche en bas | ? cherche en haut | Ctrl+C deux fois quitte
 status-sessions = Sessions: /sessions [recherche]
 status-transcript = VIEW: i saisie | j/k defile | / cherche | c copie dernier | y copie
-status-composer = INSERT: Esc retour | Ctrl+Enter envoie maintenant | Ctrl+J nouvelle ligne | Alt+Up/Down historique | / commandes
+status-composer = INSERT: Esc retour | Ctrl+Enter envoie maintenant | Ctrl+J nouvelle ligne | Ctrl+R/Alt+Up historique | Ctrl+Up file | / commandes
 
 help-title = Aide
 help-header = Agena TUI
@@ -56,9 +56,9 @@ help-composer-line-6 = F3, Ctrl+O ou Alt+O recherchent des fichiers du workspace
 help-composer-line-7 = F4 ou Alt+E ouvrent $VISUAL/$EDITOR pour la composition
 help-composer-line-8 = F6 ou Alt+I joignent une image du presse-papiers
 help-composer-line-9 = Le texte colle est insere directement ; un chemin de fichier unique est joint et les pieces jointes restent atomiques
-help-composer-line-10 = Alt+Up/Down rappelle les prompts envoyes
+help-composer-line-10 = Ctrl+R ou Alt+Up ouvre l'historique ; Ctrl+Up recupere un message en attente
 help-section-actions = Actions
-help-actions-line-1 = n cree une session
+help-actions-line-1 = Ctrl+N cree une session ; n/N parcourt les resultats de recherche
 help-actions-line-2 = r continue une session bloquee ou en attente ; U ouvre les statistiques d’utilisation
 help-actions-line-3 = a/A/d/D repondent a la premiere demande d'autorisation en attente
 help-actions-line-4 = Alt+U ouvre la premiere demande d'entree en attente depuis la composition
@@ -81,8 +81,8 @@ overlay-user-input-title = Entree utilisateur en attente
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = valeur personnalisee autorisee
 overlay-user-input-reply-format = Format de reponse : question_id=value;other_id=value1,value2
-overlay-user-input-cancel-hint = Ctrl+D annule la demande
-overlay-user-input-footer = Ctrl+D annuler
+overlay-user-input-cancel-hint = Ctrl+X annule la demande
+overlay-user-input-footer = Ctrl+X annuler
 
 flash-terminal-event-error = erreur d'evenement terminal : {$error}
 flash-created-session = session creee {$title}

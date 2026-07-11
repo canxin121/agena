@@ -30,7 +30,7 @@ composer-placeholder = Nachricht an Agena. Alt+Up Verlauf. / Befehle. F3 Datei.
 status-global = / abwaerts suchen | ? aufwaerts suchen | Ctrl+C zweimal beendet
 status-sessions = Sitzungen: /sessions [Suche]
 status-transcript = VIEW: i Eingabe | j/k scrollen | / suchen | c letzte kopieren | y kopieren
-status-composer = INSERT: Esc zurueck | Ctrl+Enter jetzt senden | Ctrl+J neue Zeile | Alt+Up/Down Verlauf | / Befehle
+status-composer = INSERT: Esc zurueck | Ctrl+Enter jetzt senden | Ctrl+J neue Zeile | Ctrl+R/Alt+Up Verlauf | Ctrl+Up Warteschlange | / Befehle
 
 help-title = Hilfe
 help-header = Agena TUI
@@ -56,9 +56,9 @@ help-composer-line-6 = F3, Ctrl+O oder Alt+O suchen Workspace-Dateien zum Anhaen
 help-composer-line-7 = F4 oder Alt+E oeffnen $VISUAL/$EDITOR fuer die Eingabe
 help-composer-line-8 = F6 oder Alt+I haengen ein Zwischenablagebild an
 help-composer-line-9 = Eingefuegter Text wird direkt eingefuegt; ein einzelner Dateipfad wird angehaengt, und Anhaenge bleiben atomar
-help-composer-line-10 = Alt+Up/Down ruft gesendete Prompts ab
+help-composer-line-10 = Ctrl+R oder Alt+Up oeffnet den Verlauf; Ctrl+Up holt eine wartende Nachricht zurueck
 help-section-actions = Aktionen
-help-actions-line-1 = n erstellt eine Sitzung
+help-actions-line-1 = Ctrl+N erstellt eine Sitzung; n/N navigiert Suchtreffer
 help-actions-line-2 = r setzt eine blockierte oder wartende Sitzung fort; U öffnet die Nutzungsstatistik
 help-actions-line-3 = a/A/d/D antworten auf die erste offene Berechtigungsanfrage
 help-actions-line-4 = Alt+U oeffnet die erste offene Benutzereingabeanfrage im Composer
@@ -81,8 +81,8 @@ overlay-user-input-title = Ausstehende Benutzereingabe
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = benutzerdefinierter Wert erlaubt
 overlay-user-input-reply-format = Antwortformat: question_id=value;other_id=value1,value2
-overlay-user-input-cancel-hint = Ctrl+D bricht die Anfrage ab
-overlay-user-input-footer = Ctrl+D abbrechen
+overlay-user-input-cancel-hint = Ctrl+X bricht die Anfrage ab
+overlay-user-input-footer = Ctrl+X abbrechen
 
 flash-terminal-event-error = Terminalereignisfehler: {$error}
 flash-created-session = Sitzung erstellt {$title}

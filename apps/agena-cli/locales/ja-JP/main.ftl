@@ -30,7 +30,7 @@ composer-placeholder = Agena へ入力。Alt+Up 履歴。/ コマンド。F3 添
 status-global = / 下方向検索 | ? 上方向検索 | Ctrl+C 2回で終了
 status-sessions = セッション: /sessions [検索]
 status-transcript = VIEW: i で入力 | j/k スクロール | / 検索 | c 最後をコピー | y コピー
-status-composer = INSERT: Esc で戻る | Ctrl+Enter 今すぐ送信 | Ctrl+J 改行 | Alt+Up/Down 履歴 | / コマンド
+status-composer = INSERT: Esc で戻る | Ctrl+Enter 今すぐ送信 | Ctrl+J 改行 | Ctrl+R/Alt+Up 履歴 | Ctrl+Up キュー回収 | / コマンド
 
 help-title = ヘルプ
 help-header = Agena TUI
@@ -56,9 +56,9 @@ help-composer-line-6 = F3、Ctrl+O、Alt+O でワークスペースファイル�
 help-composer-line-7 = F4 または Alt+E で $VISUAL/$EDITOR を開く
 help-composer-line-8 = F6 または Alt+I でクリップボード画像を添付
 help-composer-line-9 = 貼り付けたテキストは直接入力され、単一のファイルパスは添付になり、添付は原子的に扱われます
-help-composer-line-10 = Alt+Up/Down で送信済みプロンプトを呼び出します
+help-composer-line-10 = Ctrl+R または Alt+Up で履歴を開き、Ctrl+Up でキューのメッセージを戻します
 help-section-actions = 操作
-help-actions-line-1 = n セッション作成
+help-actions-line-1 = Ctrl+N でセッション作成、n/N で検索結果を移動
 help-actions-line-2 = r ブロック中または保留中のセッションを続行、U 使用状況分析を開く
 help-actions-line-3 = a/A/d/D で最初の保留中の権限リクエストに応答
 help-actions-line-4 = Composer で Alt+U を押すと最初の保留中ユーザー入力を開く
@@ -81,8 +81,8 @@ overlay-user-input-title = 保留中のユーザー入力
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = カスタム値を許可
 overlay-user-input-reply-format = 返信形式: question_id=value;other_id=value1,value2
-overlay-user-input-cancel-hint = Ctrl+D でリクエストをキャンセル
-overlay-user-input-footer = Ctrl+D でキャンセル
+overlay-user-input-cancel-hint = Ctrl+X でリクエストをキャンセル
+overlay-user-input-footer = Ctrl+X でキャンセル
 
 flash-terminal-event-error = 端末イベントエラー: {$error}
 flash-created-session = セッションを作成しました {$title}

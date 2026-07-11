@@ -20,7 +20,7 @@ use crate::{
     },
     navigation_action,
     panels::{ListPanelState, MeasuredListPanelHeight, render_list_panel_state},
-    render_editor_panel, render_framed_surface,
+    render_editor_panel, render_framed_surface, search_navigation_action,
     selection::{
         clamp_selected_index, move_selected_index, move_selected_index_end,
         move_selected_index_home, move_selected_index_page,
@@ -312,7 +312,19 @@ where
     }
 
     pub fn handle_navigation_key(&mut self, key: KeyEvent, page_size: usize) -> bool {
-        match navigation_action(key) {
+        self.handle_navigation_action(navigation_action(key), page_size)
+    }
+
+    fn handle_search_navigation_key(&mut self, key: KeyEvent, page_size: usize) -> bool {
+        self.handle_navigation_action(search_navigation_action(key), page_size)
+    }
+
+    fn handle_navigation_action(
+        &mut self,
+        action: Option<NavigationAction>,
+        page_size: usize,
+    ) -> bool {
+        match action {
             Some(NavigationAction::PageUp) => {
                 self.move_selection_page(-1, page_size);
                 true
@@ -349,7 +361,7 @@ where
         if input_dialog_action(key, false) == Some(InputDialogAction::Close) {
             return SearchInputKeyResult::Close;
         }
-        if self.handle_navigation_key(key, page_size) {
+        if self.handle_search_navigation_key(key, page_size) {
             return SearchInputKeyResult::Navigated;
         }
         if !self.config.input_enabled {

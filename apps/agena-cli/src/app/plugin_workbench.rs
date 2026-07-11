@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
-use crossterm::event::{KeyEvent, KeyModifiers};
+use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},

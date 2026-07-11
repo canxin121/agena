@@ -11,9 +11,40 @@ mod plugin;
 mod studio;
 mod usage;
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyEvent, KeyModifiers};
 
 pub use self::composer::{ComposerAction, ComposerKeyBindings};
+
+fn command_modifiers(key: KeyEvent) -> KeyModifiers {
+    key.modifiers
+        & (KeyModifiers::CONTROL
+            | KeyModifiers::ALT
+            | KeyModifiers::SHIFT
+            | KeyModifiers::SUPER
+            | KeyModifiers::HYPER
+            | KeyModifiers::META)
+}
+
+pub(super) fn unmodified(key: KeyEvent) -> bool {
+    command_modifiers(key).is_empty()
+}
+
+pub(super) fn only_ctrl(key: KeyEvent) -> bool {
+    command_modifiers(key) == KeyModifiers::CONTROL
+}
+
+pub(super) fn only_alt(key: KeyEvent) -> bool {
+    command_modifiers(key) == KeyModifiers::ALT
+}
+
+pub(super) fn only_shift(key: KeyEvent) -> bool {
+    command_modifiers(key) == KeyModifiers::SHIFT
+}
+
+pub(super) fn unmodified_or_shift(key: KeyEvent) -> bool {
+    let modifiers = command_modifiers(key);
+    modifiers.is_empty() || modifiers == KeyModifiers::SHIFT
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyContext {
@@ -127,7 +158,6 @@ pub enum KeyAction {
     TransportFilter,
     ConfigFilter,
     ShowDiff,
-    CloseDiff,
     Validate,
     InsertDefaults,
     Actions,
@@ -192,7 +222,7 @@ pub fn resolve(context: KeyContext, key: KeyEvent) -> Option<KeyAction> {
 
 #[cfg(test)]
 mod tests {
-    use super::{KeyAction, KeyContext, resolve};
+    use super::{ComposerAction, ComposerKeyBindings, KeyAction, KeyContext, resolve};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
@@ -318,16 +348,227 @@ mod tests {
     }
 
     #[test]
+    fn unexpected_modifiers_do_not_trigger_plain_page_actions() {
+        for (context, code, modifiers) in [
+            (
+                KeyContext::Global,
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
+            (
+                KeyContext::Sessions,
+                KeyCode::Char('k'),
+                KeyModifiers::CONTROL,
+            ),
+            (KeyContext::Transcript, KeyCode::Enter, KeyModifiers::ALT),
+            (
+                KeyContext::SettingsStudio,
+                KeyCode::Char('r'),
+                KeyModifiers::ALT,
+            ),
+            (KeyContext::PluginList, KeyCode::Down, KeyModifiers::SHIFT),
+            (KeyContext::Usage, KeyCode::Up, KeyModifiers::SHIFT),
+        ] {
+            assert_eq!(resolve(context, key(code, modifiers)), None);
+        }
+
+        assert_eq!(
+            resolve(
+                KeyContext::PluginConfig,
+                key(KeyCode::Char('d'), KeyModifiers::CONTROL)
+            ),
+            Some(KeyAction::Delete)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::PromptHistory,
+                key(KeyCode::Char('c'), KeyModifiers::CONTROL)
+            ),
+            Some(KeyAction::Close)
+        );
+        assert_eq!(
+            ComposerKeyBindings::default().match_action(&key(
+                KeyCode::Enter,
+                KeyModifiers::CONTROL | KeyModifiers::SUPER,
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn searchable_pages_leave_printable_characters_for_the_editor() {
+        for context in [
+            KeyContext::Choice,
+            KeyContext::FileAttach,
+            KeyContext::SessionSearch,
+            KeyContext::Picker,
+            KeyContext::SessionModel,
+            KeyContext::Timeline,
+            KeyContext::PathBrowser,
+            KeyContext::PluginList,
+        ] {
+            for byte in b' '..=b'~' {
+                let character = char::from(byte);
+                assert_eq!(
+                    resolve(context, key(KeyCode::Char(character), KeyModifiers::NONE)),
+                    None,
+                    "{context:?} must leave {character:?} for search input"
+                );
+            }
+        }
+
+        assert_eq!(
+            resolve(
+                KeyContext::Picker,
+                key(KeyCode::Char('n'), KeyModifiers::ALT)
+            ),
+            Some(KeyAction::New)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::SessionSearch,
+                key(KeyCode::Left, KeyModifiers::NONE)
+            ),
+            None
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::SessionSearch,
+                key(KeyCode::PageUp, KeyModifiers::CONTROL)
+            ),
+            Some(KeyAction::Previous)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::PathBrowser,
+                key(KeyCode::Left, KeyModifiers::NONE)
+            ),
+            None
+        );
+        assert_eq!(
+            resolve(KeyContext::PathBrowser, key(KeyCode::Up, KeyModifiers::ALT)),
+            Some(KeyAction::Back)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::PluginList,
+                key(KeyCode::Char('r'), KeyModifiers::CONTROL)
+            ),
+            Some(KeyAction::Refresh)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Timeline,
+                key(KeyCode::Char('y'), KeyModifiers::CONTROL)
+            ),
+            None
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Timeline,
+                key(KeyCode::Char('y'), KeyModifiers::ALT)
+            ),
+            Some(KeyAction::CopyEvent)
+        );
+    }
+
+    #[test]
+    fn overloaded_main_and_composer_keys_have_distinct_chords() {
+        assert_eq!(
+            resolve(
+                KeyContext::Main,
+                key(KeyCode::Char('n'), KeyModifiers::NONE)
+            ),
+            Some(KeyAction::SearchNext)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Main,
+                key(KeyCode::Char('n'), KeyModifiers::CONTROL)
+            ),
+            Some(KeyAction::New)
+        );
+        assert_eq!(
+            resolve(KeyContext::Composer, key(KeyCode::Up, KeyModifiers::NONE)),
+            None
+        );
+        assert_eq!(
+            resolve(KeyContext::Composer, key(KeyCode::Up, KeyModifiers::ALT)),
+            Some(KeyAction::Older)
+        );
+        let bindings = ComposerKeyBindings::default();
+        assert_eq!(
+            bindings.match_action(&key(KeyCode::Up, KeyModifiers::NONE)),
+            None
+        );
+        assert_eq!(
+            bindings.match_action(&key(KeyCode::Up, KeyModifiers::CONTROL)),
+            Some(ComposerAction::EditQueue)
+        );
+    }
+
+    #[test]
+    fn plugin_config_uses_one_unambiguous_context() {
+        for (code, modifiers, action) in [
+            (KeyCode::Esc, KeyModifiers::NONE, Some(KeyAction::Back)),
+            (
+                KeyCode::Char('r'),
+                KeyModifiers::NONE,
+                Some(KeyAction::Reset),
+            ),
+            (
+                KeyCode::Char('R'),
+                KeyModifiers::SHIFT,
+                Some(KeyAction::Refresh),
+            ),
+            (KeyCode::Char('d'), KeyModifiers::NONE, None),
+            (
+                KeyCode::Char('D'),
+                KeyModifiers::SHIFT,
+                Some(KeyAction::ShowDiff),
+            ),
+            (
+                KeyCode::Char('h'),
+                KeyModifiers::CONTROL,
+                Some(KeyAction::Previous),
+            ),
+        ] {
+            assert_eq!(
+                resolve(KeyContext::PluginConfig, key(code, modifiers)),
+                action
+            );
+        }
+    }
+
+    #[test]
+    fn user_input_cancellation_no_longer_uses_editor_delete() {
+        for context in [KeyContext::UserInputQuestion, KeyContext::UserInputReview] {
+            assert_eq!(
+                resolve(context, key(KeyCode::Char('d'), KeyModifiers::CONTROL)),
+                None
+            );
+            assert_eq!(
+                resolve(context, key(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+                Some(KeyAction::CancelRequest)
+            );
+        }
+    }
+
+    #[test]
     fn visible_shortcut_hints_track_the_central_keymap() {
         let english = crate::i18n::I18n::english();
         let transcript = crate::ui_text::t(&english, "status-transcript");
         let composer = crate::ui_text::t(&english, "status-composer");
         let global = crate::ui_text::t(&english, "status-global");
-        let actions = crate::ui_text::t(&english, "help-actions-line-2");
+        let session_actions = crate::ui_text::t(&english, "help-actions-line-1");
+        let usage_actions = crate::ui_text::t(&english, "help-actions-line-2");
 
         assert!(transcript.contains("i insert"));
         assert!(composer.contains("Esc view"));
-        assert!(actions.contains("U opens usage analytics"));
+        assert!(composer.contains("Ctrl+Up recover queued"));
+        assert!(!composer.contains("Up/Down history at edges"));
+        assert!(session_actions.contains("Ctrl+N creates a session"));
+        assert!(usage_actions.contains("U opens usage analytics"));
         for removed in ["Alt+S", "Alt+P", "q quit"] {
             assert!(!global.contains(removed));
         }

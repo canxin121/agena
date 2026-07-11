@@ -371,7 +371,7 @@ pub(in crate::app) fn render_plugin_list_page(
     render_plugin_footer(
         frame,
         rows[2],
-        "Type to search  t transport filter  c config filter  r refresh",
+        "Type to search  Alt+T transport filter  Alt+C config filter  Ctrl+R refresh",
     );
 }
 
@@ -421,7 +421,7 @@ pub(in crate::app) fn render_plugin_detail_page(
         PluginDetailTab::Diagnostics => plugin_diagnostics_text(plugin),
     };
     render_plugin_panel(frame, rows[2], dialog.detail_tab.label(), body, None);
-    render_plugin_footer(frame, rows[3], "r refresh");
+    render_plugin_footer(frame, rows[3], "r reset  R refresh");
 }
 
 pub(in crate::app) fn render_plugin_compact_config_page(

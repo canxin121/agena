@@ -14,11 +14,7 @@ impl KeyChord {
     }
 
     pub fn matches(&self, event: &KeyEvent) -> bool {
-        let want =
-            self.modifiers & (KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT);
-        let got =
-            event.modifiers & (KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT);
-        event.code == self.code && want == got
+        event.code == self.code && event.modifiers == self.modifiers
     }
 }
 
@@ -48,7 +44,7 @@ impl Default for ComposerKeyBindings {
                 KeyChord::new(KeyCode::Enter, KeyModifiers::ALT),
                 KeyChord::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
             ],
-            edit_queue: vec![KeyChord::new(KeyCode::Up, KeyModifiers::empty())],
+            edit_queue: vec![KeyChord::new(KeyCode::Up, KeyModifiers::CONTROL)],
             history_search: vec![KeyChord::new(KeyCode::Char('r'), KeyModifiers::CONTROL)],
             clear_input: vec![KeyChord::new(KeyCode::Char('l'), KeyModifiers::CONTROL)],
             focus_items: vec![KeyChord::new(KeyCode::F(2), KeyModifiers::empty())],

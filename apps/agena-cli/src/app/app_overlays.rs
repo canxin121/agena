@@ -103,7 +103,7 @@ impl App {
             .min(u16::MAX as usize) as u16;
         match resolve_tui_key(KeyContext::Help, key) {
             Some(KeyAction::Close) => true,
-            _ => dialog.handle_navigation_key(key, max_scroll, 8),
+            _ => handle_help_navigation_key(dialog, key, max_scroll),
         }
     }
 
@@ -757,6 +757,32 @@ impl App {
             _ if dialog.workbench.list.handle_navigation_key(key, 10) => false,
             _ => false,
         }
+    }
+}
+
+fn handle_help_navigation_key(dialog: &mut HelpOverlay, key: KeyEvent, max_scroll: u16) -> bool {
+    dialog.handle_navigation_key(key, max_scroll, 8);
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::{HelpOverlay, handle_help_navigation_key};
+
+    #[test]
+    fn help_navigation_scrolls_without_closing_the_route() {
+        let mut dialog = HelpOverlay::default();
+
+        let close = handle_help_navigation_key(
+            &mut dialog,
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            20,
+        );
+
+        assert!(!close);
+        assert_eq!(dialog.scroll, 1);
     }
 }
 use crate::app::{

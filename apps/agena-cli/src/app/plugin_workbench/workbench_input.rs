@@ -303,21 +303,7 @@ impl App {
         dialog: &mut PluginWorkbenchOverlay,
     ) -> bool {
         if dialog.detail_tab == PluginDetailTab::Config {
-            return match resolve_tui_key(KeyContext::PluginDetail, key) {
-                Some(KeyAction::Back) => {
-                    dialog.mode = PluginWorkbenchMode::List;
-                    false
-                }
-                Some(KeyAction::PreviousTab) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    dialog.detail_tab = dialog.detail_tab.move_by(-1);
-                    false
-                }
-                Some(KeyAction::NextTab) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    dialog.detail_tab = dialog.detail_tab.move_by(1);
-                    false
-                }
-                _ => self.handle_plugin_config_key(key, dialog),
-            };
+            return self.handle_plugin_config_key(key, dialog);
         }
 
         match resolve_tui_key(KeyContext::PluginDetail, key) {
@@ -360,7 +346,7 @@ impl App {
         let action = resolve_tui_key(KeyContext::PluginConfig, key);
         if compact_layout && dialog.show_diff {
             match action {
-                Some(KeyAction::Close | KeyAction::CloseDiff | KeyAction::ShowDiff) => {
+                Some(KeyAction::Back | KeyAction::ShowDiff) => {
                     dialog.show_diff = false;
                     return false;
                 }
@@ -426,6 +412,22 @@ impl App {
             }
         }
         match action {
+            Some(KeyAction::Back) => {
+                dialog.mode = PluginWorkbenchMode::List;
+                false
+            }
+            Some(KeyAction::Previous) => {
+                dialog.detail_tab = dialog.detail_tab.move_by(-1);
+                false
+            }
+            Some(KeyAction::Next) => {
+                dialog.detail_tab = dialog.detail_tab.move_by(1);
+                false
+            }
+            Some(KeyAction::Refresh) => {
+                self.refresh_plugin_workbench(dialog);
+                false
+            }
             Some(KeyAction::NextTab) => {
                 dialog.config_focus = next_config_focus(dialog.config_focus, compact_layout);
                 false
@@ -794,7 +796,7 @@ impl App {
 }
 use super::{
     App, COMPACT_TOOLBAR_ACTIONS, CONFIG_EDITOR_PAGE_SIZE, ConfigRowCell, Editor,
-    EditorDialogKeyResult, KeyEvent, KeyModifiers, PLUGIN_WORKBENCH_LOG_LIMIT, PluginConfigFilter,
+    EditorDialogKeyResult, KeyEvent, PLUGIN_WORKBENCH_LOG_LIMIT, PluginConfigFilter,
     PluginConfigFocus, PluginConfigView, PluginDetailTab, PluginTransportFilter,
     PluginWorkbenchMode, PluginWorkbenchOverlay, UiResult, build_plugin_workbench_plugin,
     drilldown_row_count, drilldown_selected_row_cell, drive_editor_dialog_key,

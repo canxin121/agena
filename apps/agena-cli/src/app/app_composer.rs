@@ -82,21 +82,8 @@ impl App {
             self.sync_composer_suggestions();
             return;
         }
-        if composer_key == Some(KeyAction::Older) && !key.modifiers.is_empty() {
+        if composer_key == Some(KeyAction::Older) {
             self.open_prompt_history_search();
-            return;
-        }
-        // Match shell/OpenCode history navigation without stealing normal
-        // multiline editing: bare Up opens history only at the start of the
-        // input. Once open, Up/Down move through the floating newest-first
-        // list. Queued message editing remains higher priority.
-        if composer_key == Some(KeyAction::Older) && self.composer.cursor() == 0 {
-            if self.try_pop_queue_into_editor() {
-                self.reset_prompt_history_recall();
-                self.after_composer_text_mutated();
-            } else {
-                self.open_prompt_history_search();
-            }
             return;
         }
         // Configurable bindings define the composer map. The defaults preserve
@@ -124,8 +111,8 @@ impl App {
                         self.after_composer_text_mutated();
                         return;
                     }
-                    // Fall through to normal cursor-up behavior when queue
-                    // is empty.
+                    // An empty queue leaves Ctrl+Up as a no-op. Bare Up is
+                    // reserved for normal multiline cursor movement.
                 }
                 ComposerAction::HistorySearch => {
                     self.open_prompt_history_search();

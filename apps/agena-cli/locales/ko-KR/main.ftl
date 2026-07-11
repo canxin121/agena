@@ -30,7 +30,7 @@ composer-placeholder = Agena에 입력. Alt+Up 기록. / 명령. F3 첨부.
 status-global = / 아래 검색 | ? 위 검색 | Ctrl+C 두 번 종료
 status-sessions = 세션: /sessions [검색]
 status-transcript = VIEW: i 입력 | j/k 스크롤 | / 검색 | c 마지막 복사 | y 복사
-status-composer = INSERT: Esc 돌아가기 | Ctrl+Enter 즉시 전송 | Ctrl+J 줄바꿈 | Alt+Up/Down 기록 | / 명령
+status-composer = INSERT: Esc 돌아가기 | Ctrl+Enter 즉시 전송 | Ctrl+J 줄바꿈 | Ctrl+R/Alt+Up 기록 | Ctrl+Up 대기열 회수 | / 명령
 
 help-title = 도움말
 help-header = Agena TUI
@@ -56,9 +56,9 @@ help-composer-line-6 = F3, Ctrl+O, Alt+O 로 워크스페이스 파일 검색 �
 help-composer-line-7 = F4 또는 Alt+E 로 $VISUAL/$EDITOR 열기
 help-composer-line-8 = F6 또는 Alt+I 로 클립보드 이미지 첨부
 help-composer-line-9 = 붙여넣은 텍스트는 바로 입력되고, 단일 파일 경로는 첨부되며, 첨부는 원자적으로 유지됩니다
-help-composer-line-10 = Alt+Up/Down으로 보낸 프롬프트를 불러옵니다
+help-composer-line-10 = Ctrl+R 또는 Alt+Up으로 기록을 열고 Ctrl+Up으로 대기열 메시지를 되돌립니다
 help-section-actions = 동작
-help-actions-line-1 = n 세션 생성
+help-actions-line-1 = Ctrl+N 세션 생성, n/N 검색 결과 이동
 help-actions-line-2 = r 차단되었거나 보류 중인 세션 계속; U 사용량 분석 열기
 help-actions-line-3 = a/A/d/D 로 첫 번째 권한 요청 응답
 help-actions-line-4 = Composer에서 Alt+U로 첫 번째 사용자 입력 요청 열기
@@ -81,8 +81,8 @@ overlay-user-input-title = 대기 중인 사용자 입력
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = 사용자 정의 값 허용
 overlay-user-input-reply-format = 답변 형식: question_id=value;other_id=value1,value2
-overlay-user-input-cancel-hint = Ctrl+D 로 요청 취소
-overlay-user-input-footer = Ctrl+D 취소
+overlay-user-input-cancel-hint = Ctrl+X 로 요청 취소
+overlay-user-input-footer = Ctrl+X 취소
 
 flash-terminal-event-error = 터미널 이벤트 오류: {$error}
 flash-created-session = 세션을 만들었습니다 {$title}

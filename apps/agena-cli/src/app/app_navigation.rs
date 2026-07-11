@@ -395,20 +395,22 @@ impl App {
     }
 
     pub(in crate::app) fn current_session_path_label(&self) -> Option<String> {
-        let lineage = self.current_lineage.as_ref()?;
-        if self.transcript.session_id != Some(lineage.session_id) || lineage.path.is_empty() {
+        self.transcript.session_id?;
+        let effective = self
+            .transcript
+            .execution
+            .as_ref()
+            .filter(|execution| self.transcript.session_id == Some(execution.session.id))
+            .and_then(|execution| execution.execution.effective_workspace_root.as_deref())
+            .map(str::trim)
+            .filter(|path| !path.is_empty());
+        let path = effective
+            .map(str::to_owned)
+            .unwrap_or_else(|| self.backend.workspace_root().display().to_string());
+        if path.trim().is_empty() {
             return None;
         }
-
-        Some(format!(
-            "path {}",
-            lineage
-                .path
-                .iter()
-                .map(|segment| format!("#{}", segment.id))
-                .collect::<Vec<_>>()
-                .join(" > ")
-        ))
+        Some(path)
     }
 
     pub(in crate::app) fn open_parent_session(&mut self) {

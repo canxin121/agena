@@ -235,6 +235,12 @@ pub(in crate::app) enum TableColumnAlignment {
     Right,
 }
 
+// Keep Markdown tables compact: one terminal cell on each horizontal side of
+// the content. This is half of the previous two-cell visual inset while still
+// leaving the text clear of the box-drawing characters.
+const MARKDOWN_TABLE_HORIZONTAL_PADDING: usize = 1;
+const MARKDOWN_TABLE_MIN_CONTENT_WIDTH: usize = 1;
+
 pub(in crate::app) fn markdown_fence_delimiter(line: &str) -> Option<MarkdownFence> {
     let trimmed = line.trim_start();
     let marker = trimmed.chars().next()?;
@@ -304,15 +310,15 @@ pub(in crate::app) fn push_markdown_table(
         }
     }
 
-    // Three cells need two inner separators plus the two outer borders.
+    // Every cell owns its padding; the remaining fixed width is the left
+    // border, one separator after each cell, and both horizontal insets.
     let separator_width = column_count
-        .saturating_sub(1)
-        .saturating_mul(3)
-        .saturating_add(2);
+        .saturating_mul(MARKDOWN_TABLE_HORIZONTAL_PADDING.saturating_mul(2))
+        .saturating_add(column_count.saturating_add(1));
     let prefix_width = UnicodeWidthStr::width(prefix);
     let available_width = width.max(1) as usize;
     let table_width_budget = available_width.saturating_sub(prefix_width);
-    let min_content_width = column_count.saturating_mul(3);
+    let min_content_width = column_count.saturating_mul(MARKDOWN_TABLE_MIN_CONTENT_WIDTH);
     if table_width_budget <= separator_width.saturating_add(min_content_width) {
         push_markdown_table_fallback(out, prefix, &rows, width);
         return;
@@ -342,32 +348,30 @@ pub(in crate::app) fn push_markdown_table(
         "┐",
         separator_style,
     );
-    render_table_row(
-        out,
-        prefix,
-        rows[0].as_slice(),
-        column_widths.as_slice(),
-        alignments.as_slice(),
-        header_style,
-    );
-    push_table_border(
-        out,
-        prefix,
-        column_widths.as_slice(),
-        "├",
-        "┼",
-        "┤",
-        separator_style,
-    );
-    for row in rows.iter().skip(1) {
+    for (row_index, row) in rows.iter().enumerate() {
         render_table_row(
             out,
             prefix,
             row.as_slice(),
             column_widths.as_slice(),
             alignments.as_slice(),
-            body_style,
+            if row_index == 0 {
+                header_style
+            } else {
+                body_style
+            },
         );
+        if row_index + 1 < rows.len() {
+            push_table_border(
+                out,
+                prefix,
+                column_widths.as_slice(),
+                "├",
+                "┼",
+                "┤",
+                separator_style,
+            );
+        }
     }
     push_table_border(
         out,
@@ -509,7 +513,7 @@ pub(in crate::app) fn compute_table_column_widths(
         return Vec::new();
     }
 
-    let min_width = 3_usize;
+    let min_width = MARKDOWN_TABLE_MIN_CONTENT_WIDTH;
     let min_total = min_width.saturating_mul(column_count);
     if budget < min_total {
         return Vec::new();
@@ -561,20 +565,13 @@ pub(in crate::app) fn render_table_row(
     let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
 
     for line_index in 0..row_height {
+        let border_style = Style::default().fg(agena_tui_components::theme::muted_color());
         let mut spans = vec![
             Span::raw(prefix.to_string()),
-            Span::styled(
-                "│",
-                Style::default().fg(agena_tui_components::theme::muted_color()),
-            ),
+            Span::styled("│", border_style),
         ];
         for (column_index, width) in widths.iter().enumerate() {
-            if column_index > 0 {
-                spans.push(Span::styled(
-                    " │ ",
-                    Style::default().fg(agena_tui_components::theme::muted_color()),
-                ));
-            }
+            spans.push(Span::raw(" ".repeat(MARKDOWN_TABLE_HORIZONTAL_PADDING)));
             let text = wrapped_cells
                 .get(column_index)
                 .and_then(|lines| lines.get(line_index))
@@ -591,11 +588,9 @@ pub(in crate::app) fn render_table_row(
                 ),
                 style,
             ));
+            spans.push(Span::raw(" ".repeat(MARKDOWN_TABLE_HORIZONTAL_PADDING)));
+            spans.push(Span::styled("│", border_style));
         }
-        spans.push(Span::styled(
-            "│",
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-        ));
         out.push(RenderedLine::rich(Line::from(spans)));
     }
 }
@@ -615,9 +610,12 @@ pub(in crate::app) fn push_table_border(
     ];
     for (index, width) in widths.iter().enumerate() {
         if index > 0 {
-            spans.push(Span::styled(format!("─{middle}─"), style));
+            spans.push(Span::styled(middle.to_string(), style));
         }
-        spans.push(Span::styled("─".repeat(*width), style));
+        spans.push(Span::styled(
+            "─".repeat(width.saturating_add(MARKDOWN_TABLE_HORIZONTAL_PADDING.saturating_mul(2))),
+            style,
+        ));
     }
     spans.push(Span::styled(right.to_string(), style));
     out.push(RenderedLine::rich(Line::from(spans)));

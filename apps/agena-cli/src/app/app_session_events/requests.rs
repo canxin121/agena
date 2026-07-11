@@ -299,7 +299,32 @@ impl App {
         });
     }
 
+    pub(in crate::app) fn begin_pending_user_message(&mut self, draft: &ComposerDraft) -> u64 {
+        let id = self.next_pending_user_message_id;
+        self.next_pending_user_message_id = self.next_pending_user_message_id.saturating_add(1);
+        self.transcript
+            .add_pending_user_message(PendingUserMessage {
+                id,
+                text: draft.text.clone(),
+                confirmed: false,
+            });
+        self.transcript.scroll_to_bottom(
+            self.layout.transcript_body.width,
+            self.layout.transcript_body.height,
+        );
+        id
+    }
+
     pub(in crate::app) fn request_submit_message(&mut self, session_id: i64, draft: ComposerDraft) {
+        self.request_submit_message_with_pending(session_id, draft, None);
+    }
+
+    pub(in crate::app) fn request_submit_message_with_pending(
+        &mut self,
+        session_id: i64,
+        draft: ComposerDraft,
+        existing_pending_message_id: Option<u64>,
+    ) {
         if self
             .pending_interactive_kind_for_session(session_id)
             .is_some()
@@ -309,6 +334,8 @@ impl App {
             self.prompt_for_pending_interactive_on_session(session_id);
             return;
         }
+        let pending_message_id =
+            existing_pending_message_id.unwrap_or_else(|| self.begin_pending_user_message(&draft));
         self.transcript.submitting = true;
         self.transcript.pending_restore_draft = Some(draft.clone());
         self.submitting_session_ids.insert(session_id);
@@ -318,6 +345,8 @@ impl App {
         let parts = match self.build_submission_parts(&draft) {
             Ok(parts) => parts,
             Err(error) => {
+                self.transcript
+                    .remove_pending_user_message(pending_message_id);
                 self.transcript.submitting = false;
                 self.transcript.pending_restore_draft = None;
                 self.submitting_session_ids.remove(&session_id);
@@ -326,8 +355,6 @@ impl App {
                 return;
             }
         };
-        self.record_prompt_history_from_draft(&draft);
-
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
@@ -338,6 +365,7 @@ impl App {
                 .map_err(|error| error.to_string());
             let _ = tx.send(AppMessage::SessionMessageSubmitted {
                 session_id,
+                pending_message_id,
                 draft,
                 result,
             });
@@ -382,7 +410,7 @@ impl App {
         parts: Vec<PartContent>,
         draft: ComposerDraft,
     ) {
-        self.record_prompt_history_from_draft(&draft);
+        let pending_message_id = self.begin_pending_user_message(&draft);
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
@@ -392,6 +420,7 @@ impl App {
                 .map_err(|error| error.to_string());
             let _ = tx.send(AppMessage::SteerSubmitted {
                 session_id,
+                pending_message_id,
                 draft,
                 result,
             });
@@ -459,6 +488,6 @@ impl App {
 }
 use crate::app::{
     App, AppMessage, ComposerDraft, DraftSlot, Focus, Instant, MESSAGE_PAGE_SIZE, MessageLoadMode,
-    PartContent, PermissionReplyKind, PermissionScope, ProviderPickerPurpose, SessionLoadScope,
-    SessionViewMode, UserInputReply, ui_text,
+    PartContent, PendingUserMessage, PermissionReplyKind, PermissionScope, ProviderPickerPurpose,
+    SessionLoadScope, SessionViewMode, UserInputReply, ui_text,
 };

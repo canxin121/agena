@@ -78,7 +78,9 @@ impl App {
             1,
         );
 
-        let lines = if self.transcript.session_id.is_none() {
+        let lines = if self.transcript.session_id.is_none()
+            && self.transcript.pending_user_messages.is_empty()
+        {
             vec![
                 Line::from(ui_text::t(&self.i18n, "no-session-selected")),
                 Line::from(Span::styled(
@@ -128,6 +130,9 @@ impl App {
                 .collect::<Vec<_>>()
         };
         let title = sanitize_display_text(self.transcript_surface_title());
+        let subtitle = self
+            .current_session_path_label()
+            .map(|path| sanitize_display_text(path.as_str()));
         let right = sanitize_display_text(self.transcript_surface_top_right().join("  ·  "));
         let footer = if layout.footer.height > 0 {
             let footer_lines = self.transcript_footer_lines(layout.footer.width);
@@ -140,12 +145,16 @@ impl App {
             layout,
             &HeaderBodyFooterTextSurfaceSpec {
                 title: title.into(),
+                subtitle: subtitle.map(Into::into),
                 right: Some(right.into()),
                 body: Text::from(lines),
                 body_scroll: (min(self.transcript.scroll, u16::MAX as usize) as u16, 0),
                 body_wrap: false,
                 footer,
                 title_style: Style::default().add_modifier(Modifier::BOLD),
+                subtitle_style: Style::default()
+                    .fg(agena_tui_components::theme::muted_color())
+                    .add_modifier(Modifier::DIM | Modifier::ITALIC),
                 right_style: Style::default().fg(agena_tui_components::theme::muted_color()),
             },
         );
@@ -156,24 +165,11 @@ impl App {
     }
 
     pub(in crate::app) fn transcript_surface_title(&self) -> String {
-        let is_running = self.transcript.execution.as_ref().is_some_and(|execution| {
-            execution.run_state != SessionRunState::Idle || execution.blocked
-        });
-        let title = ui_text::transcript_header_title(
+        ui_text::transcript_header_title(
             &self.i18n,
             self.transcript.session_id,
             self.transcript.session_title.as_str(),
-            is_running,
-        );
-        if self.transcript.session_id.is_some() {
-            if let Some(path) = self.current_session_path_label() {
-                format!("{}  {}", title.trim_end(), path)
-            } else {
-                title
-            }
-        } else {
-            format!(" {} ", ui_text::t(&self.i18n, "pane-transcript"))
-        }
+        )
     }
 
     pub(in crate::app) fn render_composer(&self, frame: &mut Frame, area: Rect) {
@@ -228,6 +224,44 @@ impl App {
         if let Some(status_area) = layout.status {
             self.render_composer_status_row(frame, inset_rect(status_area, 1, 0));
         }
+        self.render_prompt_history_floating_window(frame, area);
+    }
+
+    pub(in crate::app) fn render_prompt_history_floating_window(
+        &self,
+        frame: &mut Frame,
+        composer_area: Rect,
+    ) {
+        let Some(search) = self.prompt_history_search.as_ref() else {
+            return;
+        };
+        let result_rows = if search.items.is_empty() {
+            1
+        } else {
+            min(MAX_PROMPT_HISTORY_SEARCH_RESULTS, search.items.len())
+        };
+        let height = (result_rows as u16).saturating_add(3);
+        let available_above = composer_area.y.saturating_sub(frame.area().y);
+        let height = min(height, available_above);
+        if height < 3 || composer_area.width < 8 {
+            return;
+        }
+        let width = min(composer_area.width.saturating_sub(2), 100);
+        let area = Rect {
+            x: composer_area
+                .x
+                .saturating_add(composer_area.width.saturating_sub(width) / 2),
+            y: composer_area.y.saturating_sub(height),
+            width,
+            height,
+        };
+        let block = ratatui::widgets::Block::default()
+            .borders(ratatui::widgets::Borders::ALL)
+            .title(ui_text::t(&self.i18n, "composer-prompt-history-title"));
+        let inner = block.inner(area);
+        frame.render_widget(ratatui::widgets::Clear, area);
+        frame.render_widget(block, area);
+        self.render_prompt_history_search(frame, inner);
     }
 
     pub(in crate::app) fn render_active_composer_popup(&self, frame: &mut Frame, area: Rect) {
@@ -507,13 +541,8 @@ impl App {
         if self.overlay.is_some() || self.focus != Focus::Composer {
             return 0;
         }
-        if let Some(search) = self.prompt_history_search.as_ref() {
-            let result_rows = if search.items.is_empty() {
-                1
-            } else {
-                min(MAX_PROMPT_HISTORY_SEARCH_RESULTS, search.items.len())
-            };
-            return (result_rows + 1) as u16;
+        if self.prompt_history_search.is_some() {
+            return 0;
         }
         if let Some(state) = self.file_mention_suggestions.as_ref() {
             return min(MAX_FILE_MENTION_SUGGESTIONS, state.items.len()) as u16;
@@ -609,7 +638,7 @@ impl App {
                     "composer-status-history",
                     &crate::fl_args!(
                         "current" => selection as i64,
-                        "total" => search.items.len() as i64,
+                        "total" => search.meta.total_matches as i64,
                     ),
                 )
             } else {
@@ -617,7 +646,7 @@ impl App {
                     "composer-status-history-query",
                     &crate::fl_args!(
                         "current" => selection as i64,
-                        "total" => search.items.len() as i64,
+                        "total" => search.meta.total_matches as i64,
                         "query" => query,
                     ),
                 )
@@ -674,8 +703,8 @@ use super::{
     App, ComposerEditorSurfaceSpec, ComposerItem, FlashLevel, Focus, Frame,
     HeaderBodyFooterTextSurfaceSpec, LayoutCache, Line, MAX_FILE_MENTION_SUGGESTIONS,
     MAX_PROMPT_HISTORY_SEARCH_RESULTS, MAX_SLASH_COMMAND_SUGGESTIONS, Modifier, Paragraph,
-    QuerySuggestionPopupSpec, Rect, Route, SessionRunState, Span, Style, SuggestionPopupItem,
-    SuggestionPopupSpec, Text, VerticalSectionSize, Wrap, WrappedTextSpec, apply_line_highlight,
+    QuerySuggestionPopupSpec, Rect, Route, Span, Style, SuggestionPopupItem, SuggestionPopupSpec,
+    Text, VerticalSectionSize, Wrap, WrappedTextSpec, apply_line_highlight,
     build_wrapped_text_lines, composer_item_needs_summary_chip, highlight_search_line, inset_rect,
     layout_composer_surface, layout_header_body_footer_surface, min, pane_header_height,
     pending_interactive_counts_for_execution, render_composer_editor_surface,

@@ -114,7 +114,8 @@ pub use text::{
     HeaderRowSpec, WrappedTextSpec, bordered_text_height, build_wrapped_text_lines,
     format_key_value_segment, join_inline_segments, line_plain_text, render_header_row,
     render_wrapped_text, text_plain_text, trim_empty_line_edges, truncate_display_text,
-    truncate_display_text_with_suffix, wrapped_lines_height, wrapped_text_height_for_text,
+    truncate_display_text_middle, truncate_display_text_with_suffix, wrapped_lines_height,
+    wrapped_text_height_for_text,
 };
 pub use text_dialog::{LineTextDialogSpec, TextDialogLine, render_line_text_dialog};
 pub use theme::{ColorScheme, TerminalRgb, ThemeOverrides, ThemePalette};

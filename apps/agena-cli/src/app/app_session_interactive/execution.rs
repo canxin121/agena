@@ -28,6 +28,9 @@ impl App {
         submit_draft: Option<ComposerDraft>,
         parent_id: Option<i64>,
     ) {
+        let pending_message_id = submit_draft
+            .as_ref()
+            .map(|draft| self.begin_pending_user_message(draft));
         if let Some(draft) = submit_draft.as_ref().cloned() {
             self.transcript.submitting = true;
             self.transcript.pending_restore_draft = Some(draft.clone());
@@ -50,6 +53,7 @@ impl App {
                 .map_err(|error| error.to_string());
             let _ = tx.send(AppMessage::SessionCreated {
                 submit_draft,
+                pending_message_id,
                 result,
             });
         });

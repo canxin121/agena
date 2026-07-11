@@ -59,11 +59,6 @@ impl App {
                     self.should_quit = true;
                     return;
                 }
-                KeyCode::Char('?') => {
-                    self.route_stack.clear();
-                    self.current_route = Route::Help(HelpOverlay::default());
-                    return;
-                }
                 _ => {}
             }
         }
@@ -83,23 +78,11 @@ impl App {
             return;
         }
 
-        if matches!(key.code, KeyCode::Char('/')) && self.focus != Focus::Composer {
-            match self.focus {
-                Focus::Sessions => self.open_resume_session_picker(),
-                Focus::Transcript => {
-                    self.overlay = Some(Overlay::TranscriptSearch(
-                        self.build_transcript_search_overlay(),
-                    ));
-                }
-                Focus::Composer => unreachable!("composer focus is excluded above"),
-            }
-            return;
-        }
-
-        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('f')) {
-            self.overlay = Some(Overlay::TranscriptSearch(
-                self.build_transcript_search_overlay(),
-            ));
+        if self.focus != Focus::Composer
+            && matches!(key.code, KeyCode::Char('/') | KeyCode::Char('?'))
+        {
+            self.focus = Focus::Transcript;
+            self.open_transcript_search_overlay(matches!(key.code, KeyCode::Char('/')));
             return;
         }
 
@@ -112,7 +95,7 @@ impl App {
             && !self.transcript.search_query.trim().is_empty()
             && matches!(key.code, KeyCode::Char('N'))
         {
-            self.jump_search_match(false);
+            self.jump_search_match(!self.transcript_search_forward);
             return;
         }
 
@@ -120,7 +103,7 @@ impl App {
             && !self.transcript.search_query.trim().is_empty()
             && matches!(key.code, KeyCode::Char('n'))
         {
-            self.jump_search_match(true);
+            self.jump_search_match(self.transcript_search_forward);
             return;
         }
 
@@ -326,6 +309,6 @@ impl App {
     }
 }
 use crate::app::{
-    App, Focus, HelpOverlay, Instant, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Overlay,
-    OverlayCommit, Route, TIMELINE_EVENT_LIMIT, UiAction, ui_text,
+    App, Focus, Instant, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Overlay, OverlayCommit,
+    Route, TIMELINE_EVENT_LIMIT, UiAction, ui_text,
 };

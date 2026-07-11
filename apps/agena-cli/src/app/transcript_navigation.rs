@@ -451,6 +451,24 @@ pub(in crate::app) fn transcript_message_navigation_target(
     }
 }
 
+pub(in crate::app) fn initial_search_match_index(
+    matches: &[usize],
+    cursor_line: usize,
+    forward: bool,
+) -> usize {
+    if forward {
+        matches
+            .iter()
+            .position(|line| *line > cursor_line)
+            .unwrap_or(0)
+    } else {
+        matches
+            .iter()
+            .rposition(|line| *line < cursor_line)
+            .unwrap_or_else(|| matches.len().saturating_sub(1))
+    }
+}
+
 pub(in crate::app) fn transcript_selection_scroll_position(
     total_lines: usize,
     start_line: usize,

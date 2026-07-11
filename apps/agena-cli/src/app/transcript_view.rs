@@ -24,8 +24,6 @@ pub(in crate::app) use self::transcript_render::{
 pub(super) use self::transcript_text::*;
 pub(super) use self::transcript_tool_summary::*;
 
-const COLLAPSED_ACTIVITY_VISIBLE_TAIL: usize = 5;
-
 pub(in crate::app) fn render_message_detailed(
     message: &MessageResource,
     width: u16,
@@ -70,18 +68,16 @@ pub(in crate::app) fn render_message_detailed(
                 part_index += 1;
                 continue;
             }
-            if let Some(run_end) =
-                collapsed_activity_run_end(message, parts, part_index, defaults, expansions)
-            {
+            if let Some(run_end) = collapsed_activity_run_end(parts, part_index) {
                 let run = &parts[part_index..run_end];
-                if run.len() > COLLAPSED_ACTIVITY_VISIBLE_TAIL {
+                if run.len() > 1 {
                     let key = TranscriptNodeKey::ActivitySummary {
                         message_id: message.id,
                         first_part_id: run[0].id,
                         last_part_id: run.last().expect("non-empty activity run").id,
                     };
                     let expanded = expansions.get(&key).copied().unwrap_or(false);
-                    let hidden_count = run.len().saturating_sub(COLLAPSED_ACTIVITY_VISIBLE_TAIL);
+                    let hidden_count = run.len();
                     // Message headers belong exclusively to the message-level
                     // parent selection. An activity summary must never make
                     // the adjacent `assistant` header look selected.
@@ -183,10 +179,11 @@ pub(in crate::app) fn render_message_detailed(
 #[cfg(test)]
 mod tests {
     use super::{
-        ExecutionStatus, MessagePart, OperationPart, PartContent, RequestPart, ToolInvocation,
-        TranscriptNodeKind, UnicodeWidthStr, activity_status_icon,
-        collapsed_activity_visible_start, interactive_request_is_embedded_in_operation,
-        markdown_blocks, render_markdown_block, should_suppress_markdown_block, spinner_frame,
+        ExecutionStatus, I18n, MessagePart, MessageResource, MessageStatus, OperationPart,
+        PartContent, RequestPart, ToolInvocation, TranscriptDetailDefaults, TranscriptNodeKind,
+        UnicodeWidthStr, activity_status_icon, collapsed_activity_visible_start,
+        interactive_request_is_embedded_in_operation, markdown_blocks, render_markdown_block,
+        render_message_detailed, should_suppress_markdown_block, spinner_frame,
         thinking_collapsed_summary, tool_execution_compact_summary, tool_invocation_label,
     };
     use agena::permission::{PermissionAction, PermissionRequest, PermissionRiskLevel};
@@ -240,10 +237,78 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_activity_runs_only_keep_the_latest_few_blocks_visible() {
-        assert_eq!(collapsed_activity_visible_start(4, 12, false), 7);
+    fn collapsed_activity_runs_hide_all_children_until_expanded() {
+        assert_eq!(collapsed_activity_visible_start(4, 12, false), 12);
         assert_eq!(collapsed_activity_visible_start(4, 12, true), 4);
-        assert_eq!(collapsed_activity_visible_start(4, 6, false), 4);
+        assert_eq!(collapsed_activity_visible_start(4, 6, false), 6);
+    }
+
+    #[test]
+    fn consecutive_activity_parts_collapse_into_one_enter_toggleable_group() {
+        let now = Utc::now();
+        let parts = vec![
+            MessagePart::from_content(
+                21,
+                7,
+                now,
+                ExecutionStatus::Completed,
+                PartContent::Reasoning(agena::message::ReasoningPart {
+                    summary: vec!["first thought".to_string()],
+                    raw_content: Vec::new(),
+                    encrypted_content: None,
+                }),
+            ),
+            MessagePart::from_content(
+                22,
+                7,
+                now,
+                ExecutionStatus::Completed,
+                PartContent::Operation(OperationPart::pending(
+                    1,
+                    ToolInvocation::new("agena.fs.read", Default::default()),
+                    "Read file",
+                    Default::default(),
+                )),
+            ),
+        ];
+        let message = MessageResource {
+            id: 7,
+            session_id: 3,
+            role: agena_api::resource::MessageRole::Assistant,
+            state: MessageStatus::Completed,
+            created_at: now,
+            updated_at: now,
+            metadata: Default::default(),
+            usage: None,
+            part_count: parts.len() as u64,
+            parts: Some(parts),
+        };
+
+        let rendered = render_message_detailed(
+            &message,
+            80,
+            &I18n::english(),
+            TranscriptDetailDefaults {
+                tool_output_expanded: true,
+                thinking_expanded: true,
+            },
+            &Default::default(),
+        );
+        let activity_nodes = rendered
+            .nodes
+            .iter()
+            .filter(|node| node.kind == TranscriptNodeKind::Activity)
+            .collect::<Vec<_>>();
+        assert_eq!(activity_nodes.len(), 1);
+        assert!(activity_nodes[0].toggleable);
+        assert!(!activity_nodes[0].expanded);
+        assert!(rendered.lines.iter().any(|line| line.text.contains("2")));
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .all(|line| !line.text.contains("first thought"))
+        );
     }
 
     #[test]
@@ -255,6 +320,43 @@ mod tests {
         assert_eq!(activity_status_icon(ExecutionStatus::Completed), "●");
         assert_eq!(activity_status_icon(ExecutionStatus::Failed), "×");
         assert_eq!(activity_status_icon(ExecutionStatus::Cancelled), "–");
+    }
+
+    #[test]
+    fn in_progress_message_header_uses_a_spinner_instead_of_state_text() {
+        let now = Utc::now();
+        let message = MessageResource {
+            id: 1,
+            session_id: 1,
+            role: agena_api::resource::MessageRole::Assistant,
+            state: MessageStatus::InProgress,
+            created_at: now,
+            updated_at: now,
+            metadata: Default::default(),
+            usage: None,
+            part_count: 0,
+            parts: Some(Vec::new()),
+        };
+
+        let rendered = render_message_detailed(
+            &message,
+            80,
+            &I18n::english(),
+            TranscriptDetailDefaults {
+                tool_output_expanded: false,
+                thinking_expanded: false,
+            },
+            &Default::default(),
+        );
+        assert!(
+            rendered.lines[0]
+                .text
+                .strip_prefix("assistant ")
+                .is_some_and(
+                    |icon| ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"].contains(&icon)
+                )
+        );
+        assert!(!rendered.lines[0].text.contains("in_progress"));
     }
 
     #[test]
@@ -478,6 +580,33 @@ mod tests {
                 .any(|line| line.text.contains('│') && line.text.contains("key"))
         );
         assert!(table.last().is_some_and(|line| line.text.contains('└')));
+    }
+
+    #[test]
+    fn markdown_tables_render_a_compact_full_grid() {
+        let block =
+            markdown_blocks("| key | value |\n| --- | ---: |\n| first | 1 |\n| second | 2 |")
+                .pop()
+                .expect("table block");
+        let mut table = Vec::new();
+        render_markdown_block(&mut table, "", &block, 40);
+
+        let rendered = table
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rendered,
+            vec![
+                "┌────────┬───────┐",
+                "│ key    │ value │",
+                "├────────┼───────┤",
+                "│ first  │     1 │",
+                "├────────┼───────┤",
+                "│ second │     2 │",
+                "└────────┴───────┘",
+            ]
+        );
     }
 
     #[test]

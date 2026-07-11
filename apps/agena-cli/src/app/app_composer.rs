@@ -82,17 +82,13 @@ impl App {
             return;
         }
         if matches!(key.code, KeyCode::Up) && key.modifiers.contains(KeyModifiers::ALT) {
-            self.recall_prompt_history(PromptHistoryDirection::Older);
-            return;
-        }
-        if matches!(key.code, KeyCode::Down) && key.modifiers.contains(KeyModifiers::ALT) {
-            self.recall_prompt_history(PromptHistoryDirection::Newer);
+            self.open_prompt_history_search();
             return;
         }
         // Match shell/OpenCode history navigation without stealing normal
-        // multiline editing: bare Up recalls only at the start of the input,
-        // while bare Down restores a newer draft only at its end. Queued
-        // message editing remains higher priority than history recall.
+        // multiline editing: bare Up opens history only at the start of the
+        // input. Once open, Up/Down move through the floating newest-first
+        // list. Queued message editing remains higher priority.
         if matches!(key.code, KeyCode::Up)
             && key.modifiers.is_empty()
             && self.composer.cursor() == 0
@@ -101,16 +97,8 @@ impl App {
                 self.reset_prompt_history_recall();
                 self.after_composer_text_mutated();
             } else {
-                self.recall_prompt_history(PromptHistoryDirection::Older);
+                self.open_prompt_history_search();
             }
-            return;
-        }
-        if matches!(key.code, KeyCode::Down)
-            && key.modifiers.is_empty()
-            && self.composer.cursor() == self.composer.text().len()
-            && self.prompt_history_recall_index.is_some()
-        {
-            self.recall_prompt_history(PromptHistoryDirection::Newer);
             return;
         }
         // Configurable bindings define the composer map. The defaults preserve
@@ -346,9 +334,7 @@ impl App {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                if search.query.text().trim().is_empty() {
-                    self.replace_composer_draft(search.meta.original.clone());
-                } else if let Some(result) = search.selected_item().cloned() {
+                if let Some(result) = search.selected_item().cloned() {
                     self.replace_composer_draft(ComposerDraft {
                         text: result.text,
                         ..ComposerDraft::default()
@@ -365,19 +351,31 @@ impl App {
             }
             | KeyEvent {
                 code: KeyCode::Up,
-                modifiers: KeyModifiers::NONE,
+                modifiers: KeyModifiers::NONE | KeyModifiers::ALT,
                 ..
             } => {
+                if search.selected + 1 >= search.items.len() && search.meta.has_more {
+                    search.meta.loaded_count = search
+                        .meta
+                        .loaded_count
+                        .saturating_add(PROMPT_HISTORY_PAGE_SIZE);
+                    Self::refresh_prompt_history_search(&self.prompt_history, &mut search);
+                }
                 move_selected_index(&mut search.selected, search.items.len(), 1);
                 false
             }
             KeyEvent {
                 code: KeyCode::Down,
-                modifiers: KeyModifiers::NONE,
+                modifiers: KeyModifiers::NONE | KeyModifiers::ALT,
                 ..
             } => {
-                move_selected_index(&mut search.selected, search.items.len(), -1);
-                false
+                if search.selected == 0 {
+                    self.replace_composer_draft(search.meta.original.clone());
+                    true
+                } else {
+                    move_selected_index(&mut search.selected, search.items.len(), -1);
+                    false
+                }
             }
             KeyEvent {
                 code: KeyCode::Char('s'),
@@ -388,9 +386,14 @@ impl App {
                 false
             }
             _ => {
+                let before = search.query.text().to_string();
                 search.query.handle_line_input_key(key);
-                search.selected = 0;
-                Self::refresh_prompt_history_search(&self.prompt_history, &mut search);
+                search.query.flush_all_pending_input();
+                if search.query.text() != before {
+                    search.selected = 0;
+                    search.meta.loaded_count = PROMPT_HISTORY_PAGE_SIZE;
+                    Self::refresh_prompt_history_search(&self.prompt_history, &mut search);
+                }
                 false
             }
         };
@@ -409,12 +412,19 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-prompt-history-items"));
             return;
         }
+        if self.prompt_history.is_empty() {
+            self.flash_info(ui_text::t(&self.i18n, "flash-prompt-history-empty"));
+            return;
+        }
         self.after_composer_text_mutated();
         let mut search = PromptHistorySearchState::new(
             Editor::default(),
             0,
             PromptHistorySearchMeta {
                 original: self.current_composer_draft(),
+                loaded_count: PROMPT_HISTORY_PAGE_SIZE,
+                total_matches: 0,
+                has_more: false,
             },
         );
         Self::refresh_prompt_history_search(&self.prompt_history, &mut search);
@@ -424,17 +434,14 @@ impl App {
         self.prompt_history_search = Some(search);
     }
 
-    /// Ctrl+R search owns its query independently from the composer. While a
-    /// non-empty query has a match, preview that match directly in the editor;
-    /// Esc or a miss restores the untouched draft. This follows Codex-style
-    /// reverse-i-search while keeping Agena's visible result list.
+    /// History owns its query independently from the composer and previews the
+    /// selected newest-to-oldest entry directly in the editor. Esc restores the
+    /// untouched draft; Enter accepts the current selection.
     pub(in crate::app) fn preview_prompt_history_search_selection(
         &mut self,
         search: &PromptHistorySearchState,
     ) {
-        let preview = (!search.query.text().trim().is_empty())
-            .then(|| search.selected_item().map(|result| result.text.as_str()))
-            .flatten();
+        let preview = search.selected_item().map(|result| result.text.as_str());
         match preview {
             Some(text) => self.set_composer_text_for_history(text, false),
             None => self.set_composer_text_for_history(search.meta.original.text.as_str(), false),
@@ -462,18 +469,23 @@ impl App {
     ) {
         search.query.flush_all_pending_input();
         let query = search.query.text().trim().to_ascii_lowercase();
-        search.items = prompt_history
-            .items
-            .iter()
-            .enumerate()
-            .rev()
-            .filter(|(_, entry)| query.is_empty() || entry.to_ascii_lowercase().contains(&query))
-            .take(MAX_PROMPT_HISTORY_SEARCH_RESULTS)
-            .map(|(history_index, text)| PromptHistorySearchResult {
-                history_index,
-                text: text.clone(),
-            })
-            .collect();
+        let mut total_matches = 0_usize;
+        let mut loaded = Vec::with_capacity(search.meta.loaded_count);
+        for (history_index, text) in prompt_history.items.iter().enumerate().rev() {
+            if !query.is_empty() && !text.to_ascii_lowercase().contains(&query) {
+                continue;
+            }
+            total_matches = total_matches.saturating_add(1);
+            if loaded.len() < search.meta.loaded_count {
+                loaded.push(PromptHistorySearchResult {
+                    history_index,
+                    text: text.clone(),
+                });
+            }
+        }
+        search.meta.total_matches = total_matches;
+        search.meta.has_more = total_matches > loaded.len();
+        search.items = loaded;
         search.clamp_selection();
     }
 
@@ -878,11 +890,10 @@ use crate::app::{
     App, ClipboardCopyMethod, ComposerAction, ComposerDraft, ComposerItem, Editor,
     FileMentionSuggestionContext, FileMentionSuggestionItem, FileMentionSuggestionMeta,
     FileMentionSuggestionState, Focus, KeyCode, KeyEvent, KeyModifiers,
-    MAX_FILE_MENTION_SUGGESTIONS, MAX_PROMPT_HISTORY_SEARCH_RESULTS, PromptHistory,
-    PromptHistoryDirection, PromptHistorySearchMeta, PromptHistorySearchResult,
-    PromptHistorySearchState, SlashCommandSuggestionContext, SlashCommandSuggestionItem,
-    SlashCommandSuggestionMeta, SlashCommandSuggestionState, SlashCommandSuggestionValue, UiAction,
-    commands, file_mention_suggestion_context_for_text, min, move_selected_index,
-    runtime_tool_matches_slash_query, set_clipboard_text,
+    MAX_FILE_MENTION_SUGGESTIONS, PROMPT_HISTORY_PAGE_SIZE, PromptHistory, PromptHistorySearchMeta,
+    PromptHistorySearchResult, PromptHistorySearchState, SlashCommandSuggestionContext,
+    SlashCommandSuggestionItem, SlashCommandSuggestionMeta, SlashCommandSuggestionState,
+    SlashCommandSuggestionValue, UiAction, commands, file_mention_suggestion_context_for_text, min,
+    move_selected_index, runtime_tool_matches_slash_query, set_clipboard_text,
     slash_command_suggestion_context_for_text, transcript_node_kind_label, ui_text,
 };

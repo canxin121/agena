@@ -16,10 +16,7 @@ impl App {
             self.copy_loaded_transcript();
         } else if matches!(key.code, KeyCode::Char('c')) {
             self.copy_last_assistant_message();
-        } else if matches!(
-            key.code,
-            KeyCode::Enter | KeyCode::Char('o') | KeyCode::Char(' ')
-        ) {
+        } else if matches!(key.code, KeyCode::Enter) {
             self.toggle_transcript_cursor_node();
         } else if let Some(direction) = transcript_message_navigation_direction(key.code) {
             let count = self.transcript_motion_count();
@@ -42,10 +39,7 @@ impl App {
             self.transcript_motion_prefix = None;
             self.transcript.scroll_by_page(width, height, false);
             self.maybe_request_older_messages();
-        } else if matches!(key.code, KeyCode::PageDown)
-            || matches!(key.code, KeyCode::Char('f'))
-                && key.modifiers.contains(KeyModifiers::CONTROL)
-        {
+        } else if matches!(key.code, KeyCode::PageDown) {
             self.transcript_motion_prefix = None;
             self.transcript.scroll_by_page(width, height, true);
         } else if matches!(key.code, KeyCode::Char(' '))

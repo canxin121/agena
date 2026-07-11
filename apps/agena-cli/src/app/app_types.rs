@@ -49,6 +49,7 @@ pub(super) const TOOL_EXPANDED_PREVIEW_CHARS: usize = 12_000;
 pub(super) const MAX_SLASH_COMMAND_SUGGESTIONS: usize = 6;
 pub(super) const MAX_FILE_MENTION_SUGGESTIONS: usize = 8;
 pub(super) const MAX_PROMPT_HISTORY_SEARCH_RESULTS: usize = 6;
+pub(super) const PROMPT_HISTORY_PAGE_SIZE: usize = 20;
 pub(super) const MAX_PROMPT_HISTORY_ENTRIES: usize = 200;
 pub(super) const AWS_REGION_CHOICES: &[&str] = &[
     "us-east-1",
@@ -336,12 +337,6 @@ pub(super) struct PromptHistory {
     pub(super) items: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(super) enum PromptHistoryDirection {
-    Older,
-    Newer,
-}
-
 #[derive(Debug, Clone)]
 pub(super) struct StatusLineState {
     pub(super) command: String,
@@ -399,11 +394,10 @@ pub struct App {
     pub(super) pending_draft_store_error: Option<String>,
     pub(super) prompt_history: PromptHistory,
     pub(super) prompt_history_path: PathBuf,
-    pub(super) prompt_history_recall_original: Option<ComposerDraft>,
-    pub(super) prompt_history_recall_index: Option<usize>,
     pub(super) prompt_history_reported_error: Option<String>,
     pub(super) pending_prompt_history_error: Option<String>,
     pub(super) submitting_session_ids: HashSet<i64>,
+    pub(super) next_pending_user_message_id: u64,
     pub(super) layout: LayoutCache,
     pub(super) bootstrap_done: bool,
     pub(super) last_refresh_at: Instant,
@@ -420,6 +414,8 @@ pub struct App {
     pub(super) plugin_theme: Option<agena::plugin::HostThemePalette>,
     pub(super) keybindings: ComposerKeyBindings,
     pub(super) transcript_motion_prefix: Option<String>,
+    /// Direction selected when the transcript search overlay was opened.
+    pub(super) transcript_search_forward: bool,
     /// Last time the user pressed Ctrl+C; a second press within the window
     /// exits the application.
     pub(super) last_ctrl_c_at: Option<Instant>,
@@ -470,6 +466,7 @@ pub(super) enum AppMessage {
     },
     SessionCreated {
         submit_draft: Option<ComposerDraft>,
+        pending_message_id: Option<u64>,
         result: UiResult<SessionResource>,
     },
     SessionStateLoaded {
@@ -487,6 +484,7 @@ pub(super) enum AppMessage {
     },
     SessionMessageSubmitted {
         session_id: i64,
+        pending_message_id: u64,
         draft: ComposerDraft,
         result: UiResult<SessionExecutionResource>,
     },
@@ -589,6 +587,7 @@ pub(super) enum AppMessage {
     /// so the user's intent isn't dropped.
     SteerSubmitted {
         session_id: i64,
+        pending_message_id: u64,
         draft: ComposerDraft,
         result: UiResult<()>,
     },

@@ -225,7 +225,6 @@ impl App {
                     self.current_lineage = Some(CurrentLineageState {
                         session_id,
                         summary,
-                        path: lineage_path_segments(sessions.as_slice(), session_id),
                     });
                 }
 
@@ -683,10 +682,9 @@ use crate::app::{
     PickerValue, ProviderAdapterModelsResponse, ProviderPickerPurpose, ProviderStudioFocus,
     ProviderSummaryResource, Route, SelectableListState, SessionExecutionResource, SessionResource,
     SessionViewMode, UiResult, agent_list_items, build_lineage_session_items, build_timeline_item,
-    i18n_provider_list_detail, is_rewind_target_message, lineage_path_segments,
-    provider_draft_auth_action_message, provider_draft_auth_error_message,
-    provider_draft_auth_message_is_pending, provider_list_create_item,
-    provider_studio_ensure_default_selection, provider_studio_model_key,
+    i18n_provider_list_detail, is_rewind_target_message, provider_draft_auth_action_message,
+    provider_draft_auth_error_message, provider_draft_auth_message_is_pending,
+    provider_list_create_item, provider_studio_ensure_default_selection, provider_studio_model_key,
     provider_studio_preferred_detail_field_index, provider_studio_provider_rows,
     provider_studio_restore_model_selection, provider_studio_save_error_message,
     provider_studio_save_result_message, provider_studio_selected_adapter_id,

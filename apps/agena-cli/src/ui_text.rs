@@ -46,11 +46,23 @@ pub fn transcript_header_title(
     i18n: &I18n,
     session_id: Option<i64>,
     session_title: &str,
-    _is_running: bool,
 ) -> String {
     match session_id {
-        Some(id) => format!(" {}  #{} ", session_title, id),
+        Some(id) => format!(" #{}  {} ", id, session_title),
         None => format!(" {} ", t(i18n, "pane-transcript")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{I18n, transcript_header_title};
+
+    #[test]
+    fn session_header_places_id_before_title() {
+        assert_eq!(
+            transcript_header_title(&I18n::english(), Some(702), "New session 01:27"),
+            " #702  New session 01:27 "
+        );
     }
 }
 

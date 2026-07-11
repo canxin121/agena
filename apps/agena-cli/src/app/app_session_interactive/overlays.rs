@@ -496,6 +496,7 @@ impl App {
             SessionModelChooserOverlayMeta {
                 all_items: Vec::new(),
                 page_size: 18,
+                current_model_label: None,
             },
         );
         dialog.loading = true;
@@ -517,6 +518,13 @@ impl App {
             ui_text::t(&self.i18n, "overlay-transcript-search-prompt"),
             Editor::from_text(self.transcript.search_query.clone()),
         )
+    }
+
+    pub(in crate::app) fn open_transcript_search_overlay(&mut self, forward: bool) {
+        self.transcript_search_forward = forward;
+        self.overlay = Some(Overlay::TranscriptSearch(
+            self.build_transcript_search_overlay(),
+        ));
     }
 
     pub(in crate::app) fn build_model_catalog_search_overlay(

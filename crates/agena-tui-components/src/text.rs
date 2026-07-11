@@ -132,6 +132,55 @@ pub fn truncate_display_text(text: &str, max_width: usize) -> String {
     truncate_display_text_with_suffix(text, max_width, "...")
 }
 
+/// Truncate a path-like label in the middle so both its root/context and its
+/// distinguishing tail remain visible.
+pub fn truncate_display_text_middle(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if UnicodeWidthStr::width(text) <= max_width {
+        return text.to_string();
+    }
+
+    const ELLIPSIS: &str = "…";
+    let ellipsis_width = UnicodeWidthStr::width(ELLIPSIS);
+    if max_width <= ellipsis_width {
+        return ELLIPSIS.to_string();
+    }
+
+    let content_budget = max_width.saturating_sub(ellipsis_width);
+    let prefix_budget = content_budget / 2;
+    let suffix_budget = content_budget.saturating_sub(prefix_budget);
+    let graphemes = UnicodeSegmentation::graphemes(text, true).collect::<Vec<_>>();
+
+    let mut prefix = String::new();
+    let mut prefix_width = 0_usize;
+    let mut prefix_count = 0_usize;
+    for grapheme in &graphemes {
+        let width = UnicodeWidthStr::width(*grapheme);
+        if prefix_width.saturating_add(width) > prefix_budget {
+            break;
+        }
+        prefix.push_str(grapheme);
+        prefix_width = prefix_width.saturating_add(width);
+        prefix_count += 1;
+    }
+
+    let mut suffix_parts = Vec::new();
+    let mut suffix_width = 0_usize;
+    for grapheme in graphemes.iter().skip(prefix_count).rev() {
+        let width = UnicodeWidthStr::width(*grapheme);
+        if suffix_width.saturating_add(width) > suffix_budget {
+            break;
+        }
+        suffix_parts.push(*grapheme);
+        suffix_width = suffix_width.saturating_add(width);
+    }
+    suffix_parts.reverse();
+
+    format!("{prefix}{ELLIPSIS}{}", suffix_parts.concat())
+}
+
 pub fn truncate_display_text_with_suffix(text: &str, max_width: usize, suffix: &str) -> String {
     if max_width == 0 {
         return String::new();
@@ -203,4 +252,29 @@ pub fn bordered_text_height(text: &Text<'_>, width: u16, min_body: u16, max_body
     wrapped_text_height_for_text(text, width.saturating_sub(2))
         .clamp(min_body, max_body)
         .saturating_add(2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{UnicodeWidthStr, truncate_display_text_middle};
+
+    #[test]
+    fn middle_truncation_keeps_both_ends_of_long_paths() {
+        let path = "/home/canxin/Git/agena/worktrees/feature-session-header";
+        let compact = truncate_display_text_middle(path, 28);
+
+        assert!(compact.starts_with("/home/canxin/"));
+        assert!(compact.ends_with("session-header"));
+        assert!(compact.contains('…'));
+        assert!(UnicodeWidthStr::width(compact.as_str()) <= 28);
+    }
+
+    #[test]
+    fn middle_truncation_preserves_short_and_wide_character_paths() {
+        assert_eq!(truncate_display_text_middle("/tmp/agena", 20), "/tmp/agena");
+        let compact = truncate_display_text_middle("/工作区/非常长的项目名称/当前任务", 16);
+        assert!(compact.starts_with("/工作"));
+        assert!(compact.ends_with("当前任务"));
+        assert!(UnicodeWidthStr::width(compact.as_str()) <= 16);
+    }
 }

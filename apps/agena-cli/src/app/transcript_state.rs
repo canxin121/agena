@@ -20,6 +20,7 @@ impl TranscriptState {
             session_id: None,
             session_title: String::new(),
             messages: Vec::new(),
+            pending_user_messages: Vec::new(),
             older_cursor: None,
             has_more_older: false,
             loading_initial: false,
@@ -46,6 +47,7 @@ impl TranscriptState {
         self.session_id = Some(session_id);
         self.session_title = title;
         self.messages.clear();
+        self.pending_user_messages.clear();
         self.older_cursor = None;
         self.has_more_older = false;
         self.loading_initial = false;
@@ -73,12 +75,37 @@ impl TranscriptState {
         self.invalidate_render();
     }
 
+    pub(in crate::app) fn add_pending_user_message(&mut self, message: PendingUserMessage) {
+        self.pending_user_messages.push(message);
+        self.follow_tail = true;
+        self.invalidate_render();
+    }
+
+    pub(in crate::app) fn remove_pending_user_message(&mut self, id: u64) {
+        self.pending_user_messages
+            .retain(|message| message.id != id);
+        self.invalidate_render();
+    }
+
+    pub(in crate::app) fn confirm_pending_user_message(&mut self, id: u64) {
+        if let Some(message) = self
+            .pending_user_messages
+            .iter_mut()
+            .find(|message| message.id == id)
+        {
+            message.confirmed = true;
+            self.invalidate_render();
+        }
+    }
+
     pub(in crate::app) fn replace_messages(
         &mut self,
         page: PaginatedResponse<MessageResource>,
         width: u16,
         height: u16,
     ) {
+        self.pending_user_messages
+            .retain(|message| !message.confirmed);
         self.messages = page.items;
         self.older_cursor = page.page.next_cursor;
         self.has_more_older = page.page.has_more;
@@ -121,6 +148,8 @@ impl TranscriptState {
         width: u16,
         height: u16,
     ) {
+        self.pending_user_messages
+            .retain(|message| !message.confirmed);
         let latest_ids = page
             .items
             .iter()
@@ -214,8 +243,9 @@ impl TranscriptState {
         }
 
         let next_index = match (self.search_match_index, forward) {
-            (None, true) => 0,
-            (None, false) => matches.len().saturating_sub(1),
+            (None, direction) => {
+                initial_search_match_index(matches.as_slice(), self.cursor_line, direction)
+            }
             (Some(index), true) => (index + 1) % matches.len(),
             (Some(0), false) => matches.len().saturating_sub(1),
             (Some(index), false) => index.saturating_sub(1),
@@ -387,7 +417,11 @@ impl TranscriptState {
             }
         }
 
-        if self.messages.is_empty() && self.session_id.is_some() && !self.loading_initial {
+        if self.messages.is_empty()
+            && self.pending_user_messages.is_empty()
+            && self.session_id.is_some()
+            && !self.loading_initial
+        {
             lines.push(RenderedLine::dim(ui_text::t(
                 &self.i18n,
                 "transcript-empty-session",
@@ -451,6 +485,24 @@ impl TranscriptState {
             });
         }
 
+        for message in &self.pending_user_messages {
+            let status = (!message.confirmed)
+                .then(|| format!(" {}", spinner_frame(current_spinner_millis())))
+                .unwrap_or_default();
+            lines.push(RenderedLine::plain(
+                format!(
+                    "{}{status}",
+                    ui_text::role_label(&self.i18n, MessageRole::User)
+                ),
+                style_for_role(MessageRole::User).add_modifier(Modifier::BOLD),
+            ));
+            push_markdown(&mut lines, "  ", message.text.as_str(), width);
+            line_nodes.extend(std::iter::repeat_n(
+                None,
+                lines.len().saturating_sub(line_nodes.len()),
+            ));
+        }
+
         let search_matches = if self.search_query.trim().is_empty() {
             Vec::new()
         } else {
@@ -480,17 +532,20 @@ impl TranscriptState {
     }
 
     pub(in crate::app) fn has_animated_activity(&self) -> bool {
-        self.messages.iter().any(|message| {
-            message.parts.as_deref().is_some_and(|parts| {
-                parts.iter().any(|part| {
-                    part.status == ExecutionStatus::InProgress
-                        && matches!(
-                            part.content.as_ref(),
-                            Some(PartContent::Reasoning(_) | PartContent::Operation(_))
-                        )
+        self.pending_user_messages
+            .iter()
+            .any(|message| !message.confirmed)
+            || self.messages.iter().any(|message| {
+                message.parts.as_deref().is_some_and(|parts| {
+                    parts.iter().any(|part| {
+                        part.status == ExecutionStatus::InProgress
+                            && matches!(
+                                part.content.as_ref(),
+                                Some(PartContent::Reasoning(_) | PartContent::Operation(_))
+                            )
+                    })
                 })
             })
-        })
     }
 
     pub(in crate::app) fn clamp_scroll(&mut self, width: u16, height: u16) {
@@ -691,12 +746,13 @@ impl TranscriptState {
 }
 use crate::app::{
     AgenaSessionEvent, BTreeMap, DomainEvent, ExecutionStatus, HashSet, I18n, MessageResource,
-    PaginatedResponse, PartContent, Range, RenderedLine, RenderedTranscript,
-    RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
+    MessageRole, Modifier, PaginatedResponse, PartContent, PendingUserMessage, Range, RenderedLine,
+    RenderedTranscript, RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
     TranscriptBlockSelectionMode, TranscriptDetailDefaults, TranscriptMoveDirection,
     TranscriptNodeKey, TranscriptNodeKind, TranscriptState, TranscriptVerticalNavigationStep,
-    contains_case_insensitive, merge_message_resources, message_sort_key, min,
-    render_message_detailed, transcript_message_navigation_target,
+    contains_case_insensitive, current_spinner_millis, initial_search_match_index,
+    merge_message_resources, message_sort_key, min, push_markdown, render_message_detailed,
+    spinner_frame, style_for_role, transcript_message_navigation_target,
     transcript_selection_scroll_position, transcript_should_fall_back_to_message_navigation,
     transcript_should_follow_tail, transcript_vertical_line_navigation_step,
     transcript_vertical_navigation_step, ui_text,

@@ -86,11 +86,10 @@ impl App {
             pending_draft_store_error,
             prompt_history,
             prompt_history_path,
-            prompt_history_recall_original: None,
-            prompt_history_recall_index: None,
             prompt_history_reported_error: None,
             pending_prompt_history_error,
             submitting_session_ids: HashSet::new(),
+            next_pending_user_message_id: 1,
             layout: LayoutCache::default(),
             bootstrap_done: false,
             last_refresh_at: Instant::now()
@@ -104,6 +103,7 @@ impl App {
             plugin_theme,
             keybindings,
             transcript_motion_prefix: None,
+            transcript_search_forward: true,
             last_ctrl_c_at: None,
             double_esc_window,
         };

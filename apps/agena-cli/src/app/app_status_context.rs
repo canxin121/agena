@@ -239,13 +239,13 @@ impl App {
             self.backend
                 .resolved_model_for_run_options(&self.run_options.to_request())
                 .ok()
-                .map(|model| model_status_label(&model))
+                .map(|model| model_name_status_label(&model))
         };
         let fallback_agent = || self.backend.default_agent_name();
 
         if let Some(execution) = self.transcript.execution.as_ref() {
             let model_part =
-                execution_model_status_label(&execution.execution).or_else(fallback_model);
+                execution_model_name_status_label(&execution.execution).or_else(fallback_model);
             let agent = execution
                 .execution
                 .agent_profile
@@ -259,9 +259,9 @@ impl App {
             if let Some(wait_state) = self.current_session_wait_state_text() {
                 parts.push(wait_state);
             } else if self.transcript.submitting {
-                parts.push(ui_text::t(&self.i18n, "transcript-header-busy"));
+                parts.push(spinner_frame(current_spinner_millis()).to_string());
             } else if execution.run_state != SessionRunState::Idle {
-                parts.push(ui_text::t(&self.i18n, "session-running"));
+                parts.push(spinner_frame(current_spinner_millis()).to_string());
             }
             parts.extend(session_summary_status_parts(model_part, agent, token_usage));
             if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
@@ -289,13 +289,13 @@ impl App {
             self.run_options
                 .model
                 .as_ref()
-                .map(model_status_label)
+                .map(model_name_status_label)
                 .or_else(fallback_model),
             fallback_agent(),
             None,
         );
         if self.transcript.submitting {
-            parts.insert(0, ui_text::t(&self.i18n, "transcript-header-busy"));
+            parts.insert(0, spinner_frame(current_spinner_millis()).to_string());
         }
         if let Some(thinking_mode) = self.run_options.thinking_mode.as_deref()
             && !thinking_mode.trim().is_empty()
@@ -317,7 +317,8 @@ impl App {
     }
 }
 use crate::app::{
-    App, SessionRunState, UiResult, execution_model_status_label, model_status_label,
-    pending_interactive_counts_for_execution, session_summary_status_parts,
+    App, SessionRunState, UiResult, current_spinner_millis, execution_model_name_status_label,
+    execution_model_status_label, model_name_status_label,
+    pending_interactive_counts_for_execution, session_summary_status_parts, spinner_frame,
     status_line_token_usage, ui_text,
 };

@@ -5,14 +5,108 @@ use super::{
     PermissionScope, PermissionStudioModeTarget, RenderedTranscriptNode, SettingsPickerAction,
     ToolPermissionRules, TranscriptBlockCursor, TranscriptBlockSelectionMode,
     TranscriptMoveDirection, TranscriptNodeKey, TranscriptNodeKind,
-    TranscriptVerticalNavigationStep, Utc, apply_permission_studio_mode_input, path_rule_modes,
-    permission_overlay_choice, permission_overlay_choices, permission_rule_draft_from_request,
+    TranscriptVerticalNavigationStep, Utc, apply_permission_studio_mode_input,
+    initial_search_match_index, path_rule_modes, permission_overlay_choice,
+    permission_overlay_choices, permission_rule_draft_from_request,
     settings_studio_permission_items, transcript_message_navigation_direction,
     transcript_message_navigation_target, transcript_selection_scroll_position,
     transcript_should_fall_back_to_message_navigation, transcript_should_follow_tail,
     transcript_vertical_line_navigation_step, transcript_vertical_navigation_direction,
     transcript_vertical_navigation_step,
 };
+
+#[cfg(test)]
+mod prompt_history_tests {
+    use super::super::{
+        App, ComposerDraft, Editor, PROMPT_HISTORY_PAGE_SIZE, PromptHistory,
+        PromptHistorySearchMeta, PromptHistorySearchState,
+    };
+
+    #[test]
+    fn history_search_is_newest_first_and_loads_bounded_pages() {
+        let history = PromptHistory {
+            items: (0..55).map(|index| format!("prompt {index:02}")).collect(),
+        };
+        let mut search = PromptHistorySearchState::new(
+            Editor::default(),
+            0,
+            PromptHistorySearchMeta {
+                original: ComposerDraft::default(),
+                loaded_count: PROMPT_HISTORY_PAGE_SIZE,
+                total_matches: 0,
+                has_more: false,
+            },
+        );
+
+        App::refresh_prompt_history_search(&history, &mut search);
+        assert_eq!(search.items.len(), PROMPT_HISTORY_PAGE_SIZE);
+        assert_eq!(search.items[0].text, "prompt 54");
+        assert_eq!(search.items.last().expect("page item").text, "prompt 35");
+        assert_eq!(search.meta.total_matches, 55);
+        assert!(search.meta.has_more);
+
+        search.meta.loaded_count += PROMPT_HISTORY_PAGE_SIZE;
+        App::refresh_prompt_history_search(&history, &mut search);
+        assert_eq!(search.items.len(), PROMPT_HISTORY_PAGE_SIZE * 2);
+        assert_eq!(
+            search.items.last().expect("second page item").text,
+            "prompt 15"
+        );
+        assert!(search.meta.has_more);
+    }
+}
+
+#[cfg(test)]
+mod pending_message_tests {
+    use super::super::{PendingUserMessage, TranscriptState};
+
+    #[test]
+    fn optimistic_user_message_is_visible_only_while_pending() {
+        let mut transcript = TranscriptState::default();
+        transcript.session_id = Some(7);
+        transcript.add_pending_user_message(PendingUserMessage {
+            id: 42,
+            text: "send this now".to_string(),
+            confirmed: false,
+        });
+
+        let pending_lines = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .map(|line| line.text.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            pending_lines
+                .iter()
+                .any(|line| line.contains("send this now"))
+        );
+        assert!(
+            pending_lines
+                .first()
+                .is_some_and(|line| line.starts_with("user "))
+        );
+
+        transcript.confirm_pending_user_message(42);
+        assert_eq!(transcript.rendered(80).lines[0].text, "user");
+        assert!(
+            transcript
+                .rendered(80)
+                .lines
+                .iter()
+                .any(|line| line.text.contains("send this now"))
+        );
+
+        transcript.remove_pending_user_message(42);
+        assert!(
+            transcript
+                .rendered(80)
+                .lines
+                .iter()
+                .all(|line| !line.text.contains("send this now"))
+        );
+    }
+}
 
 #[cfg(test)]
 mod permission_studio_tests {
@@ -271,11 +365,11 @@ mod transcript_navigation_tests {
     use super::{
         KeyCode, RenderedTranscriptNode, TranscriptBlockCursor, TranscriptBlockSelectionMode,
         TranscriptMoveDirection, TranscriptNodeKey, TranscriptNodeKind,
-        TranscriptVerticalNavigationStep, transcript_message_navigation_direction,
-        transcript_message_navigation_target, transcript_selection_scroll_position,
-        transcript_should_fall_back_to_message_navigation, transcript_should_follow_tail,
-        transcript_vertical_line_navigation_step, transcript_vertical_navigation_direction,
-        transcript_vertical_navigation_step,
+        TranscriptVerticalNavigationStep, initial_search_match_index,
+        transcript_message_navigation_direction, transcript_message_navigation_target,
+        transcript_selection_scroll_position, transcript_should_fall_back_to_message_navigation,
+        transcript_should_follow_tail, transcript_vertical_line_navigation_step,
+        transcript_vertical_navigation_direction, transcript_vertical_navigation_step,
     };
 
     fn node(key: TranscriptNodeKey, start_line: usize, end_line: usize) -> RenderedTranscriptNode {
@@ -308,6 +402,16 @@ mod transcript_navigation_tests {
             transcript_vertical_navigation_direction(KeyCode::Down),
             transcript_vertical_navigation_direction(KeyCode::Char('j'))
         );
+    }
+
+    #[test]
+    fn transcript_search_starts_after_or_before_the_cursor_and_wraps() {
+        let matches = [2, 5, 9];
+
+        assert_eq!(initial_search_match_index(&matches, 6, true), 2);
+        assert_eq!(initial_search_match_index(&matches, 6, false), 1);
+        assert_eq!(initial_search_match_index(&matches, 10, true), 0);
+        assert_eq!(initial_search_match_index(&matches, 1, false), 2);
     }
 
     #[test]

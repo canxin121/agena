@@ -381,75 +381,13 @@ impl App {
     }
 
     pub(in crate::app) fn reset_prompt_history_recall(&mut self) {
-        self.prompt_history_recall_original = None;
-        self.prompt_history_recall_index = None;
+        self.prompt_history_search = None;
     }
 
     pub(in crate::app) fn replace_composer_draft(&mut self, draft: ComposerDraft) {
         cleanup_temporary_composer_items(self.composer_items.as_slice());
         self.clear_composer_state();
         self.restore_composer_draft(draft);
-    }
-
-    pub(in crate::app) fn recall_prompt_history(&mut self, direction: PromptHistoryDirection) {
-        self.composer.flush_all_pending_input();
-        self.sync_composer_items_with_editor();
-        if !self.composer_items.is_empty() {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-prompt-history-items"));
-            return;
-        }
-        if self.prompt_history.is_empty() {
-            self.flash_info(ui_text::t(&self.i18n, "flash-prompt-history-empty"));
-            return;
-        }
-
-        match direction {
-            PromptHistoryDirection::Older => self.recall_older_prompt_history(),
-            PromptHistoryDirection::Newer => self.recall_newer_prompt_history(),
-        }
-    }
-
-    pub(in crate::app) fn recall_older_prompt_history(&mut self) {
-        let len = self.prompt_history.len();
-        if self.prompt_history_recall_index.is_none() {
-            self.prompt_history_recall_original = Some(self.current_composer_draft());
-            self.prompt_history_recall_index = Some(len);
-        }
-
-        let Some(current) = self.prompt_history_recall_index else {
-            return;
-        };
-        if current == 0 {
-            return;
-        }
-        let next = current - 1;
-        let Some(text) = self.prompt_history.get(next).map(str::to_string) else {
-            return;
-        };
-        self.prompt_history_recall_index = Some(next);
-        self.set_composer_text_for_history(text.as_str(), true);
-    }
-
-    pub(in crate::app) fn recall_newer_prompt_history(&mut self) {
-        let Some(current) = self.prompt_history_recall_index else {
-            return;
-        };
-        let next = current + 1;
-        if next >= self.prompt_history.len() {
-            self.prompt_history_recall_index = None;
-            let draft = self
-                .prompt_history_recall_original
-                .take()
-                .unwrap_or_default();
-            self.replace_composer_draft(draft);
-            return;
-        }
-
-        let Some(text) = self.prompt_history.get(next).map(str::to_string) else {
-            return;
-        };
-        self.prompt_history_recall_index = Some(next);
-        self.set_composer_text_for_history(text.as_str(), false);
     }
 
     pub(in crate::app) fn cleanup_temporary_draft_store_items(&self) {
@@ -763,9 +701,9 @@ use crate::app::Result;
 use crate::app::{
     App, AttachmentKind, BTreeMap, ComposerDraft, ComposerDraftElement, ComposerItem,
     DRAFT_PERSIST_INTERVAL_MS, DraftSlot, Duration, FileAttachOverlay, Focus, HashSet, Instant,
-    Overlay, PartContent, Path, PromptHistory, PromptHistoryDirection, Route, StagedAttachment,
-    Terminal, UiAction, UiResult, attachment_chip_label, attachment_placeholder_base,
-    cleanup_temporary_composer_item, cleanup_temporary_composer_items, edit_text, env,
-    find_placeholder_occurrence, fs, iterm2, min, normalize_pasted_path, open_path,
-    paste_image_to_temp_png, pasted_image_format, push_submission_text, terminal, ui_text,
+    Overlay, PartContent, Path, PromptHistory, Route, StagedAttachment, Terminal, UiAction,
+    UiResult, attachment_chip_label, attachment_placeholder_base, cleanup_temporary_composer_item,
+    cleanup_temporary_composer_items, edit_text, env, find_placeholder_occurrence, fs, iterm2, min,
+    normalize_pasted_path, open_path, paste_image_to_temp_png, pasted_image_format,
+    push_submission_text, terminal, ui_text,
 };

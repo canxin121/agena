@@ -39,7 +39,7 @@ use agena_api::{
 };
 use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, EventStream, KeyEvent, KeyEventKind};
 use ratatui::{
     Frame, Terminal,
     backend::Backend as RatatuiBackend,
@@ -68,8 +68,8 @@ use crate::external_editor::{edit_text, open_path};
 use crate::external_pager::page_text;
 use crate::i18n::{I18n, SUPPORTED_LOCALES};
 use crate::iterm2;
-use crate::keybindings::ComposerAction;
 use crate::terminal;
+use crate::tui_keymap::ComposerAction;
 use crate::ui_text;
 use agena_api_server::local_api::{
     CatalogModelResource, ModelCatalogListResponse, ModelCatalogResponse,

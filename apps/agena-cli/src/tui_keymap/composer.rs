@@ -1,18 +1,4 @@
 //! Configurable composer key bindings.
-//!
-//! Two distinct submit actions:
-//!
-//! * `submit_key`   — fire the message immediately. While the AI is busy
-//!   this routes through `steer_input` (Phase 3); when
-//!   idle it submits the message directly.
-//! * `queue_key`    — append to the local pending queue. While the AI is
-//!   busy, the queued message is held until the current
-//!   run ends. While idle, behaves like `submit_key`.
-//! * `newline_key`  — insert a literal newline.
-//! * `edit_queue_key` — pull the queue back into the editor for edit.
-//!
-//! The defaults follow the user's stated preference (Enter = queue,
-//! Ctrl+Enter = submit).
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -28,9 +14,6 @@ impl KeyChord {
     }
 
     pub fn matches(&self, event: &KeyEvent) -> bool {
-        // We only care about the modifiers we've explicitly listed; ignore
-        // KEYPAD/REPEAT bits and similar so that terminals that pass extra
-        // flags still match.
         let want =
             self.modifiers & (KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT);
         let got =
@@ -58,9 +41,7 @@ pub struct ComposerKeyBindings {
 impl Default for ComposerKeyBindings {
     fn default() -> Self {
         Self {
-            // Per user request: Ctrl+Enter sends immediately.
             submit: vec![KeyChord::new(KeyCode::Enter, KeyModifiers::CONTROL)],
-            // Per user request: Enter queues (or sends immediately when idle).
             queue: vec![KeyChord::new(KeyCode::Enter, KeyModifiers::empty())],
             newline: vec![
                 KeyChord::new(KeyCode::Enter, KeyModifiers::SHIFT),
@@ -92,50 +73,56 @@ impl Default for ComposerKeyBindings {
 
 impl ComposerKeyBindings {
     pub fn match_action(&self, event: &KeyEvent) -> Option<ComposerAction> {
-        // Order matters: more specific (with modifiers) wins. We list submit
-        // first so Ctrl+Enter is detected before bare Enter.
-        if self.submit.iter().any(|c| c.matches(event)) {
+        if self.submit.iter().any(|chord| chord.matches(event)) {
             return Some(ComposerAction::Submit);
         }
-        if self.newline.iter().any(|c| c.matches(event)) {
+        if self.newline.iter().any(|chord| chord.matches(event)) {
             return Some(ComposerAction::Newline);
         }
-        if self.history_search.iter().any(|c| c.matches(event)) {
+        if self.history_search.iter().any(|chord| chord.matches(event)) {
             return Some(ComposerAction::HistorySearch);
         }
-        if self.clear_input.iter().any(|c| c.matches(event)) {
+        if self.clear_input.iter().any(|chord| chord.matches(event)) {
             return Some(ComposerAction::ClearInput);
         }
         if self
             .open_pending_user_input
             .iter()
-            .any(|c| c.matches(event))
+            .any(|chord| chord.matches(event))
         {
             return Some(ComposerAction::OpenPendingUserInput);
         }
         if self
             .open_pending_permission
             .iter()
-            .any(|c| c.matches(event))
+            .any(|chord| chord.matches(event))
         {
             return Some(ComposerAction::OpenPendingPermission);
         }
-        if self.attach_file.iter().any(|c| c.matches(event)) {
+        if self.attach_file.iter().any(|chord| chord.matches(event)) {
             return Some(ComposerAction::AttachFile);
         }
-        if self.external_editor.iter().any(|c| c.matches(event)) {
+        if self
+            .external_editor
+            .iter()
+            .any(|chord| chord.matches(event))
+        {
             return Some(ComposerAction::ExternalEditor);
         }
-        if self.attach_clipboard_image.iter().any(|c| c.matches(event)) {
+        if self
+            .attach_clipboard_image
+            .iter()
+            .any(|chord| chord.matches(event))
+        {
             return Some(ComposerAction::AttachClipboardImage);
         }
-        if self.focus_items.iter().any(|c| c.matches(event)) {
+        if self.focus_items.iter().any(|chord| chord.matches(event)) {
             return Some(ComposerAction::FocusItems);
         }
-        if self.queue.iter().any(|c| c.matches(event)) {
+        if self.queue.iter().any(|chord| chord.matches(event)) {
             return Some(ComposerAction::Queue);
         }
-        if self.edit_queue.iter().any(|c| c.matches(event)) {
+        if self.edit_queue.iter().any(|chord| chord.matches(event)) {
             return Some(ComposerAction::EditQueue);
         }
         None

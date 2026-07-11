@@ -224,30 +224,30 @@ impl App {
         key: KeyEvent,
         dialog: &mut PluginWorkbenchOverlay,
     ) -> bool {
-        match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Enter => {
+        match resolve_tui_key(KeyContext::PluginList, key) {
+            Some(KeyAction::Close) => true,
+            Some(KeyAction::Open) => {
                 dialog.mode = PluginWorkbenchMode::Detail;
                 dialog.detail_tab = PluginDetailTab::Config;
                 dialog.selected_section = 0;
                 dialog.selected_node = 0;
                 false
             }
-            KeyCode::Char('r') | KeyCode::Char('R') => {
+            Some(KeyAction::Refresh) => {
                 self.refresh_plugin_workbench(dialog);
                 false
             }
-            KeyCode::Char('t') => {
+            Some(KeyAction::TransportFilter) => {
                 dialog.transport_filter = next_transport_filter(dialog.transport_filter);
                 refresh_plugin_workbench_filter(dialog);
                 false
             }
-            KeyCode::Char('c') => {
+            Some(KeyAction::ConfigFilter) => {
                 dialog.config_filter = next_config_filter(dialog.config_filter);
                 refresh_plugin_workbench_filter(dialog);
                 false
             }
-            KeyCode::PageUp => {
+            Some(KeyAction::PageUp) => {
                 move_index_page(
                     &mut dialog.selected_plugin,
                     dialog.visible_plugins.len(),
@@ -256,7 +256,7 @@ impl App {
                 );
                 false
             }
-            KeyCode::PageDown => {
+            Some(KeyAction::PageDown) => {
                 move_index_page(
                     &mut dialog.selected_plugin,
                     dialog.visible_plugins.len(),
@@ -265,15 +265,15 @@ impl App {
                 );
                 false
             }
-            KeyCode::Home => {
+            Some(KeyAction::Home) => {
                 dialog.selected_plugin = 0;
                 false
             }
-            KeyCode::End => {
+            Some(KeyAction::End) => {
                 dialog.selected_plugin = dialog.visible_plugins.len().saturating_sub(1);
                 false
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            Some(KeyAction::MoveUp) => {
                 move_index(
                     &mut dialog.selected_plugin,
                     dialog.visible_plugins.len(),
@@ -281,7 +281,7 @@ impl App {
                 );
                 false
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(KeyAction::MoveDown) => {
                 move_index(&mut dialog.selected_plugin, dialog.visible_plugins.len(), 1);
                 false
             }
@@ -303,20 +303,16 @@ impl App {
         dialog: &mut PluginWorkbenchOverlay,
     ) -> bool {
         if dialog.detail_tab == PluginDetailTab::Config {
-            return match key.code {
-                KeyCode::Esc => {
+            return match resolve_tui_key(KeyContext::PluginDetail, key) {
+                Some(KeyAction::Back) => {
                     dialog.mode = PluginWorkbenchMode::List;
                     false
                 }
-                KeyCode::Left | KeyCode::Char('h')
-                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                {
+                Some(KeyAction::PreviousTab) if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     dialog.detail_tab = dialog.detail_tab.move_by(-1);
                     false
                 }
-                KeyCode::Right | KeyCode::Char('l')
-                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                {
+                Some(KeyAction::NextTab) if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     dialog.detail_tab = dialog.detail_tab.move_by(1);
                     false
                 }
@@ -324,36 +320,28 @@ impl App {
             };
         }
 
-        match key.code {
-            KeyCode::Esc => {
+        match resolve_tui_key(KeyContext::PluginDetail, key) {
+            Some(KeyAction::Back) => {
                 dialog.mode = PluginWorkbenchMode::List;
                 false
             }
-            KeyCode::Char('r') | KeyCode::Char('R') => {
+            Some(KeyAction::Refresh) => {
                 self.refresh_plugin_workbench(dialog);
                 false
             }
-            KeyCode::Tab if key.modifiers.is_empty() => {
+            Some(KeyAction::NextTab) => {
                 dialog.detail_tab = dialog.detail_tab.move_by(1);
                 false
             }
-            KeyCode::BackTab => {
+            Some(KeyAction::PreviousTab) => {
                 dialog.detail_tab = dialog.detail_tab.move_by(-1);
                 false
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                dialog.detail_tab = dialog.detail_tab.move_by(1);
-                false
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                dialog.detail_tab = dialog.detail_tab.move_by(-1);
-                false
-            }
-            KeyCode::PageUp if dialog.detail_tab != PluginDetailTab::Config => {
+            Some(KeyAction::PageUp) if dialog.detail_tab != PluginDetailTab::Config => {
                 move_detail_scroll(dialog, -10);
                 false
             }
-            KeyCode::PageDown if dialog.detail_tab != PluginDetailTab::Config => {
+            Some(KeyAction::PageDown) if dialog.detail_tab != PluginDetailTab::Config => {
                 move_detail_scroll(dialog, 10);
                 false
             }
@@ -369,9 +357,10 @@ impl App {
         let compact_layout = dialog
             .selected_plugin()
             .is_some_and(plugin_uses_compact_config_layout);
+        let action = resolve_tui_key(KeyContext::PluginConfig, key);
         if compact_layout && dialog.show_diff {
-            match key.code {
-                KeyCode::Esc | KeyCode::Char('d') | KeyCode::Char('D') => {
+            match action {
+                Some(KeyAction::Close | KeyAction::CloseDiff | KeyAction::ShowDiff) => {
                     dialog.show_diff = false;
                     return false;
                 }
@@ -379,18 +368,16 @@ impl App {
             }
         }
         if compact_layout {
-            match key.code {
-                KeyCode::Enter if dialog.config_focus == PluginConfigFocus::Toolbar => {
+            match action {
+                Some(KeyAction::Edit) if dialog.config_focus == PluginConfigFocus::Toolbar => {
                     self.run_compact_toolbar_action(dialog);
                     return false;
                 }
-                KeyCode::Enter if dialog.config_focus == PluginConfigFocus::Structure => {
+                Some(KeyAction::Edit) if dialog.config_focus == PluginConfigFocus::Structure => {
                     dialog.config_focus = PluginConfigFocus::Editor;
                     return false;
                 }
-                KeyCode::Right | KeyCode::Char('l')
-                    if dialog.config_focus == PluginConfigFocus::Toolbar =>
-                {
+                Some(KeyAction::MoveRight) if dialog.config_focus == PluginConfigFocus::Toolbar => {
                     move_index(
                         &mut dialog.selected_toolbar_action,
                         COMPACT_TOOLBAR_ACTIONS.len(),
@@ -398,9 +385,7 @@ impl App {
                     );
                     return false;
                 }
-                KeyCode::Left | KeyCode::Char('h')
-                    if dialog.config_focus == PluginConfigFocus::Toolbar =>
-                {
+                Some(KeyAction::MoveLeft) if dialog.config_focus == PluginConfigFocus::Toolbar => {
                     move_index(
                         &mut dialog.selected_toolbar_action,
                         COMPACT_TOOLBAR_ACTIONS.len(),
@@ -408,72 +393,64 @@ impl App {
                     );
                     return false;
                 }
-                KeyCode::Right | KeyCode::Char('l')
+                Some(KeyAction::MoveRight)
                     if dialog.config_focus == PluginConfigFocus::Structure =>
                 {
                     dialog.config_focus = PluginConfigFocus::Editor;
                     return false;
                 }
-                KeyCode::Left | KeyCode::Char('h')
+                Some(KeyAction::MoveLeft)
                     if dialog.config_focus == PluginConfigFocus::Structure =>
                 {
                     return false;
                 }
-                KeyCode::Left | KeyCode::Char('h')
-                    if dialog.config_focus == PluginConfigFocus::Editor =>
-                {
+                Some(KeyAction::MoveLeft) if dialog.config_focus == PluginConfigFocus::Editor => {
                     if !self.move_selected_main_config_cell(dialog, -1) {
                         dialog.config_focus = PluginConfigFocus::Structure;
                     }
                     return false;
                 }
-                KeyCode::Right | KeyCode::Char('l')
-                    if dialog.config_focus == PluginConfigFocus::Editor =>
-                {
+                Some(KeyAction::MoveRight) if dialog.config_focus == PluginConfigFocus::Editor => {
                     self.move_selected_main_config_cell(dialog, 1);
                     return false;
                 }
-                KeyCode::Up | KeyCode::Char('k')
-                    if dialog.config_focus == PluginConfigFocus::Toolbar =>
-                {
+                Some(KeyAction::MoveUp) if dialog.config_focus == PluginConfigFocus::Toolbar => {
                     dialog.config_focus = PluginConfigFocus::Structure;
                     return false;
                 }
-                KeyCode::Down | KeyCode::Char('j')
-                    if dialog.config_focus == PluginConfigFocus::Toolbar =>
-                {
+                Some(KeyAction::MoveDown) if dialog.config_focus == PluginConfigFocus::Toolbar => {
                     dialog.config_focus = PluginConfigFocus::Structure;
                     return false;
                 }
                 _ => {}
             }
         }
-        match key.code {
-            KeyCode::Tab if key.modifiers.is_empty() => {
+        match action {
+            Some(KeyAction::NextTab) => {
                 dialog.config_focus = next_config_focus(dialog.config_focus, compact_layout);
                 false
             }
-            KeyCode::BackTab => {
+            Some(KeyAction::PreviousTab) => {
                 dialog.config_focus = previous_config_focus(dialog.config_focus, compact_layout);
                 false
             }
-            KeyCode::Char('s') | KeyCode::Char('S') => {
+            Some(KeyAction::Save) => {
                 self.save_selected_plugin_config(dialog);
                 false
             }
-            KeyCode::Char('v') | KeyCode::Char('V') => {
+            Some(KeyAction::Validate) => {
                 self.validate_selected_plugin_config(dialog);
                 false
             }
-            KeyCode::Char('i') | KeyCode::Char('I') => {
+            Some(KeyAction::InsertDefaults) => {
                 self.insert_selected_plugin_defaults(dialog);
                 false
             }
-            KeyCode::Char('x') | KeyCode::Char('X') => {
+            Some(KeyAction::Actions) => {
                 self.open_selected_config_actions(dialog);
                 false
             }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(KeyAction::Delete) => {
                 if dialog.config_focus == PluginConfigFocus::Diagnostics {
                     self.jump_to_selected_bottom_item(dialog);
                 } else {
@@ -481,30 +458,30 @@ impl App {
                 }
                 false
             }
-            KeyCode::Char('D') => {
+            Some(KeyAction::ShowDiff) => {
                 dialog.show_diff = !dialog.show_diff;
                 if !compact_layout {
                     dialog.clamp_selection();
                 }
                 false
             }
-            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(KeyAction::Restart) => {
                 self.restart_selected_plugin(dialog);
                 false
             }
-            KeyCode::Char('r') => {
+            Some(KeyAction::Reset) => {
                 self.reset_selected_plugin_config_to_defaults(dialog);
                 false
             }
-            KeyCode::Char('a') | KeyCode::Char('A') => {
+            Some(KeyAction::Add) => {
                 self.open_add_config_value_editor(dialog);
                 false
             }
-            KeyCode::Char('t') | KeyCode::Char('T') => {
+            Some(KeyAction::SelectType) => {
                 self.open_config_type_selector(dialog);
                 false
             }
-            KeyCode::Enter | KeyCode::Char('e') => {
+            Some(KeyAction::Edit) => {
                 if dialog.config_focus == PluginConfigFocus::Diagnostics {
                     self.jump_to_selected_bottom_item(dialog);
                 } else {
@@ -512,7 +489,7 @@ impl App {
                 }
                 false
             }
-            KeyCode::PageUp => {
+            Some(KeyAction::PageUp) => {
                 match dialog.config_focus {
                     PluginConfigFocus::Toolbar => {}
                     PluginConfigFocus::Structure => {
@@ -525,7 +502,7 @@ impl App {
                 }
                 false
             }
-            KeyCode::PageDown => {
+            Some(KeyAction::PageDown) => {
                 match dialog.config_focus {
                     PluginConfigFocus::Toolbar => {}
                     PluginConfigFocus::Structure => {
@@ -538,7 +515,7 @@ impl App {
                 }
                 false
             }
-            KeyCode::Home => {
+            Some(KeyAction::Home) => {
                 match dialog.config_focus {
                     PluginConfigFocus::Toolbar => dialog.selected_toolbar_action = 0,
                     PluginConfigFocus::Structure => dialog.selected_section = 0,
@@ -551,7 +528,7 @@ impl App {
                 dialog.clamp_selection();
                 false
             }
-            KeyCode::End => {
+            Some(KeyAction::End) => {
                 match dialog.config_focus {
                     PluginConfigFocus::Toolbar => {
                         dialog.selected_toolbar_action =
@@ -589,15 +566,15 @@ impl App {
                 dialog.clamp_selection();
                 false
             }
-            KeyCode::Left | KeyCode::Char('h') => {
+            Some(KeyAction::MoveLeft) => {
                 dialog.config_focus = previous_config_focus(dialog.config_focus, compact_layout);
                 false
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            Some(KeyAction::MoveRight) => {
                 dialog.config_focus = next_config_focus(dialog.config_focus, compact_layout);
                 false
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            Some(KeyAction::MoveUp) => {
                 match dialog.config_focus {
                     PluginConfigFocus::Structure => move_selected_config_section(dialog, -1),
                     PluginConfigFocus::Diagnostics => move_selected_bottom_panel_row(dialog, -1),
@@ -605,7 +582,7 @@ impl App {
                 }
                 false
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(KeyAction::MoveDown) => {
                 match dialog.config_focus {
                     PluginConfigFocus::Structure => move_selected_config_section(dialog, 1),
                     PluginConfigFocus::Diagnostics => move_selected_bottom_panel_row(dialog, 1),
@@ -625,28 +602,28 @@ impl App {
         let Some(overlay) = dialog.actions.as_mut() else {
             return false;
         };
-        match key.code {
-            KeyCode::Esc => {
+        match resolve_tui_key(KeyContext::PluginConfigActions, key) {
+            Some(KeyAction::Close) => {
                 dialog.actions = None;
                 false
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            Some(KeyAction::MoveUp) => {
                 move_index(&mut overlay.selected_action, overlay.actions.len(), -1);
                 false
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(KeyAction::MoveDown) => {
                 move_index(&mut overlay.selected_action, overlay.actions.len(), 1);
                 false
             }
-            KeyCode::Home => {
+            Some(KeyAction::Home) => {
                 overlay.selected_action = 0;
                 false
             }
-            KeyCode::End => {
+            Some(KeyAction::End) => {
                 overlay.selected_action = overlay.actions.len().saturating_sub(1);
                 false
             }
-            KeyCode::Enter => {
+            Some(KeyAction::Accept) => {
                 self.commit_plugin_config_action(dialog);
                 false
             }
@@ -662,34 +639,34 @@ impl App {
         let Some(overlay) = dialog.selection.as_mut() else {
             return false;
         };
-        match key.code {
-            KeyCode::Esc => {
+        match resolve_tui_key(KeyContext::PluginConfigSelection, key) {
+            Some(KeyAction::Close) => {
                 dialog.selection = None;
                 false
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            Some(KeyAction::MoveUp) => {
                 move_index(&mut overlay.selected_item, overlay.items.len(), -1);
                 false
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(KeyAction::MoveDown) => {
                 move_index(&mut overlay.selected_item, overlay.items.len(), 1);
                 false
             }
-            KeyCode::Home => {
+            Some(KeyAction::Home) => {
                 overlay.selected_item = 0;
                 false
             }
-            KeyCode::End => {
+            Some(KeyAction::End) => {
                 overlay.selected_item = overlay.items.len().saturating_sub(1);
                 false
             }
-            KeyCode::Char(' ') if overlay.multi => {
+            Some(KeyAction::Toggle) if overlay.multi => {
                 if let Some(item) = overlay.items.get_mut(overlay.selected_item) {
                     item.checked = !item.checked;
                 }
                 false
             }
-            KeyCode::Enter => {
+            Some(KeyAction::Accept) => {
                 if let Err(error) = self.commit_plugin_config_selection(dialog) {
                     self.flash_error(error);
                 } else {
@@ -710,12 +687,12 @@ impl App {
             return false;
         };
         let view = dialog.config_view;
-        match key.code {
-            KeyCode::Esc => {
+        match resolve_tui_key(KeyContext::PluginDrilldown, key) {
+            Some(KeyAction::Back) => {
                 dialog.drilldown_stack.pop();
                 false
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            Some(KeyAction::MoveUp) => {
                 let count = drilldown_row_count(&overlay_snapshot, dialog.config_view);
                 let Some(overlay) = dialog.current_drilldown_mut() else {
                     return false;
@@ -725,7 +702,7 @@ impl App {
                     drilldown_selected_row_cell(overlay, view, overlay.selected_cell);
                 false
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(KeyAction::MoveDown) => {
                 let count = drilldown_row_count(&overlay_snapshot, dialog.config_view);
                 let Some(overlay) = dialog.current_drilldown_mut() else {
                     return false;
@@ -735,7 +712,7 @@ impl App {
                     drilldown_selected_row_cell(overlay, view, overlay.selected_cell);
                 false
             }
-            KeyCode::PageUp => {
+            Some(KeyAction::PageUp) => {
                 let count = drilldown_row_count(&overlay_snapshot, dialog.config_view);
                 let Some(overlay) = dialog.current_drilldown_mut() else {
                     return false;
@@ -750,7 +727,7 @@ impl App {
                     drilldown_selected_row_cell(overlay, view, overlay.selected_cell);
                 false
             }
-            KeyCode::PageDown => {
+            Some(KeyAction::PageDown) => {
                 let count = drilldown_row_count(&overlay_snapshot, dialog.config_view);
                 let Some(overlay) = dialog.current_drilldown_mut() else {
                     return false;
@@ -760,7 +737,7 @@ impl App {
                     drilldown_selected_row_cell(overlay, view, overlay.selected_cell);
                 false
             }
-            KeyCode::Home => {
+            Some(KeyAction::Home) => {
                 let Some(overlay) = dialog.current_drilldown_mut() else {
                     return false;
                 };
@@ -769,7 +746,7 @@ impl App {
                     drilldown_selected_row_cell(overlay, view, overlay.selected_cell);
                 false
             }
-            KeyCode::End => {
+            Some(KeyAction::End) => {
                 let count = drilldown_row_count(&overlay_snapshot, dialog.config_view);
                 let Some(overlay) = dialog.current_drilldown_mut() else {
                     return false;
@@ -779,15 +756,15 @@ impl App {
                     drilldown_selected_row_cell(overlay, view, overlay.selected_cell);
                 false
             }
-            KeyCode::Left | KeyCode::Char('h') => {
+            Some(KeyAction::MoveLeft) => {
                 self.move_selected_drilldown_cell(dialog, -1);
                 false
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            Some(KeyAction::MoveRight) => {
                 self.move_selected_drilldown_cell(dialog, 1);
                 false
             }
-            KeyCode::Char('a') | KeyCode::Char('A') => {
+            Some(KeyAction::Add) => {
                 self.open_add_config_value_editor_for_path(
                     dialog,
                     overlay_snapshot.plugin_id.clone(),
@@ -795,19 +772,19 @@ impl App {
                 );
                 false
             }
-            KeyCode::Char('x') | KeyCode::Char('X') => {
+            Some(KeyAction::Actions) => {
                 self.open_selected_config_actions(dialog);
                 false
             }
-            KeyCode::Char('t') | KeyCode::Char('T') => {
+            Some(KeyAction::SelectType) => {
                 self.open_config_type_selector(dialog);
                 false
             }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(KeyAction::Delete) => {
                 self.delete_drilldown_selected_row(dialog);
                 false
             }
-            KeyCode::Enter | KeyCode::Char('e') => {
+            Some(KeyAction::Edit) => {
                 self.open_drilldown_selected_row_editor(dialog);
                 false
             }
@@ -817,13 +794,14 @@ impl App {
 }
 use super::{
     App, COMPACT_TOOLBAR_ACTIONS, CONFIG_EDITOR_PAGE_SIZE, ConfigRowCell, Editor,
-    EditorDialogKeyResult, KeyCode, KeyEvent, KeyModifiers, PLUGIN_WORKBENCH_LOG_LIMIT,
-    PluginConfigFilter, PluginConfigFocus, PluginConfigView, PluginDetailTab,
-    PluginTransportFilter, PluginWorkbenchMode, PluginWorkbenchOverlay, UiResult,
-    build_plugin_workbench_plugin, drilldown_row_count, drilldown_selected_row_cell,
-    drive_editor_dialog_key, filtered_plugin_indices, find_row_position, move_detail_scroll,
-    move_index, move_index_page, move_selected_bottom_panel_row, move_selected_config_node,
-    move_selected_config_section, next_config_filter, next_config_focus, next_transport_filter,
-    plugin_all_diagnostics, plugin_uses_compact_config_layout, previous_config_focus,
-    rebuild_drilldown_stack, refresh_plugin_workbench_filter, section_row_count,
+    EditorDialogKeyResult, KeyEvent, KeyModifiers, PLUGIN_WORKBENCH_LOG_LIMIT, PluginConfigFilter,
+    PluginConfigFocus, PluginConfigView, PluginDetailTab, PluginTransportFilter,
+    PluginWorkbenchMode, PluginWorkbenchOverlay, UiResult, build_plugin_workbench_plugin,
+    drilldown_row_count, drilldown_selected_row_cell, drive_editor_dialog_key,
+    filtered_plugin_indices, find_row_position, move_detail_scroll, move_index, move_index_page,
+    move_selected_bottom_panel_row, move_selected_config_node, move_selected_config_section,
+    next_config_filter, next_config_focus, next_transport_filter, plugin_all_diagnostics,
+    plugin_uses_compact_config_layout, previous_config_focus, rebuild_drilldown_stack,
+    refresh_plugin_workbench_filter, section_row_count,
 };
+use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

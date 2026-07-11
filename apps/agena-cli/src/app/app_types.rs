@@ -19,8 +19,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use crate::backend::{Backend, LiveEvent, SessionRefresh};
 use crate::composer_queue::ComposerQueue;
 use crate::i18n::I18n;
-use crate::keybindings::ComposerKeyBindings;
 use crate::tui_config::{TuiConfig, TuiStatusLineConfig};
+use crate::tui_keymap::ComposerKeyBindings;
 use agena_api_server::local_api::ModelCatalogListResponse;
 use agena_tui_components::{Editor, InputDialogState, ScrollState};
 

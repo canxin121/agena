@@ -7,10 +7,10 @@ mod external_editor;
 mod external_pager;
 mod i18n;
 mod iterm2;
-mod keybindings;
 mod short_link;
 mod terminal;
 mod tui_config;
+mod tui_keymap;
 mod ui_text;
 
 use std::{

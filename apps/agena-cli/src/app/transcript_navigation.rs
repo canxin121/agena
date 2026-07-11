@@ -1,23 +1,3 @@
-pub(in crate::app) fn transcript_message_navigation_direction(
-    code: KeyCode,
-) -> Option<TranscriptMoveDirection> {
-    match code {
-        KeyCode::Left | KeyCode::Char('h') => Some(TranscriptMoveDirection::Up),
-        KeyCode::Right | KeyCode::Char('l') => Some(TranscriptMoveDirection::Down),
-        _ => None,
-    }
-}
-
-pub(in crate::app) fn transcript_vertical_navigation_direction(
-    code: KeyCode,
-) -> Option<TranscriptMoveDirection> {
-    match code {
-        KeyCode::Up | KeyCode::Char('k') => Some(TranscriptMoveDirection::Up),
-        KeyCode::Down | KeyCode::Char('j') => Some(TranscriptMoveDirection::Down),
-        _ => None,
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::app) struct TranscriptBlockCursor {
     pub(super) key: TranscriptNodeKey,
@@ -491,4 +471,4 @@ pub(in crate::app) fn transcript_selection_scroll_position(
     };
     desired.min(max_scroll)
 }
-use crate::app::{I18n, KeyCode, TranscriptMoveDirection, ui_text};
+use crate::app::{I18n, TranscriptMoveDirection, ui_text};

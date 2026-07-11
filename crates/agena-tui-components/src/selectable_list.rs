@@ -1,4 +1,6 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
+
+use crate::{NavigationAction, navigation_action};
 
 use crate::selection::{
     clamp_selected_index, clamped_selected_index, move_selected_index, move_selected_index_end,
@@ -55,28 +57,28 @@ impl<T> SelectableListState<T> {
     }
 
     pub fn handle_navigation_key(&mut self, key: KeyEvent, page_size: usize) -> bool {
-        match key.code {
-            KeyCode::PageUp => {
+        match navigation_action(key) {
+            Some(NavigationAction::PageUp) => {
                 self.move_selection_page(-1, page_size);
                 true
             }
-            KeyCode::PageDown => {
+            Some(NavigationAction::PageDown) => {
                 self.move_selection_page(1, page_size);
                 true
             }
-            KeyCode::Home => {
+            Some(NavigationAction::Home) => {
                 self.move_selection_home();
                 true
             }
-            KeyCode::End => {
+            Some(NavigationAction::End) => {
                 self.move_selection_end();
                 true
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            Some(NavigationAction::Up) => {
                 self.move_selection(-1);
                 true
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(NavigationAction::Down) => {
                 self.move_selection(1);
                 true
             }

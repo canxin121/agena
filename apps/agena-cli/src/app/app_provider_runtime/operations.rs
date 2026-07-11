@@ -417,20 +417,20 @@ impl App {
         let Some(detail_page) = dialog.detail_page.as_mut() else {
             return false;
         };
-        match key.code {
-            KeyCode::Esc => {
+        match resolve_tui_key(KeyContext::ProviderDetail, key) {
+            Some(KeyAction::Back) => {
                 dialog.detail_page = None;
                 false
             }
-            KeyCode::Char('o') | KeyCode::Char('O') if dialog.draft.supports_interactive_auth() => {
+            Some(KeyAction::AuthStart) if dialog.draft.supports_interactive_auth() => {
                 self.activate_provider_studio_start_auth(dialog);
                 false
             }
-            KeyCode::Char('p') | KeyCode::Char('P') if dialog.draft.supports_interactive_auth() => {
+            Some(KeyAction::AuthContinue) if dialog.draft.supports_interactive_auth() => {
                 self.activate_provider_studio_continue_auth(dialog);
                 false
             }
-            KeyCode::Enter => {
+            Some(KeyAction::Activate) => {
                 self.activate_provider_studio_detail_page_selection(dialog);
                 false
             }
@@ -634,8 +634,8 @@ impl App {
     }
 }
 use crate::app::{
-    App, AppMessage, ChoiceOverlayAction, ConfirmAction, Editor, JsonValue, KeyCode, KeyEvent,
-    Overlay, ProviderConfigDraft, ProviderModel, ProviderStudioDetailPage, ProviderStudioEditor,
+    App, AppMessage, ChoiceOverlayAction, ConfirmAction, Editor, JsonValue, KeyEvent, Overlay,
+    ProviderConfigDraft, ProviderModel, ProviderStudioDetailPage, ProviderStudioEditor,
     ProviderStudioEditorAction, ProviderStudioField, ProviderStudioFocus, ProviderStudioModelPage,
     ProviderStudioOverlay, SelectionCursor, SessionModelChoiceItem, UiResult,
     apply_provider_model_config_native_tools_suggestion, provider_model_config_draft_from_value,
@@ -649,3 +649,4 @@ use crate::app::{
     provider_studio_selected_model_target, provider_studio_visible_fields,
     session_model_choice_item, ui_text,
 };
+use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

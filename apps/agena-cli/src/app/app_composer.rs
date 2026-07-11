@@ -76,12 +76,13 @@ impl App {
         }
         // Esc handling is special — double-tap clears the input. We track
         // it before consulting the configurable bindings.
-        if matches!(key.code, KeyCode::Esc) && key.modifiers.is_empty() {
+        let composer_key = resolve_tui_key(KeyContext::Composer, key);
+        if composer_key == Some(KeyAction::EnterView) {
             self.focus = Focus::Transcript;
             self.sync_composer_suggestions();
             return;
         }
-        if matches!(key.code, KeyCode::Up) && key.modifiers.contains(KeyModifiers::ALT) {
+        if composer_key == Some(KeyAction::Older) && !key.modifiers.is_empty() {
             self.open_prompt_history_search();
             return;
         }
@@ -89,10 +90,7 @@ impl App {
         // multiline editing: bare Up opens history only at the start of the
         // input. Once open, Up/Down move through the floating newest-first
         // list. Queued message editing remains higher priority.
-        if matches!(key.code, KeyCode::Up)
-            && key.modifiers.is_empty()
-            && self.composer.cursor() == 0
-        {
+        if composer_key == Some(KeyAction::Older) && self.composer.cursor() == 0 {
             if self.try_pop_queue_into_editor() {
                 self.reset_prompt_history_recall();
                 self.after_composer_text_mutated();
@@ -213,70 +211,25 @@ impl App {
         let Some(index) = self.selected_composer_item else {
             return false;
         };
-        match key {
-            KeyEvent {
-                code: KeyCode::Esc,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
+        match resolve_tui_key(KeyContext::ComposerItem, key) {
+            Some(KeyAction::Close) => {
                 self.selected_composer_item = None;
                 true
             }
-            KeyEvent {
-                code: KeyCode::BackTab,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Left,
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('h'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
+            Some(KeyAction::Previous) => {
                 self.selected_composer_item = Some(index.saturating_sub(1));
                 true
             }
-            KeyEvent {
-                code: KeyCode::Tab, ..
-            }
-            | KeyEvent {
-                code: KeyCode::Right,
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('l'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
+            Some(KeyAction::Next) => {
                 self.selected_composer_item =
                     Some(min(index + 1, self.composer_items.len().saturating_sub(1)));
                 true
             }
-            KeyEvent {
-                code: KeyCode::Delete | KeyCode::Backspace,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('d'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
+            Some(KeyAction::Delete) => {
                 self.remove_composer_item(index);
                 true
             }
-            KeyEvent {
-                code: KeyCode::Enter,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('o'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
+            Some(KeyAction::Open) => {
                 self.open_selected_composer_item(index);
                 true
             }
@@ -312,28 +265,12 @@ impl App {
         let Some(mut search) = self.prompt_history_search.take() else {
             return false;
         };
-        let close = match key {
-            KeyEvent {
-                code: KeyCode::Esc,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
+        let close = match resolve_tui_key(KeyContext::PromptHistory, key) {
+            Some(KeyAction::Close) => {
                 self.replace_composer_draft(search.meta.original.clone());
                 true
             }
-            KeyEvent {
-                code: KeyCode::Char('c'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                self.replace_composer_draft(search.meta.original.clone());
-                true
-            }
-            KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
+            Some(KeyAction::Accept) => {
                 if let Some(result) = search.selected_item().cloned() {
                     self.replace_composer_draft(ComposerDraft {
                         text: result.text,
@@ -344,16 +281,7 @@ impl App {
                 }
                 true
             }
-            KeyEvent {
-                code: KeyCode::Char('r'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Up,
-                modifiers: KeyModifiers::NONE | KeyModifiers::ALT,
-                ..
-            } => {
+            Some(KeyAction::Older) => {
                 if search.selected + 1 >= search.items.len() && search.meta.has_more {
                     search.meta.loaded_count = search
                         .meta
@@ -364,11 +292,7 @@ impl App {
                 move_selected_index(&mut search.selected, search.items.len(), 1);
                 false
             }
-            KeyEvent {
-                code: KeyCode::Down,
-                modifiers: KeyModifiers::NONE | KeyModifiers::ALT,
-                ..
-            } => {
+            Some(KeyAction::Newer) => {
                 if search.selected == 0 {
                     self.replace_composer_draft(search.meta.original.clone());
                     true
@@ -377,11 +301,7 @@ impl App {
                     false
                 }
             }
-            KeyEvent {
-                code: KeyCode::Char('s'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
+            Some(KeyAction::NewerKeepOpen) => {
                 move_selected_index(&mut search.selected, search.items.len(), -1);
                 false
             }
@@ -494,47 +414,20 @@ impl App {
             return false;
         }
 
-        match key {
-            KeyEvent {
-                code: KeyCode::Up,
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('p'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
+        match resolve_tui_key(KeyContext::Suggestion, key) {
+            Some(KeyAction::Previous) => {
                 self.move_file_mention_suggestion(-1);
                 true
             }
-            KeyEvent {
-                code: KeyCode::Down,
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('n'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
+            Some(KeyAction::Next) => {
                 self.move_file_mention_suggestion(1);
                 true
             }
-            KeyEvent {
-                code: KeyCode::Esc, ..
-            } => {
+            Some(KeyAction::Close) => {
                 self.dismiss_file_mention_suggestions();
                 true
             }
-            KeyEvent {
-                code: KeyCode::Tab, ..
-            }
-            | KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
+            Some(KeyAction::Fill | KeyAction::Accept) => {
                 self.complete_selected_file_mention();
                 true
             }
@@ -657,50 +550,24 @@ impl App {
             return false;
         }
 
-        match key {
-            KeyEvent {
-                code: KeyCode::Up,
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('p'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
+        match resolve_tui_key(KeyContext::Suggestion, key) {
+            Some(KeyAction::Previous) => {
                 self.move_slash_command_suggestion(-1);
                 true
             }
-            KeyEvent {
-                code: KeyCode::Down,
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('n'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
+            Some(KeyAction::Next) => {
                 self.move_slash_command_suggestion(1);
                 true
             }
-            KeyEvent {
-                code: KeyCode::Esc, ..
-            } => {
+            Some(KeyAction::Close) => {
                 self.dismiss_slash_command_suggestions();
                 true
             }
-            KeyEvent {
-                code: KeyCode::Tab, ..
-            } => {
+            Some(KeyAction::Fill) => {
                 self.complete_selected_slash_command_suggestion(false);
                 true
             }
-            KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
+            Some(KeyAction::Accept) => {
                 self.complete_selected_slash_command_suggestion(true);
                 true
             }
@@ -889,11 +756,12 @@ impl App {
 use crate::app::{
     App, ClipboardCopyMethod, ComposerAction, ComposerDraft, ComposerItem, Editor,
     FileMentionSuggestionContext, FileMentionSuggestionItem, FileMentionSuggestionMeta,
-    FileMentionSuggestionState, Focus, KeyCode, KeyEvent, KeyModifiers,
-    MAX_FILE_MENTION_SUGGESTIONS, PROMPT_HISTORY_PAGE_SIZE, PromptHistory, PromptHistorySearchMeta,
-    PromptHistorySearchResult, PromptHistorySearchState, SlashCommandSuggestionContext,
-    SlashCommandSuggestionItem, SlashCommandSuggestionMeta, SlashCommandSuggestionState,
-    SlashCommandSuggestionValue, UiAction, commands, file_mention_suggestion_context_for_text, min,
-    move_selected_index, runtime_tool_matches_slash_query, set_clipboard_text,
+    FileMentionSuggestionState, Focus, KeyEvent, MAX_FILE_MENTION_SUGGESTIONS,
+    PROMPT_HISTORY_PAGE_SIZE, PromptHistory, PromptHistorySearchMeta, PromptHistorySearchResult,
+    PromptHistorySearchState, SlashCommandSuggestionContext, SlashCommandSuggestionItem,
+    SlashCommandSuggestionMeta, SlashCommandSuggestionState, SlashCommandSuggestionValue, UiAction,
+    commands, file_mention_suggestion_context_for_text, min, move_selected_index,
+    runtime_tool_matches_slash_query, set_clipboard_text,
     slash_command_suggestion_context_for_text, transcript_node_kind_label, ui_text,
 };
+use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

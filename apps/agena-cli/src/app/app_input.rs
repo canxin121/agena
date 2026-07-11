@@ -188,6 +188,7 @@ impl App {
 
         let close = match &mut route {
             Route::Main => false,
+            Route::Usage(dialog) => self.handle_usage_dashboard_key(key, dialog),
             Route::Help(dialog) => self.handle_help_overlay_key(key, dialog),
             Route::SettingsStudio(dialog) => self.handle_settings_studio_overlay_key(key, dialog),
             Route::AgentStudio(dialog) => self.handle_agent_studio_overlay_key(key, dialog),

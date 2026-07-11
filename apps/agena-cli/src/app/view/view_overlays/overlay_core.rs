@@ -101,6 +101,9 @@ impl App {
     pub(in crate::app) fn render_route(&self, frame: &mut Frame, area: Rect) {
         match &self.current_route {
             Route::Main => {}
+            Route::Usage(dialog) => {
+                self.render_usage_dashboard(frame, area, dialog, SurfaceMode::Route)
+            }
             Route::Help(dialog) => {
                 self.render_help_overlay(frame, area, dialog, SurfaceMode::Route)
             }

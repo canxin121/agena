@@ -578,10 +578,17 @@ impl SessionStore {
             ));
         };
 
-        let sessions = entities::session::Entity::find()
-            .filter(entities::session::Column::WorkspaceId.eq(workspace_id))
-            .all(&self.db)
-            .await?;
+        let mut session_statement = entities::session::Entity::find()
+            .filter(entities::session::Column::WorkspaceId.eq(workspace_id));
+        if !query.include_subagents {
+            session_statement =
+                session_statement.filter(entities::session::Column::IsSubagent.eq(false));
+        }
+        if !query.session_ids.is_empty() {
+            session_statement = session_statement
+                .filter(entities::session::Column::Id.is_in(query.session_ids.clone()));
+        }
+        let sessions = session_statement.all(&self.db).await?;
         if sessions.is_empty() {
             return Ok(crate::session::cost::summarize_usage_records(
                 &[],

@@ -1,6 +1,9 @@
 impl App {
     pub(in crate::app) fn handle_message(&mut self, message: AppMessage) {
         match message {
+            AppMessage::UsageStatsLoaded { request_id, result } => {
+                self.handle_usage_stats_loaded(request_id, result)
+            }
             AppMessage::SessionsLoaded {
                 scope,
                 subtree_root_id,

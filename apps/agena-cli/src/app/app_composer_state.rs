@@ -25,6 +25,7 @@ impl App {
         self.sync_composer_suggestions();
         match &mut self.current_route {
             Route::Main => {}
+            Route::Usage(_) => {}
             Route::Help(_) => {}
             Route::SettingsStudio(_) => {}
             Route::AgentStudio(dialog) => {

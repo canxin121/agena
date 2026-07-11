@@ -38,6 +38,7 @@ pub enum CommandId {
     Parent,
     Diagnostics,
     Status,
+    Usage,
     Btw,
     Queue,
 }
@@ -333,6 +334,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         arguments: "",
         summary_key: "command-status-summary",
+    },
+    CommandSpec {
+        id: CommandId::Usage,
+        name: "usage",
+        aliases: &["stats", "analytics"],
+        arguments: "[today|yesterday|7d|14d|30d|90d|month|year|all]",
+        summary_key: "command-usage-summary",
     },
     CommandSpec {
         id: CommandId::Btw,

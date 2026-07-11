@@ -47,6 +47,7 @@ mod view_overlays;
 mod view_permission_helpers;
 mod view_settings_helpers;
 mod view_studio;
+mod view_usage;
 mod view_user_input_helpers;
 
 pub(super) use self::view_catalog_helpers::*;

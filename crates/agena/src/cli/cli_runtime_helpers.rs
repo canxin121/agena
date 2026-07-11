@@ -6,7 +6,11 @@ use super::{
 
 pub(super) fn usage_stats_query_from_args(args: &UsageArgs) -> Result<UsageStatsQuery, AppError> {
     let has_custom_range = args.from.is_some() || args.to.is_some();
-    let mut query = UsageStatsQuery::for_period(args.period.into_usage_period(), Utc::now());
+    let mut query = UsageStatsQuery::for_period_with_offset(
+        args.period.into_usage_period(),
+        Utc::now(),
+        args.timezone_offset_minutes,
+    );
     if has_custom_range {
         query = UsageStatsQuery::custom(
             args.from
@@ -18,7 +22,8 @@ pub(super) fn usage_stats_query_from_args(args: &UsageArgs) -> Result<UsageStats
                 .map(|value| parse_usage_datetime(value, true))
                 .transpose()?
                 .or_else(|| Some(Utc::now())),
-        );
+        )
+        .with_timezone_offset(args.timezone_offset_minutes);
     }
 
     if let (Some(from), Some(to)) = (query.from.as_ref(), query.to.as_ref())
@@ -29,7 +34,12 @@ pub(super) fn usage_stats_query_from_args(args: &UsageArgs) -> Result<UsageStats
         ));
     }
 
-    Ok(query)
+    Ok(query.with_filters(
+        args.provider.clone(),
+        args.model.clone(),
+        args.session.clone(),
+        args.include_subagents,
+    ))
 }
 
 pub(super) fn parse_usage_datetime(raw: &str, end_of_day: bool) -> Result<DateTime<Utc>, AppError> {

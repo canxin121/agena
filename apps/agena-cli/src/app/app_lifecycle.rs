@@ -96,6 +96,7 @@ impl App {
                 .unwrap_or_else(Instant::now),
             pending_ui_action: None,
             current_lineage: None,
+            next_usage_request_id: 0,
             active_subscription: None,
             queue: ComposerQueue::new(),
             status_line,

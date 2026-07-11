@@ -83,7 +83,7 @@ impl App {
                 Line::from(ui_text::t(&self.i18n, "no-session-selected")),
                 Line::from(Span::styled(
                     ui_text::t(&self.i18n, "no-session-selected-hint"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                 )),
             ]
         } else {
@@ -146,7 +146,7 @@ impl App {
                 body_wrap: false,
                 footer,
                 title_style: Style::default().add_modifier(Modifier::BOLD),
-                right_style: Style::default().fg(Color::DarkGray),
+                right_style: Style::default().fg(agena_tui_components::theme::muted_color()),
             },
         );
     }
@@ -212,7 +212,7 @@ impl App {
         let placeholder = self.composer.text().is_empty().then(|| {
             Line::from(Span::styled(
                 ui_text::t(&self.i18n, "composer-placeholder"),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(agena_tui_components::theme::muted_color()),
             ))
         });
         render_composer_editor_surface(
@@ -273,9 +273,9 @@ impl App {
                 prefix_style: Style::default(),
                 selected_prefix_style: None,
                 label_style: Style::default()
-                    .fg(self.theme_color("accent", Color::Cyan))
+                    .fg(agena_tui_components::theme::accent_color())
                     .add_modifier(Modifier::BOLD),
-                detail_style: Style::default().fg(Color::DarkGray),
+                detail_style: Style::default().fg(agena_tui_components::theme::muted_color()),
                 pad_selected_row: true,
             },
         );
@@ -314,9 +314,9 @@ impl App {
                 prefix_style: Style::default(),
                 selected_prefix_style: None,
                 label_style: Style::default()
-                    .fg(self.theme_color("flash_info", Color::Cyan))
+                    .fg(agena_tui_components::theme::info_color())
                     .add_modifier(Modifier::BOLD),
-                detail_style: Style::default().fg(Color::DarkGray),
+                detail_style: Style::default().fg(agena_tui_components::theme::muted_color()),
                 pad_selected_row: true,
             },
         );
@@ -348,10 +348,10 @@ impl App {
                 query: query.clone().into(),
                 empty_message: ui_text::t(&self.i18n, "composer-prompt-history-no-matches").into(),
                 prompt_style: Style::default()
-                    .fg(self.theme_color("accent", Color::Cyan))
+                    .fg(agena_tui_components::theme::accent_color())
                     .add_modifier(Modifier::BOLD),
                 query_style: Style::default(),
-                empty_style: Style::default().fg(Color::DarkGray),
+                empty_style: Style::default().fg(agena_tui_components::theme::muted_color()),
                 results: SuggestionPopupSpec {
                     items: items.as_slice(),
                     selected: search.selected,
@@ -362,10 +362,12 @@ impl App {
                     detail_gap: 2,
                     base_style: Style::default(),
                     selected_style: selection_highlight_style(),
-                    prefix_style: Style::default().fg(Color::DarkGray),
-                    selected_prefix_style: Some(Style::default().fg(Color::DarkGray)),
+                    prefix_style: Style::default().fg(agena_tui_components::theme::muted_color()),
+                    selected_prefix_style: Some(
+                        Style::default().fg(agena_tui_components::theme::muted_color()),
+                    ),
                     label_style: Style::default(),
-                    detail_style: Style::default().fg(Color::DarkGray),
+                    detail_style: Style::default().fg(agena_tui_components::theme::muted_color()),
                     pad_selected_row: false,
                 },
             },
@@ -390,7 +392,10 @@ impl App {
                 continue;
             }
             if visible_items > 0 {
-                spans.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(
+                    "  ",
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
+                ));
             }
             let style = if self.selected_composer_item == Some(index) {
                 selection_highlight_style().add_modifier(Modifier::BOLD)
@@ -428,7 +433,7 @@ impl App {
         }
         Some(WrappedTextSpec {
             text: sanitize_display_text(combined.as_str()).into(),
-            style: Style::default().fg(Color::DarkGray),
+            style: Style::default().fg(agena_tui_components::theme::muted_color()),
         })
     }
 
@@ -522,10 +527,10 @@ impl App {
     pub(in crate::app) fn composer_item_style(&self, item: &ComposerItem) -> Style {
         match item {
             ComposerItem::Attachment(_) => Style::default()
-                .fg(self.theme_color("flash_info", Color::Cyan))
+                .fg(agena_tui_components::theme::info_color())
                 .add_modifier(Modifier::BOLD),
             ComposerItem::LargePaste(_) => Style::default()
-                .fg(self.theme_color("flash_warning", Color::Magenta))
+                .fg(agena_tui_components::theme::warning_color())
                 .add_modifier(Modifier::BOLD),
         }
     }
@@ -543,13 +548,13 @@ impl App {
     pub(in crate::app) fn flash_style(&self, level: FlashLevel) -> Style {
         match level {
             FlashLevel::Success => {
-                Style::default().fg(self.theme_color("flash_success", Color::Green))
+                Style::default().fg(agena_tui_components::theme::success_color())
             }
             FlashLevel::Warning => {
-                Style::default().fg(self.theme_color("flash_warning", Color::Magenta))
+                Style::default().fg(agena_tui_components::theme::warning_color())
             }
-            FlashLevel::Error => Style::default().fg(self.theme_color("flash_error", Color::Red)),
-            FlashLevel::Info => Style::default().fg(self.theme_color("flash_info", Color::Cyan)),
+            FlashLevel::Error => Style::default().fg(agena_tui_components::theme::danger_color()),
+            FlashLevel::Info => Style::default().fg(agena_tui_components::theme::info_color()),
         }
     }
 
@@ -563,7 +568,7 @@ impl App {
             area,
             &WrappedTextSpec {
                 text: sanitize_display_text(text.as_str()).into(),
-                style: Style::default().fg(Color::DarkGray),
+                style: Style::default().fg(agena_tui_components::theme::muted_color()),
             },
         );
     }
@@ -664,24 +669,16 @@ impl App {
             ui_text::t(&self.i18n, "surface-mode-view")
         }
     }
-
-    pub(in crate::app) fn theme_color(&self, key: &str, fallback: Color) -> Color {
-        self.plugin_theme
-            .as_ref()
-            .and_then(|theme| theme.colors.get(key))
-            .and_then(|value| parse_tui_color(value))
-            .unwrap_or(fallback)
-    }
 }
 use super::{
-    App, Color, ComposerEditorSurfaceSpec, ComposerItem, FlashLevel, Focus, Frame,
+    App, ComposerEditorSurfaceSpec, ComposerItem, FlashLevel, Focus, Frame,
     HeaderBodyFooterTextSurfaceSpec, LayoutCache, Line, MAX_FILE_MENTION_SUGGESTIONS,
     MAX_PROMPT_HISTORY_SEARCH_RESULTS, MAX_SLASH_COMMAND_SUGGESTIONS, Modifier, Paragraph,
     QuerySuggestionPopupSpec, Rect, Route, SessionRunState, Span, Style, SuggestionPopupItem,
     SuggestionPopupSpec, Text, VerticalSectionSize, Wrap, WrappedTextSpec, apply_line_highlight,
     build_wrapped_text_lines, composer_item_needs_summary_chip, highlight_search_line, inset_rect,
     layout_composer_surface, layout_header_body_footer_surface, min, pane_header_height,
-    parse_tui_color, pending_interactive_counts_for_execution, render_composer_editor_surface,
+    pending_interactive_counts_for_execution, render_composer_editor_surface,
     render_header_body_footer_text_surface, render_query_suggestion_popup, render_suggestion_popup,
     render_wrapped_text, sanitize_display_text, selection_highlight_style, split_vertical_sections,
     ui_text,

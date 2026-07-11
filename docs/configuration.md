@@ -251,7 +251,32 @@ TUI 参数：
 ```text
 AGENA_TUI_LOG_FILE
 AGENA_TUI_LOG_STDERR
+AGENA_TUI_COLOR_SCHEME
+AGENA_TUI_THEME
 ```
+
+TUI 默认使用 `auto` 配色模式：优先读取 `COLORFGBG`、`TERM_BACKGROUND` 或
+`VSCODE_THEME_KIND`，无法判断时会通过 OSC 11 查询终端的实际背景色；查询仍失败时
+回退到暗色配色。主界面不会覆盖终端背景，普通正文继续使用终端默认前景色，只有
+强调、状态、弱化文字和选中区域使用经过亮色/暗色对比度校验的语义色。
+
+可以在 `agena.json` 中显式覆盖自动检测：
+
+```json
+{
+  "ui": {
+    "tui": {
+      "color_scheme": "auto",
+      "theme": null
+    }
+  }
+}
+```
+
+`color_scheme` 支持 `auto`、`dark` 和 `light`。`theme` 是可选的 plugin TUI theme
+ID。也可以分别通过 `AGENA_TUI_COLOR_SCHEME`、`AGENA_TUI_THEME`，或
+`--set ui.tui.color_scheme=light`、`--set ui.tui.theme=<theme-id>` 设置。TUI 设置页
+中的改动会立即重新加载配色，无需重启。
 
 ### 插件、marketplace
 

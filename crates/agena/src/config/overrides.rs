@@ -4,7 +4,7 @@ use super::{
     ConfigError, RawConfig, RawProviderHttpConfig, RawRequestRetryConfig, RawRuntimeConfig,
     RawRuntimeGcConfig, RawRuntimeModelCatalogConfig, RawRuntimeProvidersConfig,
     RawRuntimeSessionConfig, RawSessionCacheConfig, RawStreamReplayConfig, RawTracingConfig,
-    RawUiConfig, parse_numeric,
+    RawTuiUiConfig, RawUiConfig, TuiColorSchemeConfig, parse_numeric,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,6 +13,8 @@ pub enum ConfigOverride {
     TracingDatabase(String),
     TracingAdapter(String),
     UiLocale(String),
+    UiTuiColorScheme(TuiColorSchemeConfig),
+    UiTuiTheme(String),
     ProvidersDefault(String),
     AgentsDefault(String),
     ProviderHttpTimeoutSecs(u64),
@@ -119,6 +121,10 @@ impl FromStr for ConfigOverride {
             "tracing.database" => Ok(Self::TracingDatabase(raw_value.to_owned())),
             "tracing.adapter" => Ok(Self::TracingAdapter(raw_value.to_owned())),
             "ui.locale" => Ok(Self::UiLocale(raw_value.to_owned())),
+            "ui.tui.color_scheme" => Ok(Self::UiTuiColorScheme(
+                raw_value.parse().map_err(ConfigError::Validation)?,
+            )),
+            "ui.tui.theme" => Ok(Self::UiTuiTheme(raw_value.to_owned())),
             "providers.default" => Ok(Self::ProvidersDefault(raw_value.to_owned())),
             "agents.default" => Ok(Self::AgentsDefault(raw_value.to_owned())),
             _ if key.starts_with("providers.") => parse_provider_override(key, raw_value),
@@ -190,6 +196,22 @@ impl ConfigOverride {
             }
             Self::UiLocale(locale) => {
                 config.ui.get_or_insert_with(RawUiConfig::default).locale = Some(locale.clone());
+            }
+            Self::UiTuiColorScheme(color_scheme) => {
+                config
+                    .ui
+                    .get_or_insert_with(RawUiConfig::default)
+                    .tui
+                    .get_or_insert_with(RawTuiUiConfig::default)
+                    .color_scheme = Some(*color_scheme);
+            }
+            Self::UiTuiTheme(theme) => {
+                config
+                    .ui
+                    .get_or_insert_with(RawUiConfig::default)
+                    .tui
+                    .get_or_insert_with(RawTuiUiConfig::default)
+                    .theme = Some(theme.clone());
             }
             Self::ProvidersDefault(value) => {
                 config.providers.default = Some(value.clone());

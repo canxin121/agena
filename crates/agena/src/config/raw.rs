@@ -24,7 +24,7 @@ use super::{
     ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
     ResolvedProviderModelConfig, RuntimeConfig, RuntimeGcConfig, RuntimeModelCatalogConfig,
     RuntimeProvidersConfig, RuntimeSessionConfig, SessionCacheConfig, SessionCompactionConfig,
-    SessionConfig, StreamTransportMode, TracingConfig, UiConfig,
+    SessionConfig, StreamTransportMode, TracingConfig, TuiColorSchemeConfig, TuiUiConfig, UiConfig,
 };
 
 mod raw_provider;
@@ -358,9 +358,27 @@ impl RawConfig {
             )
         };
 
-        let ui = env.var("AGENA_LOCALE").map(|locale| RawUiConfig {
-            locale: Some(locale),
-        });
+        let locale = env.var("AGENA_LOCALE");
+        let tui_color_scheme = env
+            .var("AGENA_TUI_COLOR_SCHEME")
+            .map(|value| {
+                value
+                    .parse::<TuiColorSchemeConfig>()
+                    .map_err(ConfigError::Validation)
+            })
+            .transpose()?;
+        let tui_theme = env.var("AGENA_TUI_THEME");
+        let ui = (locale.is_some() || tui_color_scheme.is_some() || tui_theme.is_some()).then_some(
+            RawUiConfig {
+                locale,
+                tui: (tui_color_scheme.is_some() || tui_theme.is_some()).then_some(
+                    RawTuiUiConfig {
+                        color_scheme: tui_color_scheme,
+                        theme: tui_theme,
+                    },
+                ),
+            },
+        );
 
         let mut timeout_secs = None;
         let mut connect_timeout_secs = None;
@@ -487,12 +505,20 @@ impl RawConfig {
             database,
             adapter,
         };
+        let raw_ui = self.ui.unwrap_or_default();
+        let raw_tui = raw_ui.tui.unwrap_or_default();
         let ui = UiConfig {
-            locale: self
-                .ui
-                .and_then(|value| value.locale)
+            locale: raw_ui
+                .locale
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
+            tui: TuiUiConfig {
+                color_scheme: raw_tui.color_scheme.unwrap_or_default(),
+                theme: raw_tui
+                    .theme
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty()),
+            },
         };
         let desktop =
             crate::config::types::DesktopConfig::from_raw(self.desktop.unwrap_or_default());
@@ -806,6 +832,17 @@ fn validate_tracing_level(field: &str, value: &str) -> Result<(), ConfigError> {
 pub(crate) struct RawUiConfig {
     #[merge(strategy = option_override)]
     pub(crate) locale: Option<String>,
+    #[merge(strategy = option_struct_merge)]
+    pub(crate) tui: Option<RawTuiUiConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RawTuiUiConfig {
+    #[merge(strategy = option_override)]
+    pub(crate) color_scheme: Option<TuiColorSchemeConfig>,
+    #[merge(strategy = option_override)]
+    pub(crate) theme: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
@@ -1263,6 +1300,7 @@ macro_rules! impl_local_merge_via_crate {
 impl_local_merge_via_crate!(
     RawTracingConfig,
     RawUiConfig,
+    RawTuiUiConfig,
     RawDesktopConfig,
     RawDesktopBackendConfig,
     RawRuntimeConfig,

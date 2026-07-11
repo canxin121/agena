@@ -328,9 +328,9 @@ pub(in crate::app) fn push_markdown_table(
     }
 
     let header_style = Style::default()
-        .fg(Color::Cyan)
+        .fg(agena_tui_components::theme::accent_color())
         .add_modifier(Modifier::BOLD);
-    let separator_style = Style::default().fg(Color::DarkGray);
+    let separator_style = Style::default().fg(agena_tui_components::theme::muted_color());
     let body_style = Style::default();
 
     push_table_border(
@@ -399,7 +399,7 @@ pub(in crate::app) fn push_markdown_table_fallback(
         prefix,
         header.as_str(),
         Style::default()
-            .fg(Color::Cyan)
+            .fg(agena_tui_components::theme::accent_color())
             .add_modifier(Modifier::BOLD),
         width,
     );
@@ -563,11 +563,17 @@ pub(in crate::app) fn render_table_row(
     for line_index in 0..row_height {
         let mut spans = vec![
             Span::raw(prefix.to_string()),
-            Span::styled("│", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "│",
+                Style::default().fg(agena_tui_components::theme::muted_color()),
+            ),
         ];
         for (column_index, width) in widths.iter().enumerate() {
             if column_index > 0 {
-                spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(
+                    " │ ",
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
+                ));
             }
             let text = wrapped_cells
                 .get(column_index)
@@ -586,7 +592,10 @@ pub(in crate::app) fn render_table_row(
                 style,
             ));
         }
-        spans.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            "│",
+            Style::default().fg(agena_tui_components::theme::muted_color()),
+        ));
         out.push(RenderedLine::rich(Line::from(spans)));
     }
 }
@@ -816,7 +825,7 @@ pub(in crate::app) fn strip_terminal_ansi_sequences(text: &str) -> String {
     out
 }
 use super::{
-    Color, Line, Modifier, RenderedLine, Span, Style, UnicodeWidthStr, WordSplitter, WrapOptions,
+    Line, Modifier, RenderedLine, Span, Style, UnicodeWidthStr, WordSplitter, WrapOptions,
     line_plain_text, markdown_to_text, sanitize_terminal_text, trim_empty_line_edges,
     truncate_display_width, wrap,
 };

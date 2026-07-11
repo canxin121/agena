@@ -4,10 +4,12 @@ use crate::layout::list_panel_height;
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
+
+use crate::theme;
 
 pub trait ListPanelHeightResolver {
     fn resolve_placeholder_height(&self) -> u16;
@@ -217,7 +219,7 @@ pub fn render_list_panel_state<H>(frame: &mut Frame, area: Rect, state: &ListPan
         | ListPanelState::Empty { title, message, .. } => {
             let items = [ListItem::new(Line::from(Span::styled(
                 message.as_ref(),
-                Style::default().fg(Color::DarkGray),
+                theme::muted_style(),
             )))];
             render_list_panel(
                 frame,
@@ -253,8 +255,8 @@ pub fn build_accented_two_line_list_item<'a>(
         value,
         detail,
         label_style: Style::default().add_modifier(Modifier::BOLD),
-        value_style: Style::default().fg(Color::Cyan),
-        detail_style: Style::default().fg(Color::DarkGray),
+        value_style: Style::default().fg(theme::accent_color()),
+        detail_style: theme::muted_style(),
         separator: Cow::Borrowed("  "),
     })
 }

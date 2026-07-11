@@ -6,7 +6,7 @@ use std::{
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -1179,7 +1179,7 @@ fn slice_display_window_styled(
             .any(|element| element.range.start < absolute_end && element.range.end > absolute_start)
         {
             Style::default()
-                .fg(Color::LightCyan)
+                .fg(crate::theme::accent_color())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()

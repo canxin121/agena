@@ -4,10 +4,12 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span, Text},
     widgets::{Borders, ListItem, Paragraph, Wrap},
 };
+
+use crate::theme;
 
 use crate::{
     Editor, EditorPanelSpec, FramedSurfaceSpec,
@@ -92,7 +94,7 @@ pub trait SearchListItem: Clone {
     }
 
     fn search_list_detail_style(&self) -> Style {
-        Style::default().fg(Color::DarkGray)
+        theme::muted_style()
     }
 }
 
@@ -103,11 +105,11 @@ pub trait SearchListCustomValue<TContext>: Clone {
     fn search_list_input_text(&self) -> String;
 
     fn search_list_label_style(&self) -> Style {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(theme::accent_color())
     }
 
     fn search_list_detail_style(&self) -> Style {
-        Style::default().fg(Color::DarkGray)
+        theme::muted_style()
     }
 }
 
@@ -392,7 +394,7 @@ where
         TCustom: SearchListCustomValue<TContext>,
     {
         match self {
-            Self::Clear(_) => Style::default().fg(Color::Yellow),
+            Self::Clear(_) => Style::default().fg(theme::warning_color()),
             Self::Custom(custom) => custom.search_list_label_style(),
             Self::Item(item) => item.search_list_label_style(),
         }
@@ -403,7 +405,7 @@ where
         TCustom: SearchListCustomValue<TContext>,
     {
         match self {
-            Self::Clear(_) => Style::default().fg(Color::DarkGray),
+            Self::Clear(_) => theme::muted_style(),
             Self::Custom(custom) => custom.search_list_detail_style(),
             Self::Item(item) => item.search_list_detail_style(),
         }
@@ -527,7 +529,7 @@ fn render_search_list_overlay<TItem, TCustom, TMeta, F>(
             };
             frame.render_widget(
                 Paragraph::new(normalize_text(message.as_str()))
-                    .style(Style::default().fg(Color::DarkGray))
+                    .style(theme::muted_style())
                     .wrap(Wrap { trim: false })
                     .block(list_block),
                 list_area,

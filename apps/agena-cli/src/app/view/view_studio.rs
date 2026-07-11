@@ -36,7 +36,7 @@ impl App {
                 build_detail_two_line_list_item(
                     sanitize_display_text(row.label.as_str()).into(),
                     Some(sanitize_display_text(row.detail.as_str()).into()),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                 )
             })
             .collect::<Vec<_>>();
@@ -62,10 +62,10 @@ impl App {
                 );
                 let detail_style = match adapter_models {
                     Some(adapter) if adapter.error.is_none() => {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(agena_tui_components::theme::muted_color())
                     }
-                    Some(_) => Style::default().fg(Color::Red),
-                    None => Style::default().fg(Color::DarkGray),
+                    Some(_) => Style::default().fg(agena_tui_components::theme::danger_color()),
+                    None => Style::default().fg(agena_tui_components::theme::muted_color()),
                 };
                 build_detail_two_line_list_item(
                     sanitize_display_text(format!("{enabled} {}", adapter_id)).into(),
@@ -101,7 +101,7 @@ impl App {
                                 ))
                                 .into(),
                             ),
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(agena_tui_components::theme::muted_color()),
                         )
                     })
                     .collect::<Vec<_>>()
@@ -124,7 +124,7 @@ impl App {
                     provider_items.as_slice(),
                     (!dialog.providers.items.is_empty()).then_some(dialog.providers.selected),
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(agena_tui_components::theme::accent_color())
                         .add_modifier(Modifier::BOLD),
                     ">> ".into(),
                 ),
@@ -220,14 +220,14 @@ impl App {
                     } else if editable {
                         Style::default().add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(agena_tui_components::theme::muted_color())
                     };
                     let value_style = if selected {
                         selection_highlight_style()
                     } else if editable {
                         Style::default()
                     } else {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(agena_tui_components::theme::muted_color())
                     };
                     DetailTextLine::labeled(
                         provider_model_config_field_label(&self.i18n, field),
@@ -261,7 +261,7 @@ impl App {
             lines.extend(auth_state_lines.into_iter().map(|line| {
                 DetailTextLine::plain(
                     sanitize_display_text(line),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                 )
             }));
             lines.extend(
@@ -277,14 +277,14 @@ impl App {
                         } else if provider_studio_field_editable(dialog, field) {
                             Style::default().add_modifier(Modifier::BOLD)
                         } else {
-                            Style::default().fg(Color::DarkGray)
+                            Style::default().fg(agena_tui_components::theme::muted_color())
                         };
                         let value_style = if selected {
                             selection_highlight_style()
                         } else if provider_studio_field_editable(dialog, field) {
                             Style::default()
                         } else {
-                            Style::default().fg(Color::DarkGray)
+                            Style::default().fg(agena_tui_components::theme::muted_color())
                         };
                         DetailTextLine::labeled(
                             provider_studio_field_label(&self.i18n, field),
@@ -360,7 +360,7 @@ impl App {
                         sanitize_display_text(model_catalog_list_subtitle(&self.i18n, entry))
                             .into(),
                     ),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                 )
             })
             .collect::<Vec<_>>();
@@ -434,7 +434,7 @@ impl App {
     }
 }
 use super::{
-    App, BoundedListPanelHeight, Color, DashboardDetailOverlaySpec, DashboardLeadPanelSpec,
+    App, BoundedListPanelHeight, DashboardDetailOverlaySpec, DashboardLeadPanelSpec,
     DashboardListPanelHeight, DashboardListPanelState, DashboardSplitPanelsSpec,
     DashboardTextPanelHeight, DashboardTextSection, DashboardWorkbenchOverlaySpec,
     DashboardWorkbenchSpec, DetailTextDialogSpec, DetailTextLine, DetailTextSpec, Frame,

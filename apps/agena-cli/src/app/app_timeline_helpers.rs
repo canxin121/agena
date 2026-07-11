@@ -2,10 +2,10 @@ use super::{app_detail_labeled_line, app_detail_plain_line};
 
 pub(in crate::app) fn style_for_role(role: MessageRole) -> Style {
     match role {
-        MessageRole::User => Style::default().fg(Color::Green),
-        MessageRole::Assistant => Style::default().fg(Color::Cyan),
-        MessageRole::System => Style::default().fg(Color::Magenta),
-        MessageRole::Tool => Style::default().fg(Color::Yellow),
+        MessageRole::User => Style::default().fg(agena_tui_components::theme::success_color()),
+        MessageRole::Assistant => Style::default().fg(agena_tui_components::theme::accent_color()),
+        MessageRole::System => Style::default().fg(agena_tui_components::theme::special_color()),
+        MessageRole::Tool => Style::default().fg(agena_tui_components::theme::warning_color()),
     }
 }
 
@@ -833,8 +833,8 @@ pub(in crate::app) fn detail_excerpt(text: &str, max_chars: usize) -> String {
     out
 }
 use crate::app::{
-    AgenaSessionEvent, Color, DateTime, DecisionTraceStep, DetailTextLine, DetailTextSpec,
-    DomainEvent, I18n, Local, MessageRole, PermissionAction, PermissionRiskLevel, PermissionScope,
+    AgenaSessionEvent, DateTime, DecisionTraceStep, DetailTextLine, DetailTextSpec, DomainEvent,
+    I18n, Local, MessageRole, PermissionAction, PermissionRiskLevel, PermissionScope,
     PolicySourceKind, Style, TimelineItem, Utc, build_detail_document, format_key_value_segment,
     join_inline_segments, permission_action_label, permission_mode_token_display,
     permission_related_actions_for_display, permission_requested_actions_for_display,

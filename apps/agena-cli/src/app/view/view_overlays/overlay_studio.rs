@@ -1,5 +1,5 @@
 use super::super::{
-    AgentStudioOverlay, Alignment, App, BoundedListPanelHeight, Color, Constraint, DetailTextLine,
+    AgentStudioOverlay, Alignment, App, BoundedListPanelHeight, Constraint, DetailTextLine,
     DetailTextSpec, Direction, EditorDialogSpec, Frame, FramedSurfaceSpec, HeaderRowSpec, Layout,
     Line, ListPanelSpec, ListWorkbenchDialogSpec, ListWorkbenchPanelState, Modifier, Paragraph,
     PermissionRuleStudioOverlay, PermissionStudioFocus, PermissionStudioOverlay,
@@ -346,9 +346,9 @@ impl App {
                     .into(),
                 ),
                 left_style: Style::default()
-                    .fg(self.theme_color("accent", Color::Cyan))
+                    .fg(agena_tui_components::theme::accent_color())
                     .add_modifier(Modifier::BOLD),
-                right_style: Style::default().fg(Color::DarkGray),
+                right_style: Style::default().fg(agena_tui_components::theme::muted_color()),
             },
         );
 
@@ -460,7 +460,7 @@ impl App {
         let right_width = width.saturating_sub(left_width).saturating_sub(3).max(8);
         let mut lines = Vec::new();
         let header_style = Style::default()
-            .fg(self.theme_color("accent", Color::Cyan))
+            .fg(agena_tui_components::theme::accent_color())
             .add_modifier(Modifier::BOLD);
         let row_style = Style::default();
         let selected_style = selection_highlight_style();
@@ -479,13 +479,13 @@ impl App {
         )));
         lines.push(Line::from(Span::styled(
             "─".repeat(width as usize),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
         )));
 
         if section.items.is_empty() {
             lines.push(Line::from(Span::styled(
                 ui_text::t(&self.i18n, "overlay-settings-empty-items"),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(agena_tui_components::theme::muted_color()),
             )));
             return Text::from(lines);
         }
@@ -496,7 +496,7 @@ impl App {
                 selected_style
             } else if is_selected {
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(agena_tui_components::theme::accent_color())
                     .add_modifier(Modifier::BOLD)
             } else {
                 row_style
@@ -544,7 +544,10 @@ impl App {
                 .enumerate()
                 .fold(Vec::new(), |mut acc, (index, (label, style))| {
                     if index > 0 {
-                        acc.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+                        acc.push(Span::styled(
+                            "  ",
+                            Style::default().fg(agena_tui_components::theme::muted_color()),
+                        ));
                     }
                     acc.push(Span::styled(format!("[ {label} ]"), style));
                     acc
@@ -585,10 +588,10 @@ impl App {
             return Vec::new();
         }
         let accent = Style::default()
-            .fg(self.theme_color("accent", Color::Cyan))
+            .fg(agena_tui_components::theme::accent_color())
             .add_modifier(Modifier::BOLD);
         let danger = Style::default()
-            .fg(self.theme_color("danger", Color::Red))
+            .fg(agena_tui_components::theme::danger_color())
             .add_modifier(Modifier::BOLD);
         match section_id {
             PermissionStudioSectionId::PathDefaults
@@ -621,19 +624,19 @@ impl App {
                 DetailTextLine::labeled(
                     ui_text::t(&self.i18n, "overlay-permission-rule-overview-draft"),
                     sanitize_display_text(permission_rule_draft_label(&self.i18n, &dialog.draft)),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                     Style::default(),
                 ),
                 DetailTextLine::labeled(
                     ui_text::t(&self.i18n, "overlay-permission-rule-overview-mode"),
                     sanitize_display_text(permission_rule_mode_label(dialog.draft.mode)),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                     Style::default(),
                 ),
                 DetailTextLine::labeled(
                     ui_text::t(&self.i18n, "overlay-permission-rule-overview-scope"),
                     sanitize_display_text(dialog.draft.scope.as_str()),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                     Style::default(),
                 ),
                 DetailTextLine::labeled(
@@ -643,7 +646,7 @@ impl App {
                     } else {
                         dialog.draft.session_id.clone()
                     }),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                     Style::default(),
                 ),
                 DetailTextLine::labeled(
@@ -656,7 +659,7 @@ impl App {
                     } else {
                         dialog.draft.workspace_root.clone()
                     }),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                     Style::default(),
                 ),
             ],

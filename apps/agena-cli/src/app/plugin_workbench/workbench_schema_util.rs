@@ -499,9 +499,7 @@ pub(in crate::app) fn diagnostic_severity_label(severity: DiagnosticSeverity) ->
 }
 
 pub(in crate::app) fn plugin_workbench_selection_highlight_style() -> Style {
-    Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::REVERSED | Modifier::BOLD)
+    agena_tui_components::theme::selection_style()
 }
 
 pub(in crate::app) fn quote_settings_segment(value: &str) -> String {
@@ -601,10 +599,9 @@ pub(in crate::app) fn clean(text: impl AsRef<str>) -> String {
         .collect()
 }
 use super::{
-    BTreeSet, Color, DiagnosticSeverity, JsonMap, JsonValue, Modifier, PluginDetailTab,
-    PluginWorkbenchOverlay, PluginWorkbenchPlugin, Style, active_schema_for_value,
-    default_value_for_schema, json, merge_config_override, object_property_schema,
-    pattern_key_matches, preview_value, schema_has_array_shape, schema_has_object_shape,
-    section_row_count,
+    BTreeSet, DiagnosticSeverity, JsonMap, JsonValue, PluginDetailTab, PluginWorkbenchOverlay,
+    PluginWorkbenchPlugin, Style, active_schema_for_value, default_value_for_schema, json,
+    merge_config_override, object_property_schema, pattern_key_matches, preview_value,
+    schema_has_array_shape, schema_has_object_shape, section_row_count,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};

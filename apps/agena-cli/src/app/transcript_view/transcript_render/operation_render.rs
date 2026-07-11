@@ -1,10 +1,10 @@
 use super::super::{
-    Color, ExecutionStatus, I18n, MessagePart, Modifier, OperationBlock, OperationPart,
-    RenderedLine, Style, apply_patch_details, diff_stats, media_artifact_label,
-    push_collapsible_text, push_label_value, push_limited_diff_text, push_limited_markdown,
-    push_limited_tool_text, push_multiline, push_section_heading, push_single_line,
-    render_limited_tool_text_block, should_render_tool_model_output, tool_display_label,
-    tool_execution_collapsed_summary, tool_execution_status_summary, tool_status_color, ui_text,
+    ExecutionStatus, I18n, MessagePart, Modifier, OperationBlock, OperationPart, RenderedLine,
+    Style, apply_patch_details, diff_stats, media_artifact_label, push_collapsible_text,
+    push_label_value, push_limited_diff_text, push_limited_markdown, push_limited_tool_text,
+    push_multiline, push_section_heading, push_single_line, render_limited_tool_text_block,
+    should_render_tool_model_output, tool_display_label, tool_execution_collapsed_summary,
+    tool_execution_status_summary, tool_status_color, ui_text,
 };
 use super::request_render::{render_checklist, render_file_changes};
 
@@ -49,7 +49,7 @@ pub(in crate::app) fn render_tool_execution(
             out,
             "    ",
             error_message,
-            Style::default().fg(Color::Red),
+            Style::default().fg(agena_tui_components::theme::danger_color()),
             width,
         );
     }
@@ -106,7 +106,7 @@ pub(in crate::app) fn render_tool_execution(
                 stats.renames,
                 stats.line_count,
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
             width,
         );
         push_limited_diff_text(out, "    ", diff, width, i18n);
@@ -167,7 +167,7 @@ pub(in crate::app) fn render_operation_blocks(
                     out,
                     "    $ ",
                     command.as_str(),
-                    Style::default().fg(Color::Magenta),
+                    Style::default().fg(agena_tui_components::theme::special_color()),
                     width,
                 );
                 if let Some(stdout) = stdout
@@ -194,7 +194,7 @@ pub(in crate::app) fn render_operation_blocks(
                             out,
                             "      ",
                             stderr,
-                            Style::default().fg(Color::Red),
+                            Style::default().fg(agena_tui_components::theme::danger_color()),
                             width,
                             i18n,
                         );
@@ -203,7 +203,7 @@ pub(in crate::app) fn render_operation_blocks(
                             out,
                             "      ",
                             stderr,
-                            Style::default().fg(Color::Red),
+                            Style::default().fg(agena_tui_components::theme::danger_color()),
                             width,
                             i18n,
                         );
@@ -216,7 +216,7 @@ pub(in crate::app) fn render_operation_blocks(
                         out,
                         "      ",
                         &ui_text::operation_command_exit_line(i18n, *exit_code),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(agena_tui_components::theme::muted_color()),
                         width,
                     );
                 }
@@ -229,7 +229,7 @@ pub(in crate::app) fn render_operation_blocks(
                         out,
                         "    ",
                         diff,
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(agena_tui_components::theme::muted_color()),
                         width,
                         i18n,
                     );
@@ -247,7 +247,7 @@ pub(in crate::app) fn render_operation_blocks(
                     out,
                     &format!("    {heading}"),
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(agena_tui_components::theme::accent_color())
                         .add_modifier(Modifier::BOLD),
                     width,
                 );
@@ -263,7 +263,7 @@ pub(in crate::app) fn render_operation_blocks(
                         out,
                         "        ",
                         result.uri.as_str(),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(agena_tui_components::theme::muted_color()),
                         width,
                     );
                     if let Some(snippet) = &result.snippet
@@ -279,7 +279,7 @@ pub(in crate::app) fn render_operation_blocks(
                     out,
                     "    - ",
                     title.as_deref().unwrap_or(uri.as_str()),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                     width,
                 );
             }
@@ -290,7 +290,7 @@ pub(in crate::app) fn render_operation_blocks(
                     out,
                     "    - ",
                     url.as_str(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                     width,
                 );
             }
@@ -299,7 +299,7 @@ pub(in crate::app) fn render_operation_blocks(
                     out,
                     "    - ",
                     uri.as_str(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                     width,
                 );
                 if let Some(text) = text
@@ -317,7 +317,7 @@ pub(in crate::app) fn render_operation_blocks(
                     out,
                     "    - ",
                     media_artifact_label(artifact).as_str(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                     width,
                 );
             }
@@ -327,7 +327,7 @@ pub(in crate::app) fn render_operation_blocks(
                         out,
                         "    ",
                         message,
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(agena_tui_components::theme::muted_color()),
                         width,
                         i18n,
                     );
@@ -336,7 +336,7 @@ pub(in crate::app) fn render_operation_blocks(
                         out,
                         "    ",
                         message,
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(agena_tui_components::theme::muted_color()),
                         width,
                         i18n,
                     );
@@ -352,7 +352,7 @@ pub(in crate::app) fn render_operation_blocks(
                     out,
                     "    - ",
                     &ui_text::operation_nested_task_summary(i18n, title, *status),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                     width,
                 );
             }

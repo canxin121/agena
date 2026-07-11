@@ -1,7 +1,5 @@
 pub(in crate::app) fn selection_highlight_style() -> Style {
-    Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::REVERSED | Modifier::BOLD)
+    agena_tui_components::theme::selection_style()
 }
 
 pub(in crate::app) fn apply_line_highlight(line: Line<'static>) -> Line<'static> {
@@ -23,41 +21,6 @@ pub(in crate::app) fn apply_line_highlight(line: Line<'static>) -> Line<'static>
         })
         .collect::<Vec<_>>();
     Line::from(spans)
-}
-
-pub(in crate::app) fn parse_tui_color(value: &str) -> Option<Color> {
-    let value = value.trim();
-    let lower = value.to_ascii_lowercase();
-    match lower.as_str() {
-        "black" => Some(Color::Black),
-        "red" => Some(Color::Red),
-        "green" => Some(Color::Green),
-        "yellow" => Some(Color::Yellow),
-        "blue" => Some(Color::Blue),
-        "magenta" => Some(Color::Magenta),
-        "cyan" => Some(Color::Cyan),
-        "gray" | "grey" => Some(Color::Gray),
-        "darkgray" | "dark_gray" | "dark-grey" | "darkgrey" => Some(Color::DarkGray),
-        "lightred" | "light_red" | "light-red" => Some(Color::LightRed),
-        "lightgreen" | "light_green" | "light-green" => Some(Color::LightGreen),
-        "lightyellow" | "light_yellow" | "light-yellow" => Some(Color::LightYellow),
-        "lightblue" | "light_blue" | "light-blue" => Some(Color::LightBlue),
-        "lightmagenta" | "light_magenta" | "light-magenta" => Some(Color::LightMagenta),
-        "lightcyan" | "light_cyan" | "light-cyan" => Some(Color::LightCyan),
-        "white" => Some(Color::White),
-        _ => parse_hex_color(value),
-    }
-}
-
-pub(in crate::app) fn parse_hex_color(value: &str) -> Option<Color> {
-    let hex = value.strip_prefix('#')?;
-    if hex.len() != 6 {
-        return None;
-    }
-    let red = u8::from_str_radix(&hex[0..2], 16).ok()?;
-    let green = u8::from_str_radix(&hex[2..4], 16).ok()?;
-    let blue = u8::from_str_radix(&hex[4..6], 16).ok()?;
-    Some(Color::Rgb(red, green, blue))
 }
 
 pub(in crate::app) fn sanitize_display_text(text: impl AsRef<str>) -> String {
@@ -97,7 +60,7 @@ pub(in crate::app) fn settings_compact_sections_text(
             lines.push(Line::from(Span::styled(
                 sanitize_display_text(settings_compact_pad_to_width(group.as_str(), content_width)),
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(agena_tui_components::theme::muted_color())
                     .add_modifier(Modifier::BOLD),
             )));
         }
@@ -138,7 +101,7 @@ pub(in crate::app) fn settings_compact_editor_text(
     )));
     lines.push(Line::from(Span::styled(
         sanitize_display_text(section.description.as_str()),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
     )));
     lines.push(Line::from(""));
 
@@ -175,7 +138,7 @@ pub(in crate::app) fn settings_compact_editor_text(
             )));
             lines.push(Line::from(Span::styled(
                 settings_compact_item_subtitle_line(item, "   ", width),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(agena_tui_components::theme::muted_color()),
             )));
         }
     }
@@ -410,7 +373,7 @@ pub(in crate::app) fn settings_compact_fixed_columns(
     out
 }
 use super::{
-    Color, I18n, Line, Modifier, SettingsPickerAction, SettingsStudioFocus, SettingsStudioItem,
+    I18n, Line, Modifier, SettingsPickerAction, SettingsStudioFocus, SettingsStudioItem,
     SettingsStudioOverlay, SettingsStudioSection, SettingsStudioSectionId, Span, Style, Text,
     UnicodeWidthStr, sanitize_terminal_text, settings_compact_pad_to_width, truncate_display_text,
     ui_text,

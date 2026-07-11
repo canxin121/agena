@@ -31,7 +31,10 @@ impl RenderedLine {
     }
 
     pub(in crate::app) fn dim(text: impl Into<String>) -> Self {
-        Self::plain(text, Style::default().fg(Color::DarkGray))
+        Self::plain(
+            text,
+            Style::default().fg(agena_tui_components::theme::muted_color()),
+        )
     }
 }
 
@@ -593,7 +596,7 @@ pub(in crate::app) fn permission_related_actions_for_display<'a>(
         .collect()
 }
 use crate::app::{
-    BTreeSet, Color, Focus, I18n, Line, MessagePart, MessageResource, MessageStatus, PartContent,
+    BTreeSet, Focus, I18n, Line, MessagePart, MessageResource, MessageStatus, PartContent,
     PendingInteractiveKind, PendingInteractiveRequest, PermissionAction, PermissionOverlay,
     PermissionOverlayChoice, PermissionOverlayDecision, PermissionOverlayPage, PermissionReplyKind,
     PermissionRequest, PermissionScope, RenderedLine, SessionExecutionResource, SessionResource,

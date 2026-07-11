@@ -61,6 +61,38 @@ pub enum PluginSecretsBackend {
 pub struct UiConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
+    pub tui: TuiUiConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TuiColorSchemeConfig {
+    #[default]
+    Auto,
+    Dark,
+    Light,
+}
+
+impl std::str::FromStr for TuiColorSchemeConfig {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "dark" => Ok(Self::Dark),
+            "light" => Ok(Self::Light),
+            _ => Err(format!(
+                "ui.tui.color_scheme expects one of auto,dark,light, got `{value}`"
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct TuiUiConfig {
+    pub color_scheme: TuiColorSchemeConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

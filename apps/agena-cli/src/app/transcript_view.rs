@@ -98,7 +98,7 @@ pub(in crate::app) fn render_message_detailed(
                         &mut lines,
                         "  ",
                         summary.as_str(),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(agena_tui_components::theme::muted_color()),
                         width,
                     );
                     nodes.push(RenderedTranscriptNode {

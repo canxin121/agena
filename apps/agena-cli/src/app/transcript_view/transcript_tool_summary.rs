@@ -76,7 +76,7 @@ pub(in crate::app) fn push_collapsible_text(
                 "message-tool-output-collapsed",
                 &crate::fl_args!("lines" => preview.omitted_lines as i64),
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
             width,
         );
     }
@@ -104,7 +104,7 @@ pub(in crate::app) fn push_limited_tool_text(
                 "message-tool-output-collapsed",
                 &crate::fl_args!("lines" => preview.omitted_lines as i64),
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
             width,
         );
     }
@@ -131,7 +131,7 @@ pub(in crate::app) fn push_limited_markdown(
                 "message-tool-output-collapsed",
                 &crate::fl_args!("lines" => preview.omitted_lines as i64),
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
             width,
         );
     }
@@ -169,10 +169,12 @@ pub(in crate::app) fn tool_output_copy_text(
 
 pub(in crate::app) fn tool_status_color(status: ExecutionStatus) -> Color {
     match status {
-        ExecutionStatus::Pending | ExecutionStatus::InProgress => Color::Magenta,
-        ExecutionStatus::Completed => Color::Green,
-        ExecutionStatus::Failed => Color::Red,
-        ExecutionStatus::Cancelled => Color::DarkGray,
+        ExecutionStatus::Pending | ExecutionStatus::InProgress => {
+            agena_tui_components::theme::special_color()
+        }
+        ExecutionStatus::Completed => agena_tui_components::theme::success_color(),
+        ExecutionStatus::Failed => agena_tui_components::theme::danger_color(),
+        ExecutionStatus::Cancelled => agena_tui_components::theme::muted_color(),
     }
 }
 

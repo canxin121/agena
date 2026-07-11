@@ -11,7 +11,7 @@ pub(in crate::app) fn app_detail_labeled_line(
     DetailTextLine::labeled(
         label,
         sanitize_terminal_text(value.as_str()),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
         Style::default(),
     )
 }
@@ -26,7 +26,7 @@ pub(in crate::app) fn app_detail_heading_line(text: impl Into<String>) -> Detail
     DetailTextLine::plain(
         sanitize_terminal_text(text.as_str()),
         Style::default()
-            .fg(Color::Cyan)
+            .fg(agena_tui_components::theme::accent_color())
             .add_modifier(Modifier::BOLD),
     )
 }
@@ -219,7 +219,7 @@ pub(in crate::app) fn agent_markdown_document(
     ))
 }
 use crate::app::{
-    AgentFrontmatter, AgentProfile, AgentProfileStorage, AgentStudioField, Color, DetailTextLine,
+    AgentFrontmatter, AgentProfile, AgentProfileStorage, AgentStudioField, DetailTextLine,
     DetailTextSpec, Editor, I18n, JsonValue, Modifier, Style, Text, UiResult, agent_config_path,
     build_detail_text, editor_save_footer, sanitize_terminal_text, settings_edit_title, ui_text,
 };

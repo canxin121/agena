@@ -42,6 +42,23 @@ impl App {
                     .map(|(code, detail)| choice_item(*code, *detail))
                     .collect(),
             ),
+            "ui.tui.color_scheme" => Some(
+                [
+                    ("auto", "settings-choice-tui-color-scheme-auto"),
+                    ("dark", "settings-choice-tui-color-scheme-dark"),
+                    ("light", "settings-choice-tui-color-scheme-light"),
+                ]
+                .into_iter()
+                .map(|(value, detail_key)| choice_item(value, ui_text::t(&self.i18n, detail_key)))
+                .collect(),
+            ),
+            "ui.tui.theme" => Some(
+                self.backend
+                    .plugin_theme_palettes()
+                    .into_iter()
+                    .map(|theme| choice_item(theme.id, theme.display_name))
+                    .collect(),
+            ),
             "tracing.filter" | "tracing.database" | "tracing.adapter" => Some(
                 ["off", "error", "warn", "info", "debug", "trace"]
                     .into_iter()
@@ -60,9 +77,12 @@ impl App {
     ) -> ChoiceOverlayStyle {
         match field.path {
             "providers.default" | "agents.default" => ChoiceOverlayStyle::Searchable,
-            "ui.locale" | "tracing.filter" | "tracing.database" | "tracing.adapter" => {
-                ChoiceOverlayStyle::SelectOnly
-            }
+            "ui.locale"
+            | "ui.tui.color_scheme"
+            | "tracing.filter"
+            | "tracing.database"
+            | "tracing.adapter" => ChoiceOverlayStyle::SelectOnly,
+            "ui.tui.theme" => ChoiceOverlayStyle::SearchableSelect,
             _ if matches!(field.kind, SettingsFieldKind::Bool) => ChoiceOverlayStyle::SelectOnly,
             _ => ChoiceOverlayStyle::Searchable,
         }

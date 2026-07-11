@@ -1,5 +1,5 @@
 use super::super::{
-    Color, I18n, MessagePart, Modifier, PartContent, RenderedLine, RequestPart, Style,
+    I18n, MessagePart, Modifier, PartContent, RenderedLine, RequestPart, Style,
     file_change_list_item_text, file_change_style, first_non_empty_preview_line, push_label_value,
     push_multiline, push_section_heading, tool_execution_preview, transcript_part_content, ui_text,
 };
@@ -17,7 +17,7 @@ pub(in crate::app) fn render_file_changes(
         out,
         &format!("    {}", ui_text::t(i18n, "message-file-changes")),
         Style::default()
-            .fg(Color::Magenta)
+            .fg(agena_tui_components::theme::special_color())
             .add_modifier(Modifier::BOLD),
         width,
     );
@@ -45,7 +45,7 @@ pub(in crate::app) fn render_checklist(
         out,
         &format!("    {}", ui_text::t(i18n, "message-todo-list")),
         Style::default()
-            .fg(Color::Cyan)
+            .fg(agena_tui_components::theme::accent_color())
             .add_modifier(Modifier::BOLD),
         width,
     );
@@ -78,7 +78,7 @@ pub(in crate::app) fn render_permission_request(
         out,
         &format!("  {}", ui_text::message_permission_heading(i18n)),
         Style::default()
-            .fg(Color::Magenta)
+            .fg(agena_tui_components::theme::special_color())
             .add_modifier(Modifier::BOLD),
         width,
     );
@@ -86,7 +86,7 @@ pub(in crate::app) fn render_permission_request(
         out,
         "    ",
         ui_text::permission_summary(i18n, permission).as_str(),
-        Style::default().fg(Color::Magenta),
+        Style::default().fg(agena_tui_components::theme::special_color()),
         width,
     );
 }
@@ -107,7 +107,7 @@ pub(in crate::app) fn render_user_input_request(
             "message-awaiting-user-input",
             &crate::fl_args!("request_id" => request.request.request_id.as_str()),
         ),
-        Style::default().fg(Color::Magenta),
+        Style::default().fg(agena_tui_components::theme::special_color()),
         width,
     );
     for question in &request.request.questions {

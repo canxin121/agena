@@ -43,7 +43,8 @@ pub use types::{
     ResolvedProviderModelConfig, RuntimeConfig, RuntimeGcConfig, RuntimeModelCatalogConfig,
     RuntimeProvidersConfig, RuntimeReloadConfig, RuntimeSessionConfig, SessionCacheConfig,
     SessionCompactionConfig, SessionConfig, ShellHarnessConfig, SimpleHttpProviderOptions,
-    StreamReplayConfig, StreamTransportMode, TracingConfig, UiConfig, cline_api_protocol_paths,
+    StreamReplayConfig, StreamTransportMode, TracingConfig, TuiColorSchemeConfig, TuiUiConfig,
+    UiConfig, cline_api_protocol_paths,
 };
 
 pub use adapter_models::{
@@ -77,7 +78,7 @@ pub(crate) use raw::{
     RawConfig, RawConfigFile, RawProviderHttpConfig, RawRequestRetryConfig, RawRuntimeConfig,
     RawRuntimeGcConfig, RawRuntimeModelCatalogConfig, RawRuntimeProvidersConfig,
     RawRuntimeSessionConfig, RawSessionCacheConfig, RawStreamReplayConfig, RawTracingConfig,
-    RawUiConfig,
+    RawTuiUiConfig, RawUiConfig,
 };
 pub use registry::ProviderAdapterModelsResult;
 pub use registry::list_provider_adapter_models;

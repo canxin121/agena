@@ -148,12 +148,10 @@ pub(in crate::app) fn highlight_search_line(
     has_match: bool,
 ) -> Line<'static> {
     let line_style = if active_match {
-        base_style
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::REVERSED | Modifier::BOLD)
+        base_style.patch(agena_tui_components::theme::selection_style())
     } else if has_match {
         base_style
-            .fg(Color::Cyan)
+            .fg(agena_tui_components::theme::accent_color())
             .add_modifier(Modifier::UNDERLINED)
     } else {
         base_style
@@ -178,10 +176,10 @@ pub(in crate::app) fn highlight_search_line(
             ));
         }
         let match_style = if active_match {
-            line_style.add_modifier(Modifier::REVERSED | Modifier::BOLD)
+            line_style
         } else {
             line_style
-                .fg(Color::Cyan)
+                .fg(agena_tui_components::theme::accent_color())
                 .add_modifier(Modifier::UNDERLINED)
         };
         spans.push(Span::styled(text[range.clone()].to_string(), match_style));

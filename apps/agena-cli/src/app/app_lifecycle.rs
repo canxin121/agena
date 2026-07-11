@@ -1,0 +1,262 @@
+impl App {
+    pub(in crate::app) fn current_route_is_main(&self) -> bool {
+        matches!(self.current_route, Route::Main)
+    }
+
+    pub fn new(backend: Backend, launch: LaunchOptions, i18n: I18n) -> Self {
+        let (tx, rx) = unbounded_channel();
+        let draft_store_path = default_draft_store_path();
+        let (draft_store, pending_draft_store_error) = match DraftStore::load(&draft_store_path) {
+            Ok(store) => (store, None),
+            Err(error) => (
+                DraftStore::default(),
+                Some(i18n.text_args(
+                    "flash-composer-drafts-load-failed",
+                    &crate::fl_args!("error" => error.to_string()),
+                )),
+            ),
+        };
+        let prompt_history_path = default_prompt_history_path();
+        let (prompt_history, pending_prompt_history_error) =
+            match PromptHistory::load(&prompt_history_path) {
+                Ok(history) => (history, None),
+                Err(error) => (
+                    PromptHistory::default(),
+                    Some(i18n.text_args(
+                        "flash-prompt-history-load-failed",
+                        &crate::fl_args!("error" => error.to_string()),
+                    )),
+                ),
+            };
+        let keybindings = launch.tui_config.keybindings.clone();
+        let status_line = StatusLineState::new(&launch.tui_config.status_line);
+        let double_esc_window = Duration::from_millis(launch.tui_config.double_esc_window_ms);
+        let plugin_theme = launch.tui_config.theme.as_ref().and_then(|theme_id| {
+            backend
+                .plugin_theme_palettes()
+                .into_iter()
+                .find(|palette| palette.id == *theme_id)
+        });
+        let mut app = Self {
+            backend,
+            i18n: i18n.clone(),
+            tx,
+            rx,
+            launch: launch.clone(),
+            should_quit: false,
+            focus: Focus::Transcript,
+            current_route: Route::Main,
+            route_stack: Vec::new(),
+            overlay: None,
+            overlay_stack: Vec::new(),
+            seen_permission_request_ids: BTreeSet::new(),
+            seen_user_input_request_ids: BTreeSet::new(),
+            pending_permission_replay: None,
+            flash: None,
+            sessions: SessionListState {
+                search_query: launch.initial_session_search.unwrap_or_default(),
+                ..SessionListState::default()
+            },
+            transcript: TranscriptState::new(
+                i18n,
+                TranscriptDetailDefaults {
+                    tool_output_expanded: launch.tui_config.transcript.tool_output_default_expanded,
+                    thinking_expanded: launch.tui_config.transcript.thinking_default_expanded,
+                },
+            ),
+            run_options: RunOptionsState::default(),
+            composer: Editor::default(),
+            composer_items: Vec::new(),
+            slash_command_suggestions: None,
+            dismissed_slash_command_suggestions_for: None,
+            file_mention_suggestions: None,
+            dismissed_file_mention_suggestions_for: None,
+            prompt_history_search: None,
+            selected_composer_item: None,
+            draft_store,
+            draft_store_path,
+            draft_store_dirty: false,
+            draft_store_last_persist_at: Instant::now()
+                .checked_sub(Duration::from_millis(DRAFT_PERSIST_INTERVAL_MS))
+                .unwrap_or_else(Instant::now),
+            draft_store_reported_error: None,
+            pending_draft_store_error,
+            prompt_history,
+            prompt_history_path,
+            prompt_history_recall_original: None,
+            prompt_history_recall_index: None,
+            prompt_history_reported_error: None,
+            pending_prompt_history_error,
+            submitting_session_ids: HashSet::new(),
+            layout: LayoutCache::default(),
+            bootstrap_done: false,
+            last_refresh_at: Instant::now()
+                .checked_sub(Duration::from_millis(REFRESH_INTERVAL_MS))
+                .unwrap_or_else(Instant::now),
+            pending_ui_action: None,
+            current_lineage: None,
+            active_subscription: None,
+            queue: ComposerQueue::new(),
+            status_line,
+            plugin_theme,
+            keybindings,
+            transcript_motion_prefix: None,
+            last_ctrl_c_at: None,
+            double_esc_window,
+        };
+        if let Some(draft) = app.draft_store.get(DraftSlot::NewSession).cloned() {
+            app.restore_composer_draft(draft);
+        }
+        app
+    }
+
+    pub async fn run<B: RatatuiBackend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
+        self.bootstrap();
+
+        let mut events = Some(EventStream::new());
+        let mut ticker = interval(Duration::from_millis(UI_TICK_MS));
+
+        loop {
+            terminal
+                .draw(|frame| self.draw(frame))
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+            tokio::select! {
+                maybe_event = async {
+                    match events.as_mut() {
+                        Some(events) => events.next().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    match maybe_event {
+                        Some(Ok(event)) => self.handle_terminal_event(event),
+                        Some(Err(error)) => self.flash_error(self.i18n.text_args(
+                            "flash-terminal-event-error",
+                            &crate::fl_args!("error" => error.to_string()),
+                        )),
+                        None => self.should_quit = true,
+                    }
+                }
+                maybe_message = self.rx.recv() => {
+                    if let Some(message) = maybe_message {
+                        self.handle_message(message);
+                    } else {
+                        self.should_quit = true;
+                    }
+                }
+                _ = ticker.tick() => {
+                    self.on_tick();
+                }
+            }
+
+            if let Some(action) = self.pending_ui_action.take() {
+                drop(events.take());
+                self.run_ui_action(action, terminal)?;
+                events = Some(EventStream::new());
+            }
+
+            if self.should_quit {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(in crate::app) fn bootstrap(&mut self) {
+        if self.bootstrap_done {
+            return;
+        }
+
+        self.bootstrap_done = true;
+        self.request_sessions(false);
+
+        if let Some(session_id) = self.launch.initial_session_id {
+            self.open_session(
+                session_id,
+                ui_text::session_fallback_title(&self.i18n, session_id),
+            );
+        }
+    }
+
+    pub(in crate::app) fn on_tick(&mut self) {
+        let now = Instant::now();
+        self.flush_input_buffers_if_due(now);
+        self.refresh_status_line_if_due(now);
+        self.poll_provider_studio_auth_if_due(now);
+        if self.transcript.has_animated_activity() {
+            self.transcript.invalidate_render();
+        }
+
+        if let Some(error) = self.pending_draft_store_error.take() {
+            self.report_draft_store_error(error);
+        }
+        if let Some(error) = self.pending_prompt_history_error.take() {
+            self.report_prompt_history_error(error);
+        }
+
+        if self
+            .flash
+            .as_ref()
+            .is_some_and(|flash| Instant::now() >= flash.expires_at)
+        {
+            self.flash = None;
+        }
+
+        if let Some(session_id) = self.transcript.session_id
+            && !self.transcript.loading_initial
+            && !self.transcript.refreshing
+            && !self.transcript.state_loading
+            && self.last_refresh_at.elapsed() >= Duration::from_millis(REFRESH_INTERVAL_MS)
+        {
+            self.last_refresh_at = Instant::now();
+            self.request_refresh(session_id, false);
+        }
+
+        self.sync_current_draft_slot();
+        self.persist_draft_store_with_feedback(false);
+    }
+
+    pub(in crate::app) fn poll_provider_studio_auth_if_due(&mut self, now: Instant) {
+        let Some((host, mut dialog)) = self.take_provider_studio_dialog() else {
+            return;
+        };
+
+        if dialog.pending_auth_key.is_none()
+            && let Some(interval) = provider_studio_auth_poll_interval(&dialog)
+        {
+            match dialog.next_auth_poll_at {
+                Some(deadline) if now >= deadline => {
+                    self.request_provider_studio_continue_auth(&mut dialog);
+                }
+                Some(_) => {}
+                None => {
+                    dialog.next_auth_poll_at = now.checked_add(interval).or(Some(now));
+                }
+            }
+        }
+
+        self.restore_provider_studio_dialog(host, dialog);
+    }
+
+    pub(in crate::app) fn handle_terminal_event(&mut self, event: Event) {
+        match event {
+            Event::Key(key) => self.handle_key_event(key),
+            Event::Paste(text) => self.handle_paste(text),
+            Event::Resize(_, _) => self.transcript.invalidate_render(),
+            Event::Mouse(_) => {}
+            Event::FocusGained | Event::FocusLost => {}
+        }
+    }
+}
+use crate::app::RatatuiBackend;
+use crate::app::Result;
+use crate::app::{
+    App, BTreeSet, Backend, ComposerQueue, DRAFT_PERSIST_INTERVAL_MS, DraftSlot, DraftStore,
+    Duration, Editor, Event, EventStream, Focus, HashSet, I18n, Instant, LaunchOptions,
+    LayoutCache, PromptHistory, REFRESH_INTERVAL_MS, Route, RunOptionsState, SessionListState,
+    StatusLineState, Terminal, TranscriptDetailDefaults, TranscriptState, UI_TICK_MS,
+    default_draft_store_path, default_prompt_history_path, interval,
+    provider_studio_auth_poll_interval, ui_text, unbounded_channel,
+};
+use futures_util::StreamExt;

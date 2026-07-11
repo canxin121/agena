@@ -1,5 +1,3 @@
-use super::*;
-
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelCatalogResponse {
     #[serde(default)]
@@ -156,3 +154,7 @@ pub struct ModelCatalogLookupRequest {
     #[serde(default)]
     pub model_ids: Vec<String>,
 }
+use super::{
+    CatalogModelRecord, DateTime, Deserialize, ModelCatalogSnapshotSourceKind,
+    RuntimeBackgroundTaskResource, Serialize, Utc,
+};

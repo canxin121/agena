@@ -1,5 +1,3 @@
-use super::*;
-
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct ModelCatalogListQuery {
     #[serde(default)]
@@ -241,3 +239,8 @@ pub async fn refresh_model_catalog(
         summary: model_catalog_summary(runtime, &catalog),
     }))
 }
+use super::{
+    AppState, AxumQuery, BTreeSet, Deserialize, IntoResponse, Json, ModelCatalogListResponse,
+    ModelCatalogLookupRequest, ModelCatalogRefreshResponse, ModelCatalogResponse, ServerError,
+    State, items_json,
+};

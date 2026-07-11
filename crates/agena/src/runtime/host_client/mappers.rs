@@ -1,5 +1,3 @@
-use super::*;
-
 pub(super) fn host_unavailable(message: impl Into<String>) -> PluginError {
     PluginError {
         code: crate::plugin::sdk::PluginErrorCode::HostUnavailable,
@@ -727,3 +725,10 @@ pub(super) mod active_invocations {
         }
     }
 }
+use super::{
+    AskUserRequest, AskUserToolInput, HostAgentDescriptor, HostAgentSelectionConfig,
+    HostPermissionCheckResponse, HostPluginStatus, HostSchedulerJob, HostSession, MonitorError,
+    MonitorEvent, MonitorHandle, MonitorReadResponse, PluginError, PluginPermissionDecision,
+    PluginStorageError, ProcessStatus, ProcessStream, TaskSubagentType, ToolDescriptor,
+    ToolInvokeOutput, UserInputOption, UserInputQuestion,
+};

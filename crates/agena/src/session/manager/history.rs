@@ -1,4 +1,10 @@
-use super::*;
+use super::{RunControlError, run_control_to_app_error};
+use crate::{
+    AppError,
+    message::{Message, MessageStatus, PartContent},
+    role::Role,
+    session::{Session, SessionForkRequest, SessionManager, SessionRewindRequest, SessionSummary},
+};
 
 impl SessionManager {
     pub async fn fork_session(&self, request: SessionForkRequest) -> Result<Session, AppError> {
@@ -149,7 +155,10 @@ fn is_completed_user_rewind_target(message: &Message) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        Message, MessageStatus, Role, RunControlError, cancel_active_run_result,
+        is_completed_user_rewind_target,
+    };
 
     #[test]
     fn cancelling_a_completed_run_is_a_successful_no_op() {

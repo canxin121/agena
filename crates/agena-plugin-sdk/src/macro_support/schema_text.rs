@@ -3,14 +3,14 @@ use std::collections::BTreeSet;
 
 use serde_json::{Map, Value};
 
-use super::{
-    ordered_schema_properties, resolve_schema_value, string_literals,
-    top_level_discriminated_variants, top_level_union_variants,
-};
 use super::schema_examples::{
     append_schema_relations, compact_json_value, schema_aliases,
     schema_array_item_constraint_labels, schema_compact_json_text, schema_constraint_labels,
     schema_description_text, schema_example_value, schema_type_label,
+};
+use super::{
+    ordered_schema_properties, resolve_schema_value, string_literals,
+    top_level_discriminated_variants, top_level_union_variants,
 };
 
 pub fn schema_usage_text(schema: &serde_json::Value) -> Option<String> {

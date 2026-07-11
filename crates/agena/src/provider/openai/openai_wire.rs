@@ -1,0 +1,501 @@
+use crate::provider::chat_wire;
+
+use super::{
+    AppError, BTreeSet, CompletionStreamEvent, Deserialize, HashMap, ModelId, ProviderId,
+    Serialize, ToolStreamInput, ToolStreamInputKind, ToolStreamUpdate, prompt_cache, protocol_ids,
+    utils,
+};
+
+#[derive(Debug, Serialize)]
+pub(super) struct OpenAiResponsesRequest {
+    pub(super) model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) instructions: Option<String>,
+    pub(super) input: Vec<OpenAiResponsesInputItem>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) tools: Vec<serde_json::Value>,
+    pub(super) tool_choice: String,
+    pub(super) parallel_tool_calls: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) include: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) max_output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) prompt_cache_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) previous_response_id: Option<String>,
+    pub(super) store: bool,
+    pub(super) stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) stop: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) seed: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) reasoning: Option<OpenAiResponsesReasoningConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) service_tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) text: Option<OpenAiResponsesTextConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) client_metadata: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct OpenAiResponsesCompactRequest {
+    pub(super) model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) instructions: Option<String>,
+    pub(super) input: Vec<OpenAiResponsesInputItem>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) tools: Vec<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) include: Option<Vec<String>>,
+    pub(super) parallel_tool_calls: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) prompt_cache_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) reasoning: Option<OpenAiResponsesReasoningConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) service_tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) text: Option<OpenAiResponsesTextConfig>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct OpenAiResponsesReasoningConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) effort: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct OpenAiResponsesCompactResponse {
+    #[serde(default)]
+    pub(super) output: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct OpenAiResponsesTextConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) verbosity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) format: Option<OpenAiResponsesTextFormat>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(super) enum OpenAiResponsesTextFormat {
+    JsonObject,
+    JsonSchema {
+        name: String,
+        schema: serde_json::Value,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        strict: bool,
+    },
+}
+
+impl OpenAiResponsesTextFormat {
+    pub(super) fn from_response_format(
+        format: Option<&crate::provider::ResponseFormat>,
+    ) -> Option<Self> {
+        match format? {
+            crate::provider::ResponseFormat::Text => None,
+            crate::provider::ResponseFormat::JsonObject => Some(Self::JsonObject),
+            crate::provider::ResponseFormat::JsonSchema {
+                name,
+                schema,
+                strict,
+            } => Some(Self::JsonSchema {
+                name: name.clone(),
+                schema: schema.clone(),
+                strict: *strict,
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct OpenAiInputMessage {
+    pub(super) role: String,
+    pub(super) content: Vec<OpenAiInputContent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) copilot_cache_control: Option<prompt_cache::PromptCacheControl>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+pub(super) enum OpenAiInputContent {
+    #[serde(rename = "input_text")]
+    InputText { text: String },
+    #[serde(rename = "output_text")]
+    OutputText { text: String },
+    #[serde(rename = "input_image")]
+    Image { image_url: String },
+    #[serde(rename = "input_file")]
+    File {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_data: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+    },
+}
+
+impl OpenAiInputContent {
+    pub(super) fn text_for_role(role: &str, text: String) -> Self {
+        if role == "assistant" {
+            Self::OutputText { text }
+        } else {
+            Self::InputText { text }
+        }
+    }
+}
+
+pub(super) fn validate_responses_input(input: &[OpenAiResponsesInputItem]) -> Result<(), AppError> {
+    let mut seen_tool_calls = BTreeSet::new();
+
+    for (index, item) in input.iter().enumerate() {
+        match item {
+            OpenAiResponsesInputItem::Message(message) => {
+                validate_responses_message(index, message)?;
+            }
+            OpenAiResponsesInputItem::FunctionCall(item) => {
+                if !protocol_ids::valid_openai_responses_call_id(item.call_id.as_ref()) {
+                    return Err(AppError::Internal(format!(
+                        "invalid OpenAI Responses function_call call_id at input[{index}]"
+                    )));
+                }
+                if item.name.trim().is_empty() {
+                    return Err(AppError::Internal(format!(
+                        "invalid OpenAI Responses function_call name at input[{index}]"
+                    )));
+                }
+                seen_tool_calls.insert(item.call_id.clone());
+            }
+            OpenAiResponsesInputItem::FunctionCallOutput(item) => {
+                if !protocol_ids::valid_openai_responses_call_id(item.call_id.as_ref()) {
+                    return Err(AppError::Internal(format!(
+                        "invalid OpenAI Responses function_call_output call_id at input[{index}]"
+                    )));
+                }
+                if !seen_tool_calls.contains::<str>(item.call_id.as_ref()) {
+                    return Err(AppError::Internal(format!(
+                        "OpenAI Responses function_call_output at input[{index}] references unknown call_id `{}`",
+                        item.call_id
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub(super) fn validate_responses_message(
+    index: usize,
+    message: &OpenAiInputMessage,
+) -> Result<(), AppError> {
+    let role = message.role.trim();
+    if role.is_empty() {
+        return Err(AppError::Internal(format!(
+            "OpenAI Responses message at input[{index}] has empty role"
+        )));
+    }
+    if message.content.is_empty() {
+        return Err(AppError::Internal(format!(
+            "OpenAI Responses message at input[{index}] has empty content"
+        )));
+    }
+
+    for content in &message.content {
+        match (role, content) {
+            ("assistant", OpenAiInputContent::InputText { .. }) => {
+                return Err(AppError::Internal(format!(
+                    "OpenAI Responses assistant message at input[{index}] used input_text; assistant history must use output_text"
+                )));
+            }
+            (role, OpenAiInputContent::OutputText { .. }) if role != "assistant" => {
+                return Err(AppError::Internal(format!(
+                    "OpenAI Responses {role} message at input[{index}] used output_text"
+                )));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub(super) enum OpenAiResponsesInputItem {
+    Message(OpenAiInputMessage),
+    FunctionCall(OpenAiFunctionCallItem),
+    FunctionCallOutput(OpenAiFunctionCallOutputItem),
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub(super) enum OpenAiRealtimeConversationItem {
+    Message(OpenAiRealtimeMessageItem),
+    FunctionCall(OpenAiFunctionCallItem),
+    FunctionCallOutput(OpenAiFunctionCallOutputItem),
+}
+
+impl OpenAiRealtimeConversationItem {
+    pub(super) fn from_responses_input(value: OpenAiResponsesInputItem) -> Self {
+        match value {
+            OpenAiResponsesInputItem::Message(message) => {
+                Self::Message(OpenAiRealtimeMessageItem {
+                    kind: "message",
+                    role: message.role,
+                    content: message.content,
+                })
+            }
+            OpenAiResponsesInputItem::FunctionCall(item) => Self::FunctionCall(item),
+            OpenAiResponsesInputItem::FunctionCallOutput(item) => Self::FunctionCallOutput(item),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct OpenAiRealtimeMessageItem {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    role: String,
+    content: Vec<OpenAiInputContent>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct OpenAiFunctionCallItem {
+    #[serde(rename = "type")]
+    pub(super) kind: &'static str,
+    pub(super) call_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) namespace: Option<String>,
+    pub(super) name: String,
+    pub(super) arguments: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) copilot_cache_control: Option<prompt_cache::PromptCacheControl>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct OpenAiFunctionCallOutputItem {
+    #[serde(rename = "type")]
+    pub(super) kind: &'static str,
+    pub(super) call_id: String,
+    pub(super) output: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) copilot_cache_control: Option<prompt_cache::PromptCacheControl>,
+}
+
+pub(super) struct OpenAiResponsesWireToolName {
+    pub(super) namespace: Option<String>,
+    pub(super) name: String,
+}
+
+pub(super) fn responses_wire_tool_name(name: &str) -> OpenAiResponsesWireToolName {
+    responses_native_tool_name(name).unwrap_or_else(|| OpenAiResponsesWireToolName {
+        namespace: None,
+        name: name.trim().to_string(),
+    })
+}
+
+pub(super) fn openai_chat_tool_name(name: &str) -> String {
+    name.trim().to_string()
+}
+
+/// Normalize one OpenAI Chat tool-call chunk into the same alias-aware stream
+/// representation used by the Responses API.  A call id is authoritative,
+/// while an index remains an alias for providers that omit either field on
+/// some chunks.  Keeping both candidates prevents a compatible gateway from
+/// turning a single call into several operations when it changes the index.
+pub(super) fn chat_tool_stream_input(
+    provider_id: &str,
+    tool: chat_wire::ChatToolCallWire,
+) -> Result<ToolStreamInput, AppError> {
+    let call_id = utils::normalize_optional_text(tool.id);
+    let mut candidate_keys = Vec::new();
+    if let Some(call_id) = call_id.as_ref() {
+        candidate_keys.push(format!("id:{call_id}"));
+    }
+    if let Some(index) = tool.index {
+        candidate_keys.push(format!("idx:{index}"));
+    }
+    let stream_key_candidates = candidate_keys
+        .into_iter()
+        .filter_map(|key| key.parse().ok())
+        .collect::<Vec<_>>();
+    if stream_key_candidates.is_empty() {
+        return Err(AppError::Provider(format!(
+            "{provider_id} returned chat tool_call delta without index/id"
+        )));
+    }
+
+    let (name, arguments) = tool
+        .function
+        .map(|function| {
+            (
+                utils::normalize_optional_text(function.name),
+                utils::optional_non_empty(function.arguments),
+            )
+        })
+        .unwrap_or_default();
+
+    Ok(ToolStreamInput {
+        // Standard OpenAI Chat streams carry argument deltas. A parameterless
+        // function needs a registration event so the session processor does
+        // not drop it before the stream completes.
+        kind: arguments
+            .as_deref()
+            .is_some_and(|value| !value.is_empty())
+            .then_some(ToolStreamInputKind::Delta)
+            .unwrap_or(ToolStreamInputKind::Start),
+        stream_key_candidates,
+        provider_item_id: None,
+        model_call_id: call_id.and_then(|id| id.parse().ok()),
+        name,
+        arguments,
+    })
+}
+
+pub(super) fn responses_native_tool_name(name: &str) -> Option<OpenAiResponsesWireToolName> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some((namespace, local_name)) = trimmed.split_once('.')
+        && !local_name.contains('.')
+        && responses_simple_tool_identifier(namespace)
+        && responses_simple_tool_identifier(local_name)
+    {
+        return Some(OpenAiResponsesWireToolName {
+            namespace: Some(namespace.to_owned()),
+            name: local_name.to_owned(),
+        });
+    }
+
+    if responses_simple_tool_identifier(trimmed) {
+        return Some(OpenAiResponsesWireToolName {
+            namespace: None,
+            name: trimmed.to_owned(),
+        });
+    }
+
+    None
+}
+
+pub(super) fn responses_model_tool_name(namespace: Option<&str>, name: &str) -> String {
+    let name = name.trim();
+    match namespace.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(namespace) => format!("{namespace}.{name}"),
+        None => name.to_owned(),
+    }
+}
+
+pub(super) fn responses_simple_tool_identifier(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && trimmed.len() <= 64
+        && trimmed
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+pub(super) fn responses_tool_stream_input(
+    provider_id: &str,
+    event: utils::ResponsesToolEvent,
+) -> Result<ToolStreamInput, AppError> {
+    let stream_key_candidates = event
+        .stream_key_candidates(provider_id)?
+        .into_iter()
+        .filter_map(|value| value.parse().ok())
+        .collect::<Vec<_>>();
+    if stream_key_candidates.is_empty() {
+        return Err(AppError::Provider(format!(
+            "{provider_id} returned tool event without usable stream key candidates"
+        )));
+    }
+
+    let model_call_id = event
+        .call_id
+        .as_deref()
+        .and_then(protocol_ids::openai_responses_call_id)
+        .or_else(|| {
+            event
+                .id
+                .as_deref()
+                .and_then(protocol_ids::openai_responses_call_id)
+        });
+
+    let name = event
+        .name
+        .as_deref()
+        .map(|name| responses_model_tool_name(event.namespace.as_deref(), name));
+
+    Ok(ToolStreamInput {
+        kind: match event.kind {
+            utils::ResponsesToolEventKind::Added => ToolStreamInputKind::Start,
+            utils::ResponsesToolEventKind::Delta => ToolStreamInputKind::Delta,
+            utils::ResponsesToolEventKind::Done => ToolStreamInputKind::Finish,
+        },
+        stream_key_candidates,
+        provider_item_id: event.item_id.and_then(|value| value.parse().ok()),
+        model_call_id,
+        name,
+        arguments: event.arguments,
+    })
+}
+
+pub(super) fn completion_event_from_tool_stream_update(
+    provider_id: &ProviderId,
+    model: &ModelId,
+    update: ToolStreamUpdate,
+) -> CompletionStreamEvent {
+    match update {
+        ToolStreamUpdate::Registered {
+            stream_key,
+            id,
+            name,
+        } => CompletionStreamEvent::ToolCallDelta {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            stream_key,
+            id,
+            name,
+            arguments_delta: String::new(),
+        },
+        ToolStreamUpdate::ArgumentsDelta {
+            stream_key,
+            id,
+            name,
+            arguments_delta,
+        } => CompletionStreamEvent::ToolCallDelta {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            stream_key,
+            id,
+            name,
+            arguments_delta,
+        },
+        ToolStreamUpdate::ArgumentsSnapshot {
+            stream_key,
+            id,
+            name,
+            arguments_json,
+        } => CompletionStreamEvent::ToolCallSnapshot {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            stream_key,
+            id,
+            name,
+            arguments_json,
+        },
+    }
+}

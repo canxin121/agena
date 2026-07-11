@@ -1,5 +1,3 @@
-use super::*;
-
 #[derive(Debug, Clone, Serialize)]
 pub struct PluginInspectResponse {
     pub plugin: agena::plugin::PluginInspect,
@@ -43,3 +41,4 @@ pub struct PluginLogListQuery {
     #[serde(default)]
     pub limit: Option<usize>,
 }
+use super::{Deserialize, Serialize};

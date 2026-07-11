@@ -1,5 +1,3 @@
-use super::*;
-
 use agena_macros::ToolInput;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
@@ -183,3 +181,4 @@ pub(crate) struct PlanUpdateInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) note: Option<String>,
 }
+use super::{Deserialize, JsonSchema, Serialize};

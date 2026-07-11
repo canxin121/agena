@@ -7,8 +7,8 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::manifest_support::{hook_subscription_for_name, normalize_schema_json, normalize_tags};
 pub use super::manifest_support::normalize_tool_tag_name;
+use super::manifest_support::{hook_subscription_for_name, normalize_schema_json, normalize_tags};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginManifest {
@@ -208,7 +208,10 @@ pub struct ToolDefinition {
 pub struct ToolContract {
     #[serde(default)]
     pub input_schema: serde_json::Value,
-    #[serde(default, skip_serializing_if = "crate::manifest_support::serde_json_value_is_empty_schema")]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::manifest_support::serde_json_value_is_empty_schema"
+    )]
     pub output_schema: serde_json::Value,
     #[serde(default)]
     pub strict: bool,

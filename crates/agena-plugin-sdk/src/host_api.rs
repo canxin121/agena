@@ -13,9 +13,9 @@ use crate::error::{PluginError, Result};
 use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
 };
+pub use crate::host_api_agents::*;
 use crate::identity::{PluginKey, ToolKey};
 use crate::manifest::{PathKind, ToolDefinition};
-pub use crate::host_api_agents::*;
 
 #[async_trait]
 pub trait HostClient: Send + Sync + 'static {

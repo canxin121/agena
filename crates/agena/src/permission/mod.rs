@@ -914,7 +914,10 @@ fn ipv4_to_u32(addr: Ipv4Addr) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        PermissionAction, PermissionDecision, PermissionMode, ToolPermissionPolicy, ToolTag,
+        tool_action,
+    };
 
     #[test]
     fn shell_tag_applies_command_patterns_to_process_runner() {

@@ -1,5 +1,3 @@
-use super::*;
-
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderAdapterSummaryResource {
     pub adapter_id: String,
@@ -51,3 +49,4 @@ pub struct ProviderModelsResponse {
     pub provider_id: String,
     pub models: Vec<ProviderModel>,
 }
+use super::{ProviderModel, Serialize};

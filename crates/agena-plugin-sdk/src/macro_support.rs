@@ -6,10 +6,10 @@ use serde_json::Value;
 
 use crate::{PluginError, Result, ToolTag};
 
-mod schema_text;
 mod schema_examples;
 mod schema_metadata_support;
 mod schema_support;
+mod schema_text;
 
 mod validation_paths;
 
@@ -32,26 +32,26 @@ pub use validation_paths::{
     validate_requires_path,
 };
 
-pub use schema_text::{
-    command_usage_text, command_usage_text_for_schema, command_usage_text_from_schema,
-    example_value_from_schema, merge_example_with_schema, schema_usage_text,
-};
 pub use schema_examples::{
     flattened_input_keys_for_parse_path, normalize_flattened_input_object,
     resolve_input_constraint_path, schema_example_texts,
+};
+pub use schema_metadata_support::{
+    merge_flattened_schema_at_pointer, merge_schema_overlay_at_pointer,
+    prefix_schema_order_metadata, prefixed_input_error_path_mappings, remap_invalid_params_paths,
+    remap_invalid_params_paths_owned, rename_schema_property, set_schema_bool_metadata,
+    set_schema_metadata, set_schema_minimum_u64_metadata, set_schema_non_empty_metadata,
+    set_schema_number_metadata, set_schema_string_list_metadata, set_schema_string_metadata,
+    set_schema_u64_metadata, set_schema_value_list_metadata, set_schema_value_metadata,
+    suggest_name_candidates, unknown_name_message,
 };
 pub(crate) use schema_support::{
     ordered_schema_properties, resolve_schema_value, schema_order_key, string_literals,
     top_level_discriminated_variants, top_level_union_variants,
 };
-pub use schema_metadata_support::{
-    merge_flattened_schema_at_pointer, merge_schema_overlay_at_pointer, prefixed_input_error_path_mappings,
-    prefix_schema_order_metadata, remap_invalid_params_paths, remap_invalid_params_paths_owned,
-    rename_schema_property, set_schema_bool_metadata, set_schema_metadata,
-    set_schema_minimum_u64_metadata, set_schema_non_empty_metadata, set_schema_number_metadata,
-    set_schema_string_list_metadata, set_schema_string_metadata, set_schema_u64_metadata,
-    set_schema_value_list_metadata, set_schema_value_metadata, suggest_name_candidates,
-    unknown_name_message,
+pub use schema_text::{
+    command_usage_text, command_usage_text_for_schema, command_usage_text_from_schema,
+    example_value_from_schema, merge_example_with_schema, schema_usage_text,
 };
 
 pub fn json_schema_for<T>() -> Value

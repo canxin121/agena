@@ -1,13 +1,13 @@
 use super::super::{
-    COLLAPSED_ACTIVITY_VISIBLE_TAIL, ExecutionStatus, I18n, Local, MessagePart, MessageResource,
-    MessageStatus, Modifier, PartContent, RenderedLine, RenderedTranscriptNode, RequestPart,
-    SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
-    ToolOutputPreview, TranscriptDetailDefaults, TranscriptNodeKey, TranscriptNodeKind,
-    UnicodeWidthStr, activity_status_icon, concise_text, format_timestamp, push_label_value,
+    ExecutionStatus, I18n, Local, MessagePart, MessageResource, MessageStatus, Modifier,
+    PartContent, RenderedLine, RenderedTranscriptNode, RequestPart, SessionExecutionResource,
+    Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES, ToolOutputPreview,
+    TranscriptDetailDefaults, TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr,
+    activity_status_icon, concise_text, current_spinner_millis, format_timestamp, push_label_value,
     push_markdown, push_multiline, push_section_heading, push_single_line, push_wrapped_line,
-    render_message_detailed, strip_terminal_ansi_sequences, style_for_role, tool_output_copy_text,
-    transcript_message_parts, transcript_part_content, trim_empty_line_edges,
-    truncate_display_width, ui_text,
+    render_message_detailed, spinner_frame, strip_terminal_ansi_sequences, style_for_role,
+    tool_output_copy_text, transcript_message_parts, transcript_part_content,
+    trim_empty_line_edges, truncate_display_width, ui_text,
 };
 use super::operation_render::render_tool_execution;
 use super::request_render::{
@@ -101,18 +101,12 @@ pub(in crate::app) fn append_rendered_part_node(
 }
 
 pub(in crate::app) fn collapsed_activity_run_end(
-    message: &MessageResource,
     parts: &[MessagePart],
     start: usize,
-    defaults: TranscriptDetailDefaults,
-    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
 ) -> Option<usize> {
-    is_collapsed_activity_part(message, parts.get(start)?, defaults, expansions).then(|| {
+    is_activity_part(parts.get(start)?).then(|| {
         let mut end = start.saturating_add(1);
-        while parts
-            .get(end)
-            .is_some_and(|part| is_collapsed_activity_part(message, part, defaults, expansions))
-        {
+        while parts.get(end).is_some_and(is_activity_part) {
             end = end.saturating_add(1);
         }
         end
@@ -124,37 +118,14 @@ pub(in crate::app) fn collapsed_activity_visible_start(
     end: usize,
     expanded: bool,
 ) -> usize {
-    if expanded {
-        start
-    } else {
-        end.saturating_sub(COLLAPSED_ACTIVITY_VISIBLE_TAIL)
-            .max(start)
-    }
+    if expanded { start } else { end }
 }
 
-pub(in crate::app) fn is_collapsed_activity_part(
-    message: &MessageResource,
-    part: &MessagePart,
-    defaults: TranscriptDetailDefaults,
-    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
-) -> bool {
-    match transcript_part_content(part) {
-        PartContent::Reasoning(_) => !expansions
-            .get(&TranscriptNodeKey::Reasoning {
-                message_id: message.id,
-                part_id: part.id,
-            })
-            .copied()
-            .unwrap_or(defaults.thinking_expanded),
-        PartContent::Operation(_) => !expansions
-            .get(&TranscriptNodeKey::Tool {
-                message_id: message.id,
-                part_id: part.id,
-            })
-            .copied()
-            .unwrap_or(defaults.tool_output_expanded),
-        _ => false,
-    }
+pub(in crate::app) fn is_activity_part(part: &MessagePart) -> bool {
+    matches!(
+        transcript_part_content(part),
+        PartContent::Reasoning(_) | PartContent::Operation(_)
+    )
 }
 
 pub(in crate::app) fn activity_part_copy_text(part: &MessagePart, i18n: &I18n) -> Option<String> {
@@ -359,13 +330,14 @@ pub(in crate::app) fn push_message_header(
     i18n: &I18n,
 ) {
     let role = ui_text::role_label(i18n, message.role);
-    let header = if message.state == MessageStatus::Completed {
-        role
-    } else {
-        format!(
-            "{role} {}",
-            ui_text::message_state_label(i18n, message.state)
-        )
+    let header = match message.state {
+        MessageStatus::Completed => role,
+        MessageStatus::Pending => format!("{role} ○"),
+        MessageStatus::InProgress => {
+            format!("{role} {}", spinner_frame(current_spinner_millis()))
+        }
+        MessageStatus::Failed => format!("{role} ×"),
+        MessageStatus::Cancelled => format!("{role} –"),
     };
     let header_style = style_for_role(message.role).add_modifier(Modifier::BOLD);
 

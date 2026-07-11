@@ -8,8 +8,9 @@ impl App {
             } => self.handle_sessions_loaded(scope, subtree_root_id, result),
             AppMessage::SessionCreated {
                 submit_draft,
+                pending_message_id,
                 result,
-            } => self.handle_session_created(submit_draft, result),
+            } => self.handle_session_created(submit_draft, pending_message_id, result),
             AppMessage::SessionStateLoaded { session_id, result } => {
                 self.handle_session_state_loaded(session_id, result)
             }
@@ -23,9 +24,10 @@ impl App {
             }
             AppMessage::SessionMessageSubmitted {
                 session_id,
+                pending_message_id,
                 draft,
                 result,
-            } => self.handle_session_turn_submitted(session_id, draft, result),
+            } => self.handle_session_turn_submitted(session_id, pending_message_id, draft, result),
             AppMessage::SessionContinued { session_id, result } => {
                 self.handle_session_continued(session_id, result)
             }
@@ -101,9 +103,10 @@ impl App {
             }
             AppMessage::SteerSubmitted {
                 session_id,
+                pending_message_id,
                 draft,
                 result,
-            } => self.handle_steer_submitted(session_id, draft, result),
+            } => self.handle_steer_submitted(session_id, pending_message_id, draft, result),
             AppMessage::RunCancelled { session_id, result } => {
                 self.handle_turn_cancelled(session_id, result)
             }
@@ -165,6 +168,7 @@ impl App {
     pub(in crate::app) fn handle_session_created(
         &mut self,
         submit_draft: Option<ComposerDraft>,
+        pending_message_id: Option<u64>,
         result: UiResult<SessionResource>,
     ) {
         match result {
@@ -177,7 +181,23 @@ impl App {
                 self.focus = Focus::Composer;
 
                 if let Some(draft) = submit_draft {
-                    self.request_submit_message(session.id, draft);
+                    let pending_message_id = match pending_message_id {
+                        Some(pending_message_id) => {
+                            self.transcript
+                                .add_pending_user_message(PendingUserMessage {
+                                    id: pending_message_id,
+                                    text: draft.text.clone(),
+                                    confirmed: false,
+                                });
+                            pending_message_id
+                        }
+                        None => self.begin_pending_user_message(&draft),
+                    };
+                    self.request_submit_message_with_pending(
+                        session.id,
+                        draft,
+                        Some(pending_message_id),
+                    );
                 } else {
                     self.flash_success(self.i18n.text_args(
                         "flash-created-session",
@@ -186,6 +206,10 @@ impl App {
                 }
             }
             Err(error) => {
+                if let Some(pending_message_id) = pending_message_id {
+                    self.transcript
+                        .remove_pending_user_message(pending_message_id);
+                }
                 self.transcript.submitting = false;
                 if let Some(draft) =
                     submit_draft.or_else(|| self.transcript.pending_restore_draft.take())
@@ -304,6 +328,7 @@ impl App {
     pub(in crate::app) fn handle_session_turn_submitted(
         &mut self,
         session_id: i64,
+        pending_message_id: u64,
         draft: ComposerDraft,
         result: UiResult<SessionExecutionResource>,
     ) {
@@ -313,6 +338,9 @@ impl App {
         self.submitting_session_ids.remove(&session_id);
         match result {
             Ok(execution) => {
+                self.transcript
+                    .confirm_pending_user_message(pending_message_id);
+                self.record_prompt_history_from_draft(&draft);
                 self.transcript.pending_restore_draft = None;
                 self.clear_draft_for_slot(DraftSlot::Session(session_id));
                 cleanup_temporary_composer_items(draft.items.as_slice());
@@ -329,6 +357,8 @@ impl App {
                 self.try_drain_queue_one();
             }
             Err(error) => {
+                self.transcript
+                    .remove_pending_user_message(pending_message_id);
                 self.transcript.pending_restore_draft = None;
                 if self.transcript.session_id == Some(session_id) {
                     self.restore_composer_draft(draft);
@@ -361,13 +391,23 @@ impl App {
 
     pub(in crate::app) fn handle_steer_submitted(
         &mut self,
-        _session_id: i64,
+        session_id: i64,
+        pending_message_id: u64,
         draft: ComposerDraft,
         result: UiResult<()>,
     ) {
         match result {
-            Ok(()) => {}
+            Ok(()) => {
+                self.transcript
+                    .confirm_pending_user_message(pending_message_id);
+                self.record_prompt_history_from_draft(&draft);
+                if self.transcript.session_id == Some(session_id) {
+                    self.request_refresh(session_id, true);
+                }
+            }
             Err(error) => {
+                self.transcript
+                    .remove_pending_user_message(pending_message_id);
                 // Backend rejected the steer (run no longer steerable).
                 // Don't drop the user's message — push it onto the front
                 // of the queue so it goes out at the next run boundary.
@@ -488,7 +528,7 @@ impl App {
 }
 use crate::app::{
     App, AppMessage, ComposerDraft, DraftSlot, Focus, MessageLoadMode, MessageResource,
-    PaginatedResponse, QueuePriority, QueuedMessage, SessionExecutionResource, SessionLoadScope,
-    SessionRefresh, SessionResource, UiResult, cleanup_temporary_composer_items,
+    PaginatedResponse, PendingUserMessage, QueuePriority, QueuedMessage, SessionExecutionResource,
+    SessionLoadScope, SessionRefresh, SessionResource, UiResult, cleanup_temporary_composer_items,
     execution_update_is_stale, ui_text,
 };

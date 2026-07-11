@@ -12,7 +12,7 @@ impl App {
                 match commit {
                     OverlayCommit::TranscriptSearch => {
                         self.transcript.set_search_query(value);
-                        self.jump_search_match(true);
+                        self.jump_search_match(self.transcript_search_forward);
                     }
                 }
                 true

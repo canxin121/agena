@@ -10,17 +10,6 @@ impl App {
             CommandId::Sessions => self.handle_sessions_command(spec, args),
             CommandId::Lineage => self.open_lineage_picker(),
             CommandId::Rewind => self.open_rewind_messages_picker(),
-            CommandId::Find => {
-                self.focus = Focus::Transcript;
-                if args.trim().is_empty() {
-                    self.overlay = Some(Overlay::TranscriptSearch(
-                        self.build_transcript_search_overlay(),
-                    ));
-                } else {
-                    self.transcript.set_search_query(args.trim().to_string());
-                    self.jump_search_match(true);
-                }
-            }
             CommandId::Rename => self.handle_rename_command(spec, args),
             CommandId::Timeline => self.handle_timeline_command(spec, args),
             CommandId::Plugins => self.handle_plugins_command(spec, args),
@@ -147,6 +136,7 @@ impl App {
                     // appropriate, otherwise just refresh the list.
                     let _ = tx.send(AppMessage::SessionMessageSubmitted {
                         session_id,
+                        pending_message_id: 0,
                         draft: ComposerDraft::default(),
                         result,
                     });
@@ -154,6 +144,7 @@ impl App {
                 Err(err) => {
                     let _ = tx.send(AppMessage::SessionCreated {
                         submit_draft: None,
+                        pending_message_id: None,
                         result: Err(err.to_string()),
                     });
                 }
@@ -580,9 +571,9 @@ impl App {
     }
 }
 use crate::app::{
-    App, AppMessage, CommandId, CommandSpec, ComposerDraft, Focus, HelpOverlay, Overlay,
-    PartContent, Path, PermissionReplyKind, PermissionStudioFocus, PermissionStudioPage,
-    PermissionStudioSectionId, PermissionStudioSource, Route, SessionViewMode,
-    TIMELINE_EVENT_LIMIT, UiAction, build_visible_session_items, derive_session_title,
-    non_empty_owned, parse_pr_command_args, split_command_args_once, ui_text,
+    App, AppMessage, CommandId, CommandSpec, ComposerDraft, Focus, HelpOverlay, PartContent, Path,
+    PermissionReplyKind, PermissionStudioFocus, PermissionStudioPage, PermissionStudioSectionId,
+    PermissionStudioSource, Route, SessionViewMode, TIMELINE_EVENT_LIMIT, UiAction,
+    build_visible_session_items, derive_session_title, non_empty_owned, parse_pr_command_args,
+    split_command_args_once, ui_text,
 };

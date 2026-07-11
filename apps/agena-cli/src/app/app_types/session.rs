@@ -47,6 +47,7 @@ pub(crate) type PickerOverlay =
 pub(crate) struct SessionModelChooserOverlayMeta {
     pub(crate) all_items: Vec<SessionModelChoiceItem>,
     pub(crate) page_size: usize,
+    pub(crate) current_model_label: Option<String>,
 }
 
 pub(crate) type SessionModelChooserOverlay = SearchListOverlay<
@@ -129,15 +130,9 @@ pub(crate) struct SessionLineageSummary {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SessionPathSegment {
-    pub(crate) id: i64,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct CurrentLineageState {
     pub(crate) session_id: i64,
     pub(crate) summary: SessionLineageSummary,
-    pub(crate) path: Vec<SessionPathSegment>,
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +170,7 @@ pub(crate) struct TranscriptState {
     pub(crate) session_id: Option<i64>,
     pub(crate) session_title: String,
     pub(crate) messages: Vec<MessageResource>,
+    pub(crate) pending_user_messages: Vec<PendingUserMessage>,
     pub(crate) older_cursor: Option<String>,
     pub(crate) has_more_older: bool,
     pub(crate) loading_initial: bool,
@@ -194,6 +190,13 @@ pub(crate) struct TranscriptState {
     pub(crate) detail_expanded_by_default: TranscriptDetailDefaults,
     pub(crate) node_expansions: BTreeMap<TranscriptNodeKey, bool>,
     pub(crate) rendered: Option<RenderedTranscript>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingUserMessage {
+    pub(crate) id: u64,
+    pub(crate) text: String,
+    pub(crate) confirmed: bool,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -6,7 +6,6 @@ pub enum CommandId {
     Sessions,
     Lineage,
     Rewind,
-    Find,
     Rename,
     Timeline,
     Plugins,
@@ -110,13 +109,6 @@ pub const COMMANDS: &[CommandSpec] = &[
         aliases: &["backtrack"],
         arguments: "",
         summary_key: "command-rewind-summary",
-    },
-    CommandSpec {
-        id: CommandId::Find,
-        name: "find",
-        aliases: &[],
-        arguments: "[query]",
-        summary_key: "command-find-summary",
     },
     CommandSpec {
         id: CommandId::Rename,

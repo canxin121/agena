@@ -100,6 +100,9 @@ pub(crate) struct FileMentionSuggestionContext {
 #[derive(Debug, Clone)]
 pub(crate) struct PromptHistorySearchMeta {
     pub(crate) original: ComposerDraft,
+    pub(crate) loaded_count: usize,
+    pub(crate) total_matches: usize,
+    pub(crate) has_more: bool,
 }
 
 pub(crate) type PromptHistorySearchState =

@@ -157,14 +157,6 @@ impl PromptHistory {
     pub(in crate::app) fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
-
-    pub(in crate::app) fn len(&self) -> usize {
-        self.items.len()
-    }
-
-    pub(in crate::app) fn get(&self, index: usize) -> Option<&str> {
-        self.items.get(index).map(String::as_str)
-    }
 }
 use crate::app::{
     ComposerDraft, DraftSlot, DraftStore, MAX_PROMPT_HISTORY_ENTRIES, Path, PersistentDraftStore,

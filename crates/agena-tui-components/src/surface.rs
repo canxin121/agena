@@ -10,7 +10,7 @@ use ratatui::{
 
 use crate::{
     layout::{VerticalSectionSize, inset_rect, split_vertical_sections},
-    text::{HeaderRowSpec, render_header_row},
+    text::{HeaderRowSpec, render_header_row, truncate_display_text_middle},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,12 +32,14 @@ pub struct ComposerSurfaceLayout {
 
 pub struct HeaderBodyFooterTextSurfaceSpec<'a> {
     pub title: std::borrow::Cow<'a, str>,
+    pub subtitle: Option<std::borrow::Cow<'a, str>>,
     pub right: Option<std::borrow::Cow<'a, str>>,
     pub body: Text<'a>,
     pub body_scroll: (u16, u16),
     pub body_wrap: bool,
     pub footer: Option<Text<'a>>,
     pub title_style: Style,
+    pub subtitle_style: Style,
     pub right_style: Style,
 }
 
@@ -48,7 +50,7 @@ pub struct ComposerEditorSurfaceSpec<'a> {
 }
 
 pub fn pane_header_height(total_height: u16) -> u16 {
-    min(2, total_height)
+    min(3, total_height)
 }
 
 pub fn layout_header_body_footer_surface(
@@ -176,9 +178,13 @@ pub fn render_header_body_footer_text_surface(
     frame.render_widget(header_frame, layout.header);
 
     if header_inner.width > 0 && header_inner.height > 0 {
+        let title_area = Rect {
+            height: 1,
+            ..header_inner
+        };
         render_header_row(
             frame,
-            header_inner,
+            title_area,
             &HeaderRowSpec {
                 left: spec.title.clone(),
                 right: spec.right.clone(),
@@ -186,6 +192,25 @@ pub fn render_header_body_footer_text_surface(
                 right_style: spec.right_style,
             },
         );
+        if header_inner.height > 1
+            && let Some(subtitle) = spec.subtitle.as_deref()
+            && !subtitle.trim().is_empty()
+        {
+            let subtitle_area = Rect {
+                y: header_inner.y.saturating_add(1),
+                height: 1,
+                ..header_inner
+            };
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new(ratatui::text::Line::from(
+                    ratatui::text::Span::styled(
+                        truncate_display_text_middle(subtitle, subtitle_area.width as usize),
+                        spec.subtitle_style,
+                    ),
+                )),
+                subtitle_area,
+            );
+        }
     }
 
     if layout.body.width > 0 && layout.body.height > 0 {

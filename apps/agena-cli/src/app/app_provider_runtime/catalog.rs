@@ -135,6 +135,17 @@ impl App {
             Ok(items) => {
                 dialog.meta.all_items = items;
                 let current_model = self.current_session_model_ref();
+                dialog.meta.current_model_label = current_model.as_ref().map(model_status_label);
+                if let Some(current_model_label) = dialog.meta.current_model_label.as_deref() {
+                    dialog.prompt = format!(
+                        "{}\n{}",
+                        self.i18n.text_args(
+                            "overlay-session-model-current",
+                            &crate::fl_args!("model" => current_model_label),
+                        ),
+                        ui_text::t(&self.i18n, "overlay-session-model-prompt"),
+                    );
+                }
                 Self::refresh_session_model_chooser_overlay(
                     &mut dialog,
                     true,
@@ -449,7 +460,7 @@ use crate::app::{
     ModelCatalogResponse, ModelCatalogStudioOverlay, Overlay, PickerItem, PickerKind,
     PickerOverlay, PickerValue, ProviderConfigDraft, ProviderPickerPurpose, ProviderStudioFocus,
     ProviderStudioOverlay, Route, SelectableListState, agent_list_items, i18n_provider_list_detail,
-    json, provider_list_create_item, provider_studio_adapter_rule,
+    json, model_status_label, provider_list_create_item, provider_studio_adapter_rule,
     provider_studio_auth_request_key, provider_studio_can_request_adapter_models,
     provider_studio_draft_listing_unsupported_message,
     provider_studio_listing_auth_required_message,

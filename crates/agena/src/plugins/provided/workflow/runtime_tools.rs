@@ -1,5 +1,3 @@
-use super::*;
-
 use agena_macros::ToolInput;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
@@ -13,3 +11,4 @@ pub(crate) struct SessionRenameToolInput {
 pub(crate) struct SessionToolResponse {
     pub(crate) session: HostSession,
 }
+use super::{Deserialize, HostSession, JsonSchema, Serialize};

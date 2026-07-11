@@ -767,7 +767,9 @@ pub(crate) fn schema_constraint_labels(schema: &serde_json::Value) -> Option<Vec
     Some(labels)
 }
 
-pub(crate) fn schema_array_item_constraint_labels(schema: &serde_json::Value) -> Option<Vec<String>> {
+pub(crate) fn schema_array_item_constraint_labels(
+    schema: &serde_json::Value,
+) -> Option<Vec<String>> {
     let object = schema.as_object()?;
     if let Some(labels) = object
         .iter()

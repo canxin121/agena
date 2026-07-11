@@ -436,7 +436,7 @@ fn bounded_edit_distance(left: &str, right: &str, max_distance: usize) -> Option
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{ToolCatalogDocument, search_tool_catalog};
 
     fn doc(name: &str, description: &str, tags: &[&str]) -> ToolCatalogDocument {
         ToolCatalogDocument::new(

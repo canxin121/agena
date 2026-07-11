@@ -1,4 +1,3 @@
-use super::*;
 use agena::provider::auth::{DeviceCodeStart, OAuthAuthorizeStart};
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -210,3 +209,4 @@ pub struct AuthLoginResultResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<AuthProviderResource>,
 }
+use super::{DateTime, Deserialize, Serialize, Utc};

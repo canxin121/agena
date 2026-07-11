@@ -1,5 +1,3 @@
-use super::*;
-
 use agena_macros::ToolInput;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
@@ -78,3 +76,4 @@ fn tool_call_input_schema(_generator: &mut schemars::SchemaGenerator) -> schemar
     .try_into()
     .expect("valid schema")
 }
+use super::{Deserialize, JsonSchema, Serialize};

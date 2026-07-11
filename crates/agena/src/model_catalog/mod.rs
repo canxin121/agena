@@ -5,10 +5,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder,
-};
+use sea_orm::{ActiveValue::Set, DatabaseConnection};
 use serde::{Deserialize, Serialize};
 
 mod curate;

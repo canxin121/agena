@@ -1,4 +1,3 @@
-use super::*;
 use crate::model::{ModelMetadata, ProviderId};
 
 pub fn catalog_definition_to_provider_definition(
@@ -366,3 +365,8 @@ fn catalog_match_model_id_for_raw(raw_model_id: &str) -> Option<String> {
     let trimmed = canonical.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
+use super::{
+    BTreeMap, BTreeSet, CatalogModelDefinition, ConfiguredModelDefinition,
+    ConfiguredModelSpeedMode, ConfiguredModelThinkingMode, Model, ModelCapabilities,
+    ModelCatalogProviderRecord, ModelId, ModelRuntime, canonical_model_catalog_id,
+};

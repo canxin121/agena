@@ -1,0 +1,134 @@
+use super::{
+    AppError, DateTime, DbErr, Mutex, PermissionMode, PermissionRuleEvent, PermissionScope,
+    PersistedPermissionRule, Session, SessionCache, Utc, permission_rule,
+};
+
+pub(crate) fn access_cache<T>(
+    cache: &Mutex<SessionCache>,
+    op: impl FnOnce(&mut SessionCache) -> T,
+) -> Option<T> {
+    match cache.lock() {
+        Ok(mut guard) => Some(op(&mut guard)),
+        Err(_) => {
+            tracing::warn!("session cache lock poisoned; falling back to database state");
+            None
+        }
+    }
+}
+
+pub(crate) fn nonempty_or_unknown(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        "unknown".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+pub(crate) fn persisted_permission_rule_from_model(
+    model: &crate::db::entities::permission_rule::Model,
+) -> Result<PersistedPermissionRule, AppError> {
+    let mode = permission_rule::mode_from_string(model.mode.as_str()).map_err(|_| {
+        AppError::Internal(format!(
+            "invalid permission mode in persisted rule {}",
+            model.id
+        ))
+    })?;
+    let scope = permission_rule::scope_from_string(model.scope.as_ref()).map_err(|_| {
+        AppError::Internal(format!(
+            "invalid permission scope in persisted rule {}",
+            model.id
+        ))
+    })?;
+    Ok(PersistedPermissionRule {
+        action_key: model.action_key.clone(),
+        mode,
+        scope,
+        session_id: model.session_id,
+        workspace_id: model.workspace_id,
+        source: model.source.clone(),
+        reason: model.reason.clone(),
+        operator: model.operator.clone(),
+        revoked_at_ms: model.revoked_at_ms,
+        revoked_reason: model.revoked_reason.clone(),
+        revoked_by: model.revoked_by.clone(),
+    })
+}
+
+pub(crate) fn permission_mode_label(mode: PermissionMode) -> String {
+    match mode {
+        PermissionMode::Allow => "allow".to_string(),
+        PermissionMode::Ask => "ask".to_string(),
+        PermissionMode::Deny => "deny".to_string(),
+    }
+}
+
+pub(crate) fn permission_scope_label(scope: PermissionScope) -> String {
+    match scope {
+        PermissionScope::Session => "session".to_string(),
+        PermissionScope::Workspace => "workspace".to_string(),
+        PermissionScope::Global => "global".to_string(),
+    }
+}
+
+pub(crate) fn permission_rule_event_from_rule(
+    rule_id: i64,
+    rule: &PersistedPermissionRule,
+    fallback_session_id: i64,
+) -> PermissionRuleEvent {
+    PermissionRuleEvent {
+        session_id: rule.session_id.or(Some(fallback_session_id)),
+        rule_id,
+        action_key: rule.action_key.clone(),
+        mode: permission_mode_label(rule.mode),
+        scope: permission_scope_label(rule.scope),
+        source: rule.source.clone(),
+        reason: rule.reason.clone(),
+        operator: rule.operator.clone(),
+        revoked_reason: rule.revoked_reason.clone(),
+        revoked_by: rule.revoked_by.clone(),
+        ts_ms: Utc::now().timestamp_millis(),
+    }
+}
+
+pub(crate) fn session_from_model(
+    model: crate::db::entities::session::Model,
+) -> Result<Session, AppError> {
+    let created_at = timestamp_millis_to_utc(model.created_at_ms)?;
+    let updated_at = timestamp_millis_to_utc(model.updated_at_ms)?;
+    let mut session = Session::new(model.id, model.workspace_id, model.title, created_at);
+    session.parent_id = model.parent_id;
+    session.depth = model.depth;
+    session.root_id = model.root_id;
+    session.version = model.version;
+    session.is_subagent = model.is_subagent;
+    session.runtime = model.runtime_state.unwrap_or_default();
+    session.updated_at = updated_at;
+    Ok(session)
+}
+
+pub(crate) fn session_from_model_db(
+    model: crate::db::entities::session::Model,
+) -> Result<Session, DbErr> {
+    let created_at = timestamp_millis_to_utc_db(model.created_at_ms)?;
+    let updated_at = timestamp_millis_to_utc_db(model.updated_at_ms)?;
+    let mut session = Session::new(model.id, model.workspace_id, model.title, created_at);
+    session.parent_id = model.parent_id;
+    session.depth = model.depth;
+    session.root_id = model.root_id;
+    session.version = model.version;
+    session.is_subagent = model.is_subagent;
+    session.runtime = model.runtime_state.unwrap_or_default();
+    session.updated_at = updated_at;
+    Ok(session)
+}
+
+pub(crate) fn timestamp_millis_to_utc(timestamp_ms: i64) -> Result<DateTime<Utc>, AppError> {
+    DateTime::from_timestamp_millis(timestamp_ms)
+        .ok_or_else(|| AppError::Internal(format!("invalid timestamp millis: {timestamp_ms}")))
+}
+
+pub(crate) fn timestamp_millis_to_utc_db(timestamp_ms: i64) -> Result<DateTime<Utc>, DbErr> {
+    DateTime::from_timestamp_millis(timestamp_ms)
+        .ok_or_else(|| DbErr::Custom(format!("invalid timestamp millis: {timestamp_ms}")))
+}

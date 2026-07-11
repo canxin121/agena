@@ -4,12 +4,12 @@ use quote::quote;
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Data, Expr, Fields, Ident, LitStr, Result, Token, Variant};
 
+use super::input_schema_path_support::escape_json_pointer_segment;
 use super::{
     PluginInputFieldAliasSpec, PluginInputFieldDefaultSpec, PluginInputFieldMetadata,
     dispatch_variant_pattern_and_args, input_variant_action_name, normalized_input_variant_config,
     parse_input_field_arg_attrs, prepare_input_field_names, serde_rename_all_rule,
 };
-use super::input_schema_path_support::escape_json_pointer_segment;
 
 pub(crate) fn expand_input_example_expr(
     explicit_example: Option<&Expr>,

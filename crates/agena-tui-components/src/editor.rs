@@ -1222,7 +1222,7 @@ fn is_word_separator(ch: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::Editor;
 
     #[test]
     fn wrapped_view_expands_long_logical_lines_into_multiple_terminal_rows() {

@@ -111,7 +111,10 @@ pub(crate) fn ordered_schema_properties<'a>(
     schema: &'a Value,
 ) -> Option<Vec<(&'a String, &'a Value)>> {
     let schema = resolve_schema_value(root, schema);
-    let properties = schema.as_object()?.get("properties").and_then(Value::as_object)?;
+    let properties = schema
+        .as_object()?
+        .get("properties")
+        .and_then(Value::as_object)?;
     let mut ordered = properties.iter().collect::<Vec<_>>();
     ordered.sort_by(|(left_name, left_property), (right_name, right_property)| {
         let left_order = schema_order_key(resolve_schema_value(root, left_property));
@@ -141,20 +144,23 @@ pub(crate) fn string_literals(value: &Value) -> Option<BTreeSet<String>> {
     if let Some(value) = object.get("const").and_then(Value::as_str) {
         return Some(BTreeSet::from([value.to_owned()]));
     }
-    object
-        .get("enum")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect()
-        })
+    object.get("enum").and_then(Value::as_array).map(|items| {
+        items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect()
+    })
 }
 
-pub(crate) fn resolve_schema_ref<'a>(root: &'a Value, current: &'a Value) -> Option<(&'a Value, &'a str)> {
-    let target_pointer = current.get("$ref").and_then(Value::as_str)?.strip_prefix('#')?;
+pub(crate) fn resolve_schema_ref<'a>(
+    root: &'a Value,
+    current: &'a Value,
+) -> Option<(&'a Value, &'a str)> {
+    let target_pointer = current
+        .get("$ref")
+        .and_then(Value::as_str)?
+        .strip_prefix('#')?;
     let target = root.pointer(target_pointer)?;
     Some((target, target_pointer))
 }

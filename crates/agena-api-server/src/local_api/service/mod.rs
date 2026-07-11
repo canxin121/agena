@@ -7,10 +7,9 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use path_clean::PathClean;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, DatabaseConnection, DbErr,
-    EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
+    ActiveValue::Set, ColumnTrait, Condition, DatabaseConnection, DbErr, EntityTrait,
+    FromQueryResult, QueryFilter, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 

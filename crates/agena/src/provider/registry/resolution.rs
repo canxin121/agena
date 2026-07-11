@@ -1,4 +1,4 @@
-use super::*;
+use super::{AdapterId, AppError, ModelId, ModelRef, ProviderId, ProviderRegistry};
 
 impl ProviderRegistry {
     pub fn resolve_default_model_selection(

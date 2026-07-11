@@ -4,7 +4,10 @@ pub(crate) fn escape_json_pointer_segment(segment: &str) -> String {
     segment.replace('~', "~0").replace('/', "~1")
 }
 
-pub(crate) fn schema_pointer_from_logical_path(prefix: &str, path: &str) -> Result<String, syn::Error> {
+pub(crate) fn schema_pointer_from_logical_path(
+    prefix: &str,
+    path: &str,
+) -> Result<String, syn::Error> {
     let mut pointer = prefix.to_string();
     if path.trim().is_empty() {
         return Ok(pointer);
@@ -27,7 +30,10 @@ pub(crate) fn schema_pointer_from_logical_path(prefix: &str, path: &str) -> Resu
     Ok(pointer)
 }
 
-pub(crate) fn schema_relation_display_path(path: &str, metadata: &[PluginInputFieldMetadata]) -> String {
+pub(crate) fn schema_relation_display_path(
+    path: &str,
+    metadata: &[PluginInputFieldMetadata],
+) -> String {
     if let Some(mapped) = metadata
         .iter()
         .find(|field| field.parse_path.value() == path)
@@ -52,4 +58,3 @@ pub(crate) fn schema_relation_display_path(path: &str, metadata: &[PluginInputFi
     }
     path.to_string()
 }
-

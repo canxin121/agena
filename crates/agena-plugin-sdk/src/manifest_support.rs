@@ -83,7 +83,10 @@ fn normalize_schema_json_value(value: Value, remove_schema_metadata: bool) -> Va
                 .is_some_and(|kind| kind == "object")
                 && !cleaned.contains_key("properties")
             {
-                cleaned.insert("properties".to_string(), Value::Object(serde_json::Map::new()));
+                cleaned.insert(
+                    "properties".to_string(),
+                    Value::Object(serde_json::Map::new()),
+                );
             }
             Value::Object(cleaned)
         }

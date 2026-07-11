@@ -2,16 +2,16 @@ use std::collections::BTreeMap;
 
 use syn::{LitStr, Type};
 
-use super::{
-    PathPairConstraint, PathStringConstraint, PathStringsConstraint, PathUsizeConstraint,
-    PathValueConstraint, PathValuesConstraint, PluginArgConfig, PluginInputNetworkSpec,
-    PluginInputPathSpec, ToolSpecConfig, append_constraint_path_suffix,
-    input_type_semantic_shape, prefixed_constraint_group, resolve_known_constraint_path,
-};
 use super::input_arg_output_support::{
     apply_arg_metadata_to_spec, input_jsonpath_for_arg, input_jsonpath_for_field,
 };
 use super::input_arg_parse_support::inline_arg_has_default;
+use super::{
+    PathPairConstraint, PathStringConstraint, PathStringsConstraint, PathUsizeConstraint,
+    PathValueConstraint, PathValuesConstraint, PluginArgConfig, PluginInputNetworkSpec,
+    PluginInputPathSpec, ToolSpecConfig, append_constraint_path_suffix, input_type_semantic_shape,
+    prefixed_constraint_group, resolve_known_constraint_path,
+};
 
 pub(crate) fn apply_arg_config_to_spec(
     spec: &mut ToolSpecConfig,

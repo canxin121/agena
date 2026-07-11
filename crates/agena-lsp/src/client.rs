@@ -576,9 +576,9 @@ mod tests {
     use serde_json::json;
     use tokio::time::timeout;
 
-    use super::*;
+    use super::{DocumentSyncStatus, GotoDefinitionResponse, LspClient, Position, Uri};
     use crate::{
-        protocol::{InboundMessage, JsonRpcResponse, RequestId},
+        protocol::{InboundMessage, JSONRPC_VERSION, JsonRpcResponse, RequestId},
         transport::InMemoryTransport,
     };
 

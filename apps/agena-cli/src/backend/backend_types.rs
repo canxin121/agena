@@ -1,0 +1,33 @@
+#[derive(Debug, Clone)]
+pub struct SessionRefresh {
+    pub latest_event_seq: Option<i64>,
+    pub event_count: usize,
+    pub execution: Option<SessionExecutionResource>,
+    pub latest_messages: Option<PaginatedResponse<MessageResource>>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct GitStatusResource {
+    pub(super) git_available: bool,
+    pub(super) repo: bool,
+    pub(super) gh_available: bool,
+    pub(super) branch: Option<String>,
+    pub(super) staged_files: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct InspectorRow {
+    pub label: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionPermissionStudioState {
+    pub session_id: i64,
+    pub session_title: String,
+    pub agent_name: Option<String>,
+    pub agent_permission: Option<agena::agent::PermissionConfig>,
+    pub permission: agena::agent::PermissionConfig,
+    pub effective_permission: agena::agent::PermissionConfig,
+}
+use crate::backend::{MessageResource, PaginatedResponse, SessionExecutionResource};

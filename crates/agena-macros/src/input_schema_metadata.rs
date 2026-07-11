@@ -8,9 +8,9 @@ use super::input_schema_path_support::{
     schema_pointer_from_logical_path, schema_relation_display_path,
 };
 use super::{
-    SchemaConstraintSource, SchemaRelationSource, ToolSpecConfig, doc_text,
-    network_semantic_label, path_permission_kind_label, picker_kind_label,
-    serde_rename_all_fields_rule, serde_rename_all_rule,
+    SchemaConstraintSource, SchemaRelationSource, ToolSpecConfig, doc_text, network_semantic_label,
+    path_permission_kind_label, picker_kind_label, serde_rename_all_fields_rule,
+    serde_rename_all_rule,
 };
 
 pub(crate) fn expand_schema_metadata_fn<C, F>(

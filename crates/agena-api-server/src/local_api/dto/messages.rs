@@ -1,5 +1,3 @@
-use super::*;
-
 pub use agena_api::resource::{MessageResource, PartLoadMode};
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -9,3 +7,4 @@ pub struct MessageListQuery {
     #[serde(default)]
     pub parts: PartLoadMode,
 }
+use super::{CursorPaginationQuery, Deserialize};

@@ -60,6 +60,8 @@ pub(in crate::app) struct PluginWorkbenchOverlay {
     plugins: Vec<PluginWorkbenchPlugin>,
     visible_plugins: Vec<usize>,
     selected_plugin: usize,
+    list_controls_focused: bool,
+    selected_list_control: usize,
     detail_tab: PluginDetailTab,
     config_view: PluginConfigView,
     config_focus: PluginConfigFocus,
@@ -486,16 +488,6 @@ impl CompactToolbarAction {
             Self::Diff => "Diff",
             Self::Save => "Save",
             Self::Restart => "Restart",
-        }
-    }
-
-    fn shortcut(self) -> &'static str {
-        match self {
-            Self::Validate => "V",
-            Self::ResetAll => "R",
-            Self::Diff => "D",
-            Self::Save => "S",
-            Self::Restart => "^R",
         }
     }
 }

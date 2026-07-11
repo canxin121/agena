@@ -22,7 +22,7 @@ impl App {
             });
         Ok(PluginPolicyStudioOverlay {
             title: "Plugin Policy Studio".to_owned(),
-            footer: "Tab switches plugin list and rows. Left/Right picks Prompt or UI. Enter cycles, Delete clears, r refreshes.".to_owned(),
+            footer: "Tab switches plugin list and rows. Left/Right picks Prompt or UI. Enter cycles the selected value; Delete clears it.".to_owned(),
             config_path: sources.config_path.display().to_string(),
             config_found: sources.config_found,
             selected_column: PluginPolicyColumn::Prompt,
@@ -126,10 +126,6 @@ impl App {
                 dialog.state.set_focus(SectionedListFocus::Items);
                 false
             }
-            Some(KeyAction::Refresh) => {
-                self.refresh_plugin_policy_studio(dialog);
-                false
-            }
             Some(KeyAction::MoveUp) => {
                 dialog.state.move_selection(-1);
                 false
@@ -172,50 +168,6 @@ impl App {
             }
             Some(KeyAction::Activate) if dialog.state.focus() == SectionedListFocus::Items => {
                 self.cycle_plugin_policy_override(dialog);
-                false
-            }
-            Some(KeyAction::ClearOverride) if dialog.state.focus() == SectionedListFocus::Items => {
-                self.clear_plugin_policy_override(dialog);
-                false
-            }
-            Some(KeyAction::Brief)
-                if dialog.state.focus() == SectionedListFocus::Items
-                    && dialog.selected_column == PluginPolicyColumn::Prompt =>
-            {
-                self.set_plugin_policy_prompt_override(
-                    dialog,
-                    Some(agena::plugin::ToolDescriptionOverride::Brief),
-                );
-                false
-            }
-            Some(KeyAction::Detailed)
-                if dialog.state.focus() == SectionedListFocus::Items
-                    && dialog.selected_column == PluginPolicyColumn::Prompt =>
-            {
-                self.set_plugin_policy_prompt_override(
-                    dialog,
-                    Some(agena::plugin::ToolDescriptionOverride::Detailed),
-                );
-                false
-            }
-            Some(KeyAction::Summary)
-                if dialog.state.focus() == SectionedListFocus::Items
-                    && dialog.selected_column == PluginPolicyColumn::Ui =>
-            {
-                self.set_plugin_policy_ui_override(
-                    dialog,
-                    Some(agena::plugin::UiPresentationOverride::Summary),
-                );
-                false
-            }
-            Some(KeyAction::Detailed)
-                if dialog.state.focus() == SectionedListFocus::Items
-                    && dialog.selected_column == PluginPolicyColumn::Ui =>
-            {
-                self.set_plugin_policy_ui_override(
-                    dialog,
-                    Some(agena::plugin::UiPresentationOverride::Detailed),
-                );
                 false
             }
             Some(KeyAction::ClearOverride) if dialog.state.focus() == SectionedListFocus::Items => {

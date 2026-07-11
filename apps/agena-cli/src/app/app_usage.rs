@@ -1,8 +1,8 @@
 use agena::session::{SessionUsageBreakdown, UsagePeriod, UsageStatsQuery};
 
 use super::{
-    App, AppMessage, Focus, KeyEvent, Route, UsageDashboardSort, UsageDashboardState,
-    UsageDashboardView, Utc,
+    App, AppMessage, Focus, KeyEvent, Route, UsageDashboardControl, UsageDashboardSort,
+    UsageDashboardState, UsageDashboardView, Utc,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 
@@ -112,68 +112,24 @@ impl App {
     ) -> bool {
         match resolve_tui_key(KeyContext::Usage, key) {
             Some(KeyAction::Close) => return true,
-            Some(KeyAction::PreviousPeriod) => {
-                state.period = cycle_usage_period(state.period, -1);
-                reset_usage_selection(state);
-                self.spawn_usage_stats_request(state);
-            }
-            Some(KeyAction::NextPeriod) => {
-                state.period = cycle_usage_period(state.period, 1);
-                reset_usage_selection(state);
-                self.spawn_usage_stats_request(state);
-            }
             Some(KeyAction::NextTab) => {
-                state.view = state.view.cycle(1);
-                reset_usage_selection(state);
+                move_usage_focus(state, 1);
             }
             Some(KeyAction::PreviousTab) => {
-                state.view = state.view.cycle(-1);
-                reset_usage_selection(state);
+                move_usage_focus(state, -1);
             }
-            Some(KeyAction::SelectView(1)) => set_usage_view(state, UsageDashboardView::Overview),
-            Some(KeyAction::SelectView(2)) => set_usage_view(state, UsageDashboardView::Daily),
-            Some(KeyAction::SelectView(3)) => set_usage_view(state, UsageDashboardView::Providers),
-            Some(KeyAction::SelectView(4)) => set_usage_view(state, UsageDashboardView::Models),
-            Some(KeyAction::SelectView(5)) => set_usage_view(state, UsageDashboardView::Sessions),
-            Some(KeyAction::MoveUp) => move_usage_selection(state, -1),
-            Some(KeyAction::MoveDown) => move_usage_selection(state, 1),
-            Some(KeyAction::Home) => {
+            Some(KeyAction::MoveUp) if !state.controls_focused => move_usage_selection(state, -1),
+            Some(KeyAction::MoveDown) if !state.controls_focused => move_usage_selection(state, 1),
+            Some(KeyAction::Home) if !state.controls_focused => {
                 state.selected = 0;
                 state.scroll = 0;
             }
-            Some(KeyAction::End) => {
+            Some(KeyAction::End) if !state.controls_focused => {
                 state.selected = usage_dashboard_row_count(state).saturating_sub(1);
             }
-            Some(KeyAction::CycleSort) => {
-                state.sort = state.sort.next();
-                reset_usage_selection(state);
+            Some(KeyAction::Open) if state.controls_focused => {
+                self.activate_usage_control(state);
             }
-            Some(KeyAction::ToggleSubagents) => {
-                state.include_subagents = !state.include_subagents;
-                reset_usage_selection(state);
-                self.spawn_usage_stats_request(state);
-            }
-            Some(KeyAction::NextProvider) => {
-                cycle_provider_filter(state, 1);
-                reset_usage_selection(state);
-                self.spawn_usage_stats_request(state);
-            }
-            Some(KeyAction::PreviousProvider) => {
-                cycle_provider_filter(state, -1);
-                reset_usage_selection(state);
-                self.spawn_usage_stats_request(state);
-            }
-            Some(KeyAction::NextModel) => {
-                cycle_model_filter(state, 1);
-                reset_usage_selection(state);
-                self.spawn_usage_stats_request(state);
-            }
-            Some(KeyAction::PreviousModel) => {
-                cycle_model_filter(state, -1);
-                reset_usage_selection(state);
-                self.spawn_usage_stats_request(state);
-            }
-            Some(KeyAction::Refresh) => self.spawn_usage_stats_request(state),
             Some(KeyAction::Open) if state.view == UsageDashboardView::Sessions => {
                 if let Some(session) = selected_usage_session(state) {
                     let session_id = session.session_id;
@@ -186,6 +142,64 @@ impl App {
             Some(_) | None => {}
         }
         false
+    }
+
+    fn activate_usage_control(&mut self, state: &mut UsageDashboardState) {
+        let control = UsageDashboardControl::ALL
+            .get(state.selected_control)
+            .copied()
+            .unwrap_or(UsageDashboardControl::Period);
+        let mut reload = false;
+        match control {
+            UsageDashboardControl::Period => {
+                state.period = cycle_usage_period(state.period, 1);
+                reload = true;
+            }
+            UsageDashboardControl::View => {
+                state.view = state.view.cycle(1);
+            }
+            UsageDashboardControl::Provider => {
+                cycle_provider_filter(state, 1);
+                reload = true;
+            }
+            UsageDashboardControl::Model => {
+                cycle_model_filter(state, 1);
+                reload = true;
+            }
+            UsageDashboardControl::Subagents => {
+                state.include_subagents = !state.include_subagents;
+                reload = true;
+            }
+            UsageDashboardControl::Sort => {
+                state.sort = state.sort.next();
+            }
+            UsageDashboardControl::Refresh => reload = true,
+        }
+        reset_usage_selection(state);
+        if reload {
+            self.spawn_usage_stats_request(state);
+        }
+    }
+}
+
+fn move_usage_focus(state: &mut UsageDashboardState, delta: isize) {
+    let control_count = UsageDashboardControl::ALL.len();
+    if delta > 0 {
+        if !state.controls_focused {
+            state.controls_focused = true;
+            state.selected_control = 0;
+        } else if state.selected_control + 1 < control_count {
+            state.selected_control += 1;
+        } else {
+            state.controls_focused = false;
+        }
+    } else if !state.controls_focused {
+        state.controls_focused = true;
+        state.selected_control = control_count.saturating_sub(1);
+    } else if state.selected_control > 0 {
+        state.selected_control -= 1;
+    } else {
+        state.controls_focused = false;
     }
 }
 
@@ -307,11 +321,6 @@ fn cycle_usage_period(current: UsagePeriod, delta: isize) -> UsagePeriod {
 fn reset_usage_selection(state: &mut UsageDashboardState) {
     state.selected = 0;
     state.scroll = 0;
-}
-
-fn set_usage_view(state: &mut UsageDashboardState, view: UsageDashboardView) {
-    state.view = view;
-    reset_usage_selection(state);
 }
 
 fn move_usage_selection(state: &mut UsageDashboardState, delta: isize) {

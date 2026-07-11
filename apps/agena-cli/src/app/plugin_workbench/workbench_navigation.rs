@@ -1,21 +1,4 @@
 impl App {
-    pub(in crate::app) fn open_add_config_value_editor(
-        &mut self,
-        dialog: &mut PluginWorkbenchOverlay,
-    ) {
-        let Some(row) = dialog.selected_row().cloned() else {
-            return;
-        };
-        let Some(plugin) = dialog.selected_plugin() else {
-            return;
-        };
-        self.open_add_config_value_editor_for_path(
-            dialog,
-            plugin.plugin_id.clone(),
-            row.primary_path,
-        );
-    }
-
     pub(in crate::app) fn open_add_config_value_editor_for_path(
         &mut self,
         dialog: &mut PluginWorkbenchOverlay,

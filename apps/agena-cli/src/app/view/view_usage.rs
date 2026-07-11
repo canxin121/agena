@@ -10,7 +10,7 @@ use ratatui::{
 
 use super::{App, Frame, SurfaceMode};
 use crate::app::{
-    USAGE_PERIODS, UsageDashboardSort, UsageDashboardState, UsageDashboardView,
+    UsageDashboardControl, UsageDashboardSort, UsageDashboardState, UsageDashboardView,
     usage_dashboard_sort_label, usage_dashboard_view_label, usage_period_short_label,
     usage_sort_order, usage_sorted_sessions,
 };
@@ -67,22 +67,34 @@ impl App {
 
     fn render_usage_header(&self, frame: &mut Frame, area: Rect, state: &UsageDashboardState) {
         let palette = agena_tui_components::theme::active_palette();
-        let period_spans = USAGE_PERIODS
+        let provider = state.provider_filter.as_deref().unwrap_or("All");
+        let model = state.model_filter.as_deref().unwrap_or("All");
+        let agents = if state.include_subagents {
+            "included"
+        } else {
+            "excluded"
+        };
+        let control_labels = [
+            format!("Period: {}", usage_period_short_label(state.period)),
+            format!("View: {}", usage_dashboard_view_label(state.view)),
+            format!("Provider: {provider}"),
+            format!("Model: {model}"),
+            format!("Subagents: {agents}"),
+            format!("Sort: {}", usage_dashboard_sort_label(state.sort)),
+            "Refresh".to_owned(),
+        ];
+        let controls = UsageDashboardControl::ALL
             .iter()
-            .flat_map(|period| {
-                let selected = *period == state.period;
-                let label = usage_period_short_label(*period);
+            .enumerate()
+            .flat_map(|(index, _)| {
+                let focused = state.controls_focused && state.selected_control == index;
                 [
                     Span::styled(
-                        if selected {
-                            format!("[{label}]")
-                        } else {
-                            format!(" {label} ")
-                        },
-                        if selected {
+                        format!("[ {} ]", control_labels[index]),
+                        if focused {
                             Style::default()
                                 .fg(palette.accent)
-                                .add_modifier(Modifier::BOLD)
+                                .add_modifier(Modifier::BOLD | Modifier::REVERSED)
                         } else {
                             Style::default().fg(palette.muted)
                         },
@@ -91,46 +103,16 @@ impl App {
                 ]
             })
             .collect::<Vec<_>>();
-        let view_spans = UsageDashboardView::ALL
-            .iter()
-            .enumerate()
-            .flat_map(|(index, view)| {
-                let selected = *view == state.view;
-                [
-                    Span::styled(
-                        format!("{}:{}", index + 1, usage_dashboard_view_label(*view)),
-                        if selected {
-                            Style::default()
-                                .fg(palette.special)
-                                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-                        } else {
-                            Style::default().fg(palette.muted)
-                        },
-                    ),
-                    Span::raw("  "),
-                ]
-            })
-            .collect::<Vec<_>>();
-        let provider = state.provider_filter.as_deref().unwrap_or("All");
-        let model = state.model_filter.as_deref().unwrap_or("All");
-        let agents = if state.include_subagents {
-            "included"
-        } else {
-            "excluded"
-        };
         let lines = vec![
-            Line::from(period_spans),
-            Line::from(view_spans),
-            Line::from(vec![
-                Span::styled("p ", Style::default().fg(palette.accent)),
-                Span::raw(format!("Provider: {provider}   ")),
-                Span::styled("m ", Style::default().fg(palette.accent)),
-                Span::raw(format!("Model: {model}   ")),
-                Span::styled("a ", Style::default().fg(palette.accent)),
-                Span::raw(format!("Subagents: {agents}   ")),
-                Span::styled("s ", Style::default().fg(palette.accent)),
-                Span::raw(format!("Sort: {}", usage_dashboard_sort_label(state.sort))),
-            ]),
+            Line::from(controls),
+            Line::from(Span::styled(
+                if state.controls_focused {
+                    "Enter changes the selected control"
+                } else {
+                    "Tab focuses dashboard controls"
+                },
+                Style::default().fg(palette.muted),
+            )),
         ];
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
     }
@@ -250,7 +232,7 @@ impl App {
         if let Some(error) = state.error.as_deref() {
             frame.render_widget(
                 Paragraph::new(format!(
-                    "Unable to load usage statistics\n\n{error}\n\nPress r to retry"
+                    "Unable to load usage statistics\n\n{error}\n\nSelect Refresh in the control bar and press Enter"
                 ))
                 .alignment(Alignment::Center)
                 .style(Style::default().fg(agena_tui_components::theme::danger_color()))
@@ -292,9 +274,7 @@ impl App {
     }
 
     fn render_usage_footer(&self, frame: &mut Frame, area: Rect, state: &UsageDashboardState) {
-        let mut hints =
-            "←/→ period  Tab view  p/P provider  m/M model  a agents  s sort  r refresh  q close"
-                .to_string();
+        let mut hints = "Tab controls/content  ↑/↓ rows  Enter activate  Esc close".to_string();
         if state.view == UsageDashboardView::Sessions {
             hints.push_str("  Enter open session");
         }

@@ -31,6 +31,24 @@ pub fn navigation_action(key: KeyEvent) -> Option<NavigationAction> {
     }
 }
 
+/// Navigation for secondary UI surfaces that intentionally expose only
+/// structural keys. Unlike `navigation_action`, this excludes Vim letter
+/// aliases so page commands do not accumulate behind invisible mnemonics.
+pub fn structural_navigation_action(key: KeyEvent) -> Option<NavigationAction> {
+    if !key.modifiers.is_empty() {
+        return None;
+    }
+    match key.code {
+        KeyCode::Up => Some(NavigationAction::Up),
+        KeyCode::Down => Some(NavigationAction::Down),
+        KeyCode::PageUp => Some(NavigationAction::PageUp),
+        KeyCode::PageDown => Some(NavigationAction::PageDown),
+        KeyCode::Home => Some(NavigationAction::Home),
+        KeyCode::End => Some(NavigationAction::End),
+        _ => None,
+    }
+}
+
 /// Navigation used while a searchable text input is active. Printable Vim
 /// aliases are deliberately excluded so every character remains typeable.
 pub fn search_navigation_action(key: KeyEvent) -> Option<NavigationAction> {
@@ -67,7 +85,7 @@ pub fn input_dialog_action(key: KeyEvent, multiline: bool) -> Option<InputDialog
 mod tests {
     use super::{
         InputDialogAction, NavigationAction, input_dialog_action, navigation_action,
-        search_navigation_action,
+        search_navigation_action, structural_navigation_action,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -154,6 +172,18 @@ mod tests {
         assert_eq!(
             search_navigation_action(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL)),
             Some(NavigationAction::Home)
+        );
+    }
+
+    #[test]
+    fn structural_navigation_has_no_letter_aliases() {
+        assert_eq!(
+            structural_navigation_action(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)),
+            None
+        );
+        assert_eq!(
+            structural_navigation_action(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            Some(NavigationAction::Down)
         );
     }
 }

@@ -131,52 +131,14 @@ pub enum KeyAction {
     Older,
     Newer,
     NewerKeepOpen,
-    Refresh,
-    Add,
     Edit,
-    Rename,
-    Duplicate,
-    Browse,
-    Details,
     CancelRequest,
     PreviousQuestion,
     NextQuestion,
     PreviousTab,
     NextTab,
     Clear,
-    Save,
-    SaveAdapter,
-    SaveModel,
-    SelectAll,
-    AuthStart,
-    AuthContinue,
-    LoadModels,
-    DeleteProvider,
-    CatalogSearch,
-    CatalogRefresh,
-    CopyEvent,
-    TransportFilter,
-    ConfigFilter,
-    ShowDiff,
-    Validate,
-    InsertDefaults,
-    Actions,
-    Restart,
-    Reset,
-    SelectType,
-    Brief,
-    Detailed,
-    Summary,
     ClearOverride,
-    PreviousPeriod,
-    NextPeriod,
-    SelectView(u8),
-    CycleSort,
-    ToggleSubagents,
-    PreviousProvider,
-    NextProvider,
-    PreviousModel,
-    NextModel,
 }
 
 pub fn resolve(context: KeyContext, key: KeyEvent) -> Option<KeyAction> {
@@ -318,33 +280,22 @@ mod tests {
             Some(KeyAction::OpenUsage)
         );
         assert_eq!(
-            resolve(KeyContext::Usage, key(KeyCode::Left, KeyModifiers::NONE)),
-            resolve(
-                KeyContext::Usage,
-                key(KeyCode::Char('h'), KeyModifiers::NONE)
-            )
-        );
-        assert_eq!(
             resolve(KeyContext::Usage, key(KeyCode::Up, KeyModifiers::NONE)),
-            resolve(
-                KeyContext::Usage,
-                key(KeyCode::Char('k'), KeyModifiers::NONE)
-            )
+            Some(KeyAction::MoveUp)
         );
         assert_eq!(
-            resolve(
-                KeyContext::Usage,
-                key(KeyCode::Char('3'), KeyModifiers::NONE)
-            ),
-            Some(KeyAction::SelectView(3))
+            resolve(KeyContext::Usage, key(KeyCode::Tab, KeyModifiers::NONE)),
+            Some(KeyAction::NextTab)
         );
-        assert_eq!(
-            resolve(
-                KeyContext::Usage,
-                key(KeyCode::Char('r'), KeyModifiers::CONTROL)
-            ),
-            None
-        );
+        for character in ['1', '3', 'a', 'h', 'k', 'm', 'p', 'q', 'r', 's'] {
+            assert_eq!(
+                resolve(
+                    KeyContext::Usage,
+                    key(KeyCode::Char(character), KeyModifiers::NONE)
+                ),
+                None
+            );
+        }
     }
 
     #[test]
@@ -377,7 +328,7 @@ mod tests {
                 KeyContext::PluginConfig,
                 key(KeyCode::Char('d'), KeyModifiers::CONTROL)
             ),
-            Some(KeyAction::Delete)
+            None
         );
         assert_eq!(
             resolve(
@@ -419,24 +370,10 @@ mod tests {
 
         assert_eq!(
             resolve(
-                KeyContext::Picker,
-                key(KeyCode::Char('n'), KeyModifiers::ALT)
-            ),
-            Some(KeyAction::New)
-        );
-        assert_eq!(
-            resolve(
                 KeyContext::SessionSearch,
                 key(KeyCode::Left, KeyModifiers::NONE)
             ),
             None
-        );
-        assert_eq!(
-            resolve(
-                KeyContext::SessionSearch,
-                key(KeyCode::PageUp, KeyModifiers::CONTROL)
-            ),
-            Some(KeyAction::Previous)
         );
         assert_eq!(
             resolve(
@@ -446,29 +383,11 @@ mod tests {
             None
         );
         assert_eq!(
-            resolve(KeyContext::PathBrowser, key(KeyCode::Up, KeyModifiers::ALT)),
-            Some(KeyAction::Back)
-        );
-        assert_eq!(
-            resolve(
-                KeyContext::PluginList,
-                key(KeyCode::Char('r'), KeyModifiers::CONTROL)
-            ),
-            Some(KeyAction::Refresh)
-        );
-        assert_eq!(
             resolve(
                 KeyContext::Timeline,
                 key(KeyCode::Char('y'), KeyModifiers::CONTROL)
             ),
             None
-        );
-        assert_eq!(
-            resolve(
-                KeyContext::Timeline,
-                key(KeyCode::Char('y'), KeyModifiers::ALT)
-            ),
-            Some(KeyAction::CopyEvent)
         );
     }
 
@@ -511,32 +430,49 @@ mod tests {
     fn plugin_config_uses_one_unambiguous_context() {
         for (code, modifiers, action) in [
             (KeyCode::Esc, KeyModifiers::NONE, Some(KeyAction::Back)),
-            (
-                KeyCode::Char('r'),
-                KeyModifiers::NONE,
-                Some(KeyAction::Reset),
-            ),
-            (
-                KeyCode::Char('R'),
-                KeyModifiers::SHIFT,
-                Some(KeyAction::Refresh),
-            ),
+            (KeyCode::Tab, KeyModifiers::NONE, Some(KeyAction::NextTab)),
+            (KeyCode::Enter, KeyModifiers::NONE, Some(KeyAction::Edit)),
+            (KeyCode::Char('r'), KeyModifiers::NONE, None),
+            (KeyCode::Char('R'), KeyModifiers::SHIFT, None),
             (KeyCode::Char('d'), KeyModifiers::NONE, None),
-            (
-                KeyCode::Char('D'),
-                KeyModifiers::SHIFT,
-                Some(KeyAction::ShowDiff),
-            ),
-            (
-                KeyCode::Char('h'),
-                KeyModifiers::CONTROL,
-                Some(KeyAction::Previous),
-            ),
+            (KeyCode::Char('D'), KeyModifiers::SHIFT, None),
+            (KeyCode::Char('h'), KeyModifiers::CONTROL, None),
         ] {
             assert_eq!(
                 resolve(KeyContext::PluginConfig, key(code, modifiers)),
                 action
             );
+        }
+    }
+
+    #[test]
+    fn secondary_pages_have_no_plain_character_commands() {
+        for context in [
+            KeyContext::Help,
+            KeyContext::Usage,
+            KeyContext::SettingsStudio,
+            KeyContext::AgentStudio,
+            KeyContext::PermissionStudio,
+            KeyContext::PermissionRuleStudio,
+            KeyContext::ProviderStudio,
+            KeyContext::ProviderDetail,
+            KeyContext::ProviderModel,
+            KeyContext::ModelCatalog,
+            KeyContext::PluginPolicy,
+            KeyContext::PluginList,
+            KeyContext::PluginDetail,
+            KeyContext::PluginConfig,
+            KeyContext::PluginConfigActions,
+            KeyContext::PluginConfigSelection,
+            KeyContext::PluginDrilldown,
+        ] {
+            for character in '!'..='~' {
+                assert_eq!(
+                    resolve(context, key(KeyCode::Char(character), KeyModifiers::NONE)),
+                    None,
+                    "{context:?} still binds printable character {character:?}"
+                );
+            }
         }
     }
 

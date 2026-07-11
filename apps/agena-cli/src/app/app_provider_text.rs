@@ -165,18 +165,6 @@ pub(in crate::app) fn provider_studio_save_result_message(
                 "matched" => *matched_model_count as i64,
             ),
         ),
-        crate::backend::ProviderStudioSaveResult::ModelSaved {
-            provider_id,
-            adapter_id,
-            model_id,
-        } => i18n.text_args(
-            "flash-provider-save-model",
-            &crate::fl_args!(
-                "provider" => provider_id.clone(),
-                "adapter" => adapter_id.clone(),
-                "model" => model_id.clone(),
-            ),
-        ),
         crate::backend::ProviderStudioSaveResult::ConfiguredModelSaved {
             provider_id,
             adapter_id,

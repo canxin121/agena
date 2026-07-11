@@ -262,7 +262,7 @@ mod permission_overlay_tests {
         let i18n = I18n::default();
         let choices = permission_overlay_choices(&i18n, PermissionOverlayPage::Action);
 
-        assert_eq!(choices.len(), 3);
+        assert_eq!(choices.len(), 4);
         assert_eq!(
             permission_overlay_choice(PermissionOverlayPage::Action, 0),
             PermissionOverlayChoice::OpenScope(PermissionOverlayDecision::Allow)
@@ -274,6 +274,10 @@ mod permission_overlay_tests {
         assert_eq!(
             permission_overlay_choice(PermissionOverlayPage::Action, 2),
             PermissionOverlayChoice::EditRule
+        );
+        assert_eq!(
+            permission_overlay_choice(PermissionOverlayPage::Action, 3),
+            PermissionOverlayChoice::Details
         );
     }
 

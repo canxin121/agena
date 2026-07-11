@@ -43,7 +43,7 @@ pub(in crate::app) fn compact_config_view_line(
         .map(|context| config_row_cell_label(&context.row, context.layout, context.cell).to_owned())
         .unwrap_or_else(|| "Value".to_owned());
     format!(
-        "Changed: {}  Cell: {}  T type/shape  A add  X actions",
+        "Changed: {}  Cell: {}  Tab moves focus; Enter activates the selected control or cell",
         override_leaf_count(&plugin.draft_override),
         cell_label,
     )
@@ -53,7 +53,7 @@ pub(in crate::app) fn drilldown_footer_text(
     _dialog: &PluginWorkbenchOverlay,
     _overlay: &PluginConfigDrilldownOverlay,
 ) -> String {
-    "T type/shape  A add  X actions  Ctrl+D reset row".to_owned()
+    "Arrows navigate cells  Enter activates the selected cell  Esc returns".to_owned()
 }
 
 pub(in crate::app) fn compact_config_toolbar_text(
@@ -64,7 +64,7 @@ pub(in crate::app) fn compact_config_toolbar_text(
         if index > 0 {
             spans.push(Span::raw(" "));
         }
-        let label = format!("[ {} ({}) ]", action.label(), action.shortcut());
+        let label = format!("[ {} ]", action.label());
         let style = if dialog.config_focus == PluginConfigFocus::Toolbar
             && dialog.selected_toolbar_action == index
         {

@@ -434,7 +434,9 @@ impl App {
             | ProviderModelConfigField::InputModalities
             | ProviderModelConfigField::Features
             | ProviderModelConfigField::OutputModalities
-            | ProviderModelConfigField::Description => None,
+            | ProviderModelConfigField::Description
+            | ProviderModelConfigField::SaveAction
+            | ProviderModelConfigField::DeleteAction => None,
         }
     }
 
@@ -454,7 +456,9 @@ impl App {
             | ProviderModelConfigField::InputModalities
             | ProviderModelConfigField::Features
             | ProviderModelConfigField::OutputModalities
-            | ProviderModelConfigField::Description => ChoiceOverlayStyle::Searchable,
+            | ProviderModelConfigField::Description
+            | ProviderModelConfigField::SaveAction
+            | ProviderModelConfigField::DeleteAction => ChoiceOverlayStyle::Searchable,
         }
     }
 }

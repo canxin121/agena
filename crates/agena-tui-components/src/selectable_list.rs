@@ -1,6 +1,6 @@
 use crossterm::event::KeyEvent;
 
-use crate::{NavigationAction, navigation_action};
+use crate::{NavigationAction, navigation_action, structural_navigation_action};
 
 use crate::selection::{
     clamp_selected_index, clamped_selected_index, move_selected_index, move_selected_index_end,
@@ -57,7 +57,19 @@ impl<T> SelectableListState<T> {
     }
 
     pub fn handle_navigation_key(&mut self, key: KeyEvent, page_size: usize) -> bool {
-        match navigation_action(key) {
+        self.handle_navigation_action(navigation_action(key), page_size)
+    }
+
+    pub fn handle_structural_navigation_key(&mut self, key: KeyEvent, page_size: usize) -> bool {
+        self.handle_navigation_action(structural_navigation_action(key), page_size)
+    }
+
+    fn handle_navigation_action(
+        &mut self,
+        action: Option<NavigationAction>,
+        page_size: usize,
+    ) -> bool {
+        match action {
             Some(NavigationAction::PageUp) => {
                 self.move_selection_page(-1, page_size);
                 true

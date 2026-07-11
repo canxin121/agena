@@ -313,8 +313,32 @@ pub(in crate::app) fn render_plugin_list_page(
         dialog.visible_plugins.len(),
         dialog.plugins.len()
     );
+    let control_labels = [
+        format!("Transport: {}", dialog.transport_filter.label()),
+        format!("Config: {}", dialog.config_filter.label()),
+        "Refresh".to_owned(),
+    ];
+    let control_spans = control_labels
+        .iter()
+        .enumerate()
+        .flat_map(|(index, label)| {
+            let focused = dialog.list_controls_focused && dialog.selected_list_control == index;
+            [
+                Span::styled(
+                    format!("[ {label} ]"),
+                    if focused {
+                        plugin_workbench_selection_highlight_style()
+                    } else {
+                        Style::default().fg(agena_tui_components::theme::muted_color())
+                    },
+                ),
+                Span::raw(" "),
+            ]
+        })
+        .collect::<Vec<_>>();
     frame.render_widget(
-        Paragraph::new(filter_line).wrap(Wrap { trim: false }),
+        Paragraph::new(vec![Line::from(filter_line), Line::from(control_spans)])
+            .wrap(Wrap { trim: false }),
         rows[0],
     );
 
@@ -371,7 +395,7 @@ pub(in crate::app) fn render_plugin_list_page(
     render_plugin_footer(
         frame,
         rows[2],
-        "Type to search  Alt+T transport filter  Alt+C config filter  Ctrl+R refresh",
+        "Type to search  Tab controls/list  Enter activate  Esc close",
     );
 }
 
@@ -421,7 +445,11 @@ pub(in crate::app) fn render_plugin_detail_page(
         PluginDetailTab::Diagnostics => plugin_diagnostics_text(plugin),
     };
     render_plugin_panel(frame, rows[2], dialog.detail_tab.label(), body, None);
-    render_plugin_footer(frame, rows[3], "r reset  R refresh");
+    render_plugin_footer(
+        frame,
+        rows[3],
+        "Tab/Shift+Tab sections  PageUp/PageDown scroll  Esc back",
+    );
 }
 
 pub(in crate::app) fn render_plugin_compact_config_page(
@@ -788,7 +816,7 @@ pub(in crate::app) fn render_plugin_config_diff_overlay(
         config_diff_text(dialog, plugin),
         None,
     );
-    render_plugin_footer(frame, rows[1], "D close");
+    render_plugin_footer(frame, rows[1], "Esc close");
 }
 
 pub(in crate::app) fn render_plugin_panel(

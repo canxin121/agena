@@ -202,7 +202,9 @@ pub(in crate::app) fn set_permission_studio_pane_focus(
     dialog.pane_focus = pane_focus;
     dialog.state.set_focus(match pane_focus {
         PermissionStudioPaneFocus::Navigation => PermissionStudioFocus::Navigation,
-        PermissionStudioPaneFocus::Content => PermissionStudioFocus::Items,
+        PermissionStudioPaneFocus::Content | PermissionStudioPaneFocus::Actions => {
+            PermissionStudioFocus::Items
+        }
     });
 }
 

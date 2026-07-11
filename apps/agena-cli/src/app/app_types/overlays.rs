@@ -107,6 +107,7 @@ pub(crate) struct PermissionStudioOverlay {
     pub(crate) permission: PermissionConfig,
     pub(crate) nav: SelectableListState<PermissionStudioNavItem>,
     pub(crate) pane_focus: PermissionStudioPaneFocus,
+    pub(crate) selected_action: usize,
     pub(crate) page: PermissionStudioPage,
     pub(crate) state: SectionedListState<PermissionStudioSection>,
     pub(crate) editor: Option<PermissionStudioEditor>,
@@ -125,6 +126,7 @@ pub(crate) struct PermissionStudioNavItem {
 pub(crate) enum PermissionStudioPaneFocus {
     Navigation,
     Content,
+    Actions,
 }
 
 #[derive(Debug, Clone)]
@@ -531,6 +533,7 @@ pub(crate) enum PermissionOverlayChoice {
         scope: Option<PermissionScope>,
     },
     EditRule,
+    Details,
 }
 
 #[derive(Debug, Clone)]
@@ -651,7 +654,6 @@ pub(crate) struct TimelineItem {
     pub(crate) summary: String,
     pub(crate) detail_body: Text<'static>,
     pub(crate) search_text: String,
-    pub(crate) copy_text: String,
     pub(crate) linked_message_id: Option<i64>,
 }
 
@@ -723,6 +725,12 @@ pub(crate) enum ProviderStudioField {
     ServiceKeyEnv,
     DefaultAdapter,
     DefaultModel,
+    LoadModelsAction,
+    AddModelAction,
+    DeleteAdapterAction,
+    DeleteModelAction,
+    SaveAdapterAction,
+    SaveProviderAction,
 }
 
 #[derive(Debug, Clone)]
@@ -773,6 +781,8 @@ pub(crate) enum ProviderModelConfigField {
     OutputModalities,
     Description,
     NativeTools,
+    SaveAction,
+    DeleteAction,
 }
 
 pub(crate) type ProviderStudioEditor = EditorDialogState<ProviderStudioEditorAction>;
@@ -792,5 +802,7 @@ pub(crate) struct ModelCatalogStudioOverlay {
     pub(crate) offset: usize,
     pub(crate) limit: usize,
     pub(crate) loading: bool,
+    pub(crate) actions_focused: bool,
+    pub(crate) selected_action: usize,
     pub(crate) workbench: ListWorkbenchState<CatalogModelResource, LineInputOverlay>,
 }

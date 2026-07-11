@@ -60,7 +60,6 @@ pub(in crate::app) fn build_timeline_item(i18n: &I18n, record: &DomainEvent) -> 
 
     let detail_document =
         build_detail_document(detail_lines.as_slice(), &DetailTextSpec::label_width(16));
-    let copy_text = format!("{summary}\n\n{}", detail_document.plain);
     let search_text = format!(
         "{} {} {}",
         summary.to_ascii_lowercase(),
@@ -73,7 +72,6 @@ pub(in crate::app) fn build_timeline_item(i18n: &I18n, record: &DomainEvent) -> 
         summary,
         detail_body: detail_document.text,
         search_text,
-        copy_text,
         linked_message_id,
     }
 }

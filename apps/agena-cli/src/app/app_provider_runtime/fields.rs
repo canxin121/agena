@@ -24,6 +24,33 @@ impl App {
                             self.open_provider_studio_delete_provider_confirm(provider_id);
                         }
                     }
+                    ProviderStudioField::LoadModelsAction => {
+                        self.request_provider_studio_adapter_models(dialog);
+                    }
+                    ProviderStudioField::AddModelAction => {
+                        self.open_provider_studio_new_model_editor(dialog);
+                    }
+                    ProviderStudioField::DeleteAdapterAction => {
+                        self.open_provider_studio_delete_selected_adapter_confirm(dialog);
+                    }
+                    ProviderStudioField::DeleteModelAction => {
+                        self.open_provider_studio_delete_selected_model_confirm(dialog);
+                    }
+                    ProviderStudioField::SaveAdapterAction => {
+                        if provider_studio_selected_adapter_models(dialog).is_none() {
+                            self.flash_warning(ui_text::t(
+                                &self.i18n,
+                                "flash-provider-studio-adapter-required",
+                            ));
+                            return;
+                        }
+                        dialog.saving = true;
+                        self.request_provider_studio_save_selected_adapter(dialog.clone());
+                    }
+                    ProviderStudioField::SaveProviderAction => {
+                        dialog.saving = true;
+                        self.request_provider_studio_save_draft(dialog.clone());
+                    }
                     _ => self.activate_provider_studio_field_editor(dialog, field),
                 }
             }
@@ -64,7 +91,13 @@ impl App {
             ProviderStudioField::StartAuthAction
             | ProviderStudioField::ContinueAuthAction
             | ProviderStudioField::EditAuthDetailsAction
-            | ProviderStudioField::DeleteProviderAction => {}
+            | ProviderStudioField::DeleteProviderAction
+            | ProviderStudioField::LoadModelsAction
+            | ProviderStudioField::AddModelAction
+            | ProviderStudioField::DeleteAdapterAction
+            | ProviderStudioField::DeleteModelAction
+            | ProviderStudioField::SaveAdapterAction
+            | ProviderStudioField::SaveProviderAction => {}
             ProviderStudioField::AuthMode => {
                 match ProviderDraftAuthKind::parse_category(
                     value.as_str(),
@@ -200,56 +233,6 @@ impl App {
         if !dialog.selected_model_keys.remove(key.as_str()) {
             dialog.selected_model_keys.insert(key);
         }
-        provider_studio_ensure_default_selection(dialog);
-    }
-
-    pub(in crate::app) fn select_all_provider_studio_adapters(dialog: &mut ProviderStudioOverlay) {
-        dialog.selected_adapter_ids = dialog
-            .adapter_candidate_ids
-            .iter()
-            .filter(|adapter_id| provider_studio_adapter_selectable(dialog, adapter_id.as_str()))
-            .cloned()
-            .collect();
-        dialog.adapter_selection_touched = true;
-    }
-
-    pub(in crate::app) fn clear_provider_studio_selected_adapters(
-        dialog: &mut ProviderStudioOverlay,
-    ) {
-        dialog.selected_adapter_ids.clear();
-        dialog.adapter_selection_touched = true;
-        provider_studio_ensure_default_selection(dialog);
-    }
-
-    pub(in crate::app) fn select_all_provider_studio_models(dialog: &mut ProviderStudioOverlay) {
-        let Some(adapter_models) = provider_studio_selected_adapter_models(dialog) else {
-            return;
-        };
-        let adapter_id = adapter_models.adapter_id.clone();
-        let model_ids = adapter_models
-            .models
-            .iter()
-            .map(|model| model.id.to_string())
-            .collect::<Vec<_>>();
-        for model_id in model_ids {
-            dialog.selected_model_keys.insert(provider_studio_model_key(
-                adapter_id.as_str(),
-                model_id.as_str(),
-            ));
-        }
-        provider_studio_ensure_default_selection(dialog);
-    }
-
-    pub(in crate::app) fn clear_provider_studio_selected_models(
-        dialog: &mut ProviderStudioOverlay,
-    ) {
-        let Some(adapter_models) = provider_studio_selected_adapter_models(dialog) else {
-            return;
-        };
-        let adapter_id = adapter_models.adapter_id.clone();
-        dialog
-            .selected_model_keys
-            .retain(|key| !key.starts_with(format!("{adapter_id}\u{1f}").as_str()));
         provider_studio_ensure_default_selection(dialog);
     }
 }

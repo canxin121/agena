@@ -472,7 +472,6 @@ impl App {
                     crate::backend::ProviderStudioSaveResult::ProviderDeleted { .. } => {}
                     crate::backend::ProviderStudioSaveResult::ProviderDraftSaved { .. }
                     | crate::backend::ProviderStudioSaveResult::AdapterMatchesSaved { .. }
-                    | crate::backend::ProviderStudioSaveResult::ModelSaved { .. }
                     | crate::backend::ProviderStudioSaveResult::ConfiguredModelSaved { .. } => {}
                 }
                 self.flash_success(provider_studio_save_result_message(&self.i18n, &message));

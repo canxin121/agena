@@ -121,7 +121,13 @@ impl App {
         let Some(field) = provider_model_config_fields().get(selected).copied() else {
             return;
         };
-        self.activate_provider_studio_model_field_editor(dialog, field);
+        match field {
+            ProviderModelConfigField::SaveAction => self.save_provider_studio_model_page(dialog),
+            ProviderModelConfigField::DeleteAction => {
+                self.open_provider_studio_delete_selected_model_confirm(dialog)
+            }
+            _ => self.activate_provider_studio_model_field_editor(dialog, field),
+        }
     }
 
     pub(in crate::app) fn commit_provider_studio_model_field(
@@ -209,22 +215,14 @@ impl App {
                 dialog.model_page = None;
                 false
             }
-            Some(KeyAction::Save) => {
-                self.save_provider_studio_model_page(dialog);
-                false
-            }
-            Some(KeyAction::Delete) => {
-                self.open_provider_studio_delete_selected_model_confirm(dialog);
-                false
-            }
             Some(KeyAction::Activate) => {
                 self.activate_provider_studio_model_page_selection(dialog);
                 false
             }
-            _ if dialog
-                .model_page
-                .as_mut()
-                .is_some_and(|page| page.selection.handle_navigation_key(key, field_count, 10)) =>
+            _ if dialog.model_page.as_mut().is_some_and(|page| {
+                page.selection
+                    .handle_structural_navigation_key(key, field_count, 10)
+            }) =>
             {
                 false
             }

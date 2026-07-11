@@ -699,6 +699,29 @@ pub(super) enum UsageDashboardSort {
     Runs,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum UsageDashboardControl {
+    Period,
+    View,
+    Provider,
+    Model,
+    Subagents,
+    Sort,
+    Refresh,
+}
+
+impl UsageDashboardControl {
+    pub(super) const ALL: [Self; 7] = [
+        Self::Period,
+        Self::View,
+        Self::Provider,
+        Self::Model,
+        Self::Subagents,
+        Self::Sort,
+        Self::Refresh,
+    ];
+}
+
 impl UsageDashboardSort {
     pub(super) fn next(self) -> Self {
         match self {
@@ -725,6 +748,8 @@ pub(super) struct UsageDashboardState {
     pub(super) selected: usize,
     pub(super) scroll: usize,
     pub(super) error: Option<String>,
+    pub(super) controls_focused: bool,
+    pub(super) selected_control: usize,
 }
 
 impl UsageDashboardState {
@@ -744,6 +769,8 @@ impl UsageDashboardState {
             selected: 0,
             scroll: 0,
             error: None,
+            controls_focused: false,
+            selected_control: 0,
         }
     }
 }

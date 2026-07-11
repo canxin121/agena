@@ -1,6 +1,6 @@
 # Agena TUI 快捷键与按键参考
 
-本文档记录 Agena TUI 当前实际实现的全部应用级快捷键、页面按键、通用列表导航和文本编辑键。内容对应集中式 keymap，不以状态栏是否显示为准。
+本文档记录 Agena TUI 当前实际实现的全部应用级快捷键、页面按键、通用列表导航和文本编辑键。聊天主界面保留 Vim/Composer 键位；二级页面采用可见控件和结构键，不再为页面功能分配普通字母快捷键。内容对应集中式 keymap，不以状态栏是否显示为准。
 
 主要代码入口：
 
@@ -225,9 +225,9 @@ Help 通常通过 `/help` 打开。
 
 | 按键 | 行为 |
 |---|---|
-| `Esc` / `?` / `q` | 关闭 Help |
-| `↑` / `k` | 向上滚动一行 |
-| `↓` / `j` | 向下滚动一行 |
+| `Esc` | 关闭 Help |
+| `↑` | 向上滚动一行 |
+| `↓` | 向下滚动一行 |
 | `PageUp` | 向上翻页 |
 | `PageDown` | 向下翻页 |
 | `Home` | 顶部 |
@@ -249,7 +249,7 @@ Choice、文件附件、路径浏览、会话搜索、Picker、模型选择和 T
 | `Home` / `End` | 移动搜索输入光标到开头／结尾 |
 | 普通文本编辑键 | 编辑搜索内容 |
 
-搜索输入激活时只使用方向键导航。`j/k/h/l/n/d/r/t/c` 等所有普通字符都保留给搜索文本输入。非搜索列表仍可使用页面明确登记的 Vim 导航别名。
+搜索输入激活时只使用方向键导航。所有普通字符都保留给搜索文本输入。
 
 ## Choice 通用选项弹窗
 
@@ -257,7 +257,6 @@ Choice、文件附件、路径浏览、会话搜索、Picker、模型选择和 T
 
 | 按键 | 行为 |
 |---|---|
-| `Tab` | 将选中项填入输入框 |
 | `Enter` | 确认选中项 |
 
 ## 文件附件选择器
@@ -266,7 +265,6 @@ Choice、文件附件、路径浏览、会话搜索、Picker、模型选择和 T
 
 | 按键 | 行为 |
 |---|---|
-| `Tab` | 将选中的文件路径填入输入框 |
 | `Enter` | 附加选中的文件 |
 
 ## 路径浏览器
@@ -275,12 +273,7 @@ Choice、文件附件、路径浏览、会话搜索、Picker、模型选择和 T
 
 | 按键 | 行为 |
 |---|---|
-| `Tab` | 将选中路径填入输入框 |
-| `Alt+↑` | 返回父目录 |
-| `Alt+↓` | 打开选中的目录项 |
-| `Enter` | 接受当前路径 |
-
-`h/l` 现在可以正常输入到路径搜索框。
+| `Enter` | 目录行进入目录；`../` 行返回父目录；文件或自定义路径行接受当前路径 |
 
 ## 会话搜索和会话切换页
 
@@ -288,10 +281,9 @@ Choice、文件附件、路径浏览、会话搜索、Picker、模型选择和 T
 
 | 按键 | 行为 |
 |---|---|
-| `Ctrl+PageUp` | 上一页 |
-| `Ctrl+PageDown` | 下一页 |
-| `Tab` | 将选中会话标题填入搜索框 |
 | `Enter` | 打开选中会话并进入 Composer |
+
+在当前页第一项继续按 `↑/PageUp` 会惰性加载上一页；在最后一项继续按 `↓/PageDown` 会惰性加载下一页。分页不再占用额外快捷键。
 
 ## 通用 Picker
 
@@ -302,10 +294,9 @@ Choice、文件附件、路径浏览、会话搜索、Picker、模型选择和 T
 | `Esc` | 关闭 |
 | `↑` / `↓` | 上一项／下一项 |
 | `PageUp` / `PageDown`、`Ctrl+Home` / `Ctrl+End` | 翻页和首尾 |
-| `Tab` | 将选中项填入搜索框 |
 | `Enter` | 接受或打开选中项 |
-| `Alt+N` | Agent、Provider 配置和 Permission Rule Picker 中新建 |
-| `Alt+D` | Permission Rule Picker 中删除规则 |
+
+Agent、Provider 和 Permission Rule Picker 把“新建”显示为真实列表项；规则删除通过进入规则页后选择可见的 Revoke 操作完成。
 
 ## Session Model 模型选择页
 
@@ -314,7 +305,6 @@ Choice、文件附件、路径浏览、会话搜索、Picker、模型选择和 T
 | `Esc` | 关闭 |
 | `↑` / `↓` | 上一个／下一个模型 |
 | `PageUp` / `PageDown`、`Ctrl+Home` / `Ctrl+End` | 列表翻页和首尾 |
-| `Ctrl+PageUp` / `Ctrl+PageDown` | 上一页／下一页模型 |
 | `Enter` | 应用选中模型 override |
 | 普通文本编辑键 | 搜索模型 |
 
@@ -326,7 +316,6 @@ Choice、文件附件、路径浏览、会话搜索、Picker、模型选择和 T
 | `↑` / `↓` | 上一个／下一个事件 |
 | `PageUp` / `PageDown`、`Ctrl+Home` / `Ctrl+End` | 翻页和首尾 |
 | `Enter` | 跳到事件关联的消息 |
-| `Alt+Y` | 复制当前事件 |
 | 普通文本编辑键 | 搜索事件 |
 
 ## 确认弹窗
@@ -334,7 +323,7 @@ Choice、文件附件、路径浏览、会话搜索、Picker、模型选择和 T
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 取消 |
-| `Enter` / `y` / `Y` | 确认 |
+| `Enter` | 确认 |
 
 ## 单行和多行编辑弹窗
 
@@ -360,12 +349,11 @@ Agent、Permission、Provider 和 Plugin 配置中的多行编辑器：
 
 | 按键 | 行为 |
 |---|---|
-| `i` | 打开或关闭详细信息 |
 | `Esc` / `←` | 返回上一级；最外层时关闭弹窗 |
 | `↑` / `↓` | 上一个／下一个选项 |
 | `Enter` / `→` | 激活当前选项 |
 
-该页面只支持方向键选择，没有 `j/k` 别名。详细信息页中只有 `i` 和 `Esc/←` 有效。
+“详情”现在是 Allow、Deny 和 Edit Rule 同级的可见选项，不再使用隐藏的 `i` 键。详细信息页使用 `Esc/←` 返回。
 
 ## 用户输入请求：问题页
 
@@ -413,37 +401,22 @@ Agent、Permission、Provider 和 Plugin 配置中的多行编辑器：
 
 | 按键 | 行为 |
 |---|---|
-| `Esc` / `q` | 关闭 |
-| `←` / `h` | 上一个统计周期 |
-| `→` / `l` | 下一个统计周期 |
-| `BackTab` / `Tab` | 上一个／下一个统计视图 |
-| `1` | Overview |
-| `2` | Daily |
-| `3` | Providers |
-| `4` | Models |
-| `5` | Sessions |
-| `↑` / `k`、`↓` / `j` | 上一行／下一行 |
-| `Home` / `g` | 第一行 |
-| `End` / `G` | 最后一行 |
-| `s` | 循环排序：Cost → Tokens → Runs |
-| `a` | 切换是否包含 Subagents |
-| `p` / `P` | 下一个／上一个 Provider 过滤器 |
-| `m` / `M` | 下一个／上一个 Model 过滤器 |
-| `r` | 刷新统计 |
-| `Enter` | Sessions 视图中打开选中会话 |
+| `Esc` | 关闭 |
+| `Tab` / `BackTab` | 在内容区及 Period、View、Provider、Model、Subagents、Sort、Refresh 可见控件之间移动焦点 |
+| `Enter` | 修改当前控件；内容区位于 Sessions 视图时打开选中会话 |
+| `↑` / `↓` | 内容区上一行／下一行 |
+| `Home` / `End` | 内容区第一行／最后一行 |
 
-Usage Dashboard 不接受额外的 Ctrl、Alt、Super、Meta 等修饰键。
+统计周期、视图、过滤器、Subagents、排序和刷新都显示为可聚焦控件。原来的 `1-5`、`p/P`、`m/M`、`a`、`s`、`r`、`q` 和 Vim 字母别名均已移除。
 
 ## Settings Studio
 
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 关闭 |
-| `r` | 刷新 |
-| `Tab` / `→` / `l` | Navigation → Items |
-| `BackTab` / `←` / `h` | Items → Navigation |
-| `↑` / `k`、`↓` / `j` | 当前区域上一项／下一项 |
-| `PageUp` / `PageDown`、`Ctrl+Home` / `Ctrl+End` | 翻页和首尾 |
+| `Tab` / `BackTab` | 在 Navigation 和 Items 之间移动焦点 |
+| `↑` / `↓` | 当前区域上一项／下一项 |
+| `PageUp` / `PageDown`、`Home` / `End` | 翻页和首尾 |
 | `Enter` | 激活或编辑选中设置 |
 
 ## Agent Studio
@@ -451,40 +424,35 @@ Usage Dashboard 不接受额外的 Ctrl、Alt、Super、Meta 等修饰键。
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 关闭 |
-| `r` | 刷新 Agent 配置 |
-| `o` | 打开 Agent 配置源文件 |
-| `p` | 打开 Agent Permission Studio |
-| `↑` / `k`、`↓` / `j` | 上一项／下一项 |
+| `↑` / `↓` | 上一项／下一项 |
 | `PageUp` / `PageDown`、`Home` / `End` | 翻页和首尾 |
 | `Enter` | 激活或编辑选中字段 |
+
+权限编辑和打开配置来源已经是 Agent 字段列表底部的可见操作行，不再绑定 `p/o`；刷新在页面打开或保存后自动进行。
 
 ## Permission Studio
 
 | 按键 | 行为 |
 |---|---|
-| `Esc` | Content 中返回 Navigation；Navigation 中关闭页面 |
-| `r` | 刷新 |
-| `a` | 添加当前类型的 Permission 项 |
-| `e` | 编辑当前项 |
-| `n` | 重命名 |
-| `y` | 复制当前项 |
-| `d` | 删除当前项 |
-| `Tab` / `→` / `l` | Navigation → Content |
-| `BackTab` / `←` / `h` | Content → Navigation |
-| `↑` / `k`、`↓` / `j` | 当前 Pane 上一项／下一项 |
+| `Esc` | Actions → Content → Navigation → 关闭页面 |
+| `Tab` / `BackTab` | 在 Navigation、Content 和底部可见 Actions 操作栏之间移动焦点 |
+| `←` / `→` | Actions 获得焦点时选择 Add、Edit、Rename、Duplicate 或 Delete |
+| `↑` / `↓` | 当前列表上一项／下一项 |
 | `PageUp` / `PageDown`、`Home` / `End` | 当前 Pane 翻页和首尾 |
-| `Enter` | Navigation 中进入 Content；Content 中激活当前项 |
+| `Enter` | 激活当前导航、内容项或可见操作按钮 |
+
+原来的 `a/e/n/y/d/r` 命令已移除。操作栏只在当前 Permission 分区支持这些操作时显示，并始终作用于 Content 中保持选中的条目。
 
 ## Permission Rule Studio
 
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 关闭 |
-| `r` | 刷新 |
-| `b` | 为当前路径字段打开 Path Browser |
-| `↑` / `k`、`↓` / `j` | 上一项／下一项 |
+| `↑` / `↓` | 上一项／下一项 |
 | `PageUp` / `PageDown`、`Home` / `End` | 翻页和首尾 |
 | `Enter` | 激活或编辑当前规则字段 |
+
+Browse Workspace、Browse Target、Save 和 Revoke 都是字段列表中的可见操作行，因此不再需要 `b/r`。
 
 ## Provider Studio 主页面
 
@@ -492,59 +460,44 @@ Usage Dashboard 不接受额外的 Ctrl、Alt、Super、Meta 等修饰键。
 |---|---|
 | `Esc` | 关闭 |
 | `Tab` / `BackTab` | 下一个／上一个焦点区域 |
-| `n` | 新建 Provider 草稿 |
-| `o` / `O` | 启动认证 |
-| `p` / `P` | 继续认证 |
-| `r` | 加载 Adapter 模型 |
-| `+` | Models 焦点下新增手动模型 |
-| `Delete` / `Backspace` | 删除当前 Adapter 或 Model |
-| `D` | 删除整个 Provider |
-| `s` / `S` | 保存整个 Provider |
-| `a` | 保存当前 Adapter |
-| `A` | 全选当前 Adapter 或 Model 列表 |
-| `c` / `C` | 清空当前 Adapter 或 Model 选择 |
-| `m` / `M` | 保存当前选中 Model |
 | `Space` | 切换当前 Adapter 或 Model 选中状态 |
-| `↑` / `k`、`↓` / `j` | 上一项／下一项 |
+| `↑` / `↓` | 上一项／下一项 |
 | `PageUp` / `PageDown`、`Home` / `End` | 翻页和首尾 |
-| `Enter` | 激活当前焦点项 |
+| `Enter` | 编辑字段、打开模型，或激活字段列表中的可见操作行 |
 
-`+`、删除、全选、清空和 Space 等行为依赖当前焦点是 Adapters 还是 Models。
+创建 Provider 位于 Provider Picker 的真实列表项中。启动/继续认证、删除 Provider、发现模型、添加模型、删除选中 Adapter/Model、保存 Adapter 和保存 Provider 都是 Fields 面板中的可见操作行。原来的 `n/o/p/r/+/Delete/D/s/a/A/c/m` 页面命令已移除。
 
 ## Provider Detail 页面
 
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 返回 Provider Studio |
-| `o` / `O` | 启动认证，要求支持交互认证 |
-| `p` / `P` | 继续认证，要求支持交互认证 |
-| `↑` / `k`、`↓` / `j` | 上一字段／下一字段 |
+| `↑` / `↓` | 上一字段／下一字段 |
 | `PageUp` / `PageDown`、`Home` / `End` | 翻页和首尾 |
 | `Enter` | 编辑选中字段 |
+
+认证动作显示在 Provider 主页面，不在 Detail 页面重复绑定。
 
 ## Provider Model 页面
 
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 返回 Provider Studio |
-| `s` / `S` | 保存 Model |
-| `d` / `Delete` / `Backspace` | 删除 Model |
-| `↑` / `k`、`↓` / `j` | 上一字段／下一字段 |
+| `↑` / `↓` | 上一字段／下一字段 |
 | `PageUp` / `PageDown`、`Home` / `End` | 翻页和首尾 |
-| `Enter` | 编辑选中字段 |
+| `Enter` | 编辑字段，或激活列表末尾的 Save Model / Delete Model 操作行 |
 
 ## Model Catalog
 
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 关闭 |
-| `/` | 打开目录搜索输入框 |
-| `R` | 刷新 Model Catalog |
-| `←` / `h`、`→` / `l` | 上一页／下一页 |
-| `↑` / `k`、`↓` / `j` | 上一个／下一个模型 |
+| `Tab` / `BackTab` | 在模型列表和 Search、Refresh、Previous page、Next page 可见操作之间移动焦点 |
+| `Enter` | 激活当前可见操作 |
+| `↑` / `↓` | 上一个／下一个模型 |
 | `PageUp` / `PageDown`、`Home` / `End` | 列表翻页和首尾 |
 
-搜索编辑器中：`Esc` 关闭搜索，`Enter` 提交查询，其他文本编辑键修改查询。
+Search 操作打开搜索编辑器；编辑器中 `Esc` 关闭，`Enter` 提交查询，其他文本编辑键修改查询。原来的 `/`、`R` 和 `h/l` 已移除。
 
 ## Plugin Policy Studio
 
@@ -553,79 +506,55 @@ Usage Dashboard 不接受额外的 Ctrl、Alt、Super、Meta 等修饰键。
 | `Esc` | 关闭 |
 | `Tab` / `BackTab` | 在 Navigation 和 Items 之间切换 |
 | `Enter` | Navigation 中进入 Items；Items 中循环当前策略值 |
-| `r` / `R` | 刷新 |
-| `↑` / `k`、`↓` / `j` | 上一项／下一项 |
+| `↑` / `↓` | 上一项／下一项 |
 | `PageUp` / `PageDown`、`Home` / `End` | 当前区域翻页和首尾 |
-| `←` / `h` | Items 中选择 Prompt 列 |
-| `→` / `l` | Items 中选择 UI 列 |
-| `Delete` / `Backspace` / `x` / `X` / `0` | 清除当前 override |
-| `b` / `B` | Prompt 列设为 Brief |
-| `d` / `D` | Prompt 或 UI 列设为 Detailed |
-| `s` / `S` | UI 列设为 Summary |
+| `←` / `→` | Items 中选择 Prompt 或 UI 列 |
+| `Delete` / `Backspace` | 清除当前 override |
 
-策略值快捷键只有在 Items 焦点和对应列下执行。
+策略值通过选择单元格后按 Enter 循环，不再绑定 `b/d/s/x/0/r`。
 
 ## Plugin Workbench：插件列表
 
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 关闭 Plugin Workbench |
-| `Enter` | 打开选中 Plugin Detail |
-| `Ctrl+R` | 刷新 |
-| `Alt+T` | 循环 Transport Filter |
-| `Alt+C` | 循环 Config Filter |
+| `Tab` / `BackTab` | 在搜索/列表与 Transport、Config、Refresh 可见控件之间移动焦点 |
+| `Enter` | 列表中打开选中 Plugin；控制栏中修改过滤器或刷新 |
 | `↑` / `↓` | 上一个／下一个插件 |
 | `PageUp` / `PageDown`、`Ctrl+Home` / `Ctrl+End` | 翻页和首尾 |
 | `Home` / `End` | 移动插件搜索输入光标到开头／结尾 |
 | 其他普通文本编辑键 | 编辑插件搜索词 |
 
-`r/R/t/c/j/k` 现在都可以正常输入到插件搜索框。
+Transport、Config 和 Refresh 都显示为可聚焦控件，原来的 `Ctrl+R`、`Alt+T` 和 `Alt+C` 已移除。
 
 ## Plugin Detail 非 Config Tab
 
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 返回插件列表 |
-| `r` / `R` | 刷新 |
-| `Tab` / `↓` / `j` | 下一个 Detail Tab |
-| `BackTab` / `↑` / `k` | 上一个 Detail Tab |
+| `Tab` | 下一个 Detail Tab |
+| `BackTab` | 上一个 Detail Tab |
 | `PageUp` / `PageDown` | 当前详情向上／向下滚动 |
-| `Ctrl+←` / `Ctrl+H` | 上一个 Detail Tab |
-| `Ctrl+→` / `Ctrl+L` | 下一个 Detail Tab |
-
-这里的 `j/k` 用于切换 Tab，不是逐行滚动。
 
 ## Plugin Detail：Config Tab
 
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 返回插件列表 |
-| `Ctrl+←` / `Ctrl+H`、`Ctrl+→` / `Ctrl+L` | 上一个／下一个 Detail Tab |
 | `Tab` / `BackTab` | 下一个／上一个 Config 焦点区域 |
-| `s` / `S` | 保存配置 |
-| `v` / `V` | 验证配置 |
-| `i` / `I` | 插入默认配置 |
-| `x` / `X` | 打开当前节点动作菜单 |
-| `Ctrl+D` | 删除当前配置节点；Diagnostics 中跳到对应项 |
-| `D` | 显示或隐藏 Diff；紧凑布局 Diff 打开时再次按下关闭 |
-| `R` | 刷新插件数据 |
-| `Ctrl+R` | 重启插件 |
-| `r` | 重置插件配置为默认值 |
-| `a` / `A` | 添加配置值 |
-| `t` / `T` | 选择配置类型 |
-| `Enter` / `e` | 编辑当前值；Diagnostics 中跳到对应项 |
-| `↑` / `k`、`↓` / `j` | 上一项／下一项 |
-| `←` / `h`、`→` / `l` | 上一个／下一个焦点区域或单元格 |
+| `Enter` | Toolbar 中执行 Validate、Reset All、Diff、Save 或 Restart；Editor 中激活选中单元格 |
+| `↑` / `↓` | 上一项／下一项 |
+| `←` / `→` | 上一个／下一个焦点区域或单元格 |
 | `PageUp` / `PageDown`、`Home` / `End` | 当前区域翻页和首尾 |
 
-紧凑布局中，Toolbar 的 `←/→` 选择动作，`Enter/e` 执行动作；Structure 和 Editor 之间用 `←/→` 切换。
+所有顶层操作都在 Toolbar 中可见；字段级类型、添加、重命名、删除和重置通过移动到对应 Type/Action/State 单元格后按 Enter 打开。Diff 打开时使用 Esc 关闭。原来的 `s/v/i/x/D/R/r/a/t/e` 和 Ctrl 组合均已移除。
 
 ## Plugin Config Actions 菜单
 
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 关闭动作菜单 |
-| `↑` / `k`、`↓` / `j` | 上一个／下一个动作 |
+| `↑` / `↓` | 上一个／下一个动作 |
 | `Home` / `End` | 首尾 |
 | `Enter` | 执行当前动作 |
 
@@ -634,7 +563,7 @@ Usage Dashboard 不接受额外的 Ctrl、Alt、Super、Meta 等修饰键。
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 关闭选择器 |
-| `↑` / `k`、`↓` / `j` | 上一项／下一项 |
+| `↑` / `↓` | 上一项／下一项 |
 | `Home` / `End` | 首尾 |
 | `Space` | 多选模式下切换当前项 |
 | `Enter` | 确认选择 |
@@ -644,14 +573,10 @@ Usage Dashboard 不接受额外的 Ctrl、Alt、Super、Meta 等修饰键。
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 返回上一级 Drilldown |
-| `↑` / `k`、`↓` / `j` | 上一行／下一行 |
+| `↑` / `↓` | 上一行／下一行 |
 | `PageUp` / `PageDown`、`Home` / `End` | 翻页和首尾 |
-| `←` / `h`、`→` / `l` | 上一个／下一个单元格 |
-| `a` / `A` | 添加值 |
-| `x` / `X` | 打开动作菜单 |
-| `t` / `T` | 选择类型 |
-| `Ctrl+D` | 删除当前行 |
-| `Enter` / `e` | 编辑当前行 |
+| `←` / `→` | 上一个／下一个单元格 |
+| `Enter` | 激活当前单元格，包括编辑、类型、添加和动作菜单 |
 
 ## 通用文本编辑器
 
@@ -708,7 +633,7 @@ Usage Dashboard 不接受额外的 Ctrl、Alt、Super、Meta 等修饰键。
 | `Ctrl+F` | 打开 Find |
 | `/find` | Find 命令 |
 
-这些字符仍可在局部页面使用。例如 `q` 可关闭 Help 和 Usage，`P` 可在 Usage 中选择上一个 Provider，`b` 可在 Permission Rule Studio 中打开 Path Browser。
+这些按键不再作为聊天主页面的全局命令；二级页面也不复用普通字母作为隐藏命令。需要输入文本时，普通字符会继续交给当前编辑器或搜索框。
 
 ## 维护要求
 

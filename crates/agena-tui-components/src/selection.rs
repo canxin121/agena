@@ -1,6 +1,6 @@
 use crossterm::event::KeyEvent;
 
-use crate::{NavigationAction, navigation_action};
+use crate::{NavigationAction, navigation_action, structural_navigation_action};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SelectionCursor {
@@ -38,7 +38,25 @@ impl SelectionCursor {
         item_count: usize,
         page_size: usize,
     ) -> bool {
-        match navigation_action(key) {
+        self.handle_navigation_action(navigation_action(key), item_count, page_size)
+    }
+
+    pub fn handle_structural_navigation_key(
+        &mut self,
+        key: KeyEvent,
+        item_count: usize,
+        page_size: usize,
+    ) -> bool {
+        self.handle_navigation_action(structural_navigation_action(key), item_count, page_size)
+    }
+
+    fn handle_navigation_action(
+        &mut self,
+        action: Option<NavigationAction>,
+        item_count: usize,
+        page_size: usize,
+    ) -> bool {
+        match action {
             Some(NavigationAction::PageUp) => {
                 self.move_page(item_count, -1, page_size);
                 true

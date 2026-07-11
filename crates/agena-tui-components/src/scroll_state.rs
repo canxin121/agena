@@ -1,6 +1,6 @@
 use crossterm::event::KeyEvent;
 
-use crate::{NavigationAction, navigation_action};
+use crate::{NavigationAction, navigation_action, structural_navigation_action};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ScrollState {
@@ -40,7 +40,25 @@ impl ScrollState {
         max_scroll: u16,
         page_size: u16,
     ) -> bool {
-        match navigation_action(key) {
+        self.handle_navigation_action(navigation_action(key), max_scroll, page_size)
+    }
+
+    pub fn handle_structural_navigation_key(
+        &mut self,
+        key: KeyEvent,
+        max_scroll: u16,
+        page_size: u16,
+    ) -> bool {
+        self.handle_navigation_action(structural_navigation_action(key), max_scroll, page_size)
+    }
+
+    fn handle_navigation_action(
+        &mut self,
+        action: Option<NavigationAction>,
+        max_scroll: u16,
+        page_size: u16,
+    ) -> bool {
+        match action {
             Some(NavigationAction::Up) => {
                 self.move_by(-1, max_scroll);
                 true

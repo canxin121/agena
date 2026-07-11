@@ -14,6 +14,8 @@ pub(in crate::app) fn provider_model_config_field_label_key(
         ProviderModelConfigField::OutputModalities => "provider-model-field-output-modalities",
         ProviderModelConfigField::Description => "provider-model-field-description",
         ProviderModelConfigField::NativeTools => "provider-model-field-native-tools",
+        ProviderModelConfigField::SaveAction => "provider-model-field-save",
+        ProviderModelConfigField::DeleteAction => "provider-model-field-delete",
     }
 }
 

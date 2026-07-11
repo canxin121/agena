@@ -591,11 +591,6 @@ pub enum ProviderStudioSaveResult {
         listed_model_count: usize,
         matched_model_count: usize,
     },
-    ModelSaved {
-        provider_id: String,
-        adapter_id: String,
-        model_id: String,
-    },
     ConfiguredModelSaved {
         provider_id: String,
         adapter_id: String,

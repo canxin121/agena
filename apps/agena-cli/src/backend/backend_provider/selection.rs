@@ -10,14 +10,13 @@ use crate::backend::{
     ProviderModel, ProviderStudioSaveError, ProviderStudioSaveField, ProviderStudioSaveResult,
     RunOptions, apply_provider_auth_required_adapter_defaults_to_json_adapters,
     apply_provider_native_tools_defaults_to_model_value, build_provider_auth_patch_value_for_save,
-    build_provider_patch_value_for_save, catalog_lookup_id_for_model_id,
-    catalog_lookup_id_for_provider_model, continue_provider_draft_auth, decorate_provider_models,
-    ensure_provider_model_entry, local_model_catalog_model_search_text, local_model_catalog_models,
-    local_model_catalog_summary, map_provider_adapter_models_config_error, normalize_limit,
-    optional_non_empty, preferred_catalog_model_for_provider_model,
-    provider_model_json_for_model_id, provider_model_selection_contains,
-    provider_model_settings_path, read_file_setting, required_provider_save_field,
-    required_trimmed, resolve_provider_defaults_from_value_for_save,
+    build_provider_patch_value_for_save, catalog_lookup_id_for_provider_model,
+    continue_provider_draft_auth, decorate_provider_models, ensure_provider_model_entry,
+    local_model_catalog_model_search_text, local_model_catalog_models, local_model_catalog_summary,
+    map_provider_adapter_models_config_error, normalize_limit, optional_non_empty,
+    preferred_catalog_model_for_provider_model, provider_model_json_for_model_id,
+    provider_model_selection_contains, provider_model_settings_path, read_file_setting,
+    required_provider_save_field, required_trimmed, resolve_provider_defaults_from_value_for_save,
     saved_provider_adapter_models_target, start_provider_draft_auth, summarize_named_mode,
 };
 
@@ -721,70 +720,6 @@ impl Backend {
             adapter_id: adapter_id.to_owned(),
             listed_model_count: adapter_models.models.len(),
             matched_model_count,
-        })
-    }
-
-    pub async fn save_provider_model(
-        &self,
-        draft: ProviderConfigDraft,
-        adapter_id: &str,
-        model_id: &str,
-        provider_model: Option<ProviderModel>,
-        set_default: bool,
-    ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
-        let mut draft = draft;
-        draft.normalize_shape();
-        let provider_id = required_provider_save_field(
-            draft.provider_id.as_str(),
-            ProviderStudioSaveField::ProviderId,
-        )
-        .map_err(ProviderStudioSaveError::Validation)?;
-        let adapter_id =
-            required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
-                .map_err(ProviderStudioSaveError::Validation)?;
-        let model_id = required_provider_save_field(model_id, ProviderStudioSaveField::ModelId)
-            .map_err(ProviderStudioSaveError::Validation)?;
-        let effective_adapter_ids =
-            self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
-        draft
-            .validate_for_adapters_for_save(&effective_adapter_ids)
-            .map_err(ProviderStudioSaveError::Validation)?;
-        let catalog_entries =
-            self.lookup_model_catalog_models(&[catalog_lookup_id_for_model_id(model_id)]);
-        let mut model_value =
-            provider_model_json_for_model_id(&catalog_entries, model_id, provider_model.as_ref());
-        apply_provider_native_tools_defaults_to_model_value(&draft, adapter_id, &mut model_value)?;
-        let default_adapter = if set_default {
-            adapter_id
-        } else {
-            optional_non_empty(draft.default_adapter.as_str()).unwrap_or(adapter_id)
-        };
-        let default_model = if set_default {
-            model_id
-        } else {
-            optional_non_empty(draft.default_model.as_str()).unwrap_or(model_id)
-        };
-        let provider_patch = build_provider_patch_value_for_save(
-            &draft,
-            default_adapter,
-            Some(default_model),
-            json!({
-                adapter_id: {
-                    "enabled": true,
-                    "models": {
-                        model_id: model_value,
-                    }
-                }
-            }),
-            set_default || draft.source_provider_id.is_none(),
-        )?;
-        self.patch_provider_settings(provider_id, provider_patch)
-            .await
-            .map_err(ProviderStudioSaveError::other)?;
-        Ok(ProviderStudioSaveResult::ModelSaved {
-            provider_id: provider_id.to_owned(),
-            adapter_id: adapter_id.to_owned(),
-            model_id: model_id.to_owned(),
         })
     }
 

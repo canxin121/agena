@@ -32,6 +32,24 @@ pub(in crate::app) fn provider_studio_main_field_value(
         ProviderStudioField::DeleteProviderAction => {
             ui_text::t(i18n, "provider-studio-summary-delete-provider")
         }
+        ProviderStudioField::LoadModelsAction => {
+            ui_text::t(i18n, "provider-studio-summary-load-models")
+        }
+        ProviderStudioField::AddModelAction => {
+            ui_text::t(i18n, "provider-studio-summary-add-model")
+        }
+        ProviderStudioField::DeleteAdapterAction => {
+            ui_text::t(i18n, "provider-studio-summary-delete-adapter")
+        }
+        ProviderStudioField::DeleteModelAction => {
+            ui_text::t(i18n, "provider-studio-summary-delete-model")
+        }
+        ProviderStudioField::SaveAdapterAction => {
+            ui_text::t(i18n, "provider-studio-summary-save-adapter")
+        }
+        ProviderStudioField::SaveProviderAction => {
+            ui_text::t(i18n, "provider-studio-summary-save-provider")
+        }
         _ => provider_studio_field_value(&dialog.draft, field),
     }
 }
@@ -415,5 +433,17 @@ pub(in crate::app) fn provider_studio_visible_fields(
     if dialog.draft.source_provider_id.is_some() {
         fields.push(ProviderStudioField::DeleteProviderAction);
     }
+    fields.push(ProviderStudioField::LoadModelsAction);
+    if !dialog.adapter_candidate_ids.is_empty() {
+        fields.push(ProviderStudioField::AddModelAction);
+        fields.push(ProviderStudioField::DeleteAdapterAction);
+        fields.push(ProviderStudioField::SaveAdapterAction);
+    }
+    if provider_studio_selected_adapter_models(dialog)
+        .is_some_and(|adapter| !adapter.models.is_empty())
+    {
+        fields.push(ProviderStudioField::DeleteModelAction);
+    }
+    fields.push(ProviderStudioField::SaveProviderAction);
     fields
 }

@@ -65,28 +65,6 @@ impl App {
         }
     }
 
-    pub(in crate::app) fn insert_selected_plugin_defaults(
-        &mut self,
-        dialog: &mut PluginWorkbenchOverlay,
-    ) {
-        let Some(plugin) = dialog.selected_plugin_mut() else {
-            return;
-        };
-        let Some(schema) = plugin.schema.clone() else {
-            self.flash_warning("schema missing; defaults are unavailable".to_owned());
-            return;
-        };
-        let before = plugin.draft_config.clone();
-        insert_schema_defaults(&mut plugin.draft_config, &schema, &schema);
-        if plugin.draft_config == before {
-            self.flash_info("no missing defaults to insert".to_owned());
-        } else {
-            clear_branch_drafts_for_structural_change(plugin);
-            recompute_plugin_config_state(plugin);
-            self.flash_success(format!("inserted defaults for {}", plugin.plugin_id));
-        }
-    }
-
     pub(in crate::app) fn run_compact_toolbar_action(
         &mut self,
         dialog: &mut PluginWorkbenchOverlay,
@@ -719,11 +697,11 @@ use super::{
     array_item_action_info, can_append_array_item, clear_branch_drafts_for_structural_change,
     config_actions_overlay_footer, config_row_primary_action, duplicate_array_item_at_path,
     find_best_drilldown_row_for_path, find_best_section_row_for_path, find_row_position,
-    get_value_at_path, insert_default_array_item_at_path, insert_schema_defaults,
-    move_array_item_at_path, object_add_field_block_reason, path_key_info,
-    persisted_plugin_config_value, plugin_all_diagnostics, plugin_config_record_value,
-    plugin_save_block_reason, prioritize_config_actions, quote_settings_segment,
-    rebuild_drilldown_stack, recompute_plugin_config_state, remove_array_item_at_path,
-    reset_paths_warning_message, row_paths, row_rename_action_allowed, select_config_path,
-    selected_config_row_context, title_from_key,
+    get_value_at_path, insert_default_array_item_at_path, move_array_item_at_path,
+    object_add_field_block_reason, path_key_info, persisted_plugin_config_value,
+    plugin_all_diagnostics, plugin_config_record_value, plugin_save_block_reason,
+    prioritize_config_actions, quote_settings_segment, rebuild_drilldown_stack,
+    recompute_plugin_config_state, remove_array_item_at_path, reset_paths_warning_message,
+    row_paths, row_rename_action_allowed, select_config_path, selected_config_row_context,
+    title_from_key,
 };

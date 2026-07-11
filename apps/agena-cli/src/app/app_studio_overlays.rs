@@ -224,6 +224,7 @@ impl App {
             permission,
             nav: SelectableListState::new(Vec::new(), 0),
             pane_focus: PermissionStudioPaneFocus::Navigation,
+            selected_action: 0,
             page,
             state: SectionedListState::new(Vec::new(), 0, 0, PermissionStudioFocus::Navigation),
             editor: None,

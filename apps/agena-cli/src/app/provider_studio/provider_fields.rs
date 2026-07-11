@@ -29,6 +29,12 @@ pub(in crate::app) fn provider_studio_field_label_key(field: ProviderStudioField
         ProviderStudioField::ServiceKeyEnv => "provider-field-service-key-env",
         ProviderStudioField::DefaultAdapter => "provider-field-default-adapter",
         ProviderStudioField::DefaultModel => "provider-field-default-model",
+        ProviderStudioField::LoadModelsAction => "provider-field-load-models",
+        ProviderStudioField::AddModelAction => "provider-field-add-model",
+        ProviderStudioField::DeleteAdapterAction => "provider-field-delete-adapter",
+        ProviderStudioField::DeleteModelAction => "provider-field-delete-model",
+        ProviderStudioField::SaveAdapterAction => "provider-field-save-adapter",
+        ProviderStudioField::SaveProviderAction => "provider-field-save-provider",
     }
 }
 
@@ -57,7 +63,13 @@ pub(in crate::app) fn provider_studio_field_prompt(
         ProviderStudioField::StartAuthAction
         | ProviderStudioField::ContinueAuthAction
         | ProviderStudioField::EditAuthDetailsAction
-        | ProviderStudioField::DeleteProviderAction => String::new(),
+        | ProviderStudioField::DeleteProviderAction
+        | ProviderStudioField::LoadModelsAction
+        | ProviderStudioField::AddModelAction
+        | ProviderStudioField::DeleteAdapterAction
+        | ProviderStudioField::DeleteModelAction
+        | ProviderStudioField::SaveAdapterAction
+        | ProviderStudioField::SaveProviderAction => String::new(),
         _ => i18n.text_args(
             "overlay-provider-studio-edit-prompt",
             &crate::fl_args!("field" => provider_studio_field_label(i18n, field)),
@@ -80,7 +92,13 @@ pub(in crate::app) fn provider_studio_field_value(
         ProviderStudioField::StartAuthAction
         | ProviderStudioField::ContinueAuthAction
         | ProviderStudioField::EditAuthDetailsAction
-        | ProviderStudioField::DeleteProviderAction => String::new(),
+        | ProviderStudioField::DeleteProviderAction
+        | ProviderStudioField::LoadModelsAction
+        | ProviderStudioField::AddModelAction
+        | ProviderStudioField::DeleteAdapterAction
+        | ProviderStudioField::DeleteModelAction
+        | ProviderStudioField::SaveAdapterAction
+        | ProviderStudioField::SaveProviderAction => String::new(),
         ProviderStudioField::BaseUrl => draft.auth.base_url.clone(),
         ProviderStudioField::InstanceUrl => draft.auth.instance_url.clone(),
         ProviderStudioField::ApiKeySource => draft.auth.secret_source_kind.token().to_owned(),
@@ -142,6 +160,12 @@ pub(in crate::app) fn provider_studio_field_editable(
             !provider_studio_detail_fields(dialog).is_empty()
         }
         ProviderStudioField::DeleteProviderAction => dialog.draft.source_provider_id.is_some(),
+        ProviderStudioField::LoadModelsAction
+        | ProviderStudioField::AddModelAction
+        | ProviderStudioField::DeleteAdapterAction
+        | ProviderStudioField::DeleteModelAction
+        | ProviderStudioField::SaveAdapterAction
+        | ProviderStudioField::SaveProviderAction => true,
         ProviderStudioField::BaseUrl => match dialog.draft.auth_kind {
             ProviderDraftAuthKind::Unset => false,
             ProviderDraftAuthKind::ApiPending => false,
@@ -286,7 +310,7 @@ pub(in crate::app) fn remove_provider_studio_adapter_from_dialog(
     provider_studio_ensure_default_selection(dialog);
 }
 
-const PROVIDER_MODEL_CONFIG_FIELDS: [ProviderModelConfigField; 12] = [
+const PROVIDER_MODEL_CONFIG_FIELDS: [ProviderModelConfigField; 14] = [
     ProviderModelConfigField::ModelId,
     ProviderModelConfigField::Enabled,
     ProviderModelConfigField::DisplayName,
@@ -299,6 +323,8 @@ const PROVIDER_MODEL_CONFIG_FIELDS: [ProviderModelConfigField; 12] = [
     ProviderModelConfigField::OutputModalities,
     ProviderModelConfigField::Description,
     ProviderModelConfigField::NativeTools,
+    ProviderModelConfigField::SaveAction,
+    ProviderModelConfigField::DeleteAction,
 ];
 
 pub(in crate::app) fn provider_model_config_fields() -> &'static [ProviderModelConfigField] {
@@ -496,6 +522,9 @@ pub(in crate::app) fn provider_model_config_field_value(
         ProviderModelConfigField::OutputModalities => draft.output_modalities.clone(),
         ProviderModelConfigField::Description => draft.description.clone(),
         ProviderModelConfigField::NativeTools => draft.native_tools_preset.token().to_owned(),
+        ProviderModelConfigField::SaveAction | ProviderModelConfigField::DeleteAction => {
+            String::new()
+        }
     }
 }
 
@@ -504,6 +533,15 @@ pub(in crate::app) fn provider_model_config_field_display(
     draft: &ProviderModelConfigDraft,
     field: ProviderModelConfigField,
 ) -> String {
+    match field {
+        ProviderModelConfigField::SaveAction => {
+            return ui_text::t(i18n, "provider-model-action-save-detail");
+        }
+        ProviderModelConfigField::DeleteAction => {
+            return ui_text::t(i18n, "provider-model-action-delete-detail");
+        }
+        _ => {}
+    }
     let value = provider_model_config_field_value(draft, field);
     if value.trim().is_empty() {
         ui_text::t(i18n, "value-unset")
@@ -517,7 +555,12 @@ pub(in crate::app) fn provider_model_config_field_display(
 pub(in crate::app) fn provider_model_config_field_editable(
     field: ProviderModelConfigField,
 ) -> bool {
-    field != ProviderModelConfigField::ModelId
+    !matches!(
+        field,
+        ProviderModelConfigField::ModelId
+            | ProviderModelConfigField::SaveAction
+            | ProviderModelConfigField::DeleteAction
+    )
 }
 
 pub(in crate::app) fn commit_provider_model_config_field(
@@ -572,6 +615,7 @@ pub(in crate::app) fn commit_provider_model_config_field(
             };
             draft.native_tools_preset = preset;
         }
+        ProviderModelConfigField::SaveAction | ProviderModelConfigField::DeleteAction => {}
     }
     Ok(())
 }

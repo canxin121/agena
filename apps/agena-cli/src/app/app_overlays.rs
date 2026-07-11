@@ -113,77 +113,6 @@ impl App {
         dialog: &mut SessionSearchOverlay,
     ) -> bool {
         match resolve_tui_key(KeyContext::SessionSearch, key) {
-            Some(KeyAction::Previous) => {
-                if dialog.loading || dialog.meta.page_index == 0 {
-                    return false;
-                }
-                dialog.meta.page_index = dialog.meta.page_index.saturating_sub(1);
-                dialog.selected = 0;
-                match dialog.meta.mode {
-                    SessionViewMode::Subtree => {
-                        self.refresh_session_search_overlay_local(dialog);
-                    }
-                    SessionViewMode::All | SessionViewMode::Roots => {
-                        let cursor = dialog
-                            .meta
-                            .cursors
-                            .get(dialog.meta.page_index)
-                            .cloned()
-                            .flatten();
-                        dialog.loading = true;
-                        dialog.footer = self.session_search_footer(dialog);
-                        self.request_session_search_page(
-                            dialog.meta.mode,
-                            dialog.input.text().trim().to_string(),
-                            dialog.meta.page_index,
-                            cursor,
-                        );
-                    }
-                }
-                false
-            }
-            Some(KeyAction::Next) => {
-                if dialog.loading || !dialog.meta.has_more {
-                    return false;
-                }
-                match dialog.meta.mode {
-                    SessionViewMode::Subtree => {
-                        dialog.meta.page_index = dialog.meta.page_index.saturating_add(1);
-                        dialog.selected = 0;
-                        self.refresh_session_search_overlay_local(dialog);
-                    }
-                    SessionViewMode::All | SessionViewMode::Roots => {
-                        let Some(cursor) = dialog.meta.next_cursor.clone() else {
-                            return false;
-                        };
-                        dialog.meta.page_index = dialog.meta.page_index.saturating_add(1);
-                        if dialog.meta.cursors.len() <= dialog.meta.page_index {
-                            dialog.meta.cursors.resize(dialog.meta.page_index + 1, None);
-                        }
-                        dialog.meta.cursors[dialog.meta.page_index] = Some(cursor.clone());
-                        dialog.selected = 0;
-                        dialog.loading = true;
-                        dialog.footer = self.session_search_footer(dialog);
-                        self.request_session_search_page(
-                            dialog.meta.mode,
-                            dialog.input.text().trim().to_string(),
-                            dialog.meta.page_index,
-                            Some(cursor),
-                        );
-                    }
-                }
-                false
-            }
-            Some(KeyAction::Fill) => {
-                if let Some(session) = dialog.items.get(dialog.selected) {
-                    let title = session.session.title.clone();
-                    if dialog.input.text() != title {
-                        dialog.input.set_text(title.clone());
-                        self.reset_session_search_query(dialog, title);
-                    }
-                }
-                false
-            }
             Some(KeyAction::Open) => {
                 let Some(session) = dialog.items.get(dialog.selected).cloned() else {
                     return false;
@@ -192,19 +121,103 @@ impl App {
                 self.focus = Focus::Composer;
                 true
             }
-            _ => match dialog.handle_filter_input_key(key, 10) {
-                SearchInputKeyResult::Close => true,
-                SearchInputKeyResult::Navigated => false,
-                SearchInputKeyResult::Edited { changed } => {
-                    if changed {
-                        self.reset_session_search_query(
-                            dialog,
-                            dialog.input.text().trim().to_string(),
-                        );
+            _ => {
+                let selected_before = dialog.selected;
+                match dialog.handle_filter_input_key(key, 10) {
+                    SearchInputKeyResult::Close => true,
+                    SearchInputKeyResult::Navigated => {
+                        let stayed_at_boundary = dialog.selected == selected_before;
+                        if stayed_at_boundary
+                            && matches!(
+                                key.code,
+                                crossterm::event::KeyCode::Down
+                                    | crossterm::event::KeyCode::PageDown
+                            )
+                        {
+                            self.move_session_search_page(dialog, 1);
+                        } else if stayed_at_boundary
+                            && matches!(
+                                key.code,
+                                crossterm::event::KeyCode::Up | crossterm::event::KeyCode::PageUp
+                            )
+                        {
+                            self.move_session_search_page(dialog, -1);
+                        }
+                        false
                     }
-                    false
+                    SearchInputKeyResult::Edited { changed } => {
+                        if changed {
+                            self.reset_session_search_query(
+                                dialog,
+                                dialog.input.text().trim().to_string(),
+                            );
+                        }
+                        false
+                    }
                 }
-            },
+            }
+        }
+    }
+
+    fn move_session_search_page(&mut self, dialog: &mut SessionSearchOverlay, delta: isize) {
+        if dialog.loading {
+            return;
+        }
+        if delta < 0 {
+            if dialog.meta.page_index == 0 {
+                return;
+            }
+            dialog.meta.page_index = dialog.meta.page_index.saturating_sub(1);
+            dialog.selected = usize::MAX;
+            match dialog.meta.mode {
+                SessionViewMode::Subtree => self.refresh_session_search_overlay_local(dialog),
+                SessionViewMode::All | SessionViewMode::Roots => {
+                    let cursor = dialog
+                        .meta
+                        .cursors
+                        .get(dialog.meta.page_index)
+                        .cloned()
+                        .flatten();
+                    dialog.loading = true;
+                    dialog.footer = self.session_search_footer(dialog);
+                    self.request_session_search_page(
+                        dialog.meta.mode,
+                        dialog.input.text().trim().to_string(),
+                        dialog.meta.page_index,
+                        cursor,
+                    );
+                }
+            }
+            return;
+        }
+        if !dialog.meta.has_more {
+            return;
+        }
+        match dialog.meta.mode {
+            SessionViewMode::Subtree => {
+                dialog.meta.page_index = dialog.meta.page_index.saturating_add(1);
+                dialog.selected = 0;
+                self.refresh_session_search_overlay_local(dialog);
+            }
+            SessionViewMode::All | SessionViewMode::Roots => {
+                let Some(cursor) = dialog.meta.next_cursor.clone() else {
+                    return;
+                };
+                dialog.meta.page_index = dialog.meta.page_index.saturating_add(1);
+                if dialog.meta.cursors.len() <= dialog.meta.page_index {
+                    dialog.meta.cursors.resize(dialog.meta.page_index + 1, None);
+                }
+                dialog.meta.cursors[dialog.meta.page_index] = Some(cursor.clone());
+                dialog.selected = 0;
+                dialog.loading = true;
+                dialog.footer = self.session_search_footer(dialog);
+                self.request_session_search_page(
+                    dialog.meta.mode,
+                    dialog.input.text().trim().to_string(),
+                    dialog.meta.page_index,
+                    Some(cursor),
+                );
+            }
         }
     }
 
@@ -478,21 +491,6 @@ impl App {
                 }
                 false
             }
-            Some(KeyAction::CopyEvent) => {
-                if let Some(item) = dialog.selected_item() {
-                    match set_clipboard_text(item.copy_text.as_str()) {
-                        Ok(method) => self.flash_clipboard_copy_success(
-                            method,
-                            ui_text::t(&self.i18n, "flash-timeline-event-copied"),
-                        ),
-                        Err(error) => self.flash_error(self.i18n.text_args(
-                            "flash-clipboard-copy-failed",
-                            &crate::fl_args!("error" => error.to_string()),
-                        )),
-                    }
-                }
-                false
-            }
             _ => match dialog.handle_filter_input_key(key, 10) {
                 SearchInputKeyResult::Close => true,
                 SearchInputKeyResult::Navigated => false,
@@ -570,91 +568,6 @@ impl App {
                 dialog.selection.prev_focus();
                 false
             }
-            Some(KeyAction::New) => {
-                self.load_provider_studio_draft(dialog, None, Some(String::new()));
-                false
-            }
-            Some(KeyAction::AuthStart) => {
-                self.request_provider_studio_start_auth(dialog);
-                false
-            }
-            Some(KeyAction::AuthContinue) => {
-                self.request_provider_studio_continue_auth(dialog);
-                false
-            }
-            Some(KeyAction::LoadModels) => {
-                self.request_provider_studio_adapter_models(dialog);
-                false
-            }
-            Some(KeyAction::Add) if dialog.selection.focus() == ProviderStudioFocus::Models => {
-                self.open_provider_studio_new_model_editor(dialog);
-                false
-            }
-            Some(KeyAction::Delete)
-                if dialog.selection.focus() == ProviderStudioFocus::Adapters =>
-            {
-                self.open_provider_studio_delete_selected_adapter_confirm(dialog);
-                false
-            }
-            Some(KeyAction::Delete) if dialog.selection.focus() == ProviderStudioFocus::Models => {
-                self.open_provider_studio_delete_selected_model_confirm(dialog);
-                false
-            }
-            Some(KeyAction::DeleteProvider) if dialog.draft.source_provider_id.is_some() => {
-                if let Some(provider_id) = dialog.draft.source_provider_id.clone() {
-                    self.open_provider_studio_delete_provider_confirm(provider_id);
-                }
-                false
-            }
-            Some(KeyAction::Save) => {
-                dialog.saving = true;
-                self.request_provider_studio_save_draft(dialog.clone());
-                false
-            }
-            Some(KeyAction::SaveAdapter) => {
-                if provider_studio_selected_adapter_models(dialog).is_none() {
-                    self.flash_warning(ui_text::t(
-                        &self.i18n,
-                        "flash-provider-studio-adapter-required",
-                    ));
-                    return false;
-                }
-                dialog.saving = true;
-                self.request_provider_studio_save_selected_adapter(dialog.clone());
-                false
-            }
-            Some(KeyAction::SelectAll)
-                if dialog.selection.focus() == ProviderStudioFocus::Adapters =>
-            {
-                Self::select_all_provider_studio_adapters(dialog);
-                false
-            }
-            Some(KeyAction::SelectAll)
-                if dialog.selection.focus() == ProviderStudioFocus::Models =>
-            {
-                Self::select_all_provider_studio_models(dialog);
-                false
-            }
-            Some(KeyAction::Clear) if dialog.selection.focus() == ProviderStudioFocus::Adapters => {
-                Self::clear_provider_studio_selected_adapters(dialog);
-                false
-            }
-            Some(KeyAction::Clear) if dialog.selection.focus() == ProviderStudioFocus::Models => {
-                Self::clear_provider_studio_selected_models(dialog);
-                false
-            }
-            Some(KeyAction::SaveModel) => {
-                if provider_studio_selected_model_target(dialog).is_none() {
-                    self.flash_warning(ui_text::t(
-                        &self.i18n,
-                        "flash-provider-studio-model-required",
-                    ));
-                    return false;
-                }
-                dialog.saving = true;
-                self.request_provider_studio_save_selected_model(dialog.clone());
-                false
-            }
             Some(KeyAction::Toggle)
                 if dialog.selection.focus() == ProviderStudioFocus::Adapters =>
             {
@@ -723,45 +636,77 @@ impl App {
 
         match resolve_tui_key(KeyContext::ModelCatalog, key) {
             Some(KeyAction::Close) => true,
-            Some(KeyAction::CatalogSearch) => {
-                dialog.workbench.editor =
-                    Some(self.build_model_catalog_search_overlay(dialog.query.as_str()));
+            Some(KeyAction::NextTab) => {
+                move_model_catalog_focus(dialog, 1);
                 false
             }
-            Some(KeyAction::CatalogRefresh) => {
-                dialog.loading = true;
-                self.request_model_catalog_refresh();
+            Some(KeyAction::PreviousTab) => {
+                move_model_catalog_focus(dialog, -1);
                 false
             }
-            Some(KeyAction::Previous) => {
-                if dialog.offset == 0 {
-                    return false;
+            Some(KeyAction::Activate) if dialog.actions_focused => {
+                match dialog.selected_action {
+                    0 => {
+                        dialog.workbench.editor =
+                            Some(self.build_model_catalog_search_overlay(dialog.query.as_str()));
+                    }
+                    1 => {
+                        dialog.loading = true;
+                        self.request_model_catalog_refresh();
+                    }
+                    2 if dialog.offset > 0 => {
+                        let offset = dialog.offset.saturating_sub(dialog.limit.max(1));
+                        dialog.offset = offset;
+                        dialog.workbench.list.selected = 0;
+                        dialog.loading = true;
+                        self.request_model_catalog_page(dialog.query.clone(), offset);
+                    }
+                    3 if dialog.offset + dialog.workbench.list.items.len() < dialog.total => {
+                        dialog.offset += dialog.limit.max(1);
+                        dialog.workbench.list.selected = 0;
+                        dialog.loading = true;
+                        self.request_model_catalog_page(dialog.query.clone(), dialog.offset);
+                    }
+                    _ => {}
                 }
-                let offset = dialog.offset.saturating_sub(dialog.limit.max(1));
-                dialog.offset = offset;
-                dialog.workbench.list.selected = 0;
-                dialog.loading = true;
-                self.request_model_catalog_page(dialog.query.clone(), offset);
                 false
             }
-            Some(KeyAction::Next) => {
-                if dialog.offset + dialog.workbench.list.items.len() >= dialog.total {
-                    return false;
-                }
-                dialog.offset += dialog.limit.max(1);
-                dialog.workbench.list.selected = 0;
-                dialog.loading = true;
-                self.request_model_catalog_page(dialog.query.clone(), dialog.offset);
+            _ if !dialog.actions_focused
+                && dialog
+                    .workbench
+                    .list
+                    .handle_structural_navigation_key(key, 10) =>
+            {
                 false
             }
-            _ if dialog.workbench.list.handle_navigation_key(key, 10) => false,
             _ => false,
         }
     }
 }
 
+fn move_model_catalog_focus(dialog: &mut ModelCatalogStudioOverlay, delta: isize) {
+    const ACTION_COUNT: usize = 4;
+    if delta > 0 {
+        if !dialog.actions_focused {
+            dialog.actions_focused = true;
+            dialog.selected_action = 0;
+        } else if dialog.selected_action + 1 < ACTION_COUNT {
+            dialog.selected_action += 1;
+        } else {
+            dialog.actions_focused = false;
+        }
+    } else if !dialog.actions_focused {
+        dialog.actions_focused = true;
+        dialog.selected_action = ACTION_COUNT - 1;
+    } else if dialog.selected_action > 0 {
+        dialog.selected_action -= 1;
+    } else {
+        dialog.actions_focused = false;
+    }
+}
+
 fn handle_help_navigation_key(dialog: &mut HelpOverlay, key: KeyEvent, max_scroll: u16) -> bool {
-    dialog.handle_navigation_key(key, max_scroll, 8);
+    dialog.handle_structural_navigation_key(key, max_scroll, 8);
     false
 }
 
@@ -791,8 +736,7 @@ use crate::app::{
     PickerValue, ProviderPickerPurpose, ProviderStudioEditorAction, ProviderStudioFocus,
     ProviderStudioOverlay, Route, RuntimeSettingEditOverlay, SearchInputKeyResult, SearchListRow,
     SessionModelChooserOverlay, SessionSearchOverlay, SessionViewMode, TimelineOverlay,
-    drive_editor_dialog_key, drive_input_dialog_key, min, provider_studio_selected_adapter_models,
-    provider_studio_selected_model_target, set_clipboard_text, ui_text,
+    drive_editor_dialog_key, drive_input_dialog_key, min, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui_components::SearchListItem;

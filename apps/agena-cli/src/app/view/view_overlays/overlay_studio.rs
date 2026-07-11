@@ -549,6 +549,13 @@ impl App {
                             Style::default().fg(agena_tui_components::theme::muted_color()),
                         ));
                     }
+                    let style = if dialog.pane_focus == PermissionStudioPaneFocus::Actions
+                        && dialog.selected_action == index
+                    {
+                        style.add_modifier(Modifier::REVERSED)
+                    } else {
+                        style
+                    };
                     acc.push(Span::styled(format!("[ {label} ]"), style));
                     acc
                 });
@@ -606,6 +613,7 @@ impl App {
             | PermissionStudioSectionId::ToolCommandRules => vec![
                 (ui_text::t(&self.i18n, "value-add"), accent),
                 (ui_text::t(&self.i18n, "value-edit"), accent),
+                (ui_text::t(&self.i18n, "value-rename"), accent),
                 (ui_text::t(&self.i18n, "value-duplicate"), accent),
                 (ui_text::t(&self.i18n, "value-delete"), danger),
             ],

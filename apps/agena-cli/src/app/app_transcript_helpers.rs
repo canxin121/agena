@@ -350,7 +350,8 @@ pub(in crate::app) fn permission_overlay_choice(
         PermissionOverlayPage::Action => match selected {
             0 => PermissionOverlayChoice::OpenScope(PermissionOverlayDecision::Allow),
             1 => PermissionOverlayChoice::OpenScope(PermissionOverlayDecision::Deny),
-            _ => PermissionOverlayChoice::EditRule,
+            2 => PermissionOverlayChoice::EditRule,
+            _ => PermissionOverlayChoice::Details,
         },
         PermissionOverlayPage::Scope(PermissionOverlayDecision::Allow) => match selected {
             0 => PermissionOverlayChoice::Reply {
@@ -365,10 +366,11 @@ pub(in crate::app) fn permission_overlay_choice(
                 kind: PermissionReplyKind::AllowAlways,
                 scope: Some(PermissionScope::Workspace),
             },
-            _ => PermissionOverlayChoice::Reply {
+            3 => PermissionOverlayChoice::Reply {
                 kind: PermissionReplyKind::AllowAlways,
                 scope: Some(PermissionScope::Global),
             },
+            _ => PermissionOverlayChoice::Details,
         },
         PermissionOverlayPage::Scope(PermissionOverlayDecision::Deny) => match selected {
             0 => PermissionOverlayChoice::Reply {
@@ -383,10 +385,11 @@ pub(in crate::app) fn permission_overlay_choice(
                 kind: PermissionReplyKind::DenyAlways,
                 scope: Some(PermissionScope::Workspace),
             },
-            _ => PermissionOverlayChoice::Reply {
+            3 => PermissionOverlayChoice::Reply {
                 kind: PermissionReplyKind::DenyAlways,
                 scope: Some(PermissionScope::Global),
             },
+            _ => PermissionOverlayChoice::Details,
         },
         PermissionOverlayPage::Details(_) => {
             unreachable!("permission details do not have selectable choices")
@@ -408,6 +411,7 @@ pub(in crate::app) fn permission_overlay_choice_label(
         PermissionOverlayChoice::EditRule => {
             ui_text::t(i18n, "overlay-permission-choice-edit-rule")
         }
+        PermissionOverlayChoice::Details => ui_text::t(i18n, "overlay-permission-details-title"),
         PermissionOverlayChoice::Reply {
             kind: PermissionReplyKind::AllowOnce,
             ..
@@ -478,8 +482,8 @@ pub(in crate::app) fn permission_overlay_choices(
     page: PermissionOverlayPage,
 ) -> Vec<String> {
     let count = match page {
-        PermissionOverlayPage::Action => 3,
-        PermissionOverlayPage::Scope(_) => 4,
+        PermissionOverlayPage::Action => 4,
+        PermissionOverlayPage::Scope(_) => 5,
         PermissionOverlayPage::Details(_) => 0,
     };
     (0..count)

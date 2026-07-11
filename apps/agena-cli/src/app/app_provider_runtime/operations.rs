@@ -90,38 +90,6 @@ impl App {
         });
     }
 
-    pub(in crate::app) fn request_provider_studio_save_selected_model(
-        &mut self,
-        dialog: ProviderStudioOverlay,
-    ) {
-        let Some((adapter_id, model_id, provider_model)) =
-            provider_studio_selected_model_target(&dialog)
-        else {
-            self.flash_warning(ui_text::t(
-                &self.i18n,
-                "flash-provider-studio-model-required",
-            ));
-            return;
-        };
-        let backend = self.backend.clone();
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let result = backend
-                .save_provider_model(
-                    dialog.draft.clone(),
-                    adapter_id.as_str(),
-                    model_id.as_str(),
-                    provider_model,
-                    true,
-                )
-                .await;
-            let _ = tx.send(AppMessage::ProviderStudioSaved {
-                provider_id: dialog.draft.provider_id.clone(),
-                result,
-            });
-        });
-    }
-
     pub(in crate::app) fn request_provider_studio_save_model_value(
         &mut self,
         draft: ProviderConfigDraft,
@@ -422,21 +390,13 @@ impl App {
                 dialog.detail_page = None;
                 false
             }
-            Some(KeyAction::AuthStart) if dialog.draft.supports_interactive_auth() => {
-                self.activate_provider_studio_start_auth(dialog);
-                false
-            }
-            Some(KeyAction::AuthContinue) if dialog.draft.supports_interactive_auth() => {
-                self.activate_provider_studio_continue_auth(dialog);
-                false
-            }
             Some(KeyAction::Activate) => {
                 self.activate_provider_studio_detail_page_selection(dialog);
                 false
             }
             _ if detail_page
                 .selection
-                .handle_navigation_key(key, field_count, 10) =>
+                .handle_structural_navigation_key(key, field_count, 10) =>
             {
                 false
             }

@@ -482,7 +482,11 @@ pub(in crate::app) fn push_markdown_heading(
         _ => "›",
     };
     let style = Style::default()
-        .fg(if level <= 2 { Color::Cyan } else { Color::Blue })
+        .fg(if level <= 2 {
+            agena_tui_components::theme::accent_color()
+        } else {
+            agena_tui_components::theme::info_color()
+        })
         .add_modifier(Modifier::BOLD);
     let available = width.max(1) as usize;
     let start = format!("{prefix}{marker} {text} ");
@@ -518,7 +522,7 @@ pub(in crate::app) fn push_markdown_quote(
         if block.leading_blank_line {
             out.push(RenderedLine::plain(
                 inner_prefix.to_string(),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(agena_tui_components::theme::muted_color()),
             ));
         }
         render_markdown_block(out, inner_prefix.as_str(), &block, width);
@@ -531,7 +535,7 @@ pub(in crate::app) fn push_markdown_rule(out: &mut Vec<RenderedLine>, prefix: &s
         out,
         prefix,
         "─".repeat(available.clamp(3, 24)).as_str(),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
         width,
     );
 }
@@ -563,7 +567,7 @@ pub(in crate::app) fn push_markdown_code_block(
             prefix,
             format!("[{language}]").as_str(),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(agena_tui_components::theme::accent_color())
                 .add_modifier(Modifier::BOLD),
             width,
         );
@@ -584,16 +588,19 @@ pub(in crate::app) fn push_markdown_code_block(
     );
     out.push(RenderedLine::rich(Line::from(vec![
         Span::raw(prefix.to_string()),
-        Span::styled("┌─ ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "┌─ ",
+            Style::default().fg(agena_tui_components::theme::muted_color()),
+        ),
         Span::styled(
             label,
             Style::default()
-                .fg(Color::Cyan)
+                .fg(agena_tui_components::theme::accent_color())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!(" {top_fill}┐"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
         ),
     ])));
 
@@ -618,30 +625,42 @@ pub(in crate::app) fn push_markdown_code_block(
                 " ".repeat(body_width.saturating_sub(UnicodeWidthStr::width(body.as_str())));
             out.push(RenderedLine::rich(Line::from(vec![
                 Span::raw(prefix.to_string()),
-                Span::styled("│", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    "│",
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
+                ),
                 Span::styled(
                     format!("{gutter}{gutter_padding}"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                 ),
                 Span::styled(format!("{body}{padding}"), Style::default()),
-                Span::styled("│", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    "│",
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
+                ),
             ])));
         }
     }
     if code_lines.is_empty() {
         out.push(RenderedLine::rich(Line::from(vec![
             Span::raw(prefix.to_string()),
-            Span::styled("│", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "│",
+                Style::default().fg(agena_tui_components::theme::muted_color()),
+            ),
             Span::styled(
                 "  (empty)".to_string() + &" ".repeat(card_width.saturating_sub(11)),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(agena_tui_components::theme::muted_color()),
             ),
-            Span::styled("│", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "│",
+                Style::default().fg(agena_tui_components::theme::muted_color()),
+            ),
         ])));
     }
     out.push(RenderedLine::plain(
         format!("{prefix}└{}┘", "─".repeat(card_width.saturating_sub(2))),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
     ));
 }
 
@@ -719,7 +738,7 @@ pub(in crate::app) fn push_markdown_list(
                 format!("{prefix}{}", "  ".repeat(indent)).as_str(),
                 format!("{prefix}{}", "  ".repeat(indent)).as_str(),
                 line.trim(),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(agena_tui_components::theme::muted_color()),
                 width,
             );
         }
@@ -780,7 +799,7 @@ pub(in crate::app) fn markdown_inline_text(text: &str) -> String {
     sanitize_terminal_text(plain.as_str()).trim().to_string()
 }
 use super::{
-    Color, I18n, Line, MarkdownBlock, MessagePart, MessageResource, Modifier, OperationBlock,
+    I18n, Line, MarkdownBlock, MessagePart, MessageResource, Modifier, OperationBlock,
     OperationPart, PartContent, RenderedLine, Span, Style, TranscriptNodeKind, UnicodeWidthStr,
     file_change_list_item_text, is_markdown_table_header, line_plain_text,
     looks_like_markdown_table_row, markdown_fence_delimiter, markdown_to_text, owned_line,

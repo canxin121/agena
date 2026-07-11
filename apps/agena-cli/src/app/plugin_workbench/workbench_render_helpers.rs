@@ -24,13 +24,13 @@ pub(in crate::app) fn plugin_policy_sections_text(
                 "missing"
             }
         ),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
     )));
     lines.push(Line::from(""));
     if sections.is_empty() {
         lines.push(Line::from(Span::styled(
             "No plugin entries available.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
         )));
         return Text::from(lines);
     }
@@ -56,7 +56,7 @@ pub(in crate::app) fn plugin_policy_sections_text(
             plugin_workbench_selection_highlight_style()
         } else if selected {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(agena_tui_components::theme::accent_color())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
@@ -82,7 +82,7 @@ pub(in crate::app) fn plugin_policy_sections_text(
                 .as_str(),
                 visible_limit,
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
         )));
     }
     Text::from(lines)
@@ -97,13 +97,13 @@ pub(in crate::app) fn plugin_policy_table_text(
     let Some(section) = dialog.selected_section() else {
         lines.push(Line::from(Span::styled(
             "No plugin selected.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
         )));
         return Text::from(lines);
     };
     lines.push(Line::from(Span::styled(
         clean(section.description.as_str()),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
     )));
     lines.push(Line::from(""));
     let label_width = width.saturating_sub(30).clamp(14, 44) as usize;
@@ -119,17 +119,17 @@ pub(in crate::app) fn plugin_policy_table_text(
             width,
         ),
         Style::default()
-            .fg(Color::Cyan)
+            .fg(agena_tui_components::theme::accent_color())
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(Span::styled(
         "─".repeat(width as usize),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
     )));
     if section.items.is_empty() {
         lines.push(Line::from(Span::styled(
             "No policy rows available.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
         )));
         return Text::from(lines);
     }
@@ -149,7 +149,7 @@ pub(in crate::app) fn plugin_policy_table_text(
             plugin_workbench_selection_highlight_style()
         } else if selected {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(agena_tui_components::theme::accent_color())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
@@ -819,9 +819,7 @@ pub(in crate::app) fn render_plugin_tabs(frame: &mut Frame, area: Rect, selected
             spans.push(Span::raw(" | "));
         }
         let style = if tab == selected {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+            agena_tui_components::theme::selection_style()
         } else {
             Style::default()
         };
@@ -830,8 +828,8 @@ pub(in crate::app) fn render_plugin_tabs(frame: &mut Frame, area: Rect, selected
     render_plugin_panel(frame, area, "Tabs", Text::from(Line::from(spans)), None);
 }
 use super::{
-    Block, Borders, Color, Constraint, Direction, EditorDialogSpec, Frame, FramedSurfaceSpec,
-    Layout, Line, Modifier, Paragraph, PluginConfigActionOverlay, PluginConfigDrilldownOverlay,
+    Block, Borders, Constraint, Direction, EditorDialogSpec, Frame, FramedSurfaceSpec, Layout,
+    Line, Modifier, Paragraph, PluginConfigActionOverlay, PluginConfigDrilldownOverlay,
     PluginConfigSelectionOverlay, PluginDetailTab, PluginPolicyColumn, PluginPolicyStudioOverlay,
     PluginWorkbenchOverlay, PluginWorkbenchPlugin, Rect, SectionedListFocus, Span, Style,
     SurfaceMode, Text, Wrap, clean, compact_config_divider, compact_config_header_line,

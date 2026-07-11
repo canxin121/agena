@@ -101,10 +101,12 @@ pub(in crate::app) fn file_change_marker(kind: FileChangeKind) -> &'static str {
 
 pub(in crate::app) fn file_change_style(kind: FileChangeKind) -> Style {
     match kind {
-        FileChangeKind::Added => Style::default().fg(Color::Green),
-        FileChangeKind::Updated => Style::default().fg(Color::Yellow),
-        FileChangeKind::Deleted => Style::default().fg(Color::Red),
-        FileChangeKind::Moved => Style::default().fg(Color::Cyan),
+        FileChangeKind::Added => Style::default().fg(agena_tui_components::theme::success_color()),
+        FileChangeKind::Updated => {
+            Style::default().fg(agena_tui_components::theme::warning_color())
+        }
+        FileChangeKind::Deleted => Style::default().fg(agena_tui_components::theme::danger_color()),
+        FileChangeKind::Moved => Style::default().fg(agena_tui_components::theme::accent_color()),
     }
 }
 
@@ -119,4 +121,4 @@ pub(in crate::app) fn file_change_list_item_text(
         ui_text::file_change_kind_label(i18n, change.kind)
     )
 }
-use super::{Color, FileChangeKind, I18n, Style, ui_text};
+use super::{FileChangeKind, I18n, Style, ui_text};

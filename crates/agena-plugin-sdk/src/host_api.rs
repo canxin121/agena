@@ -15,7 +15,7 @@ use crate::hooks::{
 };
 pub use crate::host_api_agents::*;
 use crate::identity::{PluginKey, ToolKey};
-use crate::manifest::{PathKind, ToolDefinition};
+use crate::manifest::{PathKind, PluginTuiColor, PluginTuiThemeColors, ToolDefinition};
 
 #[async_trait]
 pub trait HostClient: Send + Sync + 'static {
@@ -1149,7 +1149,7 @@ pub struct HostStatuslineSegment {
     #[serde(default)]
     pub priority: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
+    pub color: Option<PluginTuiColor>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1159,7 +1159,7 @@ pub struct HostStatuslineContributeRequest {
     #[serde(default)]
     pub priority: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
+    pub color: Option<PluginTuiColor>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1190,14 +1190,14 @@ pub struct HostThemePalette {
     pub id: String,
     pub plugin_id: PluginKey,
     pub display_name: String,
-    pub colors: BTreeMap<String, String>,
+    pub colors: PluginTuiThemeColors,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostThemeRegisterRequest {
     pub id: String,
     pub display_name: String,
-    pub colors: BTreeMap<String, String>,
+    pub colors: PluginTuiThemeColors,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

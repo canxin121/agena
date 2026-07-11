@@ -1,5 +1,5 @@
 use super::super::{
-    Color, Line, Modifier, PluginTextDisplayMode, PluginWorkbenchPlugin, Span, Style, Text, clean,
+    Line, Modifier, PluginTextDisplayMode, PluginWorkbenchPlugin, Span, Style, Text, clean,
     command_argument_count, command_schema_and_value, default_value_for_schema, fixed_columns,
     plugin_package_preview, plugin_text_display_mode_label, plugin_text_display_source_label,
     schema_property_count,
@@ -67,7 +67,7 @@ pub(in crate::app) fn plugin_tools_text(plugin: &PluginWorkbenchPlugin) -> Text<
             summary_tools,
             plugin.tools.len(),
         ),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
     ))];
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(

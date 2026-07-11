@@ -29,6 +29,7 @@ pub mod suggestions;
 pub mod surface;
 pub mod text;
 pub mod text_dialog;
+pub mod theme;
 pub mod titles;
 pub mod workbench;
 
@@ -116,6 +117,7 @@ pub use text::{
     truncate_display_text_with_suffix, wrapped_lines_height, wrapped_text_height_for_text,
 };
 pub use text_dialog::{LineTextDialogSpec, TextDialogLine, render_line_text_dialog};
+pub use theme::{ColorScheme, TerminalRgb, ThemeOverrides, ThemePalette};
 pub use titles::title_with_summary;
 pub use workbench::{
     ListWorkbenchDialogSpec, ListWorkbenchPanelState, SectionedWorkbenchDialogSpec,

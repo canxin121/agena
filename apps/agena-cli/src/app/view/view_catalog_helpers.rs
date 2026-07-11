@@ -138,7 +138,7 @@ pub(in crate::app) fn model_catalog_detail_labeled_line(
     DetailTextLine::labeled(
         ui_text::t(i18n, label_key),
         sanitize_display_text(value.as_str()),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
         Style::default(),
     )
 }
@@ -580,7 +580,7 @@ pub(in crate::app) fn model_catalog_source_summary(entry: &CatalogModelResource)
         .unwrap_or_else(|| format!("{:?}", entry.source).to_ascii_lowercase())
 }
 use super::{
-    CatalogModelResource, Color, ComposerItem, DetailTextLine, DetailTextSpec, I18n, Style, Text,
+    CatalogModelResource, ComposerItem, DetailTextLine, DetailTextSpec, I18n, Style, Text,
     build_detail_text, format_key_value_segment, format_tokens_k, join_inline_segments,
     sanitize_display_text, ui_text,
 };

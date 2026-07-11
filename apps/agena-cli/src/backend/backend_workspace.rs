@@ -310,6 +310,15 @@ impl Backend {
         })
     }
 
+    pub fn ui_config(&self) -> agena::config::UiConfig {
+        self.runtime
+            .current_snapshot()
+            .config_resolution()
+            .config
+            .ui
+            .clone()
+    }
+
     pub async fn set_config_setting(
         &self,
         path: &str,

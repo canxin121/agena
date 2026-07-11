@@ -37,6 +37,9 @@ impl App {
                 .into_iter()
                 .find(|palette| palette.id == *theme_id)
         });
+        let base_palette = launch.tui_config.palette(launch.terminal_background);
+        let tui_palette = tui_palette_with_plugin(base_palette, plugin_theme.as_ref());
+        agena_tui_components::theme::set_active_palette(tui_palette);
         let mut app = Self {
             backend,
             i18n: i18n.clone(),
@@ -108,6 +111,23 @@ impl App {
             app.restore_composer_draft(draft);
         }
         app
+    }
+
+    pub(in crate::app) fn refresh_tui_palette_from_runtime(&mut self) {
+        self.launch.tui_config =
+            crate::tui_config::TuiConfig::load(Some(&self.backend.ui_config()));
+        self.plugin_theme = self.launch.tui_config.theme.as_ref().and_then(|theme_id| {
+            self.backend
+                .plugin_theme_palettes()
+                .into_iter()
+                .find(|palette| palette.id == *theme_id)
+        });
+        let base_palette = self
+            .launch
+            .tui_config
+            .palette(self.launch.terminal_background);
+        let palette = tui_palette_with_plugin(base_palette, self.plugin_theme.as_ref());
+        agena_tui_components::theme::set_active_palette(palette);
     }
 
     pub async fn run<B: RatatuiBackend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
@@ -249,10 +269,37 @@ impl App {
         }
     }
 }
+
+fn tui_palette_with_plugin(
+    base: agena_tui_components::ThemePalette,
+    plugin_theme: Option<&agena::plugin::HostThemePalette>,
+) -> agena_tui_components::ThemePalette {
+    let Some(theme) = plugin_theme else {
+        return base;
+    };
+    base.with_overrides(agena_tui_components::ThemeOverrides {
+        muted: tui_plugin_color(theme.colors.muted.as_ref()),
+        accent: tui_plugin_color(theme.colors.accent.as_ref()),
+        info: tui_plugin_color(theme.colors.info.as_ref()),
+        success: tui_plugin_color(theme.colors.success.as_ref()),
+        warning: tui_plugin_color(theme.colors.warning.as_ref()),
+        danger: tui_plugin_color(theme.colors.danger.as_ref()),
+        special: tui_plugin_color(theme.colors.special.as_ref()),
+        selection_fg: tui_plugin_color(theme.colors.selection_fg.as_ref()),
+        selection_bg: tui_plugin_color(theme.colors.selection_bg.as_ref()),
+    })
+}
+
+fn tui_plugin_color(color: Option<&agena_plugin_sdk::PluginTuiColor>) -> Option<Color> {
+    color.map(|color| {
+        agena_tui_components::theme::parse_color(color.as_str())
+            .expect("PluginTuiColor guarantees the canonical TUI color grammar")
+    })
+}
 use crate::app::RatatuiBackend;
 use crate::app::Result;
 use crate::app::{
-    App, BTreeSet, Backend, ComposerQueue, DRAFT_PERSIST_INTERVAL_MS, DraftSlot, DraftStore,
+    App, BTreeSet, Backend, Color, ComposerQueue, DRAFT_PERSIST_INTERVAL_MS, DraftSlot, DraftStore,
     Duration, Editor, Event, EventStream, Focus, HashSet, I18n, Instant, LaunchOptions,
     LayoutCache, PromptHistory, REFRESH_INTERVAL_MS, Route, RunOptionsState, SessionListState,
     StatusLineState, Terminal, TranscriptDetailDefaults, TranscriptState, UI_TICK_MS,

@@ -211,7 +211,10 @@ pub async fn run_embedded(
     load_request: LoadConfigRequest,
     args: TuiLaunchArgs,
 ) -> Result<(), AppError> {
-    let config_locale = resolve_config_locale(&load_request);
+    let bootstrap_config = ConfigLoader::default().load(&load_request).ok();
+    let config_locale = bootstrap_config
+        .as_ref()
+        .and_then(|resolution| resolution.config.ui.locale.clone());
 
     let storage = StorageConfig {
         database_url: args.database_url.clone(),
@@ -220,9 +223,9 @@ pub async fn run_embedded(
     let database_url = storage.resolve_url()?;
     StorageConfig::ensure_parent(database_url.as_str())?;
 
-    let tracing = ConfigLoader::default()
-        .load(&load_request)
-        .map(|resolution| resolution.config.tracing)
+    let tracing = bootstrap_config
+        .as_ref()
+        .map(|resolution| resolution.config.tracing.clone())
         .unwrap_or_default();
     let db = Arc::new(tracing_config::connect_database(database_url.as_str(), &tracing).await?);
     let workspace_root = args.workspace_root.unwrap_or(env::current_dir()?);
@@ -238,15 +241,21 @@ pub async fn run_embedded(
 
     let backend = Backend::new(runtime, db, workspace_root.clone());
     let i18n = I18n::resolve(args.locale.as_deref(), config_locale.as_deref());
-    let tui_config = tui_config::TuiConfig::load();
+    let tui_config = tui_config::TuiConfig::load(
+        bootstrap_config
+            .as_ref()
+            .map(|resolution| &resolution.config.ui),
+    );
     let mut terminal =
         terminal::TerminalGuard::enter().map_err(|error| AppError::Internal(error.to_string()))?;
+    let terminal_background = terminal.background();
     let mut app = App::new(
         backend,
         LaunchOptions {
             initial_session_id: args.session,
             initial_session_search: args.search,
             tui_config,
+            terminal_background,
         },
         i18n,
     );
@@ -290,13 +299,6 @@ fn resolve_tui_log_writer(args: &TuiLaunchArgs) -> Result<TuiLogWriter, AppError
 
     let file = OpenOptions::new().create(true).append(true).open(path)?;
     Ok(TuiLogWriter::File(Arc::new(Mutex::new(file))))
-}
-
-fn resolve_config_locale(load_request: &LoadConfigRequest) -> Option<String> {
-    ConfigLoader::default()
-        .load(load_request)
-        .ok()
-        .and_then(|resolution| resolution.config.ui.locale)
 }
 
 fn default_tui_log_path() -> PathBuf {

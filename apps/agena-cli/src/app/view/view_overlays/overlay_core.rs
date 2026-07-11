@@ -1,8 +1,8 @@
 use super::super::{
-    Alignment, App, Borders, ChoiceOverlay, Color, ConfirmOverlay, FileAttachOverlay, Frame,
-    HelpOverlay, Line, LineTextDialogSpec, ListItem, ListPanelSection, ListPanelSpec, Modifier,
-    Overlay, ParagraphSection, PathBrowserOverlay, PermissionOverlay, PermissionOverlayPage,
-    PickerOverlay, QuestionFlowCustomInputSpec, QuestionFlowDialogMode, QuestionFlowDialogSpec,
+    Alignment, App, Borders, ChoiceOverlay, ConfirmOverlay, FileAttachOverlay, Frame, HelpOverlay,
+    Line, LineTextDialogSpec, ListItem, ListPanelSection, ListPanelSpec, Modifier, Overlay,
+    ParagraphSection, PathBrowserOverlay, PermissionOverlay, PermissionOverlayPage, PickerOverlay,
+    QuestionFlowCustomInputSpec, QuestionFlowDialogMode, QuestionFlowDialogSpec,
     QuestionFlowScreen, Rect, Route, SearchListDialogSpec, SearchPanelsDialogSpec,
     SearchPanelsDialogState, SessionModelChooserOverlay, SessionSearchOverlay, Span,
     StackedDialogSection, StackedDialogSectionHeight, StackedDialogSpec, Style, SurfaceMode, Text,
@@ -257,7 +257,7 @@ impl App {
             &dialog.request,
             "overlay-user-input-footer-question",
         );
-        let nav_color = self.theme_color("flash_info", Color::Cyan);
+        let nav_color = agena_tui_components::theme::info_color();
         let title = user_input_overlay_title(&self.i18n, &dialog.request);
         if dialog.state.screen() == QuestionFlowScreen::Review {
             let nav_body = Text::from(vec![
@@ -266,7 +266,7 @@ impl App {
                         "overlay-user-input-request-id",
                         &crate::fl_args!("request_id" => dialog.request.request_id.clone()),
                     )),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                 )),
                 user_input_nav_line(&self.i18n, dialog, nav_color),
             ]);
@@ -307,7 +307,7 @@ impl App {
                     if answered {
                         Style::default().fg(nav_color)
                     } else {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(agena_tui_components::theme::muted_color())
                     },
                 )));
             }
@@ -370,7 +370,7 @@ impl App {
                     "overlay-user-input-request-id",
                     &crate::fl_args!("request_id" => dialog.request.request_id.clone()),
                 )),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(agena_tui_components::theme::muted_color()),
             )),
             user_input_nav_line(&self.i18n, dialog, nav_color),
         ]);
@@ -405,7 +405,7 @@ impl App {
                     ),
                     question.id
                 )),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(agena_tui_components::theme::muted_color()),
             )),
             Line::from(vec![
                 Span::styled(
@@ -418,7 +418,7 @@ impl App {
                 Span::styled(
                     sanitize_display_text(answer_summary.as_str()),
                     if answer_summary == unanswered {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(agena_tui_components::theme::muted_color())
                     } else {
                         Style::default().fg(nav_color)
                     },
@@ -463,7 +463,7 @@ impl App {
                     if focused {
                         style
                     } else {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(agena_tui_components::theme::muted_color())
                     },
                 )));
             }
@@ -503,7 +503,7 @@ impl App {
                     if custom_selected {
                         custom_style
                     } else {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(agena_tui_components::theme::muted_color())
                     }
                 } else if custom_selected {
                     custom_style
@@ -579,7 +579,7 @@ impl App {
                     option.label.clone().into(),
                     (!option.description.trim().is_empty())
                         .then_some(option.description.clone().into()),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                 )
             })
             .collect::<Vec<ListItem<'static>>>();
@@ -593,7 +593,7 @@ impl App {
                 user_input_submit_label(&self.i18n, &dialog.request),
                 cancel_label
             )),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
         ))]);
         let decision_height = list_panel_height(question.options.len(), 2, 4, 10);
         let footer_height = wrapped_text_height_for_text(&footer, content_width).clamp(1, 2);
@@ -706,7 +706,7 @@ impl App {
                 ui_text::HelpLineKind::Section => TextDialogLine::styled(
                     sanitize_display_text(line.text),
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(agena_tui_components::theme::accent_color())
                         .add_modifier(Modifier::BOLD),
                 ),
                 ui_text::HelpLineKind::Body => {
@@ -726,7 +726,7 @@ impl App {
             (8, 22),
             (1, 2),
             Some(Alignment::Right),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
         );
         render_line_text_dialog(frame, area, surface, &spec);
     }

@@ -236,7 +236,7 @@ pub(in crate::app) fn permission_overlay_body_lines(
             "overlay-permission-fact-risk",
             &crate::fl_args!("value" => permission_risk_label(i18n, dialog.request.risk)),
         ),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
     )));
     lines
 }
@@ -327,7 +327,7 @@ pub(in crate::app) fn append_permission_primary_action_lines(
                     lines,
                     "overlay-permission-field-workspace",
                     workspace_root,
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                 );
             }
         }
@@ -357,7 +357,7 @@ pub(in crate::app) fn append_permission_primary_action_lines(
                     lines,
                     "overlay-permission-field-host",
                     host_label,
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                 );
             }
         }
@@ -373,7 +373,7 @@ pub(in crate::app) fn append_permission_field_line(
 ) {
     lines.push(Line::from(Span::styled(
         sanitize_display_text(ui_text::t(i18n, label_key)),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
     )));
     lines.push(Line::from(Span::styled(
         format!("  {}", sanitize_display_text(value)),
@@ -392,7 +392,7 @@ pub(in crate::app) fn append_permission_secondary_action_lines(
     }
     lines.push(Line::from(Span::styled(
         sanitize_display_text(ui_text::t(i18n, heading_key)),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
     )));
     lines.extend(actions.iter().map(|action| {
         Line::from(Span::styled(
@@ -424,7 +424,7 @@ pub(in crate::app) fn permission_overlay_details_lines(
         &mut lines,
         "overlay-permission-detail-request-id",
         &dialog.request.request_id,
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
     );
     if let Some(source) = dialog.request.source.as_deref() {
         append_permission_field_line(
@@ -432,7 +432,7 @@ pub(in crate::app) fn permission_overlay_details_lines(
             &mut lines,
             "overlay-permission-detail-source",
             source,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
         );
     }
     if let Some(scope) = dialog.request.scope {
@@ -441,7 +441,7 @@ pub(in crate::app) fn permission_overlay_details_lines(
             &mut lines,
             "overlay-permission-detail-scope",
             permission_request_scope_label(i18n, scope),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
         );
     }
     if let Some(operator) = dialog.request.operator.as_deref() {
@@ -450,13 +450,13 @@ pub(in crate::app) fn permission_overlay_details_lines(
             &mut lines,
             "overlay-permission-detail-operator",
             operator,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
         );
     }
     if !dialog.request.trace.is_empty() {
         lines.push(Line::from(Span::styled(
             sanitize_display_text(ui_text::t(i18n, "overlay-permission-detail-trace")),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
         )));
         lines.extend(dialog.request.trace.iter().map(|step| {
             Line::from(Span::styled(
@@ -464,7 +464,7 @@ pub(in crate::app) fn permission_overlay_details_lines(
                     "  {}",
                     sanitize_display_text(permission_trace_step_label(i18n, step))
                 ),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(agena_tui_components::theme::muted_color()),
             ))
         }));
     }
@@ -482,7 +482,7 @@ pub(in crate::app) fn permission_request_scope_label(
     }
 }
 use super::{
-    Color, DetailTextSpec, I18n, Line, Modifier, PermissionAction, PermissionOverlay,
+    DetailTextSpec, I18n, Line, Modifier, PermissionAction, PermissionOverlay,
     PermissionOverlayPage, PermissionRequest, PermissionScope, PermissionStudioAction,
     PermissionStudioItem, PermissionStudioModeTarget, PermissionStudioSectionId,
     ProviderDraftSecretSourceKind, ProviderStudioField, ProviderStudioOverlay, Span, Style,

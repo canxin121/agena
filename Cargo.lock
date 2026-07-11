@@ -255,6 +255,7 @@ dependencies = [
  "image",
  "imagesize",
  "indexmap 2.14.0",
+ "libc",
  "mime_guess",
  "ratatui",
  "regex",

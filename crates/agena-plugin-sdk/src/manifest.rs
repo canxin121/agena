@@ -649,15 +649,100 @@ pub struct PluginTuiStatuslineSegment {
     #[serde(default)]
     pub priority: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
+    pub color: Option<PluginTuiColor>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PluginUiThemePalette {
     pub id: String,
     pub display_name: String,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub colors: BTreeMap<String, String>,
+    #[serde(default)]
+    pub colors: PluginTuiThemeColors,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct PluginTuiColor(String);
+
+impl PluginTuiColor {
+    pub fn new(value: impl Into<String>) -> Result<Self, String> {
+        let value = value.into();
+        if is_tui_color(&value) {
+            Ok(Self(value))
+        } else {
+            Err(format!("invalid TUI color `{value}`"))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl std::str::FromStr for PluginTuiColor {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::new(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for PluginTuiColor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(serde::de::Error::custom)
+    }
+}
+
+fn is_tui_color(value: &str) -> bool {
+    matches!(
+        value,
+        "reset"
+            | "black"
+            | "red"
+            | "green"
+            | "yellow"
+            | "blue"
+            | "magenta"
+            | "cyan"
+            | "gray"
+            | "dark_gray"
+            | "light_red"
+            | "light_green"
+            | "light_yellow"
+            | "light_blue"
+            | "light_magenta"
+            | "light_cyan"
+            | "white"
+    ) || value
+        .strip_prefix('#')
+        .is_some_and(|hex| hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct PluginTuiThemeColors {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub muted: Option<PluginTuiColor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent: Option<PluginTuiColor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub info: Option<PluginTuiColor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub success: Option<PluginTuiColor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<PluginTuiColor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub danger: Option<PluginTuiColor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub special: Option<PluginTuiColor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_fg: Option<PluginTuiColor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_bg: Option<PluginTuiColor>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -671,7 +756,7 @@ pub struct PluginTuiContentBlock {
     #[serde(default)]
     pub priority: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
+    pub color: Option<PluginTuiColor>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -851,6 +936,7 @@ pub struct NetworkAccessSpec {
 
 #[cfg(test)]
 mod tests {
+    use super::{PluginTuiColor, PluginTuiThemeColors};
     use crate::manifest_support::normalize_schema_json;
     use serde_json::json;
 
@@ -877,6 +963,20 @@ mod tests {
         assert_eq!(
             normalized.get("required"),
             Some(&json!(["valid_name", "invalid-name", "WithCaps"]))
+        );
+    }
+
+    #[test]
+    fn tui_theme_schema_rejects_noncanonical_keys_and_colors() {
+        assert!("light_red".parse::<PluginTuiColor>().is_ok());
+        assert!("#12aBcF".parse::<PluginTuiColor>().is_ok());
+        assert!("light-red".parse::<PluginTuiColor>().is_err());
+        assert!("default".parse::<PluginTuiColor>().is_err());
+        assert!(
+            serde_json::from_value::<PluginTuiThemeColors>(json!({
+                "flash_error": "red"
+            }))
+            .is_err()
         );
     }
 }

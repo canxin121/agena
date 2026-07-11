@@ -625,6 +625,7 @@ impl App {
     }
 
     pub(in crate::app) fn refresh_current_route_after_local_edit(&mut self) {
+        self.refresh_tui_palette_from_runtime();
         let route = std::mem::replace(&mut self.current_route, Route::Main);
         self.current_route = self.refresh_restored_route(route);
     }

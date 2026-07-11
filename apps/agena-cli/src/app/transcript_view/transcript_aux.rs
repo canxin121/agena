@@ -28,7 +28,7 @@ pub(in crate::app) fn push_limited_diff_text(
                 "message-tool-output-collapsed",
                 &crate::fl_args!("lines" => preview.omitted_lines as i64),
             ),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
             width,
         );
     }
@@ -43,15 +43,15 @@ pub(in crate::app) fn diff_line_style(line: &str) -> Style {
         || line.starts_with("--- ")
         || line.starts_with("+++ ")
     {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(agena_tui_components::theme::accent_color())
     } else if line.starts_with("@@") {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(agena_tui_components::theme::warning_color())
     } else if line.starts_with('+') {
-        Style::default().fg(Color::Green)
+        Style::default().fg(agena_tui_components::theme::success_color())
     } else if line.starts_with('-') {
-        Style::default().fg(Color::Red)
+        Style::default().fg(agena_tui_components::theme::danger_color())
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(agena_tui_components::theme::muted_color())
     }
 }
 
@@ -96,6 +96,6 @@ pub(in crate::app) fn gateway_model_tool_name(name: &str) -> Option<&'static str
     }
 }
 use super::{
-    Color, I18n, RenderedLine, Style, TOOL_EXPANDED_PREVIEW_CHARS, TOOL_EXPANDED_PREVIEW_LINES,
+    I18n, RenderedLine, Style, TOOL_EXPANDED_PREVIEW_CHARS, TOOL_EXPANDED_PREVIEW_LINES,
     ToolInvocation, push_multiline, push_wrapped_line, tool_output_preview_with_limits,
 };

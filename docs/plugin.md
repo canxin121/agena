@@ -821,6 +821,15 @@ Manifest 顶层 `commands` 是 Command Palette 和 slash command 可发现的 pl
 
 TUI 和 Studio 的 UI contribution 类型不同，是有意的边界：TUI 只处理可在终端稳定渲染的状态栏、主题和文本块；Studio 可以渲染 manifest commands、controls、views，并把用户操作映射为统一的 `PluginUiAction`。
 
+TUI theme palette 使用语义色键，而不是要求插件为每个 widget 指定颜色。支持的键为
+`muted`、`accent`、`info`、`success`、`warning`、`danger`、`special`、
+`selection_fg` 和 `selection_bg`。颜色值只能使用 `reset`、标准 ANSI 名称、
+snake_case 的亮色名称（例如 `light_red`、`dark_gray`）或 `#RRGGBB`。主题格式只接受
+上述新 schema，不包含旧键名、别名或兼容映射；未知键和非法颜色会使 theme 反序列化
+失败。未提供的键使用 Agena 针对当前亮色/暗色终端选择的高对比度默认值。
+`statusline_segments.color`、`content_blocks.color` 和动态 statusline/theme host API 使用
+同一个严格颜色类型，不再接受自由格式字符串。
+
 Studio control 的 `kind` 当前支持：
 
 | kind | 渲染和提交 |

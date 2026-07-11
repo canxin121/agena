@@ -43,10 +43,11 @@ pub use manifest::{
     HookSubscription, HostCapability, InputNetworkSpec, InputPathSpec, NetworkAccessSpec,
     PathAccessSpec, PathKind, PluginCommandDefinition, PluginManifest, PluginStudioCommand,
     PluginStudioControl, PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView,
-    PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions, PluginUiAction,
-    PluginUiContributions, PluginUiThemePalette, ToolDefinition, ToolDescriptionMode,
-    ToolDisplayPreset, ToolInput, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode,
-    ToolTag, TransportKind, UiTextDisplayMode, normalize_tool_tag_name,
+    PluginTuiColor, PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiThemeColors,
+    PluginTuiUiContributions, PluginUiAction, PluginUiContributions, PluginUiThemePalette,
+    ToolDefinition, ToolDescriptionMode, ToolDisplayPreset, ToolInput, ToolResultPolicy,
+    ToolResultRenderKind, ToolStreamingMode, ToolTag, TransportKind, UiTextDisplayMode,
+    normalize_tool_tag_name,
 };
 pub use plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
 pub use schemars::JsonSchema;

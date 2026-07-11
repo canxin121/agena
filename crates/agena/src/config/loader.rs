@@ -156,3 +156,106 @@ fn home_dir(env: &impl ConfigEnvironment) -> Option<PathBuf> {
         .or_else(|| env.var("USERPROFILE"))
         .map(PathBuf::from)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::BTreeMap,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use super::*;
+    use crate::config::TuiColorSchemeConfig;
+
+    #[derive(Clone, Default)]
+    struct TestEnvironment {
+        values: BTreeMap<String, String>,
+    }
+
+    impl ConfigEnvironment for TestEnvironment {
+        fn var(&self, key: &str) -> Option<String> {
+            self.values.get(key).cloned()
+        }
+
+        fn vars(&self) -> Vec<(String, String)> {
+            self.values
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect()
+        }
+    }
+
+    fn test_root() -> PathBuf {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        std::env::temp_dir().join(format!(
+            "agena-tui-theme-config-{}-{}",
+            std::process::id(),
+            NEXT_ID.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    #[test]
+    fn loads_tui_appearance_from_canonical_config() {
+        let root = test_root();
+        let config_dir = root.join("agena");
+        std::fs::create_dir_all(&config_dir).expect("create test config directory");
+        std::fs::write(
+            config_dir.join("agena.json"),
+            r#"{"ui":{"tui":{"color_scheme":"light","theme":"paper"}}}"#,
+        )
+        .expect("write test config");
+        let env = TestEnvironment {
+            values: BTreeMap::from([("HOME".to_owned(), root.display().to_string())]),
+        };
+        let resolution = ConfigLoader::new(env)
+            .load(&LoadConfigRequest {
+                workspace_root: Some(root.join("workspace")),
+                ..LoadConfigRequest::default()
+            })
+            .expect("load config");
+        assert_eq!(
+            resolution.config.ui.tui.color_scheme,
+            TuiColorSchemeConfig::Light
+        );
+        assert_eq!(resolution.config.ui.tui.theme.as_deref(), Some("paper"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tui_environment_overrides_are_validated_and_resolved() {
+        let root = test_root();
+        let env = TestEnvironment {
+            values: BTreeMap::from([
+                ("HOME".to_owned(), root.display().to_string()),
+                ("AGENA_TUI_COLOR_SCHEME".to_owned(), "dark".to_owned()),
+                ("AGENA_TUI_THEME".to_owned(), "night-owl".to_owned()),
+            ]),
+        };
+        let resolution = ConfigLoader::new(env)
+            .load(&LoadConfigRequest {
+                workspace_root: Some(root.join("workspace")),
+                ..LoadConfigRequest::default()
+            })
+            .expect("load config");
+        assert_eq!(
+            resolution.config.ui.tui.color_scheme,
+            TuiColorSchemeConfig::Dark
+        );
+        assert_eq!(resolution.config.ui.tui.theme.as_deref(), Some("night-owl"));
+
+        let invalid_env = TestEnvironment {
+            values: BTreeMap::from([
+                ("HOME".to_owned(), root.display().to_string()),
+                ("AGENA_TUI_COLOR_SCHEME".to_owned(), "sepia".to_owned()),
+            ]),
+        };
+        assert!(
+            ConfigLoader::new(invalid_env)
+                .load(&LoadConfigRequest {
+                    workspace_root: Some(root.join("workspace")),
+                    ..LoadConfigRequest::default()
+                })
+                .is_err()
+        );
+    }
+}

@@ -1,7 +1,7 @@
 use super::super::{
-    COLLAPSED_ACTIVITY_VISIBLE_TAIL, Color, ExecutionStatus, I18n, Local, MessagePart,
-    MessageResource, MessageStatus, Modifier, PartContent, RenderedLine, RenderedTranscriptNode,
-    RequestPart, SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
+    COLLAPSED_ACTIVITY_VISIBLE_TAIL, ExecutionStatus, I18n, Local, MessagePart, MessageResource,
+    MessageStatus, Modifier, PartContent, RenderedLine, RenderedTranscriptNode, RequestPart,
+    SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
     ToolOutputPreview, TranscriptDetailDefaults, TranscriptNodeKey, TranscriptNodeKind,
     UnicodeWidthStr, activity_status_icon, concise_text, format_timestamp, push_label_value,
     push_markdown, push_multiline, push_section_heading, push_single_line, push_wrapped_line,
@@ -414,7 +414,7 @@ pub(in crate::app) fn render_part_node(
                     out,
                     "  thinking",
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(agena_tui_components::theme::muted_color())
                         .add_modifier(Modifier::BOLD),
                     width,
                 );
@@ -422,7 +422,7 @@ pub(in crate::app) fn render_part_node(
                     out,
                     "    ",
                     summary.as_str(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                     width,
                 );
             } else {
@@ -430,7 +430,7 @@ pub(in crate::app) fn render_part_node(
                     out,
                     "  ",
                     thinking_collapsed_summary(part.status, summary.as_str()).as_str(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                     width,
                 );
             }
@@ -468,7 +468,13 @@ pub(in crate::app) fn render_part_node(
                     "message" => error.message.as_str(),
                 ),
             );
-            push_multiline(out, "  ", &text, Style::default().fg(Color::Red), width);
+            push_multiline(
+                out,
+                "  ",
+                &text,
+                Style::default().fg(agena_tui_components::theme::danger_color()),
+                width,
+            );
             RenderedNodeDraft {
                 key: TranscriptNodeKey::MessagePart {
                     message_id: message.id,
@@ -485,7 +491,7 @@ pub(in crate::app) fn render_part_node(
                 out,
                 &format!("  {}", ui_text::t(i18n, "message-attachments")),
                 Style::default()
-                    .fg(Color::Magenta)
+                    .fg(agena_tui_components::theme::special_color())
                     .add_modifier(Modifier::BOLD),
                 width,
             );

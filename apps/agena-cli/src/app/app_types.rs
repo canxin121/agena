@@ -89,7 +89,7 @@ pub(super) const PLUGIN_UI_PRESENTATION_DEFAULT_MODE_PATH: &str =
     "plugins.policy.ui_presentation.default_mode";
 pub(super) const PROVIDER_DEFAULT_WIZARD_INHERIT: &str = "__agena_default__";
 
-pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 23] = [
+pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 25] = [
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigProviders,
         path: "providers.default",
@@ -109,6 +109,20 @@ pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 23] = [
         path: "ui.locale",
         label_key: "settings-field-ui-locale-label",
         description_key: "settings-field-ui-locale-description",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigUi,
+        path: "ui.tui.color_scheme",
+        label_key: "settings-field-tui-color-scheme-label",
+        description_key: "settings-field-tui-color-scheme-description",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigUi,
+        path: "ui.tui.theme",
+        label_key: "settings-field-tui-theme-label",
+        description_key: "settings-field-tui-theme-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
@@ -289,6 +303,7 @@ pub struct LaunchOptions {
     pub initial_session_id: Option<i64>,
     pub initial_session_search: Option<String>,
     pub tui_config: TuiConfig,
+    pub terminal_background: Option<agena_tui_components::TerminalRgb>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

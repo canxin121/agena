@@ -212,6 +212,70 @@ Prometheus-style text metrics，包括：
 - process uptime。
 - build info。
 
+## 用量统计
+
+### `GET /api/v1/usage`
+
+按当前 workspace 聚合 assistant 消息中记录的模型用量。返回总费用、Token、调用次数、会话数、缓存命中率，以及按日期、provider、model 和 session 的多维明细。未直接返回费用的调用会使用 Agena 的内置模型价格表估算，并通过 `recorded_cost_usd`、`estimated_cost_usd` 和 `unpriced_runs` 区分数据来源。
+
+常用 query 参数：
+
+```text
+period=today|yesterday|last_7_days|last_14_days|last_30_days|last_90_days|month_to_date|year_to_date|all_time
+from=YYYY-MM-DD|RFC3339
+to=YYYY-MM-DD|RFC3339
+provider=openai,anthropic
+model=gpt-5,claude-sonnet-4
+session=12,35
+include_subagents=true|false
+timezone_offset_minutes=480
+```
+
+- `from` 或 `to` 存在时使用自定义范围，并覆盖 `period` 的时间窗口。
+- `provider`、`model` 和 `session` 支持逗号分隔的精确筛选。
+- `timezone_offset_minutes` 控制预设周期的日/月/年边界和 `by_day` 分桶；范围是 `-1439..=1439`。
+- `include_subagents` 默认为 `true`。
+
+示例：
+
+```bash
+curl 'http://127.0.0.1:3210/api/v1/usage?period=last_30_days&provider=openai&include_subagents=false&timezone_offset_minutes=480'
+```
+
+响应中的派生指标包括：
+
+```json
+{
+  "period": "last_30_days",
+  "timezone_offset_minutes": 480,
+  "totals": {
+    "runs": 42,
+    "sessions": 8,
+    "total_tokens": 1234567,
+    "cache_hit_rate": 0.73,
+    "total_cost_usd": 12.34,
+    "recorded_cost_usd": 8.1,
+    "estimated_cost_usd": 4.24,
+    "unpriced_runs": 0
+  },
+  "active_days": 11,
+  "average_cost_per_run_usd": 0.2938,
+  "average_tokens_per_run": 29394.45,
+  "average_cost_per_active_day_usd": 1.1218,
+  "average_tokens_per_active_day": 112233.36,
+  "peak_cost_date": "2026-07-08",
+  "peak_cost_usd": 3.12,
+  "peak_tokens_date": "2026-07-09",
+  "peak_tokens": 345678,
+  "by_day": [],
+  "by_provider": [],
+  "by_model": [],
+  "by_session": []
+}
+```
+
+TUI 可通过 `/usage`、`/stats`、`/analytics` 或非编辑状态下的 `U` 打开交互式统计页。页面支持周期切换、provider/model 筛选、subagent 开关、费用/Token/调用次数排序，以及 Overview、Daily、Providers、Models、Sessions 五种视图。
+
 ## 错误格式
 
 REST handler 有两类错误 envelope。

@@ -108,6 +108,20 @@ pub struct UsageStatsHttpQuery {
     pub from: Option<String>,
     #[serde(default)]
     pub to: Option<String>,
+    /// Comma-separated provider ids to include.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Comma-separated model ids to include.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Comma-separated session ids to include.
+    #[serde(default)]
+    pub session: Option<String>,
+    #[serde(default)]
+    pub include_subagents: Option<bool>,
+    /// Fixed UTC offset used for preset boundaries and daily buckets.
+    #[serde(default)]
+    pub timezone_offset_minutes: Option<i32>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -391,6 +405,16 @@ pub async fn get_usage_stats(
 }
 
 fn usage_stats_query_from_http(query: UsageStatsHttpQuery) -> Result<UsageStatsQuery, ServerError> {
+    let timezone_offset_minutes = query.timezone_offset_minutes.unwrap_or_default();
+    if !(-1_439..=1_439).contains(&timezone_offset_minutes) {
+        return Err(ServerError::BadRequest(
+            "timezone_offset_minutes must be between -1439 and 1439".to_string(),
+        ));
+    }
+    let provider_ids = parse_usage_csv(query.provider.as_deref());
+    let model_ids = parse_usage_csv(query.model.as_deref());
+    let session_ids = parse_usage_session_ids(query.session.as_deref())?;
+    let include_subagents = query.include_subagents.unwrap_or(true);
     let has_custom_range = query.from.is_some() || query.to.is_some();
     if has_custom_range {
         let from = query
@@ -411,13 +435,37 @@ fn usage_stats_query_from_http(query: UsageStatsHttpQuery) -> Result<UsageStatsQ
                 "from must be earlier than or equal to to".to_string(),
             ));
         }
-        return Ok(UsageStatsQuery::custom(from, to));
+        return Ok(UsageStatsQuery::custom(from, to)
+            .with_timezone_offset(timezone_offset_minutes)
+            .with_filters(provider_ids, model_ids, session_ids, include_subagents));
     }
 
-    Ok(UsageStatsQuery::for_period(
+    Ok(UsageStatsQuery::for_period_with_offset(
         query.period.unwrap_or(UsagePeriod::Last7Days),
         chrono::Utc::now(),
-    ))
+        timezone_offset_minutes,
+    )
+    .with_filters(provider_ids, model_ids, session_ids, include_subagents))
+}
+
+fn parse_usage_csv(raw: Option<&str>) -> Vec<String> {
+    raw.unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn parse_usage_session_ids(raw: Option<&str>) -> Result<Vec<i64>, ServerError> {
+    parse_usage_csv(raw)
+        .into_iter()
+        .map(|value| {
+            value.parse::<i64>().map_err(|_| {
+                ServerError::BadRequest(format!("invalid session id `{value}` in usage filter"))
+            })
+        })
+        .collect()
 }
 
 fn parse_usage_datetime(
@@ -445,6 +493,49 @@ fn parse_usage_datetime(
     Err(ServerError::BadRequest(format!(
         "invalid usage date `{raw}`; expected YYYY-MM-DD or RFC3339"
     )))
+}
+
+#[cfg(test)]
+mod usage_query_tests {
+    use super::{ServerError, UsagePeriod, UsageStatsHttpQuery, usage_stats_query_from_http};
+
+    #[test]
+    fn http_usage_query_maps_filters_and_timezone() {
+        let query = usage_stats_query_from_http(UsageStatsHttpQuery {
+            period: Some(UsagePeriod::Last14Days),
+            provider: Some("openai, anthropic".to_string()),
+            model: Some("gpt-5".to_string()),
+            session: Some("12,35".to_string()),
+            include_subagents: Some(false),
+            timezone_offset_minutes: Some(480),
+            ..UsageStatsHttpQuery::default()
+        })
+        .expect("valid usage query");
+
+        assert_eq!(query.period, UsagePeriod::Last14Days);
+        assert_eq!(query.provider_ids, ["anthropic", "openai"]);
+        assert_eq!(query.model_ids, ["gpt-5"]);
+        assert_eq!(query.session_ids, [12, 35]);
+        assert!(!query.include_subagents);
+        assert_eq!(query.timezone_offset_minutes, 480);
+    }
+
+    #[test]
+    fn http_usage_query_rejects_invalid_timezone_and_session() {
+        let timezone_error = usage_stats_query_from_http(UsageStatsHttpQuery {
+            timezone_offset_minutes: Some(1_440),
+            ..UsageStatsHttpQuery::default()
+        })
+        .expect_err("invalid timezone");
+        assert!(matches!(timezone_error, ServerError::BadRequest(_)));
+
+        let session_error = usage_stats_query_from_http(UsageStatsHttpQuery {
+            session: Some("12,nope".to_string()),
+            ..UsageStatsHttpQuery::default()
+        })
+        .expect_err("invalid session id");
+        assert!(matches!(session_error, ServerError::BadRequest(_)));
+    }
 }
 
 pub async fn reload_runtime(

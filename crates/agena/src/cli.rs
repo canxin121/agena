@@ -187,9 +187,13 @@ pub struct CostArgs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum UsagePeriodArg {
     Today,
+    Yesterday,
     Week,
+    TwoWeeks,
     ThirtyDays,
+    NinetyDays,
     Month,
+    Year,
     All,
 }
 
@@ -197,9 +201,13 @@ impl UsagePeriodArg {
     fn into_usage_period(self) -> UsagePeriod {
         match self {
             Self::Today => UsagePeriod::Today,
+            Self::Yesterday => UsagePeriod::Yesterday,
             Self::Week => UsagePeriod::Last7Days,
+            Self::TwoWeeks => UsagePeriod::Last14Days,
             Self::ThirtyDays => UsagePeriod::Last30Days,
+            Self::NinetyDays => UsagePeriod::Last90Days,
             Self::Month => UsagePeriod::MonthToDate,
+            Self::Year => UsagePeriod::YearToDate,
             Self::All => UsagePeriod::AllTime,
         }
     }
@@ -216,6 +224,21 @@ pub struct UsageArgs {
     /// End of a custom range. Accepts YYYY-MM-DD or RFC3339.
     #[arg(long)]
     pub to: Option<String>,
+    /// Only include these provider ids (repeat or use comma-separated values).
+    #[arg(long, value_delimiter = ',')]
+    pub provider: Vec<String>,
+    /// Only include these model ids (repeat or use comma-separated values).
+    #[arg(long, value_delimiter = ',')]
+    pub model: Vec<String>,
+    /// Only include these session ids (repeat or use comma-separated values).
+    #[arg(long, value_delimiter = ',')]
+    pub session: Vec<i64>,
+    /// Include subagent sessions in the report.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub include_subagents: bool,
+    /// Fixed UTC offset in minutes for calendar windows and daily buckets.
+    #[arg(long, default_value_t = 0, value_parser = -1439..=1439)]
+    pub timezone_offset_minutes: i32,
     #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }

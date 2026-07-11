@@ -1,6 +1,16 @@
 use anyhow::{Context, anyhow};
 
 impl Backend {
+    pub async fn usage_stats(
+        &self,
+        query: agena::session::UsageStatsQuery,
+    ) -> Result<agena::session::UsageStats> {
+        self.session_manager()?
+            .usage_stats(query)
+            .await
+            .context("failed to load usage statistics")
+    }
+
     pub async fn list_child_sessions(&self, parent_id: i64) -> Result<Vec<SessionResource>> {
         let workspace_id = self.current_workspace_id().await?;
         self.list_sessions_query(ListSessionsParams {

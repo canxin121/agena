@@ -60,6 +60,7 @@ impl App {
             CommandId::Status => {
                 self.flash_success(self.current_runtime_status_summary());
             }
+            CommandId::Usage => self.open_usage_dashboard(args),
             CommandId::Btw => self.handle_btw_command(args),
             CommandId::Queue => self.handle_queue_command(args),
         }

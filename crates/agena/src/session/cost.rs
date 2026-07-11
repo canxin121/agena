@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Datelike, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::message::{Message, MessageUsage};
@@ -410,11 +410,17 @@ impl SessionCostSummary {
 #[serde(rename_all = "snake_case")]
 pub enum UsagePeriod {
     Today,
+    Yesterday,
     #[serde(rename = "last_7_days")]
     Last7Days,
+    #[serde(rename = "last_14_days")]
+    Last14Days,
     #[serde(rename = "last_30_days")]
     Last30Days,
+    #[serde(rename = "last_90_days")]
+    Last90Days,
     MonthToDate,
+    YearToDate,
     AllTime,
 }
 
@@ -422,9 +428,13 @@ impl UsagePeriod {
     pub fn label(self) -> &'static str {
         match self {
             Self::Today => "today",
+            Self::Yesterday => "yesterday",
             Self::Last7Days => "last_7_days",
+            Self::Last14Days => "last_14_days",
             Self::Last30Days => "last_30_days",
+            Self::Last90Days => "last_90_days",
             Self::MonthToDate => "month_to_date",
+            Self::YearToDate => "year_to_date",
             Self::AllTime => "all_time",
         }
     }
@@ -435,21 +445,53 @@ pub struct UsageStatsQuery {
     pub period: UsagePeriod,
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,
+    pub provider_ids: Vec<String>,
+    pub model_ids: Vec<String>,
+    pub session_ids: Vec<i64>,
+    pub include_subagents: bool,
+    pub timezone_offset_minutes: i32,
 }
 
 impl UsageStatsQuery {
     pub fn for_period(period: UsagePeriod, now: DateTime<Utc>) -> Self {
-        let from = match period {
-            UsagePeriod::Today => Some(start_of_day(now)),
-            UsagePeriod::Last7Days => Some(now - Duration::days(7)),
-            UsagePeriod::Last30Days => Some(now - Duration::days(30)),
-            UsagePeriod::MonthToDate => Some(start_of_month(now)),
-            UsagePeriod::AllTime => None,
+        Self::for_period_with_offset(period, now, 0)
+    }
+
+    /// Build a calendar-aligned reporting window in the caller's timezone.
+    /// The offset is deliberately explicit so REST and TUI clients get the
+    /// same day boundaries instead of inheriting the server process timezone.
+    pub fn for_period_with_offset(
+        period: UsagePeriod,
+        now: DateTime<Utc>,
+        timezone_offset_minutes: i32,
+    ) -> Self {
+        let timezone_offset_minutes = clamp_timezone_offset(timezone_offset_minutes);
+        let offset = fixed_offset(timezone_offset_minutes);
+        let local_now = now.with_timezone(&offset);
+        let today = start_of_local_day(local_now, offset);
+        let (from, to) = match period {
+            UsagePeriod::Today => (Some(today), Some(now)),
+            UsagePeriod::Yesterday => (
+                Some(today - Duration::days(1)),
+                Some(today - Duration::milliseconds(1)),
+            ),
+            UsagePeriod::Last7Days => (Some(today - Duration::days(6)), Some(now)),
+            UsagePeriod::Last14Days => (Some(today - Duration::days(13)), Some(now)),
+            UsagePeriod::Last30Days => (Some(today - Duration::days(29)), Some(now)),
+            UsagePeriod::Last90Days => (Some(today - Duration::days(89)), Some(now)),
+            UsagePeriod::MonthToDate => (Some(start_of_local_month(local_now, offset)), Some(now)),
+            UsagePeriod::YearToDate => (Some(start_of_local_year(local_now, offset)), Some(now)),
+            UsagePeriod::AllTime => (None, Some(now)),
         };
         Self {
             period,
             from,
-            to: Some(now),
+            to,
+            provider_ids: Vec::new(),
+            model_ids: Vec::new(),
+            session_ids: Vec::new(),
+            include_subagents: true,
+            timezone_offset_minutes,
         }
     }
 
@@ -458,7 +500,40 @@ impl UsageStatsQuery {
             period: UsagePeriod::AllTime,
             from,
             to,
+            provider_ids: Vec::new(),
+            model_ids: Vec::new(),
+            session_ids: Vec::new(),
+            include_subagents: true,
+            timezone_offset_minutes: 0,
         }
+    }
+
+    pub fn with_timezone_offset(mut self, timezone_offset_minutes: i32) -> Self {
+        self.timezone_offset_minutes = clamp_timezone_offset(timezone_offset_minutes);
+        self
+    }
+
+    pub fn with_filters(
+        mut self,
+        provider_ids: Vec<String>,
+        model_ids: Vec<String>,
+        session_ids: Vec<i64>,
+        include_subagents: bool,
+    ) -> Self {
+        self.provider_ids = normalized_filters(provider_ids);
+        self.model_ids = normalized_filters(model_ids);
+        self.session_ids = session_ids;
+        self.session_ids.sort_unstable();
+        self.session_ids.dedup();
+        self.include_subagents = include_subagents;
+        self
+    }
+
+    pub fn matches_record(&self, record: &UsageStatRecord) -> bool {
+        (self.include_subagents || !record.is_subagent)
+            && (self.session_ids.is_empty() || self.session_ids.contains(&record.session_id))
+            && matches_text_filter(self.provider_ids.as_slice(), record.provider_id.as_str())
+            && matches_text_filter(self.model_ids.as_slice(), record.model_id.as_str())
     }
 }
 
@@ -504,7 +579,9 @@ impl UsageTotals {
         self.total_tokens = self
             .input_tokens
             .saturating_add(self.output_tokens)
-            .saturating_add(self.reasoning_tokens);
+            .saturating_add(self.reasoning_tokens)
+            .saturating_add(self.cache_write_tokens)
+            .saturating_add(self.cache_read_tokens);
         self.cache_input_tokens = self
             .input_tokens
             .saturating_add(self.cache_write_tokens)
@@ -553,7 +630,17 @@ pub struct UsageStats {
     pub period_label: String,
     pub from: Option<DateTime<Utc>>,
     pub to: Option<DateTime<Utc>>,
+    pub timezone_offset_minutes: i32,
     pub totals: UsageTotals,
+    pub active_days: u64,
+    pub average_cost_per_run_usd: f64,
+    pub average_tokens_per_run: f64,
+    pub average_cost_per_active_day_usd: f64,
+    pub average_tokens_per_active_day: f64,
+    pub peak_cost_date: Option<String>,
+    pub peak_cost_usd: f64,
+    pub peak_tokens_date: Option<String>,
+    pub peak_tokens: u64,
     pub by_day: Vec<UsageDailyBreakdown>,
     pub by_provider: Vec<ProviderUsageBreakdown>,
     pub by_model: Vec<ModelUsageBreakdown>,
@@ -629,7 +716,7 @@ pub fn summarize_usage_records(
     let mut by_model: BTreeMap<(String, String), UsageTotalsAccumulator> = BTreeMap::new();
     let mut by_session: BTreeMap<i64, SessionUsageAccumulator> = BTreeMap::new();
 
-    for record in records {
+    for record in records.iter().filter(|record| query.matches_record(record)) {
         totals.fold(
             record.session_id,
             &record.provider_id,
@@ -638,7 +725,10 @@ pub fn summarize_usage_records(
         );
 
         by_day
-            .entry(record.created_at.format("%Y-%m-%d").to_string())
+            .entry(usage_date_key(
+                record.created_at,
+                query.timezone_offset_minutes,
+            ))
             .or_insert_with(|| UsageTotalsAccumulator {
                 totals: UsageTotals::default(),
                 sessions: BTreeSet::new(),
@@ -720,20 +810,45 @@ pub fn summarize_usage_records(
         .collect::<Vec<_>>();
     by_session.sort_by(compare_usage_totals_desc);
 
+    let by_day = by_day
+        .into_iter()
+        .map(|(date, builder)| UsageDailyBreakdown {
+            date,
+            totals: builder.into_totals(),
+        })
+        .collect::<Vec<_>>();
+    let active_days = by_day.len() as u64;
+    let peak_cost = by_day.iter().max_by(|left, right| {
+        left.totals
+            .total_cost_usd
+            .partial_cmp(&right.totals.total_cost_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let peak_tokens = by_day.iter().max_by_key(|day| day.totals.total_tokens);
+    let totals = totals.into_totals();
+
     UsageStats {
         generated_at,
         period: query.period,
         period_label: query.period.label().to_string(),
         from: query.from.to_owned(),
         to: query.to.to_owned(),
-        totals: totals.into_totals(),
-        by_day: by_day
-            .into_iter()
-            .map(|(date, builder)| UsageDailyBreakdown {
-                date,
-                totals: builder.into_totals(),
-            })
-            .collect(),
+        timezone_offset_minutes: query.timezone_offset_minutes,
+        active_days,
+        average_cost_per_run_usd: safe_average(totals.total_cost_usd, totals.runs),
+        average_tokens_per_run: safe_average(totals.total_tokens as f64, totals.runs),
+        average_cost_per_active_day_usd: safe_average(totals.total_cost_usd, active_days),
+        average_tokens_per_active_day: safe_average(totals.total_tokens as f64, active_days),
+        peak_cost_date: peak_cost.map(|day| day.date.clone()),
+        peak_cost_usd: peak_cost
+            .map(|day| day.totals.total_cost_usd)
+            .unwrap_or_default(),
+        peak_tokens_date: peak_tokens.map(|day| day.date.clone()),
+        peak_tokens: peak_tokens
+            .map(|day| day.totals.total_tokens)
+            .unwrap_or_default(),
+        totals,
+        by_day,
         by_provider,
         by_model,
         by_session,
@@ -835,20 +950,87 @@ pub fn summarize(messages: &[Message]) -> SessionCostSummary {
     }
 }
 
-fn start_of_day(now: DateTime<Utc>) -> DateTime<Utc> {
-    now.date_naive()
-        .and_hms_opt(0, 0, 0)
-        .expect("midnight is valid")
-        .and_utc()
+fn start_of_local_day(now: DateTime<FixedOffset>, offset: FixedOffset) -> DateTime<Utc> {
+    offset
+        .from_local_datetime(
+            &now.date_naive()
+                .and_hms_opt(0, 0, 0)
+                .expect("midnight is valid"),
+        )
+        .single()
+        .expect("fixed offsets have unambiguous local datetimes")
+        .with_timezone(&Utc)
 }
 
-fn start_of_month(now: DateTime<Utc>) -> DateTime<Utc> {
-    now.date_naive()
-        .with_day(1)
-        .expect("day 1 is valid")
-        .and_hms_opt(0, 0, 0)
-        .expect("midnight is valid")
-        .and_utc()
+fn start_of_local_month(now: DateTime<FixedOffset>, offset: FixedOffset) -> DateTime<Utc> {
+    offset
+        .from_local_datetime(
+            &now.date_naive()
+                .with_day(1)
+                .expect("day 1 is valid")
+                .and_hms_opt(0, 0, 0)
+                .expect("midnight is valid"),
+        )
+        .single()
+        .expect("fixed offsets have unambiguous local datetimes")
+        .with_timezone(&Utc)
+}
+
+fn start_of_local_year(now: DateTime<FixedOffset>, offset: FixedOffset) -> DateTime<Utc> {
+    offset
+        .from_local_datetime(
+            &now.date_naive()
+                .with_month(1)
+                .and_then(|date| date.with_day(1))
+                .expect("January 1 is valid")
+                .and_hms_opt(0, 0, 0)
+                .expect("midnight is valid"),
+        )
+        .single()
+        .expect("fixed offsets have unambiguous local datetimes")
+        .with_timezone(&Utc)
+}
+
+fn usage_date_key(timestamp: DateTime<Utc>, timezone_offset_minutes: i32) -> String {
+    timestamp
+        .with_timezone(&fixed_offset(timezone_offset_minutes))
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+fn fixed_offset(timezone_offset_minutes: i32) -> FixedOffset {
+    FixedOffset::east_opt(clamp_timezone_offset(timezone_offset_minutes) * 60)
+        .expect("clamped timezone offset is valid")
+}
+
+fn clamp_timezone_offset(timezone_offset_minutes: i32) -> i32 {
+    timezone_offset_minutes.clamp(-1_439, 1_439)
+}
+
+fn normalized_filters(filters: Vec<String>) -> Vec<String> {
+    let mut filters = filters
+        .into_iter()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    filters.sort();
+    filters.dedup();
+    filters
+}
+
+fn matches_text_filter(filters: &[String], value: &str) -> bool {
+    filters.is_empty()
+        || filters
+            .iter()
+            .any(|filter| value.eq_ignore_ascii_case(filter))
+}
+
+fn safe_average(total: f64, count: u64) -> f64 {
+    if count == 0 {
+        0.0
+    } else {
+        total / count as f64
+    }
 }
 
 fn ratio(numerator: u64, denominator: u64) -> f64 {
@@ -870,4 +1052,113 @@ fn format_count(n: u64) -> String {
         out.push(*b as char);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{TimeZone, Utc};
+
+    use super::{UsagePeriod, UsageStatRecord, UsageStatsQuery, summarize_usage_records};
+    use crate::message::MessageUsage;
+
+    fn record(
+        session_id: i64,
+        timestamp: chrono::DateTime<Utc>,
+        provider: &str,
+        model: &str,
+        is_subagent: bool,
+    ) -> UsageStatRecord {
+        UsageStatRecord {
+            session_id,
+            session_title: format!("session {session_id}"),
+            is_subagent,
+            created_at: timestamp,
+            provider_id: provider.to_string(),
+            model_id: model.to_string(),
+            usage: MessageUsage {
+                input_tokens: 100,
+                output_tokens: 20,
+                reasoning_tokens: 5,
+                cache_write_tokens: 10,
+                cache_read_tokens: 40,
+                total_cost: 0.25,
+            },
+        }
+    }
+
+    #[test]
+    fn period_boundaries_follow_the_requested_timezone() {
+        let now = Utc.with_ymd_and_hms(2026, 7, 11, 3, 30, 0).unwrap();
+        let today = UsageStatsQuery::for_period_with_offset(UsagePeriod::Today, now, 480);
+        assert_eq!(
+            today.from,
+            Some(Utc.with_ymd_and_hms(2026, 7, 10, 16, 0, 0).unwrap())
+        );
+        assert_eq!(today.to, Some(now));
+
+        let yesterday = UsageStatsQuery::for_period_with_offset(UsagePeriod::Yesterday, now, 480);
+        assert_eq!(
+            yesterday.from,
+            Some(Utc.with_ymd_and_hms(2026, 7, 9, 16, 0, 0).unwrap())
+        );
+        assert_eq!(
+            yesterday.to,
+            Some(
+                Utc.with_ymd_and_hms(2026, 7, 10, 15, 59, 59).unwrap()
+                    + chrono::Duration::milliseconds(999)
+            )
+        );
+    }
+
+    #[test]
+    fn aggregation_applies_filters_and_local_daily_buckets() {
+        let generated_at = Utc.with_ymd_and_hms(2026, 7, 11, 12, 0, 0).unwrap();
+        let records = vec![
+            record(
+                1,
+                Utc.with_ymd_and_hms(2026, 7, 10, 20, 0, 0).unwrap(),
+                "openai",
+                "gpt-5",
+                false,
+            ),
+            record(
+                2,
+                Utc.with_ymd_and_hms(2026, 7, 10, 21, 0, 0).unwrap(),
+                "anthropic",
+                "claude-sonnet-4",
+                true,
+            ),
+        ];
+        let query = UsageStatsQuery::custom(None, Some(generated_at))
+            .with_timezone_offset(480)
+            .with_filters(
+                vec!["OpenAI".to_string()],
+                vec!["GPT-5".to_string()],
+                Vec::new(),
+                false,
+            );
+        let stats = summarize_usage_records(&records, &query, generated_at);
+
+        assert_eq!(stats.totals.runs, 1);
+        assert_eq!(stats.totals.sessions, 1);
+        assert_eq!(stats.totals.total_tokens, 175);
+        assert_eq!(stats.totals.cache_input_tokens, 150);
+        assert_eq!(stats.by_day.len(), 1);
+        assert_eq!(stats.by_day[0].date, "2026-07-11");
+        assert_eq!(stats.peak_cost_date.as_deref(), Some("2026-07-11"));
+        assert_eq!(stats.active_days, 1);
+        assert_eq!(stats.by_provider[0].provider_id, "openai");
+    }
+
+    #[test]
+    fn empty_aggregation_has_finite_derived_metrics() {
+        let generated_at = Utc.with_ymd_and_hms(2026, 7, 11, 12, 0, 0).unwrap();
+        let query = UsageStatsQuery::for_period(UsagePeriod::Last7Days, generated_at);
+        let stats = summarize_usage_records(&[], &query, generated_at);
+
+        assert_eq!(stats.totals.total_tokens, 0);
+        assert_eq!(stats.average_cost_per_run_usd, 0.0);
+        assert_eq!(stats.average_tokens_per_active_day, 0.0);
+        assert!(stats.peak_cost_date.is_none());
+    }
 }

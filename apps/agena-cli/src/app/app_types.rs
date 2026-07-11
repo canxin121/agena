@@ -5,7 +5,11 @@ use std::{
 };
 
 use agena::{
-    agents::AgentDescriptor, event::DomainEvent, model::ModelRef, permission::PermissionMode,
+    agents::AgentDescriptor,
+    event::DomainEvent,
+    model::ModelRef,
+    permission::PermissionMode,
+    session::{UsagePeriod, UsageStats},
 };
 use agena_api::{
     pagination::PaginatedResponse,
@@ -403,6 +407,10 @@ pub struct App {
     pub(super) last_refresh_at: Instant,
     pub(super) pending_ui_action: Option<UiAction>,
     pub(super) current_lineage: Option<CurrentLineageState>,
+    /// Monotonic id for usage dashboard loads. Keeping it on the app prevents
+    /// a late response from an older, closed dashboard matching a newly
+    /// opened dashboard that is also on its first request.
+    pub(super) next_usage_request_id: u64,
     /// Forwarder task that pumps `Backend::subscribe_session_events` into
     /// [`AppMessage::SessionEventArrived`]. Aborted whenever the active
     /// session changes so we don't accumulate stale subscriptions.
@@ -459,6 +467,10 @@ pub(super) enum MessageLoadMode {
 
 #[derive(Debug, Clone)]
 pub(super) enum AppMessage {
+    UsageStatsLoaded {
+        request_id: u64,
+        result: UiResult<UsageStats>,
+    },
     SessionsLoaded {
         scope: SessionLoadScope,
         subtree_root_id: Option<i64>,
@@ -639,6 +651,7 @@ pub(super) enum Overlay {
 #[derive(Debug, Clone)]
 pub(super) enum Route {
     Main,
+    Usage(UsageDashboardState),
     Help(HelpOverlay),
     SettingsStudio(SettingsStudioOverlay),
     AgentStudio(AgentStudioOverlay),
@@ -652,6 +665,99 @@ pub(super) enum Route {
     PluginWorkbench(Box<PluginWorkbenchOverlay>),
     ProviderStudio(Box<ProviderStudioOverlay>),
     ModelCatalogStudio(ModelCatalogStudioOverlay),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum UsageDashboardView {
+    #[default]
+    Overview,
+    Daily,
+    Providers,
+    Models,
+    Sessions,
+}
+
+impl UsageDashboardView {
+    pub(super) const ALL: [Self; 5] = [
+        Self::Overview,
+        Self::Daily,
+        Self::Providers,
+        Self::Models,
+        Self::Sessions,
+    ];
+
+    pub(super) fn cycle(self, delta: isize) -> Self {
+        cycle_copy(Self::ALL.as_slice(), self, delta)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum UsageDashboardSort {
+    #[default]
+    Cost,
+    Tokens,
+    Runs,
+}
+
+impl UsageDashboardSort {
+    pub(super) fn next(self) -> Self {
+        match self {
+            Self::Cost => Self::Tokens,
+            Self::Tokens => Self::Runs,
+            Self::Runs => Self::Cost,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct UsageDashboardState {
+    pub(super) period: UsagePeriod,
+    pub(super) view: UsageDashboardView,
+    pub(super) sort: UsageDashboardSort,
+    pub(super) include_subagents: bool,
+    pub(super) provider_filter: Option<String>,
+    pub(super) model_filter: Option<String>,
+    pub(super) available_providers: Vec<String>,
+    pub(super) available_models: Vec<(String, String)>,
+    pub(super) stats: Option<UsageStats>,
+    pub(super) loading: bool,
+    pub(super) request_id: u64,
+    pub(super) selected: usize,
+    pub(super) scroll: usize,
+    pub(super) error: Option<String>,
+}
+
+impl UsageDashboardState {
+    pub(super) fn new(period: UsagePeriod) -> Self {
+        Self {
+            period,
+            view: UsageDashboardView::Overview,
+            sort: UsageDashboardSort::Cost,
+            include_subagents: true,
+            provider_filter: None,
+            model_filter: None,
+            available_providers: Vec::new(),
+            available_models: Vec::new(),
+            stats: None,
+            loading: false,
+            request_id: 0,
+            selected: 0,
+            scroll: 0,
+            error: None,
+        }
+    }
+}
+
+fn cycle_copy<T>(values: &[T], current: T, delta: isize) -> T
+where
+    T: Copy + PartialEq,
+{
+    let index = values
+        .iter()
+        .position(|value| *value == current)
+        .unwrap_or(0);
+    let next = (index as isize + delta).rem_euclid(values.len() as isize) as usize;
+    values[next]
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

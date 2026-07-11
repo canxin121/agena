@@ -7,7 +7,9 @@ impl App {
             let mut handled_route = false;
             match &mut self.current_route {
                 Route::Main => {}
-                Route::Help(_) | Route::SettingsStudio(_) => {}
+                Route::Usage(_) | Route::Help(_) | Route::SettingsStudio(_) => {
+                    handled_route = true;
+                }
                 Route::AgentStudio(dialog) => {
                     if let Some(editor) = dialog.workbench.editor.as_mut() {
                         editor.input.flush_all_pending_input();

@@ -175,6 +175,10 @@ agena config validate
 agena config resolve --format json
 agena diagnostics
 
+# 用量统计（JSON）
+agena usage --period thirty-days --timezone-offset-minutes 480
+agena usage --period month --provider openai --include-subagents false
+
 # provider 与 auth
 agena provider list
 agena provider models <provider-id>
@@ -187,6 +191,8 @@ agena plugin status
 agena plugin inspect <plugin-id>
 agena plugin logs <plugin-id>
 ```
+
+在 TUI 中输入 `/usage`（也可用 `/stats`、`/analytics`），或在非编辑状态按 `U`，可以打开完整的交互式用量面板。面板提供 9 种周期、provider/model 筛选、subagent 开关、3 种排序方式，以及按日、provider、model、session 的多维图表和表格。
 
 ## 开发检查
 

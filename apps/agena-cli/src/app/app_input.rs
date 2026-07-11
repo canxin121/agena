@@ -6,7 +6,13 @@ impl App {
 
         self.flush_input_buffers_if_due(Instant::now());
 
-        if resolve_tui_key(KeyContext::Global, key) == Some(KeyAction::Interrupt) {
+        let global_action = resolve_tui_key(KeyContext::Global, key);
+        if prompt_history_preempts_global_interrupt(self.prompt_history_search.is_some(), key) {
+            self.handle_prompt_history_search_key(key);
+            return;
+        }
+
+        if global_action == Some(KeyAction::Interrupt) {
             let now = Instant::now();
             let double = self
                 .last_ctrl_c_at
@@ -69,7 +75,7 @@ impl App {
                     self.jump_search_match(self.transcript_search_forward);
                     return;
                 }
-                KeyAction::SearchNext => {
+                KeyAction::New => {
                     self.create_session(None);
                     return;
                 }
@@ -230,6 +236,34 @@ impl App {
         }
 
         true
+    }
+}
+
+fn prompt_history_preempts_global_interrupt(history_open: bool, key: KeyEvent) -> bool {
+    history_open
+        && resolve_tui_key(KeyContext::Global, key) == Some(KeyAction::Interrupt)
+        && resolve_tui_key(KeyContext::PromptHistory, key) == Some(KeyAction::Close)
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::prompt_history_preempts_global_interrupt;
+
+    #[test]
+    fn prompt_history_ctrl_c_closes_before_the_global_interrupt_handler() {
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+
+        assert!(prompt_history_preempts_global_interrupt(true, ctrl_c));
+        assert!(!prompt_history_preempts_global_interrupt(false, ctrl_c));
+        assert!(!prompt_history_preempts_global_interrupt(
+            true,
+            KeyEvent::new(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            ),
+        ));
     }
 }
 use crate::app::{

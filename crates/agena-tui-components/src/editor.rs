@@ -377,9 +377,7 @@ impl Editor {
                 code: KeyCode::Left,
                 modifiers,
                 ..
-            } if modifiers.contains(KeyModifiers::CONTROL)
-                || (modifiers.contains(KeyModifiers::ALT) && !is_altgr(modifiers)) =>
-            {
+            } if modifiers == KeyModifiers::CONTROL || modifiers == KeyModifiers::ALT => {
                 self.prepare_for_command();
                 self.move_word_left();
             }
@@ -387,7 +385,7 @@ impl Editor {
                 code: KeyCode::Char('b'),
                 modifiers,
                 ..
-            } if modifiers.contains(KeyModifiers::ALT) => {
+            } if modifiers == KeyModifiers::ALT => {
                 self.prepare_for_command();
                 self.move_word_left();
             }
@@ -426,9 +424,7 @@ impl Editor {
                 code: KeyCode::Right,
                 modifiers,
                 ..
-            } if modifiers.contains(KeyModifiers::CONTROL)
-                || (modifiers.contains(KeyModifiers::ALT) && !is_altgr(modifiers)) =>
-            {
+            } if modifiers == KeyModifiers::CONTROL || modifiers == KeyModifiers::ALT => {
                 self.prepare_for_command();
                 self.move_word_right();
             }
@@ -436,7 +432,7 @@ impl Editor {
                 code: KeyCode::Char('f'),
                 modifiers,
                 ..
-            } if modifiers.contains(KeyModifiers::ALT) => {
+            } if modifiers == KeyModifiers::ALT => {
                 self.prepare_for_command();
                 self.move_word_right();
             }
@@ -484,13 +480,16 @@ impl Editor {
             }
             KeyEvent {
                 code: KeyCode::Home,
+                modifiers: KeyModifiers::NONE,
                 ..
             } => {
                 self.prepare_for_command();
                 self.move_home(false);
             }
             KeyEvent {
-                code: KeyCode::End, ..
+                code: KeyCode::End,
+                modifiers: KeyModifiers::NONE,
+                ..
             } => {
                 self.prepare_for_command();
                 self.move_end(false);
@@ -507,7 +506,7 @@ impl Editor {
                 code: KeyCode::Backspace,
                 modifiers,
                 ..
-            } if modifiers.contains(KeyModifiers::ALT) => {
+            } if modifiers == KeyModifiers::ALT => {
                 self.prepare_for_command();
                 self.delete_backward_word();
             }
@@ -515,7 +514,7 @@ impl Editor {
                 code: KeyCode::Char('\u{007f}'),
                 modifiers,
                 ..
-            } if modifiers.contains(KeyModifiers::ALT) => {
+            } if modifiers == KeyModifiers::ALT => {
                 self.prepare_for_command();
                 self.delete_backward_word();
             }
@@ -558,7 +557,7 @@ impl Editor {
                 code: KeyCode::Delete,
                 modifiers,
                 ..
-            } if modifiers.contains(KeyModifiers::ALT) => {
+            } if modifiers == KeyModifiers::ALT => {
                 self.prepare_for_command();
                 self.delete_forward_word();
             }
@@ -1222,6 +1221,8 @@ fn is_word_separator(ch: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
     use super::Editor;
 
     #[test]
@@ -1260,6 +1261,21 @@ mod tests {
         assert_eq!(editor.cursor(), 2);
         editor.set_cursor(usize::MAX);
         assert_eq!(editor.cursor(), editor.text().len());
+    }
+
+    #[test]
+    fn text_commands_reject_extra_modifiers() {
+        let mut editor = Editor::from_text("one two".to_string());
+        editor.set_cursor(editor.text().len());
+
+        editor.handle_line_input_key(KeyEvent::new(
+            KeyCode::Left,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
+        assert_eq!(editor.cursor(), editor.text().len());
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
+        assert_eq!(editor.cursor(), 4);
     }
 }
 

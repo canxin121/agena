@@ -60,7 +60,10 @@ pub use editor_preview_dialog::{
 pub use editor_state::{EditorDialogKeyResult, EditorDialogState, drive_editor_dialog_key};
 pub use frame::{FramedSurface, FramedSurfaceSpec, render_framed_surface};
 pub use input_state::{InputDialogKeyResult, InputDialogState, drive_input_dialog_key};
-pub use keymap::{InputDialogAction, NavigationAction, input_dialog_action, navigation_action};
+pub use keymap::{
+    InputDialogAction, NavigationAction, input_dialog_action, navigation_action,
+    search_navigation_action,
+};
 pub use layout::{
     SurfaceMode, VerticalSectionSize, adaptive_detail_split, adaptive_modal_height,
     adaptive_modal_width, bordered_paragraph_height, editor_input_panel_height,

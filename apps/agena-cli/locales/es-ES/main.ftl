@@ -30,7 +30,7 @@ composer-placeholder = Mensaje para Agena. Alt+Up historial. / comandos. F3 arch
 status-global = / busca abajo | ? busca arriba | Ctrl+C dos veces sale
 status-sessions = Sesiones: /sessions [busqueda]
 status-transcript = VIEW: i inserta | j/k desplaza | / busca | c copia ultima | y copia
-status-composer = INSERT: Esc vuelve | Ctrl+Enter envia ahora | Ctrl+J nueva linea | Alt+Up/Down historial | / comandos
+status-composer = INSERT: Esc vuelve | Ctrl+Enter envia ahora | Ctrl+J nueva linea | Ctrl+R/Alt+Up historial | Ctrl+Up cola | / comandos
 
 help-title = Ayuda
 help-header = Agena TUI
@@ -56,9 +56,9 @@ help-composer-line-6 = F3, Ctrl+O o Alt+O buscan archivos del workspace para adj
 help-composer-line-7 = F4 o Alt+E abren $VISUAL/$EDITOR para el editor
 help-composer-line-8 = F6 o Alt+I adjuntan una imagen del portapapeles
 help-composer-line-9 = El texto pegado se inserta directamente; una sola ruta de archivo se adjunta y los adjuntos permanecen atomicos
-help-composer-line-10 = Alt+Up/Down recupera prompts enviados
+help-composer-line-10 = Ctrl+R o Alt+Up abre el historial; Ctrl+Up recupera un mensaje en cola
 help-section-actions = Acciones
-help-actions-line-1 = n crea una sesion
+help-actions-line-1 = Ctrl+N crea una sesion; n/N navega resultados de busqueda
 help-actions-line-2 = r continua una sesion bloqueada o pendiente; U abre las estadísticas de uso
 help-actions-line-3 = a/A/d/D responden a la primera solicitud de permiso pendiente
 help-actions-line-4 = Alt+U abre la primera solicitud de entrada pendiente desde el editor
@@ -81,8 +81,8 @@ overlay-user-input-title = Entrada de usuario pendiente
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = valor personalizado permitido
 overlay-user-input-reply-format = Formato de respuesta: question_id=value;other_id=value1,value2
-overlay-user-input-cancel-hint = Ctrl+D cancela la solicitud
-overlay-user-input-footer = Ctrl+D cancelar
+overlay-user-input-cancel-hint = Ctrl+X cancela la solicitud
+overlay-user-input-footer = Ctrl+X cancelar
 
 flash-terminal-event-error = error de evento del terminal: {$error}
 flash-created-session = sesion creada {$title}

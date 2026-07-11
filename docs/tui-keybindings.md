@@ -1,0 +1,721 @@
+# Agena TUI 快捷键与按键参考
+
+本文档记录 Agena TUI 当前实际实现的全部应用级快捷键、页面按键、通用列表导航和文本编辑键。内容对应集中式 keymap，不以状态栏是否显示为准。
+
+主要代码入口：
+
+- `apps/agena-cli/src/tui_keymap/core.rs`：主页面、会话、Transcript、Composer 和通用弹窗。
+- `apps/agena-cli/src/tui_keymap/usage.rs`：Usage Dashboard。
+- `apps/agena-cli/src/tui_keymap/studio.rs`：Settings、Agent、Permission、Provider 和 Model Catalog。
+- `apps/agena-cli/src/tui_keymap/plugin.rs`：Plugin Policy 和 Plugin Workbench。
+- `apps/agena-cli/src/tui_keymap/composer.rs`：Composer 默认键位。
+- `crates/agena-tui-components/src/keymap.rs`：通用列表、滚动和输入弹窗。
+- `crates/agena-tui-components/src/editor.rs`：Shell/Emacs 风格文本编辑。
+
+## 约定与处理优先级
+
+- `BackTab` 通常就是 `Shift+Tab`。
+- `↑/↓/←/→` 分别表示方向键。
+- 表格中的大写字符表示对应的大写按键，例如 `U`、`N`、`P`。
+- 普通页面按键要求精确修饰键匹配。`Ctrl+K` 不会再被当成普通 `k`，`Alt+R` 不会再被当成普通 `r`。
+- `Ctrl`、`Alt`、`Shift`、`Super`、`Hyper` 和 `Meta` 都参与修饰键匹配。
+- `BackTab`、大写字符和 `?`、`+` 等需要 Shift 的符号仍兼容终端可能附带的 Shift 标志。
+
+按键处理优先级为：
+
+```text
+历史输入窗口对 Ctrl+C 的局部关闭
+→ 全局 Ctrl+C
+→ 当前 Overlay
+→ 当前 Route
+→ 主页面共享按键
+→ 当前焦点页面
+→ 通用文本编辑器
+```
+
+Composer 内部的优先级为：
+
+```text
+历史输入窗口
+→ 文件提及建议
+→ Slash 命令建议
+→ Composer 内联条目
+→ Composer 快捷键
+→ 通用文本编辑器
+```
+
+## 全局按键
+
+全局按键在页面、Route、Overlay 和编辑器之前处理。
+
+| 按键 | 行为 |
+|---|---|
+| `Ctrl+C` 第一次 | 模型运行中时请求取消运行；否则提示再次按下退出 |
+| `Ctrl+C` 第二次 | 在约 600ms 内再次按下，退出 TUI |
+
+例外：历史输入窗口打开时，精确的 `Ctrl+C` 会先关闭历史窗口并恢复原始 Composer 草稿，不会触发全局中断。
+
+主页面没有 `q` 退出；当前键盘退出方式是连续两次 `Ctrl+C`。
+
+## 主会话页面共享按键
+
+以下按键只在焦点不位于 Composer 时生效。
+
+| 按键 | 行为 |
+|---|---|
+| `/` | 将焦点切到 Transcript，打开向下搜索 |
+| `?` | 将焦点切到 Transcript，打开向上搜索 |
+| `n` | 有 Transcript 搜索时跳到下一个匹配；没有搜索时无操作 |
+| `N` | 有 Transcript 搜索时跳到上一个匹配；没有搜索时无操作 |
+| `Ctrl+N` | 创建新会话 |
+| `r` | 继续当前被阻塞或待处理的会话 |
+| `U` | 打开 Usage Dashboard |
+
+`?` 不再打开 Help。Help 通过 `/help` 命令打开。`Ctrl+F` 和 `/find` 不再提供搜索功能。
+
+## Sessions 会话列表
+
+仅在 Sessions Pane 获得焦点时生效。
+
+| 按键 | 行为 |
+|---|---|
+| `1` | 显示全部会话 |
+| `2` | 只显示根会话 |
+| `3` | 显示当前会话子树 |
+| `m` | 循环切换会话视图模式 |
+| `↑` / `k` | 上一条会话，必要时惰性加载更多 |
+| `↓` / `j` | 下一条会话，必要时惰性加载更多 |
+| `PageUp` | 向上移动 10 条 |
+| `PageDown` | 向下移动 10 条并按需加载 |
+| `Home` | 第一条会话 |
+| `End` | 当前已加载列表的最后一条，并按需加载 |
+| `Enter` | 打开选中会话并进入 Transcript |
+
+## Transcript VIEW 模式
+
+### 模式、选择和折叠
+
+| 按键 | 行为 |
+|---|---|
+| `i` | 进入 Composer INSERT 模式 |
+| `Enter` | 展开或收起当前选中的可折叠节点 |
+| `←` / `h` | 选择上一个消息或内容块 |
+| `→` / `l` | 选择下一个消息或内容块 |
+
+`h/l` 是按块选择，不是横向滚动。
+
+### 滚动
+
+| 按键 | 行为 |
+|---|---|
+| `↑` / `k` | 向上滚动一行并更新块选择 |
+| `↓` / `j` | 向下滚动一行并更新块选择 |
+| `PageUp` / `Ctrl+B` | 向上翻一页 |
+| `PageDown` / `Space` | 向下翻一页 |
+| `Shift+Space` | 向上翻一页 |
+| `Ctrl+U` | 向上翻半页 |
+| `Ctrl+D` | 向下翻半页 |
+| `Home` / `g` | Transcript 顶部，并按需加载旧消息 |
+| `End` / `G` | Transcript 底部 |
+
+### 数字移动前缀
+
+| 按键 | 行为 |
+|---|---|
+| `1`–`9` | 开始或追加移动次数 |
+| `0` | 已有数字前缀时追加 `0` |
+| 数字后接 `h/j/k/l` | 按指定次数移动 |
+
+例如 `5j`、`10k`、`3l`。数字前缀只用于 Transcript 移动。
+
+### 复制
+
+| 按键 | 行为 |
+|---|---|
+| `y` | 复制当前选中的 Transcript 节点 |
+| `Y` | 复制当前可见 Transcript |
+| `C` | 复制当前已加载的全部 Transcript |
+| `c` | 复制最后一条 assistant 消息 |
+
+## Composer INSERT 模式
+
+### 发送、Steer 和排队
+
+| 按键 | 行为 |
+|---|---|
+| `Enter` | 空闲时发送；运行中时加入本地待发送队列 |
+| `Ctrl+Enter` | 空闲时发送；运行中时尝试 steer，失败后排队 |
+| `Shift+Enter` / `Alt+Enter` / `Ctrl+J` | 插入换行 |
+| `Esc` | 离开 Composer，返回 Transcript VIEW 模式 |
+
+Slash 命令始终直接在本地执行，不进入消息队列。粘贴检测期间的内部 Enter 会作为换行处理。
+
+### 历史、队列和输入状态
+
+| 按键 | 行为 |
+|---|---|
+| `Ctrl+R` / `Alt+↑` | 打开历史输入窗口 |
+| `Ctrl+↑` | 从待发送队列取回一条消息进行编辑 |
+| `↑` | 多行编辑器向上一行，不再打开历史或取回队列 |
+| `Ctrl+L` | 清空当前 Composer 输入 |
+
+### 附件和外部工具
+
+| 按键 | 行为 |
+|---|---|
+| `F2` | 进入或退出 Composer 内联条目选择 |
+| `F3` / `Ctrl+O` / `Alt+O` | 打开文件附件选择器 |
+| `F4` / `Alt+E` | 使用外部编辑器编辑 Composer |
+| `F6` / `Alt+I` | 从剪贴板附加图片 |
+| `Alt+U` | 打开待处理的用户输入请求 |
+| `Alt+A` | 打开待处理的权限请求 |
+
+Composer 默认键位存放在 `ComposerKeyBindings` 中。当前 `TuiConfig::load()` 尚未从用户配置读取自定义键位，因此以上是实际生效的默认值。
+
+## Composer 内联条目选择
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 退出条目选择 |
+| `BackTab` / `←` / `h` | 上一个条目 |
+| `Tab` / `→` / `l` | 下一个条目 |
+| `Delete` / `Backspace` / `d` | 删除选中条目 |
+| `Enter` / `o` | 打开选中条目 |
+
+文件附件会打开对应路径；大段粘贴没有文件路径，不能作为文件打开。
+
+## 历史输入悬浮窗口
+
+历史记录按从新到旧排列，并按需分页加载。
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` / `Ctrl+C` | 关闭历史窗口并恢复打开前的原始草稿 |
+| `Enter` | 接受当前历史输入 |
+| `Ctrl+R` / `↑` / `Alt+↑` | 选择更旧的一条，必要时加载下一页 |
+| `↓` / `Alt+↓` | 选择更新的一条；越过最新端时关闭并恢复原草稿 |
+| `Ctrl+S` | 选择更新的一条，但保持窗口打开 |
+| 普通文本编辑键 | 编辑历史搜索词 |
+
+## 文件提及和 Slash 命令建议
+
+| 按键 | 行为 |
+|---|---|
+| `↑` / `Ctrl+P` | 上一个建议 |
+| `↓` / `Ctrl+N` | 下一个建议 |
+| `Esc` | 关闭建议 |
+| `Tab` | 填入选中建议 |
+| `Enter` | 接受选中建议 |
+
+文件提及的 Enter 会附加文件。Slash 命令的 Enter 会补全并立即提交；Tab 只补全。
+
+## Transcript 搜索输入框
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭搜索输入框 |
+| `Enter` | 应用搜索词并按打开时的方向跳转 |
+| 普通文本编辑键 | 编辑搜索词 |
+
+关闭搜索框后使用 `n/N` 沿当前搜索方向或反方向跳转。
+
+## Help 页面
+
+Help 通常通过 `/help` 打开。
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` / `?` / `q` | 关闭 Help |
+| `↑` / `k` | 向上滚动一行 |
+| `↓` / `j` | 向下滚动一行 |
+| `PageUp` | 向上翻页 |
+| `PageDown` | 向下翻页 |
+| `Home` | 顶部 |
+| `End` | 底部 |
+
+导航键只滚动，不会关闭 Help。
+
+## 通用可搜索列表
+
+Choice、文件附件、路径浏览、会话搜索、Picker、模型选择和 Timeline 等页面继承以下基础键位：
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭当前列表或选择器 |
+| `↑` | 上一项 |
+| `↓` | 下一项 |
+| `PageUp` / `PageDown` | 翻页 |
+| `Ctrl+Home` / `Ctrl+End` | 首项／末项 |
+| `Home` / `End` | 移动搜索输入光标到开头／结尾 |
+| 普通文本编辑键 | 编辑搜索内容 |
+
+搜索输入激活时只使用方向键导航。`j/k/h/l/n/d/r/t/c` 等所有普通字符都保留给搜索文本输入。非搜索列表仍可使用页面明确登记的 Vim 导航别名。
+
+## Choice 通用选项弹窗
+
+除通用可搜索列表键位外：
+
+| 按键 | 行为 |
+|---|---|
+| `Tab` | 将选中项填入输入框 |
+| `Enter` | 确认选中项 |
+
+## 文件附件选择器
+
+除通用可搜索列表键位外：
+
+| 按键 | 行为 |
+|---|---|
+| `Tab` | 将选中的文件路径填入输入框 |
+| `Enter` | 附加选中的文件 |
+
+## 路径浏览器
+
+除通用可搜索列表键位外：
+
+| 按键 | 行为 |
+|---|---|
+| `Tab` | 将选中路径填入输入框 |
+| `Alt+↑` | 返回父目录 |
+| `Alt+↓` | 打开选中的目录项 |
+| `Enter` | 接受当前路径 |
+
+`h/l` 现在可以正常输入到路径搜索框。
+
+## 会话搜索和会话切换页
+
+除通用可搜索列表键位外：
+
+| 按键 | 行为 |
+|---|---|
+| `Ctrl+PageUp` | 上一页 |
+| `Ctrl+PageDown` | 下一页 |
+| `Tab` | 将选中会话标题填入搜索框 |
+| `Enter` | 打开选中会话并进入 Composer |
+
+## 通用 Picker
+
+包括 Agent、Provider 和 Permission Rule 等 Picker。
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭 |
+| `↑` / `↓` | 上一项／下一项 |
+| `PageUp` / `PageDown`、`Ctrl+Home` / `Ctrl+End` | 翻页和首尾 |
+| `Tab` | 将选中项填入搜索框 |
+| `Enter` | 接受或打开选中项 |
+| `Alt+N` | Agent、Provider 配置和 Permission Rule Picker 中新建 |
+| `Alt+D` | Permission Rule Picker 中删除规则 |
+
+## Session Model 模型选择页
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭 |
+| `↑` / `↓` | 上一个／下一个模型 |
+| `PageUp` / `PageDown`、`Ctrl+Home` / `Ctrl+End` | 列表翻页和首尾 |
+| `Ctrl+PageUp` / `Ctrl+PageDown` | 上一页／下一页模型 |
+| `Enter` | 应用选中模型 override |
+| 普通文本编辑键 | 搜索模型 |
+
+## Timeline 事件时间线
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭 |
+| `↑` / `↓` | 上一个／下一个事件 |
+| `PageUp` / `PageDown`、`Ctrl+Home` / `Ctrl+End` | 翻页和首尾 |
+| `Enter` | 跳到事件关联的消息 |
+| `Alt+Y` | 复制当前事件 |
+| 普通文本编辑键 | 搜索事件 |
+
+## 确认弹窗
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 取消 |
+| `Enter` / `y` / `Y` | 确认 |
+
+## 单行和多行编辑弹窗
+
+会话重命名、Agent 创建、设置值和搜索等单行输入：
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭或取消 |
+| `Enter` | 提交 |
+| 通用文本编辑键 | 编辑内容 |
+
+Agent、Permission、Provider 和 Plugin 配置中的多行编辑器：
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭编辑器 |
+| `Ctrl+S` | 保存或提交 |
+| 通用文本编辑键 | 编辑内容 |
+
+编辑器打开时优先处理按键，外层页面快捷键暂时不执行。
+
+## 权限请求弹窗
+
+| 按键 | 行为 |
+|---|---|
+| `i` | 打开或关闭详细信息 |
+| `Esc` / `←` | 返回上一级；最外层时关闭弹窗 |
+| `↑` / `↓` | 上一个／下一个选项 |
+| `Enter` / `→` | 激活当前选项 |
+
+该页面只支持方向键选择，没有 `j/k` 别名。详细信息页中只有 `i` 和 `Esc/←` 有效。
+
+## 用户输入请求：问题页
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭弹窗 |
+| `Enter` | 提交当前问题答案 |
+| `Ctrl+X` | 取消整个请求 |
+| `↑` / `k`、`↓` / `j` | 上一个／下一个选项 |
+| `PageUp` / `PageDown` | 上一个／下一个问题 |
+| `Home` / `End` | 第一个／最后一个选项 |
+| `BackTab` / `←` / `h` | 上一个页面或 Tab |
+| `Tab` / `→` / `l` | 下一个页面或 Tab |
+| `Space` | 切换当前选项 |
+| `e` | 编辑自定义答案 |
+| `c` / `Delete` / `Backspace` | 清空当前答案 |
+
+自定义答案编辑状态：
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 退出自定义编辑 |
+| `Enter` | 接受自定义内容 |
+| `Ctrl+X` | 取消整个用户输入请求 |
+| 通用文本编辑键 | 编辑内容 |
+
+`Ctrl+D` 在普通问题状态和自定义编辑状态中都只保留给文本编辑语义，不再取消整个请求。
+
+## 用户输入请求：Review 页
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭 |
+| `Enter` | 提交全部回答 |
+| `Ctrl+X` | 取消请求 |
+| `↑` / `k`、`↓` / `j` | 上一个／下一个问题 |
+| `PageUp` / `PageDown` | 按页选择问题 |
+| `Home` / `End` | 第一／最后一个问题 |
+| `e` / `BackTab` / `←` / `h` | 返回编辑选中的问题 |
+| `c` / `Delete` / `Backspace` | 清空选中问题答案 |
+
+特殊审核决策页面复用该上下文：`↑/↓/j/k` 选择决策，`PageUp/PageDown` 滚动正文，`Home/End` 跳到正文首尾，`Enter` 提交决策。
+
+## Usage Dashboard
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` / `q` | 关闭 |
+| `←` / `h` | 上一个统计周期 |
+| `→` / `l` | 下一个统计周期 |
+| `BackTab` / `Tab` | 上一个／下一个统计视图 |
+| `1` | Overview |
+| `2` | Daily |
+| `3` | Providers |
+| `4` | Models |
+| `5` | Sessions |
+| `↑` / `k`、`↓` / `j` | 上一行／下一行 |
+| `Home` / `g` | 第一行 |
+| `End` / `G` | 最后一行 |
+| `s` | 循环排序：Cost → Tokens → Runs |
+| `a` | 切换是否包含 Subagents |
+| `p` / `P` | 下一个／上一个 Provider 过滤器 |
+| `m` / `M` | 下一个／上一个 Model 过滤器 |
+| `r` | 刷新统计 |
+| `Enter` | Sessions 视图中打开选中会话 |
+
+Usage Dashboard 不接受额外的 Ctrl、Alt、Super、Meta 等修饰键。
+
+## Settings Studio
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭 |
+| `r` | 刷新 |
+| `Tab` / `→` / `l` | Navigation → Items |
+| `BackTab` / `←` / `h` | Items → Navigation |
+| `↑` / `k`、`↓` / `j` | 当前区域上一项／下一项 |
+| `PageUp` / `PageDown`、`Ctrl+Home` / `Ctrl+End` | 翻页和首尾 |
+| `Enter` | 激活或编辑选中设置 |
+
+## Agent Studio
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭 |
+| `r` | 刷新 Agent 配置 |
+| `o` | 打开 Agent 配置源文件 |
+| `p` | 打开 Agent Permission Studio |
+| `↑` / `k`、`↓` / `j` | 上一项／下一项 |
+| `PageUp` / `PageDown`、`Home` / `End` | 翻页和首尾 |
+| `Enter` | 激活或编辑选中字段 |
+
+## Permission Studio
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | Content 中返回 Navigation；Navigation 中关闭页面 |
+| `r` | 刷新 |
+| `a` | 添加当前类型的 Permission 项 |
+| `e` | 编辑当前项 |
+| `n` | 重命名 |
+| `y` | 复制当前项 |
+| `d` | 删除当前项 |
+| `Tab` / `→` / `l` | Navigation → Content |
+| `BackTab` / `←` / `h` | Content → Navigation |
+| `↑` / `k`、`↓` / `j` | 当前 Pane 上一项／下一项 |
+| `PageUp` / `PageDown`、`Home` / `End` | 当前 Pane 翻页和首尾 |
+| `Enter` | Navigation 中进入 Content；Content 中激活当前项 |
+
+## Permission Rule Studio
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭 |
+| `r` | 刷新 |
+| `b` | 为当前路径字段打开 Path Browser |
+| `↑` / `k`、`↓` / `j` | 上一项／下一项 |
+| `PageUp` / `PageDown`、`Home` / `End` | 翻页和首尾 |
+| `Enter` | 激活或编辑当前规则字段 |
+
+## Provider Studio 主页面
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭 |
+| `Tab` / `BackTab` | 下一个／上一个焦点区域 |
+| `n` | 新建 Provider 草稿 |
+| `o` / `O` | 启动认证 |
+| `p` / `P` | 继续认证 |
+| `r` | 加载 Adapter 模型 |
+| `+` | Models 焦点下新增手动模型 |
+| `Delete` / `Backspace` | 删除当前 Adapter 或 Model |
+| `D` | 删除整个 Provider |
+| `s` / `S` | 保存整个 Provider |
+| `a` | 保存当前 Adapter |
+| `A` | 全选当前 Adapter 或 Model 列表 |
+| `c` / `C` | 清空当前 Adapter 或 Model 选择 |
+| `m` / `M` | 保存当前选中 Model |
+| `Space` | 切换当前 Adapter 或 Model 选中状态 |
+| `↑` / `k`、`↓` / `j` | 上一项／下一项 |
+| `PageUp` / `PageDown`、`Home` / `End` | 翻页和首尾 |
+| `Enter` | 激活当前焦点项 |
+
+`+`、删除、全选、清空和 Space 等行为依赖当前焦点是 Adapters 还是 Models。
+
+## Provider Detail 页面
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 返回 Provider Studio |
+| `o` / `O` | 启动认证，要求支持交互认证 |
+| `p` / `P` | 继续认证，要求支持交互认证 |
+| `↑` / `k`、`↓` / `j` | 上一字段／下一字段 |
+| `PageUp` / `PageDown`、`Home` / `End` | 翻页和首尾 |
+| `Enter` | 编辑选中字段 |
+
+## Provider Model 页面
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 返回 Provider Studio |
+| `s` / `S` | 保存 Model |
+| `d` / `Delete` / `Backspace` | 删除 Model |
+| `↑` / `k`、`↓` / `j` | 上一字段／下一字段 |
+| `PageUp` / `PageDown`、`Home` / `End` | 翻页和首尾 |
+| `Enter` | 编辑选中字段 |
+
+## Model Catalog
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭 |
+| `/` | 打开目录搜索输入框 |
+| `R` | 刷新 Model Catalog |
+| `←` / `h`、`→` / `l` | 上一页／下一页 |
+| `↑` / `k`、`↓` / `j` | 上一个／下一个模型 |
+| `PageUp` / `PageDown`、`Home` / `End` | 列表翻页和首尾 |
+
+搜索编辑器中：`Esc` 关闭搜索，`Enter` 提交查询，其他文本编辑键修改查询。
+
+## Plugin Policy Studio
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭 |
+| `Tab` / `BackTab` | 在 Navigation 和 Items 之间切换 |
+| `Enter` | Navigation 中进入 Items；Items 中循环当前策略值 |
+| `r` / `R` | 刷新 |
+| `↑` / `k`、`↓` / `j` | 上一项／下一项 |
+| `PageUp` / `PageDown`、`Home` / `End` | 当前区域翻页和首尾 |
+| `←` / `h` | Items 中选择 Prompt 列 |
+| `→` / `l` | Items 中选择 UI 列 |
+| `Delete` / `Backspace` / `x` / `X` / `0` | 清除当前 override |
+| `b` / `B` | Prompt 列设为 Brief |
+| `d` / `D` | Prompt 或 UI 列设为 Detailed |
+| `s` / `S` | UI 列设为 Summary |
+
+策略值快捷键只有在 Items 焦点和对应列下执行。
+
+## Plugin Workbench：插件列表
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭 Plugin Workbench |
+| `Enter` | 打开选中 Plugin Detail |
+| `Ctrl+R` | 刷新 |
+| `Alt+T` | 循环 Transport Filter |
+| `Alt+C` | 循环 Config Filter |
+| `↑` / `↓` | 上一个／下一个插件 |
+| `PageUp` / `PageDown`、`Ctrl+Home` / `Ctrl+End` | 翻页和首尾 |
+| `Home` / `End` | 移动插件搜索输入光标到开头／结尾 |
+| 其他普通文本编辑键 | 编辑插件搜索词 |
+
+`r/R/t/c/j/k` 现在都可以正常输入到插件搜索框。
+
+## Plugin Detail 非 Config Tab
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 返回插件列表 |
+| `r` / `R` | 刷新 |
+| `Tab` / `↓` / `j` | 下一个 Detail Tab |
+| `BackTab` / `↑` / `k` | 上一个 Detail Tab |
+| `PageUp` / `PageDown` | 当前详情向上／向下滚动 |
+| `Ctrl+←` / `Ctrl+H` | 上一个 Detail Tab |
+| `Ctrl+→` / `Ctrl+L` | 下一个 Detail Tab |
+
+这里的 `j/k` 用于切换 Tab，不是逐行滚动。
+
+## Plugin Detail：Config Tab
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 返回插件列表 |
+| `Ctrl+←` / `Ctrl+H`、`Ctrl+→` / `Ctrl+L` | 上一个／下一个 Detail Tab |
+| `Tab` / `BackTab` | 下一个／上一个 Config 焦点区域 |
+| `s` / `S` | 保存配置 |
+| `v` / `V` | 验证配置 |
+| `i` / `I` | 插入默认配置 |
+| `x` / `X` | 打开当前节点动作菜单 |
+| `Ctrl+D` | 删除当前配置节点；Diagnostics 中跳到对应项 |
+| `D` | 显示或隐藏 Diff；紧凑布局 Diff 打开时再次按下关闭 |
+| `R` | 刷新插件数据 |
+| `Ctrl+R` | 重启插件 |
+| `r` | 重置插件配置为默认值 |
+| `a` / `A` | 添加配置值 |
+| `t` / `T` | 选择配置类型 |
+| `Enter` / `e` | 编辑当前值；Diagnostics 中跳到对应项 |
+| `↑` / `k`、`↓` / `j` | 上一项／下一项 |
+| `←` / `h`、`→` / `l` | 上一个／下一个焦点区域或单元格 |
+| `PageUp` / `PageDown`、`Home` / `End` | 当前区域翻页和首尾 |
+
+紧凑布局中，Toolbar 的 `←/→` 选择动作，`Enter/e` 执行动作；Structure 和 Editor 之间用 `←/→` 切换。
+
+## Plugin Config Actions 菜单
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭动作菜单 |
+| `↑` / `k`、`↓` / `j` | 上一个／下一个动作 |
+| `Home` / `End` | 首尾 |
+| `Enter` | 执行当前动作 |
+
+## Plugin Config Selection 选择器
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 关闭选择器 |
+| `↑` / `k`、`↓` / `j` | 上一项／下一项 |
+| `Home` / `End` | 首尾 |
+| `Space` | 多选模式下切换当前项 |
+| `Enter` | 确认选择 |
+
+## Plugin Config Drilldown
+
+| 按键 | 行为 |
+|---|---|
+| `Esc` | 返回上一级 Drilldown |
+| `↑` / `k`、`↓` / `j` | 上一行／下一行 |
+| `PageUp` / `PageDown`、`Home` / `End` | 翻页和首尾 |
+| `←` / `h`、`→` / `l` | 上一个／下一个单元格 |
+| `a` / `A` | 添加值 |
+| `x` / `X` | 打开动作菜单 |
+| `t` / `T` | 选择类型 |
+| `Ctrl+D` | 删除当前行 |
+| `Enter` / `e` | 编辑当前行 |
+
+## 通用文本编辑器
+
+这些键适用于 Composer、搜索框、单行输入框和各种 Studio 编辑器。外层页面先占用的键不会继续传入编辑器。
+
+### 光标移动
+
+| 按键 | 行为 |
+|---|---|
+| `←` / `Ctrl+B` | 向左一个字符 |
+| `→` / `Ctrl+F` | 向右一个字符 |
+| `Ctrl+←` / `Alt+←` / `Alt+B` | 向左一个单词 |
+| `Ctrl+→` / `Alt+→` / `Alt+F` | 向右一个单词 |
+| `Home` | 当前行开头 |
+| `End` | 当前行结尾 |
+| `Ctrl+A` | 当前行开头；已在行首时可到上一行行首 |
+| `Ctrl+E` | 当前行结尾；已在行尾时可到下一行行尾 |
+| `↑` / `Ctrl+P` | 多行编辑器中向上一行 |
+| `↓` / `Ctrl+N` | 多行编辑器中向下一行 |
+
+### 删除和 Kill/Yank
+
+| 按键 | 行为 |
+|---|---|
+| `Backspace` / `Ctrl+H` | 删除前一个字符 |
+| `Delete` | 删除当前字符；文本末尾时退格删除 |
+| `Ctrl+D` | 删除当前字符 |
+| `Alt+Backspace` / `Ctrl+Alt+H` / `Ctrl+W` | 删除前一个单词 |
+| `Alt+Delete` | 删除后一个单词 |
+| `Ctrl+U` | 删除到当前行开头 |
+| `Ctrl+K` | 删除到当前行结尾 |
+| `Ctrl+Y` | 粘贴编辑器内部最近一次 Kill 的内容 |
+
+编辑器要求精确修饰键。`Ctrl+Shift+Left` 不会被当成 `Ctrl+Left`；`Ctrl+Super+Enter` 不会被当成 Composer 的 `Ctrl+Enter`。AltGr 输入仍按普通字符处理。
+
+## 主页面已经移除的快捷键
+
+以下按键不再是主页面全局命令：
+
+| 按键 | 已移除的旧行为 |
+|---|---|
+| `q` | 退出 TUI |
+| `Tab` / `BackTab` | 进入 Composer |
+| `s` / `Alt+S` | 打开会话切换器 |
+| `b` | 打开会话分支历史 |
+| `R` | 重命名当前会话 |
+| `t` | 打开时间线 |
+| `P` | 打开插件工作台 |
+| `[` / `]` | 打开父会话／子会话选择器 |
+| `e` | 导出对话 |
+| `v` | 使用外部分页器打开对话 |
+| `u` | 打开待处理用户输入 |
+| `Alt+P` | 打开命令面板 |
+| `Ctrl+F` | 打开 Find |
+| `/find` | Find 命令 |
+
+这些字符仍可在局部页面使用。例如 `q` 可关闭 Help 和 Usage，`P` 可在 Usage 中选择上一个 Provider，`b` 可在 Permission Rule Studio 中打开 Path Browser。
+
+## 维护要求
+
+新增、删除或修改 TUI 按键时，应同时完成以下事项：
+
+1. 在对应 `tui_keymap` 模块中修改物理按键到 `KeyAction` 的映射。
+2. 页面 handler 只处理语义化 `KeyAction`，不要重新引入散落的 `KeyCode` 判断。
+3. 通用列表、滚动或编辑器行为应修改 `agena-tui-components` 的集中式 keymap。
+4. 更新状态栏、Help 多语言提示和本文档。
+5. 为修饰键、页面上下文和按键冲突增加防回归测试。

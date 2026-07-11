@@ -3,8 +3,7 @@ impl Default for TranscriptState {
         Self::new(
             I18n::english(),
             TranscriptDetailDefaults {
-                tool_output_expanded: false,
-                thinking_expanded: false,
+                activity_expanded: false,
             },
         )
     }

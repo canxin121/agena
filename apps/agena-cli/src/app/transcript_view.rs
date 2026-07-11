@@ -69,15 +69,20 @@ pub(in crate::app) fn render_message_detailed(
                 continue;
             }
             if let Some(run_end) = collapsed_activity_run_end(parts, part_index) {
-                let run = &parts[part_index..run_end];
-                if run.len() > 1 {
+                let activity_parts = parts[part_index..run_end]
+                    .iter()
+                    .filter(|part| is_activity_part(part))
+                    .collect::<Vec<_>>();
+                let hidden_count = activity_parts
+                    .len()
+                    .saturating_sub(COLLAPSED_ACTIVITY_VISIBLE_COUNT);
+                if hidden_count > 0 {
                     let key = TranscriptNodeKey::ActivitySummary {
                         message_id: message.id,
-                        first_part_id: run[0].id,
-                        last_part_id: run.last().expect("non-empty activity run").id,
+                        first_part_id: activity_parts[0].id,
+                        last_part_id: activity_parts.last().expect("non-empty activity run").id,
                     };
                     let expanded = expansions.get(&key).copied().unwrap_or(false);
-                    let hidden_count = run.len();
                     // Message headers belong exclusively to the message-level
                     // parent selection. An activity summary must never make
                     // the adjacent `assistant` header look selected.
@@ -88,7 +93,7 @@ pub(in crate::app) fn render_message_detailed(
                         } else {
                             "message-activity-run-collapsed"
                         },
-                        &crate::fl_args!("count" => (if expanded { run.len() } else { hidden_count }) as i64),
+                        &crate::fl_args!("count" => hidden_count as i64),
                     );
                     push_single_line(
                         &mut lines,
@@ -102,25 +107,24 @@ pub(in crate::app) fn render_message_detailed(
                         kind: TranscriptNodeKind::Activity,
                         start_line,
                         end_line: lines.len(),
-                        copy_text: run
+                        copy_text: activity_parts
                             .iter()
-                            .take(if expanded { run.len() } else { hidden_count })
+                            .take(hidden_count)
                             .filter_map(|part| activity_part_copy_text(part, i18n))
                             .collect::<Vec<_>>()
                             .join("\n\n"),
                         toggleable: true,
                         expanded,
                     });
-                    let first_visible =
-                        collapsed_activity_visible_start(part_index, run_end, expanded);
-                    for part in &parts[first_visible..run_end] {
+                    let first_visible = if expanded { 0 } else { hidden_count };
+                    for part in activity_parts.into_iter().skip(first_visible) {
                         append_rendered_part_node(
                             message, part, width, &mut lines, &mut nodes, i18n, defaults,
                             expansions,
                         );
                     }
                 } else {
-                    for part in run {
+                    for part in activity_parts {
                         append_rendered_part_node(
                             message, part, width, &mut lines, &mut nodes, i18n, defaults,
                             expansions,
@@ -180,8 +184,8 @@ pub(in crate::app) fn render_message_detailed(
 mod tests {
     use super::{
         ExecutionStatus, I18n, MessagePart, MessageResource, MessageStatus, OperationPart,
-        PartContent, RequestPart, ToolInvocation, TranscriptDetailDefaults, TranscriptNodeKind,
-        UnicodeWidthStr, activity_status_icon, collapsed_activity_visible_start,
+        PartContent, RequestPart, ToolInvocation, TranscriptDetailDefaults, TranscriptNodeKey,
+        TranscriptNodeKind, UnicodeWidthStr, activity_status_icon, collapsed_activity_run_end,
         interactive_request_is_embedded_in_operation, markdown_blocks, render_markdown_block,
         render_message_detailed, should_suppress_markdown_block, spinner_frame,
         thinking_collapsed_summary, tool_execution_compact_summary, tool_invocation_label,
@@ -237,14 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_activity_runs_hide_all_children_until_expanded() {
-        assert_eq!(collapsed_activity_visible_start(4, 12, false), 12);
-        assert_eq!(collapsed_activity_visible_start(4, 12, true), 4);
-        assert_eq!(collapsed_activity_visible_start(4, 6, false), 6);
-    }
-
-    #[test]
-    fn consecutive_activity_parts_collapse_into_one_enter_toggleable_group() {
+    fn consecutive_activity_parts_collapse_old_items_and_keep_the_latest_five_visible() {
         let now = Utc::now();
         let parts = vec![
             MessagePart::from_content(
@@ -270,6 +267,63 @@ mod tests {
                     Default::default(),
                 )),
             ),
+            MessagePart::from_content(
+                23,
+                7,
+                now,
+                ExecutionStatus::Completed,
+                PartContent::Reasoning(agena::message::ReasoningPart {
+                    summary: vec!["third activity".to_string()],
+                    raw_content: Vec::new(),
+                    encrypted_content: None,
+                }),
+            ),
+            MessagePart::from_content(
+                24,
+                7,
+                now,
+                ExecutionStatus::Completed,
+                PartContent::Operation(OperationPart::pending(
+                    2,
+                    ToolInvocation::new("agena.fs.write", Default::default()),
+                    "Write file",
+                    Default::default(),
+                )),
+            ),
+            MessagePart::from_content(
+                25,
+                7,
+                now,
+                ExecutionStatus::Completed,
+                PartContent::Reasoning(agena::message::ReasoningPart {
+                    summary: vec!["fifth activity".to_string()],
+                    raw_content: Vec::new(),
+                    encrypted_content: None,
+                }),
+            ),
+            MessagePart::from_content(
+                26,
+                7,
+                now,
+                ExecutionStatus::Completed,
+                PartContent::Operation(OperationPart::pending(
+                    3,
+                    ToolInvocation::new("agena.fs.search", Default::default()),
+                    "Search files",
+                    Default::default(),
+                )),
+            ),
+            MessagePart::from_content(
+                27,
+                7,
+                now,
+                ExecutionStatus::Completed,
+                PartContent::Reasoning(agena::message::ReasoningPart {
+                    summary: vec!["latest activity".to_string()],
+                    raw_content: Vec::new(),
+                    encrypted_content: None,
+                }),
+            ),
         ];
         let message = MessageResource {
             id: 7,
@@ -289,8 +343,7 @@ mod tests {
             80,
             &I18n::english(),
             TranscriptDetailDefaults {
-                tool_output_expanded: true,
-                thinking_expanded: true,
+                activity_expanded: true,
             },
             &Default::default(),
         );
@@ -299,7 +352,7 @@ mod tests {
             .iter()
             .filter(|node| node.kind == TranscriptNodeKind::Activity)
             .collect::<Vec<_>>();
-        assert_eq!(activity_nodes.len(), 1);
+        assert_eq!(activity_nodes.len(), 6);
         assert!(activity_nodes[0].toggleable);
         assert!(!activity_nodes[0].expanded);
         assert!(rendered.lines.iter().any(|line| line.text.contains("2")));
@@ -309,6 +362,46 @@ mod tests {
                 .iter()
                 .all(|line| !line.text.contains("first thought"))
         );
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .all(|line| !line.text.contains("Read file"))
+        );
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .any(|line| line.text.contains("latest activity"))
+        );
+
+        let expansion = std::collections::BTreeMap::from([(
+            TranscriptNodeKey::ActivitySummary {
+                message_id: 7,
+                first_part_id: 21,
+                last_part_id: 27,
+            },
+            true,
+        )]);
+        let expanded = render_message_detailed(
+            &message,
+            80,
+            &I18n::english(),
+            TranscriptDetailDefaults {
+                activity_expanded: true,
+            },
+            &expansion,
+        );
+        assert!(
+            expanded
+                .lines
+                .iter()
+                .any(|line| line.text.contains("first thought"))
+        );
+        assert!(expanded.nodes.iter().all(|node| {
+            !matches!(node.key, TranscriptNodeKey::ActivityPart { .. })
+                || node.kind == TranscriptNodeKind::Activity
+        }));
     }
 
     #[test]
@@ -343,8 +436,7 @@ mod tests {
             80,
             &I18n::english(),
             TranscriptDetailDefaults {
-                tool_output_expanded: false,
-                thinking_expanded: false,
+                activity_expanded: false,
             },
             &Default::default(),
         );
@@ -507,7 +599,26 @@ mod tests {
         );
         permission.operation_id = Some(operation_id);
 
-        let parts = vec![operation, permission];
+        let empty_text = MessagePart::from_content(
+            12,
+            7,
+            now,
+            ExecutionStatus::Completed,
+            PartContent::text(""),
+        );
+
+        let trailing_activity = MessagePart::from_content(
+            13,
+            7,
+            now,
+            ExecutionStatus::Completed,
+            PartContent::Reasoning(agena::message::ReasoningPart {
+                summary: vec!["continue after approval".to_string()],
+                raw_content: Vec::new(),
+                encrypted_content: None,
+            }),
+        );
+        let parts = vec![operation, permission, empty_text, trailing_activity];
         assert!(!interactive_request_is_embedded_in_operation(
             parts.as_slice(),
             0
@@ -516,6 +627,7 @@ mod tests {
             parts.as_slice(),
             1
         ));
+        assert_eq!(collapsed_activity_run_end(parts.as_slice(), 0), Some(4));
     }
 
     #[test]
@@ -648,8 +760,7 @@ mod tests {
     }
 }
 use self::{
-    activity_status_icon, collapsed_activity_visible_start,
-    interactive_request_is_embedded_in_operation, render_markdown_block,
+    activity_status_icon, interactive_request_is_embedded_in_operation, render_markdown_block,
     should_suppress_markdown_block, tool_invocation_label,
 };
 use crate::app::{

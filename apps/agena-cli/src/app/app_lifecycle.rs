@@ -63,8 +63,7 @@ impl App {
             transcript: TranscriptState::new(
                 i18n,
                 TranscriptDetailDefaults {
-                    tool_output_expanded: launch.tui_config.transcript.tool_output_default_expanded,
-                    thinking_expanded: launch.tui_config.transcript.thinking_default_expanded,
+                    activity_expanded: launch.tui_config.transcript.activity_default_expanded,
                 },
             ),
             run_options: RunOptionsState::default(),

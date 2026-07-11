@@ -204,20 +204,20 @@ impl App {
         if dialog.model_page.is_none() {
             return false;
         }
-        match key.code {
-            KeyCode::Esc => {
+        match resolve_tui_key(KeyContext::ProviderModel, key) {
+            Some(KeyAction::Back) => {
                 dialog.model_page = None;
                 false
             }
-            KeyCode::Char('s') | KeyCode::Char('S') => {
+            Some(KeyAction::Save) => {
                 self.save_provider_studio_model_page(dialog);
                 false
             }
-            KeyCode::Char('d') | KeyCode::Delete | KeyCode::Backspace => {
+            Some(KeyAction::Delete) => {
                 self.open_provider_studio_delete_selected_model_confirm(dialog);
                 false
             }
-            KeyCode::Enter => {
+            Some(KeyAction::Activate) => {
                 self.activate_provider_studio_model_page_selection(dialog);
                 false
             }
@@ -233,8 +233,8 @@ impl App {
     }
 }
 use crate::app::{
-    App, ChoiceOverlayAction, Editor, KeyCode, KeyEvent, ProviderAdapterModelsResource,
-    ProviderModel, ProviderModelConfigField, ProviderStudioEditor, ProviderStudioEditorAction,
+    App, ChoiceOverlayAction, Editor, KeyEvent, ProviderAdapterModelsResource, ProviderModel,
+    ProviderModelConfigField, ProviderStudioEditor, ProviderStudioEditorAction,
     ProviderStudioFocus, ProviderStudioOverlay, UiResult, commit_provider_model_config_field,
     provider_model_config_draft_to_model_value, provider_model_config_field_editable,
     provider_model_config_field_prompt, provider_model_config_field_value,
@@ -242,3 +242,4 @@ use crate::app::{
     provider_studio_model_key, remove_provider_studio_adapter_from_dialog,
     remove_provider_studio_model_from_dialog, ui_text,
 };
+use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

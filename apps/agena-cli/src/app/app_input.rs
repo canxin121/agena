@@ -6,7 +6,7 @@ impl App {
 
         self.flush_input_buffers_if_due(Instant::now());
 
-        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
+        if resolve_tui_key(KeyContext::Global, key) == Some(KeyAction::Interrupt) {
             let now = Instant::now();
             let double = self
                 .last_ctrl_c_at
@@ -42,129 +42,43 @@ impl App {
 
         self.maybe_capture_transcript_motion_prefix(key);
 
-        if key.modifiers.contains(KeyModifiers::ALT)
-            && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
-        {
-            self.open_resume_session_picker();
-            return;
-        }
-
         if !self.current_route_is_main() {
             return;
         }
 
-        if self.focus != Focus::Composer {
-            match key.code {
-                KeyCode::Char('q') => {
-                    self.should_quit = true;
+        if self.focus != Focus::Composer
+            && let Some(action) = resolve_tui_key(KeyContext::Main, key)
+        {
+            match action {
+                KeyAction::SearchForward | KeyAction::SearchBackward => {
+                    self.focus = Focus::Transcript;
+                    self.open_transcript_search_overlay(action == KeyAction::SearchForward);
+                    return;
+                }
+                KeyAction::SearchPrevious
+                    if self.focus == Focus::Transcript
+                        && !self.transcript.search_query.trim().is_empty() =>
+                {
+                    self.jump_search_match(!self.transcript_search_forward);
+                    return;
+                }
+                KeyAction::SearchNext
+                    if self.focus == Focus::Transcript
+                        && !self.transcript.search_query.trim().is_empty() =>
+                {
+                    self.jump_search_match(self.transcript_search_forward);
+                    return;
+                }
+                KeyAction::SearchNext => {
+                    self.create_session(None);
+                    return;
+                }
+                KeyAction::Continue => {
+                    self.continue_current_session();
                     return;
                 }
                 _ => {}
             }
-        }
-
-        if matches!(key.code, KeyCode::Tab)
-            && self.focus != Focus::Composer
-            && !(self.focus == Focus::Composer && self.slash_command_suggestions.is_some())
-        {
-            self.focus = Focus::Composer;
-            self.slash_command_suggestions = None;
-            return;
-        }
-
-        if matches!(key.code, KeyCode::BackTab) && self.focus != Focus::Composer {
-            self.focus = Focus::Composer;
-            self.slash_command_suggestions = None;
-            return;
-        }
-
-        if self.focus != Focus::Composer
-            && matches!(key.code, KeyCode::Char('/') | KeyCode::Char('?'))
-        {
-            self.focus = Focus::Transcript;
-            self.open_transcript_search_overlay(matches!(key.code, KeyCode::Char('/')));
-            return;
-        }
-
-        if matches!(key.code, KeyCode::Char('p')) && key.modifiers.contains(KeyModifiers::ALT) {
-            self.open_command_palette();
-            return;
-        }
-
-        if self.focus == Focus::Transcript
-            && !self.transcript.search_query.trim().is_empty()
-            && matches!(key.code, KeyCode::Char('N'))
-        {
-            self.jump_search_match(!self.transcript_search_forward);
-            return;
-        }
-
-        if self.focus == Focus::Transcript
-            && !self.transcript.search_query.trim().is_empty()
-            && matches!(key.code, KeyCode::Char('n'))
-        {
-            self.jump_search_match(self.transcript_search_forward);
-            return;
-        }
-
-        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('n')) {
-            self.create_session(None);
-            return;
-        }
-
-        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('r')) {
-            self.continue_current_session();
-            return;
-        }
-
-        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('s')) {
-            self.open_resume_session_picker();
-            return;
-        }
-
-        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('b')) {
-            self.open_lineage_picker();
-            return;
-        }
-
-        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('R')) {
-            self.open_rename_session_overlay();
-            return;
-        }
-
-        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('t')) {
-            self.open_timeline_overlay(TIMELINE_EVENT_LIMIT);
-            return;
-        }
-
-        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('P')) {
-            self.open_plugin_workbench("");
-            return;
-        }
-
-        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('[')) {
-            self.open_parent_session();
-            return;
-        }
-
-        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char(']')) {
-            self.open_child_sessions_picker();
-            return;
-        }
-
-        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('e')) {
-            self.handle_export_command("");
-            return;
-        }
-
-        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('v')) {
-            self.pending_ui_action = Some(UiAction::PageTranscript);
-            return;
-        }
-
-        if self.focus != Focus::Composer && matches!(key.code, KeyCode::Char('u')) {
-            self.open_user_input_overlay();
-            return;
         }
 
         match self.focus {
@@ -187,18 +101,23 @@ impl App {
             self.transcript_motion_prefix = None;
             return;
         }
-        match key.code {
-            KeyCode::Char(digit @ '1'..='9') => {
+        match resolve_tui_key(KeyContext::Transcript, key) {
+            Some(KeyAction::CountDigit(digit @ 1..=9)) => {
                 self.transcript_motion_prefix
                     .get_or_insert_with(String::new)
-                    .push(digit);
+                    .push(char::from(b'0' + digit));
             }
-            KeyCode::Char(digit @ '0') if self.transcript_motion_prefix.is_some() => {
+            Some(KeyAction::CountDigit(0)) if self.transcript_motion_prefix.is_some() => {
                 if let Some(prefix) = self.transcript_motion_prefix.as_mut() {
-                    prefix.push(digit);
+                    prefix.push('0');
                 }
             }
-            KeyCode::Char('j') | KeyCode::Char('k') | KeyCode::Char('h') | KeyCode::Char('l') => {}
+            Some(
+                KeyAction::MoveUp
+                | KeyAction::MoveDown
+                | KeyAction::MoveLeft
+                | KeyAction::MoveRight,
+            ) => {}
             _ => {
                 self.transcript_motion_prefix = None;
             }
@@ -309,6 +228,6 @@ impl App {
     }
 }
 use crate::app::{
-    App, Focus, Instant, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Overlay, OverlayCommit,
-    Route, TIMELINE_EVENT_LIMIT, UiAction, ui_text,
+    App, Focus, Instant, KeyEvent, KeyEventKind, Overlay, OverlayCommit, Route, ui_text,
 };
+use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

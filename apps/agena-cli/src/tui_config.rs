@@ -3,7 +3,7 @@
 use agena::config::{TuiColorSchemeConfig, UiConfig};
 use agena_tui_components::{ColorScheme, TerminalRgb, ThemePalette};
 
-use crate::keybindings::ComposerKeyBindings;
+use crate::tui_keymap::ComposerKeyBindings;
 
 #[derive(Debug, Clone, Default)]
 pub struct TuiConfig {

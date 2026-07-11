@@ -1,6 +1,6 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::KeyEvent;
 
-use crate::Editor;
+use crate::{Editor, InputDialogAction, input_dialog_action};
 
 #[derive(Debug, Clone)]
 pub struct EditorDialogState<TAction> {
@@ -43,12 +43,12 @@ pub fn drive_editor_dialog_key<TAction: Clone>(
     editor: &mut EditorDialogState<TAction>,
     key: KeyEvent,
 ) -> EditorDialogKeyResult<TAction> {
-    if matches!(key.code, KeyCode::Esc) {
+    if input_dialog_action(key, editor.multiline) == Some(InputDialogAction::Close) {
         return EditorDialogKeyResult::Close;
     }
 
     if editor.multiline {
-        if matches!(key.code, KeyCode::Char('s')) && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if input_dialog_action(key, true) == Some(InputDialogAction::Submit) {
             editor.input.flush_all_pending_input();
             return EditorDialogKeyResult::Submit(
                 editor.action.clone(),
@@ -59,8 +59,8 @@ pub fn drive_editor_dialog_key<TAction: Clone>(
         return EditorDialogKeyResult::Continue;
     }
 
-    match key.code {
-        KeyCode::Enter => {
+    match input_dialog_action(key, false) {
+        Some(InputDialogAction::Submit) => {
             editor.input.flush_all_pending_input();
             EditorDialogKeyResult::Submit(editor.action.clone(), editor.input.text().to_string())
         }

@@ -1,4 +1,6 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
+
+use crate::{NavigationAction, navigation_action};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SelectionCursor {
@@ -36,28 +38,28 @@ impl SelectionCursor {
         item_count: usize,
         page_size: usize,
     ) -> bool {
-        match key.code {
-            KeyCode::PageUp => {
+        match navigation_action(key) {
+            Some(NavigationAction::PageUp) => {
                 self.move_page(item_count, -1, page_size);
                 true
             }
-            KeyCode::PageDown => {
+            Some(NavigationAction::PageDown) => {
                 self.move_page(item_count, 1, page_size);
                 true
             }
-            KeyCode::Home => {
+            Some(NavigationAction::Home) => {
                 self.move_home();
                 true
             }
-            KeyCode::End => {
+            Some(NavigationAction::End) => {
                 self.move_end(item_count);
                 true
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            Some(NavigationAction::Up) => {
                 self.move_by(item_count, -1);
                 true
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(NavigationAction::Down) => {
                 self.move_by(item_count, 1);
                 true
             }

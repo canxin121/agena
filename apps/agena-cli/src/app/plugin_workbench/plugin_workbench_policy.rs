@@ -113,39 +113,32 @@ impl App {
         key: KeyEvent,
         dialog: &mut PluginPolicyStudioOverlay,
     ) -> bool {
-        match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Tab if key.modifiers.is_empty() => {
+        match resolve_tui_key(KeyContext::PluginPolicy, key) {
+            Some(KeyAction::Close) => true,
+            Some(KeyAction::Toggle) => {
                 dialog.state.set_focus(match dialog.state.focus() {
                     SectionedListFocus::Navigation => SectionedListFocus::Items,
                     SectionedListFocus::Items => SectionedListFocus::Navigation,
                 });
                 false
             }
-            KeyCode::BackTab => {
-                dialog.state.set_focus(match dialog.state.focus() {
-                    SectionedListFocus::Navigation => SectionedListFocus::Items,
-                    SectionedListFocus::Items => SectionedListFocus::Navigation,
-                });
-                false
-            }
-            KeyCode::Enter if dialog.state.focus() == SectionedListFocus::Navigation => {
+            Some(KeyAction::Activate) if dialog.state.focus() == SectionedListFocus::Navigation => {
                 dialog.state.set_focus(SectionedListFocus::Items);
                 false
             }
-            KeyCode::Char('r') | KeyCode::Char('R') => {
+            Some(KeyAction::Refresh) => {
                 self.refresh_plugin_policy_studio(dialog);
                 false
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            Some(KeyAction::MoveUp) => {
                 dialog.state.move_selection(-1);
                 false
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(KeyAction::MoveDown) => {
                 dialog.state.move_selection(1);
                 false
             }
-            KeyCode::PageUp => {
+            Some(KeyAction::PageUp) => {
                 let page = match dialog.state.focus() {
                     SectionedListFocus::Navigation => dialog.visible_section_page_size.get().max(1),
                     SectionedListFocus::Items => dialog.visible_item_page_size.get().max(1),
@@ -153,7 +146,7 @@ impl App {
                 dialog.state.move_selection_page(-1, page);
                 false
             }
-            KeyCode::PageDown => {
+            Some(KeyAction::PageDown) => {
                 let page = match dialog.state.focus() {
                     SectionedListFocus::Navigation => dialog.visible_section_page_size.get().max(1),
                     SectionedListFocus::Items => dialog.visible_item_page_size.get().max(1),
@@ -161,37 +154,31 @@ impl App {
                 dialog.state.move_selection_page(1, page);
                 false
             }
-            KeyCode::Home => {
+            Some(KeyAction::Home) => {
                 dialog.state.move_selection_home();
                 false
             }
-            KeyCode::End => {
+            Some(KeyAction::End) => {
                 dialog.state.move_selection_end();
                 false
             }
-            KeyCode::Left | KeyCode::Char('h')
-                if dialog.state.focus() == SectionedListFocus::Items =>
-            {
+            Some(KeyAction::MoveLeft) if dialog.state.focus() == SectionedListFocus::Items => {
                 dialog.selected_column = PluginPolicyColumn::Prompt;
                 false
             }
-            KeyCode::Right | KeyCode::Char('l')
-                if dialog.state.focus() == SectionedListFocus::Items =>
-            {
+            Some(KeyAction::MoveRight) if dialog.state.focus() == SectionedListFocus::Items => {
                 dialog.selected_column = PluginPolicyColumn::Ui;
                 false
             }
-            KeyCode::Enter if dialog.state.focus() == SectionedListFocus::Items => {
+            Some(KeyAction::Activate) if dialog.state.focus() == SectionedListFocus::Items => {
                 self.cycle_plugin_policy_override(dialog);
                 false
             }
-            KeyCode::Delete | KeyCode::Backspace
-                if dialog.state.focus() == SectionedListFocus::Items =>
-            {
+            Some(KeyAction::ClearOverride) if dialog.state.focus() == SectionedListFocus::Items => {
                 self.clear_plugin_policy_override(dialog);
                 false
             }
-            KeyCode::Char('b') | KeyCode::Char('B')
+            Some(KeyAction::Brief)
                 if dialog.state.focus() == SectionedListFocus::Items
                     && dialog.selected_column == PluginPolicyColumn::Prompt =>
             {
@@ -201,7 +188,7 @@ impl App {
                 );
                 false
             }
-            KeyCode::Char('d') | KeyCode::Char('D')
+            Some(KeyAction::Detailed)
                 if dialog.state.focus() == SectionedListFocus::Items
                     && dialog.selected_column == PluginPolicyColumn::Prompt =>
             {
@@ -211,7 +198,7 @@ impl App {
                 );
                 false
             }
-            KeyCode::Char('s') | KeyCode::Char('S')
+            Some(KeyAction::Summary)
                 if dialog.state.focus() == SectionedListFocus::Items
                     && dialog.selected_column == PluginPolicyColumn::Ui =>
             {
@@ -221,7 +208,7 @@ impl App {
                 );
                 false
             }
-            KeyCode::Char('d') | KeyCode::Char('D')
+            Some(KeyAction::Detailed)
                 if dialog.state.focus() == SectionedListFocus::Items
                     && dialog.selected_column == PluginPolicyColumn::Ui =>
             {
@@ -231,9 +218,7 @@ impl App {
                 );
                 false
             }
-            KeyCode::Char('x') | KeyCode::Char('X') | KeyCode::Char('0')
-                if dialog.state.focus() == SectionedListFocus::Items =>
-            {
+            Some(KeyAction::ClearOverride) if dialog.state.focus() == SectionedListFocus::Items => {
                 self.clear_plugin_policy_override(dialog);
                 false
             }
@@ -354,6 +339,7 @@ impl App {
     }
 }
 use super::{
-    App, Cell, JsonValue, KeyCode, KeyEvent, PluginPolicyColumn, PluginPolicyStudioOverlay, Route,
+    App, Cell, JsonValue, KeyEvent, PluginPolicyColumn, PluginPolicyStudioOverlay, Route,
     SectionedListFocus, SectionedListState, UiResult, build_plugin_policy_sections,
 };
+use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

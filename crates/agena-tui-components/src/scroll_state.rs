@@ -1,4 +1,6 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
+
+use crate::{NavigationAction, navigation_action};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ScrollState {
@@ -38,28 +40,28 @@ impl ScrollState {
         max_scroll: u16,
         page_size: u16,
     ) -> bool {
-        match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
+        match navigation_action(key) {
+            Some(NavigationAction::Up) => {
                 self.move_by(-1, max_scroll);
                 true
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(NavigationAction::Down) => {
                 self.move_by(1, max_scroll);
                 true
             }
-            KeyCode::PageUp => {
+            Some(NavigationAction::PageUp) => {
                 self.move_page(-1, page_size, max_scroll);
                 true
             }
-            KeyCode::PageDown => {
+            Some(NavigationAction::PageDown) => {
                 self.move_page(1, page_size, max_scroll);
                 true
             }
-            KeyCode::Home => {
+            Some(NavigationAction::Home) => {
                 self.move_home();
                 true
             }
-            KeyCode::End => {
+            Some(NavigationAction::End) => {
                 self.move_end(max_scroll);
                 true
             }

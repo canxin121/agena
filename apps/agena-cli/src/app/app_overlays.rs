@@ -32,14 +32,14 @@ impl App {
         key: KeyEvent,
         dialog: &mut ChoiceOverlay,
     ) -> bool {
-        match key.code {
-            KeyCode::Tab => {
+        match resolve_tui_key(KeyContext::Choice, key) {
+            Some(KeyAction::Fill) => {
                 if dialog.fill_input_from_selected() {
                     Self::sync_choice_overlay_input(dialog, true);
                 }
                 false
             }
-            KeyCode::Enter => self.commit_choice_overlay(dialog),
+            Some(KeyAction::Accept) => self.commit_choice_overlay(dialog),
             _ => match dialog.handle_filter_input_key(key, 10) {
                 SearchInputKeyResult::Close => true,
                 SearchInputKeyResult::Navigated => false,
@@ -58,12 +58,12 @@ impl App {
         key: KeyEvent,
         dialog: &mut FileAttachOverlay,
     ) -> bool {
-        match key.code {
-            KeyCode::Tab => {
+        match resolve_tui_key(KeyContext::FileAttach, key) {
+            Some(KeyAction::Fill) => {
                 dialog.fill_input_from_selected();
                 false
             }
-            KeyCode::Enter => {
+            Some(KeyAction::Accept) => {
                 let Some(path) = dialog.selected_row().and_then(|selection| match selection {
                     SearchListRow::Clear(_) => None,
                     SearchListRow::Custom(value) => Some(PathBuf::from(value.raw)),
@@ -101,8 +101,8 @@ impl App {
             .len()
             .saturating_sub(1)
             .min(u16::MAX as usize) as u16;
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => true,
+        match resolve_tui_key(KeyContext::Help, key) {
+            Some(KeyAction::Close) => true,
             _ => dialog.handle_navigation_key(key, max_scroll, 8),
         }
     }
@@ -112,8 +112,8 @@ impl App {
         key: KeyEvent,
         dialog: &mut SessionSearchOverlay,
     ) -> bool {
-        match key.code {
-            KeyCode::Left | KeyCode::Char('h') => {
+        match resolve_tui_key(KeyContext::SessionSearch, key) {
+            Some(KeyAction::Previous) => {
                 if dialog.loading || dialog.meta.page_index == 0 {
                     return false;
                 }
@@ -142,7 +142,7 @@ impl App {
                 }
                 false
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            Some(KeyAction::Next) => {
                 if dialog.loading || !dialog.meta.has_more {
                     return false;
                 }
@@ -174,7 +174,7 @@ impl App {
                 }
                 false
             }
-            KeyCode::Tab => {
+            Some(KeyAction::Fill) => {
                 if let Some(session) = dialog.items.get(dialog.selected) {
                     let title = session.session.title.clone();
                     if dialog.input.text() != title {
@@ -184,7 +184,7 @@ impl App {
                 }
                 false
             }
-            KeyCode::Enter => {
+            Some(KeyAction::Open) => {
                 let Some(session) = dialog.items.get(dialog.selected).cloned() else {
                     return false;
                 };
@@ -325,18 +325,18 @@ impl App {
         key: KeyEvent,
         dialog: &mut PickerOverlay,
     ) -> bool {
-        match key.code {
-            KeyCode::Tab => {
+        match resolve_tui_key(KeyContext::Picker, key) {
+            Some(KeyAction::Fill) => {
                 if dialog.fill_input_from_selected() {
                     Self::refresh_picker_overlay(dialog);
                 }
                 false
             }
-            KeyCode::Char('n') if matches!(dialog.meta.kind, PickerKind::Agents) => {
+            Some(KeyAction::New) if matches!(dialog.meta.kind, PickerKind::Agents) => {
                 self.open_agent_create_overlay();
                 false
             }
-            KeyCode::Char('n')
+            Some(KeyAction::New)
                 if matches!(
                     dialog.meta.kind,
                     PickerKind::Providers(ProviderPickerPurpose::Configure)
@@ -346,12 +346,12 @@ impl App {
                 self.open_provider_studio(None);
                 false
             }
-            KeyCode::Char('n') if matches!(dialog.meta.kind, PickerKind::PermissionRules) => {
+            Some(KeyAction::New) if matches!(dialog.meta.kind, PickerKind::PermissionRules) => {
                 self.route_stack.push(Route::Picker(dialog.clone()));
                 self.open_permission_rule_studio(None, None);
                 false
             }
-            KeyCode::Char('d') if matches!(dialog.meta.kind, PickerKind::PermissionRules) => {
+            Some(KeyAction::Delete) if matches!(dialog.meta.kind, PickerKind::PermissionRules) => {
                 let Some(item) = dialog.items.get(dialog.selected).cloned() else {
                     return false;
                 };
@@ -362,7 +362,7 @@ impl App {
                     false
                 }
             }
-            KeyCode::Enter => {
+            Some(KeyAction::Accept) => {
                 let Some(item) = dialog.items.get(dialog.selected).cloned() else {
                     return false;
                 };
@@ -434,16 +434,16 @@ impl App {
         key: KeyEvent,
         dialog: &mut SessionModelChooserOverlay,
     ) -> bool {
-        match key.code {
-            KeyCode::Left => {
+        match resolve_tui_key(KeyContext::SessionModel, key) {
+            Some(KeyAction::Previous) => {
                 dialog.move_selection_page(-1, dialog.meta.page_size);
                 false
             }
-            KeyCode::Right => {
+            Some(KeyAction::Next) => {
                 dialog.move_selection_page(1, dialog.meta.page_size);
                 false
             }
-            KeyCode::Enter => {
+            Some(KeyAction::Accept) => {
                 let Some(item) = dialog.items.get(dialog.selected).cloned() else {
                     return false;
                 };
@@ -468,8 +468,8 @@ impl App {
         key: KeyEvent,
         dialog: &mut TimelineOverlay,
     ) -> bool {
-        match key.code {
-            KeyCode::Enter => {
+        match resolve_tui_key(KeyContext::Timeline, key) {
+            Some(KeyAction::Open) => {
                 if let Some(item) = dialog.selected_item()
                     && let Some(message_id) = item.linked_message_id
                 {
@@ -478,7 +478,7 @@ impl App {
                 }
                 false
             }
-            KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(KeyAction::CopyEvent) => {
                 if let Some(item) = dialog.selected_item() {
                     match set_clipboard_text(item.copy_text.as_str()) {
                         Ok(method) => self.flash_clipboard_copy_success(
@@ -560,60 +560,58 @@ impl App {
             return self.handle_provider_studio_detail_page_key(key, dialog);
         }
 
-        match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Tab => {
+        match resolve_tui_key(KeyContext::ProviderStudio, key) {
+            Some(KeyAction::Close) => true,
+            Some(KeyAction::NextTab) => {
                 dialog.selection.next_focus();
                 false
             }
-            KeyCode::BackTab => {
+            Some(KeyAction::PreviousTab) => {
                 dialog.selection.prev_focus();
                 false
             }
-            KeyCode::Char('n') => {
+            Some(KeyAction::New) => {
                 self.load_provider_studio_draft(dialog, None, Some(String::new()));
                 false
             }
-            KeyCode::Char('o') | KeyCode::Char('O') => {
+            Some(KeyAction::AuthStart) => {
                 self.request_provider_studio_start_auth(dialog);
                 false
             }
-            KeyCode::Char('p') | KeyCode::Char('P') => {
+            Some(KeyAction::AuthContinue) => {
                 self.request_provider_studio_continue_auth(dialog);
                 false
             }
-            KeyCode::Char('r') => {
+            Some(KeyAction::LoadModels) => {
                 self.request_provider_studio_adapter_models(dialog);
                 false
             }
-            KeyCode::Char('+') if dialog.selection.focus() == ProviderStudioFocus::Models => {
+            Some(KeyAction::Add) if dialog.selection.focus() == ProviderStudioFocus::Models => {
                 self.open_provider_studio_new_model_editor(dialog);
                 false
             }
-            KeyCode::Delete | KeyCode::Backspace
+            Some(KeyAction::Delete)
                 if dialog.selection.focus() == ProviderStudioFocus::Adapters =>
             {
                 self.open_provider_studio_delete_selected_adapter_confirm(dialog);
                 false
             }
-            KeyCode::Delete | KeyCode::Backspace
-                if dialog.selection.focus() == ProviderStudioFocus::Models =>
-            {
+            Some(KeyAction::Delete) if dialog.selection.focus() == ProviderStudioFocus::Models => {
                 self.open_provider_studio_delete_selected_model_confirm(dialog);
                 false
             }
-            KeyCode::Char('D') if dialog.draft.source_provider_id.is_some() => {
+            Some(KeyAction::DeleteProvider) if dialog.draft.source_provider_id.is_some() => {
                 if let Some(provider_id) = dialog.draft.source_provider_id.clone() {
                     self.open_provider_studio_delete_provider_confirm(provider_id);
                 }
                 false
             }
-            KeyCode::Char('s') | KeyCode::Char('S') => {
+            Some(KeyAction::Save) => {
                 dialog.saving = true;
                 self.request_provider_studio_save_draft(dialog.clone());
                 false
             }
-            KeyCode::Char('a') => {
+            Some(KeyAction::SaveAdapter) => {
                 if provider_studio_selected_adapter_models(dialog).is_none() {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
@@ -625,27 +623,27 @@ impl App {
                 self.request_provider_studio_save_selected_adapter(dialog.clone());
                 false
             }
-            KeyCode::Char('A') if dialog.selection.focus() == ProviderStudioFocus::Adapters => {
+            Some(KeyAction::SelectAll)
+                if dialog.selection.focus() == ProviderStudioFocus::Adapters =>
+            {
                 Self::select_all_provider_studio_adapters(dialog);
                 false
             }
-            KeyCode::Char('A') if dialog.selection.focus() == ProviderStudioFocus::Models => {
+            Some(KeyAction::SelectAll)
+                if dialog.selection.focus() == ProviderStudioFocus::Models =>
+            {
                 Self::select_all_provider_studio_models(dialog);
                 false
             }
-            KeyCode::Char('c') | KeyCode::Char('C')
-                if dialog.selection.focus() == ProviderStudioFocus::Adapters =>
-            {
+            Some(KeyAction::Clear) if dialog.selection.focus() == ProviderStudioFocus::Adapters => {
                 Self::clear_provider_studio_selected_adapters(dialog);
                 false
             }
-            KeyCode::Char('c') | KeyCode::Char('C')
-                if dialog.selection.focus() == ProviderStudioFocus::Models =>
-            {
+            Some(KeyAction::Clear) if dialog.selection.focus() == ProviderStudioFocus::Models => {
                 Self::clear_provider_studio_selected_models(dialog);
                 false
             }
-            KeyCode::Char('m') | KeyCode::Char('M') => {
+            Some(KeyAction::SaveModel) => {
                 if provider_studio_selected_model_target(dialog).is_none() {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
@@ -657,39 +655,41 @@ impl App {
                 self.request_provider_studio_save_selected_model(dialog.clone());
                 false
             }
-            KeyCode::Char(' ') if dialog.selection.focus() == ProviderStudioFocus::Adapters => {
+            Some(KeyAction::Toggle)
+                if dialog.selection.focus() == ProviderStudioFocus::Adapters =>
+            {
                 self.toggle_provider_studio_selected_adapter(dialog);
                 false
             }
-            KeyCode::Char(' ') if dialog.selection.focus() == ProviderStudioFocus::Models => {
+            Some(KeyAction::Toggle) if dialog.selection.focus() == ProviderStudioFocus::Models => {
                 self.toggle_provider_studio_selected_model(dialog);
                 false
             }
-            KeyCode::PageUp => {
+            Some(KeyAction::PageUp) => {
                 self.move_provider_studio_selection_page(dialog, -1, 10);
                 false
             }
-            KeyCode::PageDown => {
+            Some(KeyAction::PageDown) => {
                 self.move_provider_studio_selection_page(dialog, 1, 10);
                 false
             }
-            KeyCode::Home => {
+            Some(KeyAction::Home) => {
                 self.move_provider_studio_selection_home(dialog);
                 false
             }
-            KeyCode::End => {
+            Some(KeyAction::End) => {
                 self.move_provider_studio_selection_end(dialog);
                 false
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            Some(KeyAction::MoveUp) => {
                 self.move_provider_studio_selection(dialog, -1);
                 false
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(KeyAction::MoveDown) => {
                 self.move_provider_studio_selection(dialog, 1);
                 false
             }
-            KeyCode::Enter => {
+            Some(KeyAction::Activate) => {
                 self.activate_provider_studio_focus(dialog);
                 false
             }
@@ -721,19 +721,19 @@ impl App {
             };
         }
 
-        match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Char('/') => {
+        match resolve_tui_key(KeyContext::ModelCatalog, key) {
+            Some(KeyAction::Close) => true,
+            Some(KeyAction::CatalogSearch) => {
                 dialog.workbench.editor =
                     Some(self.build_model_catalog_search_overlay(dialog.query.as_str()));
                 false
             }
-            KeyCode::Char('R') => {
+            Some(KeyAction::CatalogRefresh) => {
                 dialog.loading = true;
                 self.request_model_catalog_refresh();
                 false
             }
-            KeyCode::Left | KeyCode::Char('h') => {
+            Some(KeyAction::Previous) => {
                 if dialog.offset == 0 {
                     return false;
                 }
@@ -744,7 +744,7 @@ impl App {
                 self.request_model_catalog_page(dialog.query.clone(), offset);
                 false
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            Some(KeyAction::Next) => {
                 if dialog.offset + dialog.workbench.list.items.len() >= dialog.total {
                     return false;
                 }
@@ -761,12 +761,12 @@ impl App {
 }
 use crate::app::{
     App, ChoiceOverlay, EditorDialogKeyResult, FileAttachOverlay, Focus, HelpOverlay,
-    InputDialogKeyResult, KeyCode, KeyEvent, KeyModifiers, ModelCatalogStudioOverlay, PathBuf,
-    PickerKind, PickerOverlay, PickerValue, ProviderPickerPurpose, ProviderStudioEditorAction,
-    ProviderStudioFocus, ProviderStudioOverlay, Route, RuntimeSettingEditOverlay,
-    SearchInputKeyResult, SearchListRow, SessionModelChooserOverlay, SessionSearchOverlay,
-    SessionViewMode, TimelineOverlay, drive_editor_dialog_key, drive_input_dialog_key, min,
-    provider_studio_selected_adapter_models, provider_studio_selected_model_target,
-    set_clipboard_text, ui_text,
+    InputDialogKeyResult, KeyEvent, ModelCatalogStudioOverlay, PathBuf, PickerKind, PickerOverlay,
+    PickerValue, ProviderPickerPurpose, ProviderStudioEditorAction, ProviderStudioFocus,
+    ProviderStudioOverlay, Route, RuntimeSettingEditOverlay, SearchInputKeyResult, SearchListRow,
+    SessionModelChooserOverlay, SessionSearchOverlay, SessionViewMode, TimelineOverlay,
+    drive_editor_dialog_key, drive_input_dialog_key, min, provider_studio_selected_adapter_models,
+    provider_studio_selected_model_target, set_clipboard_text, ui_text,
 };
+use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui_components::SearchListItem;

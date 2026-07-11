@@ -1,17 +1,15 @@
 use super::{
-    ConfigJsonSources, I18n, JsonValue, KeyCode, PermissionAction, PermissionConfig,
-    PermissionMode, PermissionOverlayChoice, PermissionOverlayDecision, PermissionOverlayPage,
-    PermissionReplyKind, PermissionRequest, PermissionRiskLevel, PermissionRuleSubjectKind,
-    PermissionScope, PermissionStudioModeTarget, RenderedTranscriptNode, SettingsPickerAction,
-    ToolPermissionRules, TranscriptBlockCursor, TranscriptBlockSelectionMode,
-    TranscriptMoveDirection, TranscriptNodeKey, TranscriptNodeKind,
-    TranscriptVerticalNavigationStep, Utc, apply_permission_studio_mode_input,
-    initial_search_match_index, path_rule_modes, permission_overlay_choice,
-    permission_overlay_choices, permission_rule_draft_from_request,
-    settings_studio_permission_items, transcript_message_navigation_direction,
-    transcript_message_navigation_target, transcript_selection_scroll_position,
-    transcript_should_fall_back_to_message_navigation, transcript_should_follow_tail,
-    transcript_vertical_line_navigation_step, transcript_vertical_navigation_direction,
+    ConfigJsonSources, I18n, JsonValue, PermissionAction, PermissionConfig, PermissionMode,
+    PermissionOverlayChoice, PermissionOverlayDecision, PermissionOverlayPage, PermissionReplyKind,
+    PermissionRequest, PermissionRiskLevel, PermissionRuleSubjectKind, PermissionScope,
+    PermissionStudioModeTarget, RenderedTranscriptNode, SettingsPickerAction, ToolPermissionRules,
+    TranscriptBlockCursor, TranscriptBlockSelectionMode, TranscriptMoveDirection,
+    TranscriptNodeKey, TranscriptNodeKind, TranscriptVerticalNavigationStep, Utc,
+    apply_permission_studio_mode_input, initial_search_match_index, path_rule_modes,
+    permission_overlay_choice, permission_overlay_choices, permission_rule_draft_from_request,
+    settings_studio_permission_items, transcript_message_navigation_target,
+    transcript_selection_scroll_position, transcript_should_fall_back_to_message_navigation,
+    transcript_should_follow_tail, transcript_vertical_line_navigation_step,
     transcript_vertical_navigation_step,
 };
 
@@ -363,13 +361,12 @@ mod permission_overlay_tests {
 #[cfg(test)]
 mod transcript_navigation_tests {
     use super::{
-        KeyCode, RenderedTranscriptNode, TranscriptBlockCursor, TranscriptBlockSelectionMode,
+        RenderedTranscriptNode, TranscriptBlockCursor, TranscriptBlockSelectionMode,
         TranscriptMoveDirection, TranscriptNodeKey, TranscriptNodeKind,
         TranscriptVerticalNavigationStep, initial_search_match_index,
-        transcript_message_navigation_direction, transcript_message_navigation_target,
-        transcript_selection_scroll_position, transcript_should_fall_back_to_message_navigation,
-        transcript_should_follow_tail, transcript_vertical_line_navigation_step,
-        transcript_vertical_navigation_direction, transcript_vertical_navigation_step,
+        transcript_message_navigation_target, transcript_selection_scroll_position,
+        transcript_should_fall_back_to_message_navigation, transcript_should_follow_tail,
+        transcript_vertical_line_navigation_step, transcript_vertical_navigation_step,
     };
 
     fn node(key: TranscriptNodeKey, start_line: usize, end_line: usize) -> RenderedTranscriptNode {
@@ -382,26 +379,6 @@ mod transcript_navigation_tests {
             toggleable: false,
             expanded: true,
         }
-    }
-
-    #[test]
-    fn transcript_arrow_and_vim_keys_share_navigation_bindings() {
-        assert_eq!(
-            transcript_message_navigation_direction(KeyCode::Left),
-            transcript_message_navigation_direction(KeyCode::Char('h'))
-        );
-        assert_eq!(
-            transcript_message_navigation_direction(KeyCode::Right),
-            transcript_message_navigation_direction(KeyCode::Char('l'))
-        );
-        assert_eq!(
-            transcript_vertical_navigation_direction(KeyCode::Up),
-            transcript_vertical_navigation_direction(KeyCode::Char('k'))
-        );
-        assert_eq!(
-            transcript_vertical_navigation_direction(KeyCode::Down),
-            transcript_vertical_navigation_direction(KeyCode::Char('j'))
-        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -12,11 +12,13 @@ use ratatui::{
 use crate::theme;
 
 use crate::{
-    Editor, EditorPanelSpec, FramedSurfaceSpec,
+    Editor, EditorPanelSpec, FramedSurfaceSpec, InputDialogAction, NavigationAction,
+    input_dialog_action,
     layout::{
         SurfaceMode, VerticalSectionSize, editor_input_panel_height, framed_sections_target_height,
         optional_overlay_text_height, overlay_text_height, split_vertical_sections,
     },
+    navigation_action,
     panels::{ListPanelState, MeasuredListPanelHeight, render_list_panel_state},
     render_editor_panel, render_framed_surface,
     selection::{
@@ -310,28 +312,28 @@ where
     }
 
     pub fn handle_navigation_key(&mut self, key: KeyEvent, page_size: usize) -> bool {
-        match key.code {
-            KeyCode::PageUp => {
+        match navigation_action(key) {
+            Some(NavigationAction::PageUp) => {
                 self.move_selection_page(-1, page_size);
                 true
             }
-            KeyCode::PageDown => {
+            Some(NavigationAction::PageDown) => {
                 self.move_selection_page(1, page_size);
                 true
             }
-            KeyCode::Home => {
+            Some(NavigationAction::Home) => {
                 self.move_selection_home();
                 true
             }
-            KeyCode::End => {
+            Some(NavigationAction::End) => {
                 self.move_selection_end();
                 true
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            Some(NavigationAction::Up) => {
                 self.move_selection(-1);
                 true
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(NavigationAction::Down) => {
                 self.move_selection(1);
                 true
             }
@@ -344,7 +346,7 @@ where
         key: KeyEvent,
         page_size: usize,
     ) -> SearchInputKeyResult {
-        if matches!(key.code, KeyCode::Esc) {
+        if input_dialog_action(key, false) == Some(InputDialogAction::Close) {
             return SearchInputKeyResult::Close;
         }
         if self.handle_navigation_key(key, page_size) {

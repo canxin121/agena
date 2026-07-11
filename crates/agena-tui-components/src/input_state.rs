@@ -1,6 +1,6 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 
-use crate::Editor;
+use crate::{Editor, InputDialogAction, input_dialog_action};
 
 #[derive(Debug, Clone)]
 pub struct InputDialogState<TAction> {
@@ -32,9 +32,9 @@ pub fn drive_input_dialog_key<TAction: Clone>(
     dialog: &mut InputDialogState<TAction>,
     key: KeyEvent,
 ) -> InputDialogKeyResult<TAction> {
-    match key.code {
-        KeyCode::Esc => InputDialogKeyResult::Close,
-        KeyCode::Enter => {
+    match input_dialog_action(key, false) {
+        Some(InputDialogAction::Close) => InputDialogKeyResult::Close,
+        Some(InputDialogAction::Submit) => {
             dialog.input.flush_all_pending_input();
             InputDialogKeyResult::Submit(dialog.action.clone(), dialog.input.text().to_string())
         }

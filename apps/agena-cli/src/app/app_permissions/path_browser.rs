@@ -49,20 +49,20 @@ impl App {
         key: KeyEvent,
         dialog: &mut PathBrowserOverlay,
     ) -> bool {
-        match key.code {
-            KeyCode::Tab => {
+        match resolve_tui_key(KeyContext::PathBrowser, key) {
+            Some(KeyAction::Fill) => {
                 dialog.fill_input_from_selected();
                 false
             }
-            KeyCode::Char('h') => {
+            Some(KeyAction::Back) => {
                 self.path_browser_navigate_parent(dialog);
                 false
             }
-            KeyCode::Char('l') => {
+            Some(KeyAction::Open) => {
                 self.path_browser_open_entry(dialog);
                 false
             }
-            KeyCode::Enter => self.path_browser_activate(dialog),
+            Some(KeyAction::Accept) => self.path_browser_activate(dialog),
             _ => match dialog.handle_filter_input_key(key, 10) {
                 SearchInputKeyResult::Close => true,
                 SearchInputKeyResult::Navigated => false,
@@ -249,8 +249,9 @@ impl App {
     }
 }
 use crate::app::{
-    App, KeyCode, KeyEvent, Overlay, Path, PathBrowserItem, PathBrowserMode, PathBrowserOverlay,
+    App, KeyEvent, Overlay, Path, PathBrowserItem, PathBrowserMode, PathBrowserOverlay,
     PathBrowserTarget, PathBuf, PermissionRuleStudioAction, PermissionRuleStudioOverlay,
     PermissionRuleStudioPathField, Route, SearchInputKeyResult, SearchListRow, fs,
     permission_rule_path_browser_spec, refresh_permission_rule_studio_dialog, ui_text,
 };
+use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

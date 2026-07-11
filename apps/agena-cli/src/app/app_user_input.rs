@@ -26,9 +26,9 @@ impl App {
         key: KeyEvent,
         dialog: &mut ConfirmOverlay,
     ) -> bool {
-        match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+        match resolve_tui_key(KeyContext::Confirm, key) {
+            Some(KeyAction::Close) => true,
+            Some(KeyAction::Confirm) => {
                 self.handle_confirm_action(dialog.action.clone());
                 true
             }
@@ -45,12 +45,12 @@ impl App {
             return self.handle_user_input_review_decision_key(key, dialog);
         }
         if dialog.editing_custom {
-            return match key.code {
-                KeyCode::Esc => {
+            return match resolve_tui_key(KeyContext::UserInputQuestion, key) {
+                Some(KeyAction::Close) => {
                     dialog.editing_custom = false;
                     false
                 }
-                KeyCode::Enter => {
+                Some(KeyAction::Accept) => {
                     let committed = Self::commit_user_input_custom_values(dialog);
                     let should_advance = dialog
                         .request
@@ -87,33 +87,31 @@ impl App {
         let option_count = Self::user_input_review_question(&dialog.request)
             .map(|question| question.options.len())
             .unwrap_or(0);
-        match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Enter => self.submit_user_input_overlay(dialog),
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.cancel_user_input_overlay(dialog)
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
+        match resolve_tui_key(KeyContext::UserInputReview, key) {
+            Some(KeyAction::Close) => true,
+            Some(KeyAction::Accept) => self.submit_user_input_overlay(dialog),
+            Some(KeyAction::CancelRequest) => self.cancel_user_input_overlay(dialog),
+            Some(KeyAction::MoveUp) => {
                 move_selected_index(&mut dialog.review_option, option_count, -1);
                 false
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(KeyAction::MoveDown) => {
                 move_selected_index(&mut dialog.review_option, option_count, 1);
                 false
             }
-            KeyCode::PageUp => {
+            Some(KeyAction::PageUp) => {
                 dialog.review_scroll = dialog.review_scroll.saturating_sub(12);
                 false
             }
-            KeyCode::PageDown => {
+            Some(KeyAction::PageDown) => {
                 dialog.review_scroll = dialog.review_scroll.saturating_add(12);
                 false
             }
-            KeyCode::Home => {
+            Some(KeyAction::Home) => {
                 dialog.review_scroll = 0;
                 false
             }
-            KeyCode::End => {
+            Some(KeyAction::End) => {
                 dialog.review_scroll = u16::MAX;
                 false
             }
@@ -126,53 +124,51 @@ impl App {
         key: KeyEvent,
         dialog: &mut UserInputOverlay,
     ) -> bool {
-        match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Enter => self.commit_user_input_question(dialog),
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.cancel_user_input_overlay(dialog)
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
+        match resolve_tui_key(KeyContext::UserInputQuestion, key) {
+            Some(KeyAction::Close) => true,
+            Some(KeyAction::Accept) => self.commit_user_input_question(dialog),
+            Some(KeyAction::CancelRequest) => self.cancel_user_input_overlay(dialog),
+            Some(KeyAction::MoveUp) => {
                 Self::move_user_input_option(dialog, -1);
                 false
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(KeyAction::MoveDown) => {
                 Self::move_user_input_option(dialog, 1);
                 false
             }
-            KeyCode::PageUp => {
+            Some(KeyAction::PreviousQuestion) => {
                 Self::move_user_input_question(dialog, -1);
                 false
             }
-            KeyCode::PageDown => {
+            Some(KeyAction::NextQuestion) => {
                 Self::move_user_input_question(dialog, 1);
                 false
             }
-            KeyCode::Home => {
+            Some(KeyAction::Home) => {
                 dialog.state.move_option_home();
                 false
             }
-            KeyCode::End => {
+            Some(KeyAction::End) => {
                 Self::move_user_input_option_to_end(dialog);
                 false
             }
-            KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
+            Some(KeyAction::PreviousTab) => {
                 Self::move_user_input_tab(dialog, -1);
                 false
             }
-            KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
+            Some(KeyAction::NextTab) => {
                 Self::move_user_input_tab(dialog, 1);
                 false
             }
-            KeyCode::Char(' ') => {
+            Some(KeyAction::Toggle) => {
                 Self::toggle_user_input_option(dialog);
                 false
             }
-            KeyCode::Char('e') => {
+            Some(KeyAction::Edit) => {
                 Self::begin_user_input_custom_edit(dialog);
                 false
             }
-            KeyCode::Char('c') | KeyCode::Delete | KeyCode::Backspace => {
+            Some(KeyAction::Clear) => {
                 Self::clear_user_input_answer(dialog);
                 false
             }
@@ -185,21 +181,19 @@ impl App {
         key: KeyEvent,
         dialog: &mut UserInputOverlay,
     ) -> bool {
-        match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Enter => self.submit_user_input_overlay(dialog),
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.cancel_user_input_overlay(dialog)
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
+        match resolve_tui_key(KeyContext::UserInputReview, key) {
+            Some(KeyAction::Close) => true,
+            Some(KeyAction::Accept) => self.submit_user_input_overlay(dialog),
+            Some(KeyAction::CancelRequest) => self.cancel_user_input_overlay(dialog),
+            Some(KeyAction::MoveUp) => {
                 Self::move_user_input_question(dialog, -1);
                 false
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            Some(KeyAction::MoveDown) => {
                 Self::move_user_input_question(dialog, 1);
                 false
             }
-            KeyCode::PageUp => {
+            Some(KeyAction::PageUp) => {
                 let review_mode = dialog.state.screen() == QuestionFlowScreen::Review;
                 dialog
                     .state
@@ -209,7 +203,7 @@ impl App {
                 }
                 false
             }
-            KeyCode::PageDown => {
+            Some(KeyAction::PageDown) => {
                 let review_mode = dialog.state.screen() == QuestionFlowScreen::Review;
                 dialog
                     .state
@@ -219,23 +213,23 @@ impl App {
                 }
                 false
             }
-            KeyCode::Home => {
+            Some(KeyAction::Home) => {
                 dialog
                     .state
                     .move_question_home(dialog.request.questions.len());
                 false
             }
-            KeyCode::End => {
+            Some(KeyAction::End) => {
                 dialog
                     .state
                     .move_question_end(dialog.request.questions.len());
                 false
             }
-            KeyCode::Char('e') | KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
+            Some(KeyAction::Edit) => {
                 Self::focus_user_input_question(dialog, dialog.state.selected_question());
                 false
             }
-            KeyCode::Char('c') | KeyCode::Delete | KeyCode::Backspace => {
+            Some(KeyAction::Clear) => {
                 Self::clear_user_input_answer(dialog);
                 false
             }
@@ -609,8 +603,9 @@ impl App {
     }
 }
 use crate::app::{
-    App, BTreeMap, ConfirmOverlay, I18n, InputDialogKeyResult, KeyCode, KeyEvent, KeyModifiers,
-    LineInputOverlay, OverlayCommit, QuestionFlowScreen, UserInputAnswerDraft, UserInputOverlay,
-    UserInputQuestion, UserInputReply, UserInputReplyKind, drive_input_dialog_key,
-    move_selected_index, ui_text, user_input_answer_values, user_input_question_label,
+    App, BTreeMap, ConfirmOverlay, I18n, InputDialogKeyResult, KeyEvent, LineInputOverlay,
+    OverlayCommit, QuestionFlowScreen, UserInputAnswerDraft, UserInputOverlay, UserInputQuestion,
+    UserInputReply, UserInputReplyKind, drive_input_dialog_key, move_selected_index, ui_text,
+    user_input_answer_values, user_input_question_label,
 };
+use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

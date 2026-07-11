@@ -391,7 +391,7 @@ Provider 定义在 `[providers.<id>]`。当前 canonical 结构是：
 - `[providers.<id>.adapters.<adapter-id>]`：协议实现。
 - `[providers.<id>.adapters.<adapter-id>.models."<model-id>"]`：真实上游模型节点，以及该 model 的 native tools 配置。
 
-更完整的架构说明见 [Provider / Auth / Adapter 架构](provider-auth-adapters.md)。
+更完整的认证和运行时刷新说明见 [Provider Auth 与 Credential](provider-credentials.md)。
 
 最小示例：
 
@@ -836,7 +836,7 @@ provider 侧只保存引用：
 - `anthropic = "/v1"`
 - `gemini = "/v1beta"`
 
-OpenCode Go / Zen 也是这类共享网关：Go 大多数模型走 OpenAI-compatible `/chat/completions`，MiniMax 模型走 Anthropic Messages `/messages`；Zen 还包含 OpenAI Responses 和 Gemini 路由。可复制配置见 [OpenCode 接入](opencode-go.md)。
+OpenCode Go / Zen 也是这类共享网关：Go 大多数模型走 OpenAI-compatible `/chat/completions`，MiniMax 模型走 Anthropic Messages `/messages`；Zen 还包含 OpenAI Responses 和 Gemini 路由。
 
 ### Model metadata 和 modes
 

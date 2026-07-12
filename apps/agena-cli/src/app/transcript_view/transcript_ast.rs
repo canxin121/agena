@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use comrak::{
     Arena, Options,
     nodes::{AlertType, AstNode, ListDelimType, ListType, NodeValue, TableAlignment},
@@ -10,14 +12,15 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::transcript_math::{push_inline_math, push_math_block};
+use super::transcript_math::push_math_block;
 use super::{
-    MarkdownBlock, RenderedLine, TranscriptNodeKind, push_markdown_code_block,
-    push_markdown_heading, push_markdown_rule, push_markdown_table, push_single_line,
-    push_wrapped_rich_line, sanitize_terminal_text, trim_empty_line_edges,
+    MarkdownBlock, RenderedLine, TableColumnAlignment, TranscriptNodeKind,
+    compute_table_column_widths, push_markdown_code_block, push_markdown_rule, push_single_line,
+    push_table_border, push_wrapped_rich_line, sanitize_terminal_text, trim_empty_line_edges,
+    wrap_rich_line,
 };
 use crate::math_render::{
-    MathLinePlacement, layout_config, render_markdown_image, unicode_formula,
+    MathLinePlacement, layout_config, render_markdown_image, render_markdown_svg, unicode_formula,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +40,10 @@ pub(in crate::app) enum MarkdownNode {
         language: String,
         literal: String,
         fenced: bool,
+    },
+    Diagram {
+        language: String,
+        literal: String,
     },
     List {
         ordered: bool,
@@ -158,7 +165,8 @@ pub(in crate::app) fn parse_markdown_document(text: &str) -> Vec<MarkdownBlock> 
     let root = parse_document(&arena, markdown.as_str(), &options);
     let source_lines = markdown.lines().collect::<Vec<_>>();
     let mut previous_end_line = 0_usize;
-    root.children()
+    let mut blocks = root
+        .children()
         .filter_map(|node| {
             let data = node.data();
             let start_line = data.sourcepos.start.line.max(1);
@@ -172,7 +180,9 @@ pub(in crate::app) fn parse_markdown_document(text: &str) -> Vec<MarkdownBlock> 
             let leading_blank_line = previous_end_line > 0 && start_line > previous_end_line + 1;
             previous_end_line = end_line;
             let copy_text = match &parsed {
-                MarkdownNode::Code { literal, .. } => literal.trim_end_matches('\n').to_string(),
+                MarkdownNode::Code { literal, .. } | MarkdownNode::Diagram { literal, .. } => {
+                    literal.trim_end_matches('\n').to_string()
+                }
                 _ => source.clone(),
             };
             Some(MarkdownBlock {
@@ -183,7 +193,132 @@ pub(in crate::app) fn parse_markdown_document(text: &str) -> Vec<MarkdownBlock> 
                 parsed,
             })
         })
-        .collect()
+        .collect::<Vec<_>>();
+    renumber_footnotes(&mut blocks);
+    blocks
+}
+
+fn renumber_footnotes(blocks: &mut [MarkdownBlock]) {
+    let mut ordinals = HashMap::new();
+    for block in blocks.iter() {
+        collect_footnote_definitions(&block.parsed, &mut ordinals);
+    }
+    for block in blocks {
+        apply_footnote_ordinals(&mut block.parsed, &ordinals);
+    }
+}
+
+fn collect_footnote_definitions(node: &MarkdownNode, ordinals: &mut HashMap<String, usize>) {
+    match node {
+        MarkdownNode::FootnoteDefinition { name, blocks } => {
+            let next = ordinals.len() + 1;
+            ordinals.entry(name.clone()).or_insert(next);
+            for block in blocks {
+                collect_footnote_definitions(block, ordinals);
+            }
+        }
+        MarkdownNode::Quote(blocks)
+        | MarkdownNode::Alert { blocks, .. }
+        | MarkdownNode::Directive { blocks, .. } => {
+            for block in blocks {
+                collect_footnote_definitions(block, ordinals);
+            }
+        }
+        MarkdownNode::List { items, .. } => {
+            for item in items {
+                for block in &item.blocks {
+                    collect_footnote_definitions(block, ordinals);
+                }
+            }
+        }
+        MarkdownNode::DescriptionList(items) => {
+            for item in items {
+                for detail in &item.details {
+                    collect_footnote_definitions(detail, ordinals);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn apply_footnote_ordinals(node: &mut MarkdownNode, ordinals: &HashMap<String, usize>) {
+    match node {
+        MarkdownNode::Paragraph(inlines)
+        | MarkdownNode::Heading {
+            content: inlines, ..
+        }
+        | MarkdownNode::Subtext(inlines) => apply_inline_footnote_ordinals(inlines, ordinals),
+        MarkdownNode::Quote(blocks)
+        | MarkdownNode::Alert { blocks, .. }
+        | MarkdownNode::Directive { blocks, .. } => {
+            for block in blocks {
+                apply_footnote_ordinals(block, ordinals);
+            }
+        }
+        MarkdownNode::List { items, .. } => {
+            for item in items {
+                for block in &mut item.blocks {
+                    apply_footnote_ordinals(block, ordinals);
+                }
+            }
+        }
+        MarkdownNode::DescriptionList(items) => {
+            for item in items {
+                apply_inline_footnote_ordinals(&mut item.term, ordinals);
+                for detail in &mut item.details {
+                    apply_footnote_ordinals(detail, ordinals);
+                }
+            }
+        }
+        MarkdownNode::Table { rows, .. } => {
+            for row in rows {
+                for cell in &mut row.cells {
+                    apply_inline_footnote_ordinals(cell, ordinals);
+                }
+            }
+        }
+        MarkdownNode::FootnoteDefinition { name, blocks } => {
+            if let Some(ordinal) = ordinals.get(name) {
+                *name = ordinal.to_string();
+            }
+            for block in blocks {
+                apply_footnote_ordinals(block, ordinals);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn apply_inline_footnote_ordinals(
+    inlines: &mut [MarkdownInline],
+    ordinals: &HashMap<String, usize>,
+) {
+    for inline in inlines {
+        match inline {
+            MarkdownInline::FootnoteReference(name) => {
+                if let Some(ordinal) = ordinals.get(name) {
+                    *name = ordinal.to_string();
+                }
+            }
+            MarkdownInline::Emphasis(children)
+            | MarkdownInline::Strong(children)
+            | MarkdownInline::Strikethrough(children)
+            | MarkdownInline::Underline(children)
+            | MarkdownInline::Highlight(children)
+            | MarkdownInline::Insert(children)
+            | MarkdownInline::Superscript(children)
+            | MarkdownInline::Subscript(children)
+            | MarkdownInline::Spoiler(children)
+            | MarkdownInline::Link {
+                label: children, ..
+            }
+            | MarkdownInline::WikiLink {
+                label: children, ..
+            } => apply_inline_footnote_ordinals(children, ordinals),
+            _ => {}
+        }
+    }
 }
 
 fn markdown_options() -> Options<'static> {
@@ -194,15 +329,19 @@ fn markdown_options() -> Options<'static> {
     options.extension.tasklist = true;
     options.extension.superscript = true;
     options.extension.footnotes = true;
+    options.extension.inline_footnotes = true;
     options.extension.description_lists = true;
     options.extension.front_matter_delimiter = Some("---".to_string());
     options.extension.multiline_block_quotes = true;
     options.extension.alerts = true;
     options.extension.math_dollars = true;
+    options.extension.math_latex = true;
     options.extension.math_code = true;
     options.extension.shortcodes = true;
     options.extension.wikilinks_title_after_pipe = true;
-    options.extension.underline = true;
+    // Keep CommonMark/GFM's `__strong__` meaning. Comrak's underline extension
+    // reassigns the same delimiter and therefore cannot be enabled globally.
+    options.extension.underline = false;
     options.extension.subscript = true;
     options.extension.spoiler = true;
     options.extension.cjk_friendly_emphasis = true;
@@ -210,9 +349,14 @@ fn markdown_options() -> Options<'static> {
     options.extension.highlight = true;
     options.extension.insert = true;
     options.extension.block_directive = true;
+    options.extension.header_attributes = true;
+    options.extension.fenced_code_attributes = true;
+    options.extension.inline_code_attributes = true;
+    options.extension.link_attributes = true;
     options.parse.smart = true;
     options.parse.relaxed_tasklist_matching = true;
     options.parse.tasklist_in_table = true;
+    options.parse.relaxed_autolinks = true;
     options.parse.leave_footnote_definitions = true;
     options
 }
@@ -262,16 +406,35 @@ fn convert_block<'a>(node: &'a AstNode<'a>) -> Option<MarkdownNode> {
             blocks: convert_blocks(node),
         }),
         NodeValue::CodeBlock(code) => {
-            let language = code
+            let mut language = code
                 .info
                 .split_whitespace()
                 .next()
                 .unwrap_or_default()
+                .trim_matches(['{', '}'])
+                .trim_start_matches('.')
                 .to_ascii_lowercase();
+            if language.is_empty()
+                && let Some(attribute_language) = node.data().attrs.as_deref().and_then(|attrs| {
+                    attrs.classes.iter().find(|class| {
+                        !matches!(
+                            class.to_ascii_lowercase().as_str(),
+                            "numberlines" | "number-lines" | "line-numbers" | "nowrap"
+                        )
+                    })
+                })
+            {
+                language = attribute_language.to_ascii_lowercase();
+            }
             if matches!(language.as_str(), "math" | "tex" | "latex" | "katex") {
                 Some(MarkdownNode::Math {
                     literal: code.literal.trim_end_matches('\n').to_string(),
                     display: true,
+                })
+            } else if is_diagram_language(&language) {
+                Some(MarkdownNode::Diagram {
+                    language,
+                    literal: code.literal,
                 })
             } else {
                 Some(MarkdownNode::Code {
@@ -370,7 +533,14 @@ fn convert_block<'a>(node: &'a AstNode<'a>) -> Option<MarkdownNode> {
             blocks: convert_blocks(node),
         }),
         NodeValue::FrontMatter(front_matter) => Some(MarkdownNode::FrontMatter(front_matter)),
-        NodeValue::HtmlBlock(html) => Some(MarkdownNode::Html(html.literal)),
+        NodeValue::HtmlBlock(html) => {
+            if let Some(MarkdownInline::Image { url, title, alt }) = safe_html_image(&html.literal)
+            {
+                Some(MarkdownNode::Image { url, title, alt })
+            } else {
+                Some(MarkdownNode::Html(html.literal))
+            }
+        }
         NodeValue::Subtext => Some(MarkdownNode::Subtext(convert_inlines(node))),
         NodeValue::BlockDirective(directive) => Some(MarkdownNode::Directive {
             info: directive.info,
@@ -391,7 +561,211 @@ fn convert_blocks<'a>(node: &'a AstNode<'a>) -> Vec<MarkdownNode> {
 }
 
 fn convert_inlines<'a>(node: &'a AstNode<'a>) -> Vec<MarkdownInline> {
-    node.children().filter_map(convert_inline).collect()
+    let mut converted = Vec::new();
+    let mut html_styles: Vec<SafeHtmlInlineStyle> = Vec::new();
+    for child in node.children() {
+        if let NodeValue::HtmlInline(html) = &child.data().value {
+            if let Some(mut image) = safe_html_image(html) {
+                for style in html_styles.iter().rev() {
+                    image = style.wrap(image);
+                }
+                converted.push(image);
+                continue;
+            }
+            if let Some(action) = safe_html_inline_action(html) {
+                match action {
+                    SafeHtmlInlineAction::Open(style) => html_styles.push(style),
+                    SafeHtmlInlineAction::Close(style) => {
+                        if let Some(position) =
+                            html_styles.iter().rposition(|active| *active == style)
+                        {
+                            html_styles.truncate(position);
+                        }
+                    }
+                    SafeHtmlInlineAction::Break => converted.push(MarkdownInline::HardBreak),
+                }
+                continue;
+            }
+        }
+        let mut additions = match &child.data().value {
+            NodeValue::Text(text) => split_obsidian_embeds(text),
+            _ => convert_inline(child).into_iter().collect(),
+        };
+        for mut inline in additions.drain(..) {
+            for style in html_styles.iter().rev() {
+                inline = style.wrap(inline);
+            }
+            converted.push(inline);
+        }
+    }
+    converted
+}
+
+fn safe_html_image(html: &str) -> Option<MarkdownInline> {
+    let trimmed = html.trim();
+    if !trimmed
+        .get(..trimmed.len().min(4))
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("<img"))
+    {
+        return None;
+    }
+    let src = html_attribute(trimmed, "src")?;
+    if src.trim().is_empty() {
+        return None;
+    }
+    Some(MarkdownInline::Image {
+        url: src,
+        title: html_attribute(trimmed, "title").unwrap_or_default(),
+        alt: html_attribute(trimmed, "alt").unwrap_or_default(),
+    })
+}
+
+fn html_attribute(tag: &str, requested: &str) -> Option<String> {
+    static ATTRIBUTE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r#"(?i)([a-z_:][a-z0-9_:.-]*)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))"#,
+        )
+        .expect("HTML attribute regex is valid")
+    });
+    ATTRIBUTE.captures_iter(tag).find_map(|captures| {
+        captures
+            .get(1)
+            .filter(|name| name.as_str().eq_ignore_ascii_case(requested))
+            .and_then(|_| {
+                captures
+                    .get(2)
+                    .or_else(|| captures.get(3))
+                    .or_else(|| captures.get(4))
+            })
+            .map(|value| value.as_str().to_string())
+    })
+}
+
+fn split_obsidian_embeds(text: &str) -> Vec<MarkdownInline> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("![[") {
+        if start > 0 {
+            out.push(MarkdownInline::Text(rest[..start].to_string()));
+        }
+        let after_open = &rest[start + 3..];
+        let Some(end) = after_open.find("]]") else {
+            out.push(MarkdownInline::Text(rest[start..].to_string()));
+            rest = "";
+            break;
+        };
+        let body = &after_open[..end];
+        let (target, alias) = body
+            .split_once('|')
+            .map_or((body, ""), |(target, alias)| (target, alias));
+        let target = target.trim();
+        let alias = alias.trim();
+        if target.is_empty() {
+            out.push(MarkdownInline::Text(format!("![[{body}]]")));
+        } else if is_raster_image_target(target) {
+            out.push(MarkdownInline::Image {
+                url: target.to_string(),
+                title: String::new(),
+                alt: if alias.is_empty() {
+                    target.rsplit('/').next().unwrap_or(target).to_string()
+                } else {
+                    alias.to_string()
+                },
+            });
+        } else {
+            out.push(MarkdownInline::WikiLink {
+                url: target.to_string(),
+                label: vec![MarkdownInline::Text(format!(
+                    "↳ {}",
+                    if alias.is_empty() { target } else { alias }
+                ))],
+            });
+        }
+        rest = &after_open[end + 2..];
+    }
+    if !rest.is_empty() {
+        out.push(MarkdownInline::Text(rest.to_string()));
+    }
+    if out.is_empty() {
+        out.push(MarkdownInline::Text(text.to_string()));
+    }
+    out
+}
+
+fn is_raster_image_target(target: &str) -> bool {
+    let path = target
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(target)
+        .to_ascii_lowercase();
+    [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"]
+        .iter()
+        .any(|extension| path.ends_with(extension))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SafeHtmlInlineStyle {
+    Emphasis,
+    Strong,
+    Underline,
+    Highlight,
+    Insert,
+    Strikethrough,
+    Superscript,
+    Subscript,
+    Keyboard,
+}
+
+impl SafeHtmlInlineStyle {
+    fn wrap(self, inline: MarkdownInline) -> MarkdownInline {
+        let children = vec![inline];
+        match self {
+            Self::Emphasis => MarkdownInline::Emphasis(children),
+            Self::Strong => MarkdownInline::Strong(children),
+            Self::Underline => MarkdownInline::Underline(children),
+            Self::Highlight | Self::Keyboard => MarkdownInline::Highlight(children),
+            Self::Insert => MarkdownInline::Insert(children),
+            Self::Strikethrough => MarkdownInline::Strikethrough(children),
+            Self::Superscript => MarkdownInline::Superscript(children),
+            Self::Subscript => MarkdownInline::Subscript(children),
+        }
+    }
+}
+
+enum SafeHtmlInlineAction {
+    Open(SafeHtmlInlineStyle),
+    Close(SafeHtmlInlineStyle),
+    Break,
+}
+
+fn safe_html_inline_action(html: &str) -> Option<SafeHtmlInlineAction> {
+    let tag = html.trim().to_ascii_lowercase();
+    if tag.starts_with("<br") {
+        return Some(SafeHtmlInlineAction::Break);
+    }
+    let closing = tag.starts_with("</");
+    let name = tag
+        .trim_start_matches('<')
+        .trim_start_matches('/')
+        .split(|ch: char| ch.is_ascii_whitespace() || matches!(ch, '>' | '/'))
+        .next()?;
+    let style = match name {
+        "em" | "i" => SafeHtmlInlineStyle::Emphasis,
+        "strong" | "b" => SafeHtmlInlineStyle::Strong,
+        "u" => SafeHtmlInlineStyle::Underline,
+        "mark" => SafeHtmlInlineStyle::Highlight,
+        "ins" => SafeHtmlInlineStyle::Insert,
+        "del" | "s" | "strike" => SafeHtmlInlineStyle::Strikethrough,
+        "sup" => SafeHtmlInlineStyle::Superscript,
+        "sub" => SafeHtmlInlineStyle::Subscript,
+        "kbd" => SafeHtmlInlineStyle::Keyboard,
+        _ => return None,
+    };
+    Some(if closing {
+        SafeHtmlInlineAction::Close(style)
+    } else {
+        SafeHtmlInlineAction::Open(style)
+    })
 }
 
 fn convert_inline<'a>(node: &'a AstNode<'a>) -> Option<MarkdownInline> {
@@ -413,10 +787,16 @@ fn convert_inline<'a>(node: &'a AstNode<'a>) -> Option<MarkdownInline> {
             title: link.title,
             label: convert_inlines(node),
         }),
-        NodeValue::WikiLink(link) => Some(MarkdownInline::WikiLink {
-            url: link.url,
-            label: convert_inlines(node),
-        }),
+        NodeValue::WikiLink(link) => {
+            let mut url = link.url;
+            let mut label = convert_inlines(node);
+            let label_text = inline_plain_text(&label);
+            if !looks_like_link_target(&url) && looks_like_link_target(&label_text) {
+                label = vec![MarkdownInline::Text(url)];
+                url = label_text;
+            }
+            Some(MarkdownInline::WikiLink { url, label })
+        }
         NodeValue::Image(image) => Some(MarkdownInline::Image {
             url: image.url,
             title: image.title,
@@ -441,6 +821,29 @@ fn convert_inline<'a>(node: &'a AstNode<'a>) -> Option<MarkdownInline> {
         ))),
         _ => None,
     }
+}
+
+fn looks_like_link_target(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    value.contains("://")
+        || value.starts_with("mailto:")
+        || value.starts_with('#')
+        || value.starts_with("./")
+        || value.starts_with("../")
+        || value.contains('/')
+        || [
+            ".md",
+            ".markdown",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".webp",
+            ".bmp",
+            ".svg",
+        ]
+        .iter()
+        .any(|extension| value.ends_with(extension))
 }
 
 pub(in crate::app) fn inline_plain_text(inlines: &[MarkdownInline]) -> String {
@@ -488,6 +891,7 @@ fn markdown_node_kind(node: &MarkdownNode) -> TranscriptNodeKind {
         MarkdownNode::Math { .. } => TranscriptNodeKind::MarkdownMath,
         MarkdownNode::Image { .. } => TranscriptNodeKind::MarkdownImage,
         MarkdownNode::FootnoteDefinition { .. } => TranscriptNodeKind::MarkdownFootnote,
+        MarkdownNode::Diagram { .. } => TranscriptNodeKind::MarkdownDiagram,
         _ => TranscriptNodeKind::MarkdownParagraph,
     }
 }
@@ -510,8 +914,7 @@ fn render_markdown_node(
     match node {
         MarkdownNode::Paragraph(inlines) => render_paragraph(out, prefix, inlines, width),
         MarkdownNode::Heading { level, content } => {
-            let source = inline_render_source(content);
-            push_markdown_heading(out, prefix, usize::from(*level), &source, width);
+            render_heading(out, prefix, usize::from(*level), content, width);
         }
         MarkdownNode::Quote(blocks) => {
             let quote_prefix = format!("{prefix}│ ");
@@ -536,6 +939,9 @@ fn render_markdown_node(
             };
             let source = format!("```{language}\n{}\n```", literal.trim_end_matches('\n'));
             push_markdown_code_block(out, prefix, &source, width);
+        }
+        MarkdownNode::Diagram { language, literal } => {
+            render_diagram(out, prefix, language, literal, width)
         }
         MarkdownNode::List {
             ordered,
@@ -638,15 +1044,338 @@ fn render_paragraph(
     inlines: &[MarkdownInline],
     width: u16,
 ) {
-    if inlines_contain_math(inlines) {
-        let source = inline_render_source(inlines);
-        if push_inline_math(out, prefix, &source, width) {
-            return;
-        }
+    if inlines_contain_rich_graphics(inlines)
+        && push_rich_inline_graphics(out, prefix, inlines, Style::default(), width)
+    {
+        return;
     }
     for line in rich_inline_lines(inlines, Style::default()) {
         push_wrapped_rich_line(out, prefix, prefix, line, width);
     }
+}
+
+fn render_heading(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    level: usize,
+    inlines: &[MarkdownInline],
+    width: u16,
+) {
+    let marker = match level {
+        1 => "══",
+        2 => "──",
+        _ => "›",
+    };
+    let style = Style::default()
+        .fg(if level <= 2 {
+            agena_tui_components::theme::accent_color()
+        } else {
+            agena_tui_components::theme::info_color()
+        })
+        .add_modifier(Modifier::BOLD);
+    let first_prefix = format!("{prefix}{marker} ");
+    let continuation = format!("{prefix}{}", " ".repeat(UnicodeWidthStr::width(marker) + 1));
+    if inlines_contain_rich_graphics(inlines)
+        && push_rich_inline_graphics(out, &first_prefix, inlines, style, width)
+    {
+        return;
+    }
+    for line in rich_inline_lines(inlines, style) {
+        push_wrapped_rich_line(out, &first_prefix, &continuation, line, width);
+    }
+}
+
+#[derive(Debug)]
+enum RichInlineAtom {
+    Text(Span<'static>),
+    Math(String),
+    Image { url: String, alt: String },
+}
+
+fn push_rich_inline_graphics(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    inlines: &[MarkdownInline],
+    base_style: Style,
+    width: u16,
+) -> bool {
+    let mut atoms = Vec::new();
+    if !append_rich_inline_atoms(&mut atoms, inlines, base_style) {
+        return false;
+    }
+    let prefix_width = u16::try_from(UnicodeWidthStr::width(prefix)).unwrap_or(u16::MAX);
+    let available = width.saturating_sub(prefix_width).max(1);
+    if layout_config().native_graphics {
+        let mut rendered = Vec::with_capacity(atoms.len());
+        let mut total_width = 0_u16;
+        let mut height = 1_u16;
+        for atom in atoms {
+            match atom {
+                RichInlineAtom::Text(span) => {
+                    let span_width = u16::try_from(UnicodeWidthStr::width(span.content.as_ref()))
+                        .unwrap_or(u16::MAX);
+                    total_width = total_width.saturating_add(span_width);
+                    rendered.push((Some(span), None, span_width));
+                }
+                RichInlineAtom::Math(literal) => {
+                    let Ok(artifact) = crate::math_render::render_formula(&literal, false) else {
+                        return false;
+                    };
+                    total_width = total_width.saturating_add(artifact.size.width);
+                    height = height.max(artifact.size.height);
+                    let size = artifact.size;
+                    rendered.push((None, Some((artifact, size)), size.width));
+                }
+                RichInlineAtom::Image { url, alt } => {
+                    if let Ok(artifact) = render_markdown_image(&url) {
+                        let size = fit_image_size(artifact.size, available.min(12), 4);
+                        let size = Size::new(size.0, size.1);
+                        total_width = total_width.saturating_add(size.width);
+                        height = height.max(size.height);
+                        rendered.push((None, Some((artifact, size)), size.width));
+                    } else {
+                        let text =
+                            format!("🖼 {} ({url})", if alt.is_empty() { "Image" } else { &alt });
+                        let span_width = u16::try_from(UnicodeWidthStr::width(text.as_str()))
+                            .unwrap_or(u16::MAX);
+                        total_width = total_width.saturating_add(span_width);
+                        rendered.push((
+                            Some(Span::styled(
+                                text,
+                                Style::default().fg(agena_tui_components::theme::info_color()),
+                            )),
+                            None,
+                            span_width,
+                        ));
+                    }
+                }
+            }
+        }
+        if total_width > available {
+            return false;
+        }
+        let start = out.len();
+        for _ in 0..height {
+            out.push(RenderedLine::plain(prefix.to_string(), Style::default()));
+        }
+        let mut spans = vec![Span::raw(prefix.to_string())];
+        let mut column = prefix_width;
+        for (span, graphic, atom_width) in rendered {
+            if let Some(span) = span {
+                spans.push(span);
+            } else if let Some((artifact, size)) = graphic {
+                out[start].math.push(MathLinePlacement {
+                    column,
+                    size,
+                    artifact,
+                });
+                spans.push(Span::raw(" ".repeat(usize::from(atom_width))));
+            }
+            column = column.saturating_add(atom_width);
+        }
+        out[start + usize::from(height.saturating_sub(1))] = RenderedLine::rich(Line::from(spans));
+        return true;
+    }
+
+    let mut rows: Vec<Vec<Span<'static>>> = vec![Vec::new()];
+    for atom in atoms {
+        let block = match atom {
+            RichInlineAtom::Text(span) => vec![vec![span]],
+            RichInlineAtom::Math(literal) => unicode_formula(&literal)
+                .into_iter()
+                .map(|line| {
+                    vec![Span::styled(
+                        line,
+                        Style::default().fg(agena_tui_components::theme::accent_color()),
+                    )]
+                })
+                .collect(),
+            RichInlineAtom::Image { url, alt } => vec![vec![Span::styled(
+                format!("🖼 {} ({url})", if alt.is_empty() { "Image" } else { &alt }),
+                Style::default().fg(agena_tui_components::theme::info_color()),
+            )]],
+        };
+        append_bottom_aligned_rich(&mut rows, block);
+    }
+    if rows
+        .iter()
+        .any(|row| rich_spans_width(row) > usize::from(available))
+    {
+        return false;
+    }
+    for mut row in rows {
+        row.insert(0, Span::raw(prefix.to_string()));
+        out.push(RenderedLine::rich(Line::from(row)));
+    }
+    true
+}
+
+fn append_bottom_aligned_rich(
+    rows: &mut Vec<Vec<Span<'static>>>,
+    mut block: Vec<Vec<Span<'static>>>,
+) {
+    let row_width = rows.first().map_or(0, |row| rich_spans_width(row));
+    let block_width = block
+        .iter()
+        .map(|row| rich_spans_width(row))
+        .max()
+        .unwrap_or(0);
+    for row in &mut block {
+        let padding = block_width.saturating_sub(rich_spans_width(row));
+        if padding > 0 {
+            row.push(Span::raw(" ".repeat(padding)));
+        }
+    }
+    if rows.len() < block.len() {
+        let mut padding = vec![vec![Span::raw(" ".repeat(row_width))]; block.len() - rows.len()];
+        padding.append(rows);
+        *rows = padding;
+    } else if block.len() < rows.len() {
+        let mut padding = vec![vec![Span::raw(" ".repeat(block_width))]; rows.len() - block.len()];
+        padding.append(&mut block);
+        block = padding;
+    }
+    for (row, addition) in rows.iter_mut().zip(block) {
+        row.extend(addition);
+    }
+}
+
+fn rich_spans_width(spans: &[Span<'_>]) -> usize {
+    spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
+}
+
+fn append_rich_inline_atoms(
+    atoms: &mut Vec<RichInlineAtom>,
+    inlines: &[MarkdownInline],
+    style: Style,
+) -> bool {
+    for inline in inlines {
+        match inline {
+            MarkdownInline::Text(text) | MarkdownInline::Emoji(text) => {
+                atoms.push(RichInlineAtom::Text(Span::styled(text.clone(), style)));
+            }
+            MarkdownInline::Code(code) => atoms.push(RichInlineAtom::Text(Span::styled(
+                code.clone(),
+                style
+                    .fg(agena_tui_components::theme::warning_color())
+                    .add_modifier(Modifier::BOLD),
+            ))),
+            MarkdownInline::Emphasis(children) => {
+                if !append_rich_inline_atoms(atoms, children, style.add_modifier(Modifier::ITALIC))
+                {
+                    return false;
+                }
+            }
+            MarkdownInline::Strong(children) => {
+                if !append_rich_inline_atoms(atoms, children, style.add_modifier(Modifier::BOLD)) {
+                    return false;
+                }
+            }
+            MarkdownInline::Strikethrough(children) => {
+                if !append_rich_inline_atoms(
+                    atoms,
+                    children,
+                    style.add_modifier(Modifier::CROSSED_OUT),
+                ) {
+                    return false;
+                }
+            }
+            MarkdownInline::Underline(children) | MarkdownInline::Insert(children) => {
+                if !append_rich_inline_atoms(
+                    atoms,
+                    children,
+                    style.add_modifier(Modifier::UNDERLINED),
+                ) {
+                    return false;
+                }
+            }
+            MarkdownInline::Highlight(children) => {
+                if !append_rich_inline_atoms(
+                    atoms,
+                    children,
+                    style
+                        .fg(agena_tui_components::theme::warning_color())
+                        .add_modifier(Modifier::BOLD),
+                ) {
+                    return false;
+                }
+            }
+            MarkdownInline::Superscript(children) | MarkdownInline::Subscript(children) => {
+                if !append_rich_inline_atoms(atoms, children, style.add_modifier(Modifier::DIM)) {
+                    return false;
+                }
+            }
+            MarkdownInline::Spoiler(children) => {
+                if !append_rich_inline_atoms(
+                    atoms,
+                    children,
+                    style
+                        .fg(agena_tui_components::theme::muted_color())
+                        .add_modifier(Modifier::REVERSED),
+                ) {
+                    return false;
+                }
+            }
+            MarkdownInline::Link { url, title, label } => {
+                if !append_rich_inline_atoms(
+                    atoms,
+                    label,
+                    style
+                        .fg(agena_tui_components::theme::info_color())
+                        .add_modifier(Modifier::UNDERLINED),
+                ) {
+                    return false;
+                }
+                atoms.push(RichInlineAtom::Text(Span::styled(
+                    link_suffix(url, title),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
+                )));
+            }
+            MarkdownInline::WikiLink { url, label } => {
+                if !append_rich_inline_atoms(
+                    atoms,
+                    label,
+                    style
+                        .fg(agena_tui_components::theme::info_color())
+                        .add_modifier(Modifier::UNDERLINED),
+                ) {
+                    return false;
+                }
+                atoms.push(RichInlineAtom::Text(Span::styled(
+                    format!(" ({url})"),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
+                )));
+            }
+            MarkdownInline::Image { url, alt, .. } => atoms.push(RichInlineAtom::Image {
+                url: url.clone(),
+                alt: alt.clone(),
+            }),
+            MarkdownInline::Math { literal, .. } => {
+                atoms.push(RichInlineAtom::Math(literal.clone()));
+            }
+            MarkdownInline::FootnoteReference(name) => {
+                atoms.push(RichInlineAtom::Text(Span::styled(
+                    format!("[^{name}]"),
+                    style
+                        .fg(agena_tui_components::theme::accent_color())
+                        .add_modifier(Modifier::BOLD),
+                )))
+            }
+            MarkdownInline::Html(html) => {
+                if html.to_ascii_lowercase().starts_with("<br") {
+                    return false;
+                }
+            }
+            MarkdownInline::SoftBreak => {
+                atoms.push(RichInlineAtom::Text(Span::styled(" ", style)));
+            }
+            MarkdownInline::HardBreak => return false,
+        }
+    }
+    true
 }
 
 fn render_list(
@@ -745,6 +1474,78 @@ fn render_alert(
     push_single_line(out, prefix, "╰─", Style::default().fg(color), width);
 }
 
+fn is_diagram_language(language: &str) -> bool {
+    matches!(
+        language,
+        "mermaid"
+            | "plantuml"
+            | "puml"
+            | "dot"
+            | "graphviz"
+            | "d2"
+            | "vega"
+            | "vega-lite"
+            | "svgbob"
+            | "svg"
+    )
+}
+
+fn render_diagram(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    language: &str,
+    literal: &str,
+    width: u16,
+) {
+    if language == "svg"
+        && layout_config().native_graphics
+        && let Ok(artifact) = render_markdown_svg(literal)
+    {
+        let prefix_width = u16::try_from(UnicodeWidthStr::width(prefix)).unwrap_or(u16::MAX);
+        let available = width.saturating_sub(prefix_width).max(1);
+        let (render_width, render_height) = fit_image_size(artifact.size, available, 24);
+        let column = prefix_width + available.saturating_sub(render_width) / 2;
+        let start = out.len();
+        for _ in 0..render_height {
+            out.push(RenderedLine::plain(prefix.to_string(), Style::default()));
+        }
+        out[start].math.push(MathLinePlacement {
+            column,
+            artifact,
+            size: Size::new(render_width, render_height),
+        });
+        push_single_line(
+            out,
+            prefix,
+            "◇ SVG diagram",
+            Style::default()
+                .fg(agena_tui_components::theme::accent_color())
+                .add_modifier(Modifier::BOLD),
+            width,
+        );
+        return;
+    }
+    let label = match language {
+        "puml" => "PlantUML",
+        "dot" | "graphviz" => "Graphviz",
+        "vega-lite" => "Vega-Lite",
+        "svgbob" => "Svgbob",
+        "svg" => "SVG",
+        language => language,
+    };
+    push_single_line(
+        out,
+        prefix,
+        &format!("◇ Diagram · {label}"),
+        Style::default()
+            .fg(agena_tui_components::theme::accent_color())
+            .add_modifier(Modifier::BOLD),
+        width,
+    );
+    let source = format!("```{language}\n{}\n```", literal.trim_end_matches('\n'));
+    push_markdown_code_block(out, prefix, &source, width);
+}
+
 fn render_ast_table(
     out: &mut Vec<RenderedLine>,
     prefix: &str,
@@ -755,43 +1556,152 @@ fn render_ast_table(
     if rows.is_empty() {
         return;
     }
-    let row_text = rows
+    let plain_rows = rows
         .iter()
         .map(|row| {
-            format!(
-                "| {} |",
-                row.cells
-                    .iter()
-                    .map(|cell| escape_table_cell(&inline_plain_text(cell)))
-                    .collect::<Vec<_>>()
-                    .join(" | ")
-            )
+            row.cells
+                .iter()
+                .map(|cell| inline_plain_text(cell))
+                .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    let delimiter = format!(
-        "| {} |",
-        alignments
-            .iter()
-            .map(|alignment| match alignment {
-                MarkdownAlignment::None | MarkdownAlignment::Left => "---",
-                MarkdownAlignment::Center => ":---:",
-                MarkdownAlignment::Right => "---:",
-            })
-            .collect::<Vec<_>>()
-            .join(" | ")
-    );
-    let mut source = Vec::with_capacity(row_text.len() + 1);
-    source.push(row_text[0].clone());
-    source.push(delimiter);
-    source.extend(row_text.into_iter().skip(1));
-    let borrowed = source.iter().map(String::as_str).collect::<Vec<_>>();
-    push_markdown_table(out, prefix, &borrowed, width);
+    let column_count = plain_rows.iter().map(Vec::len).max().unwrap_or(0);
+    if column_count == 0 {
+        return;
+    }
+    let separator_width = column_count.saturating_mul(3).saturating_add(1);
+    let prefix_width = UnicodeWidthStr::width(prefix);
+    let budget = usize::from(width)
+        .saturating_sub(prefix_width)
+        .saturating_sub(separator_width);
+    let widths = compute_table_column_widths(&plain_rows, budget);
+    if widths.len() != column_count {
+        render_rich_table_fallback(out, prefix, rows, width);
+        return;
+    }
+    let table_alignments = (0..column_count)
+        .map(|index| {
+            match alignments
+                .get(index)
+                .copied()
+                .unwrap_or(MarkdownAlignment::None)
+            {
+                MarkdownAlignment::None | MarkdownAlignment::Left => TableColumnAlignment::Left,
+                MarkdownAlignment::Center => TableColumnAlignment::Center,
+                MarkdownAlignment::Right => TableColumnAlignment::Right,
+            }
+        })
+        .collect::<Vec<_>>();
+    let border_style = Style::default().fg(agena_tui_components::theme::muted_color());
+    push_table_border(out, prefix, &widths, "┌", "┬", "┐", border_style);
+    for (row_index, row) in rows.iter().enumerate() {
+        render_rich_table_row(out, prefix, row, &widths, &table_alignments, width);
+        if row_index + 1 < rows.len() {
+            push_table_border(out, prefix, &widths, "├", "┼", "┤", border_style);
+        }
+    }
+    push_table_border(out, prefix, &widths, "└", "┴", "┘", border_style);
 }
 
-fn escape_table_cell(text: &str) -> String {
-    text.replace('\\', "\\\\")
-        .replace('|', "\\|")
-        .replace('\n', " ↵ ")
+fn render_rich_table_row(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    row: &MarkdownTableRow,
+    widths: &[usize],
+    alignments: &[TableColumnAlignment],
+    width: u16,
+) {
+    let base = if row.header {
+        Style::default()
+            .fg(agena_tui_components::theme::accent_color())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
+    let cells = widths
+        .iter()
+        .enumerate()
+        .map(|(index, cell_width)| {
+            let line = row
+                .cells
+                .get(index)
+                .and_then(|cell| rich_inline_lines(cell, base).into_iter().next())
+                .unwrap_or_default();
+            wrap_rich_line(&line.spans, *cell_width, *cell_width)
+        })
+        .collect::<Vec<_>>();
+    let row_height = cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
+    let border_style = Style::default().fg(agena_tui_components::theme::muted_color());
+    for line_index in 0..row_height {
+        let mut spans = vec![
+            Span::raw(prefix.to_string()),
+            Span::styled("│", border_style),
+        ];
+        for (column, cell_width) in widths.iter().enumerate() {
+            spans.push(Span::raw(" "));
+            let mut content = cells
+                .get(column)
+                .and_then(|lines| lines.get(line_index))
+                .cloned()
+                .unwrap_or_default()
+                .spans;
+            let content_width = rich_spans_width(&content).min(*cell_width);
+            let padding = cell_width.saturating_sub(content_width);
+            let alignment = alignments
+                .get(column)
+                .copied()
+                .unwrap_or(TableColumnAlignment::Left);
+            let left = match alignment {
+                TableColumnAlignment::Left => 0,
+                TableColumnAlignment::Right => padding,
+                TableColumnAlignment::Center => padding / 2,
+            };
+            let right = padding.saturating_sub(left);
+            if left > 0 {
+                spans.push(Span::raw(" ".repeat(left)));
+            }
+            spans.append(&mut content);
+            if right > 0 {
+                spans.push(Span::raw(" ".repeat(right)));
+            }
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled("│", border_style));
+        }
+        let line = Line::from(spans);
+        if UnicodeWidthStr::width(line.to_string().as_str()) <= usize::from(width) {
+            out.push(RenderedLine::rich(line));
+        }
+    }
+}
+
+fn render_rich_table_fallback(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    rows: &[MarkdownTableRow],
+    width: u16,
+) {
+    for row in rows {
+        let base = if row.header {
+            Style::default()
+                .fg(agena_tui_components::theme::accent_color())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let mut spans = Vec::new();
+        for (index, cell) in row.cells.iter().enumerate() {
+            if index > 0 {
+                spans.push(Span::styled(
+                    " │ ",
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
+                ));
+            }
+            if let Some(line) = rich_inline_lines(cell, base).into_iter().next() {
+                spans.extend(line.spans);
+            }
+        }
+        push_wrapped_rich_line(out, prefix, prefix, Line::from(spans), width);
+    }
 }
 
 fn render_image_card(
@@ -900,6 +1810,14 @@ fn front_matter_body(front_matter: &str) -> String {
     lines.join("\n")
 }
 
+fn link_suffix(url: &str, title: &str) -> String {
+    if title.trim().is_empty() {
+        format!(" ({url})")
+    } else {
+        format!(" ({url} — {})", title.trim())
+    }
+}
+
 fn rich_inline_lines(inlines: &[MarkdownInline], base_style: Style) -> Vec<Line<'static>> {
     let mut rows = vec![Vec::new()];
     append_inline_spans(&mut rows, inlines, base_style);
@@ -956,7 +1874,22 @@ fn append_inline_spans(
                     .fg(agena_tui_components::theme::muted_color())
                     .add_modifier(Modifier::REVERSED),
             ),
-            MarkdownInline::Link { url, label, .. } | MarkdownInline::WikiLink { url, label } => {
+            MarkdownInline::Link { url, title, label } => {
+                append_inline_spans(
+                    rows,
+                    label,
+                    style
+                        .fg(agena_tui_components::theme::info_color())
+                        .add_modifier(Modifier::UNDERLINED),
+                );
+                rows.last_mut()
+                    .expect("inline rows are never empty")
+                    .push(Span::styled(
+                        link_suffix(url, title),
+                        Style::default().fg(agena_tui_components::theme::muted_color()),
+                    ));
+            }
+            MarkdownInline::WikiLink { url, label } => {
                 append_inline_spans(
                     rows,
                     label,
@@ -1011,9 +1944,9 @@ fn append_inline_spans(
     }
 }
 
-fn inlines_contain_math(inlines: &[MarkdownInline]) -> bool {
+fn inlines_contain_rich_graphics(inlines: &[MarkdownInline]) -> bool {
     inlines.iter().any(|inline| match inline {
-        MarkdownInline::Math { .. } => true,
+        MarkdownInline::Math { .. } | MarkdownInline::Image { .. } => true,
         MarkdownInline::Emphasis(children)
         | MarkdownInline::Strong(children)
         | MarkdownInline::Strikethrough(children)
@@ -1028,63 +1961,9 @@ fn inlines_contain_math(inlines: &[MarkdownInline]) -> bool {
         }
         | MarkdownInline::WikiLink {
             label: children, ..
-        } => inlines_contain_math(children),
+        } => inlines_contain_rich_graphics(children),
         _ => false,
     })
-}
-
-fn inline_render_source(inlines: &[MarkdownInline]) -> String {
-    let mut out = String::new();
-    for inline in inlines {
-        match inline {
-            MarkdownInline::Text(text) | MarkdownInline::Emoji(text) => out.push_str(text),
-            MarkdownInline::Code(code) => out.push_str(&format!("`{code}`")),
-            MarkdownInline::Emphasis(children) => {
-                out.push('*');
-                out.push_str(&inline_render_source(children));
-                out.push('*');
-            }
-            MarkdownInline::Strong(children) => {
-                out.push_str("**");
-                out.push_str(&inline_render_source(children));
-                out.push_str("**");
-            }
-            MarkdownInline::Strikethrough(children) => {
-                out.push_str("~~");
-                out.push_str(&inline_render_source(children));
-                out.push_str("~~");
-            }
-            MarkdownInline::Underline(children)
-            | MarkdownInline::Highlight(children)
-            | MarkdownInline::Insert(children)
-            | MarkdownInline::Superscript(children)
-            | MarkdownInline::Subscript(children)
-            | MarkdownInline::Spoiler(children) => out.push_str(&inline_render_source(children)),
-            MarkdownInline::Link { url, label, .. } | MarkdownInline::WikiLink { url, label } => {
-                out.push_str(&inline_render_source(label));
-                out.push_str(&format!(" ({url})"));
-            }
-            MarkdownInline::Image { url, alt, .. } => {
-                out.push_str(&format!("🖼 {alt} ({url})"));
-            }
-            MarkdownInline::Math { literal, display } => {
-                if *display {
-                    out.push_str(&format!("$${literal}$$"));
-                } else {
-                    out.push_str(&format!("${literal}$"));
-                }
-            }
-            MarkdownInline::FootnoteReference(name) => out.push_str(&format!("[^{name}]")),
-            MarkdownInline::Html(html) => {
-                if html.to_ascii_lowercase().starts_with("<br") {
-                    out.push('\n');
-                }
-            }
-            MarkdownInline::SoftBreak => out.push(' '),
-            MarkdownInline::HardBreak => out.push('\n'),
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -1109,11 +1988,10 @@ mod tests {
                 .iter()
                 .any(|block| matches!(block.parsed, MarkdownNode::Alert { .. }))
         );
-        assert!(
-            blocks
-                .iter()
-                .any(|block| matches!(block.parsed, MarkdownNode::FootnoteDefinition { .. }))
-        );
+        assert!(blocks.iter().any(|block| matches!(
+            &block.parsed,
+            MarkdownNode::FootnoteDefinition { name, .. } if name == "1"
+        )));
     }
 
     #[test]
@@ -1123,5 +2001,117 @@ mod tests {
             panic!("table expected");
         };
         assert_eq!(inline_plain_text(&rows[1].cells[0]), "a|b");
+    }
+
+    #[test]
+    fn parses_latex_delimiters_and_inline_footnotes() {
+        let blocks = parse_markdown_document(
+            "Inline \\(x^2\\) and note^[inline **detail**].\n\n\\[\n\\frac{a}{b}\n\\]",
+        );
+        let MarkdownNode::Paragraph(inlines) = &blocks[0].parsed else {
+            panic!("paragraph expected");
+        };
+        assert!(inlines.iter().any(|inline| matches!(
+            inline,
+            MarkdownInline::Math {
+                literal,
+                display: false
+            } if literal == "x^2"
+        )));
+        assert!(
+            blocks
+                .iter()
+                .any(|block| matches!(block.parsed, MarkdownNode::FootnoteDefinition { .. }))
+        );
+        assert!(
+            blocks
+                .iter()
+                .any(|block| matches!(block.parsed, MarkdownNode::Math { display: true, .. }))
+        );
+    }
+
+    #[test]
+    fn double_underscore_remains_commonmark_strong_text() {
+        let blocks = parse_markdown_document("__strong__");
+        let MarkdownNode::Paragraph(inlines) = &blocks[0].parsed else {
+            panic!("paragraph expected");
+        };
+        assert!(matches!(inlines.as_slice(), [MarkdownInline::Strong(_)]));
+    }
+
+    #[test]
+    fn parses_attributes_safe_html_and_obsidian_embeds() {
+        let code = parse_markdown_document("```{.rust #sample}\nfn main() {}\n```");
+        assert!(matches!(
+            &code[0].parsed,
+            MarkdownNode::Code { language, .. } if language == "rust"
+        ));
+
+        let html = parse_markdown_document("Press <kbd>Ctrl</kbd> and ![[icon.svg|Logo]].");
+        let MarkdownNode::Paragraph(inlines) = &html[0].parsed else {
+            panic!("paragraph expected");
+        };
+        assert!(inlines.iter().any(|inline| matches!(
+            inline,
+            MarkdownInline::Highlight(children)
+                if inline_plain_text(children) == "Ctrl"
+        )));
+        assert!(inlines.iter().any(|inline| matches!(
+            inline,
+            MarkdownInline::Image { url, alt, .. }
+                if url == "icon.svg" && alt == "Logo"
+        )));
+
+        let image = parse_markdown_document(r#"<img src="icon.svg" alt="Logo" title="Diagram">"#);
+        assert!(matches!(
+            &image[0].parsed,
+            MarkdownNode::Image { url, alt, title }
+                if url == "icon.svg" && alt == "Logo" && title == "Diagram"
+        ));
+    }
+
+    #[test]
+    fn rich_tables_and_math_keep_inline_styles() {
+        let table = parse_markdown_document("| head |\n| --- |\n| *styled* |");
+        let mut rendered = Vec::new();
+        render_parsed_markdown_block(&mut rendered, "", &table[0], 80);
+        assert!(rendered.iter().any(|line| {
+            line.rich_line.as_ref().is_some_and(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.style.add_modifier.contains(Modifier::ITALIC))
+            })
+        }));
+
+        let math = parse_markdown_document("**value** \\(\\frac{a}{b}\\)");
+        let mut rendered = Vec::new();
+        render_parsed_markdown_block(&mut rendered, "", &math[0], 80);
+        assert!(rendered.len() >= 2);
+        assert!(rendered.iter().any(|line| {
+            line.rich_line.as_ref().is_some_and(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.style.add_modifier.contains(Modifier::BOLD))
+            })
+        }));
+    }
+
+    #[test]
+    fn diagram_fences_are_semantic_and_keep_safe_source_fallbacks() {
+        let blocks = parse_markdown_document("```mermaid\ngraph TD; A-->B\n```");
+        assert_eq!(blocks[0].kind, TranscriptNodeKind::MarkdownDiagram);
+        assert!(matches!(
+            &blocks[0].parsed,
+            MarkdownNode::Diagram { language, literal }
+                if language == "mermaid" && literal.contains("A-->B")
+        ));
+        let mut rendered = Vec::new();
+        render_parsed_markdown_block(&mut rendered, "", &blocks[0], 80);
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.text.contains("Diagram · mermaid"))
+        );
+        assert!(rendered.iter().any(|line| line.text.contains("A-->B")));
     }
 }

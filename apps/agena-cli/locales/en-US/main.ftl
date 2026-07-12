@@ -1578,6 +1578,7 @@ transcript-node-kind-table = table
 transcript-node-kind-math = formula
 transcript-node-kind-image = image
 transcript-node-kind-footnote = footnote
+transcript-node-kind-diagram = diagram
 transcript-node-kind-activity = activity blocks
 flash-command-requires-session = this action requires an open session
 flash-snapshot-ready = snapshot ready: {$path} ({$branch})

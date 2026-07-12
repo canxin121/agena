@@ -42,6 +42,7 @@ libc = { workspace = true }
 mime_guess = { workspace = true }
 ratatui = { workspace = true }
 ratatui-image = { workspace = true }
+resvg = { workspace = true }
 ratex-layout = { workspace = true }
 ratex-parser = { workspace = true }
 ratex-render = { workspace = true }

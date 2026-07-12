@@ -1,4 +1,77 @@
 impl ApiService {
+    pub fn snapshot_status(
+        &self,
+        runtime: &agena::runtime::AgenaRuntime,
+    ) -> SnapshotStatusResource {
+        let workspace_root = runtime.workspace_root().to_path_buf();
+        let capabilities = agena::tool::snapshot_backend_capabilities(&workspace_root);
+        let Some(manager) = runtime.session_manager() else {
+            return SnapshotStatusResource {
+                workspace_root: workspace_root.display().to_string(),
+                session_runtime_available: false,
+                registry_available: false,
+                preferred_backend: capabilities
+                    .preferred_backend
+                    .map(|backend| backend.to_string()),
+                git: snapshot_backend_support_resource(capabilities.git),
+                rift: snapshot_backend_support_resource(capabilities.rift),
+                active: Vec::new(),
+                managed: Vec::new(),
+            };
+        };
+        let executor = manager.tool_executor();
+        let Some(registry) = executor.snapshot_registry() else {
+            return SnapshotStatusResource {
+                workspace_root: workspace_root.display().to_string(),
+                session_runtime_available: true,
+                registry_available: false,
+                preferred_backend: capabilities
+                    .preferred_backend
+                    .map(|backend| backend.to_string()),
+                git: snapshot_backend_support_resource(capabilities.git),
+                rift: snapshot_backend_support_resource(capabilities.rift),
+                active: Vec::new(),
+                managed: Vec::new(),
+            };
+        };
+
+        let active = agena::tool::snapshot_list_active(registry)
+            .into_iter()
+            .map(|entry| ActiveSnapshotResource {
+                session_id: entry.session_id,
+                path: entry.path.display().to_string(),
+                branch: entry.branch,
+                backend: entry.backend.to_string(),
+                created_here: entry.created_here,
+            })
+            .collect();
+        let managed = agena::tool::snapshot_list_managed(&workspace_root, registry)
+            .into_iter()
+            .map(|entry| ManagedSnapshotResource {
+                stale: entry.is_stale(),
+                path: entry.path.display().to_string(),
+                session_id: entry.session_id,
+                branch: entry.branch,
+                backend: entry.backend.map(|backend| backend.to_string()),
+                registered_with_git: entry.registered_with_git,
+                registered_with_rift: entry.registered_with_rift,
+            })
+            .collect();
+
+        SnapshotStatusResource {
+            workspace_root: workspace_root.display().to_string(),
+            session_runtime_available: true,
+            registry_available: true,
+            preferred_backend: capabilities
+                .preferred_backend
+                .map(|backend| backend.to_string()),
+            git: snapshot_backend_support_resource(capabilities.git),
+            rift: snapshot_backend_support_resource(capabilities.rift),
+            active,
+            managed,
+        }
+    }
+
     pub async fn git_status(
         &self,
         runtime: &agena::runtime::AgenaRuntime,
@@ -190,6 +263,194 @@ impl ApiService {
 
         Ok(chunks.join("\n"))
     }
+
+    pub async fn git_stage(
+        &self,
+        runtime: &agena::runtime::AgenaRuntime,
+        request: GitStageRequest,
+    ) -> ApiResult<GitStatusResource> {
+        let workspace_root = runtime.workspace_root().to_path_buf();
+        let status = self.git_status(runtime).await?;
+        if !status.git_available || !status.repo {
+            return Err(ApiError::bad_request(
+                "the runtime workspace is not a git repository",
+            ));
+        }
+
+        let mut command = Command::new("git");
+        command.arg("add");
+        if request.paths.is_empty() {
+            command.arg("--all");
+        } else {
+            command.arg("--");
+            for path in request.paths {
+                let normalized = validate_git_stage_path(path.as_str())?;
+                command.arg(normalized);
+            }
+        }
+        let output = command
+            .current_dir(&workspace_root)
+            .output()
+            .map_err(|error| ApiError::internal(format!("failed to execute git add: {error}")))?;
+        if !output.status.success() {
+            return Err(ApiError::bad_request(format!(
+                "git add failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        self.git_status(runtime).await
+    }
+
+    pub async fn git_commit(
+        &self,
+        runtime: &agena::runtime::AgenaRuntime,
+        request: GitCommitRequest,
+    ) -> ApiResult<GitCommitResource> {
+        let workspace_root = runtime.workspace_root().to_path_buf();
+        let status = self.git_status(runtime).await?;
+        if !status.git_available || !status.repo {
+            return Err(ApiError::bad_request(
+                "the runtime workspace is not a git repository",
+            ));
+        }
+        if status.staged_files == 0 {
+            return Err(ApiError::bad_request("no staged changes to commit"));
+        }
+        let message = request.message.trim();
+        if message.is_empty() {
+            return Err(ApiError::bad_request("commit message is required"));
+        }
+
+        let output = Command::new("git")
+            .args(["commit", "-m", message])
+            .current_dir(&workspace_root)
+            .output()
+            .map_err(|error| {
+                ApiError::internal(format!("failed to execute git commit: {error}"))
+            })?;
+        if !output.status.success() {
+            return Err(ApiError::bad_request(format!(
+                "git commit failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+
+        Ok(GitCommitResource {
+            commit: git_output(&workspace_root, ["rev-parse", "HEAD"])?,
+            summary: git_output(&workspace_root, ["log", "-1", "--pretty=%s"])?,
+            status: self.git_status(runtime).await?,
+        })
+    }
+
+    pub async fn git_create_pull_request(
+        &self,
+        runtime: &agena::runtime::AgenaRuntime,
+        request: GitPullRequestCreateRequest,
+    ) -> ApiResult<GitPullRequestResource> {
+        let workspace_root = runtime.workspace_root().to_path_buf();
+        let status = self.git_status(runtime).await?;
+        if !status.git_available || !status.repo {
+            return Err(ApiError::bad_request(
+                "the runtime workspace is not a git repository",
+            ));
+        }
+        if !status.gh_available {
+            return Err(ApiError::bad_request("gh is not available on PATH"));
+        }
+        let title = request.title.trim();
+        if title.is_empty() {
+            return Err(ApiError::bad_request("pull request title is required"));
+        }
+        let head = request
+            .head
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .or(status.branch.as_deref())
+            .ok_or_else(|| {
+                ApiError::bad_request("could not determine the pull request head branch")
+            })?;
+
+        let mut command = Command::new("gh");
+        command
+            .args(["pr", "create", "--title", title, "--body"])
+            .arg(request.body.as_deref().unwrap_or_default())
+            .args(["--head", head]);
+        if let Some(base) = request
+            .base
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            command.args(["--base", base]);
+        }
+        let output = command
+            .current_dir(&workspace_root)
+            .output()
+            .map_err(|error| {
+                ApiError::internal(format!("failed to execute gh pr create: {error}"))
+            })?;
+        if !output.status.success() {
+            return Err(ApiError::bad_request(format!(
+                "gh pr create failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if url.is_empty() {
+            return Err(ApiError::internal("gh pr create returned an empty URL"));
+        }
+        Ok(GitPullRequestResource { url })
+    }
+}
+
+fn snapshot_backend_support_resource(
+    support: agena::tool::SnapshotBackendSupport,
+) -> SnapshotBackendSupportResource {
+    SnapshotBackendSupportResource {
+        backend: support.backend.to_string(),
+        available: support.available,
+        detail: support.detail,
+    }
+}
+
+fn validate_git_stage_path(path: &str) -> ApiResult<&str> {
+    let normalized = path.trim();
+    if normalized.is_empty() || Path::new(normalized).is_absolute() {
+        return Err(ApiError::bad_request(
+            "git stage paths must be non-empty workspace-relative paths",
+        ));
+    }
+    if Path::new(normalized).components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        return Err(ApiError::bad_request(
+            "git stage paths cannot contain parent or root components",
+        ));
+    }
+    Ok(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_git_stage_path;
+
+    #[test]
+    fn validates_workspace_relative_git_stage_paths() {
+        assert_eq!(
+            validate_git_stage_path("src/main.rs").unwrap(),
+            "src/main.rs"
+        );
+        assert!(validate_git_stage_path("../outside").is_err());
+        assert!(validate_git_stage_path("src/../../outside").is_err());
+        assert!(validate_git_stage_path("/absolute").is_err());
+        assert!(validate_git_stage_path(" ").is_err());
+    }
 }
 
 fn command_available(command: &str) -> bool {
@@ -301,4 +562,9 @@ fn summarize_git_status(status: &str) -> (u64, u64, u64, u64) {
 
     (staged, unstaged, untracked, changed)
 }
-use super::{ApiError, ApiResult, ApiService, Command, GitStatusResource, Path, non_empty};
+use super::{
+    ActiveSnapshotResource, ApiError, ApiResult, ApiService, Command, GitCommitRequest,
+    GitCommitResource, GitPullRequestCreateRequest, GitPullRequestResource, GitStageRequest,
+    GitStatusResource, ManagedSnapshotResource, Path, SnapshotBackendSupportResource,
+    SnapshotStatusResource, non_empty,
+};

@@ -63,6 +63,83 @@ pub struct GitStatusResource {
     pub snapshot_managed_dirs: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SnapshotBackendSupportResource {
+    pub backend: String,
+    pub available: bool,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ActiveSnapshotResource {
+    pub session_id: i64,
+    pub path: String,
+    pub branch: String,
+    pub backend: String,
+    pub created_here: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ManagedSnapshotResource {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
+    pub registered_with_git: bool,
+    pub registered_with_rift: bool,
+    pub stale: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SnapshotStatusResource {
+    pub workspace_root: String,
+    pub session_runtime_available: bool,
+    pub registry_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preferred_backend: Option<String>,
+    pub git: SnapshotBackendSupportResource,
+    pub rift: SnapshotBackendSupportResource,
+    pub active: Vec<ActiveSnapshotResource>,
+    pub managed: Vec<ManagedSnapshotResource>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct GitStageRequest {
+    #[serde(default)]
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitCommitRequest {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GitCommitResource {
+    pub commit: String,
+    pub summary: String,
+    pub status: GitStatusResource,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitPullRequestCreateRequest {
+    pub title: String,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub base: Option<String>,
+    #[serde(default)]
+    pub head: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GitPullRequestResource {
+    pub url: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct PermissionRuleWriteRequest {
     #[serde(default)]

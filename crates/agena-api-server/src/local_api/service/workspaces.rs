@@ -122,6 +122,77 @@ impl ApiService {
         })
     }
 
+    pub async fn read_workspace_file(
+        &self,
+        workspace_id: i64,
+        query: WorkspaceFileDownloadQuery,
+    ) -> ApiResult<(String, Vec<u8>)> {
+        const MAX_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;
+
+        let row = entities::workspace::Entity::find_by_id(workspace_id)
+            .one(self.db.as_ref())
+            .await
+            .map_err(db_error)?
+            .ok_or_else(|| ApiError::not_found(format!("workspace not found: {workspace_id}")))?;
+        let root_path = PathBuf::from(row.path);
+        let root = root_path
+            .canonicalize()
+            .map_err(|error| workspace_fs_error(root_path.as_path(), error))?;
+        if !root.is_dir() {
+            return Err(ApiError::bad_request(format!(
+                "workspace root is not a directory: {}",
+                root.display()
+            )));
+        }
+
+        let relative_path = clean_workspace_relative_path(Some(query.path.as_str()))?;
+        if relative_path.as_os_str().is_empty() {
+            return Err(ApiError::bad_request("workspace file path cannot be empty"));
+        }
+        let unresolved_target = root.join(&relative_path).clean();
+        let target = unresolved_target
+            .canonicalize()
+            .map_err(|error| workspace_fs_error(unresolved_target.as_path(), error))?;
+        if !target.starts_with(&root) {
+            return Err(ApiError::bad_request(
+                "workspace file path escapes workspace root",
+            ));
+        }
+        let metadata = fs::metadata(target.as_path())
+            .map_err(|error| workspace_fs_error(target.as_path(), error))?;
+        if !metadata.is_file() {
+            return Err(ApiError::bad_request(format!(
+                "workspace path is not a file: {}",
+                workspace_relative_path(&relative_path)
+            )));
+        }
+        if metadata.len() > MAX_DOWNLOAD_BYTES {
+            return Err(ApiError::bad_request(format!(
+                "workspace file exceeds the 100 MiB download limit: {}",
+                workspace_relative_path(&relative_path)
+            )));
+        }
+
+        let bytes = fs::read(target.as_path())
+            .map_err(|error| workspace_fs_error(target.as_path(), error))?;
+        let filename = target
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("workspace-file")
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+
+        Ok((filename, bytes))
+    }
+
     pub async fn create_workspace(
         &self,
         request: WorkspacePathRequest,
@@ -385,10 +456,29 @@ fn is_windows_drive_root(path: &str) -> bool {
     let bytes = path.as_bytes();
     bytes.len() == 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/'
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::clean_workspace_relative_path;
+
+    #[test]
+    fn workspace_file_paths_reject_escape_and_absolute_components() {
+        assert_eq!(
+            clean_workspace_relative_path(Some("src/./main.rs")).unwrap(),
+            PathBuf::from("src/main.rs")
+        );
+        assert!(clean_workspace_relative_path(Some("../secret")).is_err());
+        assert!(clean_workspace_relative_path(Some("src/../../secret")).is_err());
+        assert!(clean_workspace_relative_path(Some("/etc/passwd")).is_err());
+    }
+}
 use super::{
     ApiError, ApiResult, ApiService, Condition, DbErr, HashMap, PageOrder, PaginatedResponse, Path,
-    PathBuf, Set, Utc, WorkspaceCursor, WorkspaceFileKind, WorkspaceFileNode,
-    WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceListQuery, WorkspacePathRequest,
-    WorkspaceResolveRequest, WorkspaceResource, build_page, db_error, decode_cursor, entities, fs,
-    io, non_empty, normalize_limit, timestamp_millis_to_utc, trim_page,
+    PathBuf, Set, Utc, WorkspaceCursor, WorkspaceFileDownloadQuery, WorkspaceFileKind,
+    WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceListQuery,
+    WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource, build_page, db_error,
+    decode_cursor, entities, fs, io, non_empty, normalize_limit, timestamp_millis_to_utc,
+    trim_page,
 };

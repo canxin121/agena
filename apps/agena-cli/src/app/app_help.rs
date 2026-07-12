@@ -50,6 +50,17 @@ impl App {
         let Some(help) = self.context_help.as_mut() else {
             return false;
         };
+        if help.kind == InfoOverlayKind::Diagnostics
+            && key.modifiers.is_empty()
+            && matches!(key.code, KeyCode::Char('c' | 'y'))
+        {
+            let report = info_overlay_plain_text(help);
+            self.request_clipboard_copy(
+                report,
+                ui_text::t(&self.i18n, "terminal-diagnostics-copied"),
+            );
+            return true;
+        }
         match resolve_tui_key(KeyContext::Help, key) {
             Some(KeyAction::Close) => self.context_help = None,
             Some(KeyAction::MoveUp) => help.scroll.move_by(-1, help.max_scroll),
@@ -297,6 +308,10 @@ impl App {
             })
             .collect();
         HelpOverlay {
+            kind: InfoOverlayKind::Help,
+            modal_title: ui_text::t(&self.i18n, "context-help-title"),
+            eyebrow: ui_text::t(&self.i18n, "context-help-eyebrow"),
+            footer: ui_text::t(&self.i18n, "context-help-footer"),
             context,
             summary: ui_text::t(&self.i18n, summary_key),
             sections,
@@ -308,6 +323,317 @@ impl App {
             max_scroll: 0,
         }
     }
+}
+
+impl App {
+    pub(in crate::app) fn open_terminal_diagnostics(&mut self) {
+        let Some(context) = self.launch.terminal_context.as_ref() else {
+            self.flash_warning(ui_text::t(&self.i18n, "terminal-diagnostics-unavailable"));
+            return;
+        };
+        let identity = &context.identity;
+        let text = |key| ui_text::t(&self.i18n, key);
+        let evidence = if identity.evidence.is_empty() {
+            text("terminal-diagnostics-none")
+        } else {
+            identity
+                .evidence
+                .iter()
+                .map(|item| {
+                    let value = if matches!(
+                        item.key,
+                        "WT_SESSION"
+                            | "KITTY_WINDOW_ID"
+                            | "KITTY_PID"
+                            | "WEZTERM_PANE"
+                            | "ALACRITTY_SOCKET"
+                            | "KONSOLE_DBUS_SERVICE"
+                    ) {
+                        "<present>"
+                    } else {
+                        item.value.as_str()
+                    };
+                    format!(
+                        "{}={} → {} ({})",
+                        item.key,
+                        value,
+                        item.candidate,
+                        text(item.source.localization_key())
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        let conflicts = identity.conflicts();
+        let conflicts = if conflicts.is_empty() {
+            text("terminal-diagnostics-none")
+        } else {
+            conflicts
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let layers = if context.transport_evidence.is_empty() {
+            vec![HelpEntry {
+                keys: text("terminal-diagnostics-direct"),
+                description: text("terminal-diagnostics-direct-description"),
+            }]
+        } else {
+            context
+                .transport_evidence
+                .iter()
+                .map(|item| HelpEntry {
+                    keys: item.layer.label().to_owned(),
+                    description: self.i18n.text_args(
+                        "terminal-diagnostics-layer-description",
+                        &crate::fl_args!("source" => item.source_key),
+                    ),
+                })
+                .collect()
+        };
+        let capability = |name: &str, value: crate::terminal::CapabilityEvidence| HelpEntry {
+            keys: name.to_owned(),
+            description: self.i18n.text_args(
+                "terminal-diagnostics-capability-description",
+                &crate::fl_args!(
+                    "status" => text(value.support.localization_key()),
+                    "source" => text(value.source.localization_key()),
+                    "integration" => text(if value.integration_ready {
+                        "terminal-diagnostics-integration-ready"
+                    } else {
+                        "terminal-diagnostics-integration-missing"
+                    }),
+                ),
+            ),
+        };
+        let capabilities = &context.capabilities;
+        let mut provider_entries = Vec::new();
+        if identity.family == crate::terminal::TerminalFamily::Kitty
+            && let Some(helper) = crate::kitty::helper()
+        {
+            provider_entries.push(HelpEntry {
+                keys: "Kitty helper".to_owned(),
+                description: format!(
+                    "{} · version={} · clipboard={} · transfer={}",
+                    diagnostic_path(helper.path.as_path()),
+                    helper.version.as_deref().unwrap_or("unknown"),
+                    helper.clipboard,
+                    helper.transfer,
+                ),
+            });
+        } else if identity.family == crate::terminal::TerminalFamily::Kitty {
+            provider_entries.push(HelpEntry {
+                keys: "Kitty helper".to_owned(),
+                description: text("terminal-diagnostics-helper-missing"),
+            });
+        } else {
+            provider_entries.push(HelpEntry {
+                keys: "Kitty helper".to_owned(),
+                description: text("terminal-diagnostics-helper-not-probed"),
+            });
+        }
+        for (label, path) in [
+            ("iTerm2 upload", crate::iterm2::upload_utility()),
+            ("iTerm2 download", crate::iterm2::download_utility()),
+        ] {
+            provider_entries.push(HelpEntry {
+                keys: label.to_owned(),
+                description: path
+                    .map(|path| diagnostic_path(path.as_path()))
+                    .unwrap_or_else(|| text("terminal-diagnostics-helper-missing")),
+            });
+        }
+        let warning_entries = if context.diagnostics().is_empty() {
+            vec![HelpEntry {
+                keys: "✓".to_owned(),
+                description: text("terminal-diagnostics-no-warnings"),
+            }]
+        } else {
+            context
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| HelpEntry {
+                    keys: diagnostic.code.to_owned(),
+                    description: diagnostic.message.clone(),
+                })
+                .collect()
+        };
+        self.context_help = Some(HelpOverlay {
+            kind: InfoOverlayKind::Diagnostics,
+            modal_title: ui_text::t(&self.i18n, "terminal-diagnostics-title"),
+            eyebrow: ui_text::t(&self.i18n, "terminal-diagnostics-eyebrow"),
+            footer: ui_text::t(&self.i18n, "terminal-diagnostics-footer"),
+            context: identity.display_name(),
+            summary: self.i18n.text_args(
+                "terminal-diagnostics-summary",
+                &crate::fl_args!("confidence" => text(identity.confidence.localization_key())),
+            ),
+            sections: vec![
+                HelpSection {
+                    title: text("terminal-diagnostics-section-identity"),
+                    entries: vec![
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-field-product"),
+                            description: identity.family.to_string(),
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-field-version"),
+                            description: identity
+                                .version
+                                .clone()
+                                .unwrap_or_else(|| text("terminal-diagnostics-unknown")),
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-field-parsed-version"),
+                            description: identity
+                                .parsed_version
+                                .as_ref()
+                                .map(ToString::to_string)
+                                .unwrap_or_else(|| text("terminal-diagnostics-unavailable-value")),
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-field-compatibility"),
+                            description: identity
+                                .term
+                                .clone()
+                                .unwrap_or_else(|| text("terminal-diagnostics-term-unset")),
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-field-confidence"),
+                            description: text(identity.confidence.localization_key()),
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-field-source"),
+                            description: text(identity.source.localization_key()),
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-field-evidence"),
+                            description: evidence,
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-field-conflicts"),
+                            description: conflicts,
+                        },
+                    ],
+                },
+                HelpSection {
+                    title: text("terminal-diagnostics-section-layers"),
+                    entries: layers,
+                },
+                HelpSection {
+                    title: text("terminal-diagnostics-section-protocols"),
+                    entries: vec![
+                        capability(
+                            &text("terminal-diagnostics-protocol-alternate-screen"),
+                            capabilities.alternate_screen,
+                        ),
+                        capability(
+                            &text("terminal-diagnostics-protocol-bracketed-paste"),
+                            capabilities.bracketed_paste,
+                        ),
+                        capability(
+                            &text("terminal-diagnostics-protocol-focus"),
+                            capabilities.focus_reporting,
+                        ),
+                        capability(
+                            &text("terminal-diagnostics-protocol-keyboard"),
+                            capabilities.keyboard_disambiguation,
+                        ),
+                        capability(
+                            &text("terminal-diagnostics-protocol-key-events"),
+                            capabilities.keyboard_event_types,
+                        ),
+                        capability(
+                            &text("terminal-diagnostics-protocol-background"),
+                            capabilities.default_color_query,
+                        ),
+                        capability(
+                            &text("terminal-diagnostics-protocol-native-clipboard"),
+                            capabilities.clipboard_write_native,
+                        ),
+                        capability(
+                            &text("terminal-diagnostics-protocol-osc52-write"),
+                            capabilities.clipboard_write_osc52,
+                        ),
+                        capability(
+                            &text("terminal-diagnostics-protocol-osc52-read"),
+                            capabilities.clipboard_read_osc52,
+                        ),
+                    ],
+                },
+                HelpSection {
+                    title: text("terminal-diagnostics-section-providers"),
+                    entries: {
+                        let mut entries = vec![
+                            capability(
+                                &text("terminal-diagnostics-provider-kitty-clipboard"),
+                                capabilities.kitty_rich_clipboard,
+                            ),
+                            capability(
+                                &text("terminal-diagnostics-provider-kitty-transfer"),
+                                capabilities.kitty_file_transfer,
+                            ),
+                            capability(
+                                &text("terminal-diagnostics-provider-iterm-transfer"),
+                                capabilities.iterm2_file_transfer,
+                            ),
+                            capability(
+                                &text("terminal-diagnostics-provider-inline-images"),
+                                capabilities.inline_images,
+                            ),
+                            capability(
+                                &text("terminal-diagnostics-provider-hyperlinks"),
+                                capabilities.hyperlinks,
+                            ),
+                            capability(
+                                &text("terminal-diagnostics-provider-sync-output"),
+                                capabilities.synchronized_output,
+                            ),
+                        ];
+                        entries.extend(provider_entries);
+                        entries
+                    },
+                },
+                HelpSection {
+                    title: text("terminal-diagnostics-section-warnings"),
+                    entries: warning_entries,
+                },
+            ],
+            tips: vec![ui_text::t(&self.i18n, "terminal-diagnostics-tip")],
+            scroll: ScrollState::default(),
+            max_scroll: 0,
+        });
+    }
+}
+
+fn info_overlay_plain_text(help: &HelpOverlay) -> String {
+    let mut lines = vec![
+        help.modal_title.clone(),
+        help.context.clone(),
+        help.summary.clone(),
+    ];
+    for section in &help.sections {
+        lines.push(String::new());
+        lines.push(format!("[{}]", section.title));
+        lines.extend(
+            section
+                .entries
+                .iter()
+                .map(|entry| format!("{}: {}", entry.keys, entry.description)),
+        );
+    }
+    lines.join("\n")
+}
+
+fn diagnostic_path(path: &std::path::Path) -> String {
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = std::path::Path::new(&home);
+        if let Ok(relative) = path.strip_prefix(home) {
+            return format!("~/{}", relative.display());
+        }
+    }
+    path.display().to_string()
 }
 
 type HelpEntrySpec = (&'static str, &'static str);
@@ -792,12 +1118,14 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
 }
 
 use crate::app::{
-    App, Focus, HelpEntry, HelpOverlay, HelpSection, KeyEvent, ModelCatalogStudioOverlay, Overlay,
-    PermissionOverlayPage, PluginDetailTab, PluginWorkbenchMode, PluginWorkbenchOverlay,
-    ProviderStudioOverlay, QuestionFlowScreen, Route, ui_text,
+    App, Focus, HelpEntry, HelpOverlay, HelpSection, InfoOverlayKind, KeyEvent,
+    ModelCatalogStudioOverlay, Overlay, PermissionOverlayPage, PluginDetailTab,
+    PluginWorkbenchMode, PluginWorkbenchOverlay, ProviderStudioOverlay, QuestionFlowScreen, Route,
+    ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui_components::ScrollState;
+use crossterm::event::KeyCode;
 
 #[cfg(test)]
 mod tests {
@@ -929,6 +1257,74 @@ mod tests {
             "context-help-context-plugin-drilldown",
             "context-help-context-plugin-diff",
         ];
+        keys.extend([
+            "terminal-diagnostics-title",
+            "terminal-diagnostics-eyebrow",
+            "terminal-diagnostics-footer",
+            "terminal-diagnostics-tip",
+            "terminal-diagnostics-copied",
+            "terminal-diagnostics-unavailable",
+            "terminal-diagnostics-summary",
+            "terminal-diagnostics-none",
+            "terminal-diagnostics-unknown",
+            "terminal-diagnostics-unavailable-value",
+            "terminal-diagnostics-term-unset",
+            "terminal-diagnostics-section-identity",
+            "terminal-diagnostics-section-layers",
+            "terminal-diagnostics-section-protocols",
+            "terminal-diagnostics-section-providers",
+            "terminal-diagnostics-section-warnings",
+            "terminal-diagnostics-field-product",
+            "terminal-diagnostics-field-version",
+            "terminal-diagnostics-field-parsed-version",
+            "terminal-diagnostics-field-compatibility",
+            "terminal-diagnostics-field-confidence",
+            "terminal-diagnostics-field-source",
+            "terminal-diagnostics-field-evidence",
+            "terminal-diagnostics-field-conflicts",
+            "terminal-diagnostics-direct",
+            "terminal-diagnostics-direct-description",
+            "terminal-diagnostics-layer-description",
+            "terminal-diagnostics-capability-description",
+            "terminal-diagnostics-integration-ready",
+            "terminal-diagnostics-integration-missing",
+            "terminal-diagnostics-helper-missing",
+            "terminal-diagnostics-helper-not-probed",
+            "terminal-diagnostics-no-warnings",
+            "terminal-diagnostics-protocol-alternate-screen",
+            "terminal-diagnostics-protocol-bracketed-paste",
+            "terminal-diagnostics-protocol-focus",
+            "terminal-diagnostics-protocol-keyboard",
+            "terminal-diagnostics-protocol-key-events",
+            "terminal-diagnostics-protocol-background",
+            "terminal-diagnostics-protocol-native-clipboard",
+            "terminal-diagnostics-protocol-osc52-write",
+            "terminal-diagnostics-protocol-osc52-read",
+            "terminal-diagnostics-provider-kitty-clipboard",
+            "terminal-diagnostics-provider-kitty-transfer",
+            "terminal-diagnostics-provider-iterm-transfer",
+            "terminal-diagnostics-provider-inline-images",
+            "terminal-diagnostics-provider-hyperlinks",
+            "terminal-diagnostics-provider-sync-output",
+            "terminal-diagnostics-status-confirmed",
+            "terminal-diagnostics-status-forced",
+            "terminal-diagnostics-status-profiled",
+            "terminal-diagnostics-status-policy-dependent",
+            "terminal-diagnostics-status-unsupported",
+            "terminal-diagnostics-status-unknown",
+            "terminal-diagnostics-source-user",
+            "terminal-diagnostics-source-environment",
+            "terminal-diagnostics-source-helper",
+            "terminal-diagnostics-source-profile",
+            "terminal-diagnostics-source-platform",
+            "terminal-diagnostics-source-conservative",
+            "terminal-diagnostics-source-terminfo",
+            "terminal-diagnostics-source-unknown",
+            "terminal-diagnostics-confidence-explicit",
+            "terminal-diagnostics-confidence-strong",
+            "terminal-diagnostics-confidence-compatibility",
+            "terminal-diagnostics-confidence-unknown",
+        ]);
         for preset in presets {
             let (summary, sections, tips) = help_preset(preset);
             keys.push(summary);

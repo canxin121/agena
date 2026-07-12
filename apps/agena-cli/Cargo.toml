@@ -52,6 +52,7 @@ tempfile = { workspace = true }
 textwrap = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
+tracing.workspace = true
 tui-markdown = "0.3.7"
 unic-langid = { workspace = true }
 unicode-segmentation = { workspace = true }

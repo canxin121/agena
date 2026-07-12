@@ -92,28 +92,6 @@ impl App {
         )
     }
 
-    pub(in crate::app) fn current_diagnostics_summary(&self) -> String {
-        let runtime = self
-            .run_options
-            .summary(&self.i18n)
-            .unwrap_or_else(|| ui_text::t(&self.i18n, "runtime-status-default"));
-        let cwd = self.backend.workspace_root().display().to_string();
-        let session = self
-            .transcript
-            .session_id
-            .map(|id| format!("#{id}"))
-            .unwrap_or_else(|| "<none>".to_owned());
-        self.i18n.text_args(
-            "flash-diagnostics-summary",
-            &crate::fl_args!(
-                "cwd" => cwd,
-                "session" => session,
-                "queue" => self.queue.len() as i64,
-                "runtime" => runtime,
-            ),
-        )
-    }
-
     pub(in crate::app) fn current_session_view_summary(&self) -> String {
         self.sessions
             .view_mode

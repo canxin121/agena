@@ -6,10 +6,14 @@ mod commands;
 mod composer_queue;
 mod external_editor;
 mod external_pager;
+mod helper_runner;
 mod i18n;
 mod iterm2;
+mod kitty;
+mod provider_error;
 mod short_link;
 mod terminal;
+mod terminal_transfer;
 mod tui_config;
 mod tui_keymap;
 mod ui_text;
@@ -250,6 +254,16 @@ pub async fn run_embedded(
     let mut terminal = terminal::TerminalRuntime::enter()
         .map_err(|error| AppError::Internal(error.to_string()))?;
     let terminal_background = terminal.background();
+    let terminal_context = terminal.context().clone();
+    let terminal_summary = terminal_context.diagnostic_summary();
+    tracing::debug!(terminal = %terminal_summary, "detected TUI terminal environment");
+    for diagnostic in terminal_context.diagnostics() {
+        tracing::warn!(
+            code = diagnostic.code,
+            message = %diagnostic.message,
+            "terminal compatibility diagnostic"
+        );
+    }
     let mut app = App::new(
         backend,
         LaunchOptions {
@@ -257,6 +271,7 @@ pub async fn run_embedded(
             initial_session_search: args.search,
             tui_config,
             terminal_background,
+            terminal_context: Some(terminal_context),
         },
         i18n,
     );

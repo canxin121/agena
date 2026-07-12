@@ -1,13 +1,10 @@
-use std::{
-    io,
-    time::{Duration, Instant},
-};
+use std::io;
 
 use anyhow::Result;
 use crossterm::{
     cursor::{Hide, Show},
     event::{
-        self, DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange,
+        DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange,
         KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
@@ -22,6 +19,7 @@ pub enum SuspendReason {
     ExternalPager,
     FileUpload,
     FileDownload,
+    ClipboardRead,
     OpenPath,
 }
 
@@ -51,7 +49,7 @@ impl TerminalLifecycle {
         }
 
         if let Err(error) = self.enter_inner(capabilities) {
-            let _ = self.leave(false);
+            let _ = self.leave();
             return Err(error);
         }
         self.phase = Phase::Active;
@@ -89,7 +87,7 @@ impl TerminalLifecycle {
         if self.phase != Phase::Active {
             return Ok(());
         }
-        self.leave(true)?;
+        self.leave()?;
         self.phase = Phase::Suspended;
         Ok(())
     }
@@ -99,12 +97,12 @@ impl TerminalLifecycle {
     }
 
     pub(super) fn shutdown(&mut self) -> Result<()> {
-        let result = self.leave(true);
+        let result = self.leave();
         self.phase = Phase::Detached;
         result
     }
 
-    fn leave(&mut self, drain_input: bool) -> Result<()> {
+    fn leave(&mut self) -> Result<()> {
         let mut first_error: Option<anyhow::Error> = None;
         let mut record = |result: std::io::Result<()>| {
             if let Err(error) = result
@@ -120,9 +118,6 @@ impl TerminalLifecycle {
             self.keyboard_enhancement = false;
         }
         let _ = std::io::Write::flush(&mut stdout);
-        if drain_input && self.raw {
-            drain_pending_terminal_events();
-        }
         if self.cursor_hidden {
             record(execute!(stdout, Show));
             self.cursor_hidden = false;
@@ -163,21 +158,6 @@ fn keyboard_enhancement_flags(capabilities: &TerminalCapabilities) -> KeyboardEn
         flags |= KeyboardEnhancementFlags::REPORT_EVENT_TYPES;
     }
     flags
-}
-
-fn drain_pending_terminal_events() {
-    let deadline = Instant::now() + Duration::from_millis(40);
-    while Instant::now() < deadline {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match event::poll(remaining) {
-            Ok(true) => {
-                if event::read().is_err() {
-                    break;
-                }
-            }
-            Ok(false) | Err(_) => break,
-        }
-    }
 }
 
 pub(super) fn emergency_restore() -> Result<()> {

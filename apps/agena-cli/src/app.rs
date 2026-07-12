@@ -51,7 +51,10 @@ use serde_json::{Map as JsonMap, Value as JsonValue, json};
 use tokio::{sync::mpsc::unbounded_channel, time::interval};
 use unicode_width::UnicodeWidthChar;
 
-use crate::attachment_source::{ClipboardImageSource, Iterm2UploadSource, acquire_from_source};
+use crate::attachment_source::{
+    AttachmentAcquisition, AttachmentSource, Iterm2UploadSource, KittyUploadSource,
+    acquire_clipboard_image, acquire_from_source,
+};
 use crate::backend::{
     Backend, ConfigJsonSources, InspectorRow, LiveEvent, ProviderConfigDraft,
     ProviderDraftAdapterRule, ProviderDraftAuthKind, ProviderDraftInteractiveLoginKind,
@@ -68,8 +71,8 @@ use crate::composer_queue::{ComposerQueue, QueuePriority, QueuedMessage};
 use crate::external_editor::{edit_text, open_path};
 use crate::external_pager::page_text;
 use crate::i18n::{I18n, SUPPORTED_LOCALES};
-use crate::iterm2;
-use crate::terminal::{SuspendReason, TerminalRuntime};
+use crate::terminal::{SuspendReason, TerminalContext, TerminalRuntime};
+use crate::terminal_transfer::{download_providers, request_download};
 use crate::tui_keymap::ComposerAction;
 use crate::ui_text;
 use agena_api_server::local_api::{

@@ -31,14 +31,14 @@ impl App {
             CommandId::DenyAlways => self.reply_permission(PermissionReplyKind::DenyAlways),
             CommandId::Attach => {
                 self.focus = Focus::Composer;
-                self.request_file_attachment(false);
+                self.request_file_attachment_from_terminal(false, args);
             }
-            CommandId::Download => self.request_iterm2_download(args),
+            CommandId::Download => self.request_terminal_download(args),
             CommandId::Editor => {
                 self.pending_ui_action = Some(UiAction::EditComposerExternally);
             }
             CommandId::Image => {
-                self.request_file_attachment(true);
+                self.request_file_attachment_from_terminal(true, args);
             }
             CommandId::Copy => self.copy_loaded_transcript(),
             CommandId::CopyMessage => self.copy_last_assistant_message(),
@@ -53,7 +53,7 @@ impl App {
             CommandId::Children => self.open_child_sessions_picker(),
             CommandId::Parent => self.open_parent_session(),
             CommandId::Diagnostics => {
-                self.flash_success(self.current_diagnostics_summary());
+                self.open_terminal_diagnostics();
             }
             CommandId::Status => {
                 self.flash_success(self.current_runtime_status_summary());

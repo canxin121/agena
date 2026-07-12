@@ -1,7 +1,4 @@
 #[cfg(not(target_os = "android"))]
-use std::io::Write;
-
-#[cfg(not(target_os = "android"))]
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 #[cfg(not(target_os = "android"))]
@@ -82,7 +79,7 @@ impl<'a> ClipboardService<'a> {
             .context
             .capabilities
             .clipboard_write_osc52
-            .is_supported_or_unknown()
+            .is_supported()
         {
             if text.len() > MAX_OSC52_TEXT_BYTES {
                 failures.push(format!(
@@ -113,33 +110,23 @@ fn set_clipboard_text_native(text: &str) -> Result<(), ClipboardTextError> {
 
 #[cfg(not(target_os = "android"))]
 fn set_clipboard_text_via_tmux(text: &str) -> Result<(), ClipboardTextError> {
-    use std::process::{Command, Stdio};
+    use std::{process::Command, time::Duration};
 
-    let mut child = Command::new("tmux")
-        .args(["load-buffer", "-w", "-"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| ClipboardTextError(error.to_string()))?;
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| ClipboardTextError("tmux clipboard stdin is unavailable".to_string()))?
-        .write_all(text.as_bytes())
-        .map_err(|error| ClipboardTextError(error.to_string()))?;
-    let output = child
-        .wait_with_output()
-        .map_err(|error| ClipboardTextError(error.to_string()))?;
-    if output.status.success() {
+    let mut command = Command::new("tmux");
+    command.args(["load-buffer", "-w", "-"]);
+    let status = crate::helper_runner::run_with_input(
+        &mut command,
+        text.as_bytes().to_vec(),
+        "tmux clipboard copy",
+        Duration::from_secs(10),
+    )
+    .map_err(|error| ClipboardTextError(error.to_string()))?;
+    if status.success() {
         Ok(())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        Err(ClipboardTextError(if stderr.is_empty() {
-            "tmux rejected the clipboard request".to_string()
-        } else {
-            stderr
-        }))
+        Err(ClipboardTextError(
+            "tmux rejected the clipboard request".to_owned(),
+        ))
     }
 }
 

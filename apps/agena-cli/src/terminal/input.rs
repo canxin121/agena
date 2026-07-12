@@ -84,6 +84,15 @@ impl InputNormalizer {
         self.ready.pop_front()
     }
 
+    pub(super) fn take_ready(&mut self) -> VecDeque<Event> {
+        std::mem::take(&mut self.ready)
+    }
+
+    pub(super) fn restore_ready(&mut self, mut events: VecDeque<Event>) {
+        events.append(&mut self.ready);
+        self.ready = events;
+    }
+
     fn flush_pending(&mut self, allow_paste: bool) {
         if self.pending.is_empty() {
             self.last_at = None;
@@ -180,5 +189,15 @@ mod tests {
         input.flush_all();
         assert!(matches!(input.pop_ready(), Some(Event::Key(_))));
         assert!(matches!(input.pop_ready(), Some(Event::Key(_))));
+    }
+
+    #[test]
+    fn ready_input_survives_a_terminal_suspension_boundary() {
+        let mut input = InputNormalizer::default();
+        input.accept(key('x'));
+        let preserved = input.take_ready();
+        input.reset();
+        input.restore_ready(preserved);
+        assert_eq!(input.pop_ready(), Some(key('x')));
     }
 }

@@ -23,6 +23,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use crate::backend::{Backend, LiveEvent, SessionRefresh};
 use crate::composer_queue::ComposerQueue;
 use crate::i18n::I18n;
+use crate::terminal::TerminalContext;
 use crate::tui_config::{TuiConfig, TuiStatusLineConfig};
 use crate::tui_keymap::ComposerKeyBindings;
 use agena_api_server::local_api::ModelCatalogListResponse;
@@ -309,6 +310,7 @@ pub struct LaunchOptions {
     pub initial_session_search: Option<String>,
     pub tui_config: TuiConfig,
     pub terminal_background: Option<agena_tui_components::TerminalRgb>,
+    pub terminal_context: Option<TerminalContext>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -673,14 +675,32 @@ pub(super) enum AppMessage {
 
 #[derive(Debug, Clone)]
 pub(super) enum UiAction {
-    CopyText { text: String, success: String },
+    CopyText {
+        text: String,
+        success: String,
+    },
     EditComposerExternally,
     AttachClipboardImage,
-    AttachIterm2Files { images_only: bool },
-    DownloadIterm2File { path: PathBuf },
-    ExportTranscript { path: Option<PathBuf> },
-    OpenPath { path: PathBuf },
+    AttachTerminalFiles {
+        source: TerminalUploadRequest,
+        images_only: bool,
+    },
+    DownloadTerminalFile {
+        path: PathBuf,
+    },
+    ExportTranscript {
+        path: Option<PathBuf>,
+    },
+    OpenPath {
+        path: PathBuf,
+    },
     PageTranscript,
+}
+
+#[derive(Debug, Clone)]
+pub(super) enum TerminalUploadRequest {
+    Iterm2,
+    Kitty { local_sources: Vec<String> },
 }
 
 pub(super) type UiResult<T> = std::result::Result<T, String>;
@@ -853,12 +873,22 @@ pub(super) type LineInputOverlay = InputDialogState<()>;
 
 #[derive(Debug, Clone)]
 pub(super) struct HelpOverlay {
+    pub(super) kind: InfoOverlayKind,
+    pub(super) modal_title: String,
+    pub(super) eyebrow: String,
+    pub(super) footer: String,
     pub(super) context: String,
     pub(super) summary: String,
     pub(super) sections: Vec<HelpSection>,
     pub(super) tips: Vec<String>,
     pub(super) scroll: ScrollState,
     pub(super) max_scroll: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum InfoOverlayKind {
+    Help,
+    Diagnostics,
 }
 
 #[derive(Debug, Clone)]

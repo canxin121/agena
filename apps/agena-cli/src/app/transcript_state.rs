@@ -97,6 +97,17 @@ impl TranscriptState {
         }
     }
 
+    fn confirm_next_pending_user_message(&mut self) {
+        if let Some(message) = self
+            .pending_user_messages
+            .iter_mut()
+            .find(|message| !message.confirmed)
+        {
+            message.confirmed = true;
+            self.invalidate_render();
+        }
+    }
+
     pub(in crate::app) fn replace_messages(
         &mut self,
         page: PaginatedResponse<MessageResource>,
@@ -194,8 +205,17 @@ impl TranscriptState {
             // intermediate assistant passes that are intentionally hidden
             // from the user-visible transcript, so we always re-fetch the
             // latest projection instead of mutating the local message list.
-            AgenaSessionEvent::UserMessageAppended(_)
-            | AgenaSessionEvent::MessagePartUpdated(_)
+            AgenaSessionEvent::UserMessageAppended(_) => {
+                // Submission waits for the whole agent run, but the durable
+                // user-message event is emitted as soon as the prompt is
+                // stored. A refresh can therefore load the real message
+                // while its optimistic copy is still marked pending. Retire
+                // that copy at the durable boundary so the transcript never
+                // renders both versions of the same prompt.
+                self.confirm_next_pending_user_message();
+                true
+            }
+            AgenaSessionEvent::MessagePartUpdated(_)
             | AgenaSessionEvent::MessagePartDelta(_)
             | AgenaSessionEvent::AssistantMessageCompleted(_) => true,
             _ => false,
@@ -480,12 +500,12 @@ impl TranscriptState {
             });
         }
 
-        for message in &self.pending_user_messages {
-            let status = if message.confirmed {
-                String::new()
-            } else {
-                format!(" {}", spinner_frame(current_spinner_millis()))
-            };
+        for message in self
+            .pending_user_messages
+            .iter()
+            .filter(|message| !message.confirmed)
+        {
+            let status = format!(" {}", spinner_frame(current_spinner_millis()));
             lines.push(RenderedLine::plain(
                 format!(
                     "{}{status}",

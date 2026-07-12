@@ -56,9 +56,16 @@ impl TranscriptNodeKey {
 pub(in crate::app) enum TranscriptNodeKind {
     Message,
     MarkdownParagraph,
+    MarkdownHeading,
+    MarkdownQuote,
+    MarkdownAlert,
     MarkdownCode,
     MarkdownList,
     MarkdownTable,
+    MarkdownMath,
+    MarkdownImage,
+    MarkdownFootnote,
+    MarkdownDiagram,
     Activity,
 }
 
@@ -66,9 +73,16 @@ pub(in crate::app) fn transcript_node_kind_label(i18n: &I18n, kind: TranscriptNo
     let key = match kind {
         TranscriptNodeKind::Message => "transcript-node-kind-message",
         TranscriptNodeKind::MarkdownParagraph => "transcript-node-kind-markdown",
+        TranscriptNodeKind::MarkdownHeading => "transcript-node-kind-heading",
+        TranscriptNodeKind::MarkdownQuote => "transcript-node-kind-quote",
+        TranscriptNodeKind::MarkdownAlert => "transcript-node-kind-alert",
         TranscriptNodeKind::MarkdownCode => "transcript-node-kind-code",
         TranscriptNodeKind::MarkdownList => "transcript-node-kind-list",
         TranscriptNodeKind::MarkdownTable => "transcript-node-kind-table",
+        TranscriptNodeKind::MarkdownMath => "transcript-node-kind-math",
+        TranscriptNodeKind::MarkdownImage => "transcript-node-kind-image",
+        TranscriptNodeKind::MarkdownFootnote => "transcript-node-kind-footnote",
+        TranscriptNodeKind::MarkdownDiagram => "transcript-node-kind-diagram",
         TranscriptNodeKind::Activity => "transcript-node-kind-activity",
     };
     ui_text::t(i18n, key)
@@ -370,14 +384,18 @@ pub(in crate::app) fn transcript_vertical_line_navigation_step(
                             mode: TranscriptBlockSelectionMode::Entering,
                         },
                     )
-            }),
+            })
+            .or(Some(TranscriptVerticalNavigationStep::SelectNode {
+                node_index: current_index,
+                mode: TranscriptBlockSelectionMode::Leaving,
+            })),
     }
 }
 
-/// Line navigation owns the boundaries of message children. If there is no
-/// next/previous child or message at such a boundary, do not fall through to
-/// message navigation: that would select the enclosing message at its opposite
-/// edge and make Down from a final line appear to wrap to the first line.
+/// Line navigation owns the boundaries of message children. At the final
+/// boundary it selects the current child as a complete copyable block. Do not
+/// fall through to message navigation: that would select the enclosing message
+/// at its opposite edge and make Down appear to wrap to the first line.
 pub(in crate::app) fn transcript_should_fall_back_to_message_navigation(
     nodes: &[RenderedTranscriptNode],
     cursor_line: usize,

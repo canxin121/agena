@@ -13,6 +13,7 @@ impl RenderedLine {
             rich_line: Some(Line::from(Span::styled(text.clone(), style))),
             text,
             style,
+            math: Vec::new(),
         }
     }
 
@@ -27,6 +28,7 @@ impl RenderedLine {
             text,
             style,
             rich_line: Some(line),
+            math: Vec::new(),
         }
     }
 

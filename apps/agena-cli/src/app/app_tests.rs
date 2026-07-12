@@ -710,7 +710,7 @@ mod transcript_navigation_tests {
     }
 
     #[test]
-    fn final_line_of_the_final_message_does_not_wrap_to_its_first_line() {
+    fn final_line_of_the_final_message_selects_its_block_without_wrapping() {
         let final_child = TranscriptNodeKey::MarkdownBlock {
             message_id: 10,
             part_id: 1,
@@ -725,8 +725,11 @@ mod transcript_navigation_tests {
                 3,
                 TranscriptMoveDirection::Down,
             ),
-            None,
-            "there is no child or later message below the last rendered line"
+            Some(TranscriptVerticalNavigationStep::SelectNode {
+                node_index: 0,
+                mode: TranscriptBlockSelectionMode::Leaving,
+            }),
+            "down from the final rendered line selects the complete block for copying"
         );
         assert!(
             !transcript_should_fall_back_to_message_navigation(nodes.as_slice(), 3),

@@ -4,6 +4,7 @@ impl App {
     }
 
     pub fn new(backend: Backend, launch: LaunchOptions, i18n: I18n) -> Self {
+        crate::math_render::configure_markdown_workspace(backend.workspace_root());
         let (tx, rx) = unbounded_channel();
         let draft_store_path = default_draft_store_path();
         let (draft_store, pending_draft_store_error) = match DraftStore::load(&draft_store_path) {
@@ -46,6 +47,8 @@ impl App {
             tx,
             rx,
             launch: launch.clone(),
+            math_renderer: crate::math_render::configured_graphics()
+                .and_then(MathGraphicsRenderer::new),
             should_quit: false,
             focus: Focus::Transcript,
             current_route: Route::Main,
@@ -137,6 +140,9 @@ impl App {
         let mut ticker = interval(Duration::from_millis(UI_TICK_MS));
 
         loop {
+            if let Some(renderer) = self.math_renderer.as_mut() {
+                renderer.sync_generation(terminal.generation());
+            }
             terminal.draw(|frame| self.draw(frame))?;
             terminal.set_text_input_active(self.has_active_text_input());
 
@@ -196,10 +202,6 @@ impl App {
         self.refresh_input_derived_state();
         self.refresh_status_line_if_due(now);
         self.poll_provider_studio_auth_if_due(now);
-        if self.transcript.has_animated_activity() {
-            self.transcript.invalidate_render();
-        }
-
         if let Some(error) = self.pending_draft_store_error.take() {
             self.report_draft_store_error(error);
         }
@@ -297,3 +299,4 @@ use crate::app::{
     default_draft_store_path, default_prompt_history_path, interval,
     provider_studio_auth_poll_interval, ui_text, unbounded_channel,
 };
+use crate::math_render::MathGraphicsRenderer;

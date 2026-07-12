@@ -10,6 +10,7 @@ mod helper_runner;
 mod i18n;
 mod iterm2;
 mod kitty;
+mod math_render;
 mod provider_error;
 mod short_link;
 mod terminal;
@@ -254,9 +255,15 @@ pub async fn run_embedded(
     let mut terminal = terminal::TerminalRuntime::enter()
         .map_err(|error| AppError::Internal(error.to_string()))?;
     let terminal_background = terminal.background();
+    let math_graphics = terminal.math_graphics();
+    let math_protocol = math_graphics.protocol_name();
     let terminal_context = terminal.context().clone();
     let terminal_summary = terminal_context.diagnostic_summary();
-    tracing::debug!(terminal = %terminal_summary, "detected TUI terminal environment");
+    tracing::debug!(
+        terminal = %terminal_summary,
+        math_protocol,
+        "detected TUI terminal environment"
+    );
     for diagnostic in terminal_context.diagnostics() {
         tracing::warn!(
             code = diagnostic.code,

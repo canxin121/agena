@@ -34,6 +34,65 @@ distinguishes confirmed platform support, a user-forced override, a terminal
 profile, transport or permission policy, unknown support, and whether Agena
 has a working provider.
 
+## Markdown rendering
+
+Transcript Markdown is parsed as one CommonMark/GFM document instead of by
+line-oriented heuristics. In addition to paragraphs and ATX/Setext headings,
+Agena renders nested ordered, unordered, and task lists; block quotes and
+GitHub alert cards; aligned tables; fenced and indented code; thematic rules;
+links, relaxed autolinks, images, named and inline footnotes, description lists,
+YAML front matter, block directives, subtext, and raw HTML shown safely as
+source. Inline support includes emphasis, strong text, deletion, insertion,
+highlight, spoilers, super/subscript, code, emoji shortcodes, wiki links, hard
+breaks, and smart punctuation. Safe inline HTML maps `kbd`, `u`, `mark`, `ins`,
+`del`, `sup`, and `sub` to terminal styles without executing HTML. Standard
+CommonMark `__strong__` keeps its meaning instead of being reassigned to a
+conflicting underline dialect. CJK-friendly emphasis, task lists inside tables,
+heading/code/link attributes, rich table-cell spans, ordered footnote labels,
+and both unambiguous wiki-link pipe orders are supported. Code fences use
+language-aware Syntect highlighting, line numbers, grapheme-safe wrapping, and
+palettes selected for light or dark terminals.
+
+Standalone and inline Markdown images use the same negotiated Kitty, Sixel, or
+iTerm2 graphics pipeline as formulas. Agena displays base64 raster/SVG data URLs
+and workspace-relative or `file:` images confined to the active workspace. SVG
+is parsed and rasterized through pure-Rust `usvg`/`resvg`; external SVG resources
+remain disabled. Obsidian image embeds such as `![[diagram.svg|Architecture]]`
+map to the same safe image pipeline, while document embeds remain visible wiki
+links. Remote HTTP images remain inert links: the transcript never performs an
+implicit network request, preventing tracking, SSRF, and network latency during
+layout. Image bytes, dimensions, decoded pixels, cache entries, and display
+height are bounded. Terminals without native graphics retain a styled image
+card with its alt text, title, and URL.
+
+Fenced `svg` diagrams render through the native image pipeline. Mermaid,
+PlantUML, Graphviz/DOT, D2, Vega/Vega-Lite, and Svgbob fences are represented as
+independently navigable diagram cards with syntax-highlighted, copyable source.
+Agena deliberately does not execute external diagram helpers or JavaScript from
+model-produced Markdown; a future trusted renderer can replace the card without
+changing the transcript AST.
+
+### Math
+
+Transcript Markdown supports inline `$...$` and `\(...\)`, display `$$...$$`
+and `\[...\]`, plus fenced `math`, `tex`, `latex`, and `katex` blocks. Escaped
+dollar signs and inline-code spans are not interpreted as formulas.
+
+On terminals that negotiate Kitty graphics, Sixel, or the iTerm2 inline-image
+protocol, Agena typesets formulas with embedded KaTeX fonts through the pure
+Rust RaTeX pipeline and places the resulting transparent image in the
+transcript's scrollable line layout. Wide display formulas are scaled to the
+viewport, and inline formulas share a bottom-aligned line box with surrounding
+richly styled text and inline images. Image protocols are regenerated after
+terminal suspend/resume.
+
+When no native graphics protocol is available, Agena renders formulas as 2-D
+Unicode cell layouts, retaining stacked fractions, roots, scripts, and matrix
+structure where supported. Unsupported input remains visible as source text.
+Formula length, output dimensions, decoded pixels, artifact count, and encoded
+protocol count are bounded so model-produced Markdown cannot grow the render
+caches without limit.
+
 ## Kitty attachment transfer
 
 When Agena runs directly in Kitty and an executable standalone `kitten` helper

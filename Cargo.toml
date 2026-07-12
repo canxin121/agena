@@ -255,3 +255,9 @@ panic = "abort"
 strip = "symbols"
 debug = false
 incremental = false
+
+[patch.crates-io]
+# RaTeX 0.1.13 writes font-discovery diagnostics directly to stderr. Direct
+# terminal writes corrupt a running alternate-screen TUI, so use the minimal
+# source patch documented alongside the vendored crate.
+ratex-unicode-font = { path = "third_party/ratex-unicode-font" }

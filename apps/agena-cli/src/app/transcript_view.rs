@@ -187,13 +187,13 @@ pub(in crate::app) fn render_message_detailed(
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        ExecutionStatus, I18n, MessagePart, MessageResource, MessageStatus, OperationPart,
+        ExecutionStatus, I18n, Line, MessagePart, MessageResource, MessageStatus, OperationPart,
         PartContent, RequestPart, ToolInvocation, TranscriptDetailDefaults, TranscriptNodeKey,
         TranscriptNodeKind, UnicodeWidthStr, activity_status_icon, collapsed_activity_run_end,
-        interactive_request_is_embedded_in_operation, markdown_blocks, render_markdown_block,
-        render_message_detailed, render_tool_execution, should_suppress_markdown_block,
-        spinner_frame, thinking_collapsed_summary, tool_execution_compact_summary,
-        tool_invocation_label,
+        interactive_request_is_embedded_in_operation, markdown_blocks, refresh_spinner_line,
+        render_markdown_block, render_message_detailed, render_tool_execution,
+        should_suppress_markdown_block, spinner_frame, thinking_collapsed_summary,
+        tool_execution_compact_summary, tool_invocation_label, transcript_spinner_placeholder,
     };
     use agena::permission::{PermissionAction, PermissionRequest, PermissionRiskLevel};
     use chrono::Utc;
@@ -415,9 +415,19 @@ mod tests {
         assert_eq!(spinner_frame(100), "⠙");
         assert_eq!(spinner_frame(900), "⠏");
         assert_eq!(activity_status_icon(ExecutionStatus::Pending), "○");
+        assert_eq!(
+            activity_status_icon(ExecutionStatus::InProgress),
+            transcript_spinner_placeholder()
+        );
         assert_eq!(activity_status_icon(ExecutionStatus::Completed), "●");
         assert_eq!(activity_status_icon(ExecutionStatus::Failed), "×");
         assert_eq!(activity_status_icon(ExecutionStatus::Cancelled), "–");
+
+        let refreshed = refresh_spinner_line(
+            Line::from(format!("assistant {}", transcript_spinner_placeholder())),
+            "⠴",
+        );
+        assert_eq!(refreshed.to_string(), "assistant ⠴");
     }
 
     #[test]
@@ -445,13 +455,20 @@ mod tests {
             },
             &Default::default(),
         );
-        assert!(
-            rendered.lines[0]
-                .text
-                .strip_prefix("assistant ")
-                .is_some_and(
-                    |icon| ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"].contains(&icon)
-                )
+        assert_eq!(
+            rendered.lines[0].text,
+            format!("assistant {}", transcript_spinner_placeholder())
+        );
+        assert_eq!(
+            refresh_spinner_line(
+                rendered.lines[0]
+                    .rich_line
+                    .clone()
+                    .expect("header should keep its rich line"),
+                "⠋",
+            )
+            .to_string(),
+            "assistant ⠋"
         );
         assert!(!rendered.lines[0].text.contains("in_progress"));
         assert_eq!(

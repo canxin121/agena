@@ -4,10 +4,10 @@ use super::super::{
     PartContent, RenderedLine, RenderedTranscriptNode, RequestPart, SessionExecutionResource,
     Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES, ToolOutputPreview,
     TranscriptDetailDefaults, TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr,
-    activity_status_icon, concise_text, current_spinner_millis, format_timestamp, push_label_value,
-    push_markdown, push_multiline, push_section_heading, push_single_line, push_wrapped_line,
-    render_message_detailed, spinner_frame, strip_terminal_ansi_sequences, style_for_role,
-    tool_output_copy_text, transcript_message_parts, transcript_part_content,
+    activity_status_icon, concise_text, format_timestamp, push_label_value, push_markdown,
+    push_multiline, push_section_heading, push_single_line, push_wrapped_line,
+    render_message_detailed, strip_terminal_ansi_sequences, style_for_role, tool_output_copy_text,
+    transcript_message_parts, transcript_part_content, transcript_spinner_placeholder,
     trim_empty_line_edges, truncate_display_width, ui_text,
 };
 use super::operation_render::render_tool_execution;
@@ -338,9 +338,7 @@ pub(in crate::app) fn push_message_header(
     let header = match message.state {
         MessageStatus::Completed => role,
         MessageStatus::Pending => format!("{role} ○"),
-        MessageStatus::InProgress => {
-            format!("{role} {}", spinner_frame(current_spinner_millis()))
-        }
+        MessageStatus::InProgress => format!("{role} {}", transcript_spinner_placeholder()),
         MessageStatus::Failed => format!("{role} ×"),
         MessageStatus::Cancelled => format!("{role} –"),
     };

@@ -559,7 +559,7 @@ impl TranscriptState {
             let status = if message.confirmed {
                 String::new()
             } else {
-                format!(" {}", spinner_frame(current_spinner_millis()))
+                format!(" {}", transcript_spinner_placeholder())
             };
             lines.push(RenderedLine::plain(
                 format!(
@@ -619,23 +619,6 @@ impl TranscriptState {
 
     pub(in crate::app) fn invalidate_render(&mut self) {
         self.rendered = None;
-    }
-
-    pub(in crate::app) fn has_animated_activity(&self) -> bool {
-        self.pending_user_messages
-            .iter()
-            .any(|message| !message.confirmed)
-            || self.messages.iter().any(|message| {
-                message.parts.as_deref().is_some_and(|parts| {
-                    parts.iter().any(|part| {
-                        part.status == ExecutionStatus::InProgress
-                            && matches!(
-                                part.content.as_ref(),
-                                Some(PartContent::Reasoning(_) | PartContent::Operation(_))
-                            )
-                    })
-                })
-            })
     }
 
     pub(in crate::app) fn clamp_scroll(&mut self, width: u16, height: u16) {
@@ -835,15 +818,15 @@ impl TranscriptState {
     }
 }
 use crate::app::{
-    AgenaSessionEvent, BTreeMap, DomainEvent, ExecutionStatus, HashSet, I18n, MessageResource,
-    MessageRole, Modifier, PaginatedResponse, PartContent, PendingUserMessage, Range, RenderedLine,
-    RenderedTranscript, RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
+    AgenaSessionEvent, BTreeMap, DomainEvent, HashSet, I18n, MessageResource, MessageRole,
+    Modifier, PaginatedResponse, PendingUserMessage, Range, RenderedLine, RenderedTranscript,
+    RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
     TranscriptBlockSelectionMode, TranscriptDetailDefaults, TranscriptMoveDirection,
     TranscriptNodeKey, TranscriptNodeKind, TranscriptState, TranscriptVerticalNavigationStep,
-    contains_case_insensitive, current_spinner_millis, initial_search_match_index, markdown_blocks,
+    contains_case_insensitive, initial_search_match_index, markdown_blocks,
     merge_message_resources, message_sort_key, min, render_markdown_block, render_message_detailed,
-    spinner_frame, style_for_role, transcript_message_navigation_target,
-    transcript_node_highlight_range, transcript_selection_scroll_position,
-    transcript_should_fall_back_to_message_navigation, transcript_should_follow_tail,
+    style_for_role, transcript_message_navigation_target, transcript_node_highlight_range,
+    transcript_selection_scroll_position, transcript_should_fall_back_to_message_navigation,
+    transcript_should_follow_tail, transcript_spinner_placeholder,
     transcript_vertical_line_navigation_step, transcript_vertical_navigation_step, ui_text,
 };

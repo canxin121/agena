@@ -1,8 +1,8 @@
-use std::{io, panic, sync::Once};
+use std::{io, panic, sync::Once, time::Duration};
 
 use agena_tui_components::TerminalRgb;
-use anyhow::Result;
-use crossterm::event::{Event, EventStream};
+use anyhow::{Context, Result};
+use crossterm::event::{self, Event, EventStream};
 use futures_util::StreamExt;
 use ratatui::{Frame, Terminal, backend::CrosstermBackend};
 
@@ -180,28 +180,42 @@ impl TerminalRuntime {
     ) -> Result<T> {
         self.terminal
             .flush()
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+            .context("failed to flush the TUI before suspending the terminal")?;
 
+        // Dropping EventStream wakes its background reader but does not join
+        // that thread. Acquiring Crossterm's global event-reader lock through a
+        // zero-duration poll is the synchronization barrier that guarantees the
+        // old reader no longer owns /dev/tty before the child process starts.
         self.events.take();
+        event::poll(Duration::ZERO)
+            .context("failed to quiesce terminal input before launching an external program")?;
         self.input.flush_all();
         let preserved_input = self.input.take_ready();
         if let Err(error) = self.lifecycle.suspend(reason) {
             self.input.restore_ready(preserved_input);
             self.events = Some(EventStream::new());
-            return Err(error);
+            return Err(error)
+                .with_context(|| format!("failed to suspend the terminal for {reason:?}"));
         }
 
         let result = panic::catch_unwind(panic::AssertUnwindSafe(operation));
-        let resume_result = self.lifecycle.resume(&self.context.capabilities);
+        let resume_result = self
+            .lifecycle
+            .resume(&self.context.capabilities)
+            .with_context(|| format!("failed to resume the terminal after {reason:?}"));
         if resume_result.is_ok() {
             self.generation = self.generation.saturating_add(1);
             self.broker.next_generation();
-            self.events = Some(EventStream::new());
             self.input.reset();
             self.input.restore_ready(preserved_input);
             self.terminal
                 .clear()
-                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                .map_err(|error| anyhow::anyhow!(error.to_string()))
+                .with_context(|| format!("failed to clear the terminal after {reason:?}"))?;
+            // Create the new reader only after every terminal mode and screen
+            // mutation has completed, preserving single ownership of the tty.
+            self.events = Some(EventStream::new());
         }
 
         match result {

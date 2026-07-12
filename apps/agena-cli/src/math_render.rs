@@ -116,11 +116,19 @@ pub(crate) struct MathGraphicsConfig {
 
 impl MathGraphicsConfig {
     pub(crate) fn query(background_hint: Option<TerminalRgb>, allow_native_graphics: bool) -> Self {
-        let mut picker = Picker::from_query_stdio_with_options(QueryStdioOptions {
-            terminal_background_color_osc: true,
-            ..QueryStdioOptions::default()
-        })
-        .unwrap_or_else(|_| Picker::halfblocks());
+        // Capability probing sends cursor-position, device-attribute, graphics,
+        // cell-size, and OSC colour queries. Through tmux, screen, SSH, or Mosh
+        // those replies can be delayed until an external pager/editor owns the
+        // tty, where they become visible input such as a stray trailing `R`.
+        // TerminalRuntime has already made the transport policy decision, so
+        // do not perform a query whose result cannot be used.
+        let mut picker = picker_for_graphics_policy(allow_native_graphics, || {
+            Picker::from_query_stdio_with_options(QueryStdioOptions {
+                terminal_background_color_osc: true,
+                ..QueryStdioOptions::default()
+            })
+            .unwrap_or_else(|_| Picker::halfblocks())
+        });
         let reported_background = terminal_background_from_capabilities(picker.capabilities());
         let background = reported_background.or(background_hint);
         let resolved_background = background.unwrap_or(DEFAULT_DARK_BACKGROUND);
@@ -178,6 +186,17 @@ impl MathGraphicsConfig {
 
     pub(crate) fn downgraded_protocol_name(&self) -> Option<&'static str> {
         self.downgraded_protocol.map(protocol_name)
+    }
+}
+
+fn picker_for_graphics_policy(
+    allow_native_graphics: bool,
+    query: impl FnOnce() -> Picker,
+) -> Picker {
+    if allow_native_graphics {
+        query()
+    } else {
+        Picker::halfblocks()
     }
 }
 
@@ -1632,6 +1651,25 @@ mod tests {
             downgraded_native_protocol(ProtocolType::Halfblocks, false),
             None
         );
+    }
+
+    #[test]
+    fn disabled_native_graphics_never_queries_the_terminal() {
+        let queried = std::cell::Cell::new(false);
+        let picker = picker_for_graphics_policy(false, || {
+            queried.set(true);
+            Picker::halfblocks()
+        });
+
+        assert!(!queried.get());
+        assert_eq!(picker.protocol_type(), ProtocolType::Halfblocks);
+
+        let picker = picker_for_graphics_policy(true, || {
+            queried.set(true);
+            Picker::halfblocks()
+        });
+        assert!(queried.get());
+        assert_eq!(picker.protocol_type(), ProtocolType::Halfblocks);
     }
 
     #[test]

@@ -188,12 +188,14 @@ pub(in crate::app) fn render_message_detailed(
 mod tests {
     use super::{
         ExecutionStatus, I18n, Line, MessagePart, MessageResource, MessageStatus, OperationPart,
-        PartContent, RequestPart, ToolInvocation, TranscriptDetailDefaults, TranscriptNodeKey,
-        TranscriptNodeKind, UnicodeWidthStr, activity_status_icon, collapsed_activity_run_end,
+        PartContent, RequestPart, TRANSCRIPT_EXPORT_WIDTH, ToolInvocation,
+        TranscriptDetailDefaults, TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr,
+        activity_status_icon, collapsed_activity_run_end,
         interactive_request_is_embedded_in_operation, markdown_blocks, refresh_spinner_line,
-        render_markdown_block, render_message_detailed, render_tool_execution,
-        should_suppress_markdown_block, spinner_frame, thinking_collapsed_summary,
-        tool_execution_compact_summary, tool_invocation_label, transcript_spinner_placeholder,
+        render_markdown_block, render_message_detailed, render_message_export,
+        render_tool_execution, render_transcript_export_markdown, should_suppress_markdown_block,
+        spinner_frame, thinking_collapsed_summary, tool_execution_compact_summary,
+        tool_invocation_label, transcript_spinner_placeholder,
     };
     use agena::permission::{PermissionAction, PermissionRequest, PermissionRiskLevel};
     use chrono::Utc;
@@ -715,6 +717,61 @@ mod tests {
             lines
                 .iter()
                 .all(|line| UnicodeWidthStr::width(line.text.as_str()) <= 28)
+        );
+    }
+
+    #[test]
+    fn transcript_exports_never_materialize_unbounded_terminal_rules() {
+        let now = Utc::now();
+        let message = MessageResource {
+            id: 42,
+            session_id: 7,
+            role: agena_api::resource::MessageRole::Assistant,
+            state: MessageStatus::Completed,
+            created_at: now,
+            updated_at: now,
+            metadata: Default::default(),
+            usage: None,
+            part_count: 1,
+            parts: Some(vec![MessagePart::from_content(
+                1,
+                42,
+                now,
+                ExecutionStatus::Completed,
+                PartContent::text(concat!(
+                    "# Export fixture\n\n",
+                    "---\n\n",
+                    "```rust\n",
+                    "let value = \"a deliberately long line that must stay bounded in exports\";\n",
+                    "```",
+                )),
+            )]),
+        };
+
+        let rendered = render_message_export(
+            &message,
+            &I18n::english(),
+            TranscriptDetailDefaults {
+                activity_expanded: true,
+            },
+        );
+        assert!(rendered.iter().all(|line| {
+            UnicodeWidthStr::width(line.text.as_str()) <= usize::from(TRANSCRIPT_EXPORT_WIDTH)
+        }));
+
+        let markdown = render_transcript_export_markdown(
+            &I18n::english(),
+            Some(7),
+            "Export fixture",
+            None,
+            std::slice::from_ref(&message),
+            false,
+        );
+        assert!(markdown.len() < 32 * 1024, "export unexpectedly ballooned");
+        assert!(
+            markdown.lines().all(|line| {
+                UnicodeWidthStr::width(line) <= usize::from(TRANSCRIPT_EXPORT_WIDTH)
+            })
         );
     }
 

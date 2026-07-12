@@ -15,6 +15,12 @@ use super::request_render::{
     preview_for_part, render_permission_request, render_user_input_request,
 };
 
+/// Export and pager output is a document, not an infinitely wide terminal.
+/// Keeping this width bounded prevents visual rules and code-card borders from
+/// expanding to `u16::MAX`-sized lines while remaining comfortable to read in
+/// both terminal pagers and text editors.
+pub(in crate::app) const TRANSCRIPT_EXPORT_WIDTH: u16 = 120;
+
 pub(in crate::app) fn interactive_request_is_embedded_in_operation(
     parts: &[MessagePart],
     index: usize,
@@ -44,13 +50,12 @@ pub(in crate::app) fn interactive_request_is_embedded_in_operation(
 
 pub(in crate::app) fn render_message_export(
     message: &MessageResource,
-    width: u16,
     i18n: &I18n,
     defaults: TranscriptDetailDefaults,
 ) -> Vec<RenderedLine> {
     render_message_detailed(
         message,
-        width,
+        TRANSCRIPT_EXPORT_WIDTH,
         i18n,
         defaults,
         &std::collections::BTreeMap::new(),
@@ -178,6 +183,10 @@ pub(in crate::app) fn render_transcript_export_markdown(
         ui_text::transcript_export_default_title(i18n)
     };
 
+    let title = truncate_display_width(
+        title.as_str(),
+        usize::from(TRANSCRIPT_EXPORT_WIDTH).saturating_sub(2),
+    );
     let mut out = vec![format!("# {title}"), String::new()];
     if let Some(session_id) = session_id {
         out.push(ui_text::transcript_export_session_id_line(i18n, session_id));
@@ -225,7 +234,6 @@ pub(in crate::app) fn render_transcript_export_markdown(
         out.extend(
             render_message_export(
                 message,
-                u16::MAX,
                 i18n,
                 TranscriptDetailDefaults {
                     activity_expanded: true,

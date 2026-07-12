@@ -12,6 +12,7 @@ import {
   type PermissionSubjectKind,
   type SessionExecutionResource,
 } from '../lib/agenaApi'
+import type { SettingsTab } from './runtimePageStateModel'
 
 export type RuntimePermissionDraft = {
   subjectKind: PermissionSubjectKind
@@ -30,7 +31,7 @@ export type RuntimePermissionDraft = {
 export type RuntimePermissionActionsInput = {
   actionError: Ref<string>
   actionMessage: Ref<string>
-  activeSettingsTab: Ref<'providers' | 'agents' | 'plugins' | 'permissions' | 'desktop'>
+  activeSettingsTab: Ref<SettingsTab>
   editingPermissionRuleId: Ref<number | null>
   interactiveRequestInFlight: Record<string, boolean>
   load: () => Promise<void>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
-import { routerKey } from 'vue-router'
+import { routerKey, useRoute } from 'vue-router'
 
 import { runPluginUiAction, type PluginInspect, type PluginLogEntry, type PluginStatus } from '@/agena/lib/agenaApi'
 import { isPluginUiToolInvokeResponse, resolvePluginCommandOutput } from '@/agena/lib/pluginUiActionRuntime'
@@ -73,6 +73,15 @@ const pluginUiMessage = ref('')
 const pluginUiError = ref('')
 const controlDrafts = ref<Record<string, unknown>>({})
 const router = inject(routerKey, null)
+const route = useRoute()
+const pluginSearch = ref(typeof route.query.search === 'string' ? route.query.search.trim() : '')
+const filteredPlugins = computed(() => {
+  const query = pluginSearch.value.trim().toLowerCase()
+  if (!query) return props.plugins
+  return props.plugins.filter((plugin) =>
+    [plugin.plugin_id, plugin.kind, plugin.state, plugin.last_error || ''].join(' ').toLowerCase().includes(query),
+  )
+})
 const manifest = computed(() => props.selectedPlugin?.manifest ?? null)
 const authority = computed(() => props.selectedPlugin?.authority ?? null)
 const selectedPluginDisabled = computed(() => readRecord(props.selectedPlugin?.entry).disabled === true)
@@ -485,9 +494,13 @@ async function renderResolvedPluginCommandEffect(
   <div class="grid two">
     <section class="card">
       <h3>Plugins</h3>
-      <div v-if="props.plugins.length" class="list">
+      <div class="field">
+        <label class="label" for="installed-plugin-search">Search installed plugins</label>
+        <input id="installed-plugin-search" v-model="pluginSearch" class="input" placeholder="id, kind, state, error" />
+      </div>
+      <div v-if="filteredPlugins.length" class="list">
         <button
-          v-for="plugin in props.plugins"
+          v-for="plugin in filteredPlugins"
           :key="plugin.plugin_id"
           class="list-item"
           style="width: 100%; text-align: left"
@@ -505,7 +518,9 @@ async function renderResolvedPluginCommandEffect(
           </div>
         </button>
       </div>
-      <p v-else class="muted">No configured plugins.</p>
+      <p v-else class="muted">
+        {{ props.plugins.length ? 'No plugins match this search.' : 'No configured plugins.' }}
+      </p>
     </section>
 
     <section class="card">

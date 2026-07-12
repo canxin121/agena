@@ -3,7 +3,9 @@ import type { SettingsTab } from './runtimePageStateModel'
 import type { useSettingsPageState } from './useSettingsPageState'
 
 import SettingsAgentsPageContent from './SettingsAgentsPageContent.vue'
+import SettingsConfigurationPageContent from './SettingsConfigurationPageContent.vue'
 import SettingsDesktopPageContent from './SettingsDesktopPageContent.vue'
+import SettingsMemoryPageContent from './SettingsMemoryPageContent.vue'
 import SettingsPermissionsPageContent from './SettingsPermissionsPageContent.vue'
 import SettingsPluginsPageContent from './SettingsPluginsPageContent.vue'
 import SettingsProvidersPageContent from './SettingsProvidersPageContent.vue'
@@ -17,20 +19,18 @@ const props = defineProps<{
 </script>
 
 <template>
-  <SettingsProvidersPageContent
-    v-if="props.activeTab === 'providers'"
-    :providers="props.panels.providers"
+  <SettingsProvidersPageContent v-if="props.activeTab === 'providers'" :providers="props.panels.providers" />
+
+  <SettingsAgentsPageContent v-else-if="props.activeTab === 'agents'" :agents="props.panels.agents" />
+
+  <SettingsPluginsPageContent v-else-if="props.activeTab === 'plugins'" :plugins="props.panels.plugins" />
+
+  <SettingsConfigurationPageContent
+    v-else-if="props.activeTab === 'configuration'"
+    :configuration="props.panels.configuration"
   />
 
-  <SettingsAgentsPageContent
-    v-else-if="props.activeTab === 'agents'"
-    :agents="props.panels.agents"
-  />
-
-  <SettingsPluginsPageContent
-    v-else-if="props.activeTab === 'plugins'"
-    :plugins="props.panels.plugins"
-  />
+  <SettingsMemoryPageContent v-else-if="props.activeTab === 'memory'" :memory="props.panels.memory" />
 
   <SettingsPermissionsPageContent
     v-else-if="props.activeTab === 'permissions'"
@@ -40,7 +40,7 @@ const props = defineProps<{
   />
 
   <SettingsDesktopPageContent
-    v-else
+    v-else-if="props.activeTab === 'desktop'"
     :loading="props.loading"
     :desktop="props.panels.desktop"
   />

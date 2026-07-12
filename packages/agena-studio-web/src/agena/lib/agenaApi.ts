@@ -1,5 +1,5 @@
 import { emitAuthRequired, extractAuthRequiredMessageFromBodyText } from '../../lib/authEvents'
-import { apiJson, apiText, apiUrl } from '../../lib/api'
+import { apiBlob, apiJson, apiText, apiUrl } from '../../lib/api'
 import { buildActiveUiAuthHeaders } from '../../lib/uiAuthToken'
 import { normalizeSseBuffer, parseSseEventBlock } from './sse'
 import type { ProviderModelPricing, ProviderModelThinkingMode, ProviderModelSpeedMode } from './providerApi'
@@ -412,7 +412,16 @@ export type RuntimeReloadResponse = {
   loaded_at: string
 }
 
-export type UsagePeriod = 'today' | 'last_7_days' | 'last_30_days' | 'month_to_date' | 'all_time'
+export type UsagePeriod =
+  | 'today'
+  | 'yesterday'
+  | 'last_7_days'
+  | 'last_14_days'
+  | 'last_30_days'
+  | 'last_90_days'
+  | 'month_to_date'
+  | 'year_to_date'
+  | 'all_time'
 
 export type UsageTotals = {
   runs: number
@@ -777,8 +786,54 @@ export type GitStatusResource = {
   untracked_files: number
   changed_files: number
   clean: boolean
-  worktree_active_sessions: number
-  worktree_managed_dirs: number
+  snapshot_active_sessions: number
+  snapshot_managed_dirs: number
+}
+
+export type SnapshotStatusResource = {
+  workspace_root: string
+  session_runtime_available: boolean
+  registry_available: boolean
+  preferred_backend?: string | null
+  git: { backend: string; available: boolean; detail: string }
+  rift: { backend: string; available: boolean; detail: string }
+  active: Array<{
+    session_id: number
+    path: string
+    branch: string
+    backend: string
+    created_here: boolean
+  }>
+  managed: Array<{
+    path: string
+    session_id?: number | null
+    branch?: string | null
+    backend?: string | null
+    registered_with_git: boolean
+    registered_with_rift: boolean
+    stale: boolean
+  }>
+}
+
+export type GitCommitResource = {
+  commit: string
+  summary: string
+  status: GitStatusResource
+}
+
+export type GitPullRequestResource = {
+  url: string
+}
+
+export type MemoryType = 'user' | 'feedback' | 'project' | 'reference' | 'other'
+
+export type MemoryResource = {
+  name: string
+  file_name: string
+  path: string
+  description: string
+  memory_type?: MemoryType | null
+  body: string
 }
 
 export type SessionResource = {
@@ -825,6 +880,19 @@ export type MessagePart = {
   operation_id?: string | null
   created_at: string
   content?: Record<string, unknown> | null
+}
+
+export type AttachmentKind = 'image' | 'audio' | 'video' | 'pdf' | 'file'
+
+export type AttachmentItemInput = {
+  kind: AttachmentKind
+  mime: string
+  source: { source: 'base64'; data: string }
+  filename?: string | null
+  title?: string | null
+  size_bytes?: number | null
+  width?: number | null
+  height?: number | null
 }
 
 export type MessageResource = {
@@ -1085,12 +1153,24 @@ export async function fetchUsageStats(
     period?: UsagePeriod
     from?: string | null
     to?: string | null
+    providerIds?: string[]
+    modelIds?: string[]
+    sessionIds?: number[]
+    includeSubagents?: boolean
+    timezoneOffsetMinutes?: number
   } = {},
 ): Promise<UsageStats> {
   const params = new URLSearchParams()
   if (input.period) params.set('period', input.period)
   if (input.from) params.set('from', input.from)
   if (input.to) params.set('to', input.to)
+  if (input.providerIds?.length) params.set('provider', input.providerIds.join(','))
+  if (input.modelIds?.length) params.set('model', input.modelIds.join(','))
+  if (input.sessionIds?.length) params.set('session', input.sessionIds.join(','))
+  if (input.includeSubagents !== undefined) params.set('include_subagents', String(input.includeSubagents))
+  if (input.timezoneOffsetMinutes !== undefined) {
+    params.set('timezone_offset_minutes', String(input.timezoneOffsetMinutes))
+  }
   const suffix = params.toString()
   return await apiJson<UsageStats>(`/api/v1/usage${suffix ? `?${suffix}` : ''}`)
 }
@@ -1658,9 +1738,73 @@ export async function getGitStatus(): Promise<GitStatusResource> {
   return await apiJson<GitStatusResource>('/api/v1/git/status')
 }
 
+export async function getSnapshotStatus(): Promise<SnapshotStatusResource> {
+  return await apiJson<SnapshotStatusResource>('/api/v1/snapshots')
+}
+
 export async function initGitProject(): Promise<GitStatusResource> {
   return await apiJson<GitStatusResource>('/api/v1/project/git/init', {
     method: 'POST',
+  })
+}
+
+export async function stageGitChanges(paths: string[] = []): Promise<GitStatusResource> {
+  return await apiJson<GitStatusResource>('/api/v1/git/stage', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ paths }),
+  })
+}
+
+export async function createGitCommit(message: string): Promise<GitCommitResource> {
+  return await apiJson<GitCommitResource>('/api/v1/git/commits', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ message }),
+  })
+}
+
+export async function createGitPullRequest(input: {
+  title: string
+  body?: string | null
+  base?: string | null
+  head?: string | null
+}): Promise<GitPullRequestResource> {
+  return await apiJson<GitPullRequestResource>('/api/v1/git/pull-requests', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+export async function listMemories(): Promise<MemoryResource[]> {
+  return await apiJson<MemoryResource[]>('/api/v1/memories')
+}
+
+export async function getMemory(name: string): Promise<MemoryResource> {
+  return await apiJson<MemoryResource>(`/api/v1/memories/${encodeURIComponent(name.trim())}`)
+}
+
+export async function saveMemory(input: {
+  name: string
+  description?: string
+  memoryType?: MemoryType | null
+  body: string
+}): Promise<MemoryResource> {
+  return await apiJson<MemoryResource>(`/api/v1/memories/${encodeURIComponent(input.name.trim())}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      description: input.description || '',
+      memory_type: input.memoryType || null,
+      body: input.body,
+    }),
+  })
+}
+
+export async function deleteMemory(name: string): Promise<MemoryResource> {
+  return await apiJson<MemoryResource>(`/api/v1/memories/${encodeURIComponent(name.trim())}`, {
+    method: 'DELETE',
   })
 }
 
@@ -1686,6 +1830,26 @@ export async function listWorkspaceFileTree(input: {
   return await apiJson<WorkspaceFileTreeResource>(
     `/api/v1/workspaces/${input.workspaceId}/files${query ? `?${query}` : ''}`,
   )
+}
+
+export async function downloadWorkspaceFile(input: { workspaceId: number; path: string }): Promise<void> {
+  const path = input.path.trim().replace(/^\/+/, '')
+  if (!path) throw new Error('Workspace file path cannot be empty.')
+  const params = new URLSearchParams({ path })
+  const blob = await apiBlob(`/api/v1/workspaces/${input.workspaceId}/download?${params.toString()}`)
+  if (typeof document === 'undefined' || typeof URL === 'undefined' || !URL.createObjectURL) {
+    throw new Error('Browser file downloads are unavailable in this environment.')
+  }
+
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = path.split('/').filter(Boolean).at(-1) || 'workspace-file'
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
 }
 
 export async function listSessions(
@@ -1807,13 +1971,7 @@ export async function clearSessionGoal(sessionId: number): Promise<{ ok: boolean
 }
 
 export async function exportSessionJsonl(sessionId: number): Promise<string> {
-  const response = await fetch(apiUrl(`/api/v1/sessions/${sessionId}/export`), {
-    headers: buildActiveUiAuthHeaders(),
-  })
-  if (!response.ok) {
-    throw new Error(`Failed to export session ${sessionId}`)
-  }
-  return await response.text()
+  return await apiText(`/api/v1/sessions/${sessionId}/export`, { headers: { accept: 'application/x-ndjson' } })
 }
 
 export async function importSessionJsonl(jsonl: string): Promise<SessionExecutionResource> {
@@ -2251,6 +2409,9 @@ type SessionRunOptionsInput = {
   speedMode?: string
   verbosity?: string
   parallelToolCalls?: boolean
+  temperature?: number
+  maxOutputTokens?: number
+  system?: string
   agentProfile?: string
 }
 
@@ -2283,6 +2444,15 @@ function buildSessionRunOptionsBody(input: SessionRunOptionsInput): Record<strin
   if (providerId && modelId && input.parallelToolCalls !== undefined) {
     body.parallel_tool_calls = input.parallelToolCalls
   }
+  if (input.temperature !== undefined) {
+    body.temperature = input.temperature
+  }
+  if (input.maxOutputTokens !== undefined) {
+    body.max_output_tokens = input.maxOutputTokens
+  }
+  if (input.system?.trim()) {
+    body.system = input.system.trim()
+  }
 
   return body
 }
@@ -2296,11 +2466,38 @@ export async function continueSession(input: {
   speedMode?: string
   verbosity?: string
   parallelToolCalls?: boolean
+  temperature?: number
+  maxOutputTokens?: number
+  system?: string
   agentProfile?: string
 }): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/continue`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(buildSessionRunOptionsBody(input)),
+  })
+}
+
+export async function compactSession(input: {
+  sessionId: number
+  expectedVersion?: number | null
+  providerId?: string
+  adapterId?: string
+  modelId?: string
+  thinkingMode?: string
+  speedMode?: string
+  verbosity?: string
+  parallelToolCalls?: boolean
+  temperature?: number
+  maxOutputTokens?: number
+  system?: string
+  agentProfile?: string
+}): Promise<SessionExecutionResource> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  if (input.expectedVersion != null) headers['if-match'] = String(input.expectedVersion)
+  return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/compact`, {
+    method: 'POST',
+    headers,
     body: JSON.stringify(buildSessionRunOptionsBody(input)),
   })
 }
@@ -2322,6 +2519,7 @@ export async function listRewindCheckpoints(sessionId: number): Promise<RewindCh
 export async function submitTurn(input: {
   sessionId: number
   text: string
+  attachments?: AttachmentItemInput[]
   providerId?: string
   adapterId?: string
   modelId?: string
@@ -2329,16 +2527,17 @@ export async function submitTurn(input: {
   speedMode?: string
   verbosity?: string
   parallelToolCalls?: boolean
+  temperature?: number
+  maxOutputTokens?: number
+  system?: string
   agentProfile?: string
 }): Promise<SessionExecutionResource> {
+  const parts: Array<Record<string, unknown>> = []
+  if (input.text.trim()) parts.push({ type: 'text', text: input.text })
+  if (input.attachments?.length) parts.push({ type: 'attachment', attachments: input.attachments })
   const body: Record<string, unknown> = {
     ...buildSessionRunOptionsBody(input),
-    parts: [
-      {
-        type: 'text',
-        text: input.text,
-      },
-    ],
+    parts,
   }
 
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/messages`, {

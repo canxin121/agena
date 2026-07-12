@@ -59,6 +59,7 @@ export type RuntimeDerivedStateInput = {
   mcpQuery: Ref<string>
   permissionModeFilter: Ref<'all' | PermissionMode>
   permissionRules: Ref<PermissionRuleResource[]>
+  permissionSearch: Ref<string>
   permissionScopeFilter: Ref<'all' | 'session' | 'workspace' | 'global'>
   permissionStatusFilter: Ref<'all' | 'active' | 'revoked'>
   permissionSubjectFilter: Ref<'all' | PermissionSubjectKind>
@@ -144,6 +145,28 @@ export function useRuntimeDerivedState(input: RuntimeDerivedStateInput) {
         return false
       if (input.permissionStatusFilter.value === 'active' && rule.revoked_at) return false
       if (input.permissionStatusFilter.value === 'revoked' && !rule.revoked_at) return false
+      const query = input.permissionSearch.value.trim().toLowerCase()
+      if (
+        query &&
+        ![
+          rule.action_key,
+          rule.subject_kind,
+          rule.tool_name || '',
+          rule.qualifier || '',
+          rule.path_access_kind || '',
+          rule.workspace_root || '',
+          rule.target_path || '',
+          rule.network_target || '',
+          rule.network_host || '',
+          rule.scope,
+          rule.mode,
+          rule.source,
+        ]
+          .join(' ')
+          .toLowerCase()
+          .includes(query)
+      )
+        return false
       return true
     })
   })

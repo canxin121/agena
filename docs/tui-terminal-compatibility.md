@@ -141,7 +141,6 @@ hidden by containers, SSH configuration or multiplexers:
 | `AGENA_TUI_OSC52` | boolean | Enable or disable OSC 52 text-copy requests |
 | `AGENA_TUI_NATIVE_CLIPBOARD` | boolean | Enable or disable the operating-system clipboard provider |
 | `AGENA_TUI_KITTY_FILE_TRANSFER` | boolean | Enable or disable Kitty TTY file transfer |
-| `AGENA_TUI_QUERY_BACKGROUND` | boolean | Reserved; currently reported and ignored because active stdin probes are disabled |
 | `AGENA_TUI_DOWNLOAD_DIR` | local path | Kitty download destination, interpreted on the local computer |
 | `AGENA_TUI_KITTEN` | executable path | Explicit standalone `kitten` helper path |
 | `AGENA_TUI_HELPER_TIMEOUT_SECS` | `15..3600` | Timeout for interactive terminal helpers; defaults to 300 seconds |

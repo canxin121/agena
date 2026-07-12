@@ -6,7 +6,7 @@ use crossterm::event::{Event, EventStream};
 use futures_util::StreamExt;
 use ratatui::{Frame, Terminal, backend::CrosstermBackend};
 
-use crate::math_render::{MathGraphicsConfig, foreground_for_background};
+use crate::math_render::MathGraphicsConfig;
 
 mod broker;
 mod capabilities;
@@ -52,15 +52,22 @@ impl TerminalRuntime {
         let mut lifecycle = lifecycle::TerminalLifecycle::default();
         lifecycle.enter(&context.capabilities)?;
 
-        // Background hints are environment-only. Agena does not read terminal
-        // query responses outside the application event stream.
-        let background = protocol::detect_terminal_background(&context);
+        // Environment color evidence is a fallback. The existing bounded
+        // graphics negotiation also requests OSC 11 before EventStream owns
+        // stdin, so it can safely provide the authoritative background.
+        let background_hint = protocol::detect_terminal_background(&context);
         // ratatui-image owns the one synchronous capability query. It must run
         // after alternate-screen entry and before EventStream starts, otherwise
         // graphics replies can be mistaken for keyboard input.
-        let math_graphics = MathGraphicsConfig::query(foreground_for_background(background));
+        let math_graphics = MathGraphicsConfig::query(background_hint);
+        let background = math_graphics.background();
         if math_graphics.is_native() {
             context.capabilities.inline_images = capabilities::CapabilityEvidence::supported(
+                capabilities::CapabilitySource::TerminalQuery,
+            );
+        }
+        if math_graphics.background_was_reported() {
+            context.capabilities.default_color_query = capabilities::CapabilityEvidence::supported(
                 capabilities::CapabilitySource::TerminalQuery,
             );
         }

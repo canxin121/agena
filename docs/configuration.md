@@ -259,16 +259,14 @@ AGENA_TUI_KEYBOARD_PROTOCOL
 AGENA_TUI_OSC52
 AGENA_TUI_NATIVE_CLIPBOARD
 AGENA_TUI_KITTY_FILE_TRANSFER
-AGENA_TUI_QUERY_BACKGROUND
 AGENA_TUI_DOWNLOAD_DIR
 AGENA_TUI_KITTEN
 AGENA_TUI_HELPER_TIMEOUT_SECS
 ```
 
-TUI 默认使用 `auto` 配色模式：优先读取 `COLORFGBG`、`TERM_BACKGROUND` 或
-`VSCODE_THEME_KIND`，无法判断时回退到暗色配色。为避免终端响应与用户按键共用 stdin
-时发生误消费，当前完全禁用 OSC 11 主动查询；设置
-`AGENA_TUI_QUERY_BACKGROUND=1` 会在 `/diagnostics` 中显示为已忽略配置。
+TUI 默认使用 `auto` 配色模式。启动时唯一一次有界终端协商会同时查询 OSC 11
+背景色，并在创建输入事件流之前完整消费响应；终端返回值优先于 `COLORFGBG`、
+`TERM_BACKGROUND` 和 `VSCODE_THEME_KIND` 环境提示，无法判断时回退到暗色配色。
 主界面不会覆盖终端背景，普通正文继续使用终端默认前景色，只有
 强调、状态、弱化文字和选中区域使用经过亮色/暗色对比度校验的语义色。
 

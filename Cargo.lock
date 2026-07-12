@@ -283,6 +283,7 @@ dependencies = [
  "regex",
  "reqwest 0.13.3",
  "resvg",
+ "rust-latex-parser",
  "sea-orm",
  "serde",
  "serde_json",

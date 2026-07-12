@@ -22,6 +22,7 @@ use ratex_parser::parser::parse;
 use ratex_render::{RenderOptions, render_to_png};
 use ratex_types::{color::Color, math_style::MathStyle};
 use regex::Regex;
+use rust_latex_parser::{EqNode, parse_equation};
 
 const MAX_FORMULA_BYTES: usize = 16 * 1024;
 const MAX_MARKDOWN_IMAGE_BYTES: usize = 20 * 1024 * 1024;
@@ -588,7 +589,8 @@ fn cache_dynamic_image(
 
 pub(crate) fn unicode_formula(source: &str) -> Vec<String> {
     let source = normalize_unicode_latex(source.trim());
-    let lines = term_maths::render(&source)
+    let ast = normalize_unicode_math_ast(parse_equation(&source));
+    let lines = term_maths::layout::layout(&ast)
         .to_string()
         .lines()
         .map(str::to_owned)
@@ -606,6 +608,155 @@ fn normalize_unicode_latex(source: &str) -> String {
     let source = LATEX_FRACTION_ALIAS.replace_all(source, r"\frac");
     let source = LATEX_ROW_SPACING.replace_all(&source, r"\\");
     source.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn normalize_unicode_math_ast(node: EqNode) -> EqNode {
+    match node {
+        EqNode::Text(text) => {
+            unicode_big_operator(&text).map_or(EqNode::Text(text), |symbol| EqNode::BigOp {
+                symbol: symbol.to_string(),
+                lower: None,
+                upper: None,
+            })
+        }
+        EqNode::Space(_) | EqNode::TextBlock(_) => node,
+        EqNode::Seq(nodes) => {
+            EqNode::Seq(nodes.into_iter().map(normalize_unicode_math_ast).collect())
+        }
+        EqNode::Sup(base, upper) => attach_big_operator_limits(
+            normalize_unicode_math_ast(*base),
+            Some(normalize_unicode_math_ast(*upper)),
+            None,
+        ),
+        EqNode::Sub(base, lower) => attach_big_operator_limits(
+            normalize_unicode_math_ast(*base),
+            None,
+            Some(normalize_unicode_math_ast(*lower)),
+        ),
+        EqNode::SupSub(base, upper, lower) => attach_big_operator_limits(
+            normalize_unicode_math_ast(*base),
+            Some(normalize_unicode_math_ast(*upper)),
+            Some(normalize_unicode_math_ast(*lower)),
+        ),
+        EqNode::Frac(numerator, denominator) => EqNode::Frac(
+            Box::new(normalize_unicode_math_ast(*numerator)),
+            Box::new(normalize_unicode_math_ast(*denominator)),
+        ),
+        EqNode::Sqrt(body) => EqNode::Sqrt(Box::new(normalize_unicode_math_ast(*body))),
+        EqNode::BigOp {
+            symbol,
+            lower,
+            upper,
+        } => EqNode::BigOp {
+            symbol,
+            lower: lower.map(|node| Box::new(normalize_unicode_math_ast(*node))),
+            upper: upper.map(|node| Box::new(normalize_unicode_math_ast(*node))),
+        },
+        EqNode::Accent(body, kind) => {
+            EqNode::Accent(Box::new(normalize_unicode_math_ast(*body)), kind)
+        }
+        EqNode::Limit { name, lower } => EqNode::Limit {
+            name,
+            lower: lower.map(|node| Box::new(normalize_unicode_math_ast(*node))),
+        },
+        EqNode::MathFont { kind, content } => EqNode::MathFont {
+            kind,
+            content: Box::new(normalize_unicode_math_ast(*content)),
+        },
+        EqNode::Delimited {
+            left,
+            right,
+            content,
+        } => EqNode::Delimited {
+            left,
+            right,
+            content: Box::new(normalize_unicode_math_ast(*content)),
+        },
+        EqNode::Matrix { kind, rows } => EqNode::Matrix {
+            kind,
+            rows: rows
+                .into_iter()
+                .map(|row| row.into_iter().map(normalize_unicode_math_ast).collect())
+                .collect(),
+        },
+        EqNode::Cases { rows } => EqNode::Cases {
+            rows: rows
+                .into_iter()
+                .map(|(value, condition)| {
+                    (
+                        normalize_unicode_math_ast(value),
+                        condition.map(normalize_unicode_math_ast),
+                    )
+                })
+                .collect(),
+        },
+        EqNode::Binom(top, bottom) => EqNode::Binom(
+            Box::new(normalize_unicode_math_ast(*top)),
+            Box::new(normalize_unicode_math_ast(*bottom)),
+        ),
+        EqNode::Brace {
+            content,
+            label,
+            over,
+        } => EqNode::Brace {
+            content: Box::new(normalize_unicode_math_ast(*content)),
+            label: label.map(|node| Box::new(normalize_unicode_math_ast(*node))),
+            over,
+        },
+        EqNode::StackRel {
+            base,
+            annotation,
+            over,
+        } => EqNode::StackRel {
+            base: Box::new(normalize_unicode_math_ast(*base)),
+            annotation: Box::new(normalize_unicode_math_ast(*annotation)),
+            over,
+        },
+    }
+}
+
+fn attach_big_operator_limits(
+    base: EqNode,
+    upper: Option<EqNode>,
+    lower: Option<EqNode>,
+) -> EqNode {
+    match base {
+        EqNode::BigOp {
+            symbol,
+            lower: existing_lower,
+            upper: existing_upper,
+        } if existing_upper.is_none() && existing_lower.is_none() => EqNode::BigOp {
+            symbol,
+            lower: lower.map(Box::new),
+            upper: upper.map(Box::new),
+        },
+        base => match (upper, lower) {
+            (Some(upper), Some(lower)) => {
+                EqNode::SupSub(Box::new(base), Box::new(upper), Box::new(lower))
+            }
+            (Some(upper), None) => EqNode::Sup(Box::new(base), Box::new(upper)),
+            (None, Some(lower)) => EqNode::Sub(Box::new(base), Box::new(lower)),
+            (None, None) => base,
+        },
+    }
+}
+
+fn unicode_big_operator(command: &str) -> Option<&'static str> {
+    match command {
+        r"\bigcap" => Some("⋂"),
+        r"\bigcup" => Some("⋃"),
+        r"\bigwedge" => Some("⋀"),
+        r"\bigvee" => Some("⋁"),
+        r"\bigsqcup" => Some("⨆"),
+        r"\bigodot" => Some("⨀"),
+        r"\bigoplus" => Some("⨁"),
+        r"\bigotimes" => Some("⨂"),
+        r"\biguplus" => Some("⨄"),
+        r"\iiiint" => Some("⨌"),
+        r"\oiint" => Some("∯"),
+        r"\oiiint" => Some("∰"),
+        _ => None,
+    }
 }
 
 pub(crate) struct MathGraphicsRenderer {
@@ -783,6 +934,52 @@ mod tests {
             "raw command leaked:\n{rendered}"
         );
         assert!(!rendered.contains("8pt"), "row spacing leaked:\n{rendered}");
+    }
+
+    #[test]
+    fn unicode_fallback_renders_extended_big_operators_with_limits() {
+        let rendered =
+            unicode_formula(r"\left|\bigcup_{i=1}^{n} A_i\right| = \sum_{i=1}^{n} |A_i|")
+                .join("\n");
+
+        assert!(
+            rendered.contains('⋃'),
+            "missing union operator:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('∑'),
+            "missing summation operator:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("i = 1"),
+            "missing lower limit:\n{rendered}"
+        );
+        assert!(rendered.contains('n'), "missing upper limit:\n{rendered}");
+        assert!(
+            !rendered.contains(r"\bigcup"),
+            "raw big operator leaked:\n{rendered}"
+        );
+
+        for (command, symbol) in [
+            (r"\bigcap", '⋂'),
+            (r"\bigwedge", '⋀'),
+            (r"\bigvee", '⋁'),
+            (r"\bigsqcup", '⨆'),
+            (r"\bigodot", '⨀'),
+            (r"\bigoplus", '⨁'),
+            (r"\bigotimes", '⨂'),
+            (r"\biguplus", '⨄'),
+        ] {
+            let rendered = unicode_formula(&format!(r"{command}_{{i=1}}^n A_i")).join("\n");
+            assert!(
+                rendered.contains(symbol),
+                "{command} did not render as {symbol}:\n{rendered}"
+            );
+            assert!(
+                !rendered.contains(command),
+                "raw command leaked for {command}:\n{rendered}"
+            );
+        }
     }
 
     #[test]

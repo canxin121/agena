@@ -790,8 +790,7 @@ impl App {
     }
 
     pub(in crate::app) fn refresh_choice_overlay(dialog: &mut ChoiceOverlay) {
-        let all_items = dialog.meta.all_items.clone();
-        refresh_search_list_overlay(dialog, all_items.as_slice());
+        dialog.refresh_results();
     }
 
     pub(in crate::app) fn sync_choice_overlay_input(
@@ -811,13 +810,16 @@ impl App {
         }
 
         let clear_offset = usize::from(dialog.clear_action.is_some());
-        if let Some(index) = dialog.items.iter().position(|item| {
+        if let Some(index) = dialog.result_items().position(|item| {
             item.value.eq_ignore_ascii_case(trimmed) || item.label.eq_ignore_ascii_case(trimmed)
         }) {
             let custom_offset = usize::from(
-                dialog.config.custom_value_enabled
-                    && ChoiceCustomValue::search_list_from_input(dialog.input.text(), &dialog.meta)
-                        .is_some(),
+                dialog.config.input_mode.allows_custom_value()
+                    && ChoiceCustomValue::search_picker_from_input(
+                        dialog.input.text(),
+                        &dialog.meta,
+                    )
+                    .is_some(),
             );
             return clear_offset + custom_offset + index;
         }
@@ -832,6 +834,6 @@ use crate::app::{
     PermissionStudioPage, PermissionStudioSectionId, PermissionStudioSource, PickerKind,
     PickerOverlay, ProviderPickerPurpose, ProviderStudioOverlay, Route, SessionSearchOverlay,
     SettingsPickerAction, SettingsStudioFocus, SettingsStudioOverlay, TimelineOverlay,
-    ToolPermissionRules, refresh_search_list_overlay, ui_text,
+    ToolPermissionRules, ui_text,
 };
-use agena_tui_components::SearchListCustomValue;
+use agena_tui_components::SearchPickerCustomValue;

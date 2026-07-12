@@ -390,21 +390,6 @@ pub fn parse_command(input: &str) -> Option<ParsedCommand> {
     })
 }
 
-pub fn command_matches_query(spec: &CommandSpec, query: &str) -> bool {
-    let query = query.trim().to_ascii_lowercase();
-    if query.is_empty() {
-        return true;
-    }
-
-    spec.name.contains(query.as_str())
-        || query.contains(spec.name)
-        || spec
-            .aliases
-            .iter()
-            .any(|alias| alias.contains(query.as_str()) || query.contains(alias))
-        || spec.arguments.to_ascii_lowercase().contains(query.as_str())
-}
-
 pub fn command_suggestions_for_prefix(query: &str) -> Vec<&'static CommandSpec> {
     let query = query.trim().to_ascii_lowercase();
     if query.is_empty() {

@@ -17,9 +17,6 @@ impl App {
     }
 
     pub(in crate::app) fn refresh_input_derived_state(&mut self) {
-        if let Some(search) = self.prompt_history_search.as_mut() {
-            Self::refresh_prompt_history_search(&self.prompt_history, search);
-        }
         self.sync_composer_suggestions();
         if let Route::SessionModelChooser(dialog) = &mut self.current_route {
             Self::refresh_session_model_chooser_overlay(dialog, false, None);
@@ -41,11 +38,11 @@ impl App {
     }
 
     pub(in crate::app) fn refresh_file_attach_overlay(&self, dialog: &mut FileAttachOverlay) {
-        dialog.items = self
+        let items = self
             .backend
             .search_workspace_files(dialog.input.text(), 24)
             .unwrap_or_default();
-        dialog.clamp_selection();
+        dialog.replace_items(items);
     }
 
     pub(in crate::app) fn try_stage_pasted_path(&mut self, pasted: &str) -> bool {

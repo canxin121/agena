@@ -394,6 +394,20 @@ mod tests {
             Some(KeyAction::Close)
         );
         assert_eq!(
+            resolve(
+                KeyContext::PromptHistory,
+                key(KeyCode::Up, KeyModifiers::NONE)
+            ),
+            Some(KeyAction::Previous)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::PromptHistory,
+                key(KeyCode::Down, KeyModifiers::NONE)
+            ),
+            Some(KeyAction::Next)
+        );
+        assert_eq!(
             ComposerKeyBindings::default().match_action(&key(
                 KeyCode::Enter,
                 KeyModifiers::CONTROL | KeyModifiers::SUPER,

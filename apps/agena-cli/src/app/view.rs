@@ -9,22 +9,21 @@ use agena_tui_components::{
     DashboardWorkbenchOverlaySpec, DashboardWorkbenchSpec, DetailTextDialogSpec, DetailTextLine,
     DetailTextSpec, EditorDialogSpec, FramedSurfaceSpec, HeaderBodyFooterTextSurfaceSpec,
     HeaderRowSpec, LineTextDialogSpec, ListPanelSection, ListPanelSpec, ListWorkbenchDialogSpec,
-    ListWorkbenchPanelState, ParagraphSection, QuerySuggestionPopupSpec,
-    QuestionFlowCustomInputSpec, QuestionFlowDialogMode, QuestionFlowDialogSpec,
-    SearchListDialogSpec, SearchPanelsDialogSpec, SearchPanelsDialogState, StackedDialogSection,
-    StackedDialogSectionHeight, StackedDialogSpec, SuggestionPopupItem, SuggestionPopupSpec,
-    SurfaceMode, TextDialogLine, TextPanelSection, TextPanelSpec, VerticalSectionSize,
-    WorkbenchOverlayDialogSpec, WorkbenchTextSection, WrappedTextSpec, adaptive_detail_split,
-    adaptive_modal_width, build_accented_two_line_list_item, build_detail_two_line_list_item,
-    build_wrapped_text_lines, format_key_value_segment, inset_rect, join_inline_segments,
-    layout_composer_surface, layout_header_body_footer_surface, list_panel_height,
-    pane_header_height, render_composer_editor_surface, render_dashboard_workbench_dialog,
-    render_editor_dialog, render_framed_surface, render_header_body_footer_text_surface,
-    render_header_row, render_line_text_dialog, render_list_panel, render_list_workbench_dialog,
-    render_overlay_line_input_dialog, render_query_suggestion_popup, render_question_flow_dialog,
-    render_search_list_dialog, render_search_panels_dialog, render_stacked_dialog,
-    render_suggestion_popup, render_text_panel, render_wrapped_text, split_vertical_sections,
-    truncate_display_text, wrapped_text_height_for_text,
+    ListWorkbenchPanelState, ParagraphSection, QuestionFlowCustomInputSpec, QuestionFlowDialogMode,
+    QuestionFlowDialogSpec, SearchPickerDialogSpec, SearchPickerViewState, StackedDialogSection,
+    StackedDialogSectionHeight, StackedDialogSpec, SurfaceMode, TextDialogLine, TextPanelSection,
+    TextPanelSpec, VerticalSectionSize, WorkbenchOverlayDialogSpec, WorkbenchTextSection,
+    WrappedTextSpec, adaptive_detail_split, adaptive_modal_width,
+    build_accented_two_line_list_item, build_detail_two_line_list_item, build_wrapped_text_lines,
+    format_key_value_segment, inset_rect, join_inline_segments, layout_composer_surface,
+    layout_header_body_footer_surface, list_panel_height, pane_header_height,
+    render_composer_editor_surface, render_dashboard_workbench_dialog, render_editor_dialog,
+    render_framed_surface, render_header_body_footer_text_surface, render_header_row,
+    render_line_text_dialog, render_list_panel, render_list_workbench_dialog,
+    render_overlay_line_input_dialog, render_question_flow_dialog, render_search_picker_dialog,
+    render_search_picker_dialog_with_preview, render_stacked_dialog, render_text_panel,
+    render_wrapped_text, split_vertical_sections, truncate_display_text,
+    wrapped_text_height_for_text,
 };
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
@@ -55,6 +54,18 @@ pub(super) use self::view_catalog_helpers::*;
 pub(super) use self::view_permission_helpers::*;
 pub(super) use self::view_settings_helpers::*;
 pub(super) use self::view_user_input_helpers::*;
+
+impl App {
+    pub(in crate::app) fn standard_search_picker_dialog_spec(
+        &self,
+        results_key: &str,
+    ) -> SearchPickerDialogSpec<'static> {
+        SearchPickerDialogSpec::new(
+            ui_text::t(&self.i18n, "overlay-picker-loading").into(),
+            ui_text::t(&self.i18n, results_key).into(),
+        )
+    }
+}
 
 #[cfg(test)]
 mod composer_item_summary_tests {
@@ -227,7 +238,6 @@ mod permission_overlay_presentation_tests {
 use crate::app::{
     AgentStudioOverlay, App, CatalogModelResource, ChoiceOverlay, ConfirmOverlay,
     FileAttachOverlay, FlashLevel, Focus, Frame, HelpEntry, HelpOverlay, LayoutCache,
-    MAX_FILE_MENTION_SUGGESTIONS, MAX_PROMPT_HISTORY_SEARCH_RESULTS, MAX_SLASH_COMMAND_SUGGESTIONS,
     ModelCatalogStudioOverlay, Overlay, PathBrowserOverlay, PermissionRuleStudioOverlay,
     PermissionStudioAction, PermissionStudioFocus, PermissionStudioItem,
     PermissionStudioModeTarget, PermissionStudioOverlay, PermissionStudioPaneFocus,

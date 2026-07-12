@@ -502,14 +502,12 @@ pub(super) struct PluginConfigDrilldownOverlay {
     selected_cell: ConfigRowCell,
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct PluginConfigActionOverlay {
-    title: String,
-    subject: String,
-    footer: String,
-    actions: Vec<PluginConfigActionItem>,
-    selected_action: usize,
-}
+pub(super) type PluginConfigActionOverlay = agena_tui_components::SearchPicker<
+    PluginConfigActionItem,
+    agena_tui_components::SearchPickerNoCustom,
+    (),
+    agena_tui_components::Editor,
+>;
 
 #[derive(Debug, Clone)]
 pub(super) struct PluginConfigActionItem {
@@ -519,15 +517,17 @@ pub(super) struct PluginConfigActionItem {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct PluginConfigSelectionOverlay {
-    title: String,
-    prompt: String,
-    footer: String,
+pub(super) struct PluginConfigSelectionMeta {
     multi: bool,
-    items: Vec<PluginConfigSelectionItem>,
-    selected_item: usize,
     action: PluginConfigSelectionAction,
 }
+
+pub(super) type PluginConfigSelectionOverlay = agena_tui_components::SearchPicker<
+    PluginConfigSelectionItem,
+    agena_tui_components::SearchPickerNoCustom,
+    PluginConfigSelectionMeta,
+    agena_tui_components::Editor,
+>;
 
 #[derive(Debug, Clone)]
 pub(super) struct PluginConfigSelectionItem {
@@ -535,6 +535,34 @@ pub(super) struct PluginConfigSelectionItem {
     description: Option<String>,
     checked: bool,
     value: PluginConfigSelectionValue,
+}
+
+impl agena_tui_components::SearchPickerItem for PluginConfigActionItem {
+    fn search_picker_key(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed(&self.label)
+    }
+
+    fn search_picker_label(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed(&self.label)
+    }
+
+    fn search_picker_detail(&self) -> Option<std::borrow::Cow<'_, str>> {
+        Some(std::borrow::Cow::Borrowed(&self.description))
+    }
+}
+
+impl agena_tui_components::SearchPickerItem for PluginConfigSelectionItem {
+    fn search_picker_key(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Owned(format!("{}:{:?}", self.label, self.value))
+    }
+
+    fn search_picker_label(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed(&self.label)
+    }
+
+    fn search_picker_detail(&self) -> Option<std::borrow::Cow<'_, str>> {
+        self.description.as_deref().map(std::borrow::Cow::Borrowed)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -729,22 +757,10 @@ impl PluginWorkbenchOverlay {
             self.selected_diff_row = self.selected_diff_row.min(diff_count - 1);
         }
         if let Some(actions) = self.actions.as_mut() {
-            if actions.actions.is_empty() {
-                actions.selected_action = 0;
-            } else {
-                actions.selected_action = actions
-                    .selected_action
-                    .min(actions.actions.len().saturating_sub(1));
-            }
+            actions.clamp_selection();
         }
         if let Some(selection) = self.selection.as_mut() {
-            if selection.items.is_empty() {
-                selection.selected_item = 0;
-            } else {
-                selection.selected_item = selection
-                    .selected_item
-                    .min(selection.items.len().saturating_sub(1));
-            }
+            selection.clamp_selection();
         }
         if self
             .selected_plugin()

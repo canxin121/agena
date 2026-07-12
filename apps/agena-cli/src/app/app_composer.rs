@@ -260,15 +260,16 @@ impl App {
                 }
                 true
             }
+            Some(KeyAction::Previous) => {
+                search.move_selection(-1);
+                false
+            }
+            Some(KeyAction::Next) => {
+                search.move_selection(1);
+                false
+            }
             Some(KeyAction::Older) => {
-                if search.selected + 1 >= search.items.len() && search.meta.has_more {
-                    search.meta.loaded_count = search
-                        .meta
-                        .loaded_count
-                        .saturating_add(PROMPT_HISTORY_PAGE_SIZE);
-                    Self::refresh_prompt_history_search(&self.prompt_history, &mut search);
-                }
-                move_selected_index(&mut search.selected, search.items.len(), 1);
+                search.move_selection(1);
                 false
             }
             Some(KeyAction::Newer) => {
@@ -276,21 +277,19 @@ impl App {
                     self.replace_composer_draft(search.meta.original.clone());
                     true
                 } else {
-                    move_selected_index(&mut search.selected, search.items.len(), -1);
+                    search.move_selection(-1);
                     false
                 }
             }
             Some(KeyAction::NewerKeepOpen) => {
-                move_selected_index(&mut search.selected, search.items.len(), -1);
+                search.move_selection(-1);
                 false
             }
             _ => {
-                let before = search.query.text().to_string();
-                search.query.handle_line_input_key(key);
-                if search.query.text() != before {
-                    search.selected = 0;
-                    search.meta.loaded_count = PROMPT_HISTORY_PAGE_SIZE;
-                    Self::refresh_prompt_history_search(&self.prompt_history, &mut search);
+                let before = search.input.text().to_string();
+                search.input.handle_line_input_key(key);
+                if search.input.text() != before {
+                    search.refresh_results();
                 }
                 false
             }
@@ -314,14 +313,17 @@ impl App {
             return;
         }
         self.after_composer_text_mutated();
+        let config = SearchPickerConfig::searchable();
         let mut search = PromptHistorySearchState::new(
+            ui_text::t(&self.i18n, "composer-prompt-history-title"),
+            String::new(),
+            String::new(),
+            ui_text::t(&self.i18n, "composer-prompt-history-no-matches"),
             Editor::default(),
-            0,
+            config,
+            None,
             PromptHistorySearchMeta {
                 original: self.current_composer_draft(),
-                loaded_count: PROMPT_HISTORY_PAGE_SIZE,
-                total_matches: 0,
-                has_more: false,
             },
         );
         Self::refresh_prompt_history_search(&self.prompt_history, &mut search);
@@ -364,25 +366,18 @@ impl App {
         prompt_history: &PromptHistory,
         search: &mut PromptHistorySearchState,
     ) {
-        let query = search.query.text().trim().to_ascii_lowercase();
-        let mut total_matches = 0_usize;
-        let mut loaded = Vec::with_capacity(search.meta.loaded_count);
-        for (history_index, text) in prompt_history.items.iter().enumerate().rev() {
-            if !query.is_empty() && !text.to_ascii_lowercase().contains(&query) {
-                continue;
-            }
-            total_matches = total_matches.saturating_add(1);
-            if loaded.len() < search.meta.loaded_count {
-                loaded.push(PromptHistorySearchResult {
+        search.replace_items(
+            prompt_history
+                .items
+                .iter()
+                .enumerate()
+                .rev()
+                .map(|(history_index, text)| PromptHistorySearchResult {
                     history_index,
                     text: text.clone(),
-                });
-            }
-        }
-        search.meta.total_matches = total_matches;
-        search.meta.has_more = total_matches > loaded.len();
-        search.items = loaded;
-        search.clamp_selection();
+                })
+                .collect(),
+        );
     }
 
     pub(in crate::app) fn handle_file_mention_suggestion_key(&mut self, key: KeyEvent) -> bool {
@@ -407,7 +402,23 @@ impl App {
                 self.complete_selected_file_mention();
                 true
             }
-            _ => false,
+            _ => {
+                let Some(mut state) = self.file_mention_suggestions.take() else {
+                    return false;
+                };
+                let before = state.input.text().to_string();
+                let before_cursor = state.input.cursor();
+                state.input.handle_line_input_key(key);
+                let handled = if state.input.text() != before {
+                    let items = self.file_mention_suggestion_items(state.input.text());
+                    state.replace_items(items);
+                    true
+                } else {
+                    state.input.cursor() != before_cursor
+                };
+                self.file_mention_suggestions = Some(state);
+                handled
+            }
         }
     }
 
@@ -415,27 +426,31 @@ impl App {
         let Some(state) = self.file_mention_suggestions.as_mut() else {
             return;
         };
-        state.move_selection_cycle(delta);
+        state.move_selection(delta);
     }
 
     pub(in crate::app) fn dismiss_file_mention_suggestions(&mut self) {
         if let Some(state) = self.file_mention_suggestions.take() {
-            self.dismissed_file_mention_suggestions_for = Some(state.fingerprint);
+            self.dismissed_file_mention_suggestions_for = Some(state.meta.fingerprint);
         }
     }
 
     pub(in crate::app) fn complete_selected_file_mention(&mut self) {
-        let Some(state) = self.file_mention_suggestions.clone() else {
-            return;
-        };
-        let Some(item) = state.items.get(state.selected).cloned() else {
+        let Some((item, mention_range)) =
+            self.file_mention_suggestions.as_ref().and_then(|state| {
+                state
+                    .selected_item()
+                    .cloned()
+                    .map(|item| (item, state.meta.mention_range.clone()))
+            })
+        else {
             return;
         };
 
         self.file_mention_suggestions = None;
         self.dismissed_file_mention_suggestions_for = None;
         self.composer
-            .remove_range(state.meta.mention_range.start, state.meta.mention_range.end);
+            .remove_range(mention_range.start, mention_range.end);
         if let Err(error) = self.stage_attachment_from_path(item.path.as_path(), false) {
             self.flash_error(error);
             return;
@@ -462,27 +477,32 @@ impl App {
             return;
         }
 
-        let items = self.file_mention_suggestion_items(context.query.as_str());
-        if items.is_empty() {
-            self.file_mention_suggestions = None;
+        if self
+            .file_mention_suggestions
+            .as_ref()
+            .is_some_and(|state| state.meta.fingerprint == context.fingerprint)
+        {
             return;
         }
 
-        let selected = self
-            .file_mention_suggestions
-            .as_ref()
-            .filter(|state| state.query == context.query)
-            .map(|state| min(state.selected, items.len().saturating_sub(1)))
-            .unwrap_or(0);
-        self.file_mention_suggestions = Some(FileMentionSuggestionState::new(
-            context.query,
-            context.fingerprint,
-            items,
-            selected,
+        let items = self.file_mention_suggestion_items(context.query.as_str());
+        let mut config = SearchPickerConfig::searchable();
+        config.search_mode = SearchPickerSearchMode::External;
+        let mut state = FileMentionSuggestionState::new(
+            ui_text::t(&self.i18n, "overlay-attach-title"),
+            ui_text::t(&self.i18n, "overlay-attach-prompt"),
+            ui_text::t(&self.i18n, "overlay-attach-footer"),
+            ui_text::t(&self.i18n, "overlay-attach-no-match"),
+            Editor::from_text(context.query),
+            config,
+            None,
             FileMentionSuggestionMeta {
+                fingerprint: context.fingerprint,
                 mention_range: context.mention_range,
             },
-        ));
+        );
+        state.replace_items(items);
+        self.file_mention_suggestions = Some(state);
     }
 
     pub(in crate::app) fn file_mention_suggestion_context(
@@ -547,7 +567,20 @@ impl App {
                 self.complete_selected_slash_command_suggestion(true);
                 true
             }
-            _ => false,
+            _ => {
+                let Some(state) = self.slash_command_suggestions.as_mut() else {
+                    return false;
+                };
+                let before = state.input.text().to_string();
+                let before_cursor = state.input.cursor();
+                state.input.handle_line_input_key(key);
+                if state.input.text() != before {
+                    state.refresh_results();
+                    true
+                } else {
+                    state.input.cursor() != before_cursor
+                }
+            }
         }
     }
 
@@ -555,12 +588,12 @@ impl App {
         let Some(state) = self.slash_command_suggestions.as_mut() else {
             return;
         };
-        state.move_selection_cycle(delta);
+        state.move_selection(delta);
     }
 
     pub(in crate::app) fn dismiss_slash_command_suggestions(&mut self) {
         if let Some(state) = self.slash_command_suggestions.take() {
-            self.dismissed_slash_command_suggestions_for = Some(state.fingerprint);
+            self.dismissed_slash_command_suggestions_for = Some(state.meta.fingerprint);
         }
     }
 
@@ -627,25 +660,35 @@ impl App {
             return;
         }
 
-        let items = self.slash_command_suggestion_items(context.query.as_str());
+        if self
+            .slash_command_suggestions
+            .as_ref()
+            .is_some_and(|state| state.meta.fingerprint == context.fingerprint)
+        {
+            return;
+        }
+
+        let items = self.slash_command_suggestion_items("");
         if items.is_empty() {
             self.slash_command_suggestions = None;
             return;
         }
 
-        let selected = self
-            .slash_command_suggestions
-            .as_ref()
-            .filter(|state| state.query == context.query)
-            .map(|state| min(state.selected, items.len().saturating_sub(1)))
-            .unwrap_or(0);
-        self.slash_command_suggestions = Some(SlashCommandSuggestionState::new(
-            context.query,
-            context.fingerprint,
-            items,
-            selected,
-            SlashCommandSuggestionMeta,
-        ));
+        let config = SearchPickerConfig::searchable();
+        let mut state = SlashCommandSuggestionState::new(
+            ui_text::t(&self.i18n, "overlay-commands-title"),
+            ui_text::t(&self.i18n, "overlay-commands-prompt"),
+            ui_text::t(&self.i18n, "overlay-picker-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-empty"),
+            Editor::from_text(context.query),
+            config,
+            None,
+            SlashCommandSuggestionMeta {
+                fingerprint: context.fingerprint,
+            },
+        );
+        state.replace_items(items);
+        self.slash_command_suggestions = Some(state);
     }
 
     pub(in crate::app) fn slash_command_suggestion_context(
@@ -660,13 +703,6 @@ impl App {
             self.composer.text(),
             self.composer.cursor(),
         )?;
-        if !context.query.is_empty()
-            && self
-                .slash_command_suggestion_items(context.query.as_str())
-                .is_empty()
-        {
-            return None;
-        }
         Some(context)
     }
 
@@ -732,15 +768,15 @@ impl App {
 use crate::app::{
     App, ClipboardCopyMethod, ComposerAction, ComposerDraft, ComposerItem, Editor,
     FileMentionSuggestionContext, FileMentionSuggestionItem, FileMentionSuggestionMeta,
-    FileMentionSuggestionState, Focus, KeyEvent, MAX_FILE_MENTION_SUGGESTIONS,
-    PROMPT_HISTORY_PAGE_SIZE, PromptHistory, PromptHistorySearchMeta, PromptHistorySearchResult,
-    PromptHistorySearchState, SlashCommandSuggestionContext, SlashCommandSuggestionItem,
-    SlashCommandSuggestionMeta, SlashCommandSuggestionState, SlashCommandSuggestionValue, UiAction,
-    commands, file_mention_suggestion_context_for_text, min, move_selected_index,
-    runtime_tool_matches_slash_query, slash_command_suggestion_context_for_text,
-    transcript_node_kind_label, ui_text,
+    FileMentionSuggestionState, Focus, KeyEvent, MAX_FILE_MENTION_SUGGESTIONS, PromptHistory,
+    PromptHistorySearchMeta, PromptHistorySearchResult, PromptHistorySearchState,
+    SlashCommandSuggestionContext, SlashCommandSuggestionItem, SlashCommandSuggestionMeta,
+    SlashCommandSuggestionState, SlashCommandSuggestionValue, UiAction, commands,
+    file_mention_suggestion_context_for_text, min, runtime_tool_matches_slash_query,
+    slash_command_suggestion_context_for_text, transcript_node_kind_label, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
+use agena_tui_components::{SearchPickerConfig, SearchPickerSearchMode};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 fn composer_up_opens_prompt_history(key: KeyEvent, cursor: usize) -> bool {

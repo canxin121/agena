@@ -437,11 +437,11 @@ impl App {
                 false
             }
             Some(KeyAction::MoveUp) => {
-                move_index(&mut overlay.selected_action, overlay.actions.len(), -1);
+                overlay.move_selection(-1);
                 false
             }
             Some(KeyAction::MoveDown) => {
-                move_index(&mut overlay.selected_action, overlay.actions.len(), 1);
+                overlay.move_selection(1);
                 false
             }
             Some(KeyAction::Accept) => {
@@ -466,17 +466,18 @@ impl App {
                 false
             }
             Some(KeyAction::MoveUp) => {
-                move_index(&mut overlay.selected_item, overlay.items.len(), -1);
+                overlay.move_selection(-1);
                 false
             }
             Some(KeyAction::MoveDown) => {
-                move_index(&mut overlay.selected_item, overlay.items.len(), 1);
+                overlay.move_selection(1);
                 false
             }
-            Some(KeyAction::Toggle) if overlay.multi => {
-                if let Some(item) = overlay.items.get_mut(overlay.selected_item) {
+            Some(KeyAction::Toggle) if overlay.meta.multi => {
+                if let Some(item) = overlay.selected_item_mut() {
                     item.checked = !item.checked;
                 }
+                overlay.toggle_selected();
                 false
             }
             Some(KeyAction::Accept) => {

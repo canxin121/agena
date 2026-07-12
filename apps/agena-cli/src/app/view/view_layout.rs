@@ -7,8 +7,7 @@ impl App {
         let line_count = max(1, self.composer.wrapped_line_count(editor_width));
         let item_rows = u16::from(self.has_composer_item_summary_row());
         let status_rows = u16::from(!self.composer_status_parts().is_empty());
-        let popup_rows = self.composer_popup_rows();
-        let chrome_rows = 2_u16 + item_rows + popup_rows + status_rows;
+        let chrome_rows = 2_u16 + item_rows + status_rows;
         let minimum_height = chrome_rows.saturating_add(1);
         let available_height = total_height.saturating_sub(4).max(minimum_height);
         min(12, available_height).min(

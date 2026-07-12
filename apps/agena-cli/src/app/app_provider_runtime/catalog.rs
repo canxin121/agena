@@ -129,11 +129,11 @@ impl App {
 
     pub(in crate::app) fn open_session_model_chooser(&mut self) {
         let mut dialog = self.build_session_model_chooser_overlay();
-        dialog.loading = false;
+        dialog.set_loading(false);
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-picker-empty");
         match self.session_model_chooser_items() {
             Ok(items) => {
-                dialog.meta.all_items = items;
+                dialog.replace_items(items);
                 let current_model = self.current_session_model_ref();
                 dialog.meta.current_model_label = current_model.as_ref().map(model_status_label);
                 if let Some(current_model_label) = dialog.meta.current_model_label.as_deref() {

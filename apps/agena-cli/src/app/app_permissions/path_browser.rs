@@ -19,8 +19,8 @@ impl App {
         workspace_root: &Path,
         dialog: &mut PathBrowserOverlay,
     ) {
-        dialog.items = Self::path_browser_entries_with_root(workspace_root, dialog);
-        dialog.clamp_selection();
+        let items = Self::path_browser_entries_with_root(workspace_root, dialog);
+        dialog.replace_items(items);
     }
 
     pub(in crate::app) fn handle_path_browser_overlay_key(
@@ -30,10 +30,10 @@ impl App {
     ) -> bool {
         match resolve_tui_key(KeyContext::PathBrowser, key) {
             Some(KeyAction::Accept) => self.path_browser_activate(dialog),
-            _ => match dialog.handle_filter_input_key(key, 10) {
-                SearchInputKeyResult::Close => true,
-                SearchInputKeyResult::Navigated => false,
-                SearchInputKeyResult::Edited { changed } => {
+            _ => match dialog.handle_input_key(key, 10) {
+                SearchPickerInputResult::Close => true,
+                SearchPickerInputResult::Navigated => false,
+                SearchPickerInputResult::Edited { changed } => {
                     if changed {
                         Self::refresh_path_browser_overlay_with_root(
                             self.backend.workspace_root(),
@@ -52,7 +52,7 @@ impl App {
     ) -> bool {
         if let Some(selection) = dialog.selected_row() {
             return match selection {
-                SearchListRow::Item(entry) if entry.is_dir => {
+                SearchPickerSelection::Item(entry) if entry.is_dir => {
                     dialog.input.set_text(entry.path.display().to_string());
                     Self::refresh_path_browser_overlay_with_root(
                         self.backend.workspace_root(),
@@ -60,17 +60,17 @@ impl App {
                     );
                     false
                 }
-                SearchListRow::Item(entry) => {
+                SearchPickerSelection::Item(entry) => {
                     self.commit_path_browser_selection(dialog, entry.path)
                 }
-                SearchListRow::Custom(value) => {
+                SearchPickerSelection::Custom(value) => {
                     let path = Self::resolve_browser_input_path_with_root(
                         self.backend.workspace_root(),
                         value.raw.as_str(),
                     );
                     self.commit_path_browser_selection(dialog, path)
                 }
-                SearchListRow::Clear(_) => false,
+                SearchPickerSelection::Clear(_) => false,
             };
         }
         let raw = dialog.input.text().trim();
@@ -205,7 +205,7 @@ impl App {
 use crate::app::{
     App, KeyEvent, Overlay, Path, PathBrowserItem, PathBrowserMode, PathBrowserOverlay,
     PathBrowserTarget, PathBuf, PermissionRuleStudioOverlay, PermissionRuleStudioPathField, Route,
-    SearchInputKeyResult, SearchListRow, fs, permission_rule_path_browser_spec,
+    SearchPickerInputResult, SearchPickerSelection, fs, permission_rule_path_browser_spec,
     refresh_permission_rule_studio_dialog, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

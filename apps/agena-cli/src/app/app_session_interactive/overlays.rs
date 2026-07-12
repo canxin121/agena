@@ -230,100 +230,58 @@ impl App {
         )));
     }
 
-    pub(in crate::app) fn standard_choice_overlay_config() -> SearchListOverlayConfig {
-        SearchListOverlayConfig {
-            target_width: 96,
-            input_enabled: true,
-            search_enabled: true,
-            custom_value_enabled: true,
-            fill_selected_into_input: true,
-            min_list_body_height: 3,
-            max_list_body_height: 12,
+    pub(in crate::app) fn standard_choice_overlay_config() -> SearchPickerConfig {
+        SearchPickerConfig {
+            input_mode: SearchPickerInputMode::SearchWithCustomValue,
+            ..SearchPickerConfig::searchable()
         }
     }
 
-    pub(in crate::app) fn searchable_select_choice_overlay_config() -> SearchListOverlayConfig {
-        SearchListOverlayConfig {
-            custom_value_enabled: false,
+    pub(in crate::app) fn searchable_select_choice_overlay_config() -> SearchPickerConfig {
+        SearchPickerConfig {
+            input_mode: SearchPickerInputMode::Search,
             ..Self::standard_choice_overlay_config()
         }
     }
 
-    pub(in crate::app) fn select_only_choice_overlay_config() -> SearchListOverlayConfig {
-        SearchListOverlayConfig {
-            target_width: 96,
-            input_enabled: false,
-            search_enabled: false,
-            custom_value_enabled: false,
-            fill_selected_into_input: false,
-            min_list_body_height: 3,
-            max_list_body_height: 12,
-        }
+    pub(in crate::app) fn select_only_choice_overlay_config() -> SearchPickerConfig {
+        SearchPickerConfig::select_only()
     }
 
-    pub(in crate::app) fn standard_picker_overlay_config() -> SearchListOverlayConfig {
-        SearchListOverlayConfig {
-            target_width: 120,
-            input_enabled: true,
-            search_enabled: true,
-            custom_value_enabled: false,
+    pub(in crate::app) fn standard_picker_overlay_config() -> SearchPickerConfig {
+        SearchPickerConfig::searchable()
+    }
+
+    pub(in crate::app) fn path_browser_overlay_config() -> SearchPickerConfig {
+        SearchPickerConfig {
+            input_mode: SearchPickerInputMode::EditableValue,
+            search_mode: SearchPickerSearchMode::External,
             fill_selected_into_input: true,
-            min_list_body_height: 4,
-            max_list_body_height: 10,
+            ..SearchPickerConfig::searchable()
         }
     }
 
-    pub(in crate::app) fn path_browser_overlay_config() -> SearchListOverlayConfig {
-        SearchListOverlayConfig {
-            target_width: 96,
-            input_enabled: true,
-            search_enabled: false,
-            custom_value_enabled: true,
+    pub(in crate::app) fn file_attach_overlay_config() -> SearchPickerConfig {
+        SearchPickerConfig {
+            input_mode: SearchPickerInputMode::EditableValue,
+            search_mode: SearchPickerSearchMode::External,
             fill_selected_into_input: true,
-            min_list_body_height: 6,
-            max_list_body_height: 14,
+            ..SearchPickerConfig::searchable()
         }
     }
 
-    pub(in crate::app) fn file_attach_overlay_config() -> SearchListOverlayConfig {
-        SearchListOverlayConfig {
-            target_width: 88,
-            input_enabled: true,
-            search_enabled: false,
-            custom_value_enabled: true,
-            fill_selected_into_input: true,
-            min_list_body_height: 4,
-            max_list_body_height: 10,
+    pub(in crate::app) fn session_search_overlay_config() -> SearchPickerConfig {
+        SearchPickerConfig {
+            search_mode: SearchPickerSearchMode::External,
+            ..SearchPickerConfig::searchable()
         }
     }
 
-    pub(in crate::app) fn session_search_overlay_config() -> SearchListOverlayConfig {
-        SearchListOverlayConfig {
-            target_width: 128,
-            input_enabled: true,
-            search_enabled: false,
-            custom_value_enabled: false,
-            fill_selected_into_input: true,
-            min_list_body_height: 5,
-            max_list_body_height: 12,
-        }
+    pub(in crate::app) fn session_model_chooser_overlay_config() -> SearchPickerConfig {
+        SearchPickerConfig::searchable()
     }
 
-    pub(in crate::app) fn session_model_chooser_overlay_config() -> SearchListOverlayConfig {
-        SearchListOverlayConfig {
-            target_width: 128,
-            input_enabled: true,
-            search_enabled: true,
-            custom_value_enabled: false,
-            fill_selected_into_input: false,
-            min_list_body_height: 5,
-            max_list_body_height: 12,
-        }
-    }
-
-    pub(in crate::app) fn choice_overlay_config(
-        style: ChoiceOverlayStyle,
-    ) -> SearchListOverlayConfig {
+    pub(in crate::app) fn choice_overlay_config(style: ChoiceOverlayStyle) -> SearchPickerConfig {
         match style {
             ChoiceOverlayStyle::Searchable => Self::standard_choice_overlay_config(),
             ChoiceOverlayStyle::SearchableSelect => Self::searchable_select_choice_overlay_config(),
@@ -345,8 +303,8 @@ impl App {
     pub(in crate::app) fn choice_overlay_clear_action(
         &self,
         action: ChoiceOverlayAction,
-    ) -> SearchListClearAction {
-        SearchListClearAction {
+    ) -> SearchPickerClearAction {
+        SearchPickerClearAction {
             label: settings_clear_label(&self.i18n),
             detail: choice_overlay_clear_detail(&self.i18n, &action),
         }
@@ -363,7 +321,7 @@ impl App {
         style: ChoiceOverlayStyle,
     ) -> ChoiceOverlay {
         let clear_action = allow_clear.then(|| self.choice_overlay_clear_action(action.clone()));
-        ChoiceOverlay::new(
+        let mut overlay = ChoiceOverlay::new(
             title,
             prompt,
             self.choice_overlay_footer(style),
@@ -373,10 +331,11 @@ impl App {
             clear_action,
             ChoiceOverlayMeta {
                 i18n: self.i18n.clone(),
-                all_items,
                 action,
             },
-        )
+        );
+        overlay.replace_items(all_items);
+        overlay
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -399,10 +358,10 @@ impl App {
             input,
             Self::standard_picker_overlay_config(),
             None,
-            PickerOverlayMeta { all_items, kind },
+            PickerOverlayMeta { kind },
         );
-        overlay.loading = loading;
-        Self::refresh_picker_overlay(&mut overlay);
+        overlay.replace_items(all_items);
+        overlay.set_loading(loading);
         overlay
     }
 
@@ -475,7 +434,7 @@ impl App {
                 has_more: false,
             },
         );
-        dialog.loading = true;
+        dialog.set_loading(true);
         dialog.footer = self.session_search_footer(&dialog);
         dialog
     }
@@ -490,12 +449,11 @@ impl App {
             Self::session_model_chooser_overlay_config(),
             None,
             SessionModelChooserOverlayMeta {
-                all_items: Vec::new(),
                 page_size: 18,
                 current_model_label: None,
             },
         );
-        dialog.loading = true;
+        dialog.set_loading(true);
         dialog
     }
 
@@ -564,32 +522,29 @@ impl App {
         )
     }
 
-    pub(in crate::app) fn build_search_panels_overlay<TItem, TMeta>(
-        &self,
-        title: String,
-        prompt: String,
-        empty_message: String,
-        footer: String,
-        input: Editor,
-        loading: bool,
-        meta: TMeta,
-    ) -> SearchPanelsOverlay<TItem, TMeta, Editor> {
-        SearchPanelsOverlay::new(title, prompt, empty_message, footer, input, loading, meta)
-    }
-
     pub(in crate::app) fn build_timeline_overlay(&self, session_id: i64) -> TimelineOverlay {
-        self.build_search_panels_overlay(
+        let mut overlay = TimelineOverlay::new(
             self.i18n.text_args(
                 "overlay-timeline-title",
                 &crate::fl_args!("session" => session_id),
             ),
             ui_text::t(&self.i18n, "overlay-timeline-prompt"),
-            ui_text::t(&self.i18n, "overlay-picker-loading"),
             ui_text::t(&self.i18n, "overlay-timeline-footer"),
+            ui_text::t(&self.i18n, "overlay-timeline-empty"),
             Editor::default(),
-            true,
+            SearchPickerConfig {
+                preview_mode: SearchPickerPreviewMode::Responsive {
+                    min_total_width: 100,
+                    left_min_width: 40,
+                    right_min_width: 46,
+                },
+                ..SearchPickerConfig::searchable()
+            },
+            None,
             TimelineOverlayMeta { session_id },
-        )
+        );
+        overlay.set_loading(true);
+        overlay
     }
 }
 use crate::app::{
@@ -599,12 +554,12 @@ use crate::app::{
     PathBrowserOverlay, PathBrowserOverlayMeta, PathBrowserTarget, PendingInteractiveKind,
     PendingInteractiveOverlayTarget, PendingInteractiveRequest, PermissionOverlay,
     PermissionOverlayPage, PermissionRequest, PickerItem, PickerKind, PickerOverlay,
-    PickerOverlayMeta, QuestionFlowState, SearchListClearAction, SearchListOverlayConfig,
-    SearchPanelsOverlay, SelectionCursor, SessionModelChooserOverlay,
-    SessionModelChooserOverlayMeta, SessionSearchOverlay, SessionSearchOverlayMeta,
-    SessionViewMode, TimelineOverlay, TimelineOverlayMeta, UserInputOverlay, UserInputQuestion,
-    UserInputRequest, choice_overlay_clear_detail, composer_input_is_active,
-    execution_pending_flash_key, first_pending_interactive_request_by_kind,
-    first_unseen_pending_interactive_request, pending_interactive_kind_for_execution,
-    settings_clear_label, ui_text,
+    PickerOverlayMeta, QuestionFlowState, SearchPickerClearAction, SearchPickerConfig,
+    SearchPickerInputMode, SearchPickerPreviewMode, SearchPickerSearchMode, SelectionCursor,
+    SessionModelChooserOverlay, SessionModelChooserOverlayMeta, SessionSearchOverlay,
+    SessionSearchOverlayMeta, SessionViewMode, TimelineOverlay, TimelineOverlayMeta,
+    UserInputOverlay, UserInputQuestion, UserInputRequest, choice_overlay_clear_detail,
+    composer_input_is_active, execution_pending_flash_key,
+    first_pending_interactive_request_by_kind, first_unseen_pending_interactive_request,
+    pending_interactive_kind_for_execution, settings_clear_label, ui_text,
 };

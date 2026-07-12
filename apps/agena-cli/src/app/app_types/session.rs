@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, time::Instant};
 
 use agena_api::resource::{PermissionRuleResource, ProviderSummaryResource, SessionResource};
-use agena_tui_components::{Editor, SearchListNoCustom, SearchListOverlay, SelectableListState};
+use agena_tui_components::{Editor, SearchPicker, SearchPickerNoCustom, SelectableListState};
 
 use crate::commands::CommandSpec;
 
@@ -20,6 +20,8 @@ pub(crate) struct SessionSearchItem {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SessionSearchOverlayMeta {
+    /// The complete subtree catalog for locally paged session search. Remote
+    /// modes keep only the current page in `SearchPicker::items`.
     pub(crate) all_items: Vec<SessionSearchItem>,
     pub(crate) mode: SessionViewMode,
     pub(crate) scope_session_id: Option<i64>,
@@ -32,27 +34,25 @@ pub(crate) struct SessionSearchOverlayMeta {
 }
 
 pub(crate) type SessionSearchOverlay =
-    SearchListOverlay<SessionSearchItem, SearchListNoCustom, SessionSearchOverlayMeta, Editor>;
+    SearchPicker<SessionSearchItem, SearchPickerNoCustom, SessionSearchOverlayMeta, Editor>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PickerOverlayMeta {
-    pub(crate) all_items: Vec<PickerItem>,
     pub(crate) kind: PickerKind,
 }
 
 pub(crate) type PickerOverlay =
-    SearchListOverlay<PickerItem, SearchListNoCustom, PickerOverlayMeta, Editor>;
+    SearchPicker<PickerItem, SearchPickerNoCustom, PickerOverlayMeta, Editor>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SessionModelChooserOverlayMeta {
-    pub(crate) all_items: Vec<SessionModelChoiceItem>,
     pub(crate) page_size: usize,
     pub(crate) current_model_label: Option<String>,
 }
 
-pub(crate) type SessionModelChooserOverlay = SearchListOverlay<
+pub(crate) type SessionModelChooserOverlay = SearchPicker<
     SessionModelChoiceItem,
-    SearchListNoCustom,
+    SearchPickerNoCustom,
     SessionModelChooserOverlayMeta,
     Editor,
 >;

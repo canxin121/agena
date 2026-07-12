@@ -11,7 +11,7 @@ use ratatui::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::search_list::SearchListInput;
+use crate::search_picker::SearchPickerInput;
 
 const WORD_SEPARATORS: &str = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
 #[derive(Debug, Clone, Default)]
@@ -894,7 +894,7 @@ impl Editor {
     }
 }
 
-impl SearchListInput for Editor {
+impl SearchPickerInput for Editor {
     fn text(&self) -> &str {
         self.text()
     }

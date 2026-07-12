@@ -329,17 +329,24 @@ impl App {
         });
         let selected_action =
             prioritize_config_actions(actions.as_mut_slice(), context.cell, primary_action);
-        dialog.actions = Some(PluginConfigActionOverlay {
-            title: if primary_action.is_some() {
-                "More Actions".to_owned()
-            } else {
-                "Field Actions".to_owned()
-            },
-            subject: context.row.title,
-            footer: config_actions_overlay_footer(primary_action),
-            actions,
-            selected_action,
-        });
+        let title = if primary_action.is_some() {
+            "More Actions".to_owned()
+        } else {
+            "Field Actions".to_owned()
+        };
+        let mut overlay = PluginConfigActionOverlay::new(
+            title,
+            context.row.title,
+            config_actions_overlay_footer(primary_action),
+            "No actions available".to_owned(),
+            Editor::default(),
+            agena_tui_components::SearchPickerConfig::select_only(),
+            None,
+            (),
+        );
+        overlay.replace_items(actions);
+        overlay.selected = selected_action;
+        dialog.actions = Some(overlay);
     }
 
     pub(in crate::app) fn commit_plugin_config_action(
@@ -349,7 +356,7 @@ impl App {
         let Some(overlay) = dialog.actions.clone() else {
             return;
         };
-        let Some(item) = overlay.actions.get(overlay.selected_action).cloned() else {
+        let Some(item) = overlay.selected_item().cloned() else {
             dialog.actions = None;
             return;
         };

@@ -174,11 +174,10 @@ impl App {
             return Ok(());
         };
         let selected_item = overlay
-            .items
-            .get(overlay.selected_item)
+            .selected_item()
             .cloned()
             .ok_or_else(|| "no selection available".to_owned())?;
-        match overlay.action {
+        match overlay.meta.action {
             PluginConfigSelectionAction::Type { plugin_id, path } => {
                 let PluginConfigSelectionValue::Named(selected) = selected_item.value else {
                     return Err("invalid type selection".to_owned());

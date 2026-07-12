@@ -19,14 +19,11 @@ pub mod panels;
 pub mod question_flow;
 pub mod question_flow_dialog;
 pub mod scroll_state;
-pub mod search_list;
-pub mod search_panels;
+pub mod search_picker;
 pub mod sectioned_list;
 pub mod selectable_list;
 pub mod selection;
 pub mod stacked_dialog;
-pub mod suggestion_state;
-pub mod suggestions;
 pub mod surface;
 pub mod text;
 pub mod text_dialog;
@@ -85,14 +82,13 @@ pub use question_flow_dialog::{
     render_question_flow_dialog,
 };
 pub use scroll_state::ScrollState;
-pub use search_list::{
-    SearchInputKeyResult, SearchListClearAction, SearchListCustomValue, SearchListDialogSpec,
-    SearchListDialogState, SearchListInput, SearchListItem, SearchListNoCustom, SearchListOverlay,
-    SearchListOverlayConfig, SearchListRow, refresh_search_list_overlay, render_search_list_dialog,
-};
-pub use search_panels::{
-    SearchPanelsDialogSpec, SearchPanelsDialogState, SearchPanelsOverlay,
-    refresh_search_panels_overlay, render_search_panels_dialog,
+pub use search_picker::{
+    SearchPicker, SearchPickerClearAction, SearchPickerConfig, SearchPickerCustomValue,
+    SearchPickerDialogSpec, SearchPickerInput, SearchPickerInputMode, SearchPickerInputResult,
+    SearchPickerItem, SearchPickerNoCustom, SearchPickerPhase, SearchPickerPreviewMode,
+    SearchPickerSearchMode, SearchPickerSelection, SearchPickerSelectionMode,
+    SearchPickerViewState, render_search_picker_dialog, render_search_picker_dialog_with_preview,
+    search_picker_dialog_area,
 };
 pub use sectioned_list::{SectionedListFocus, SectionedListSection, SectionedListState};
 pub use selectable_list::SelectableListState;
@@ -104,11 +100,6 @@ pub use stacked_dialog::{
     EditorSection, ListPanelSection, ParagraphSection, StackedDialogRenderResult,
     StackedDialogSection, StackedDialogSectionHeight, StackedDialogSpec, TextPanelSection,
     render_stacked_dialog,
-};
-pub use suggestion_state::{QuerySuggestionState, SuggestionPopupState};
-pub use suggestions::{
-    QuerySuggestionPopupSpec, SuggestionPopupItem, SuggestionPopupSpec,
-    render_query_suggestion_popup, render_suggestion_popup,
 };
 pub use surface::{
     ComposerEditorSurfaceSpec, ComposerSurfaceLayout, HeaderBodyFooterLayout,

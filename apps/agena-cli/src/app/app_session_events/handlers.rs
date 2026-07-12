@@ -67,7 +67,7 @@ impl App {
             return;
         }
 
-        dialog.loading = false;
+        dialog.set_loading(false);
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-picker-empty");
         match result {
             Ok(providers) => {
@@ -96,8 +96,7 @@ impl App {
                         value: PickerValue::Provider(provider),
                     }
                 }));
-                dialog.meta.all_items = items;
-                Self::refresh_picker_overlay(&mut dialog);
+                dialog.replace_items(items);
             }
             Err(error) => self.flash_error(error),
         }
@@ -113,17 +112,17 @@ impl App {
             return;
         }
 
-        dialog.loading = false;
+        dialog.set_loading(false);
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-picker-empty");
         match result {
             Ok(agents) => {
-                dialog.meta.all_items = agent_list_items(
+                let items = agent_list_items(
                     &self.i18n,
                     agents,
                     self.backend.default_agent_name().as_deref(),
                     &self.backend.config_agent_names(),
                 );
-                Self::refresh_picker_overlay(&mut dialog);
+                dialog.replace_items(items);
             }
             Err(error) => self.flash_error(error),
         }
@@ -148,22 +147,22 @@ impl App {
             return;
         }
 
-        dialog.loading = false;
+        dialog.set_loading(false);
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-resume-empty");
         match result {
             Ok(page) => {
-                dialog.items = page
+                let items = page
                     .items
                     .into_iter()
                     .map(|session| self.session_search_item(session))
                     .collect();
+                dialog.replace_items(items);
                 dialog.meta.offset = dialog
                     .meta
                     .page_index
                     .saturating_mul(dialog.meta.page_limit);
                 dialog.meta.next_cursor = page.page.next_cursor;
                 dialog.meta.has_more = page.page.has_more;
-                dialog.clamp_selection();
                 dialog.footer = self.session_search_footer(&dialog);
             }
             Err(error) => self.flash_error(error),
@@ -188,7 +187,7 @@ impl App {
             return;
         }
 
-        dialog.loading = false;
+        dialog.set_loading(false);
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-resume-empty");
         match result {
             Ok(mut sessions) => {
@@ -241,20 +240,20 @@ impl App {
                     return;
                 }
 
-                dialog.loading = false;
+                dialog.set_loading(false);
                 dialog.empty_message = ui_text::t(&self.i18n, "overlay-lineage-empty");
-                dialog.meta.all_items = items
+                let picker_items = items
                     .into_iter()
                     .map(|item| self.lineage_session_picker_item(item))
                     .collect();
-                Self::refresh_picker_overlay(&mut dialog);
+                dialog.replace_items(picker_items);
                 self.restore_picker_dialog(host, dialog);
             }
             Err(error) => {
                 if let Some((host, mut dialog)) = self.take_picker_dialog() {
                     if matches!(dialog.meta.kind, PickerKind::Lineage { session_id: current_session_id } if current_session_id == session_id)
                     {
-                        dialog.loading = false;
+                        dialog.set_loading(false);
                         dialog.empty_message = ui_text::t(&self.i18n, "overlay-lineage-empty");
                     }
                     self.restore_picker_dialog(host, dialog);
@@ -284,17 +283,17 @@ impl App {
             return;
         }
 
-        dialog.loading = false;
+        dialog.set_loading(false);
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-rewind-empty");
         match result {
             Ok(messages) => {
-                dialog.meta.all_items = messages
+                let items = messages
                     .into_iter()
                     .filter(is_rewind_target_message)
                     .rev()
                     .map(|message| self.rewind_message_picker_item(message))
                     .collect();
-                Self::refresh_picker_overlay(&mut dialog);
+                dialog.replace_items(items);
             }
             Err(error) => self.flash_error(error),
         }
@@ -585,11 +584,11 @@ impl App {
             return;
         }
 
-        dialog.loading = false;
+        dialog.set_loading(false);
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-children-empty");
         match result {
             Ok(sessions) => {
-                dialog.meta.all_items = sessions
+                let items = sessions
                     .into_iter()
                     .map(|session| PickerItem {
                         label: session.title.clone(),
@@ -600,7 +599,7 @@ impl App {
                         value: PickerValue::Session(session.id),
                     })
                     .collect();
-                Self::refresh_picker_overlay(&mut dialog);
+                dialog.replace_items(items);
             }
             Err(error) => self.flash_error(error),
         }
@@ -620,15 +619,15 @@ impl App {
             return;
         }
 
-        dialog.loading = false;
+        dialog.set_loading(false);
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-timeline-empty");
         match result {
             Ok(events) => {
-                dialog.all_items = events
+                let items = events
                     .iter()
                     .map(|event| build_timeline_item(&self.i18n, event))
                     .collect();
-                Self::refresh_timeline_overlay(&mut dialog);
+                dialog.replace_items(items);
             }
             Err(error) => self.flash_error(error),
         }

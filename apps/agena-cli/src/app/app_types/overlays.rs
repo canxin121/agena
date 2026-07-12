@@ -496,7 +496,7 @@ pub(crate) enum PendingInteractiveOverlayTarget {
     },
     UserInput {
         session_id: i64,
-        request: UserInputRequest,
+        request: Box<UserInputRequest>,
     },
 }
 

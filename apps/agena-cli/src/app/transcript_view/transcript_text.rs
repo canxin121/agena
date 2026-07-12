@@ -1,3 +1,8 @@
+use super::transcript_math::{
+    fenced_math_language, inline_math_unicode_text, is_display_math_closed, is_display_math_start,
+    push_inline_math, push_math_block,
+};
+
 pub(in crate::app) fn transcript_message_parts(message: &MessageResource) -> &[MessagePart] {
     message
         .parts
@@ -266,7 +271,11 @@ pub(in crate::app) fn markdown_blocks(text: &str) -> Vec<MarkdownBlock> {
         let copy_range;
 
         if let Some(opening_fence) = markdown_fence_delimiter(lines[index]) {
-            kind = TranscriptNodeKind::MarkdownCode;
+            kind = if fenced_math_language(lines[index]) {
+                TranscriptNodeKind::MarkdownMath
+            } else {
+                TranscriptNodeKind::MarkdownCode
+            };
             index += 1;
             let body_start = index;
             while index < lines.len() {
@@ -283,6 +292,20 @@ pub(in crate::app) fn markdown_blocks(text: &str) -> Vec<MarkdownBlock> {
                 index += 1;
             }
             copy_range = body_start..body_end;
+        } else if is_display_math_start(lines[index]) {
+            kind = TranscriptNodeKind::MarkdownMath;
+            index += 1;
+            if !is_display_math_closed(lines[start]) {
+                while index < lines.len()
+                    && !is_display_math_closed(&lines[start..=index].join("\n"))
+                {
+                    index += 1;
+                }
+                if index < lines.len() {
+                    index += 1;
+                }
+            }
+            copy_range = start..index;
         } else if markdown_heading(lines[index]).is_some() {
             kind = TranscriptNodeKind::MarkdownParagraph;
             index += 1;
@@ -337,6 +360,7 @@ pub(in crate::app) fn markdown_blocks(text: &str) -> Vec<MarkdownBlock> {
             while index < lines.len()
                 && !lines[index].trim().is_empty()
                 && markdown_fence_delimiter(lines[index]).is_none()
+                && !is_display_math_start(lines[index])
                 && markdown_heading(lines[index]).is_none()
                 && !is_markdown_quote_line(lines[index])
                 && !is_markdown_thematic_break(lines[index])
@@ -432,6 +456,7 @@ pub(in crate::app) fn render_markdown_block(
             let table_lines = block.source.lines().collect::<Vec<_>>();
             push_markdown_table(out, prefix, table_lines.as_slice(), width);
         }
+        TranscriptNodeKind::MarkdownMath => push_math_block(out, prefix, &block.source, width),
         TranscriptNodeKind::MarkdownParagraph => {
             if let Some((level, text)) = markdown_heading(&block.source) {
                 push_markdown_heading(out, prefix, level, text, width);
@@ -439,7 +464,7 @@ pub(in crate::app) fn render_markdown_block(
                 push_markdown_quote(out, prefix, &block.source, width);
             } else if is_markdown_thematic_break(&block.source) {
                 push_markdown_rule(out, prefix, width);
-            } else {
+            } else if !push_inline_math(out, prefix, &block.source, width) {
                 push_markdown(out, prefix, &block.source, width);
             }
         }
@@ -478,6 +503,12 @@ pub(in crate::app) fn push_markdown_heading(
         2 => "──",
         _ => "›",
     };
+    if crate::math_render::layout_config().native_graphics
+        && push_inline_math(out, format!("{prefix}{marker} ").as_str(), text, width)
+    {
+        return;
+    }
+    let text = markdown_inline_text(text);
     let style = Style::default()
         .fg(if level <= 2 {
             agena_tui_components::theme::accent_color()
@@ -712,13 +743,19 @@ pub(in crate::app) fn push_markdown_list(
         if let Some((indent, marker, text)) = markdown_list_item_parts(line) {
             let depth = indent / 2;
             let marker = display_list_marker(marker, text, depth);
-            let text = markdown_inline_text(display_list_text(text).as_str());
             let list_prefix = format!("{prefix}{}{} ", "  ".repeat(depth), marker);
             let continuation = format!(
                 "{prefix}{}{}",
                 "  ".repeat(depth),
                 " ".repeat(UnicodeWidthStr::width(marker.as_str()) + 1)
             );
+            let text = display_list_text(text);
+            if crate::math_render::layout_config().native_graphics
+                && push_inline_math(out, list_prefix.as_str(), text.as_str(), width)
+            {
+                continue;
+            }
+            let text = markdown_inline_text(text.as_str());
             push_wrapped_line(
                 out,
                 list_prefix.as_str(),
@@ -785,7 +822,8 @@ pub(in crate::app) fn display_list_text(text: &str) -> String {
 }
 
 pub(in crate::app) fn markdown_inline_text(text: &str) -> String {
-    let rendered = markdown_to_text(text);
+    let text = inline_math_unicode_text(text);
+    let rendered = markdown_to_text(&text);
     let plain = rendered
         .lines
         .iter()

@@ -59,6 +59,7 @@ pub(in crate::app) enum TranscriptNodeKind {
     MarkdownCode,
     MarkdownList,
     MarkdownTable,
+    MarkdownMath,
     Activity,
 }
 
@@ -69,6 +70,7 @@ pub(in crate::app) fn transcript_node_kind_label(i18n: &I18n, kind: TranscriptNo
         TranscriptNodeKind::MarkdownCode => "transcript-node-kind-code",
         TranscriptNodeKind::MarkdownList => "transcript-node-kind-list",
         TranscriptNodeKind::MarkdownTable => "transcript-node-kind-table",
+        TranscriptNodeKind::MarkdownMath => "transcript-node-kind-math",
         TranscriptNodeKind::Activity => "transcript-node-kind-activity",
     };
     ui_text::t(i18n, key)

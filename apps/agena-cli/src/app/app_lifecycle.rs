@@ -46,6 +46,8 @@ impl App {
             tx,
             rx,
             launch: launch.clone(),
+            math_renderer: crate::math_render::configured_graphics()
+                .and_then(MathGraphicsRenderer::new),
             should_quit: false,
             focus: Focus::Transcript,
             current_route: Route::Main,
@@ -137,6 +139,9 @@ impl App {
         let mut ticker = interval(Duration::from_millis(UI_TICK_MS));
 
         loop {
+            if let Some(renderer) = self.math_renderer.as_mut() {
+                renderer.sync_generation(terminal.generation());
+            }
             terminal.draw(|frame| self.draw(frame))?;
             terminal.set_text_input_active(self.has_active_text_input());
 
@@ -297,3 +302,4 @@ use crate::app::{
     default_draft_store_path, default_prompt_history_path, interval,
     provider_studio_auth_poll_interval, ui_text, unbounded_channel,
 };
+use crate::math_render::MathGraphicsRenderer;

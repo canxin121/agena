@@ -81,6 +81,7 @@ impl App {
             1,
         );
 
+        let mut math = Vec::new();
         let lines = if self.transcript.session_id.is_none()
             && self.transcript.pending_user_messages.is_empty()
         {
@@ -93,6 +94,7 @@ impl App {
             ]
         } else {
             let rendered = self.transcript.rendered(layout.body.width).clone();
+            math = rendered.math.clone();
             let matches = rendered.search_matches.clone();
             let active_match = self
                 .transcript
@@ -162,6 +164,9 @@ impl App {
                 right_style: Style::default().fg(agena_tui_components::theme::muted_color()),
             },
         );
+        if let Some(renderer) = self.math_renderer.as_mut() {
+            renderer.render(frame, layout.body, self.transcript.scroll, math.as_slice());
+        }
     }
 
     pub(in crate::app) fn transcript_surface_top_right(&self) -> Vec<String> {

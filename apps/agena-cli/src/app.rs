@@ -159,7 +159,7 @@ use self::state_store_impls::*;
 use self::transcript_navigation::*;
 
 use self::transcript_view::{
-    current_spinner_millis, push_markdown, render_message_detailed, render_message_export,
-    render_transcript_export_markdown, rewind_message_preview, sanitize_terminal_text,
-    spinner_frame,
+    current_spinner_millis, markdown_blocks, render_markdown_block, render_message_detailed,
+    render_message_export, render_transcript_export_markdown, rewind_message_preview,
+    sanitize_terminal_text, spinner_frame,
 };

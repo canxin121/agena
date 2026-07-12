@@ -9,6 +9,7 @@ use crate::app::TranscriptNodeKind;
 mod transcript_aux;
 mod transcript_diff;
 mod transcript_markdown;
+mod transcript_math;
 mod transcript_render;
 mod transcript_text;
 mod transcript_tool_summary;
@@ -800,9 +801,21 @@ mod tests {
         assert!(should_suppress_markdown_block(blocks.as_slice(), 1));
         assert!(!should_suppress_markdown_block(blocks.as_slice(), 2));
     }
+
+    #[test]
+    fn markdown_math_blocks_are_independently_navigable() {
+        let blocks =
+            markdown_blocks("Before\n\n$$\n\\frac{a}{b}\n$$\n\n```math\n\\sqrt{x}\n```\n\nAfter");
+
+        assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks[0].kind, TranscriptNodeKind::MarkdownParagraph);
+        assert_eq!(blocks[1].kind, TranscriptNodeKind::MarkdownMath);
+        assert_eq!(blocks[2].kind, TranscriptNodeKind::MarkdownMath);
+        assert_eq!(blocks[3].kind, TranscriptNodeKind::MarkdownParagraph);
+    }
 }
 use self::{
-    activity_status_icon, interactive_request_is_embedded_in_operation, render_markdown_block,
+    activity_status_icon, interactive_request_is_embedded_in_operation,
     should_suppress_markdown_block, tool_invocation_label,
 };
 use crate::app::{

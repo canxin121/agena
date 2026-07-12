@@ -69,6 +69,26 @@ static LATEX_ROW_SPACING: LazyLock<Regex> = LazyLock::new(|| {
     )
     .expect("valid LaTeX row spacing regex")
 });
+static LATEX_ALIGNED_AT_BEGIN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\\begin\{alignedat\*?\}(?:\s*\{[^{}\r\n]*\})?")
+        .expect("valid alignedat environment regex")
+});
+static LATEX_ARRAY_BEGIN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\\begin\{array\}(?:\s*\[[^\]\r\n]*\])?\s*\{[^{}\r\n]*\}")
+        .expect("valid array environment regex")
+});
+static LATEX_MATRIX_LIKE_BEGIN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"\\begin\{(?:aligned|align\*?|gathered|gather\*?|split|multline\*?|equation\*?|smallmatrix)\}(?:\s*\[[^\]\r\n]*\])?",
+    )
+    .expect("valid matrix-like environment regex")
+});
+static LATEX_MATRIX_LIKE_END: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"\\end\{(?:alignedat\*?|array|aligned|align\*?|gathered|gather\*?|split|multline\*?|equation\*?|smallmatrix)\}",
+    )
+    .expect("valid matrix-like environment end regex")
+});
 
 #[derive(Clone, Debug)]
 pub(crate) struct MathGraphicsConfig {
@@ -607,6 +627,10 @@ pub(crate) fn unicode_formula(source: &str) -> Vec<String> {
 fn normalize_unicode_latex(source: &str) -> String {
     let source = LATEX_FRACTION_ALIAS.replace_all(source, r"\frac");
     let source = LATEX_ROW_SPACING.replace_all(&source, r"\\");
+    let source = LATEX_ALIGNED_AT_BEGIN.replace_all(&source, r"\begin{matrix}");
+    let source = LATEX_ARRAY_BEGIN.replace_all(&source, r"\begin{matrix}");
+    let source = LATEX_MATRIX_LIKE_BEGIN.replace_all(&source, r"\begin{matrix}");
+    let source = LATEX_MATRIX_LIKE_END.replace_all(&source, r"\end{matrix}");
     source.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -1010,6 +1034,56 @@ mod tests {
             "both binomial arguments must stay inside the parentheses:\n{rendered}"
         );
         assert!(rendered.contains('─'), "fraction bar missing:\n{rendered}");
+    }
+
+    #[test]
+    fn unicode_fallback_renders_aligned_equation_systems_as_grids() {
+        let rendered = unicode_formula(concat!(
+            r"\begin{aligned}",
+            r"\nabla \cdot \mathbf{E} &= \frac{\rho}{\varepsilon_0} \\",
+            r"\nabla \cdot \mathbf{B} &= 0 \\",
+            r"\nabla \times \mathbf{E} &= -\frac{\partial \mathbf{B}}{\partial t} \\",
+            r"\nabla \times \mathbf{B} &= \mu_0 \mathbf{J}",
+            r"\end{aligned}",
+        ))
+        .join("\n");
+
+        assert_eq!(
+            rendered.matches('∇').count(),
+            4,
+            "aligned rows were lost:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('ρ'),
+            "fraction numerator missing:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('ε'),
+            "fraction denominator missing:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('∂'),
+            "partial derivative missing:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains(r"\begin") && !rendered.contains(r"\end"),
+            "raw environment leaked:\n{rendered}"
+        );
+
+        for source in [
+            r"\begin{alignedat}{2}a&=b\\c&=d\end{alignedat}",
+            r"\begin{array}[t]{cc}a&b\\c&d\end{array}",
+            r"\begin{gathered}a\\b\end{gathered}",
+            r"\begin{split}a&=b\\c&=d\end{split}",
+        ] {
+            let rendered = unicode_formula(source).join("\n");
+            assert!(rendered.contains('a'), "first row missing:\n{rendered}");
+            assert!(rendered.contains('d') || rendered.contains('b'));
+            assert!(
+                !rendered.contains(r"\begin") && !rendered.contains(r"\end"),
+                "raw matrix-like environment leaked:\n{rendered}"
+            );
+        }
     }
 
     #[test]

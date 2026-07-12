@@ -359,13 +359,12 @@ impl TranscriptState {
             return Err(());
         };
 
-        if part.status == agena::message::ExecutionStatus::Pending {
-            if part
+        if part.status == agena::message::ExecutionStatus::Pending
+            && part
                 .transition_status(agena::message::ExecutionStatus::InProgress)
                 .is_err()
-            {
-                return Err(());
-            }
+        {
+            return Err(());
         }
         if message.state == MessageStatus::Pending {
             message.state = MessageStatus::InProgress;

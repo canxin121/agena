@@ -59,8 +59,20 @@ impl TerminalRuntime {
         // ratatui-image owns the one synchronous capability query. It must run
         // after alternate-screen entry and before EventStream starts, otherwise
         // graphics replies can be mistaken for keyboard input.
-        let math_graphics = MathGraphicsConfig::query(background_hint);
+        // A successful capability reply proves that bytes can cross a layered
+        // transport, but not that image placement survives SSH, Mosh, or a
+        // multiplexer's screen model. Use the deterministic Unicode renderer
+        // for every layered path; native images remain enabled on direct local
+        // terminals where Ratatui owns the complete display transport.
+        let allow_native_graphics = !context.is_remote() && !context.in_multiplexer();
+        let math_graphics = MathGraphicsConfig::query(background_hint, allow_native_graphics);
         let background = math_graphics.background();
+        if let Some(protocol) = math_graphics.downgraded_protocol_name() {
+            tracing::warn!(
+                protocol,
+                "using Unicode math fallback because native image placement is unsafe through a layered transport"
+            );
+        }
         if math_graphics.is_native() {
             context.capabilities.inline_images = capabilities::CapabilityEvidence::supported(
                 capabilities::CapabilitySource::TerminalQuery,

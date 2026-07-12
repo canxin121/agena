@@ -16,7 +16,10 @@ and restoration.
    alternate-screen entry and before the sole `EventStream` is created. No
    screen or application code may issue another response-bearing query.
    OSC 11 background evidence is authoritative when returned; environment
-   color hints remain the fallback.
+   color hints remain the fallback. Native math images are used only on a
+   direct local terminal. SSH, Mosh, tmux, screen, and Zellij use the
+   deterministic two-dimensional Unicode renderer because a capability reply
+   does not prove that image placement survives the layered screen model.
 5. External editors, pagers, and transfer utilities run through
    `TerminalRuntime::with_suspended`, which restores the terminal after
    success, error, or panic.

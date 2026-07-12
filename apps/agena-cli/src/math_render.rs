@@ -64,10 +64,11 @@ pub(crate) struct MathGraphicsConfig {
     picker: Picker,
     background: Option<TerminalRgb>,
     background_was_reported: bool,
+    downgraded_protocol: Option<ProtocolType>,
 }
 
 impl MathGraphicsConfig {
-    pub(crate) fn query(background_hint: Option<TerminalRgb>) -> Self {
+    pub(crate) fn query(background_hint: Option<TerminalRgb>, allow_native_graphics: bool) -> Self {
         let mut picker = Picker::from_query_stdio_with_options(QueryStdioOptions {
             terminal_background_color_osc: true,
             ..QueryStdioOptions::default()
@@ -77,6 +78,12 @@ impl MathGraphicsConfig {
         let background = reported_background.or(background_hint);
         let resolved_background = background.unwrap_or(DEFAULT_DARK_BACKGROUND);
         let foreground = foreground_for_background(resolved_background);
+        let selected_protocol = picker.protocol_type();
+        let downgraded_protocol =
+            downgraded_native_protocol(selected_protocol, allow_native_graphics);
+        if downgraded_protocol.is_some() {
+            picker.set_protocol_type(ProtocolType::Halfblocks);
+        }
         picker.set_background_color(Some(Rgba([
             resolved_background.red,
             resolved_background.green,
@@ -98,6 +105,7 @@ impl MathGraphicsConfig {
             picker,
             background,
             background_was_reported: reported_background.is_some(),
+            downgraded_protocol,
         };
         *GRAPHICS_CONFIG
             .write()
@@ -110,12 +118,7 @@ impl MathGraphicsConfig {
     }
 
     pub(crate) fn protocol_name(&self) -> &'static str {
-        match self.picker.protocol_type() {
-            ProtocolType::Kitty => "kitty",
-            ProtocolType::Sixel => "sixel",
-            ProtocolType::Iterm2 => "iterm2",
-            ProtocolType::Halfblocks => "unicode",
-        }
+        protocol_name(self.picker.protocol_type())
     }
 
     pub(crate) const fn background(&self) -> Option<TerminalRgb> {
@@ -124,6 +127,30 @@ impl MathGraphicsConfig {
 
     pub(crate) const fn background_was_reported(&self) -> bool {
         self.background_was_reported
+    }
+
+    pub(crate) fn downgraded_protocol_name(&self) -> Option<&'static str> {
+        self.downgraded_protocol.map(protocol_name)
+    }
+}
+
+const fn protocol_name(protocol: ProtocolType) -> &'static str {
+    match protocol {
+        ProtocolType::Kitty => "kitty",
+        ProtocolType::Sixel => "sixel",
+        ProtocolType::Iterm2 => "iterm2",
+        ProtocolType::Halfblocks => "unicode",
+    }
+}
+
+fn downgraded_native_protocol(
+    selected_protocol: ProtocolType,
+    allow_native_graphics: bool,
+) -> Option<ProtocolType> {
+    if selected_protocol != ProtocolType::Halfblocks && !allow_native_graphics {
+        Some(selected_protocol)
+    } else {
+        None
     }
 }
 
@@ -673,6 +700,19 @@ mod tests {
         assert_eq!(
             foreground_for_background(TerminalRgb::new(18, 18, 20)),
             [235, 235, 235]
+        );
+    }
+
+    #[test]
+    fn layered_transports_can_disable_a_selected_native_protocol() {
+        assert_eq!(
+            downgraded_native_protocol(ProtocolType::Kitty, false),
+            Some(ProtocolType::Kitty)
+        );
+        assert_eq!(downgraded_native_protocol(ProtocolType::Kitty, true), None);
+        assert_eq!(
+            downgraded_native_protocol(ProtocolType::Halfblocks, false),
+            None
         );
     }
 

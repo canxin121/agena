@@ -143,7 +143,7 @@ pub(in crate::app) fn inline_math_unicode_text(source: &str) -> String {
         .into_iter()
         .map(|segment| match segment {
             InlineMathSegment::Text(text) => text,
-            InlineMathSegment::Math(formula) => unicode_formula(&formula).join(" "),
+            InlineMathSegment::Math(formula) => unicode_formula(&formula, false).join(" "),
         })
         .collect()
 }
@@ -224,7 +224,7 @@ pub(in crate::app) fn push_math_block(
         });
         return;
     }
-    push_unicode_canvas(out, prefix, &unicode_formula(&formula), width);
+    push_unicode_canvas(out, prefix, &unicode_formula(&formula, true), width);
 }
 
 pub(in crate::app) fn push_inline_math(
@@ -315,7 +315,7 @@ pub(in crate::app) fn push_inline_math(
     for segment in segments {
         let block = match segment {
             InlineMathSegment::Text(text) => vec![inline_markdown_plain_text(&text)],
-            InlineMathSegment::Math(formula) => unicode_formula(&formula),
+            InlineMathSegment::Math(formula) => unicode_formula(&formula, false),
         };
         append_bottom_aligned(&mut rows, &block);
     }

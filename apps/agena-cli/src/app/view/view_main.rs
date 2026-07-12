@@ -482,7 +482,7 @@ impl App {
     }
 
     pub(in crate::app) fn transcript_footer_text(&self) -> String {
-        let mut parts = vec![ui_text::t(&self.i18n, "context-help-global-hint")];
+        let mut parts = Vec::new();
         if !self.queue.is_empty() {
             let preview = self.queue.first_preview(28).unwrap_or_default();
             if preview.is_empty() {

@@ -6,6 +6,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::TranscriptNodeKind;
 
+mod transcript_ast;
 mod transcript_aux;
 mod transcript_diff;
 mod transcript_markdown;

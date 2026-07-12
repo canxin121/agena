@@ -1,3 +1,4 @@
+use super::super::transcript_ast::MarkdownNode;
 use super::super::{
     ExecutionStatus, I18n, Local, MessagePart, MessageResource, MessageStatus, Modifier,
     PartContent, RenderedLine, RenderedTranscriptNode, RequestPart, SessionExecutionResource,
@@ -146,6 +147,7 @@ pub(in crate::app) struct MarkdownBlock {
     pub(in crate::app) source: String,
     pub(in crate::app) copy_text: String,
     pub(in crate::app) leading_blank_line: bool,
+    pub(in crate::app) parsed: MarkdownNode,
 }
 
 pub(in crate::app) fn rewind_message_preview(message: &MessageResource, i18n: &I18n) -> String {

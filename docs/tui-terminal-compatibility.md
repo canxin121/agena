@@ -34,7 +34,30 @@ distinguishes confirmed platform support, a user-forced override, a terminal
 profile, transport or permission policy, unknown support, and whether Agena
 has a working provider.
 
-## Markdown math rendering
+## Markdown rendering
+
+Transcript Markdown is parsed as one CommonMark/GFM document instead of by
+line-oriented heuristics. In addition to paragraphs and ATX/Setext headings,
+Agena renders nested ordered, unordered, and task lists; block quotes and
+GitHub alert cards; aligned tables; fenced and indented code; thematic rules;
+links, autolinks, images, footnotes, description lists, YAML front matter,
+block directives, subtext, and raw HTML shown safely as source. Inline support
+includes emphasis, strong text, deletion, underline/insertion, highlight,
+spoilers, super/subscript, code, emoji shortcodes, wiki links, hard breaks, and
+smart punctuation. CJK-friendly emphasis and task lists inside tables are
+enabled. Code fences use language-aware Syntect highlighting, line numbers,
+grapheme-safe wrapping, and palettes selected for light or dark terminals.
+
+Standalone Markdown images use the same negotiated Kitty, Sixel, or iTerm2
+graphics pipeline as formulas. Agena displays base64 raster data URLs and
+workspace-relative or `file:` images confined to the active workspace. Remote
+HTTP images remain inert links: the transcript never performs an implicit
+network request, preventing tracking, SSRF, and network latency during layout.
+Image bytes, dimensions, decoded pixels, cache entries, and display height are
+bounded. Terminals without native graphics retain a styled image card with its
+alt text, title, and URL.
+
+### Math
 
 Transcript Markdown supports inline `$...$` and `\(...\)`, display `$$...$$`
 and `\[...\]`, plus fenced `math`, `tex`, `latex`, and `katex` blocks. Escaped

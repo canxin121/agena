@@ -64,22 +64,6 @@ pub(in crate::app) fn display_math_source(source: &str) -> Option<String> {
     None
 }
 
-pub(in crate::app) fn is_display_math_start(line: &str) -> bool {
-    let trimmed = line.trim();
-    trimmed.starts_with("$$") || trimmed.starts_with(r"\[")
-}
-
-pub(in crate::app) fn is_display_math_closed(source: &str) -> bool {
-    let trimmed = source.trim();
-    if let Some(rest) = trimmed.strip_prefix("$$") {
-        return rest.contains("$$");
-    }
-    if let Some(rest) = trimmed.strip_prefix(r"\[") {
-        return rest.contains(r"\]");
-    }
-    false
-}
-
 pub(in crate::app) fn inline_math_segments(source: &str) -> Vec<InlineMathSegment> {
     let bytes = source.as_bytes();
     let mut segments = Vec::new();

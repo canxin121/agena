@@ -409,7 +409,7 @@ impl App {
         });
     }
 
-    /// Steer the in-flight run by injecting `parts` as a new user message
+    /// Steer the active execution by injecting `parts` as a new user message
     /// the model will see on its next step. If the backend reports the
     /// run is no longer steerable, fall back to enqueueing the original
     /// draft so it isn't lost.
@@ -437,7 +437,7 @@ impl App {
         self.flash_info(ui_text::t(&self.i18n, "flash-steer-sent"));
     }
 
-    /// Ask the backend to cancel the in-flight run for `session_id`.
+    /// Ask the backend to cancel the active execution for `session_id`.
     /// Best-effort: even if the backend hasn't fully wired cancellation,
     /// the response clears the session's unified local activity state so the
     /// user regains control.

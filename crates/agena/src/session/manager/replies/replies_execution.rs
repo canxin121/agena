@@ -1,22 +1,23 @@
 use super::{
     AggregatedPermissionOutcome, AggregatedPermissionRequest, AppError, Arc, DecisionTraceStep,
-    EventKind, ExecutionStartedEvent, ExecutionStatus, FinishReason, InteractiveRequestPart,
-    MessageMetadata, MessageSource, MessageStatus, OperationPart, PartContent, PermissionAction,
-    PermissionDecision, PermissionRequest, PermissionRequestedEvent, PermissionRiskLevel,
-    PermissionScope, PersistedPermissionRule, PolicySourceKind, PromptRequestOptions,
-    PromptTurnBudget, ProviderPromptAnchor, RequestPart, ResolvedPendingTool, Role, RunAbortReason,
-    RunAborted, RunCompleted, RunControl, RunSource, RunStarted, Semaphore, SessionManager,
-    SessionManagerState, SessionPendingTool, SessionRunOptions, SessionRunRequest, SessionStatus,
-    SessionUsageLimitBasis, StreamingToolExecution, ToolError, ToolInvocationExecution, ToolOutput,
-    ToolPermissionCheck, TranscriptToolOutput, UserInputRequest, Utc, append_resolved_message_part,
-    apply_advisory_permission_decision, ask_user_title, assistant_message_for_part, build_message,
-    build_request_part, completed_lifecycle, is_user_cancelled_error, max_permission_risk, mpsc,
-    operation_blocks_from_tool_output, pending_operation_for_resolved,
-    pending_tool_part_not_found_error, pending_tools_include_gateway_call, permission_action_key,
-    permission_scope_label, permission_subject, plugin_risk_to_core, push_unique_permission_action,
-    resolve_pending_tool, resolve_permission_with_persisted_rules, responses_api_request_metadata,
-    risk_for_permission_decision, should_execute_pending_tools_concurrently, text_result_blocks,
-    tool_name, update_resolved_tool_message,
+    EventKind, ExecutionControl, ExecutionSource, ExecutionStatus, FinishReason,
+    InteractiveRequestPart, MessageMetadata, MessageSource, MessageStatus, OperationPart,
+    PartContent, PermissionAction, PermissionDecision, PermissionRequest, PermissionRequestedEvent,
+    PermissionRiskLevel, PermissionScope, PersistedPermissionRule, PolicySourceKind,
+    PromptRequestOptions, PromptTurnBudget, ProviderPromptAnchor, RequestPart, ResolvedPendingTool,
+    Role, RunAbortReason, RunAborted, RunCompleted, RunStarted, Semaphore, SessionManager,
+    SessionManagerState, SessionPendingTool, SessionRunOptions, SessionRunRequest,
+    SessionRunTermination, SessionUsageLimitBasis, StreamingToolExecution, ToolError,
+    ToolInvocationExecution, ToolOutput, ToolPermissionCheck, UserInputRequest, Utc, WorkflowState,
+    append_resolved_message_part, apply_advisory_permission_decision, ask_user_title,
+    assistant_message_for_part, build_message, build_request_part, completed_lifecycle,
+    execution_control_to_app_error, max_permission_risk, mpsc, operation_blocks_from_tool_output,
+    pending_operation_for_resolved, pending_tool_part_not_found_error,
+    pending_tools_include_gateway_call, permission_action_key, permission_scope_label,
+    permission_subject, plugin_risk_to_core, push_unique_permission_action, resolve_pending_tool,
+    resolve_permission_with_persisted_rules, responses_api_request_metadata,
+    risk_for_permission_decision, run_abort_reason, should_execute_pending_tools_concurrently,
+    text_result_blocks, tool_name, update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -28,9 +29,9 @@ impl SessionManager {
         mut session: Session,
         options: &SessionRunOptions,
         allow_goal_continuation: bool,
-        base_run_source: RunSource,
+        base_run_source: ExecutionSource,
         state: Arc<SessionManagerState>,
-        control: Arc<RunControl>,
+        control: Arc<ExecutionControl>,
         mut steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
     ) -> Result<Session, AppError> {
         let _ = allow_goal_continuation;
@@ -38,15 +39,6 @@ impl SessionManager {
             let current_options =
                 self.apply_execution_context_to_run_options(&session, options.clone())?;
             if control.cancel.is_cancelled() {
-                if control.is_superseded() {
-                    return Ok(session);
-                }
-                self.persist_run_failed_event(
-                    session.id,
-                    "run cancelled by user".to_string(),
-                    state.clone(),
-                )
-                .await?;
                 return Ok(session);
             }
 
@@ -72,21 +64,23 @@ impl SessionManager {
                     repeat = hit.repeat_count,
                     "aborting run: doom-loop detected"
                 );
-                self.persist_run_failed_event(session.id, hit.message(), state.clone())
-                    .await?;
-                return Ok(session);
+                return Err(AppError::Internal(hit.message()));
             }
 
             let pending_tools = session.pending_tools();
             if !pending_tools.is_empty() {
+                control
+                    .transition(crate::session::ExecutionPhase::ExecutingTools)
+                    .await
+                    .map_err(execution_control_to_app_error)?;
                 session = self
                     .resolve_pending_tools(session, pending_tools, &current_options, state.clone())
                     .await?;
                 continue;
             }
 
-            match session.status() {
-                SessionStatus::Idle => {
+            match session.workflow_state() {
+                WorkflowState::Quiescent => {
                     let last_assistant_text = session
                         .messages
                         .iter()
@@ -154,8 +148,18 @@ impl SessionManager {
                         }
                     }
                 }
-                SessionStatus::AwaitingModel => {}
+                WorkflowState::ReadyForModel => {}
+                WorkflowState::ToolPending | WorkflowState::Blocked => {
+                    return Err(AppError::Internal(
+                        "workflow changed after pending-operation resolution".to_string(),
+                    ));
+                }
             }
+
+            control
+                .transition(crate::session::ExecutionPhase::PreparingModel)
+                .await
+                .map_err(execution_control_to_app_error)?;
 
             let last_message_id = session.messages.last().map(|message| message.id);
             let already_auto_compacted_at_boundary = session
@@ -227,7 +231,7 @@ impl SessionManager {
                     let post_run_input = crate::plugin::PostRunInput {
                         session_id: session.id,
                         model,
-                        status: format!("{:?}", session.status()),
+                        status: format!("{:?}", session.workflow_state()),
                         message_count: session.messages.len(),
                     };
                     state
@@ -258,9 +262,9 @@ impl SessionManager {
         &self,
         mut session: Session,
         options: &SessionRunOptions,
-        run_source: RunSource,
+        run_source: ExecutionSource,
         state: Arc<SessionManagerState>,
-        control: Arc<RunControl>,
+        control: Arc<ExecutionControl>,
     ) -> Result<Session, AppError> {
         let run_span = tracing::info_span!(
             "session.run",
@@ -352,7 +356,7 @@ impl SessionManager {
                 "prepared prompt for session run"
             );
 
-            session.runtime.run.record_run_request(
+            session.runtime.workflow.record_model_request(
                 run_source,
                 options.model.provider_id.to_string(),
                 options.model.adapter_id.as_ref().map(ToString::to_string),
@@ -396,6 +400,7 @@ impl SessionManager {
             );
             let run = SessionRunRequest {
                 run_id,
+                execution_id: control.execution_id(),
                 session_id: session.id,
                 model: options.model.clone(),
                 model_thinking_mode: options.thinking_mode.clone(),
@@ -408,32 +413,41 @@ impl SessionManager {
                 cancel: Some(control.cancel.clone()),
             };
 
-            self.store
-                .append_client_events(
-                    session.id,
-                    vec![EventKind::ExecutionStarted(ExecutionStartedEvent {
-                        session_id: session.id,
-                        ts_ms: turn_started_at_unix_ms,
+            // The attempt start is durable before the provider worker begins.
+            // Startup reconciliation can therefore close every interrupted
+            // attempt, including a process crash before the first token.
+            session = self
+                .store
+                .append_history_items(
+                    session,
+                    vec![EventKind::RunStarted(RunStarted {
+                        execution_id: control.execution_id(),
+                        run_id,
+                        source: run_source,
+                        model_id: options.model.model_id.as_ref().into(),
+                        provider_id: options.model.provider_id.as_ref().into(),
+                        request_digest: None,
                     })],
+                    state.cache_policy(),
                 )
                 .await?;
 
-            let processor_fut = state.processor.run_turn(run).instrument(run_span.clone());
-            let run_outcome = tokio::select! {
-                res = processor_fut => res,
-                _ = control.cancel.cancelled() => {
-                    Err(AppError::Internal("run cancelled by user".to_string()))
-                }
-            };
+            // `SessionProcessor` is the sole owner of cooperative model-stream
+            // cancellation. Never race it with an outer select: dropping this
+            // future would skip message and part terminalization.
+            control
+                .transition(crate::session::ExecutionPhase::StreamingModel)
+                .await
+                .map_err(execution_control_to_app_error)?;
+            let run_outcome = state
+                .processor
+                .run_turn(run)
+                .instrument(run_span.clone())
+                .await;
             match run_outcome {
                 Ok(result) => {
                     let run_id = result.run_id;
-                    let terminal_error = result.terminal_error;
-                    if terminal_error.as_ref().is_some_and(is_user_cancelled_error)
-                        && control.is_superseded()
-                    {
-                        return Ok(session);
-                    }
+                    let termination = result.termination;
                     let assistant_message = result
                         .state
                         .into_iter()
@@ -527,25 +541,28 @@ impl SessionManager {
                         .await?;
 
                     let mut run_events: Vec<EventKind> = Vec::new();
-                    run_events.push(EventKind::RunStarted(RunStarted {
-                        run_id,
-                        source: run_source,
-                        model_id: options.model.model_id.as_ref().into(),
-                        provider_id: options.model.provider_id.as_ref().into(),
-                        request_digest: None,
-                    }));
                     run_events.extend(result.history_items);
-                    if let Some(err) = terminal_error.as_ref() {
-                        run_events.push(EventKind::RunAborted(RunAborted {
-                            run_id,
-                            reason: RunAbortReason::ProviderError,
-                            message: Some(err.to_string()),
-                        }));
-                    } else {
-                        run_events.push(EventKind::RunCompleted(RunCompleted {
-                            run_id,
-                            finish_reason: FinishReason::default(),
-                        }));
+                    match &termination {
+                        SessionRunTermination::Completed => {
+                            run_events.push(EventKind::RunCompleted(RunCompleted {
+                                run_id,
+                                finish_reason: FinishReason::default(),
+                            }));
+                        }
+                        SessionRunTermination::Cancelled => {
+                            run_events.push(EventKind::RunAborted(RunAborted {
+                                run_id,
+                                reason: RunAbortReason::UserCancelled,
+                                message: Some("execution cancelled".to_string()),
+                            }));
+                        }
+                        SessionRunTermination::Failed(error) => {
+                            run_events.push(EventKind::RunAborted(RunAborted {
+                                run_id,
+                                reason: RunAbortReason::ProviderError,
+                                message: Some(error.to_string()),
+                            }));
+                        }
                     }
                     let store = Arc::clone(&self.store);
                     let cache_policy = state.cache_policy();
@@ -559,22 +576,24 @@ impl SessionManager {
                         AppError::Internal(format!("history append task failed: {err}"))
                     })??;
 
-                    if let Some(err) = terminal_error {
-                        if is_user_cancelled_error(&err) && control.is_superseded() {
-                            return Ok(persisted_session);
-                        }
-                        self.persist_run_failed_event(persisted_session.id, err.to_string(), state)
-                            .await?;
-                        return Err(err);
+                    match termination {
+                        SessionRunTermination::Completed => Ok(persisted_session),
+                        SessionRunTermination::Cancelled => Err(AppError::Cancelled),
+                        SessionRunTermination::Failed(error) => Err(error),
                     }
-
-                    Ok(persisted_session)
                 }
                 Err(err) => {
-                    if is_user_cancelled_error(&err) && control.is_superseded() {
-                        return Ok(session);
-                    }
-                    self.persist_run_failed_event(session.id, err.to_string(), state)
+                    let reason = run_abort_reason(&err);
+                    self.store
+                        .append_history_items(
+                            session,
+                            vec![EventKind::RunAborted(RunAborted {
+                                run_id,
+                                reason,
+                                message: Some(err.to_string()),
+                            })],
+                            state.cache_policy(),
+                        )
                         .await?;
                     Err(err)
                 }
@@ -1692,9 +1711,6 @@ impl SessionManager {
             assistant_message,
             &resolved,
             persisted_rules,
-            TranscriptToolOutput::Text {
-                text: execution.view.output_text.clone(),
-            },
             state,
         )
         .await
@@ -1769,7 +1785,6 @@ impl SessionManager {
             assistant_message,
             &resolved,
             persisted_rules,
-            TranscriptToolOutput::Error { message: reason },
             state,
         )
         .await

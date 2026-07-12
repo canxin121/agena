@@ -3,7 +3,7 @@ use super::{EventKind, Message, Session};
 pub(crate) fn event_targets_message(kind: &EventKind, message_id: i64) -> bool {
     match kind {
         EventKind::UserMessageAppended(payload) => payload.message_id.raw() == message_id,
-        EventKind::AssistantMessageCompleted(payload) => payload.message_id.raw() == message_id,
+        EventKind::AssistantMessageFinished(payload) => payload.message_id.raw() == message_id,
         EventKind::ToolCallIssued(payload) => payload.message_id.raw() == message_id,
         EventKind::ToolCallCompleted(payload) => payload.message_id.raw() == message_id,
         EventKind::SystemNoticeAppended(payload) => payload.message_id.raw() == message_id,
@@ -19,7 +19,7 @@ pub(crate) fn event_run_id_for_message(
         EventKind::UserMessageAppended(payload) if payload.message_id.raw() == message_id => {
             Some(payload.run_id)
         }
-        EventKind::AssistantMessageCompleted(payload) if payload.message_id.raw() == message_id => {
+        EventKind::AssistantMessageFinished(payload) if payload.message_id.raw() == message_id => {
             Some(payload.run_id)
         }
         EventKind::ToolCallIssued(payload) if payload.message_id.raw() == message_id => {
@@ -45,7 +45,7 @@ pub(crate) fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i6
                 visit(part.message_id);
             }
         }
-        EventKind::AssistantMessageCompleted(p) => {
+        EventKind::AssistantMessageFinished(p) => {
             visit(p.message_id.raw());
             visit_message_metadata_ids(&p.metadata, &mut visit);
             for part in &p.parts {
@@ -55,20 +55,18 @@ pub(crate) fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i6
         EventKind::ToolCallIssued(p) => visit(p.message_id.raw()),
         EventKind::ToolCallCompleted(p) => {
             visit(p.message_id.raw());
-            if let Some(part) = &p.part {
-                visit(part.message_id);
-            }
+            visit(p.part.message_id);
         }
         EventKind::SystemNoticeAppended(p) => {
             visit(p.message_id.raw());
         }
-        EventKind::MessagePartUpdated(p) => {
+        EventKind::MessagePartCheckpointed(p) => {
             visit(p.message_id);
             visit(p.part.message_id);
         }
         // Non-persistent / unaffected variants:
         EventKind::ExecutionStarted(_)
-        | EventKind::ExecutionFailed(_)
+        | EventKind::ExecutionFinished(_)
         | EventKind::StreamError(_)
         | EventKind::MessagePartDelta(_)
         | EventKind::CommandBegin(_)
@@ -103,16 +101,16 @@ pub(crate) fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64))
                 visit(part.id);
             }
         }
-        EventKind::AssistantMessageCompleted(p) => {
+        EventKind::AssistantMessageFinished(p) => {
             for part in &p.parts {
                 visit(part.id);
             }
         }
-        EventKind::MessagePartUpdated(p) => {
+        EventKind::MessagePartCheckpointed(p) => {
             visit(p.part.id);
         }
         EventKind::ExecutionStarted(_)
-        | EventKind::ExecutionFailed(_)
+        | EventKind::ExecutionFinished(_)
         | EventKind::StreamError(_)
         | EventKind::MessagePartDelta(_)
         | EventKind::CommandBegin(_)
@@ -131,9 +129,7 @@ pub(crate) fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64))
         | EventKind::ToolCallIssued(_)
         | EventKind::SystemNoticeAppended(_) => {}
         EventKind::ToolCallCompleted(p) => {
-            if let Some(part) = &p.part {
-                visit(part.id);
-            }
+            visit(p.part.id);
         }
     }
 }
@@ -150,7 +146,7 @@ pub(crate) fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(
                 part.message_id = f(part.message_id);
             }
         }
-        EventKind::AssistantMessageCompleted(p) => {
+        EventKind::AssistantMessageFinished(p) => {
             p.message_id = MessageId(f(p.message_id.raw()));
             rewrite_message_metadata_ids(&mut p.metadata, &mut f);
             for part in &mut p.parts {
@@ -162,19 +158,17 @@ pub(crate) fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(
         }
         EventKind::ToolCallCompleted(p) => {
             p.message_id = MessageId(f(p.message_id.raw()));
-            if let Some(part) = &mut p.part {
-                part.message_id = f(part.message_id);
-            }
+            p.part.message_id = f(p.part.message_id);
         }
         EventKind::SystemNoticeAppended(p) => {
             p.message_id = MessageId(f(p.message_id.raw()));
         }
-        EventKind::MessagePartUpdated(p) => {
+        EventKind::MessagePartCheckpointed(p) => {
             p.message_id = f(p.message_id);
             p.part.message_id = f(p.part.message_id);
         }
         EventKind::ExecutionStarted(_)
-        | EventKind::ExecutionFailed(_)
+        | EventKind::ExecutionFinished(_)
         | EventKind::StreamError(_)
         | EventKind::MessagePartDelta(_)
         | EventKind::CommandBegin(_)
@@ -211,16 +205,16 @@ pub(crate) fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64
                 part.id = f(part.id);
             }
         }
-        EventKind::AssistantMessageCompleted(p) => {
+        EventKind::AssistantMessageFinished(p) => {
             for part in &mut p.parts {
                 part.id = f(part.id);
             }
         }
-        EventKind::MessagePartUpdated(p) => {
+        EventKind::MessagePartCheckpointed(p) => {
             p.part.id = f(p.part.id);
         }
         EventKind::ExecutionStarted(_)
-        | EventKind::ExecutionFailed(_)
+        | EventKind::ExecutionFinished(_)
         | EventKind::StreamError(_)
         | EventKind::MessagePartDelta(_)
         | EventKind::CommandBegin(_)
@@ -239,9 +233,7 @@ pub(crate) fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64
         | EventKind::PluginEvent(_)
         | EventKind::PluginToolRegistryChanged(_) => {}
         EventKind::ToolCallCompleted(p) => {
-            if let Some(part) = &mut p.part {
-                part.id = f(part.id);
-            }
+            p.part.id = f(p.part.id);
         }
     }
 }
@@ -249,9 +241,9 @@ pub(crate) fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64
 pub(crate) fn rewrite_event_session_ids(kind: &mut EventKind, session_id: i64) {
     match kind {
         EventKind::ExecutionStarted(p) => p.session_id = session_id,
-        EventKind::ExecutionFailed(p) => p.session_id = session_id,
+        EventKind::ExecutionFinished(p) => p.session_id = session_id,
         EventKind::StreamError(p) => p.session_id = session_id,
-        EventKind::MessagePartUpdated(p) => p.session_id = session_id,
+        EventKind::MessagePartCheckpointed(p) => p.session_id = session_id,
         EventKind::MessagePartDelta(p) => p.session_id = session_id,
         EventKind::CommandBegin(p) => p.context.session_id = session_id,
         EventKind::CommandOutputDelta(p) => p.context.session_id = session_id,
@@ -269,7 +261,7 @@ pub(crate) fn rewrite_event_session_ids(kind: &mut EventKind, session_id: i64) {
         | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
         | EventKind::UserMessageAppended(_)
-        | EventKind::AssistantMessageCompleted(_)
+        | EventKind::AssistantMessageFinished(_)
         | EventKind::ToolCallIssued(_)
         | EventKind::ToolCallCompleted(_)
         | EventKind::SystemNoticeAppended(_)

@@ -329,9 +329,14 @@ const {
 
 watch(
   () =>
-    [sessionState.value?.run_state, sessionState.value?.blocked, sending.value, composerQueue.value.length] as const,
-  ([runState, blocked, isSending, queueLength]) => {
-    if (runState === 'idle' && !blocked && !isSending && queueLength) void drainComposerQueue()
+    [
+      sessionState.value?.active_execution,
+      sessionState.value?.workflow_state,
+      sending.value,
+      composerQueue.value.length,
+    ] as const,
+  ([activeExecution, workflowState, isSending, queueLength]) => {
+    if (!activeExecution && workflowState !== 'blocked' && !isSending && queueLength) void drainComposerQueue()
   },
 )
 ;({ commandPalette, slashSuggestions } = useChatCommandState({

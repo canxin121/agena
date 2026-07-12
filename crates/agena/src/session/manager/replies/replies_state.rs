@@ -1,10 +1,10 @@
 use super::{
-    AppError, Arc, ErrorInfo, EventKind, ExecutionFailedEvent, Message, MessageMetadata,
-    MessageSource, MessageStatus, ModelRef, PartContent, PathBuf, PersistedPermissionRule,
-    ResolvedPendingTool, Role, SessionCommit, SessionListRequest, SessionManager,
-    SessionManagerState, SessionRunOptions, ToolError, ToolInvocation, ToolInvocationExecution,
-    Utc, build_message, custom_payload_value, managed_project_state_permission,
-    mode_request_override_for_adapter, mpsc, payload_tool_name_for_invocation,
+    AppError, Arc, EventKind, Message, MessageMetadata, MessageSource, MessageStatus, ModelRef,
+    PartContent, PathBuf, PersistedPermissionRule, ResolvedPendingTool, Role, SessionCommit,
+    SessionListRequest, SessionManager, SessionManagerState, SessionRunOptions, ToolError,
+    ToolInvocation, ToolInvocationExecution, build_message, custom_payload_value,
+    managed_project_state_permission, mode_request_override_for_adapter, mpsc,
+    payload_tool_name_for_invocation,
 };
 use crate::session::Session;
 
@@ -537,30 +537,6 @@ impl SessionManager {
             }
             _ => {}
         }
-    }
-
-    pub(in crate::session::manager) async fn persist_run_failed_event(
-        &self,
-        session_id: i64,
-        reason: String,
-        state: Arc<SessionManagerState>,
-    ) -> Result<(), AppError> {
-        let event = EventKind::ExecutionFailed(ExecutionFailedEvent {
-            session_id,
-            error: ErrorInfo {
-                code: "session_run_failed".to_string(),
-                message: reason,
-            },
-            ts_ms: Utc::now().timestamp_millis(),
-        });
-        let session = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await?;
-        let _ = self
-            .persist_session_changes(session, Vec::new(), vec![event], None, state)
-            .await?;
-        Ok(())
     }
 
     pub(in crate::session::manager) async fn find_child_session_for_task(

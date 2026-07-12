@@ -379,7 +379,7 @@ impl App {
     }
 
     /// Pop one editable message from the queue and submit it. Called
-    /// whenever an in-flight run completes successfully so the user sees
+    /// whenever an active execution completes successfully so the user sees
     /// their pending messages run automatically.
     pub(in crate::app) fn try_drain_queue_one(&mut self) {
         if self.current_session_activity().is_busy()

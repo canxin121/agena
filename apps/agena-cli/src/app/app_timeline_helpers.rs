@@ -78,16 +78,16 @@ pub(in crate::app) fn build_timeline_item(i18n: &I18n, record: &DomainEvent) -> 
 
 pub(in crate::app) fn timeline_event_message_id(record: &DomainEvent) -> Option<i64> {
     match &record.kind {
-        AgenaSessionEvent::MessagePartUpdated(event) => Some(event.message_id),
+        AgenaSessionEvent::MessagePartCheckpointed(event) => Some(event.message_id),
         AgenaSessionEvent::MessagePartDelta(event) => Some(event.message_id),
         AgenaSessionEvent::CommandBegin(event) => event.context.message_id,
         AgenaSessionEvent::CommandOutputDelta(event) => event.context.message_id,
         AgenaSessionEvent::CommandEnd(event) => event.context.message_id,
         AgenaSessionEvent::UserMessageAppended(event) => Some(event.message_id.into()),
-        AgenaSessionEvent::AssistantMessageCompleted(event) => Some(event.message_id.into()),
+        AgenaSessionEvent::AssistantMessageFinished(event) => Some(event.message_id.into()),
         AgenaSessionEvent::SystemNoticeAppended(event) => Some(event.message_id.into()),
         AgenaSessionEvent::ExecutionStarted(_)
-        | AgenaSessionEvent::ExecutionFailed(_)
+        | AgenaSessionEvent::ExecutionFinished(_)
         | AgenaSessionEvent::StreamError(_)
         | AgenaSessionEvent::PermissionRequested(_)
         | AgenaSessionEvent::PermissionReplied(_)
@@ -107,9 +107,9 @@ pub(in crate::app) fn timeline_event_message_id(record: &DomainEvent) -> Option<
 pub(in crate::app) fn timeline_event_type_key(record: &DomainEvent) -> &'static str {
     match &record.kind {
         AgenaSessionEvent::ExecutionStarted(_) => "timeline-type-execution-started",
-        AgenaSessionEvent::ExecutionFailed(_) => "timeline-type-execution-failed",
+        AgenaSessionEvent::ExecutionFinished(_) => "timeline-type-execution-failed",
         AgenaSessionEvent::StreamError(_) => "timeline-type-stream-error",
-        AgenaSessionEvent::MessagePartUpdated(_) => "timeline-type-message-part-updated",
+        AgenaSessionEvent::MessagePartCheckpointed(_) => "timeline-type-message-part-checkpointed",
         AgenaSessionEvent::MessagePartDelta(_) => "timeline-type-message-part-delta",
         AgenaSessionEvent::CommandBegin(_) => "timeline-type-command-begin",
         AgenaSessionEvent::CommandOutputDelta(_) => "timeline-type-command-output-delta",
@@ -123,7 +123,7 @@ pub(in crate::app) fn timeline_event_type_key(record: &DomainEvent) -> &'static 
         AgenaSessionEvent::RunCompleted(_) => "timeline-type-run-completed",
         AgenaSessionEvent::RunAborted(_) => "timeline-type-run-aborted",
         AgenaSessionEvent::UserMessageAppended(_) => "timeline-type-user-message-appended",
-        AgenaSessionEvent::AssistantMessageCompleted(_) => {
+        AgenaSessionEvent::AssistantMessageFinished(_) => {
             "timeline-type-assistant-message-completed"
         }
         AgenaSessionEvent::ToolCallIssued(_) => "timeline-type-tool-call-issued",
@@ -145,15 +145,9 @@ pub(in crate::app) fn timeline_event_summary(i18n: &I18n, record: &DomainEvent) 
             "timeline-summary-execution-started",
             &crate::fl_args!("id" => event.session_id),
         ),
-        AgenaSessionEvent::ExecutionFailed(event) => {
-            format!(
-                "{}: {}",
-                event.error.code,
-                timeline_excerpt(i18n, event.error.message.as_str(), 72)
-            )
-        }
-        AgenaSessionEvent::MessagePartUpdated(event) => i18n.text_args(
-            "timeline-summary-message-part-updated",
+        AgenaSessionEvent::ExecutionFinished(event) => format!("{:?}", event.outcome),
+        AgenaSessionEvent::MessagePartCheckpointed(event) => i18n.text_args(
+            "timeline-summary-message-part-checkpointed",
             &crate::fl_args!(
                 "message_id" => event.message_id,
                 "part_id" => event.part.id,
@@ -249,7 +243,7 @@ pub(in crate::app) fn timeline_event_summary(i18n: &I18n, record: &DomainEvent) 
             "timeline-summary-user-message-appended",
             &crate::fl_args!("id" => p.message_id),
         ),
-        AgenaSessionEvent::AssistantMessageCompleted(p) => i18n.text_args(
+        AgenaSessionEvent::AssistantMessageFinished(p) => i18n.text_args(
             "timeline-summary-assistant-message-completed",
             &crate::fl_args!(
                 "id" => p.message_id,
@@ -304,7 +298,7 @@ pub(in crate::app) fn timeline_event_detail_lines(
             "timeline-label-session-id",
             event.session_id.to_string(),
         )],
-        AgenaSessionEvent::ExecutionFailed(event) => vec![
+        AgenaSessionEvent::ExecutionFinished(event) => vec![
             timeline_detail_labeled_line(
                 i18n,
                 "timeline-label-session-id",
@@ -312,16 +306,11 @@ pub(in crate::app) fn timeline_event_detail_lines(
             ),
             timeline_detail_labeled_line(
                 i18n,
-                "timeline-label-error-code",
-                event.error.code.clone(),
-            ),
-            timeline_detail_labeled_line(
-                i18n,
-                "timeline-label-error-message",
-                event.error.message.clone(),
+                "timeline-label-outcome",
+                format!("{:?}", event.outcome),
             ),
         ],
-        AgenaSessionEvent::MessagePartUpdated(event) => vec![
+        AgenaSessionEvent::MessagePartCheckpointed(event) => vec![
             timeline_detail_labeled_line(
                 i18n,
                 "timeline-label-message-id",
@@ -599,7 +588,7 @@ pub(in crate::app) fn timeline_event_detail_lines(
             ),
             timeline_detail_labeled_line(i18n, "timeline-label-run-id", p.run_id.to_string()),
         ],
-        AgenaSessionEvent::AssistantMessageCompleted(p) => vec![
+        AgenaSessionEvent::AssistantMessageFinished(p) => vec![
             timeline_detail_labeled_line(
                 i18n,
                 "timeline-label-message-id",

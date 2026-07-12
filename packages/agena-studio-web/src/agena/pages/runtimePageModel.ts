@@ -123,8 +123,13 @@ export function buildExecutionFacts(execution: SessionExecutionResource | null):
   const context = execution.execution
   return [
     { label: 'Session', value: `#${execution.session.id} · ${execution.session.title}` },
-    { label: 'Run State', value: execution.run_state },
-    { label: 'Blocked', value: execution.blocked ? 'yes' : 'no' },
+    {
+      label: 'Execution',
+      value: execution.active_execution
+        ? `${execution.active_execution.phase} · ${execution.active_execution.execution_id}`
+        : 'idle',
+    },
+    { label: 'Workflow', value: execution.workflow_state },
     { label: 'Latest Event', value: execution.latest_event_seq == null ? 'n/a' : String(execution.latest_event_seq) },
     { label: 'Agent Profile', value: context.agent_profile || 'default' },
     { label: 'Active Skill', value: context.active_skill_name || 'none' },

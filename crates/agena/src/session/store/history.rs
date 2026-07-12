@@ -1,5 +1,5 @@
 use super::{
-    AppError, Arc, DbErr, EventKind, MessagePartUpdatedEvent, PersistedPermissionRule,
+    AppError, Arc, DbErr, EventKind, MessagePartCheckpointedEvent, PersistedPermissionRule,
     PersistedRuleEventMeta, ProcessorPartIdAllocator, ReservedMessageIds, ReservedProcessorIds,
     Session, SessionCachePolicy, SessionCacheStats, SessionCommit, SessionStore, Utc, access_cache,
     ordered_unique_touched_messages, permission_rule, permission_rule_event_from_rule,
@@ -17,7 +17,7 @@ impl SessionStore {
         if items.is_empty() {
             return Ok(session);
         }
-        session.sync_runtime_run_state();
+        session.sync_workflow_state();
         let session_id = session.id;
         let now = Utc::now();
         let runtime_to_persist = session.runtime.clone();
@@ -66,7 +66,7 @@ impl SessionStore {
             mut client_events,
             persisted_rules,
         } = commit;
-        session.sync_runtime_run_state();
+        session.sync_workflow_state();
         let session_id = session.id;
         let touched_messages = ordered_unique_touched_messages(&session, touched_messages);
         let now = Utc::now();
@@ -74,9 +74,11 @@ impl SessionStore {
         let mut ordered_client_events = Vec::new();
         for message in &touched_messages {
             for part in &message.parts {
-                ordered_client_events.push(EventKind::MessagePartUpdated(
-                    MessagePartUpdatedEvent {
+                ordered_client_events.push(EventKind::MessagePartCheckpointed(
+                    MessagePartCheckpointedEvent {
                         session_id,
+                        execution_id: None,
+                        run_id: None,
                         message_id: message.id,
                         message_role: message.role,
                         message_state: message.state,
@@ -161,14 +163,20 @@ impl SessionStore {
         Ok(session)
     }
 
-    pub(crate) async fn append_client_events(
+    /// Persist lifecycle events and advance the transcript projection before
+    /// returning. Execution completion relies on this synchronous projection
+    /// barrier to close every correlated open artifact.
+    pub(crate) async fn append_lifecycle_events(
         &self,
         session_id: i64,
-        client_events: Vec<EventKind>,
+        events: Vec<EventKind>,
     ) -> Result<(), AppError> {
-        for kind in client_events {
-            self.publish_event(session_id, kind).await?;
+        if events.is_empty() {
+            return Ok(());
         }
+        self.history
+            .append_items(session_id, events, Utc::now())
+            .await?;
         Ok(())
     }
 

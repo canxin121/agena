@@ -10,12 +10,12 @@ use super::{
     MemoryListArgs, MemoryListOutput, MemorySubcommand, MemorySummaryOutput, PartContent, PathBuf,
     PermissionPolicy, PermissionReply, PermissionsArgs, PermissionsListArgs, PermissionsOutput,
     PermissionsReplaceArgs, PermissionsReplyArgs, PermissionsRevokeArgs, PermissionsSubcommand,
-    PermissionsWriteArgs, PrArgs, PrOutput, ResumeArgs, ReviewArgs, RunStatus,
-    SessionCreateRequest, SessionExecutionRequest, SessionForkOutput, SessionForkRequest,
-    SessionImportOutput, SessionListArgs, SessionListOutput, SessionListView, SessionOutput,
-    SessionRunOptions, SessionUserMessageRequest, SessionsCommand, SessionsSubcommand,
-    SnapshotArgs, SnapshotBackendSupportOutput, SnapshotCapabilitiesOutput, SnapshotOutput,
-    StorageConfig, ToolExecutor, ToolPayloadInput, ToolPermissionPolicy, UsageArgs, auth_summary,
+    PermissionsWriteArgs, PrArgs, PrOutput, ResumeArgs, ReviewArgs, SessionCreateRequest,
+    SessionExecutionRequest, SessionForkOutput, SessionForkRequest, SessionImportOutput,
+    SessionListArgs, SessionListOutput, SessionListView, SessionOutput, SessionRunOptions,
+    SessionUserMessageRequest, SessionsCommand, SessionsSubcommand, SnapshotArgs,
+    SnapshotBackendSupportOutput, SnapshotCapabilitiesOutput, SnapshotOutput, StorageConfig,
+    ToolExecutor, ToolPayloadInput, ToolPermissionPolicy, UsageArgs, WorkflowState, auth_summary,
     collect_git_preflight, default_model, ensure_memory_index_path, entities,
     filter_session_summaries_by_view, format_apply_output, format_debug_session_output, fs,
     git_output, init_schema, last_assistant_text, latest_event_seq, list_all_session_summaries,
@@ -825,7 +825,7 @@ impl AgenaCli {
                 vec![PartContent::text(prompt)],
             ))
             .await?;
-        if session.runtime.run.status == RunStatus::Blocked {
+        if session.runtime.workflow.state == WorkflowState::Blocked {
             return Err(AppError::Config(
                 "command is blocked awaiting permission or user input".to_owned(),
             ));

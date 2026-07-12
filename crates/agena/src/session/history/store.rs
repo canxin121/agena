@@ -4,16 +4,17 @@ use chrono::{DateTime, Utc};
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection,
     DbErr, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
-    TransactionTrait, sea_query::OnConflict,
+    TransactionTrait,
+    sea_query::{Expr, OnConflict},
 };
 
 use crate::db::entities::{activity_message, activity_part, activity_projection_state};
 use crate::event::{
-    DomainEvent, EventFilter, EventKind, EventPublisher, MessagePartUpdatedEvent, PublishContext,
-    Scope, StoreRange,
+    DomainEvent, EventFilter, EventKind, EventPublisher, ExecutionFinishedEvent,
+    MessagePartCheckpointedEvent, PublishContext, Scope, StoreRange,
 };
 use crate::message::{Message, MessagePart, MessageSource};
-use crate::session::SessionRuntimeState;
+use crate::session::{ExecutionFailureKind, ExecutionOutcome, SessionRuntimeState};
 
 use super::{RunAbortReason, RunAborted, RunId, RunStarted};
 use crate::role::Role;
@@ -66,6 +67,56 @@ impl SessionHistoryStore {
             messages,
             runtime: base_runtime,
         })
+    }
+
+    pub(crate) async fn reconcile_interrupted_lifecycles(
+        &self,
+        session_id: i64,
+    ) -> Result<(), DbErr> {
+        let events = self.list_session_events(session_id).await?;
+        self.abort_hanging_lifecycles(session_id, events.as_slice())
+            .await?;
+        self.ensure_projection_current(session_id).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn reconcile_unmatched_runs(
+        &self,
+        session_id: i64,
+        reason: RunAbortReason,
+        message: String,
+    ) -> Result<(), DbErr> {
+        let events = self.list_session_events(session_id).await?;
+        let (started_runs, _) = unmatched_lifecycles(events.as_slice());
+        if started_runs.is_empty() {
+            return Ok(());
+        }
+        let ctx = PublishContext::for_session(session_id);
+        let mut pending = Vec::with_capacity(started_runs.len());
+        for run_id in started_runs {
+            pending.push(
+                self.publisher
+                    .build(
+                        ctx.clone(),
+                        EventKind::RunAborted(RunAborted {
+                            run_id,
+                            reason,
+                            message: Some(message.clone()),
+                        }),
+                    )
+                    .await
+                    .map_err(|error| {
+                        DbErr::Custom(format!("build run reconciliation event failed: {error}"))
+                    })?,
+            );
+        }
+        self.publisher
+            .publish_batch(pending)
+            .await
+            .map_err(|error| {
+                DbErr::Custom(format!("publish run reconciliation failed: {error}"))
+            })?;
+        Ok(())
     }
 
     pub(crate) async fn list_projected_messages(
@@ -436,42 +487,50 @@ impl SessionHistoryStore {
     /// `RunStarted` that lacks a matching `RunCompleted` / `RunAborted` in
     /// `events`. Returns the freshly published events so the caller can fold
     /// them into the view in one pass.
-    async fn abort_hanging_runs(
+    async fn abort_hanging_lifecycles(
         &self,
         session_id: i64,
         events: &[DomainEvent],
     ) -> Result<Vec<DomainEvent>, DbErr> {
-        use std::collections::HashSet;
-        let mut started: HashSet<RunId> = HashSet::new();
-        for event in events {
-            match &event.kind {
-                EventKind::RunStarted(RunStarted { run_id, .. }) => {
-                    started.insert(*run_id);
-                }
-                EventKind::RunCompleted(payload) => {
-                    started.remove(&payload.run_id);
-                }
-                EventKind::RunAborted(payload) => {
-                    started.remove(&payload.run_id);
-                }
-                _ => {}
-            }
-        }
-        if started.is_empty() {
+        let (started_runs, started_executions) = unmatched_lifecycles(events);
+        if started_runs.is_empty() && started_executions.is_empty() {
             return Ok(Vec::new());
         }
         let ctx = PublishContext::for_session(session_id);
-        let pending: Vec<DomainEvent> = started
-            .into_iter()
-            .map(|run_id| {
-                let kind = EventKind::RunAborted(RunAborted {
-                    run_id,
-                    reason: RunAbortReason::ProcessRestart,
-                    message: Some("process restart detected on session load".to_string()),
-                });
-                self.publisher.build(ctx.clone(), kind)
-            })
-            .collect();
+        let mut pending: Vec<DomainEvent> =
+            Vec::with_capacity(started_runs.len() + started_executions.len());
+        for run_id in started_runs {
+            let kind = EventKind::RunAborted(RunAborted {
+                run_id,
+                reason: RunAbortReason::ProcessRestart,
+                message: Some("process restart detected on session load".to_string()),
+            });
+            pending.push(
+                self.publisher
+                    .build(ctx.clone(), kind)
+                    .await
+                    .map_err(|err| DbErr::Custom(format!("build abort event failed: {err}")))?,
+            );
+        }
+        for execution_id in started_executions {
+            let kind = EventKind::ExecutionFinished(ExecutionFinishedEvent {
+                session_id,
+                execution_id,
+                outcome: ExecutionOutcome::Failed {
+                    failure_kind: ExecutionFailureKind::ProcessRestart,
+                    message: "process restart interrupted execution".to_string(),
+                },
+                ts_ms: Utc::now().timestamp_millis(),
+            });
+            pending.push(
+                self.publisher
+                    .build(ctx.clone(), kind)
+                    .await
+                    .map_err(|err| {
+                        DbErr::Custom(format!("build execution recovery event failed: {err}"))
+                    })?,
+            );
+        }
         self.publisher
             .publish_batch(pending)
             .await
@@ -490,17 +549,30 @@ impl SessionHistoryStore {
             return Ok(Vec::new());
         }
         let ctx = PublishContext::for_session(session_id);
-        let built: Vec<DomainEvent> = kinds
-            .into_iter()
-            .map(|kind| self.publisher.build(ctx.clone(), kind))
-            .collect();
+        let mut built: Vec<DomainEvent> = Vec::with_capacity(kinds.len());
+        for kind in kinds {
+            built.push(
+                self.publisher
+                    .build(ctx.clone(), kind)
+                    .await
+                    .map_err(|err| DbErr::Custom(format!("build history event failed: {err}")))?,
+            );
+        }
         let built = self
             .publisher
-            .publish_batch(built)
+            .append_batch_silent(built)
             .await
-            .map_err(|err| DbErr::Custom(format!("publish history batch failed: {err}")))?;
-        self.apply_projection_events(session_id, built.as_slice())
-            .await?;
+            .map_err(|err| DbErr::Custom(format!("persist history batch failed: {err}")))?;
+        self.ensure_projection_current(session_id).await?;
+        for event in &built {
+            self.publisher
+                .bus()
+                .publish(event.clone())
+                .await
+                .map_err(|error| {
+                    DbErr::Custom(format!("broadcast projected history event failed: {error}"))
+                })?;
+        }
         Ok(built)
     }
 
@@ -517,42 +589,37 @@ impl SessionHistoryStore {
             return Ok(Vec::new());
         }
         let ctx = PublishContext::for_session(session_id);
-        let built: Vec<DomainEvent> = kinds
-            .into_iter()
-            .map(|kind| self.publisher.build(ctx.clone(), kind))
-            .collect();
+        let mut built: Vec<DomainEvent> = Vec::with_capacity(kinds.len());
+        for kind in kinds {
+            built.push(
+                self.publisher
+                    .build(ctx.clone(), kind)
+                    .await
+                    .map_err(|err| DbErr::Custom(format!("build history event failed: {err}")))?,
+            );
+        }
         let built = self
             .publisher
             .append_batch_silent(built)
             .await
             .map_err(|err| DbErr::Custom(format!("append silent history batch failed: {err}")))?;
-        self.apply_projection_events(session_id, built.as_slice())
-            .await?;
+        self.ensure_projection_current(session_id).await?;
         Ok(built)
     }
 
     async fn ensure_projection_current(&self, session_id: i64) -> Result<i64, DbErr> {
-        let filter = EventFilter::new(Scope::Session { session_id });
         let projected_seq = self
             .load_projection_state(session_id)
             .await?
             .map(|row| row.last_seq_global)
             .unwrap_or(0);
-        let stale = !self
-            .publisher
-            .store()
-            .range(
-                &filter,
-                StoreRange {
-                    after_seq_global: projected_seq,
-                    limit: 1,
-                },
-            )
-            .await
-            .map_err(|err| DbErr::Custom(format!("event store range failed: {err}")))?
-            .is_empty();
-        if stale {
-            self.rebuild_projection_from_history(session_id).await?;
+        let pending = self
+            .list_session_events_after(session_id, projected_seq)
+            .await?;
+        if !pending.is_empty() {
+            let txn = self.db.begin().await?;
+            apply_projection_events_on_connection(&txn, session_id, pending.as_slice()).await?;
+            txn.commit().await?;
         }
         Ok(self
             .load_projection_state(session_id)
@@ -562,11 +629,7 @@ impl SessionHistoryStore {
     }
 
     async fn rebuild_projection_from_history(&self, session_id: i64) -> Result<(), DbErr> {
-        let mut events = self.list_session_events(session_id).await?;
-        let aborted = self.abort_hanging_runs(session_id, &events).await?;
-        if !aborted.is_empty() {
-            events.extend(aborted);
-        }
+        let events = self.list_session_events(session_id).await?;
 
         let txn = self.db.begin().await?;
         clear_projection_for_session(&txn, session_id).await?;
@@ -574,14 +637,37 @@ impl SessionHistoryStore {
         txn.commit().await?;
         Ok(())
     }
+}
 
-    async fn apply_projection_events(
-        &self,
-        session_id: i64,
-        events: &[DomainEvent],
-    ) -> Result<(), DbErr> {
-        apply_projection_events_on_connection(&self.db, session_id, events).await
+fn unmatched_lifecycles(
+    events: &[DomainEvent],
+) -> (
+    std::collections::BTreeSet<RunId>,
+    std::collections::BTreeSet<crate::session::ExecutionId>,
+) {
+    let mut started_runs = std::collections::BTreeSet::new();
+    let mut started_executions = std::collections::BTreeSet::new();
+    for event in events {
+        match &event.kind {
+            EventKind::ExecutionStarted(payload) => {
+                started_executions.insert(payload.execution_id);
+            }
+            EventKind::ExecutionFinished(payload) => {
+                started_executions.remove(&payload.execution_id);
+            }
+            EventKind::RunStarted(RunStarted { run_id, .. }) => {
+                started_runs.insert(*run_id);
+            }
+            EventKind::RunCompleted(payload) => {
+                started_runs.remove(&payload.run_id);
+            }
+            EventKind::RunAborted(payload) => {
+                started_runs.remove(&payload.run_id);
+            }
+            _ => {}
+        }
     }
+    (started_runs, started_executions)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -890,120 +976,16 @@ async fn update_tool_result_projection<C>(
 where
     C: ConnectionTrait,
 {
-    if let Some(part) = payload.part.as_ref() {
-        let mut authoritative_part = part.clone();
-        authoritative_part.message_id = payload.message_id.raw();
-        upsert_part_projection(db, session_id, &authoritative_part).await?;
-        delete_duplicate_operation_parts(
-            db,
-            payload.message_id.raw(),
-            payload.call_id.as_ref(),
-            authoritative_part.id,
-        )
-        .await?;
-        touch_message_projection(
-            db,
-            payload.message_id.raw(),
-            payload.completed_at.timestamp_millis(),
-        )
-        .await?;
-        return Ok(());
-    }
-
-    let existing = activity_part::Entity::find()
-        .filter(activity_part::Column::MessageId.eq(payload.message_id.raw()))
-        .filter(activity_part::Column::OperationId.eq(payload.call_id.as_ref()))
-        .one(db)
-        .await?;
-
-    let output_text = match &payload.output {
-        super::transcript::TranscriptToolOutput::Text { text } => text.clone(),
-        super::transcript::TranscriptToolOutput::Error { message } => message.clone(),
-    };
-    let (part_id, part_index, call_id, invocation, mut lifecycle) = match existing {
-        Some(existing) => {
-            let (call_id, invocation, lifecycle) = match existing.content.as_ref() {
-                Some(crate::message::PartContent::Operation(operation)) => (
-                    operation.call_id,
-                    operation.invocation.clone(),
-                    operation.lifecycle.clone(),
-                ),
-                _ => (
-                    0,
-                    crate::message::ToolInvocation::new(
-                        payload.tool_name.as_str().to_owned(),
-                        crate::message::StructuredObject::default(),
-                    ),
-                    crate::message::TimeRange::default(),
-                ),
-            };
-            (
-                existing.part_id,
-                existing.part_index,
-                call_id,
-                invocation,
-                lifecycle,
-            )
-        }
-        None => (
-            synthetic_tool_call_part_id(payload.message_id.raw(), payload.call_id.as_ref()),
-            count_parts_for_message(db, payload.message_id.raw()).await? as i32,
-            0,
-            crate::message::ToolInvocation::new(
-                payload.tool_name.as_str().to_owned(),
-                crate::message::StructuredObject::default(),
-            ),
-            crate::message::TimeRange::default(),
-        ),
-    };
-    if lifecycle.end_ms.is_none() {
-        lifecycle.end_ms = Some(payload.completed_at.timestamp_millis());
-    }
-
-    let status = match &payload.output {
-        super::transcript::TranscriptToolOutput::Error { .. } => {
-            crate::message::ExecutionStatus::Failed
-        }
-        super::transcript::TranscriptToolOutput::Text { .. } => {
-            crate::message::ExecutionStatus::Completed
-        }
-    };
-    let content = match &payload.output {
-        super::transcript::TranscriptToolOutput::Error { message } => {
-            crate::message::PartContent::Operation(crate::message::OperationPart::failed(
-                call_id,
-                invocation,
-                message.clone(),
-                output_text,
-                Vec::new(),
-                Vec::new(),
-                crate::message::ToolOutput::default(),
-                lifecycle,
-            ))
-        }
-        super::transcript::TranscriptToolOutput::Text { .. } => {
-            crate::message::PartContent::Operation(crate::message::OperationPart::completed(
-                call_id,
-                invocation,
-                output_text,
-                Vec::new(),
-                Vec::new(),
-                crate::message::ToolOutput::default(),
-                lifecycle,
-            ))
-        }
-    };
-
-    let mut part = MessagePart::from_content(
-        part_id,
+    let mut authoritative_part = payload.part.clone();
+    authoritative_part.message_id = payload.message_id.raw();
+    upsert_part_projection(db, session_id, &authoritative_part).await?;
+    delete_duplicate_operation_parts(
+        db,
         payload.message_id.raw(),
-        payload.completed_at,
-        status,
-        content,
-    );
-    part.part_index = part_index;
-    part.operation_id = Some(payload.call_id.as_ref().to_owned());
-    upsert_part_projection(db, session_id, &part).await?;
+        payload.call_id.as_ref(),
+        authoritative_part.id,
+    )
+    .await?;
 
     touch_message_projection(
         db,
@@ -1223,6 +1205,8 @@ where
                     activity_message::Model {
                         message_id: payload.message_id.raw(),
                         session_id,
+                        execution_id: Some(payload.execution_id.to_string()),
+                        run_id: Some(payload.run_id.to_string()),
                         role: Role::User,
                         state: crate::message::ExecutionStatus::Completed,
                         created_at_ms: payload.created_at.timestamp_millis(),
@@ -1252,7 +1236,17 @@ where
                         })?;
                 }
             }
-            EventKind::AssistantMessageCompleted(payload) => {
+            EventKind::AssistantMessageFinished(payload) => {
+                if matches!(
+                    payload.status,
+                    crate::message::ExecutionStatus::Pending
+                        | crate::message::ExecutionStatus::InProgress
+                ) {
+                    return Err(DbErr::Custom(format!(
+                        "assistant terminal event {} has nonterminal status {:?}",
+                        payload.message_id, payload.status
+                    )));
+                }
                 let metadata =
                     source_if_missing(payload.metadata.clone(), MessageSource::Assistant);
                 upsert_message_projection(
@@ -1260,8 +1254,10 @@ where
                     activity_message::Model {
                         message_id: payload.message_id.raw(),
                         session_id,
+                        execution_id: Some(payload.execution_id.to_string()),
+                        run_id: Some(payload.run_id.to_string()),
                         role: Role::Assistant,
-                        state: crate::message::ExecutionStatus::Completed,
+                        state: payload.status,
                         created_at_ms: payload.created_at.timestamp_millis(),
                         updated_at_ms: payload.created_at.timestamp_millis(),
                         metadata,
@@ -1318,6 +1314,8 @@ where
                     activity_message::Model {
                         message_id: payload.message_id.raw(),
                         session_id,
+                        execution_id: None,
+                        run_id: None,
                         role: Role::System,
                         state: crate::message::ExecutionStatus::Completed,
                         created_at_ms: payload.created_at.timestamp_millis(),
@@ -1345,7 +1343,7 @@ where
                         ))
                     })?;
             }
-            EventKind::MessagePartUpdated(update) => {
+            EventKind::MessagePartCheckpointed(update) => {
                 apply_message_part_update_on_connection(db, update)
                     .await
                     .map_err(|err| {
@@ -1354,6 +1352,41 @@ where
                             update.part.id, update.message_id
                         ))
                     })?;
+            }
+            EventKind::RunAborted(payload) => {
+                let status = match payload.reason {
+                    RunAbortReason::UserCancelled => crate::message::ExecutionStatus::Cancelled,
+                    RunAbortReason::ProcessRestart
+                    | RunAbortReason::ProviderError
+                    | RunAbortReason::Internal => crate::message::ExecutionStatus::Failed,
+                };
+                terminalize_open_messages(
+                    db,
+                    session_id,
+                    "run_id",
+                    &payload.run_id.to_string(),
+                    status,
+                )
+                .await?;
+            }
+            EventKind::ExecutionFinished(payload) => {
+                let status = match &payload.outcome {
+                    // A successfully finished execution must not own an open
+                    // message. Fail closed if an upstream bug violated that
+                    // invariant: an inactive UI must never render a spinner.
+                    ExecutionOutcome::Completed | ExecutionOutcome::Failed { .. } => {
+                        crate::message::ExecutionStatus::Failed
+                    }
+                    ExecutionOutcome::Cancelled => crate::message::ExecutionStatus::Cancelled,
+                };
+                terminalize_open_messages(
+                    db,
+                    session_id,
+                    "execution_id",
+                    &payload.execution_id.to_string(),
+                    status,
+                )
+                .await?;
             }
             _ => {}
         }
@@ -1368,7 +1401,7 @@ where
 
 async fn apply_message_part_update_on_connection<C>(
     db: &C,
-    update: &MessagePartUpdatedEvent,
+    update: &MessagePartCheckpointedEvent,
 ) -> Result<(), DbErr>
 where
     C: ConnectionTrait,
@@ -1382,6 +1415,8 @@ where
             let row = activity_message::Model {
                 message_id: update.message_id,
                 session_id: update.session_id,
+                execution_id: update.execution_id.map(|id| id.to_string()),
+                run_id: update.run_id.map(|id| id.to_string()),
                 role: update.message_role,
                 state: update.message_state,
                 created_at_ms: update.message_created_at.timestamp_millis(),
@@ -1400,14 +1435,84 @@ where
         }
     };
 
+    // Checkpoints are observations of mutable streaming state, never commands
+    // that may reopen terminal history. This also makes a delayed checkpoint
+    // harmless if it is delivered after RunAborted/ExecutionFinished.
+    if !message_row.state.can_transition(update.message_state) {
+        return Ok(());
+    }
+    if let Some(existing_part) = activity_part::Entity::find_by_id(update.part.id)
+        .one(db)
+        .await?
+        && !existing_part.status.can_transition(update.part.status)
+    {
+        return Ok(());
+    }
+
     upsert_part_projection(db, update.session_id, &update.part).await?;
 
     let mut active: activity_message::ActiveModel = message_row.into();
+    if let Some(execution_id) = update.execution_id {
+        active.execution_id = ActiveValue::Set(Some(execution_id.to_string()));
+    }
+    if let Some(run_id) = update.run_id {
+        active.run_id = ActiveValue::Set(Some(run_id.to_string()));
+    }
     active.state = ActiveValue::Set(update.message_state);
     active.updated_at_ms = ActiveValue::Set(update.ts_ms);
     active.part_count =
         ActiveValue::Set(count_parts_for_message(db, update.message_id).await? as i64);
     active.update(db).await?;
+    Ok(())
+}
+
+async fn terminalize_open_messages<C>(
+    db: &C,
+    session_id: i64,
+    identity: &str,
+    value: &str,
+    status: crate::message::ExecutionStatus,
+) -> Result<(), DbErr>
+where
+    C: ConnectionTrait,
+{
+    let mut query =
+        activity_message::Entity::find().filter(activity_message::Column::SessionId.eq(session_id));
+    query = match identity {
+        "run_id" => query.filter(activity_message::Column::RunId.eq(value)),
+        "execution_id" => query.filter(activity_message::Column::ExecutionId.eq(value)),
+        _ => {
+            return Err(DbErr::Custom(format!(
+                "unknown message identity: {identity}"
+            )));
+        }
+    };
+    let messages = query.all(db).await?;
+    for message in messages {
+        let message_id = message.message_id;
+        if matches!(
+            message.state,
+            crate::message::ExecutionStatus::Pending | crate::message::ExecutionStatus::InProgress
+        ) {
+            let mut active: activity_message::ActiveModel = message.into();
+            active.state = ActiveValue::Set(status);
+            active.updated_at_ms = ActiveValue::Set(Utc::now().timestamp_millis());
+            active.update(db).await?;
+        }
+
+        // Parts have their own lifecycle. A completed assistant message can
+        // still own an in-flight tool part, so close parts independently of
+        // whether the parent message itself is open.
+        activity_part::Entity::update_many()
+            .col_expr(activity_part::Column::Status, Expr::value(status))
+            .filter(activity_part::Column::MessageId.eq(message_id))
+            .filter(activity_part::Column::Status.is_in([
+                crate::message::ExecutionStatus::Pending,
+                crate::message::ExecutionStatus::InProgress,
+            ]))
+            .exec(db)
+            .await?;
+    }
     Ok(())
 }
 
@@ -1463,4 +1568,155 @@ where
     );
     db.execute(stmt).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{ActiveModelTrait, Database, EntityTrait, Set};
+
+    #[tokio::test]
+    async fn execution_finish_closes_open_artifacts_and_late_checkpoint_cannot_reopen_them() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        crate::db::init_schema(&db).await.expect("schema");
+        let workspace_id = crate::db::crud::workspace::ensure_workspace_id(&db, "/test")
+            .await
+            .expect("workspace");
+        let session = crate::db::crud::session::create_session(&db, workspace_id, None, "test")
+            .await
+            .expect("session");
+        let execution_id = crate::session::ExecutionId::new();
+        let run_id = RunId::new();
+
+        activity_message::ActiveModel {
+            message_id: Set(41),
+            session_id: Set(session.id),
+            execution_id: Set(Some(execution_id.to_string())),
+            run_id: Set(Some(run_id.to_string())),
+            role: Set(Role::Assistant),
+            state: Set(crate::message::ExecutionStatus::InProgress),
+            created_at_ms: Set(1),
+            updated_at_ms: Set(1),
+            metadata: Set(Default::default()),
+            provider_state: Set(None),
+            usage: Set(None),
+            part_count: Set(1),
+            is_hidden: Set(false),
+        }
+        .insert(&db)
+        .await
+        .expect("message");
+        activity_part::ActiveModel {
+            part_id: Set(51),
+            message_id: Set(41),
+            session_id: Set(session.id),
+            part_index: Set(0),
+            status: Set(crate::message::ExecutionStatus::InProgress),
+            kind: Set(crate::message::PartKind::Text),
+            name: Set(None),
+            summary: Set(None),
+            has_detail: Set(false),
+            operation_id: Set(None),
+            created_at_ms: Set(1),
+            content: Set(None),
+        }
+        .insert(&db)
+        .await
+        .expect("part");
+
+        apply_projection_events_on_connection(
+            &db,
+            session.id,
+            &[DomainEvent {
+                meta: crate::event::EventMeta {
+                    id: uuid::Uuid::new_v4(),
+                    seq_global: 1,
+                    seq_session: Some(1),
+                    session_id: Some(session.id),
+                    workspace_id: Some(workspace_id),
+                    created_at: Utc::now(),
+                    causation_id: None,
+                    correlation_id: None,
+                    envelope_schema: crate::event::envelope::ENVELOPE_SCHEMA_VERSION,
+                },
+                kind: EventKind::ExecutionFinished(ExecutionFinishedEvent {
+                    session_id: session.id,
+                    execution_id,
+                    outcome: ExecutionOutcome::Completed,
+                    ts_ms: Utc::now().timestamp_millis(),
+                }),
+            }],
+        )
+        .await
+        .expect("terminalize");
+
+        let terminal_message = activity_message::Entity::find_by_id(41)
+            .one(&db)
+            .await
+            .expect("query terminal message")
+            .expect("message exists");
+        let terminal_part = activity_part::Entity::find_by_id(51)
+            .one(&db)
+            .await
+            .expect("query terminal part")
+            .expect("part exists");
+        assert_eq!(
+            terminal_message.state,
+            crate::message::ExecutionStatus::Failed
+        );
+        assert_eq!(
+            terminal_part.status,
+            crate::message::ExecutionStatus::Failed
+        );
+
+        // Model a terminal assistant whose tool part was closed by the
+        // execution boundary. Parent state alone must not let a delayed part
+        // checkpoint reopen that tool.
+        let mut terminal_message_update: activity_message::ActiveModel = terminal_message.into();
+        terminal_message_update.state = Set(crate::message::ExecutionStatus::Completed);
+        terminal_message_update
+            .update(&db)
+            .await
+            .expect("set completed parent");
+
+        let mut late_part = MessagePart::from_content(
+            51,
+            41,
+            Utc::now(),
+            crate::message::ExecutionStatus::InProgress,
+            crate::message::PartContent::text("late checkpoint"),
+        );
+        late_part.part_index = 0;
+        apply_message_part_update_on_connection(
+            &db,
+            &MessagePartCheckpointedEvent {
+                session_id: session.id,
+                execution_id: Some(execution_id),
+                run_id: Some(run_id),
+                message_id: 41,
+                message_role: Role::Assistant,
+                message_state: crate::message::ExecutionStatus::Completed,
+                message_created_at: Utc::now(),
+                part: late_part,
+                ts_ms: Utc::now().timestamp_millis(),
+            },
+        )
+        .await
+        .expect("ignore stale checkpoint");
+
+        let message = activity_message::Entity::find_by_id(41)
+            .one(&db)
+            .await
+            .expect("query message")
+            .expect("message exists");
+        let part = activity_part::Entity::find_by_id(51)
+            .one(&db)
+            .await
+            .expect("query part")
+            .expect("part exists");
+        assert_eq!(message.state, crate::message::ExecutionStatus::Completed);
+        assert_eq!(part.status, crate::message::ExecutionStatus::Failed);
+    }
 }

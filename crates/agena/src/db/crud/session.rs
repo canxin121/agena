@@ -497,7 +497,7 @@ where
     }
     let kinds = [
         "user_message_appended",
-        "assistant_message_completed",
+        "assistant_message_finished",
         "tool_call_completed",
         "system_notice_appended",
     ];

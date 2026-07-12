@@ -1,21 +1,20 @@
 //! Unified [`EventKind`] enum — the single source of truth for every event
 //! flowing on the agena bus. Variant ordering only matters for serde tag
-//! stability — `kind` strings (snake_case of the variant name) are part of
-//! the wire protocol and must not be renamed without a versioning ceremony
-//! (see [`ALL_KINDS`]).
+//! stability — `kind` strings are a coordinated wire contract shared by core,
+//! API clients, and UIs (see [`ALL_KINDS`]).
 
 use crate::event::filter::{EventKindTag, KindMatcher, KindPersistence};
 use agena_plugin_sdk::PluginKey;
 use serde::{Deserialize, Serialize};
 
 use crate::event::client::{
-    CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, ExecutionFailedEvent,
-    ExecutionStartedEvent, MessagePartDeltaEvent, MessagePartUpdatedEvent, PermissionRepliedEvent,
-    PermissionRequestedEvent, PermissionRuleEvent, StreamErrorEvent,
+    CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, ExecutionFinishedEvent,
+    ExecutionStartedEvent, MessagePartCheckpointedEvent, MessagePartDeltaEvent,
+    PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent, StreamErrorEvent,
 };
 pub type PluginToolRegistryChangedEvent = crate::plugin::sdk::host_api::ToolRegistryChangedEvent;
 use crate::session::history::{
-    AssistantMessageCompleted, RunAborted, RunCompleted, RunStarted, SystemNoticeAppended,
+    AssistantMessageFinished, RunAborted, RunCompleted, RunStarted, SystemNoticeAppended,
     ToolCallCompleted, ToolCallIssued, UserMessageAppended,
 };
 
@@ -25,9 +24,9 @@ use crate::session::history::{
 pub enum EventKind {
     // --- runtime / UI projection ---
     ExecutionStarted(ExecutionStartedEvent),
-    ExecutionFailed(ExecutionFailedEvent),
+    ExecutionFinished(ExecutionFinishedEvent),
     StreamError(StreamErrorEvent),
-    MessagePartUpdated(MessagePartUpdatedEvent),
+    MessagePartCheckpointed(MessagePartCheckpointedEvent),
     MessagePartDelta(MessagePartDeltaEvent),
     CommandBegin(CommandBeginEvent),
     CommandOutputDelta(CommandOutputDeltaEvent),
@@ -43,7 +42,7 @@ pub enum EventKind {
     RunCompleted(RunCompleted),
     RunAborted(RunAborted),
     UserMessageAppended(UserMessageAppended),
-    AssistantMessageCompleted(AssistantMessageCompleted),
+    AssistantMessageFinished(AssistantMessageFinished),
     ToolCallIssued(ToolCallIssued),
     ToolCallCompleted(ToolCallCompleted),
     SystemNoticeAppended(SystemNoticeAppended),
@@ -68,9 +67,9 @@ impl EventKind {
     pub fn tag_str(&self) -> &'static str {
         match self {
             Self::ExecutionStarted(_) => "execution_started",
-            Self::ExecutionFailed(_) => "execution_failed",
+            Self::ExecutionFinished(_) => "execution_finished",
             Self::StreamError(_) => "stream_error",
-            Self::MessagePartUpdated(_) => "message_part_updated",
+            Self::MessagePartCheckpointed(_) => "message_part_checkpointed",
             Self::MessagePartDelta(_) => "message_part_delta",
             Self::CommandBegin(_) => "command_begin",
             Self::CommandOutputDelta(_) => "command_output_delta",
@@ -84,7 +83,7 @@ impl EventKind {
             Self::RunCompleted(_) => "run_completed",
             Self::RunAborted(_) => "run_aborted",
             Self::UserMessageAppended(_) => "user_message_appended",
-            Self::AssistantMessageCompleted(_) => "assistant_message_completed",
+            Self::AssistantMessageFinished(_) => "assistant_message_finished",
             Self::ToolCallIssued(_) => "tool_call_issued",
             Self::ToolCallCompleted(_) => "tool_call_completed",
             Self::SystemNoticeAppended(_) => "system_notice_appended",
@@ -94,14 +93,12 @@ impl EventKind {
     }
 
     /// Returns `true` for events that must be written to the persistent event
-    /// log. UI-only events (streaming deltas, run lifecycle signals) are
+    /// log. UI-only events (streaming deltas and command output) are
     /// ephemeral: they are broadcast in-process but never written to SQLite.
     pub fn is_persistent(&self) -> bool {
         !matches!(
             self,
-            Self::ExecutionStarted(_)
-                | Self::ExecutionFailed(_)
-                | Self::StreamError(_)
+            Self::StreamError(_)
                 | Self::MessagePartDelta(_)
                 | Self::CommandBegin(_)
                 | Self::CommandOutputDelta(_)
@@ -124,8 +121,6 @@ impl KindPersistence for EventKind {
 
 /// Ephemeral UI-only kind tags (never written to the event store).
 pub const UI_KINDS: &[&str] = &[
-    "execution_started",
-    "execution_failed",
     "stream_error",
     "message_part_delta",
     "command_begin",
@@ -135,7 +130,9 @@ pub const UI_KINDS: &[&str] = &[
 
 /// Persistent history kind tags (written to SQLite and replayable).
 pub const HISTORY_KINDS: &[&str] = &[
-    "message_part_updated",
+    "execution_started",
+    "execution_finished",
+    "message_part_checkpointed",
     "permission_requested",
     "permission_replied",
     "permission_rule_created",
@@ -145,7 +142,7 @@ pub const HISTORY_KINDS: &[&str] = &[
     "run_completed",
     "run_aborted",
     "user_message_appended",
-    "assistant_message_completed",
+    "assistant_message_finished",
     "tool_call_issued",
     "tool_call_completed",
     "system_notice_appended",
@@ -157,9 +154,9 @@ pub const HISTORY_KINDS: &[&str] = &[
 /// serde tag ordering in `EventKind`.
 pub const ALL_KINDS: &[&str] = &[
     "execution_started",
-    "execution_failed",
+    "execution_finished",
     "stream_error",
-    "message_part_updated",
+    "message_part_checkpointed",
     "message_part_delta",
     "command_begin",
     "command_output_delta",
@@ -173,7 +170,7 @@ pub const ALL_KINDS: &[&str] = &[
     "run_completed",
     "run_aborted",
     "user_message_appended",
-    "assistant_message_completed",
+    "assistant_message_finished",
     "tool_call_issued",
     "tool_call_completed",
     "system_notice_appended",

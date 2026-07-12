@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    future::Future,
     net::IpAddr,
     sync::{
         Arc, Mutex as StdMutex,
@@ -15,7 +16,7 @@ use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 use crate::AppError;
 use crate::config::ProviderNativeToolsConfig;
 use crate::event::{
-    ErrorInfo, EventKind, ExecutionFailedEvent, ExecutionStartedEvent, PermissionRepliedEvent,
+    EventKind, ExecutionFinishedEvent, ExecutionStartedEvent, PermissionRepliedEvent,
     PermissionRequestedEvent,
 };
 use crate::message::{
@@ -41,21 +42,23 @@ use std::path::PathBuf;
 
 use super::cache::SessionCachePolicy;
 pub use super::cache::SessionCacheStats;
-use super::control::{RunControl, RunControlError, RunRegistry};
 use super::cost::{UsageStats, UsageStatsQuery};
+use super::execution_registry::{ExecutionControl, ExecutionControlError, ExecutionRegistry};
 use super::history::{
     FinishReason, MessageId as HistoryMessageId, RunAbortReason, RunAborted, RunCompleted,
-    RunId as HistoryRunId, RunSource, RunStarted, ToolCallCompleted,
-    ToolCallId as HistoryToolCallId, TranscriptContent, TranscriptToolOutput, UserMessageAppended,
+    RunId as HistoryRunId, RunStarted, ToolCallCompleted, ToolCallId as HistoryToolCallId,
+    TranscriptContent, UserMessageAppended,
 };
 use super::model::{
     PromptCompactionRuntime, PromptCompactionStrategy, ProviderPromptAnchor,
-    SessionExecutionContext, SessionListRequest, SessionPendingTool, SessionStatus, SessionSummary,
+    SessionExecutionContext, SessionListRequest, SessionPendingTool, SessionSummary, WorkflowState,
 };
-use super::processor::SessionRunRequest;
+use super::processor::{SessionRunRequest, SessionRunTermination};
 use super::prompt_window::PromptRequestOptions;
 use super::store::{ReservedMessageIds, SessionCommit, SessionStore};
-use crate::session::{Session, SessionProcessor};
+use crate::session::{
+    ExecutionFailureKind, ExecutionOutcome, ExecutionSource, Session, SessionProcessor,
+};
 
 #[derive(Debug, Clone)]
 pub struct SessionManagerConfig {
@@ -474,7 +477,7 @@ pub struct SessionManager {
     publisher: Arc<crate::event::EventPublisher>,
     bus: Arc<dyn crate::event::EventBus<crate::event::EventKind>>,
     execution: ArcSwap<SessionManagerState>,
-    run_registry: Arc<RunRegistry>,
+    execution_registry: Arc<ExecutionRegistry>,
     reply_session_locks: Arc<Mutex<HashMap<i64, Arc<Mutex<()>>>>>,
     host_user_input_waiters: Arc<Mutex<HashMap<String, PendingHostUserInput>>>,
     host_user_input_sequences: Arc<StdMutex<HashMap<HostUserInputSequenceKey, usize>>>,
@@ -511,13 +514,142 @@ pub enum ToolInvocationAuthorization {
 }
 
 impl SessionManager {
+    async fn begin_execution(
+        &self,
+        session_id: i64,
+        control: &ExecutionControl,
+        source: ExecutionSource,
+    ) -> Result<(), AppError> {
+        let event = EventKind::ExecutionStarted(ExecutionStartedEvent {
+            session_id,
+            execution_id: control.execution_id(),
+            source,
+            ts_ms: Utc::now().timestamp_millis(),
+        });
+        self.store
+            .append_lifecycle_events(session_id, vec![event])
+            .await
+    }
+
+    async fn finish_execution(
+        &self,
+        session_id: i64,
+        control: &ExecutionControl,
+        outcome: ExecutionOutcome,
+    ) -> Result<(), AppError> {
+        let event = EventKind::ExecutionFinished(ExecutionFinishedEvent {
+            session_id,
+            execution_id: control.execution_id(),
+            outcome: outcome.clone(),
+            ts_ms: Utc::now().timestamp_millis(),
+        });
+        self.store
+            .append_lifecycle_events(session_id, vec![event])
+            .await?;
+        control
+            .finish(outcome)
+            .await
+            .map_err(execution_control_to_app_error)
+    }
+
+    fn execution_outcome<T>(
+        control: &ExecutionControl,
+        result: &Result<T, AppError>,
+    ) -> ExecutionOutcome {
+        if control.cancel.is_cancelled() {
+            ExecutionOutcome::Cancelled
+        } else {
+            match result {
+                Ok(_) => ExecutionOutcome::Completed,
+                Err(error) => ExecutionOutcome::Failed {
+                    failure_kind: execution_failure_kind(error),
+                    message: error.to_string(),
+                },
+            }
+        }
+    }
+
+    /// Own one complete execution lifecycle, including panic-safe task joining,
+    /// durable terminal publication, and registry cleanup.
+    ///
+    /// Every public command that can run model or compaction work must enter
+    /// through this boundary. Keeping acquisition and finalization in one
+    /// function prevents early returns from leaking an active registry entry or
+    /// an unmatched `ExecutionStarted` event.
+    async fn execute_registered<T, F, Fut>(
+        &self,
+        session_id: i64,
+        source: ExecutionSource,
+        task_name: &'static str,
+        operation: F,
+    ) -> Result<T, AppError>
+    where
+        T: Send + 'static,
+        F: FnOnce(
+                SessionManager,
+                Arc<ExecutionControl>,
+                mpsc::UnboundedReceiver<Vec<PartContent>>,
+            ) -> Fut
+            + Send
+            + 'static,
+        Fut: Future<Output = Result<T, AppError>> + Send + 'static,
+    {
+        let (control, steer_rx) = self
+            .execution_registry
+            .register(session_id)
+            .await
+            .map_err(execution_control_to_app_error)?;
+        if let Err(error) = self
+            .begin_execution(session_id, control.as_ref(), source)
+            .await
+        {
+            self.execution_registry
+                .unregister_if_matches(session_id, &control)
+                .await;
+            return Err(error);
+        }
+
+        crate::metrics::session_started();
+        let manager = self.background_handle();
+        let task_control = Arc::clone(&control);
+        let result = tokio::task::spawn(operation(manager, task_control, steer_rx))
+            .await
+            .map_err(|error| AppError::Internal(format!("{task_name} task failed: {error}")))
+            .and_then(std::convert::identity);
+        crate::metrics::session_finished();
+
+        let unmatched_run_reason = result
+            .as_ref()
+            .err()
+            .map(run_abort_reason)
+            .unwrap_or(RunAbortReason::Internal);
+        let reconciliation_result = self
+            .store
+            .reconcile_unmatched_runs(
+                session_id,
+                unmatched_run_reason,
+                "execution ended without a terminal run event".to_string(),
+            )
+            .await;
+        let outcome = Self::execution_outcome(control.as_ref(), &result);
+        let terminal_result = self
+            .finish_execution(session_id, control.as_ref(), outcome)
+            .await;
+        self.execution_registry
+            .unregister_if_matches(session_id, &control)
+            .await;
+        terminal_result?;
+        reconciliation_result?;
+        result
+    }
+
     fn background_handle(&self) -> Self {
         Self {
             store: Arc::clone(&self.store),
             publisher: Arc::clone(&self.publisher),
             bus: Arc::clone(&self.bus),
             execution: ArcSwap::from(self.execution.load_full()),
-            run_registry: Arc::clone(&self.run_registry),
+            execution_registry: Arc::clone(&self.execution_registry),
             reply_session_locks: Arc::clone(&self.reply_session_locks),
             host_user_input_waiters: Arc::clone(&self.host_user_input_waiters),
             host_user_input_sequences: Arc::clone(&self.host_user_input_sequences),
@@ -558,7 +690,7 @@ impl SessionManager {
             publisher,
             bus,
             execution: ArcSwap::from_pointee(state),
-            run_registry: Arc::new(RunRegistry::new()),
+            execution_registry: Arc::new(ExecutionRegistry::new()),
             reply_session_locks: Arc::new(Mutex::new(HashMap::new())),
             host_user_input_waiters: Arc::new(Mutex::new(HashMap::new())),
             host_user_input_sequences: Arc::new(StdMutex::new(HashMap::new())),

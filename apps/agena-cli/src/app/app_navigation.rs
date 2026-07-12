@@ -316,10 +316,10 @@ impl App {
                     PendingInteractiveKind::UserInput => SessionActivity::AwaitingUserInput,
                 };
             }
-            if execution.blocked {
+            if execution.workflow_state == agena::session::WorkflowState::Blocked {
                 return SessionActivity::Blocked;
             }
-            if execution.run_state != SessionRunState::Idle {
+            if execution.active_execution.is_some() {
                 return SessionActivity::Running;
             }
         }
@@ -548,8 +548,8 @@ use crate::app::{
     App, ConfirmAction, Editor, Focus, LineageSessionItem, MessageResource, ModelRef, Overlay,
     PendingInteractiveKind, PickerItem, PickerKind, PickerOverlay, PickerValue,
     ProviderPickerPurpose, ProviderSummaryResource, Route, RunActivityTarget, RunOperation,
-    SessionActivity, SessionModelChooserOverlay, SessionResource, SessionRunState,
-    SessionSearchItem, TimelineOverlay, format_timestamp, lineage_relation_tag_key,
+    SessionActivity, SessionModelChooserOverlay, SessionResource, SessionSearchItem,
+    TimelineOverlay, format_timestamp, lineage_relation_tag_key,
     pending_interactive_kind_for_execution, preferred_visible_session_selection,
     rewind_message_preview, session_model_matches_current, ui_text,
 };

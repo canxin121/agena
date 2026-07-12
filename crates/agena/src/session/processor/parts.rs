@@ -20,7 +20,9 @@ impl SessionProcessor {
         part.part_index = assistant.parts.len() as i32;
         assistant.parts.push(part);
         if assistant.state == MessageStatus::Pending {
-            let _ = assistant.transition_state(MessageStatus::InProgress);
+            assistant
+                .transition_state(MessageStatus::InProgress)
+                .map_err(|err| AppError::Internal(err.to_string()))?;
         }
         Ok(())
     }
@@ -45,7 +47,9 @@ impl SessionProcessor {
         part.part_index = assistant.parts.len() as i32;
         assistant.parts.push(part);
         if assistant.state == MessageStatus::Pending {
-            let _ = assistant.transition_state(MessageStatus::InProgress);
+            assistant
+                .transition_state(MessageStatus::InProgress)
+                .map_err(|err| AppError::Internal(err.to_string()))?;
         }
         Ok(())
     }

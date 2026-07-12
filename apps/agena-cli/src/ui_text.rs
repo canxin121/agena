@@ -7,9 +7,7 @@ use agena::{
     },
     permission::{PermissionReply, PermissionReplyKind, PermissionRequest},
 };
-use agena_api::resource::{
-    MessageRole, PendingInteractiveRequest, SessionExecutionResource, SessionRunState,
-};
+use agena_api::resource::{MessageRole, PendingInteractiveRequest, SessionExecutionResource};
 use chrono::{DateTime, Local, Utc};
 
 use crate::{fl_args, i18n::I18n};
@@ -305,11 +303,11 @@ pub fn session_workflow_state_label(i18n: &I18n, execution: &SessionExecutionRes
     match execution.pending_interactive_requests.first() {
         Some(PendingInteractiveRequest::Permission { .. }) => t(i18n, "session-awaiting-approval"),
         Some(PendingInteractiveRequest::UserInput { .. }) => t(i18n, "session-awaiting-user-input"),
-        None if execution.blocked => t(i18n, "session-blocked"),
-        None => match execution.run_state {
-            SessionRunState::AwaitingModel => t(i18n, "session-awaiting-model"),
-            SessionRunState::Idle => t(i18n, "session-idle"),
-        },
+        None if execution.workflow_state == agena::session::WorkflowState::Blocked => {
+            t(i18n, "session-blocked")
+        }
+        None if execution.active_execution.is_some() => t(i18n, "session-running"),
+        None => t(i18n, "session-idle"),
     }
 }
 

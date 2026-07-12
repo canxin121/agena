@@ -651,7 +651,7 @@ function createParameterizedChatCommands(
     {
       id: 'chat.status',
       title: 'Show Session Status',
-      description: 'Summarize the selected session, run state, blocked state, and pending requests.',
+      description: 'Summarize the selected session, execution, workflow, and pending requests.',
       category: 'Chat Actions',
       source: 'chat-action',
       slash: '/status',
@@ -666,7 +666,7 @@ function createParameterizedChatCommands(
         const pending =
           (snapshot.pending_permission_requests?.length || 0) + (snapshot.pending_user_input_requests?.length || 0)
         actions.setLocalCommandNotice(
-          `Session #${snapshot.session.id}: run=${snapshot.run_state} · blocked=${snapshot.blocked ? 'yes' : 'no'} · pending=${pending}.`,
+          `Session #${snapshot.session.id}: execution=${snapshot.active_execution?.phase || 'idle'} · workflow=${snapshot.workflow_state} · pending=${pending}.`,
         )
       },
     },

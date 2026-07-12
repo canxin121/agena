@@ -3,9 +3,10 @@ use super::{
     EventKind, FinishReason, FixedAssistantId, Message, MessageMetadata, MessageSource,
     MessageStatus, ModelRef, PartDeltaField, PathBuf, PendingNativeToolCall, PendingToolCall,
     ProviderRegistry, REASONING_PLACEHOLDER, Role, RunBuffer, SessionProcessor, SessionRunRequest,
-    SessionRunResult, StreamErrorEvent, Utc, canonical_tool_name_from_model_name,
-    complete_part_status, map_finish_reason, message_provider_state_from_provider_metadata,
-    pending_tool_call_stream_key, sync_assistant_completion_event,
+    SessionRunResult, SessionRunTermination, StreamErrorEvent, Utc, cancel_nonterminal_parts,
+    canonical_tool_name_from_model_name, complete_part_status, fail_nonterminal_parts,
+    map_finish_reason, message_provider_state_from_provider_metadata, pending_tool_call_stream_key,
+    sync_assistant_completion_event,
 };
 use futures_util::StreamExt;
 use tracing::Instrument;
@@ -95,11 +96,25 @@ impl SessionProcessor {
             &mut run.completion,
         )
         .await;
-        let stream_result = self
+        if run
+            .cancel
+            .as_ref()
+            .is_some_and(|token| token.is_cancelled())
+        {
+            return Err(AppError::Cancelled);
+        }
+        let provider_request = self
             .provider_registry
             .complete_stream(&run.model, run.completion.clone())
-            .instrument(processor_span.clone())
-            .await;
+            .instrument(processor_span.clone());
+        let stream_result = match run.cancel.as_ref() {
+            Some(cancel) => tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(AppError::Cancelled),
+                result = provider_request => result,
+            },
+            None => provider_request.await,
+        };
         crate::metrics::record_provider_stream();
         crate::metrics::record_provider_call(stream_result.is_ok());
         let mut stream = stream_result?;
@@ -131,7 +146,7 @@ impl SessionProcessor {
         };
 
         let run_id = run.run_id;
-        let mut run_buffer = RunBuffer::new(run_id);
+        let mut run_buffer = RunBuffer::new(run.execution_id, run_id);
         let mut id_provider = FixedAssistantId::new(assistant_message_id);
         run_buffer.begin_assistant(&mut id_provider);
         if let Err(err) = run_buffer.set_metadata(assistant_metadata.clone()) {
@@ -174,7 +189,7 @@ impl SessionProcessor {
                         None => {
                             let part_id = run.part_ids.reserve().await?;
                             self.start_text_part(&mut assistant, part_id, Utc::now())?;
-                            self.emit_part_updated(&run, &assistant, part_id).await?;
+                            self.checkpoint_part(&run, &assistant, part_id).await?;
                             active_text_part = Some(part_id);
                             part_id
                         }
@@ -362,7 +377,7 @@ impl SessionProcessor {
                         None => {
                             let part_id = run.part_ids.reserve().await?;
                             self.start_reasoning_part(&mut assistant, part_id, Utc::now())?;
-                            self.emit_part_updated(&run, &assistant, part_id).await?;
+                            self.checkpoint_part(&run, &assistant, part_id).await?;
                             active_reasoning_part = Some(part_id);
                             part_id
                         }
@@ -396,18 +411,27 @@ impl SessionProcessor {
         // If the cancel token tripped, the loop above broke without an
         // explicit provider error. Surface a synthetic terminal error so
         // the caller knows the run was cancelled rather than completed.
-        if provider_err.is_none()
-            && let Some(token) = cancel.as_ref()
-            && token.is_cancelled()
-        {
-            provider_err = Some(AppError::Internal("run cancelled by user".to_string()));
+        let cancelled = cancel.as_ref().is_some_and(|token| token.is_cancelled());
+        if provider_err.is_none() && cancelled {
+            provider_err = Some(AppError::Cancelled);
         }
 
-        if let Some(part_id) = active_text_part {
-            complete_part_status(&mut assistant, part_id)?;
-        }
-        if let Some(part_id) = active_reasoning_part {
-            complete_part_status(&mut assistant, part_id)?;
+        if provider_err.is_some() {
+            if cancelled {
+                cancel_nonterminal_parts(&mut assistant)?;
+            } else {
+                fail_nonterminal_parts(&mut assistant)?;
+            }
+            run_buffer
+                .discard_incomplete_tool_calls()
+                .map_err(|err| AppError::Internal(err.to_string()))?;
+        } else {
+            if let Some(part_id) = active_text_part {
+                complete_part_status(&mut assistant, part_id)?;
+            }
+            if let Some(part_id) = active_reasoning_part {
+                complete_part_status(&mut assistant, part_id)?;
+            }
         }
 
         if provider_err.is_none()
@@ -419,7 +443,7 @@ impl SessionProcessor {
         {
             let part_id = run.part_ids.reserve().await?;
             self.start_text_part(&mut assistant, part_id, Utc::now())?;
-            self.emit_part_updated(&run, &assistant, part_id).await?;
+            self.checkpoint_part(&run, &assistant, part_id).await?;
             self.append_text_delta(&mut assistant, part_id, reasoning_text.as_str())?;
             run_buffer
                 .push_text_delta(reasoning_text.as_str())
@@ -440,20 +464,39 @@ impl SessionProcessor {
             complete_part_status(&mut assistant, part_id)?;
         }
 
-        self.finalize_pending_tool_calls(&mut run, &mut assistant, &mut run_buffer, pending_calls)
+        if provider_err.is_none() {
+            self.finalize_pending_tool_calls(
+                &mut run,
+                &mut assistant,
+                &mut run_buffer,
+                pending_calls,
+            )
             .await?;
+        }
 
         if let Some(err) = provider_err {
-            assistant.state = MessageStatus::Failed;
+            let terminal_status = if cancelled {
+                MessageStatus::Cancelled
+            } else {
+                MessageStatus::Failed
+            };
+            assistant
+                .transition_state(terminal_status)
+                .map_err(|err| AppError::Internal(err.to_string()))?;
+            run_buffer
+                .set_terminal_status(assistant.state)
+                .map_err(|err| AppError::Internal(err.to_string()))?;
 
-            client_events.push(EventKind::StreamError(StreamErrorEvent {
-                session_id: run.session_id,
-                error: ErrorInfo {
-                    code: "provider_stream_error".to_string(),
-                    message: err.to_string(),
-                },
-                ts_ms: Utc::now().timestamp_millis(),
-            }));
+            if !cancelled {
+                client_events.push(EventKind::StreamError(StreamErrorEvent {
+                    session_id: run.session_id,
+                    error: ErrorInfo {
+                        code: "provider_stream_error".to_string(),
+                        message: err.to_string(),
+                    },
+                    ts_ms: Utc::now().timestamp_millis(),
+                }));
+            }
             // Even on failure the buffer has accumulated state we can still
             // commit; downstream callers may inspect it for diagnostics.
             let mut history_items = run_buffer
@@ -462,14 +505,18 @@ impl SessionProcessor {
                         run.next_message_id.saturating_add(1),
                     ),
                 )
-                .unwrap_or_default();
+                .map_err(|error| AppError::Internal(error.to_string()))?;
             sync_assistant_completion_event(history_items.as_mut_slice(), &assistant);
             return Ok(SessionRunResult {
                 assistant_message_id,
                 state: vec![assistant],
                 client_events,
                 provider_metadata,
-                terminal_error: Some(err),
+                termination: if cancelled {
+                    SessionRunTermination::Cancelled
+                } else {
+                    SessionRunTermination::Failed(err)
+                },
                 history_items,
                 run_id,
             });
@@ -478,9 +525,16 @@ impl SessionProcessor {
         // Successful run: drive terminal state on the message snapshot and
         // reflect the same finish/usage on the run buffer for history.
         if assistant.state == MessageStatus::Pending {
-            let _ = assistant.transition_state(MessageStatus::InProgress);
+            assistant
+                .transition_state(MessageStatus::InProgress)
+                .map_err(|err| AppError::Internal(err.to_string()))?;
         }
-        let _ = assistant.transition_state(MessageStatus::Completed);
+        assistant
+            .transition_state(MessageStatus::Completed)
+            .map_err(|err| AppError::Internal(err.to_string()))?;
+        run_buffer
+            .set_terminal_status(assistant.state)
+            .map_err(|err| AppError::Internal(err.to_string()))?;
         assistant.usage = usage.clone();
         assistant.provider_state = provider_metadata
             .as_ref()
@@ -512,7 +566,7 @@ impl SessionProcessor {
             state: vec![assistant],
             client_events,
             provider_metadata,
-            terminal_error: None,
+            termination: SessionRunTermination::Completed,
             history_items,
             run_id,
         })

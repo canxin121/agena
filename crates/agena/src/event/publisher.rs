@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::Utc;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::event::bus::EventBus;
@@ -16,7 +18,6 @@ use crate::event::sequence::SequenceAllocator;
 pub struct PublishContext {
     pub session_id: Option<i64>,
     pub workspace_id: Option<i64>,
-    pub seq_session: Option<i64>,
     pub causation_id: Option<Uuid>,
     pub correlation_id: Option<Uuid>,
 }
@@ -41,6 +42,7 @@ where
     seq: Arc<SequenceAllocator>,
     store: Arc<dyn EventStore<K>>,
     bus: Arc<dyn EventBus<K>>,
+    session_sequences: Arc<Mutex<HashMap<i64, Arc<Mutex<Option<i64>>>>>>,
 }
 
 impl<K> EventPublisher<K>
@@ -52,7 +54,12 @@ where
         store: Arc<dyn EventStore<K>>,
         bus: Arc<dyn EventBus<K>>,
     ) -> Self {
-        Self { seq, store, bus }
+        Self {
+            seq,
+            store,
+            bus,
+            session_sequences: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     pub fn store(&self) -> &Arc<dyn EventStore<K>> {
@@ -67,14 +74,44 @@ where
         &self.seq
     }
 
-    /// Build an envelope without publishing — useful when callers want to
-    /// inspect the assigned `seq_global` (e.g. for logging) before sending.
-    pub fn build(&self, ctx: PublishContext, kind: K) -> DomainEvent<K> {
-        DomainEvent {
+    /// Build an envelope with both globally and per-session monotonic
+    /// sequences. Session sequence allocation is lazy and resumes from the
+    /// durable store high watermark on first use after process start.
+    pub async fn build(
+        &self,
+        ctx: PublishContext,
+        kind: K,
+    ) -> Result<DomainEvent<K>, EventStoreError> {
+        let seq_session = if let Some(session_id) = ctx.session_id {
+            let allocator = {
+                let mut sequences = self.session_sequences.lock().await;
+                Arc::clone(
+                    sequences
+                        .entry(session_id)
+                        .or_insert_with(|| Arc::new(Mutex::new(None))),
+                )
+            };
+            let mut next = allocator.lock().await;
+            let allocated = match *next {
+                Some(next) => next,
+                None => self
+                    .store
+                    .session_high_watermark(session_id)
+                    .await?
+                    .unwrap_or(0)
+                    .saturating_add(1)
+                    .max(1),
+            };
+            *next = Some(allocated.saturating_add(1));
+            Some(allocated)
+        } else {
+            None
+        };
+        Ok(DomainEvent {
             meta: EventMeta {
                 id: Uuid::new_v4(),
                 seq_global: self.seq.next(),
-                seq_session: ctx.seq_session,
+                seq_session,
                 session_id: ctx.session_id,
                 workspace_id: ctx.workspace_id,
                 created_at: Utc::now(),
@@ -83,7 +120,7 @@ where
                 envelope_schema: ENVELOPE_SCHEMA_VERSION,
             },
             kind,
-        }
+        })
     }
 
     fn resequence_events(&self, events: &[DomainEvent<K>]) -> Vec<DomainEvent<K>> {
@@ -136,7 +173,7 @@ where
         ctx: PublishContext,
         kind: K,
     ) -> Result<DomainEvent<K>, PublishError> {
-        let event = self.build(ctx, kind);
+        let event = self.build(ctx, kind).await?;
         self.publish_built(event).await
     }
 
@@ -194,6 +231,51 @@ where
             seq: self.seq.clone(),
             store: self.store.clone(),
             bus: self.bus.clone(),
+            session_sequences: Arc::clone(&self.session_sequences),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::{EventKind, ExecutionStartedEvent, InProcessEventBus};
+    use crate::session::{ExecutionId, ExecutionSource};
+    use sea_orm::Database;
+
+    #[tokio::test]
+    async fn concurrent_builds_allocate_unique_ordered_session_sequences() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        crate::db::init_schema(&db).await.expect("schema");
+        let store: Arc<dyn EventStore<EventKind>> =
+            Arc::new(crate::db::SeaEventStore::<EventKind>::new(Arc::new(db)));
+        let bus: Arc<dyn EventBus<EventKind>> = Arc::new(InProcessEventBus::new(8));
+        let publisher = Arc::new(EventPublisher::new(
+            Arc::new(SequenceAllocator::new()),
+            store,
+            bus,
+        ));
+        let event = || {
+            EventKind::ExecutionStarted(ExecutionStartedEvent {
+                session_id: 7,
+                execution_id: ExecutionId::new(),
+                source: ExecutionSource::User,
+                ts_ms: 1,
+            })
+        };
+
+        let (first, second) = tokio::join!(
+            publisher.build(PublishContext::for_session(7), event()),
+            publisher.build(PublishContext::for_session(7), event()),
+        );
+        let mut sequences = [
+            first.expect("first event").meta.seq_session,
+            second.expect("second event").meta.seq_session,
+        ];
+        sequences.sort();
+
+        assert_eq!(sequences, [Some(1), Some(2)]);
     }
 }

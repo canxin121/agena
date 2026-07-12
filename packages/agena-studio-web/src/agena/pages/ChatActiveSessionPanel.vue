@@ -43,8 +43,8 @@ const activeGoal = computed(
       <div class="muted">workspace={{ props.selectedWorkspace?.path || 'unknown' }}</div>
       <div class="muted">{{ props.sessionLineageLabel }}</div>
       <div class="muted">
-        run_state={{ props.sessionState?.run_state || 'unknown' }}, blocked={{
-          props.sessionState?.blocked ? 'true' : 'false'
+        workflow={{ props.sessionState?.workflow_state || 'unknown' }}, execution={{
+          props.sessionState?.active_execution?.phase || 'inactive'
         }}
       </div>
       <div v-if="activeGoal" class="goal-summary">
@@ -85,7 +85,8 @@ const activeGoal = computed(
           :disabled="
             !props.selectedSessionId ||
             props.continuing ||
-            (props.sessionState?.run_state === 'idle' && !props.sessionState?.blocked)
+            Boolean(props.sessionState?.active_execution) ||
+            props.sessionState?.workflow_state !== 'blocked'
           "
           @click="props.continueCurrentSession"
         >
@@ -93,7 +94,7 @@ const activeGoal = computed(
         </button>
         <button
           class="button danger"
-          :disabled="!props.selectedSessionId || props.continuing || props.sessionState?.run_state === 'idle'"
+          :disabled="!props.selectedSessionId || props.continuing || !props.sessionState?.active_execution"
           @click="props.cancelCurrentSessionRun"
         >
           {{ props.continuing ? 'Cancelling…' : 'Cancel Run' }}

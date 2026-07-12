@@ -8,12 +8,9 @@ pub(crate) struct GlobalIdAllocator {
 }
 
 /// Wire-format version for [`SessionExportMeta`]. Bumped whenever the meta
-/// shape or replay semantics change; old bundles whose `schema` is outside
-/// `[SESSION_EXPORT_SCHEMA_MIN..=SESSION_EXPORT_SCHEMA]` are rejected.
-pub(crate) const SESSION_EXPORT_SCHEMA: u32 = 2;
-/// Lowest schema we still accept on import. Bump in lockstep with
-/// [`SESSION_EXPORT_SCHEMA`] when a breaking change lands.
-pub(crate) const SESSION_EXPORT_SCHEMA_MIN: u32 = 1;
+/// shape or replay semantics change. Schema 3 is the first export format with
+/// typed execution identities and terminal assistant-message events.
+pub(crate) const SESSION_EXPORT_SCHEMA: u32 = 3;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct SessionExportMeta {

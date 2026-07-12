@@ -18,15 +18,36 @@ use crate::{
 };
 
 use super::{
-    GlobalIdAllocator, SESSION_EXPORT_SCHEMA, SESSION_EXPORT_SCHEMA_MIN, Session, SessionCache,
-    SessionCachePolicy, SessionExportMeta, SessionHistoryStore, SessionListRequest, SessionStore,
-    SessionSummary, access_cache, event_run_id_for_message, event_targets_message,
-    nonempty_or_unknown, rewrite_event_message_ids, rewrite_event_part_ids,
-    rewrite_event_session_ids, session_from_model, session_from_model_db, timestamp_millis_to_utc,
-    visit_event_message_ids, visit_event_part_ids,
+    GlobalIdAllocator, SESSION_EXPORT_SCHEMA, Session, SessionCache, SessionCachePolicy,
+    SessionExportMeta, SessionHistoryStore, SessionListRequest, SessionStore, SessionSummary,
+    access_cache, event_run_id_for_message, event_targets_message, nonempty_or_unknown,
+    rewrite_event_message_ids, rewrite_event_part_ids, rewrite_event_session_ids,
+    session_from_model, session_from_model_db, timestamp_millis_to_utc, visit_event_message_ids,
+    visit_event_part_ids,
 };
 
 impl SessionStore {
+    pub(crate) async fn reconcile_interrupted_lifecycles(
+        &self,
+        session_id: i64,
+    ) -> Result<(), AppError> {
+        self.history
+            .reconcile_interrupted_lifecycles(session_id)
+            .await
+            .map_err(AppError::from)
+    }
+
+    pub(crate) async fn reconcile_unmatched_runs(
+        &self,
+        session_id: i64,
+        reason: crate::session::history::RunAbortReason,
+        message: String,
+    ) -> Result<(), AppError> {
+        self.history
+            .reconcile_unmatched_runs(session_id, reason, message)
+            .await
+            .map_err(AppError::from)
+    }
     pub(crate) fn new(
         db: DatabaseConnection,
         workspace_root: &Path,
@@ -712,9 +733,9 @@ impl SessionStore {
             .ok_or_else(|| AppError::Internal("import bundle is empty".to_string()))?;
         let meta: SessionExportMeta = serde_json::from_str(header)
             .map_err(|err| AppError::Internal(format!("decode export meta: {err}")))?;
-        if meta.schema < SESSION_EXPORT_SCHEMA_MIN || meta.schema > SESSION_EXPORT_SCHEMA {
+        if meta.schema != SESSION_EXPORT_SCHEMA {
             return Err(AppError::Internal(format!(
-                "unsupported export schema: {} (supported {SESSION_EXPORT_SCHEMA_MIN}..={SESSION_EXPORT_SCHEMA})",
+                "unsupported export schema: {} (expected {SESSION_EXPORT_SCHEMA})",
                 meta.schema
             )));
         }

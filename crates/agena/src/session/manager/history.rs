@@ -1,4 +1,4 @@
-use super::{RunControlError, run_control_to_app_error};
+use super::{ExecutionControlError, execution_control_to_app_error};
 use crate::{
     AppError,
     message::{Message, MessageStatus, PartContent},
@@ -30,33 +30,33 @@ impl SessionManager {
             .await
     }
 
-    /// External entry: cancel the in-flight run for `session_id`.
+    /// External entry: cancel the active execution for `session_id`.
     ///
     /// Cancellation is idempotent: a task can complete between the UI
     /// deciding to cancel and this call reaching the manager, so the absence
     /// of a control is a successful no-op rather than an error.
-    pub async fn cancel_active_run(&self, session_id: i64) -> Result<(), AppError> {
-        let result = self.run_registry.cancel(session_id).await;
+    pub async fn cancel_active_execution(&self, session_id: i64) -> Result<(), AppError> {
+        let result = self.execution_registry.cancel(session_id).await;
         // A plugin-hosted tool can be suspended in a host permission or
         // user-input callback. A cancellation token is only observed between
         // run-loop iterations, so release those one-shot waiters as well;
         // otherwise Ctrl+C leaves the executor blocked forever.
         self.cancel_host_interactive_waiters(session_id).await;
-        cancel_active_run_result(result)
+        cancel_active_execution_result(result)
     }
 
-    /// External entry: inject `parts` as a steer message into the in-flight
-    /// run for `session_id`. Returns `Err` if no run is active or the
+    /// External entry: inject `parts` as a steer message into the active
+    /// execution for `session_id`. Returns `Err` if no execution is active or the
     /// channel was closed.
     pub async fn steer_input(
         &self,
         session_id: i64,
         parts: Vec<PartContent>,
     ) -> Result<(), AppError> {
-        self.run_registry
+        self.execution_registry
             .steer(session_id, parts)
             .await
-            .map_err(run_control_to_app_error)
+            .map_err(execution_control_to_app_error)
     }
 
     pub async fn rewind_session(&self, request: SessionRewindRequest) -> Result<Session, AppError> {
@@ -142,10 +142,12 @@ impl SessionManager {
     }
 }
 
-fn cancel_active_run_result(result: Result<(), RunControlError>) -> Result<(), AppError> {
+fn cancel_active_execution_result(
+    result: Result<(), ExecutionControlError>,
+) -> Result<(), AppError> {
     match result {
-        Ok(()) | Err(RunControlError::NoActiveRun(_)) => Ok(()),
-        Err(error) => Err(run_control_to_app_error(error)),
+        Ok(()) | Err(ExecutionControlError::NoActiveExecution(_)) => Ok(()),
+        Err(error) => Err(execution_control_to_app_error(error)),
     }
 }
 
@@ -156,14 +158,17 @@ fn is_completed_user_rewind_target(message: &Message) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        Message, MessageStatus, Role, RunControlError, cancel_active_run_result,
+        ExecutionControlError, Message, MessageStatus, Role, cancel_active_execution_result,
         is_completed_user_rewind_target,
     };
 
     #[test]
     fn cancelling_a_completed_run_is_a_successful_no_op() {
-        assert!(cancel_active_run_result(Err(RunControlError::NoActiveRun(42))).is_ok());
-        assert!(cancel_active_run_result(Err(RunControlError::SteerClosed)).is_err());
+        assert!(
+            cancel_active_execution_result(Err(ExecutionControlError::NoActiveExecution(42)))
+                .is_ok()
+        );
+        assert!(cancel_active_execution_result(Err(ExecutionControlError::SteerClosed)).is_err());
     }
 
     #[test]

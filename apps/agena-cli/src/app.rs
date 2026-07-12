@@ -36,7 +36,7 @@ use agena_api::{
         MessageResource, MessageRole, PendingInteractiveRequest, PermissionRuleResource,
         ProviderAdapterModelsResource, ProviderAdapterModelsResponse, ProviderSummaryResource,
         RunOptions, SessionExecutionContextResource, SessionExecutionResource, SessionResource,
-        SessionRunState, SessionUsageResource,
+        SessionUsageResource,
     },
 };
 use anyhow::Result;

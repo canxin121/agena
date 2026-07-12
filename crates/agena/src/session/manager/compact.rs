@@ -1,6 +1,6 @@
 use super::{
-    AppError, Arc, Message, MessageMetadata, MessageSource, MessageStatus, PartContent,
-    PromptCompactionRuntime, PromptCompactionStrategy, Role, RunControl, RunSource,
+    AppError, Arc, ExecutionControl, ExecutionSource, Message, MessageMetadata, MessageSource,
+    MessageStatus, PartContent, PromptCompactionRuntime, PromptCompactionStrategy, Role,
     SessionExecutionContext, SessionExecutionRequest, SessionManager, SessionManagerState,
     SessionRunOptions, Utc, build_message,
 };
@@ -26,29 +26,21 @@ impl SessionManager {
         request: SessionExecutionRequest,
     ) -> Result<Session, AppError> {
         let session_id = request.session_id;
-        let (control, _steer_rx) = self.run_registry.register(session_id).await;
-        crate::metrics::session_started();
-        let manager = self.background_handle();
-        let task_control = control.clone();
-        let result = tokio::task::spawn(async move {
-            manager
-                .compact_session_inner(request, task_control.clone())
-                .await
-        })
+        self.execute_registered(
+            session_id,
+            ExecutionSource::Compaction,
+            "compaction execution",
+            move |manager, control, _steer_rx| async move {
+                manager.compact_session_inner(request, control).await
+            },
+        )
         .await
-        .map_err(|err| AppError::Internal(format!("compact task failed: {err}")))
-        .and_then(std::convert::identity);
-        crate::metrics::session_finished();
-        self.run_registry
-            .unregister_if_matches(session_id, &control)
-            .await;
-        result
     }
 
     async fn compact_session_inner(
         &self,
         mut request: SessionExecutionRequest,
-        control: Arc<RunControl>,
+        control: Arc<ExecutionControl>,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
         let mut session = self
@@ -118,7 +110,7 @@ impl SessionManager {
         session: Session,
         options: &SessionRunOptions,
         state: Arc<SessionManagerState>,
-        control: Arc<RunControl>,
+        control: Arc<ExecutionControl>,
     ) -> Result<Session, AppError> {
         if session.messages.is_empty() {
             return Ok(session);
@@ -219,7 +211,7 @@ impl SessionManager {
         tail_start: Option<i64>,
         compacted_at: Option<i64>,
         state: Arc<SessionManagerState>,
-        control: Arc<RunControl>,
+        control: Arc<ExecutionControl>,
     ) -> Result<Session, AppError> {
         options.agent_profile = Some(COMPACTION_AGENT.to_string());
         session = self
@@ -261,7 +253,7 @@ impl SessionManager {
         let run_result = Box::pin(self.run_model_turn(
             session,
             &options,
-            RunSource::Compaction,
+            ExecutionSource::Compaction,
             state.clone(),
             control,
         ))

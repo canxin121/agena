@@ -22,7 +22,7 @@ use ratex_parser::parser::parse;
 use ratex_render::{RenderOptions, render_to_png};
 use ratex_types::{color::Color, math_style::MathStyle};
 use regex::Regex;
-use rust_latex_parser::{EqNode, parse_equation};
+use rust_latex_parser::{EqNode, MatrixKind, parse_equation};
 
 const MAX_FORMULA_BYTES: usize = 16 * 1024;
 const MAX_MARKDOWN_IMAGE_BYTES: usize = 20 * 1024 * 1024;
@@ -690,10 +690,17 @@ fn normalize_unicode_math_ast(node: EqNode) -> EqNode {
                 })
                 .collect(),
         },
-        EqNode::Binom(top, bottom) => EqNode::Binom(
-            Box::new(normalize_unicode_math_ast(*top)),
-            Box::new(normalize_unicode_math_ast(*bottom)),
-        ),
+        // term-maths 1.0 gives Binom's two-row body and its delimiters
+        // different baselines, which shifts the bottom argument outside the
+        // parentheses. A one-column parenthesized matrix has the same visual
+        // semantics and keeps every row on the same baseline.
+        EqNode::Binom(top, bottom) => EqNode::Matrix {
+            kind: MatrixKind::Paren,
+            rows: vec![
+                vec![normalize_unicode_math_ast(*top)],
+                vec![normalize_unicode_math_ast(*bottom)],
+            ],
+        },
         EqNode::Brace {
             content,
             label,
@@ -980,6 +987,29 @@ mod tests {
                 "raw command leaked for {command}:\n{rendered}"
             );
         }
+    }
+
+    #[test]
+    fn unicode_fallback_keeps_binomial_arguments_inside_parentheses() {
+        let lines = unicode_formula(r"\binom{n}{k} = \frac{n!}{k!(n-k)!}");
+        let rendered = lines.join("\n");
+        let binomial_rows = lines
+            .iter()
+            .filter(|line| line.contains('n') || line.contains('k'))
+            .take(2)
+            .collect::<Vec<_>>();
+
+        assert_eq!(binomial_rows.len(), 2, "missing binomial rows:\n{rendered}");
+        assert!(
+            binomial_rows.iter().all(|line| {
+                let left = line.find(['⎛', '⎝']);
+                let value = line.find(['n', 'k']);
+                let right = line.find(['⎞', '⎠']);
+                matches!((left, value, right), (Some(left), Some(value), Some(right)) if left < value && value < right)
+            }),
+            "both binomial arguments must stay inside the parentheses:\n{rendered}"
+        );
+        assert!(rendered.contains('─'), "fraction bar missing:\n{rendered}");
     }
 
     #[test]

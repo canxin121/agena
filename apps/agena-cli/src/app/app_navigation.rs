@@ -304,24 +304,68 @@ impl App {
         }
     }
 
-    pub(in crate::app) fn current_transcript_has_active_run(&self) -> bool {
-        self.transcript.submitting
-            || self.transcript.execution.as_ref().is_some_and(|execution| {
-                execution.run_state != SessionRunState::Idle
-                    && pending_interactive_kind_for_execution(execution).is_none()
-            })
+    pub(in crate::app) fn begin_run_operation(
+        &mut self,
+        target: RunActivityTarget,
+        operation: RunOperation,
+    ) {
+        self.run_activity.begin(target, operation);
+    }
+
+    pub(in crate::app) fn finish_run_operation(
+        &mut self,
+        target: RunActivityTarget,
+        operation: RunOperation,
+    ) {
+        self.run_activity.finish(target, operation);
+    }
+
+    pub(in crate::app) fn session_activity(&self, session_id: i64) -> SessionActivity {
+        if self.transcript.session_id == Some(session_id)
+            && let Some(execution) = self.transcript.execution.as_ref()
+        {
+            if let Some(kind) = pending_interactive_kind_for_execution(execution) {
+                return match kind {
+                    PendingInteractiveKind::Permission => SessionActivity::AwaitingPermission,
+                    PendingInteractiveKind::UserInput => SessionActivity::AwaitingUserInput,
+                };
+            }
+            if execution.blocked {
+                return SessionActivity::Blocked;
+            }
+            if execution.run_state != SessionRunState::Idle {
+                return SessionActivity::Running;
+            }
+        }
+
+        if self
+            .run_activity
+            .is_active(RunActivityTarget::Session(session_id))
+        {
+            SessionActivity::Running
+        } else {
+            SessionActivity::Idle
+        }
+    }
+
+    pub(in crate::app) fn current_session_activity(&self) -> SessionActivity {
+        match self.transcript.session_id {
+            Some(session_id) => self.session_activity(session_id),
+            None if self.run_activity.is_active(RunActivityTarget::NewSession) => {
+                SessionActivity::Running
+            }
+            None => SessionActivity::Idle,
+        }
     }
 
     pub(in crate::app) fn active_run_session_id(&self) -> Option<i64> {
         self.transcript
             .session_id
-            .filter(|_| self.current_transcript_has_active_run())
+            .filter(|session_id| self.session_activity(*session_id).is_running())
     }
 
     pub(in crate::app) fn session_is_busy(&self, session_id: i64) -> bool {
-        self.submitting_session_ids.contains(&session_id)
-            || (self.transcript.session_id == Some(session_id)
-                && self.current_transcript_has_active_run())
+        self.session_activity(session_id).is_busy()
     }
 
     pub(in crate::app) fn current_or_selected_session_title(&self) -> Option<String> {
@@ -516,8 +560,9 @@ impl App {
 }
 use crate::app::{
     App, ConfirmAction, Editor, Focus, LineageSessionItem, MessageResource, ModelRef, Overlay,
-    PickerItem, PickerKind, PickerOverlay, PickerValue, ProviderPickerPurpose,
-    ProviderSummaryResource, Route, SessionModelChooserOverlay, SessionResource, SessionRunState,
+    PendingInteractiveKind, PickerItem, PickerKind, PickerOverlay, PickerValue,
+    ProviderPickerPurpose, ProviderSummaryResource, Route, RunActivityTarget, RunOperation,
+    SessionActivity, SessionModelChooserOverlay, SessionResource, SessionRunState,
     SessionSearchItem, TimelineOverlay, format_timestamp, lineage_relation_tag_key, min,
     pending_interactive_kind_for_execution, preferred_visible_session_selection,
     refresh_search_list_overlay, refresh_search_panels_overlay, rewind_message_preview,

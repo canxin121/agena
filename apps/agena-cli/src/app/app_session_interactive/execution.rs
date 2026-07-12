@@ -3,11 +3,11 @@ impl App {
         let Some(status_line) = self.status_line.as_mut() else {
             return;
         };
-        if status_line.running || now < status_line.next_refresh_at {
+        if status_line.refresh_in_flight || now < status_line.next_refresh_at {
             return;
         }
 
-        status_line.running = true;
+        status_line.refresh_in_flight = true;
         status_line.next_refresh_at = now + status_line.refresh_interval;
         let command = status_line.command.clone();
         let tx = self.tx.clone();
@@ -32,7 +32,7 @@ impl App {
             .as_ref()
             .map(|draft| self.begin_pending_user_message(draft));
         if let Some(draft) = submit_draft.as_ref().cloned() {
-            self.transcript.submitting = true;
+            self.begin_run_operation(RunActivityTarget::NewSession, RunOperation::CreateSession);
             self.transcript.pending_restore_draft = Some(draft.clone());
             self.set_draft_for_slot(self.current_draft_slot(), draft);
             self.persist_draft_store_with_feedback(true);
@@ -87,7 +87,7 @@ impl App {
             self.submit_composer();
             return;
         }
-        if !self.transcript.submitting {
+        if !self.current_session_activity().is_busy() {
             self.restore_composer_draft(draft);
             self.submit_composer();
             return;
@@ -125,7 +125,7 @@ impl App {
             self.submit_composer();
             return;
         }
-        if self.transcript.submitting {
+        if self.current_session_activity().is_busy() {
             self.queue.enqueue(draft);
             self.flash_info(ui_text::t(&self.i18n, "flash-message-queued"));
             return;
@@ -136,7 +136,7 @@ impl App {
 
     pub(in crate::app) fn submit_composer(&mut self) {
         let draft = self.take_composer_draft();
-        if draft.is_empty() || self.transcript.submitting {
+        if draft.is_empty() || self.current_session_activity().is_busy() {
             self.restore_composer_draft(draft);
             return;
         }
@@ -307,7 +307,7 @@ impl App {
 }
 use crate::app::{
     App, AppMessage, ComposerDraft, Instant, PermissionReplayState, PermissionReplyKind,
-    PermissionRequest, PermissionScope, commands, composer_draft_with_text_prefix_stripped,
-    derive_session_title, draft_title_source, permission_request_fingerprint,
-    run_status_line_command, ui_text,
+    PermissionRequest, PermissionScope, RunActivityTarget, RunOperation, commands,
+    composer_draft_with_text_prefix_stripped, derive_session_title, draft_title_source,
+    permission_request_fingerprint, run_status_line_command, ui_text,
 };

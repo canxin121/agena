@@ -177,7 +177,6 @@ pub(crate) struct TranscriptState {
     pub(crate) loading_older: bool,
     pub(crate) refreshing: bool,
     pub(crate) state_loading: bool,
-    pub(crate) submitting: bool,
     pub(crate) pending_restore_draft: Option<ComposerDraft>,
     pub(crate) follow_tail: bool,
     pub(crate) scroll: usize,
@@ -197,6 +196,26 @@ pub(crate) struct PendingUserMessage {
     pub(crate) id: u64,
     pub(crate) text: String,
     pub(crate) confirmed: bool,
+    pub(crate) persisted_message_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionActivity {
+    Idle,
+    Running,
+    AwaitingPermission,
+    AwaitingUserInput,
+    Blocked,
+}
+
+impl SessionActivity {
+    pub(crate) fn is_busy(self) -> bool {
+        self != Self::Idle
+    }
+
+    pub(crate) fn is_running(self) -> bool {
+        self == Self::Running
+    }
 }
 
 #[derive(Debug, Clone, Default)]

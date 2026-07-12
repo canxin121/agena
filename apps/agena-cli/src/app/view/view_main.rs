@@ -164,7 +164,10 @@ impl App {
     }
 
     pub(in crate::app) fn transcript_surface_top_right(&self) -> Vec<String> {
-        vec![self.main_surface_mode_label()]
+        transcript_surface_top_right_parts(
+            self.current_session_activity_indicator(),
+            self.main_surface_mode_label(),
+        )
     }
 
     pub(in crate::app) fn transcript_surface_title(&self) -> String {
@@ -715,10 +718,14 @@ fn transcript_line_is_selected(
     }
 }
 
+fn transcript_surface_top_right_parts(activity: Option<String>, mode: String) -> Vec<String> {
+    activity.into_iter().chain(std::iter::once(mode)).collect()
+}
+
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::transcript_line_is_selected;
+    use super::{transcript_line_is_selected, transcript_surface_top_right_parts};
 
     #[test]
     fn block_selection_does_not_highlight_a_cursor_outside_the_block() {
@@ -727,6 +734,18 @@ mod tests {
         assert!(!transcript_line_is_selected(3, 3, Some(&message_body)));
         assert!(transcript_line_is_selected(4, 3, Some(&message_body)));
         assert!(transcript_line_is_selected(3, 3, None));
+    }
+
+    #[test]
+    fn activity_indicator_is_rendered_immediately_left_of_insert_mode() {
+        assert_eq!(
+            transcript_surface_top_right_parts(Some("⠋".to_string()), "INSERT".to_string()),
+            vec!["⠋", "INSERT"]
+        );
+        assert_eq!(
+            transcript_surface_top_right_parts(None, "INSERT".to_string()),
+            vec!["INSERT"]
+        );
     }
 }
 use super::{

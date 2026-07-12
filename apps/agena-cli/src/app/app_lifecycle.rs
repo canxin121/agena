@@ -88,7 +88,7 @@ impl App {
             prompt_history_path,
             prompt_history_reported_error: None,
             pending_prompt_history_error,
-            submitting_session_ids: HashSet::new(),
+            run_activity: RunActivityTracker::default(),
             next_pending_user_message_id: 1,
             layout: LayoutCache::default(),
             bootstrap_done: false,
@@ -291,9 +291,9 @@ fn tui_plugin_color(color: Option<&agena_plugin_sdk::PluginTuiColor>) -> Option<
 use crate::app::Result;
 use crate::app::{
     App, BTreeSet, Backend, Color, ComposerQueue, DRAFT_PERSIST_INTERVAL_MS, DraftSlot, DraftStore,
-    Duration, Editor, Event, Focus, HashSet, I18n, Instant, LaunchOptions, LayoutCache,
-    PromptHistory, REFRESH_INTERVAL_MS, Route, RunOptionsState, SessionListState, StatusLineState,
-    TerminalRuntime, TranscriptDetailDefaults, TranscriptState, UI_TICK_MS,
+    Duration, Editor, Event, Focus, I18n, Instant, LaunchOptions, LayoutCache, PromptHistory,
+    REFRESH_INTERVAL_MS, Route, RunActivityTracker, RunOptionsState, SessionListState,
+    StatusLineState, TerminalRuntime, TranscriptDetailDefaults, TranscriptState, UI_TICK_MS,
     default_draft_store_path, default_prompt_history_path, interval,
     provider_studio_auth_poll_interval, ui_text, unbounded_channel,
 };

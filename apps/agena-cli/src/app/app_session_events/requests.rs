@@ -208,9 +208,7 @@ impl App {
     ) {
         self.sync_current_draft_slot();
         self.persist_draft_store_with_feedback(true);
-        if self.transcript.session_id == Some(session_id) {
-            self.transcript.submitting = true;
-        }
+        self.begin_run_operation(RunActivityTarget::Session(session_id), RunOperation::Rewind);
 
         let backend = self.backend.clone();
         let tx = self.tx.clone();
@@ -307,6 +305,7 @@ impl App {
                 id,
                 text: draft.text.clone(),
                 confirmed: false,
+                persisted_message_id: None,
             });
         self.transcript.scroll_to_bottom(
             self.layout.transcript_body.width,
@@ -336,9 +335,11 @@ impl App {
         }
         let pending_message_id =
             existing_pending_message_id.unwrap_or_else(|| self.begin_pending_user_message(&draft));
-        self.transcript.submitting = true;
+        self.begin_run_operation(
+            RunActivityTarget::Session(session_id),
+            RunOperation::SubmitMessage,
+        );
         self.transcript.pending_restore_draft = Some(draft.clone());
-        self.submitting_session_ids.insert(session_id);
         self.set_draft_for_slot(DraftSlot::Session(session_id), draft.clone());
         self.persist_draft_store_with_feedback(true);
 
@@ -347,9 +348,11 @@ impl App {
             Err(error) => {
                 self.transcript
                     .remove_pending_user_message(pending_message_id);
-                self.transcript.submitting = false;
                 self.transcript.pending_restore_draft = None;
-                self.submitting_session_ids.remove(&session_id);
+                self.finish_run_operation(
+                    RunActivityTarget::Session(session_id),
+                    RunOperation::SubmitMessage,
+                );
                 self.restore_composer_draft(draft);
                 self.flash_error(error);
                 return;
@@ -373,7 +376,10 @@ impl App {
     }
 
     pub(in crate::app) fn request_continue(&mut self, session_id: i64) {
-        self.transcript.submitting = true;
+        self.begin_run_operation(
+            RunActivityTarget::Session(session_id),
+            RunOperation::Continue,
+        );
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
@@ -387,7 +393,10 @@ impl App {
     }
 
     pub(in crate::app) fn request_compact(&mut self, session_id: i64) {
-        self.transcript.submitting = true;
+        self.begin_run_operation(
+            RunActivityTarget::Session(session_id),
+            RunOperation::Compact,
+        );
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
@@ -430,7 +439,8 @@ impl App {
 
     /// Ask the backend to cancel the in-flight run for `session_id`.
     /// Best-effort: even if the backend hasn't fully wired cancellation,
-    /// we clear the local `submitting` flag so the user regains control.
+    /// the response clears the session's unified local activity state so the
+    /// user regains control.
     pub(in crate::app) fn request_cancel_run(&mut self, session_id: i64) {
         let backend = self.backend.clone();
         let tx = self.tx.clone();
@@ -451,7 +461,10 @@ impl App {
         scope: Option<PermissionScope>,
         label: String,
     ) {
-        self.transcript.submitting = true;
+        self.begin_run_operation(
+            RunActivityTarget::Session(session_id),
+            RunOperation::PermissionReply,
+        );
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
@@ -473,7 +486,10 @@ impl App {
         session_id: i64,
         reply: UserInputReply,
     ) {
-        self.transcript.submitting = true;
+        self.begin_run_operation(
+            RunActivityTarget::Session(session_id),
+            RunOperation::UserInputReply,
+        );
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
@@ -489,5 +505,5 @@ impl App {
 use crate::app::{
     App, AppMessage, ComposerDraft, DraftSlot, Focus, Instant, MESSAGE_PAGE_SIZE, MessageLoadMode,
     PartContent, PendingUserMessage, PermissionReplyKind, PermissionScope, ProviderPickerPurpose,
-    SessionLoadScope, SessionViewMode, UserInputReply, ui_text,
+    RunActivityTarget, RunOperation, SessionLoadScope, SessionViewMode, UserInputReply, ui_text,
 };

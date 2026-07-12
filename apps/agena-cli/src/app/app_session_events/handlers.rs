@@ -5,17 +5,17 @@ impl App {
         label: String,
         result: UiResult<SessionExecutionResource>,
     ) {
+        self.finish_run_operation(
+            RunActivityTarget::Session(session_id),
+            RunOperation::PermissionReply,
+        );
         match result {
             Ok(execution) => {
                 let transcript_is_target = self.transcript.session_id == Some(session_id);
-                if transcript_is_target {
-                    self.transcript.submitting = false;
-                    if self.apply_transcript_execution(execution) {
-                        self.sync_pending_interactive_after_execution(session_id);
-                        self.sync_session_list_selection_to_current_execution();
-                    }
+                if transcript_is_target && self.apply_transcript_execution(execution) {
+                    self.sync_pending_interactive_after_execution(session_id);
+                    self.sync_session_list_selection_to_current_execution();
                 }
-                self.submitting_session_ids.remove(&session_id);
                 if transcript_is_target {
                     self.request_refresh(session_id, true);
                 }
@@ -26,8 +26,6 @@ impl App {
                 ));
             }
             Err(error) => {
-                self.transcript.submitting = false;
-                self.submitting_session_ids.remove(&session_id);
                 self.pending_permission_replay = None;
                 self.flash_error(error);
             }
@@ -39,16 +37,16 @@ impl App {
         session_id: i64,
         result: UiResult<SessionExecutionResource>,
     ) {
+        self.finish_run_operation(
+            RunActivityTarget::Session(session_id),
+            RunOperation::UserInputReply,
+        );
         match result {
             Ok(execution) => {
                 self.handle_session_execution_updated(session_id, execution, true);
                 self.flash_success(ui_text::t(&self.i18n, "flash-user-input-reply-sent"));
             }
-            Err(error) => {
-                self.transcript.submitting = false;
-                self.submitting_session_ids.remove(&session_id);
-                self.flash_error(error);
-            }
+            Err(error) => self.flash_error(error),
         }
     }
 
@@ -643,6 +641,7 @@ impl App {
         target: String,
         result: UiResult<SessionExecutionResource>,
     ) {
+        self.finish_run_operation(RunActivityTarget::Session(session_id), RunOperation::Rewind);
         match result {
             Ok(execution) => {
                 let rewound_session_id = execution.session.id;
@@ -660,7 +659,6 @@ impl App {
                     self.sync_pending_interactive_after_execution(rewound_session_id);
                     self.sync_session_list_selection_to_current_execution();
                 }
-                self.submitting_session_ids.remove(&session_id);
                 self.focus = Focus::Composer;
                 self.request_sessions(false);
                 self.flash_success(self.i18n.text_args(
@@ -669,10 +667,6 @@ impl App {
                 ));
             }
             Err(error) => {
-                if self.transcript.session_id == Some(session_id) {
-                    self.transcript.submitting = false;
-                }
-                self.submitting_session_ids.remove(&session_id);
                 self.flash_error(error);
             }
         }
@@ -682,9 +676,10 @@ use crate::app::{
     AgentDescriptor, App, CurrentLineageState, DomainEvent, DraftSlot, Focus, Instant,
     MessageResource, ModelCatalogListResponse, PaginatedResponse, PickerItem, PickerKind,
     PickerValue, ProviderAdapterModelsResponse, ProviderPickerPurpose, ProviderStudioFocus,
-    ProviderSummaryResource, Route, SelectableListState, SessionExecutionResource, SessionResource,
-    SessionViewMode, UiResult, agent_list_items, build_lineage_session_items, build_timeline_item,
-    i18n_provider_list_detail, is_rewind_target_message, provider_draft_auth_action_message,
+    ProviderSummaryResource, Route, RunActivityTarget, RunOperation, SelectableListState,
+    SessionExecutionResource, SessionResource, SessionViewMode, UiResult, agent_list_items,
+    build_lineage_session_items, build_timeline_item, i18n_provider_list_detail,
+    is_rewind_target_message, provider_draft_auth_action_message,
     provider_draft_auth_error_message, provider_draft_auth_message_is_pending,
     provider_list_create_item, provider_studio_ensure_default_selection, provider_studio_model_key,
     provider_studio_preferred_detail_field_index, provider_studio_provider_rows,

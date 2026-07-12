@@ -265,17 +265,6 @@ pub(in crate::app) fn user_input_overlay_matches_pending_request(
     .is_some_and(|request| request.request_id == overlay.request.request_id)
 }
 
-pub(in crate::app) fn execution_wait_state_key(
-    execution: &SessionExecutionResource,
-) -> Option<&'static str> {
-    match execution.pending_interactive_requests.first() {
-        Some(PendingInteractiveRequest::Permission { .. }) => Some("session-awaiting-approval"),
-        Some(PendingInteractiveRequest::UserInput { .. }) => Some("session-awaiting-user-input"),
-        None if execution.blocked => Some("session-blocked"),
-        None => None,
-    }
-}
-
 pub(in crate::app) fn execution_pending_flash_key(
     execution: &SessionExecutionResource,
 ) -> Option<&'static str> {

@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -331,6 +331,61 @@ pub(super) enum DraftSlot {
     NewSession,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum RunActivityTarget {
+    Session(i64),
+    NewSession,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum RunOperation {
+    CreateSession,
+    SubmitMessage,
+    Continue,
+    Compact,
+    Rewind,
+    PermissionReply,
+    UserInputReply,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct RunActivityTracker {
+    requests: BTreeMap<(RunActivityTarget, RunOperation), usize>,
+}
+
+impl RunActivityTracker {
+    pub(super) fn begin(&mut self, target: RunActivityTarget, operation: RunOperation) {
+        *self.requests.entry((target, operation)).or_default() += 1;
+    }
+
+    pub(super) fn finish(&mut self, target: RunActivityTarget, operation: RunOperation) {
+        let key = (target, operation);
+        let Some(count) = self.requests.get_mut(&key) else {
+            return;
+        };
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            self.requests.remove(&key);
+        }
+    }
+
+    pub(super) fn clear_session(&mut self, session_id: i64) {
+        self.requests.retain(
+            |(target, _), _| !matches!(target, RunActivityTarget::Session(id) if *id == session_id),
+        );
+    }
+
+    pub(super) fn is_active(&self, target: RunActivityTarget) -> bool {
+        self.requests
+            .keys()
+            .any(|(candidate, _)| *candidate == target)
+    }
+
+    pub(super) fn has_operation(&self, target: RunActivityTarget, operation: RunOperation) -> bool {
+        self.requests.contains_key(&(target, operation))
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub(super) struct DraftStore {
     pub(super) drafts: BTreeMap<DraftSlot, ComposerDraft>,
@@ -347,7 +402,7 @@ pub(super) struct StatusLineState {
     pub(super) refresh_interval: Duration,
     pub(super) next_refresh_at: Instant,
     pub(super) text: Option<String>,
-    pub(super) running: bool,
+    pub(super) refresh_in_flight: bool,
 }
 
 impl StatusLineState {
@@ -358,7 +413,7 @@ impl StatusLineState {
             refresh_interval: Duration::from_millis(config.refresh_interval_ms),
             next_refresh_at: Instant::now(),
             text: None,
-            running: false,
+            refresh_in_flight: false,
         })
     }
 }
@@ -401,7 +456,7 @@ pub struct App {
     pub(super) prompt_history_path: PathBuf,
     pub(super) prompt_history_reported_error: Option<String>,
     pub(super) pending_prompt_history_error: Option<String>,
-    pub(super) submitting_session_ids: HashSet<i64>,
+    pub(super) run_activity: RunActivityTracker,
     pub(super) next_pending_user_message_id: u64,
     pub(super) layout: LayoutCache,
     pub(super) bootstrap_done: bool,

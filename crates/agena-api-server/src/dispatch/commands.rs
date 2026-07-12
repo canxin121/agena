@@ -13,9 +13,7 @@ async fn execution_command_result(
     session: &agena::session::Session,
 ) -> Result<CommandResult, ServerError> {
     Ok(CommandResult::Execution(
-        session_execution_resource(state, manager, session)
-            .await?
-            .into(),
+        session_execution_resource(state, manager, session).await?,
     ))
 }
 
@@ -78,7 +76,7 @@ pub async fn dispatch_command(
                 })
                 .await
                 .server()?;
-            Ok(CommandResult::Session(session.into()))
+            Ok(CommandResult::Session(session))
         }
         Command::SubmitMessage(SubmitMessageParams {
             session_id,
@@ -201,7 +199,7 @@ pub async fn dispatch_command(
                 .replace_session(session_id, SessionHierarchyRequest { title, parent_id })
                 .await
                 .server()?;
-            Ok(CommandResult::Session(session.into()))
+            Ok(CommandResult::Session(session))
         }
         Command::DeleteSession(DeleteSessionParams {
             session_id,

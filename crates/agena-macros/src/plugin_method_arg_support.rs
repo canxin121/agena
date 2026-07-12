@@ -172,7 +172,7 @@ pub(crate) fn build_plugin_command_input_plan(
                 PluginCommandInputPlan::Raw { by_ref }
             } else {
                 PluginCommandInputPlan::Typed {
-                    ty: owned_ty,
+                    ty: Box::new(owned_ty),
                     by_ref,
                 }
             }
@@ -246,13 +246,13 @@ pub(crate) fn build_plugin_command_input_plan(
                 &array_field_paths,
             );
             PluginCommandInputPlan::Generated {
-                input_model: PluginGeneratedToolInput {
+                input_model: Box::new(PluginGeneratedToolInput {
                     input_ident: Some(input_ident.clone()),
                     input_fields: fields,
                     input_ty: parse_quote!(#input_ident),
                     spec,
                     docs,
-                },
+                }),
                 input: PluginCallInput::Fields(call_fields),
             }
         }

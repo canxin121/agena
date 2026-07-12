@@ -145,13 +145,11 @@ pub fn preview_text(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_string();
     }
-    let mut count = 0usize;
     let mut end = 0usize;
-    for (idx, ch) in text.char_indices() {
+    for (count, (idx, ch)) in text.char_indices().enumerate() {
         if count == max_chars {
             break;
         }
-        count += 1;
         end = idx + ch.len_utf8();
     }
     format!("{}…", text[..end].trim_end())

@@ -16,7 +16,7 @@ pub use crate::quota::QuotaConfig;
 /// The host only owns transport, policy and lifecycle fields. Plugin-specific
 /// configuration lives in [`ConfiguredPlugin::config`] as JSON and is validated
 /// against the plugin manifest at load time.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct PluginsConfig {
     #[serde(default, skip_serializing_if = "PluginHostConfig::is_default")]
@@ -27,17 +27,7 @@ pub struct PluginsConfig {
     pub list: BTreeMap<String, ConfiguredPlugin>,
 }
 
-impl Default for PluginsConfig {
-    fn default() -> Self {
-        Self {
-            host: PluginHostConfig::default(),
-            policy: PluginPolicyConfig::default(),
-            list: BTreeMap::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct PluginHostConfig {
     pub timeouts: TimeoutsConfig,
@@ -55,24 +45,13 @@ pub struct PluginHostConfig {
     pub trusted_keys: BTreeMap<String, String>,
 }
 
-impl Default for PluginHostConfig {
-    fn default() -> Self {
-        Self {
-            timeouts: TimeoutsConfig::default(),
-            default_quota: QuotaConfig::default(),
-            quotas: BTreeMap::new(),
-            trusted_keys: BTreeMap::new(),
-        }
-    }
-}
-
 impl PluginHostConfig {
     pub fn is_default(&self) -> bool {
         self == &Self::default()
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct PluginPolicyConfig {
     /// Controls how tool descriptions are shown to the model. Compact mode
@@ -83,15 +62,6 @@ pub struct PluginPolicyConfig {
     /// as the web plugin inspector and the TUI plugin workbench.
     #[serde(default, skip_serializing_if = "UiPresentationConfig::is_default")]
     pub ui_presentation: UiPresentationConfig,
-}
-
-impl Default for PluginPolicyConfig {
-    fn default() -> Self {
-        Self {
-            tool_presentation: ToolPresentationConfig::default(),
-            ui_presentation: UiPresentationConfig::default(),
-        }
-    }
 }
 
 impl PluginPolicyConfig {

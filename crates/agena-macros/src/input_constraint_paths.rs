@@ -215,6 +215,8 @@ fn normalize_array_value_pair_constraints(
     }
 }
 
+// Keeping each constraint family explicit prevents accidental cross-family mutation.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn normalize_array_value_nested_path_constraints(
     non_empty: &mut [LitStr],
     non_empty_if_present: &mut [LitStr],
@@ -345,6 +347,8 @@ fn normalize_array_value_metadata(
     }
 }
 
+// Keeping each constraint family explicit prevents accidental cross-family mutation.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn normalize_array_value_constraints(
     trim: &mut [LitStr],
     trim_suffix: &mut [PathStringConstraint],

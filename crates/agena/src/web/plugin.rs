@@ -26,7 +26,7 @@ use crate::plugin::sdk::{HostCapability, Result as SdkResult, ToolInvokeOutput};
 
 pub const WEB_PLUGIN_ID: &str = "agena.web";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct WebConfig {
     pub fetch: WebFetchConfig,
@@ -91,22 +91,12 @@ impl Default for WebFetchCacheConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct WebCrawlConfig {
     pub defaults: WebCrawlDefaultsConfig,
     pub limits: WebCrawlLimitsConfig,
     pub indexing: WebCrawlIndexingConfig,
-}
-
-impl Default for WebCrawlConfig {
-    fn default() -> Self {
-        Self {
-            defaults: WebCrawlDefaultsConfig::default(),
-            limits: WebCrawlLimitsConfig::default(),
-            indexing: WebCrawlIndexingConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -177,18 +167,10 @@ impl Default for WebSearchConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct WebStoreConfig {
     pub retention: WebStoreRetentionConfig,
-}
-
-impl Default for WebStoreConfig {
-    fn default() -> Self {
-        Self {
-            retention: WebStoreRetentionConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -207,23 +189,13 @@ impl Default for WebStoreRetentionConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct WebBrowserConfig {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub executable_path: Option<String>,
     pub wait: WebBrowserWaitConfig,
-}
-
-impl Default for WebBrowserConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            executable_path: None,
-            wait: WebBrowserWaitConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -243,18 +215,6 @@ impl Default for WebBrowserWaitConfig {
             timeout_secs: 10,
             for_selector: None,
             delay_ms: 0,
-        }
-    }
-}
-
-impl Default for WebConfig {
-    fn default() -> Self {
-        Self {
-            fetch: WebFetchConfig::default(),
-            crawl: WebCrawlConfig::default(),
-            search: WebSearchConfig::default(),
-            store: WebStoreConfig::default(),
-            browser: WebBrowserConfig::default(),
         }
     }
 }
@@ -479,6 +439,7 @@ fn default_web_config() -> WebConfig {
     }
 }
 
+#[derive(Default)]
 pub struct WebPlugin {
     state: OnceLock<WebPluginState>,
     workspace_root: OnceLock<PathBuf>,

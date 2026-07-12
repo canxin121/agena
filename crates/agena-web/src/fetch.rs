@@ -65,12 +65,13 @@ pub async fn fetch_page_with_client(
             .send()
             .await?;
 
-        if should_retry_status(response.status().as_u16()) && attempt < options.max_retries {
-            if let Some(delay) = backoff.next_backoff() {
-                attempt += 1;
-                tokio::time::sleep(delay).await;
-                continue;
-            }
+        if should_retry_status(response.status().as_u16())
+            && attempt < options.max_retries
+            && let Some(delay) = backoff.next_backoff()
+        {
+            attempt += 1;
+            tokio::time::sleep(delay).await;
+            continue;
         }
 
         return response_to_page(response, url, options).await;

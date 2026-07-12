@@ -56,7 +56,7 @@ struct PluginConfigStoreField {
 enum PluginConfigDefault {
     None,
     Default,
-    Expr(Expr),
+    Expr(Box<Expr>),
 }
 
 fn find_plugin_config_store_field(data: &Data) -> Result<PluginConfigStoreField> {
@@ -160,7 +160,7 @@ impl Parse for PluginConfigDefault {
             if !input.is_empty() {
                 return Err(input.error("unexpected trailing tokens in #[config]"));
             }
-            return Ok(Self::Expr(default));
+            return Ok(Self::Expr(Box::new(default)));
         }
         if !input.is_empty() {
             return Err(input.error("unexpected trailing tokens in #[config]"));

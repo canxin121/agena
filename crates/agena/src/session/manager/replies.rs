@@ -137,9 +137,7 @@ fn matching_request_part_refs(
                         return None;
                     }
 
-                    let Some(_operation_id) = part.operation_id.as_deref() else {
-                        return None;
-                    };
+                    let _operation_id = part.operation_id.as_deref()?;
                     let matches_request = match (request_kind, part.content.as_ref()) {
                         (
                             crate::message::PendingInteractiveRequestKind::Permission,
@@ -151,7 +149,7 @@ fn matching_request_part_refs(
                         ) => request.request_id() == request_id,
                         _ => false,
                     };
-                    matches_request.then(|| SessionPartRef {
+                    matches_request.then_some(SessionPartRef {
                         message_index,
                         part_index,
                         message_id: message.id,
@@ -546,7 +544,7 @@ impl SessionManager {
                     }
                     Err(ToolError::UserInputRequired(input)) => {
                         session = self
-                            .apply_user_input_request(session, &pending.tool, input, state.clone())
+                            .apply_user_input_request(session, &pending.tool, *input, state.clone())
                             .await?;
                     }
                     Err(err) => {
@@ -798,6 +796,7 @@ fn join_runtime_context_lines(lines: &[String]) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::should_execute_pending_tools_concurrently;
     use crate::model::ModelSpeedModeRequestOverride;

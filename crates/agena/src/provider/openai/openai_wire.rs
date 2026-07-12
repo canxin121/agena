@@ -352,11 +352,11 @@ pub(super) fn chat_tool_stream_input(
         // Standard OpenAI Chat streams carry argument deltas. A parameterless
         // function needs a registration event so the session processor does
         // not drop it before the stream completes.
-        kind: arguments
-            .as_deref()
-            .is_some_and(|value| !value.is_empty())
-            .then_some(ToolStreamInputKind::Delta)
-            .unwrap_or(ToolStreamInputKind::Start),
+        kind: if arguments.as_deref().is_some_and(|value| !value.is_empty()) {
+            ToolStreamInputKind::Delta
+        } else {
+            ToolStreamInputKind::Start
+        },
         stream_key_candidates,
         provider_item_id: None,
         model_call_id: call_id.and_then(|id| id.parse().ok()),

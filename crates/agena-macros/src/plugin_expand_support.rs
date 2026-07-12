@@ -162,9 +162,8 @@ fn expand_plugin_generated_input(
         let flatten_attrs = field
             .flatten_shape
             .then(|| quote! { #[serde(flatten)] #[schemars(flatten)] });
-        let rename_attr = (!field.flatten_shape
-            && field.wire_name.value() != field.ident.to_string())
-        .then(|| quote! { #[serde(rename = #wire_name)] });
+        let rename_attr = (!field.flatten_shape && field.ident != field.wire_name.value())
+            .then(|| quote! { #[serde(rename = #wire_name)] });
         let alias_attrs = if field.flatten_shape {
             Vec::new()
         } else {

@@ -6,7 +6,7 @@ use super::{ToolError, ToolExecutionView, ToolPayloadExecution, ToolPayloadOutpu
 
 pub(crate) fn execute(input: &AskUserToolInput) -> Result<super::ToolPayloadExecution, ToolError> {
     let normalized = normalize(input)?;
-    Err(ToolError::UserInputRequired(normalized))
+    Err(ToolError::UserInputRequired(Box::new(normalized)))
 }
 
 pub(crate) fn validate(input: &AskUserToolInput) -> Result<(), ToolError> {

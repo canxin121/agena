@@ -138,7 +138,7 @@ pub(crate) fn schema_example_variants(
             variants
                 .into_iter()
                 .take(MAX_VARIANT_EXAMPLES)
-                .filter_map(|variant| {
+                .map(|variant| {
                     let mut object = match schema_example_object(&variant.schema) {
                         Some(serde_json::Value::Object(object)) => object,
                         _ => serde_json::Map::new(),
@@ -147,7 +147,7 @@ pub(crate) fn schema_example_variants(
                         variant.field,
                         serde_json::Value::String(variant.value.clone()),
                     );
-                    Some((variant.value.clone(), serde_json::Value::Object(object)))
+                    (variant.value.clone(), serde_json::Value::Object(object))
                 })
                 .collect(),
         );
@@ -267,10 +267,10 @@ pub(crate) fn schema_compact_json_text(
 
 pub(crate) fn schema_example_object(schema: &serde_json::Value) -> Option<serde_json::Value> {
     let object = schema.as_object()?;
-    if let Some(example) = schema_first_example_value(object) {
-        if example.is_object() {
-            return Some(example);
-        }
+    if let Some(example) = schema_first_example_value(object)
+        && example.is_object()
+    {
+        return Some(example);
     }
     if let Some(default) = object.get("default") {
         return Some(default.clone());
@@ -287,14 +287,13 @@ pub(crate) fn schema_example_object(schema: &serde_json::Value) -> Option<serde_
         .unwrap_or_default();
     let mut rendered = serde_json::Map::new();
     for (name, property) in ordered_schema_properties(schema, schema)? {
-        if required.contains(name.as_str())
+        if (required.contains(name.as_str())
             || property.get("examples").is_some()
             || property.get("const").is_some()
-            || property.get("default").is_some()
+            || property.get("default").is_some())
+            && let Some(value) = schema_example_value(name, property)
         {
-            if let Some(value) = schema_example_value(name, property) {
-                rendered.insert(name.clone(), value);
-            }
+            rendered.insert(name.clone(), value);
         }
     }
     Some(serde_json::Value::Object(rendered))
@@ -399,10 +398,10 @@ fn schema_numeric_example_value(
     if number_value_satisfies_schema_bounds(default_number, object) {
         return Some(default);
     }
-    if default.as_i64().is_some() || default.as_u64().is_some() {
-        if let Some(value) = schema_integer_example_value(object) {
-            return Some(value);
-        }
+    if (default.as_i64().is_some() || default.as_u64().is_some())
+        && let Some(value) = schema_integer_example_value(object)
+    {
+        return Some(value);
     }
     if let Some(value) = schema_float_example_value(object) {
         return Some(value);
@@ -528,15 +527,15 @@ fn schema_integer_example_value(object: &Map<String, Value>) -> Option<Value> {
     });
 
     let mut candidate = lower.unwrap_or(1);
-    if let Some(upper) = upper {
-        if candidate > upper {
-            candidate = upper;
-        }
+    if let Some(upper) = upper
+        && candidate > upper
+    {
+        candidate = upper;
     }
-    if let Some(lower) = lower {
-        if candidate < lower {
-            return None;
-        }
+    if let Some(lower) = lower
+        && candidate < lower
+    {
+        return None;
     }
     let number = serde_json::Number::from(candidate);
     number_value_satisfies_schema_bounds(&number, object).then_some(Value::Number(number))

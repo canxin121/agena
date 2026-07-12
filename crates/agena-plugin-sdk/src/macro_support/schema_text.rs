@@ -445,10 +445,11 @@ fn merge_required_example_values(schema: &Value, example: &Value) -> Value {
         return example.clone();
     };
     for (name, property) in ordered_properties {
-        if required.contains(name.as_str()) && !merged.contains_key(name.as_str()) {
-            if let Some(value) = schema_example_value(&name, property) {
-                merged.insert(name.clone(), value);
-            }
+        if required.contains(name.as_str())
+            && !merged.contains_key(name.as_str())
+            && let Some(value) = schema_example_value(name, property)
+        {
+            merged.insert(name.clone(), value);
         }
     }
     Value::Object(merged)

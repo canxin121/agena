@@ -232,7 +232,6 @@ impl ModelCapabilityPatch {
         Self {
             input: capability_selection_patch(supported_inputs, unsupported_inputs),
             features: capability_selection_patch(supported_features, unsupported_features),
-            ..Self::default()
         }
     }
 }

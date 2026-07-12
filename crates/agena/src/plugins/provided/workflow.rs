@@ -34,18 +34,10 @@ pub(crate) struct WorkflowPluginConfig {
     pub(crate) plan: WorkflowPlanConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct WorkflowToolCatalogConfig {
     pub(crate) search: WorkflowToolCatalogSearchConfig,
-}
-
-impl Default for WorkflowToolCatalogConfig {
-    fn default() -> Self {
-        Self {
-            search: WorkflowToolCatalogSearchConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]

@@ -329,7 +329,7 @@ impl CodePlugin {
         let source = fs::read_to_string(&path)
             .map_err(|err| PluginError::new(format!("failed to read {}: {err}", path.display())))?;
         let mut parser = Parser::new();
-        let parser_language: tree_sitter::Language = language.get_ts_language().into();
+        let parser_language: tree_sitter::Language = language.get_ts_language();
         parser.set_language(&parser_language).map_err(|err| {
             PluginError::new(format!(
                 "failed to load {} parser: {err}",

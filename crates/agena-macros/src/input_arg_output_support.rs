@@ -203,7 +203,7 @@ pub(crate) fn set_field_arg_picker(
 
 pub(crate) fn input_jsonpath_for_field(field_name: &LitStr, ty: &Type) -> LitStr {
     let shape = super::input_type_semantic_shape(ty);
-    let suffix = shape.array.then_some("[*]").unwrap_or("");
+    let suffix = if shape.array { "[*]" } else { "" };
     LitStr::new(
         &format!("$.{}{}", field_name.value(), suffix),
         field_name.span(),

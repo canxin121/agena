@@ -90,8 +90,10 @@ fn parse_plugin_inline_tool_config(
                     }
                     "strict" => spec.strict = expr_lit_bool(&value.value, "strict")?,
                     "command" => {
-                        let mut config = PluginToolCommandConfig::default();
-                        config.slash = Some(expr_lit_str(&value.value, "command")?);
+                        let config = PluginToolCommandConfig {
+                            slash: Some(expr_lit_str(&value.value, "command")?),
+                            ..PluginToolCommandConfig::default()
+                        };
                         if command.replace(config).is_some() {
                             return Err(syn::Error::new_spanned(ident, "duplicate command config"));
                         }
@@ -342,8 +344,10 @@ fn parse_inline_tool_command_config(
     tokens: proc_macro2::TokenStream,
 ) -> Result<PluginToolCommandConfig> {
     let args = syn::parse2::<crate::PluginCommandAttrArgs>(tokens)?;
-    let mut config = PluginToolCommandConfig::default();
-    config.slash = args.slash;
+    let mut config = PluginToolCommandConfig {
+        slash: args.slash,
+        ..PluginToolCommandConfig::default()
+    };
     for meta in args.metas {
         match meta {
             Meta::NameValue(value) => {

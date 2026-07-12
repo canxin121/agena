@@ -6,27 +6,27 @@ use super::{expr_lit_str, ident_to_snake_case};
 
 #[derive(Clone, Copy)]
 pub(crate) enum SerdeRenameRule {
-    LowerCase,
-    UpperCase,
-    PascalCase,
-    CamelCase,
-    SnakeCase,
-    ScreamingSnakeCase,
-    KebabCase,
-    ScreamingKebabCase,
+    Lower,
+    Upper,
+    Pascal,
+    Camel,
+    Snake,
+    ScreamingSnake,
+    Kebab,
+    ScreamingKebab,
 }
 
 impl SerdeRenameRule {
     fn parse(value: &LitStr) -> Result<Self> {
         match value.value().as_str() {
-            "lowercase" => Ok(Self::LowerCase),
-            "UPPERCASE" => Ok(Self::UpperCase),
-            "PascalCase" => Ok(Self::PascalCase),
-            "camelCase" => Ok(Self::CamelCase),
-            "snake_case" => Ok(Self::SnakeCase),
-            "SCREAMING_SNAKE_CASE" => Ok(Self::ScreamingSnakeCase),
-            "kebab-case" => Ok(Self::KebabCase),
-            "SCREAMING-KEBAB-CASE" => Ok(Self::ScreamingKebabCase),
+            "lowercase" => Ok(Self::Lower),
+            "UPPERCASE" => Ok(Self::Upper),
+            "PascalCase" => Ok(Self::Pascal),
+            "camelCase" => Ok(Self::Camel),
+            "snake_case" => Ok(Self::Snake),
+            "SCREAMING_SNAKE_CASE" => Ok(Self::ScreamingSnake),
+            "kebab-case" => Ok(Self::Kebab),
+            "SCREAMING-KEBAB-CASE" => Ok(Self::ScreamingKebab),
             other => Err(syn::Error::new_spanned(
                 value,
                 format!("unsupported serde rename_all rule '{other}'"),
@@ -37,20 +37,20 @@ impl SerdeRenameRule {
     pub(crate) fn apply(self, ident: &Ident) -> String {
         let snake = ident_to_snake_case(ident);
         match self {
-            Self::LowerCase => snake.replace('_', ""),
-            Self::UpperCase => snake.replace('_', "").to_ascii_uppercase(),
-            Self::PascalCase => pascal_case_from_snake(&snake),
-            Self::CamelCase => {
+            Self::Lower => snake.replace('_', ""),
+            Self::Upper => snake.replace('_', "").to_ascii_uppercase(),
+            Self::Pascal => pascal_case_from_snake(&snake),
+            Self::Camel => {
                 let mut value = pascal_case_from_snake(&snake);
                 if let Some(first) = value.get_mut(0..1) {
                     first.make_ascii_lowercase();
                 }
                 value
             }
-            Self::SnakeCase => snake,
-            Self::ScreamingSnakeCase => snake.to_ascii_uppercase(),
-            Self::KebabCase => snake.replace('_', "-"),
-            Self::ScreamingKebabCase => snake.replace('_', "-").to_ascii_uppercase(),
+            Self::Snake => snake,
+            Self::ScreamingSnake => snake.to_ascii_uppercase(),
+            Self::Kebab => snake.replace('_', "-"),
+            Self::ScreamingKebab => snake.replace('_', "-").to_ascii_uppercase(),
         }
     }
 }

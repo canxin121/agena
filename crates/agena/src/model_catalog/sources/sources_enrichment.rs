@@ -471,7 +471,6 @@ pub(super) fn model_capability_patch(
             supported_features,
             unsupported_features,
         ),
-        ..ModelCapabilityPatch::default()
     }
 }
 

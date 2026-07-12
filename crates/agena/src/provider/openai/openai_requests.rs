@@ -412,7 +412,7 @@ impl OpenAiAdapter {
             Self::realtime_conversation_items_for_messages(request.messages.as_slice())?;
         let tool_plan = self.responses_tool_plan(request)?;
         let response_tools =
-            (!tool_plan.tools.is_empty()).then(|| serde_json::Value::Array(tool_plan.tools));
+            (!tool_plan.tools.is_empty()).then_some(serde_json::Value::Array(tool_plan.tools));
         let system = request.system.clone();
         let temperature = request.temperature;
         let max_output_tokens = request.max_output_tokens;

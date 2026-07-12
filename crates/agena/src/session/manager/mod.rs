@@ -505,7 +505,7 @@ impl AuthorizedToolInvocation {
 }
 
 pub enum ToolInvocationAuthorization {
-    Allowed(AuthorizedToolInvocation),
+    Allowed(Box<AuthorizedToolInvocation>),
     Ask { reason: String },
     Deny { reason: String },
 }
@@ -626,13 +626,13 @@ impl SessionManager {
             }
         }
 
-        Ok(ToolInvocationAuthorization::Allowed(
+        Ok(ToolInvocationAuthorization::Allowed(Box::new(
             AuthorizedToolInvocation {
                 executor,
                 invocation,
                 session_id: session.id,
             },
-        ))
+        )))
     }
 
     pub async fn request_host_user_input(

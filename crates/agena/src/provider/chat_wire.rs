@@ -382,6 +382,7 @@ pub(crate) fn assistant_reasoning_field_from_delta_or_message(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::ChatCompletionRequest;
 

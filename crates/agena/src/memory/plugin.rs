@@ -123,6 +123,12 @@ pub struct MemoryPlugin {
     sync_lock: Mutex<()>,
 }
 
+impl Default for MemoryPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[input(trim("query"), non_empty("query"))]
 #[serde(deny_unknown_fields)]

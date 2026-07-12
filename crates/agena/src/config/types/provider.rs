@@ -92,6 +92,7 @@ impl fmt::Debug for ProviderSecretSourceConfig {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum ProviderGitlabApiAccessConfig {
     ApiKey { source: ProviderSecretSourceConfig },
     Credential { credential: AuthData },
@@ -130,6 +131,7 @@ impl fmt::Debug for ProviderGitlabApiAccessConfig {
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "subtype", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum ProviderApiAuthConfig {
     Custom {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -464,12 +466,7 @@ impl fmt::Debug for ProviderCredentialAuthConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug = f.debug_struct("ProviderCredentialAuthConfig");
         debug.field("issuer", &self.issuer());
-        debug.field(
-            "credential",
-            &self
-                .credential()
-                .map(|credential| credential_debug_kind(credential)),
-        );
+        debug.field("credential", &self.credential().map(credential_debug_kind));
         if let Some(base_url) = self.base_url() {
             debug.field("base_url", &base_url);
         }

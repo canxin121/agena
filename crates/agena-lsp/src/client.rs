@@ -293,10 +293,8 @@ impl LspClient {
         position: Position,
         sync_status: DocumentSyncStatus,
     ) -> LspResult<Option<GotoDefinitionResponse>> {
-        self.retry_navigation_after_sync(sync_status, || {
-            self.definition(uri.clone(), position.clone())
-        })
-        .await
+        self.retry_navigation_after_sync(sync_status, || self.definition(uri.clone(), position))
+            .await
     }
 
     pub async fn references(
@@ -330,7 +328,7 @@ impl LspClient {
         sync_status: DocumentSyncStatus,
     ) -> LspResult<Option<Vec<Location>>> {
         self.retry_navigation_after_sync(sync_status, || {
-            self.references(uri.clone(), position.clone(), include_declaration)
+            self.references(uri.clone(), position, include_declaration)
         })
         .await
     }
@@ -354,7 +352,7 @@ impl LspClient {
         position: Position,
         sync_status: DocumentSyncStatus,
     ) -> LspResult<Option<Hover>> {
-        self.retry_navigation_after_sync(sync_status, || self.hover(uri.clone(), position.clone()))
+        self.retry_navigation_after_sync(sync_status, || self.hover(uri.clone(), position))
             .await
     }
 

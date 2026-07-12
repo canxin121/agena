@@ -378,7 +378,6 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
                 .into_iter()
                 .take(10)
                 .map(crate::local_api::scheduled_job_resource)
-                .map(Into::into)
                 .collect(),
         }
     } else {

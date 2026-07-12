@@ -53,7 +53,7 @@ pub(crate) fn top_level_discriminated_variants(
         .and_then(|candidates| {
             ["action", "target"]
                 .into_iter()
-                .find_map(|preferred| candidates.contains(preferred).then_some(preferred))
+                .find(|preferred| candidates.contains(*preferred))
                 .map(ToOwned::to_owned)
                 .or_else(|| candidates.into_iter().next())
         })?;

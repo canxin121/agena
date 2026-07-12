@@ -226,7 +226,7 @@ impl PluginHost {
     ) -> Result<ToolBeforeInput, PluginError> {
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let plugins = self.plugins.clone();
-        let res = self.block_on_static(async move {
+        self.block_on_static(async move {
             let mut current = input;
             for plugin in &plugins {
                 if !plugin.subscribes(HookSubscription::TOOL_BEFORE) {
@@ -269,8 +269,7 @@ impl PluginHost {
                 }
             }
             Ok(current)
-        });
-        res
+        })
     }
 
     pub fn dispatch_tool_after(

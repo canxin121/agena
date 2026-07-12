@@ -81,21 +81,20 @@ pub(crate) fn expand_input_dispatch_fn(
     let struct_stream_handle_with_context = config.stream_handle_with_context.as_ref();
     let struct_permission_paths_handle = config.permission_paths_handle.as_ref();
     let struct_permission_networks_handle = config.permission_networks_handle.as_ref();
-    if receiver_ty.is_none() {
-        if struct_handle.is_some()
+    if receiver_ty.is_none()
+        && (struct_handle.is_some()
             || struct_handle_with_context.is_some()
             || struct_stream_handle.is_some()
             || struct_stream_handle_with_context.is_some()
             || struct_permission_paths_handle.is_some()
             || struct_permission_networks_handle.is_some()
             || config.handle_field.is_some()
-            || config.handle_by_value
-        {
-            return Err(syn::Error::new(
-                proc_macro2::Span::call_site(),
-                "handle/handle_with_context/stream_handle/stream_handle_with_context/permission_paths_handle/permission_networks_handle/handle_field/handle_by_value require handler_receiver on the shape",
-            ));
-        }
+            || config.handle_by_value)
+    {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "handle/handle_with_context/stream_handle/stream_handle_with_context/permission_paths_handle/permission_networks_handle/handle_field/handle_by_value require handler_receiver on the shape",
+        ));
     }
 
     match data {

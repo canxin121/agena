@@ -466,6 +466,7 @@ fn merged_field_arg_aliases(
     }
     Ok(aliases)
 }
+#[allow(clippy::too_many_arguments)]
 fn apply_field_arg_config_to_input(
     target: &mut ToolInputConfig,
     field_path_lookup: &BTreeMap<String, LitStr>,
@@ -816,6 +817,7 @@ fn apply_field_arg_config_to_input(
     apply_arg_aliases_to_spec(&mut target.input_aliases, parse_path, parse_aliases);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_field_arg_config_to_input_variant(
     target: &mut ToolInputVariantConfig,
     field_path_lookup: &BTreeMap<String, LitStr>,

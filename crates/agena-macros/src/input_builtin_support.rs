@@ -87,6 +87,8 @@ pub(crate) fn built_in_post_parse_normalization_tokens(
     }
 }
 
+// These slices are independent validation dimensions assembled by the derive parser.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn built_in_validation_tokens(
     target: proc_macro2::TokenStream,
     non_empty: &[LitStr],

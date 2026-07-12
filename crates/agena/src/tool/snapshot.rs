@@ -175,11 +175,12 @@ pub(super) fn execute_exit(
         .ok_or_else(|| ToolError::Plugin("snapshot.exit: not in a snapshot".to_string()))?;
 
     let action = input.action.trim();
-    if action == "remove" && session.created_here {
-        if let Err(error) = remove_created_workspace(executor, &session, input.discard_changes) {
-            registry.write().insert(session_id, session.clone());
-            return Err(error);
-        }
+    if action == "remove"
+        && session.created_here
+        && let Err(error) = remove_created_workspace(executor, &session, input.discard_changes)
+    {
+        registry.write().insert(session_id, session.clone());
+        return Err(error);
     }
 
     let view = ToolExecutionView::simple(
@@ -762,8 +763,8 @@ pub fn list_managed(workspace: &Path, registry: &SnapshotRegistry) -> Vec<Manage
 
     let sessions_by_path: HashMap<PathBuf, SnapshotSession> = registry
         .read()
-        .iter()
-        .map(|(_session_id, session)| (session.path.clone(), session.clone()))
+        .values()
+        .map(|session| (session.path.clone(), session.clone()))
         .collect();
     let session_ids_by_path: HashMap<PathBuf, i64> = registry
         .read()
@@ -789,7 +790,7 @@ pub fn list_managed(workspace: &Path, registry: &SnapshotRegistry) -> Vec<Manage
             .iter()
             .any(|candidate| paths_equal(candidate, &path));
         let registered_with_rift = has_rift_marker(&path);
-        let backend = active_session.map(|session| session.backend).or_else(|| {
+        let backend = active_session.map(|session| session.backend).or({
             if registered_with_rift {
                 Some(SnapshotBackend::Rift)
             } else if registered_with_git {

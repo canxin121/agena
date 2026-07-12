@@ -46,7 +46,7 @@ pub(in crate::app) fn config_row_type_meta(
     }
     let display = declared_schema
         .as_ref()
-        .and_then(|schema| effective_schema_kind(schema))
+        .and_then(effective_schema_kind)
         .unwrap_or_else(|| json_kind_label(value).to_owned());
     (display, ConfigRowTypeMode::Fixed)
 }
@@ -268,7 +268,7 @@ pub(in crate::app) fn format_number_with_unit(path: &ConfigPath, number: &JsonNu
 
 pub(in crate::app) fn format_bytes_summary(bytes: u64) -> String {
     const MIB: u64 = 1024 * 1024;
-    if bytes >= MIB && bytes % MIB == 0 {
+    if bytes >= MIB && bytes.is_multiple_of(MIB) {
         format!("{} MiB", bytes / MIB)
     } else if bytes >= MIB {
         format!("{:.1} MiB", bytes as f64 / MIB as f64)

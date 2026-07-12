@@ -24,6 +24,7 @@ pub struct DecisionDialogSpec<'a> {
 }
 
 impl<'a> DecisionDialogSpec<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         title: Cow<'a, str>,
         body: &'a Text<'a>,

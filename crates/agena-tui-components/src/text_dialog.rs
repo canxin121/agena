@@ -67,6 +67,7 @@ pub struct LineTextDialogSpec<'a> {
 }
 
 impl<'a> LineTextDialogSpec<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         title: Cow<'a, str>,
         lines: &'a [TextDialogLine<'a>],

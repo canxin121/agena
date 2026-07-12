@@ -36,7 +36,16 @@ impl App {
             return;
         }
 
+        if global_action == Some(KeyAction::Help) {
+            self.toggle_context_help();
+            return;
+        }
+
         self.last_ctrl_c_at = None;
+
+        if self.handle_context_help_key(key) {
+            return;
+        }
 
         if self.handle_overlay_key(key) {
             return;
@@ -199,7 +208,6 @@ impl App {
         let close = match &mut route {
             Route::Main => false,
             Route::Usage(dialog) => self.handle_usage_dashboard_key(key, dialog),
-            Route::Help(dialog) => self.handle_help_overlay_key(key, dialog),
             Route::SettingsStudio(dialog) => self.handle_settings_studio_overlay_key(key, dialog),
             Route::AgentStudio(dialog) => self.handle_agent_studio_overlay_key(key, dialog),
             Route::PermissionStudio(dialog) => {
@@ -246,6 +254,7 @@ fn prompt_history_preempts_global_interrupt(history_open: bool, key: KeyEvent) -
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 

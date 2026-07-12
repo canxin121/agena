@@ -60,9 +60,9 @@ pub(in crate::app) fn action_priority_for_focus(
         PluginConfigAction::ResetGroup { .. } => 11,
         PluginConfigAction::MoveArrayItem { .. } => 12,
     };
-    let rank = if focused_cell == ConfigRowCell::Type && action_is_select_type(action) {
-        0
-    } else if focused_cell == ConfigRowCell::Default && action_is_reset_field(action) {
+    let rank = if (focused_cell == ConfigRowCell::Type && action_is_select_type(action))
+        || (focused_cell == ConfigRowCell::Default && action_is_reset_field(action))
+    {
         0
     } else if primary_action.is_some_and(|primary| action_matches_primary(action, primary)) {
         if focused_cell == ConfigRowCell::Action || focused_cell == ConfigRowCell::State {
@@ -147,12 +147,8 @@ pub(in crate::app) fn object_add_field_block_reason(
     object_path: &ConfigPath,
 ) -> Option<String> {
     let object = get_value_at_path(config, object_path)?.as_object()?;
-    let Some(root_schema) = root_schema else {
-        return None;
-    };
-    let Some(parent_schema) = schema_for_path(root_schema, root_schema, config, object_path) else {
-        return None;
-    };
+    let root_schema = root_schema?;
+    let parent_schema = schema_for_path(root_schema, root_schema, config, object_path)?;
     let max_properties =
         schema_max_u64_constraint(&parent_schema, "maxProperties").map(|value| value as usize);
     max_properties
@@ -171,9 +167,7 @@ pub(in crate::app) fn write_path_block_reason(
     config: &JsonValue,
     path: &[PathSegment],
 ) -> Option<String> {
-    let Some(root_schema) = root_schema else {
-        return None;
-    };
+    let root_schema = root_schema?;
     let mut current_value = config;
     let mut prefix = Vec::new();
     for segment in path {
@@ -261,9 +255,7 @@ pub(in crate::app) fn validate_reset_candidate(
     current_root: &JsonValue,
     path: &ConfigPath,
 ) -> Option<String> {
-    let Some(root_schema) = root_schema else {
-        return None;
-    };
+    let root_schema = root_schema?;
     let (_, parent_path) = path.split_last()?;
     let container_path = parent_path.to_vec();
     let mut candidate_root = current_root.clone();
@@ -414,19 +406,11 @@ pub(in crate::app) fn reset_path_block_reason(
     if get_value_at_path(default_root, path).is_some() {
         return None;
     }
-    if get_value_at_path(current_root, path).is_none() {
-        return None;
-    }
+    get_value_at_path(current_root, path)?;
     if let Some((parent_path, key)) = path_key_info(path.as_slice()) {
         let object = get_value_at_path(current_root, &parent_path)?.as_object()?;
-        let Some(root_schema) = root_schema else {
-            return None;
-        };
-        let Some(parent_schema) =
-            schema_for_path(root_schema, root_schema, current_root, &parent_path)
-        else {
-            return None;
-        };
+        let root_schema = root_schema?;
+        let parent_schema = schema_for_path(root_schema, root_schema, current_root, &parent_path)?;
         if schema_required_fields(&parent_schema).contains(key.as_str()) {
             return Some("field is required and has no default".to_owned());
         }
@@ -440,13 +424,8 @@ pub(in crate::app) fn reset_path_block_reason(
         return validate_reset_candidate(Some(root_schema), current_root, path);
     }
     let (parent_path, index, len) = array_item_path_info(current_root, path.as_slice())?;
-    let Some(root_schema) = root_schema else {
-        return None;
-    };
-    let Some(parent_schema) = schema_for_path(root_schema, root_schema, current_root, &parent_path)
-    else {
-        return None;
-    };
+    let root_schema = root_schema?;
+    let parent_schema = schema_for_path(root_schema, root_schema, current_root, &parent_path)?;
     let tuple_prefix_len = schema_prefix_item_count(&parent_schema);
     if index < tuple_prefix_len {
         return Some("tuple item has no removable default slot".to_owned());
@@ -885,15 +864,15 @@ pub(in crate::app) fn field_prompt_for_row(
     let mut parts = vec![format!("Path: {}", path_display(&row.primary_path))];
     if let Some(description) = row.description.as_deref() {
         parts.push(description.to_owned());
-    } else if let Some(schema) = schema {
-        if let Some(description) = schema_description_text(schema) {
-            parts.push(description.to_owned());
-        }
+    } else if let Some(schema) = schema
+        && let Some(description) = schema_description_text(schema)
+    {
+        parts.push(description.to_owned());
     }
-    if let Some(schema) = schema {
-        if let Some(format) = schema_first_string_keyword(schema, "format") {
-            parts.push(format!("format: {format}"));
-        }
+    if let Some(schema) = schema
+        && let Some(format) = schema_first_string_keyword(schema, "format")
+    {
+        parts.push(format!("format: {format}"));
     }
     parts.extend(row.constraints.iter().cloned());
     parts.join("\n")

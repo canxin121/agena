@@ -384,6 +384,7 @@ impl App {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::app) fn build_picker_overlay(
         &self,
         title: String,

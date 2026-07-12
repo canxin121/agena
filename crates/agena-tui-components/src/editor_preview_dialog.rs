@@ -45,6 +45,7 @@ pub struct EditorPreviewDialogSpec<'a> {
 }
 
 impl<'a> EditorPreviewDialogSpec<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         title: Cow<'a, str>,
         target_width: u16,

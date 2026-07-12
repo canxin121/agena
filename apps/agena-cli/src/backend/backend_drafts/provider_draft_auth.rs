@@ -377,9 +377,10 @@ impl ProviderDeviceAuthSessionDraft {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProviderDraftInteractiveLoginKind {
     Browser,
+    #[default]
     Device,
 }
 
@@ -397,12 +398,6 @@ impl ProviderDraftInteractiveLoginKind {
             "device" => Some(Self::Device),
             _ => None,
         }
-    }
-}
-
-impl Default for ProviderDraftInteractiveLoginKind {
-    fn default() -> Self {
-        Self::Device
     }
 }
 
@@ -529,9 +524,8 @@ impl ProviderCredentialDraftBundle {
     }
 
     pub(crate) fn set_account_id(&mut self, issuer: Option<CredentialIssuer>, value: String) {
-        match issuer {
-            Some(CredentialIssuer::OpenaiChatgpt) => self.openai_chatgpt.account_id = value,
-            _ => {}
+        if let Some(CredentialIssuer::OpenaiChatgpt) = issuer {
+            self.openai_chatgpt.account_id = value;
         }
     }
 }

@@ -189,15 +189,12 @@ pub(in crate::app) fn append_object_editor_lines(
     remaining: usize,
 ) {
     let indent = "  ".repeat(depth);
-    if schema.is_none() {
-        lines.push(Line::from(format!("{indent}Generic object editor")));
-    } else if schema_is_map_like(
-        root_schema.unwrap_or_else(|| schema.expect("checked")),
-        schema.expect("checked"),
-    ) {
-        lines.push(Line::from(format!("{indent}Map editor")));
-    } else {
-        lines.push(Line::from(format!("{indent}Object editor")));
+    match schema {
+        None => lines.push(Line::from(format!("{indent}Generic object editor"))),
+        Some(schema) if schema_is_map_like(root_schema.unwrap_or(schema), schema) => {
+            lines.push(Line::from(format!("{indent}Map editor")));
+        }
+        Some(_) => lines.push(Line::from(format!("{indent}Object editor"))),
     }
     lines.push(Line::from(Span::styled(
         fixed_columns(

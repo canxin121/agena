@@ -26,7 +26,6 @@ impl App {
         match &mut self.current_route {
             Route::Main => {}
             Route::Usage(_) => {}
-            Route::Help(_) => {}
             Route::SettingsStudio(_) => {}
             Route::AgentStudio(dialog) => {
                 if let Some(editor) = dialog.workbench.editor.as_mut() {

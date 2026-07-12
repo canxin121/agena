@@ -20,6 +20,7 @@ impl App {
             if let Some(footer) = footer {
                 self.render_transcript_footer_row(frame, footer);
             }
+            self.render_context_help(frame, area);
             return;
         }
 
@@ -55,6 +56,7 @@ impl App {
         self.render_transcript_surface(frame, transcript_host_area);
         self.render_composer(frame, composer);
         self.render_overlay(frame, area);
+        self.render_context_help(frame, area);
     }
 
     pub(in crate::app) fn route_footer_height(&self, width: u16, total_height: u16) -> u16 {
@@ -117,11 +119,12 @@ impl App {
                                 line_has_match,
                             )
                         };
-                    let block_selected = highlighted_block
-                        .as_ref()
-                        .is_some_and(|range| idx >= range.start && idx < range.end);
                     if self.focus == Focus::Transcript
-                        && (idx == self.transcript.cursor_line || block_selected)
+                        && transcript_line_is_selected(
+                            idx,
+                            self.transcript.cursor_line,
+                            highlighted_block.as_ref(),
+                        )
                     {
                         rendered_line = apply_line_highlight(rendered_line);
                     }
@@ -407,10 +410,11 @@ impl App {
             },
         );
 
-        if self.overlay.is_none() && self.focus == Focus::Composer {
-            if let Some(cursor) = cursor {
-                frame.set_cursor_position(cursor);
-            }
+        if self.overlay.is_none()
+            && self.focus == Focus::Composer
+            && let Some(cursor) = cursor
+        {
+            frame.set_cursor_position(cursor);
         }
     }
 
@@ -478,7 +482,7 @@ impl App {
     }
 
     pub(in crate::app) fn transcript_footer_text(&self) -> String {
-        let mut parts = Vec::new();
+        let mut parts = vec![ui_text::t(&self.i18n, "context-help-global-hint")];
         if !self.queue.is_empty() {
             let preview = self.queue.first_preview(28).unwrap_or_default();
             if preview.is_empty() {
@@ -697,6 +701,32 @@ impl App {
         } else {
             ui_text::t(&self.i18n, "surface-mode-view")
         }
+    }
+}
+
+fn transcript_line_is_selected(
+    line: usize,
+    cursor_line: usize,
+    block: Option<&std::ops::Range<usize>>,
+) -> bool {
+    match block {
+        Some(range) => line >= range.start && line < range.end,
+        None => line == cursor_line,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::transcript_line_is_selected;
+
+    #[test]
+    fn block_selection_does_not_highlight_a_cursor_outside_the_block() {
+        let message_body = 4..8;
+
+        assert!(!transcript_line_is_selected(3, 3, Some(&message_body)));
+        assert!(transcript_line_is_selected(4, 3, Some(&message_body)));
+        assert!(transcript_line_is_selected(3, 3, None));
     }
 }
 use super::{

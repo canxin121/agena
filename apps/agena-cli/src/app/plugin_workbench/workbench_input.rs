@@ -83,15 +83,15 @@ impl App {
                 refreshed.drilldown_stack =
                     rebuild_drilldown_stack(&refreshed, dialog.drilldown_stack.as_slice());
                 refresh_plugin_workbench_filter(&mut refreshed);
-                if let Some(plugin_id) = selected_plugin_id {
-                    if let Some(index) = refreshed.visible_plugins.iter().position(|visible| {
+                if let Some(plugin_id) = selected_plugin_id
+                    && let Some(index) = refreshed.visible_plugins.iter().position(|visible| {
                         refreshed
                             .plugins
                             .get(*visible)
                             .is_some_and(|plugin| plugin.plugin_id == plugin_id)
-                    }) {
-                        refreshed.selected_plugin = index;
-                    }
+                    })
+                {
+                    refreshed.selected_plugin = index;
                 }
                 if let Some(section_key) = selected_section_key {
                     refreshed.selected_section = refreshed
@@ -104,14 +104,13 @@ impl App {
                         })
                         .unwrap_or_default();
                 }
-                if let Some(path) = selected_path {
-                    if let Some((section_index, row_index)) = refreshed
+                if let Some(path) = selected_path
+                    && let Some((section_index, row_index)) = refreshed
                         .selected_plugin()
                         .and_then(|plugin| find_row_position(plugin, refreshed.config_view, &path))
-                    {
-                        refreshed.selected_section = section_index;
-                        refreshed.selected_node = row_index;
-                    }
+                {
+                    refreshed.selected_section = section_index;
+                    refreshed.selected_node = row_index;
                 }
                 refreshed.clamp_selection();
                 *dialog = refreshed;
@@ -149,15 +148,15 @@ impl App {
         refreshed.actions = dialog.actions.clone();
         refreshed.selection = dialog.selection.clone();
         refresh_plugin_workbench_filter(&mut refreshed);
-        if let Some(plugin_id) = selected_plugin_id {
-            if let Some(index) = refreshed.visible_plugins.iter().position(|visible| {
+        if let Some(plugin_id) = selected_plugin_id
+            && let Some(index) = refreshed.visible_plugins.iter().position(|visible| {
                 refreshed
                     .plugins
                     .get(*visible)
                     .is_some_and(|plugin| plugin.plugin_id == plugin_id)
-            }) {
-                refreshed.selected_plugin = index;
-            }
+            })
+        {
+            refreshed.selected_plugin = index;
         }
         if let Some(section_key) = selected_section_key {
             refreshed.selected_section = refreshed
@@ -170,14 +169,13 @@ impl App {
                 })
                 .unwrap_or_default();
         }
-        if let Some(path) = selected_path {
-            if let Some((section_index, row_index)) = refreshed
+        if let Some(path) = selected_path
+            && let Some((section_index, row_index)) = refreshed
                 .selected_plugin()
                 .and_then(|plugin| find_row_position(plugin, refreshed.config_view, &path))
-            {
-                refreshed.selected_section = section_index;
-                refreshed.selected_node = row_index;
-            }
+        {
+            refreshed.selected_section = section_index;
+            refreshed.selected_node = row_index;
         }
         refreshed.clamp_selection();
         refreshed

@@ -228,6 +228,7 @@ pub struct SearchPanelsDialogSpec<'a> {
 }
 
 impl<'a> SearchPanelsDialogSpec<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         target_width: u16,
         left_panel_title: Cow<'a, str>,

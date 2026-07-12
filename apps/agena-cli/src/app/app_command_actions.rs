@@ -2,8 +2,7 @@ impl App {
     pub(in crate::app) fn execute_command(&mut self, spec: &'static CommandSpec, args: &str) {
         match spec.id {
             CommandId::Help => {
-                self.route_stack.clear();
-                self.current_route = Route::Help(HelpOverlay::default());
+                self.open_context_help();
             }
             CommandId::Commands => self.open_command_palette(),
             CommandId::New => self.create_session(None),
@@ -572,7 +571,7 @@ impl App {
     }
 }
 use crate::app::{
-    App, AppMessage, CommandId, CommandSpec, ComposerDraft, Focus, HelpOverlay, PartContent, Path,
+    App, AppMessage, CommandId, CommandSpec, ComposerDraft, Focus, PartContent, Path,
     PermissionReplyKind, PermissionStudioFocus, PermissionStudioPage, PermissionStudioSectionId,
     PermissionStudioSource, Route, SessionViewMode, TIMELINE_EVENT_LIMIT, UiAction,
     build_visible_session_items, derive_session_title, non_empty_owned, parse_pr_command_args,

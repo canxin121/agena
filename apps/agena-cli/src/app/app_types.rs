@@ -375,6 +375,7 @@ pub struct App {
     pub(super) route_stack: Vec<Route>,
     pub(super) overlay: Option<Overlay>,
     pub(super) overlay_stack: Vec<Overlay>,
+    pub(super) context_help: Option<HelpOverlay>,
     pub(super) seen_permission_request_ids: BTreeSet<String>,
     pub(super) seen_user_input_request_ids: BTreeSet<String>,
     pub(super) pending_permission_replay: Option<PermissionReplayState>,
@@ -652,7 +653,6 @@ pub(super) enum Overlay {
 pub(super) enum Route {
     Main,
     Usage(UsageDashboardState),
-    Help(HelpOverlay),
     SettingsStudio(SettingsStudioOverlay),
     AgentStudio(AgentStudioOverlay),
     PermissionStudio(PermissionStudioOverlay),
@@ -795,4 +795,24 @@ pub(super) enum DialogHost {
 
 pub(super) type LineInputOverlay = InputDialogState<()>;
 
-pub(super) type HelpOverlay = ScrollState;
+#[derive(Debug, Clone)]
+pub(super) struct HelpOverlay {
+    pub(super) context: String,
+    pub(super) summary: String,
+    pub(super) sections: Vec<HelpSection>,
+    pub(super) tips: Vec<String>,
+    pub(super) scroll: ScrollState,
+    pub(super) max_scroll: u16,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct HelpSection {
+    pub(super) title: String,
+    pub(super) entries: Vec<HelpEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct HelpEntry {
+    pub(super) keys: String,
+    pub(super) description: String,
+}

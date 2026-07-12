@@ -195,10 +195,10 @@ pub(in crate::app) fn first_unseen_pending_interactive_request<'a>(
     })
 }
 
-pub(in crate::app) fn first_pending_interactive_request_by_kind<'a>(
-    requests: &'a [PendingInteractiveRequest],
+pub(in crate::app) fn first_pending_interactive_request_by_kind(
+    requests: &[PendingInteractiveRequest],
     kind: PendingInteractiveKind,
-) -> Option<&'a PendingInteractiveRequest> {
+) -> Option<&PendingInteractiveRequest> {
     requests
         .iter()
         .find(|request| pending_interactive_request_matches_kind(request, kind))
@@ -580,7 +580,7 @@ pub(in crate::app) fn permission_requested_actions_for_display<'a>(
     if requested.is_empty() {
         return Vec::new();
     }
-    if requested.len() == 1 && primary.is_some_and(|primary| requested.first() == Some(&primary)) {
+    if requested.len() == 1 && primary.is_some_and(|primary| requested.first() == Some(primary)) {
         return Vec::new();
     }
     requested.iter().collect()

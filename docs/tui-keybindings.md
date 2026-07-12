@@ -28,6 +28,7 @@
 ```text
 历史输入窗口对 Ctrl+C 的局部关闭
 → 全局 Ctrl+C
+→ 全局 Ctrl+H 上下文帮助
 → 当前 Overlay
 → 当前 Route
 → 主页面共享按键
@@ -54,6 +55,7 @@ Composer 内部的优先级为：
 |---|---|
 | `Ctrl+C` 第一次 | 模型运行中时请求取消运行；否则提示再次按下退出 |
 | `Ctrl+C` 第二次 | 在约 600ms 内再次按下，退出 TUI |
+| `Ctrl+H` | 打开当前界面的专属帮助；帮助已打开时再次按下可关闭 |
 
 例外：历史输入窗口打开时，精确的 `Ctrl+C` 会先关闭历史窗口并恢复原始 Composer 草稿，不会触发全局中断。
 
@@ -73,7 +75,7 @@ Composer 内部的优先级为：
 | `r` | 继续当前被阻塞或待处理的会话 |
 | `U` | 打开 Usage Dashboard |
 
-`?` 不再打开 Help。Help 通过 `/help` 命令打开。`Ctrl+F` 和 `/find` 不再提供搜索功能。
+`?` 不再打开 Help。`Ctrl+H` 在所有 Route、Overlay、编辑器和聊天焦点中打开上下文帮助，`/help` 也会打开当前界面的同一帮助。`Ctrl+F` 和 `/find` 不再提供搜索功能。
 
 ## Sessions 会话列表
 
@@ -221,17 +223,18 @@ Composer 默认键位存放在 `ComposerKeyBindings` 中。当前 `TuiConfig::lo
 
 关闭搜索框后使用 `n/N` 沿当前搜索方向或反方向跳转。
 
-## Help 页面
+## 上下文 Help
 
-Help 通常通过 `/help` 打开。
+Help 不再是汇总整个 TUI 的长文本页面。每个界面都有自己的帮助卡片，只展示当前界面的用途、快捷键、按键和必要的工作流提示。例如，在 Transcript 中只显示消息导航、折叠、搜索和复制；在 Provider Studio 中只显示面板切换、选择和可见操作；在文本编辑器中只显示编辑与提交方式。
 
 | 按键 | 行为 |
 |---|---|
+| `Ctrl+H` | 在任意界面打开或关闭当前上下文的 Help |
 | `Esc` | 关闭 Help |
 | `↑` | 向上滚动一行 |
 | `↓` | 向下滚动一行 |
 
-导航键只滚动，不会关闭 Help。
+Help 以居中的圆角窗口显示，顶部提供当前界面名称与简介，按键按 Navigation、Actions、Editing、Workflow、Search 和 Selection 等卡片分组。窄终端会自动切换为上下堆叠的按键说明。Help 打开后会拦截普通页面输入，不会意外触发背后的界面操作。
 
 ## 通用可搜索列表
 
@@ -573,7 +576,7 @@ Transport、Config 和 Refresh 都显示为可聚焦控件，原来的 `Ctrl+R`�
 
 | 按键 | 行为 |
 |---|---|
-| `Backspace` / `Ctrl+H` | 删除前一个字符 |
+| `Backspace` | 删除前一个字符；`Ctrl+H` 保留给上下文 Help |
 | `Delete` | 删除当前字符；文本末尾时退格删除 |
 | `Ctrl+D` | 删除当前字符 |
 | `Alt+Backspace` / `Ctrl+Alt+H` / `Ctrl+W` | 删除前一个单词 |

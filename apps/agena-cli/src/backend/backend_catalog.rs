@@ -611,10 +611,10 @@ pub(super) fn resolve_provider_defaults_from_value_for_save(
     Ok((default_adapter, None))
 }
 
-pub(super) fn required_provider_save_field<'a>(
-    value: &'a str,
+pub(super) fn required_provider_save_field(
+    value: &str,
     field: ProviderStudioSaveField,
-) -> std::result::Result<&'a str, ProviderStudioSaveValidationError> {
+) -> std::result::Result<&str, ProviderStudioSaveValidationError> {
     optional_non_empty(value).ok_or(ProviderStudioSaveValidationError::FieldRequired(field))
 }
 

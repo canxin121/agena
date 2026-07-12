@@ -202,8 +202,7 @@ impl App {
             &effective_permission,
             current_session_permission.as_ref(),
         );
-        let mut runtime_rule_items = Vec::new();
-        runtime_rule_items.push(SettingsStudioItem::new(
+        let runtime_rule_items = vec![SettingsStudioItem::new(
             ui_text::t(&self.i18n, "overlay-settings-manage-permission-rules"),
             permission_rule_count.to_string(),
             ui_text::t(
@@ -211,7 +210,7 @@ impl App {
                 "overlay-settings-manage-permission-rules-detail",
             ),
             SettingsPickerAction::OpenPermissionRules,
-        ));
+        )];
         let agent_count = agents.len();
         let mut sections = vec![
             SettingsStudioSection {

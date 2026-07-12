@@ -21,17 +21,9 @@ pub struct TuiStatusLineConfig {
     pub refresh_interval_ms: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TuiTranscriptConfig {
     pub activity_default_expanded: bool,
-}
-
-impl Default for TuiTranscriptConfig {
-    fn default() -> Self {
-        Self {
-            activity_default_expanded: false,
-        }
-    }
 }
 
 impl TuiConfig {

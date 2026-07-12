@@ -14,17 +14,18 @@ impl App {
             return false;
         };
         match item.action {
-            PermissionStudioAction::Noop => return false,
+            PermissionStudioAction::Noop => false,
             PermissionStudioAction::EditMode(target) => {
                 if !dialog.editable {
                     self.flash_warning(permission_studio_read_only_message(
                         &self.i18n,
                         &dialog.source,
                     ));
-                    return false;
+                    false
+                } else {
+                    self.open_permission_studio_mode_overlay(dialog, target);
+                    false
                 }
-                self.open_permission_studio_mode_overlay(dialog, target);
-                return false;
             }
             PermissionStudioAction::AddToolCommandPattern { tool_name } => {
                 if !dialog.editable {
@@ -32,13 +33,14 @@ impl App {
                         &self.i18n,
                         &dialog.source,
                     ));
-                    return false;
+                    false
+                } else {
+                    self.open_permission_studio_creator(
+                        dialog,
+                        PermissionStudioEditorAction::AddToolCommandPattern { tool_name },
+                    );
+                    false
                 }
-                self.open_permission_studio_creator(
-                    dialog,
-                    PermissionStudioEditorAction::AddToolCommandPattern { tool_name },
-                );
-                return false;
             }
         }
     }
@@ -213,7 +215,7 @@ impl App {
                             .and_then(|path| path.rules.get(from.as_str()))
                             .cloned()
                     })
-                    .unwrap_or_else(|| {
+                    .unwrap_or({
                         PathAccessRuleConfig::Modes(PathAccessModes {
                             read: Some(PermissionMode::Ask),
                             write: Some(PermissionMode::Ask),

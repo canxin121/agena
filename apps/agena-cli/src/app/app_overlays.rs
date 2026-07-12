@@ -82,21 +82,6 @@ impl App {
         }
     }
 
-    pub(in crate::app) fn handle_help_overlay_key(
-        &mut self,
-        key: KeyEvent,
-        dialog: &mut HelpOverlay,
-    ) -> bool {
-        let max_scroll = ui_text::help_lines(&self.i18n)
-            .len()
-            .saturating_sub(1)
-            .min(u16::MAX as usize) as u16;
-        match resolve_tui_key(KeyContext::Help, key) {
-            Some(KeyAction::Close) => true,
-            _ => handle_help_navigation_key(dialog, key, max_scroll),
-        }
-    }
-
     pub(in crate::app) fn handle_session_search_overlay_key(
         &mut self,
         key: KeyEvent,
@@ -610,36 +595,11 @@ fn move_model_catalog_focus(dialog: &mut ModelCatalogStudioOverlay) {
     }
 }
 
-fn handle_help_navigation_key(dialog: &mut HelpOverlay, key: KeyEvent, max_scroll: u16) -> bool {
-    dialog.handle_structural_navigation_key(key, max_scroll, 8);
-    false
-}
-
-#[cfg(test)]
-mod tests {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    use super::{HelpOverlay, handle_help_navigation_key};
-
-    #[test]
-    fn help_navigation_scrolls_without_closing_the_route() {
-        let mut dialog = HelpOverlay::default();
-
-        let close = handle_help_navigation_key(
-            &mut dialog,
-            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
-            20,
-        );
-
-        assert!(!close);
-        assert_eq!(dialog.scroll, 1);
-    }
-}
 use crate::app::{
-    App, ChoiceOverlay, EditorDialogKeyResult, FileAttachOverlay, Focus, HelpOverlay,
-    InputDialogKeyResult, KeyEvent, ModelCatalogStudioOverlay, PathBuf, PickerKind, PickerOverlay,
-    PickerValue, ProviderPickerPurpose, ProviderStudioEditorAction, ProviderStudioFocus,
-    ProviderStudioOverlay, Route, RuntimeSettingEditOverlay, SearchInputKeyResult, SearchListRow,
+    App, ChoiceOverlay, EditorDialogKeyResult, FileAttachOverlay, Focus, InputDialogKeyResult,
+    KeyEvent, ModelCatalogStudioOverlay, PathBuf, PickerKind, PickerOverlay, PickerValue,
+    ProviderPickerPurpose, ProviderStudioEditorAction, ProviderStudioFocus, ProviderStudioOverlay,
+    Route, RuntimeSettingEditOverlay, SearchInputKeyResult, SearchListRow,
     SessionModelChooserOverlay, SessionSearchOverlay, SessionViewMode, TimelineOverlay,
     drive_editor_dialog_key, drive_input_dialog_key, min, ui_text,
 };

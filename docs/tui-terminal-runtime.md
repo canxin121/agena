@@ -12,9 +12,11 @@ and restoration.
    to stdout. Complete protocol frames go through `TerminalRuntime`.
 3. Only the runtime may enable or disable raw mode, alternate screen,
    bracketed paste, focus reporting, or keyboard enhancement flags.
-4. Agena does not issue response-bearing terminal queries. Environment color
-   evidence is used instead; `AGENA_TUI_QUERY_BACKGROUND=1` is diagnosed and
-   ignored until response bytes can be routed without consuming user input.
+4. The runtime permits one bounded graphics/cell-size negotiation after
+   alternate-screen entry and before the sole `EventStream` is created. No
+   screen or application code may issue another response-bearing query.
+   Background color still uses environment evidence;
+   `AGENA_TUI_QUERY_BACKGROUND=1` is diagnosed and ignored.
 5. External editors, pagers, and transfer utilities run through
    `TerminalRuntime::with_suspended`, which restores the terminal after
    success, error, or panic.
@@ -61,6 +63,9 @@ apps/agena-cli/src/helper_runner.rs
 
 apps/agena-cli/src/provider_error.rs
   typed provider failures and fallback policy
+
+apps/agena-cli/src/math_render.rs
+  RaTeX image typesetting, bounded artifact/protocol caches, and Unicode fallback
 ```
 
 `agena-tui-components::Editor` deliberately contains no terminal protocol or

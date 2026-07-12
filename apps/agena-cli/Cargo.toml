@@ -29,6 +29,7 @@ arboard = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
+comrak = { workspace = true }
 clap = { workspace = true }
 crossterm = { workspace = true, features = ["event-stream"] }
 fluent-templates = { workspace = true }
@@ -40,6 +41,13 @@ indexmap = { workspace = true }
 libc = { workspace = true }
 mime_guess = { workspace = true }
 ratatui = { workspace = true }
+ratatui-image = { workspace = true }
+resvg = { workspace = true }
+ratex-layout = { workspace = true }
+ratex-parser = { workspace = true }
+ratex-render = { workspace = true }
+ratex-types = { workspace = true }
+term-maths = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls"] }
 sea-orm = { workspace = true, features = ["sqlx-sqlite", "runtime-tokio-rustls"] }
@@ -47,6 +55,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 shlex = { workspace = true }
+syntect = { workspace = true }
 sys-locale = { workspace = true }
 tempfile = { workspace = true }
 textwrap = { workspace = true }

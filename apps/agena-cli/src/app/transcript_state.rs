@@ -559,7 +559,7 @@ impl TranscriptState {
             let status = if message.confirmed {
                 String::new()
             } else {
-                format!(" {}", spinner_frame(current_spinner_millis()))
+                format!(" {}", transcript_spinner_placeholder())
             };
             lines.push(RenderedLine::plain(
                 format!(
@@ -568,7 +568,9 @@ impl TranscriptState {
                 ),
                 style_for_role(MessageRole::User).add_modifier(Modifier::BOLD),
             ));
-            push_markdown(&mut lines, "  ", message.text.as_str(), width);
+            for block in markdown_blocks(message.text.as_str()) {
+                render_markdown_block(&mut lines, "  ", &block, width);
+            }
             line_nodes.extend(std::iter::repeat_n(
                 None,
                 lines.len().saturating_sub(line_nodes.len()),
@@ -588,6 +590,21 @@ impl TranscriptState {
                 .collect::<Vec<_>>()
         };
 
+        let math = lines
+            .iter()
+            .enumerate()
+            .flat_map(|(line, rendered)| {
+                rendered.math.iter().map(move |placement| {
+                    crate::math_render::TranscriptMathPlacement {
+                        line,
+                        column: placement.column,
+                        artifact: std::sync::Arc::clone(&placement.artifact),
+                        size: placement.size,
+                    }
+                })
+            })
+            .collect();
+
         self.rendered = Some(RenderedTranscript {
             width,
             lines,
@@ -595,29 +612,13 @@ impl TranscriptState {
             message_line_starts,
             nodes,
             line_nodes,
+            math,
         });
         self.rendered.as_ref().expect("render cache should exist")
     }
 
     pub(in crate::app) fn invalidate_render(&mut self) {
         self.rendered = None;
-    }
-
-    pub(in crate::app) fn has_animated_activity(&self) -> bool {
-        self.pending_user_messages
-            .iter()
-            .any(|message| !message.confirmed)
-            || self.messages.iter().any(|message| {
-                message.parts.as_deref().is_some_and(|parts| {
-                    parts.iter().any(|part| {
-                        part.status == ExecutionStatus::InProgress
-                            && matches!(
-                                part.content.as_ref(),
-                                Some(PartContent::Reasoning(_) | PartContent::Operation(_))
-                            )
-                    })
-                })
-            })
     }
 
     pub(in crate::app) fn clamp_scroll(&mut self, width: u16, height: u16) {
@@ -817,15 +818,15 @@ impl TranscriptState {
     }
 }
 use crate::app::{
-    AgenaSessionEvent, BTreeMap, DomainEvent, ExecutionStatus, HashSet, I18n, MessageResource,
-    MessageRole, Modifier, PaginatedResponse, PartContent, PendingUserMessage, Range, RenderedLine,
-    RenderedTranscript, RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
+    AgenaSessionEvent, BTreeMap, DomainEvent, HashSet, I18n, MessageResource, MessageRole,
+    Modifier, PaginatedResponse, PendingUserMessage, Range, RenderedLine, RenderedTranscript,
+    RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
     TranscriptBlockSelectionMode, TranscriptDetailDefaults, TranscriptMoveDirection,
     TranscriptNodeKey, TranscriptNodeKind, TranscriptState, TranscriptVerticalNavigationStep,
-    contains_case_insensitive, current_spinner_millis, initial_search_match_index,
-    merge_message_resources, message_sort_key, min, push_markdown, render_message_detailed,
-    spinner_frame, style_for_role, transcript_message_navigation_target,
-    transcript_node_highlight_range, transcript_selection_scroll_position,
-    transcript_should_fall_back_to_message_navigation, transcript_should_follow_tail,
+    contains_case_insensitive, initial_search_match_index, markdown_blocks,
+    merge_message_resources, message_sort_key, min, render_markdown_block, render_message_detailed,
+    style_for_role, transcript_message_navigation_target, transcript_node_highlight_range,
+    transcript_selection_scroll_position, transcript_should_fall_back_to_message_navigation,
+    transcript_should_follow_tail, transcript_spinner_placeholder,
     transcript_vertical_line_navigation_step, transcript_vertical_navigation_step, ui_text,
 };

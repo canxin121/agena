@@ -47,6 +47,7 @@ impl Support {
 pub enum CapabilitySource {
     UserOverride,
     Environment,
+    TerminalQuery,
     HelperProbe,
     TerminalProfile,
     PlatformDefault,
@@ -58,6 +59,7 @@ impl CapabilitySource {
         match self {
             Self::UserOverride => "terminal-diagnostics-source-user",
             Self::Environment => "terminal-diagnostics-source-environment",
+            Self::TerminalQuery => "terminal-diagnostics-source-terminal-query",
             Self::HelperProbe => "terminal-diagnostics-source-helper",
             Self::TerminalProfile => "terminal-diagnostics-source-profile",
             Self::PlatformDefault => "terminal-diagnostics-source-platform",
@@ -365,8 +367,10 @@ impl TerminalContext {
             kitty_rich_clipboard
         };
 
-        // These terminal-side features are recorded for diagnostics, but no
-        // Agena UI provider consumes them yet.
+        // Inline-image profiles are provisional here. TerminalRuntime performs
+        // the authoritative graphics query only after entering the alternate
+        // screen, then marks the provider ready when it selects Kitty, Sixel,
+        // or iTerm2. Synchronized output remains diagnostic-only.
         let inline_images = if profiles::inline_images(identity.family) {
             direct_profile(&[identity.family], false)
         } else {

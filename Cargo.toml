@@ -93,6 +93,7 @@ toml = "1.1.2"
 
 # datetime / ids
 chrono = { version = "0.4.44", default-features = false, features = ["clock", "serde"] }
+comrak = { version = "=0.54.0", default-features = false, features = ["shortcodes", "attributes"] }
 time = "0.3.47"
 uuid = { version = "1.23.1", features = ["v4", "serde"] }
 
@@ -164,7 +165,14 @@ moka = { version = "0.12.15", features = ["future"] }
 mockito = "1.7.2"
 oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest", "rustls-tls"] }
 path-clean = "1.0.1"
-ratatui = "0.30.0"
+ratatui = "0.30.2"
+ratatui-image = { version = "=11.0.6", default-features = false, features = ["crossterm"] }
+resvg = { version = "=0.47.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
+ratex-layout = "=0.1.13"
+ratex-parser = "=0.1.13"
+ratex-render = { version = "=0.1.13", features = ["embed-fonts"] }
+ratex-types = "=0.1.13"
+term-maths = "=1.0.0"
 redb = "4.1.0"
 regex = "1.12.3"
 portable-pty = "0.9.0"
@@ -173,6 +181,7 @@ semver = "1.0.28"
 shlex = "1.3.0"
 simhash = "0.3.0"
 strum = "0.28.0"
+syntect = "5.3.0"
 sys-locale = "0.3.2"
 text-splitter = { version = "0.30.1", features = ["markdown"] }
 textwrap = "0.16.2"

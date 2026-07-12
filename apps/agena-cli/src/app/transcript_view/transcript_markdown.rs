@@ -1,3 +1,7 @@
+use super::transcript_math::{
+    display_math_source, inline_math_unicode_text, push_inline_math, push_math_block,
+};
+
 pub(in crate::app) fn push_multiline(
     out: &mut Vec<RenderedLine>,
     prefix: &str,
@@ -24,6 +28,13 @@ pub(in crate::app) fn push_markdown(
     let sanitized = sanitize_terminal_text(text);
     let markdown = trim_empty_line_edges(sanitized.as_str());
     if markdown.is_empty() {
+        return;
+    }
+    if display_math_source(&markdown).is_some() {
+        push_math_block(out, prefix, &markdown, width);
+        return;
+    }
+    if !markdown.contains('\n') && push_inline_math(out, prefix, &markdown, width) {
         return;
     }
 
@@ -488,7 +499,8 @@ pub(in crate::app) fn normalize_table_alignments(
 }
 
 pub(in crate::app) fn markdown_table_cell_text(cell: &str) -> String {
-    let rendered = markdown_to_text(cell);
+    let cell = inline_math_unicode_text(cell);
+    let rendered = markdown_to_text(&cell);
     let flattened = rendered
         .lines
         .iter()

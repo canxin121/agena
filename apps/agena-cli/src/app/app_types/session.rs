@@ -20,15 +20,13 @@ pub(crate) struct SessionSearchItem {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SessionSearchOverlayMeta {
-    /// The complete subtree catalog for locally paged session search. Remote
-    /// modes keep only the current page in `SearchPicker::items`.
+    /// The complete subtree catalog. Visual pagination is always owned by the
+    /// shared `SearchPicker`; remote modes append backend result batches.
     pub(crate) all_items: Vec<SessionSearchItem>,
     pub(crate) mode: SessionViewMode,
     pub(crate) scope_session_id: Option<i64>,
-    pub(crate) page_limit: usize,
+    /// Index of the latest backend batch, not a user-visible page number.
     pub(crate) page_index: usize,
-    pub(crate) offset: usize,
-    pub(crate) cursors: Vec<Option<String>>,
     pub(crate) next_cursor: Option<String>,
     pub(crate) has_more: bool,
 }
@@ -46,7 +44,6 @@ pub(crate) type PickerOverlay =
 
 #[derive(Debug, Clone)]
 pub(crate) struct SessionModelChooserOverlayMeta {
-    pub(crate) page_size: usize,
     pub(crate) current_model_label: Option<String>,
 }
 

@@ -84,11 +84,11 @@ pub use question_flow_dialog::{
 pub use scroll_state::ScrollState;
 pub use search_picker::{
     SearchPicker, SearchPickerClearAction, SearchPickerConfig, SearchPickerCustomValue,
-    SearchPickerDialogSpec, SearchPickerInput, SearchPickerInputMode, SearchPickerInputResult,
-    SearchPickerItem, SearchPickerNoCustom, SearchPickerPhase, SearchPickerPreviewMode,
-    SearchPickerSearchMode, SearchPickerSelection, SearchPickerSelectionMode,
-    SearchPickerViewState, render_search_picker_dialog, render_search_picker_dialog_with_preview,
-    search_picker_dialog_area,
+    SearchPickerDialogSpec, SearchPickerFocus, SearchPickerInput, SearchPickerInputMode,
+    SearchPickerInputResult, SearchPickerItem, SearchPickerNoCustom, SearchPickerPhase,
+    SearchPickerPreviewMode, SearchPickerSearchMode, SearchPickerSelection,
+    SearchPickerSelectionMode, SearchPickerViewState, render_search_picker_dialog,
+    render_search_picker_dialog_with_preview, search_picker_dialog_area,
 };
 pub use sectioned_list::{SectionedListFocus, SectionedListSection, SectionedListState};
 pub use selectable_list::SelectableListState;

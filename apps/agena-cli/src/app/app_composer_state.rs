@@ -24,7 +24,7 @@ impl App {
         if let Some(overlay) = &mut self.overlay {
             match overlay {
                 Overlay::Choice(dialog) => {
-                    Self::sync_choice_overlay_input(dialog, false);
+                    Self::sync_choice_overlay_input(dialog);
                 }
                 Overlay::PathBrowser(dialog) => {
                     Self::refresh_path_browser_overlay_with_root(

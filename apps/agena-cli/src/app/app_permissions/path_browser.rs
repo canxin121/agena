@@ -30,7 +30,7 @@ impl App {
     ) -> bool {
         match resolve_tui_key(KeyContext::PathBrowser, key) {
             Some(KeyAction::Accept) => self.path_browser_activate(dialog),
-            _ => match dialog.handle_input_key(key, 10) {
+            _ => match dialog.handle_input_key(key) {
                 SearchPickerInputResult::Close => true,
                 SearchPickerInputResult::Navigated => false,
                 SearchPickerInputResult::Edited { changed } => {

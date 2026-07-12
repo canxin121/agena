@@ -759,8 +759,10 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 search,
                 vec![
                     ("Type", "context-help-key-filter"),
+                    ("← / → in search", "context-help-key-editor-move"),
                     ("↑", "context-help-key-previous"),
                     ("↓", "context-help-key-next"),
+                    ("← / → in results", "context-help-key-page"),
                     ("Alt+Up / Ctrl+R", "context-help-key-older"),
                     ("Alt+Down", "context-help-key-newer"),
                     ("Ctrl+S", "context-help-key-newer-stay"),
@@ -776,8 +778,10 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 selection,
                 vec![
                     ("Type", "context-help-key-filter"),
+                    ("← / → in search", "context-help-key-editor-move"),
                     ("↑ / Ctrl+P", "context-help-key-previous"),
                     ("↓ / Ctrl+N", "context-help-key-next"),
+                    ("← / → in results", "context-help-key-page"),
                     ("Tab", "context-help-key-fill"),
                     ("Enter", "context-help-key-accept"),
                     ("Esc", "context-help-key-close"),
@@ -834,7 +838,9 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 search,
                 vec![
                     ("Type", "context-help-key-filter"),
+                    ("← / → in search", "context-help-key-editor-move"),
                     ("↑ / ↓", "context-help-key-move"),
+                    ("← / → in results", "context-help-key-page"),
                     ("Enter", "context-help-key-activate"),
                     ("Esc", "context-help-key-close"),
                 ],
@@ -847,6 +853,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 selection,
                 vec![
                     ("↑ / ↓", "context-help-key-move"),
+                    ("← / →", "context-help-key-page"),
                     ("Enter", "context-help-key-accept"),
                     ("Esc", "context-help-key-close"),
                 ],
@@ -859,7 +866,9 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 search,
                 vec![
                     ("Type", "context-help-key-filter"),
+                    ("← / → in search", "context-help-key-editor-move"),
                     ("↑ / ↓", "context-help-key-move"),
+                    ("← / → in results", "context-help-key-page"),
                     ("Enter", "context-help-key-jump-message"),
                     ("Esc", "context-help-key-close"),
                 ],
@@ -889,6 +898,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 selection,
                 vec![
                     ("↑ / ↓", "context-help-key-move"),
+                    ("PageUp / PageDown", "context-help-key-page"),
                     ("Space", "context-help-key-toggle"),
                     ("Tab", "context-help-key-next-question"),
                     ("e", "context-help-key-custom-answer"),
@@ -949,7 +959,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             vec![(
                 actions,
                 vec![
-                    ("Enter", "context-help-key-confirm"),
+                    ("Y / Enter", "context-help-key-confirm"),
                     ("Esc", "context-help-key-cancel"),
                 ],
             )],
@@ -1082,6 +1092,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 actions,
                 vec![
                     ("↑ / ↓", "context-help-key-move"),
+                    ("← / →", "context-help-key-page"),
                     ("Enter", "context-help-key-activate"),
                     ("Esc", "context-help-key-close"),
                 ],
@@ -1094,6 +1105,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 selection,
                 vec![
                     ("↑ / ↓", "context-help-key-move"),
+                    ("← / →", "context-help-key-page"),
                     ("Space", "context-help-key-toggle"),
                     ("Enter", "context-help-key-accept"),
                     ("Esc", "context-help-key-close"),
@@ -1189,7 +1201,6 @@ mod tests {
     fn page_keys_only_appear_when_they_are_semantically_distinct() {
         for preset in [
             HelpPreset::Composer,
-            HelpPreset::SearchPicker,
             HelpPreset::BasicList,
             HelpPreset::PaneList,
             HelpPreset::ActionPane,
@@ -1205,6 +1216,35 @@ mod tests {
                     .flat_map(|(_, entries)| entries)
                     .all(|(keys, _)| !keys.contains("PageUp")),
                 "{preset:?} reintroduced redundant page navigation"
+            );
+        }
+    }
+
+    #[test]
+    fn every_paginated_search_picker_advertises_horizontal_page_navigation() {
+        for preset in [
+            HelpPreset::PromptHistory,
+            HelpPreset::Suggestion,
+            HelpPreset::SearchPicker,
+            HelpPreset::ChoiceList,
+            HelpPreset::Timeline,
+            HelpPreset::PluginActions,
+            HelpPreset::PluginSelection,
+        ] {
+            let (_, sections, _) = help_preset(preset);
+            assert!(
+                sections
+                    .iter()
+                    .flat_map(|(_, entries)| entries)
+                    .any(|(keys, _)| keys.contains("← / →")),
+                "{preset:?} must expose the shared horizontal page navigation"
+            );
+            assert!(
+                sections
+                    .iter()
+                    .flat_map(|(_, entries)| entries)
+                    .all(|(keys, _)| !keys.contains("PageUp")),
+                "{preset:?} must not advertise legacy page keys"
             );
         }
     }

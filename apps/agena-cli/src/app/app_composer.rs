@@ -244,60 +244,17 @@ impl App {
         let Some(mut search) = self.prompt_history_search.take() else {
             return false;
         };
-        let close = match resolve_tui_key(KeyContext::PromptHistory, key) {
-            Some(KeyAction::Close) => {
-                self.replace_composer_draft(search.meta.original.clone());
-                true
+        match handle_prompt_history_picker_key(&mut search, key) {
+            PromptHistoryPickerOutcome::KeepOpen => {
+                self.prompt_history_search = Some(search);
             }
-            Some(KeyAction::Accept) => {
-                if let Some(result) = search.selected_item().cloned() {
-                    self.replace_composer_draft(ComposerDraft {
-                        text: result.text,
-                        ..ComposerDraft::default()
-                    });
-                } else {
-                    self.replace_composer_draft(search.meta.original.clone());
-                }
-                true
+            PromptHistoryPickerOutcome::Close => {}
+            PromptHistoryPickerOutcome::Accept(text) => {
+                self.replace_composer_draft(ComposerDraft {
+                    text,
+                    ..ComposerDraft::default()
+                });
             }
-            Some(KeyAction::Previous) => {
-                search.move_selection(-1);
-                false
-            }
-            Some(KeyAction::Next) => {
-                search.move_selection(1);
-                false
-            }
-            Some(KeyAction::Older) => {
-                search.move_selection(1);
-                false
-            }
-            Some(KeyAction::Newer) => {
-                if search.selected == 0 {
-                    self.replace_composer_draft(search.meta.original.clone());
-                    true
-                } else {
-                    search.move_selection(-1);
-                    false
-                }
-            }
-            Some(KeyAction::NewerKeepOpen) => {
-                search.move_selection(-1);
-                false
-            }
-            _ => {
-                let before = search.input.text().to_string();
-                search.input.handle_line_input_key(key);
-                if search.input.text() != before {
-                    search.refresh_results();
-                }
-                false
-            }
-        };
-
-        if !close {
-            self.preview_prompt_history_search_selection(&search);
-            self.prompt_history_search = Some(search);
         }
         true
     }
@@ -322,44 +279,13 @@ impl App {
             Editor::default(),
             config,
             None,
-            PromptHistorySearchMeta {
-                original: self.current_composer_draft(),
-            },
+            (),
         );
         Self::refresh_prompt_history_search(&self.prompt_history, &mut search);
         self.slash_command_suggestions = None;
         self.file_mention_suggestions = None;
         self.selected_composer_item = None;
         self.prompt_history_search = Some(search);
-    }
-
-    /// History owns its query independently from the composer and previews the
-    /// selected newest-to-oldest entry directly in the editor. Esc restores the
-    /// untouched draft; Enter accepts the current selection.
-    pub(in crate::app) fn preview_prompt_history_search_selection(
-        &mut self,
-        search: &PromptHistorySearchState,
-    ) {
-        let preview = search.selected_item().map(|result| result.text.as_str());
-        match preview {
-            Some(text) => self.set_composer_text_for_history(text, false),
-            None => self.set_composer_text_for_history(search.meta.original.text.as_str(), false),
-        }
-    }
-
-    pub(in crate::app) fn set_composer_text_for_history(
-        &mut self,
-        text: &str,
-        cursor_at_start: bool,
-    ) {
-        self.composer.set_text(text.to_string());
-        if cursor_at_start {
-            self.composer.set_cursor(0);
-        }
-        self.composer_items.clear();
-        self.selected_composer_item = None;
-        self.slash_command_suggestions = None;
-        self.file_mention_suggestions = None;
     }
 
     pub(in crate::app) fn refresh_prompt_history_search(
@@ -387,11 +313,23 @@ impl App {
 
         match resolve_tui_key(KeyContext::Suggestion, key) {
             Some(KeyAction::Previous) => {
-                self.move_file_mention_suggestion(-1);
+                if let Some(state) = self.file_mention_suggestions.as_mut() {
+                    if matches!(key.code, crossterm::event::KeyCode::Up) {
+                        let _ = state.handle_input_key(key);
+                    } else {
+                        state.move_selection(-1);
+                    }
+                }
                 true
             }
             Some(KeyAction::Next) => {
-                self.move_file_mention_suggestion(1);
+                if let Some(state) = self.file_mention_suggestions.as_mut() {
+                    if matches!(key.code, crossterm::event::KeyCode::Down) {
+                        let _ = state.handle_input_key(key);
+                    } else {
+                        state.move_selection(1);
+                    }
+                }
                 true
             }
             Some(KeyAction::Close) => {
@@ -406,27 +344,23 @@ impl App {
                 let Some(mut state) = self.file_mention_suggestions.take() else {
                     return false;
                 };
-                let before = state.input.text().to_string();
                 let before_cursor = state.input.cursor();
-                state.input.handle_line_input_key(key);
-                let handled = if state.input.text() != before {
-                    let items = self.file_mention_suggestion_items(state.input.text());
-                    state.replace_items(items);
-                    true
-                } else {
-                    state.input.cursor() != before_cursor
+                let input_result = state.handle_input_key(key);
+                let handled = match input_result {
+                    SearchPickerInputResult::Navigated => true,
+                    SearchPickerInputResult::Edited { changed } => {
+                        if changed {
+                            let items = self.file_mention_suggestion_items(state.input.text());
+                            state.replace_items(items);
+                        }
+                        changed || state.input.cursor() != before_cursor
+                    }
+                    SearchPickerInputResult::Close => false,
                 };
                 self.file_mention_suggestions = Some(state);
                 handled
             }
         }
-    }
-
-    pub(in crate::app) fn move_file_mention_suggestion(&mut self, delta: isize) {
-        let Some(state) = self.file_mention_suggestions.as_mut() else {
-            return;
-        };
-        state.move_selection(delta);
     }
 
     pub(in crate::app) fn dismiss_file_mention_suggestions(&mut self) {
@@ -548,11 +482,23 @@ impl App {
 
         match resolve_tui_key(KeyContext::Suggestion, key) {
             Some(KeyAction::Previous) => {
-                self.move_slash_command_suggestion(-1);
+                if let Some(state) = self.slash_command_suggestions.as_mut() {
+                    if matches!(key.code, crossterm::event::KeyCode::Up) {
+                        let _ = state.handle_input_key(key);
+                    } else {
+                        state.move_selection(-1);
+                    }
+                }
                 true
             }
             Some(KeyAction::Next) => {
-                self.move_slash_command_suggestion(1);
+                if let Some(state) = self.slash_command_suggestions.as_mut() {
+                    if matches!(key.code, crossterm::event::KeyCode::Down) {
+                        let _ = state.handle_input_key(key);
+                    } else {
+                        state.move_selection(1);
+                    }
+                }
                 true
             }
             Some(KeyAction::Close) => {
@@ -571,24 +517,16 @@ impl App {
                 let Some(state) = self.slash_command_suggestions.as_mut() else {
                     return false;
                 };
-                let before = state.input.text().to_string();
                 let before_cursor = state.input.cursor();
-                state.input.handle_line_input_key(key);
-                if state.input.text() != before {
-                    state.refresh_results();
-                    true
-                } else {
-                    state.input.cursor() != before_cursor
+                match state.handle_input_key(key) {
+                    SearchPickerInputResult::Navigated => true,
+                    SearchPickerInputResult::Edited { changed } => {
+                        changed || state.input.cursor() != before_cursor
+                    }
+                    SearchPickerInputResult::Close => false,
                 }
             }
         }
-    }
-
-    pub(in crate::app) fn move_slash_command_suggestion(&mut self, delta: isize) {
-        let Some(state) = self.slash_command_suggestions.as_mut() else {
-            return;
-        };
-        state.move_selection(delta);
     }
 
     pub(in crate::app) fn dismiss_slash_command_suggestions(&mut self) {
@@ -769,23 +707,70 @@ use crate::app::{
     App, ClipboardCopyMethod, ComposerAction, ComposerDraft, ComposerItem, Editor,
     FileMentionSuggestionContext, FileMentionSuggestionItem, FileMentionSuggestionMeta,
     FileMentionSuggestionState, Focus, KeyEvent, MAX_FILE_MENTION_SUGGESTIONS, PromptHistory,
-    PromptHistorySearchMeta, PromptHistorySearchResult, PromptHistorySearchState,
-    SlashCommandSuggestionContext, SlashCommandSuggestionItem, SlashCommandSuggestionMeta,
-    SlashCommandSuggestionState, SlashCommandSuggestionValue, UiAction, commands,
-    file_mention_suggestion_context_for_text, min, runtime_tool_matches_slash_query,
-    slash_command_suggestion_context_for_text, transcript_node_kind_label, ui_text,
+    PromptHistorySearchResult, PromptHistorySearchState, SlashCommandSuggestionContext,
+    SlashCommandSuggestionItem, SlashCommandSuggestionMeta, SlashCommandSuggestionState,
+    SlashCommandSuggestionValue, UiAction, commands, file_mention_suggestion_context_for_text, min,
+    runtime_tool_matches_slash_query, slash_command_suggestion_context_for_text,
+    transcript_node_kind_label, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
-use agena_tui_components::{SearchPickerConfig, SearchPickerSearchMode};
+use agena_tui_components::{SearchPickerConfig, SearchPickerInputResult, SearchPickerSearchMode};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 fn composer_up_opens_prompt_history(key: KeyEvent, cursor: usize) -> bool {
     key.code == KeyCode::Up && key.modifiers == KeyModifiers::NONE && cursor == 0
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum PromptHistoryPickerOutcome {
+    KeepOpen,
+    Close,
+    Accept(String),
+}
+
+/// Keep picker navigation completely isolated from the composer. The caller
+/// receives text only for an explicit accept action, so moving, filtering, and
+/// closing the picker cannot accidentally preview or restore a history entry.
+fn handle_prompt_history_picker_key(
+    search: &mut PromptHistorySearchState,
+    key: KeyEvent,
+) -> PromptHistoryPickerOutcome {
+    match resolve_tui_key(KeyContext::PromptHistory, key) {
+        Some(KeyAction::Close) => PromptHistoryPickerOutcome::Close,
+        Some(KeyAction::Accept) => search
+            .selected_item()
+            .map(|result| PromptHistoryPickerOutcome::Accept(result.text.clone()))
+            .unwrap_or(PromptHistoryPickerOutcome::Close),
+        Some(KeyAction::Previous | KeyAction::Next) => {
+            let _ = search.handle_input_key(key);
+            PromptHistoryPickerOutcome::KeepOpen
+        }
+        Some(KeyAction::Older) => {
+            search.move_selection(1);
+            PromptHistoryPickerOutcome::KeepOpen
+        }
+        Some(KeyAction::Newer) if search.selected == 0 => PromptHistoryPickerOutcome::Close,
+        Some(KeyAction::Newer) => {
+            search.move_selection(-1);
+            PromptHistoryPickerOutcome::KeepOpen
+        }
+        Some(KeyAction::NewerKeepOpen) => {
+            search.move_selection(-1);
+            PromptHistoryPickerOutcome::KeepOpen
+        }
+        _ => {
+            let _ = search.handle_input_key(key);
+            PromptHistoryPickerOutcome::KeepOpen
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::composer_up_opens_prompt_history;
+    use super::{
+        Editor, PromptHistoryPickerOutcome, PromptHistorySearchResult, PromptHistorySearchState,
+        SearchPickerConfig, composer_up_opens_prompt_history, handle_prompt_history_picker_key,
+    };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
@@ -810,5 +795,87 @@ mod tests {
             key(KeyCode::Char('r'), KeyModifiers::CONTROL),
             0,
         ));
+    }
+
+    #[test]
+    fn prompt_history_only_returns_text_after_explicit_accept() {
+        let mut search = PromptHistorySearchState::new(
+            "History".to_string(),
+            String::new(),
+            String::new(),
+            "No matches".to_string(),
+            Editor::default(),
+            SearchPickerConfig::searchable(),
+            None,
+            (),
+        );
+        search.replace_items(vec![
+            PromptHistorySearchResult {
+                history_index: 1,
+                text: "new prompt".to_string(),
+            },
+            PromptHistorySearchResult {
+                history_index: 0,
+                text: "old prompt".to_string(),
+            },
+        ]);
+
+        assert_eq!(
+            handle_prompt_history_picker_key(&mut search, key(KeyCode::Down, KeyModifiers::NONE),),
+            PromptHistoryPickerOutcome::KeepOpen
+        );
+        assert_eq!(
+            handle_prompt_history_picker_key(&mut search, key(KeyCode::Down, KeyModifiers::NONE),),
+            PromptHistoryPickerOutcome::KeepOpen
+        );
+        assert_eq!(search.selected, 1);
+
+        assert_eq!(
+            handle_prompt_history_picker_key(&mut search, key(KeyCode::Up, KeyModifiers::NONE),),
+            PromptHistoryPickerOutcome::KeepOpen
+        );
+        assert_eq!(search.selected, 0);
+
+        assert_eq!(
+            handle_prompt_history_picker_key(
+                &mut search,
+                key(KeyCode::Char('o'), KeyModifiers::NONE),
+            ),
+            PromptHistoryPickerOutcome::KeepOpen
+        );
+        assert_eq!(search.input.text(), "o");
+        let selected_text = search
+            .selected_item()
+            .expect("filtered history selection")
+            .text
+            .clone();
+
+        assert_eq!(
+            handle_prompt_history_picker_key(&mut search, key(KeyCode::Enter, KeyModifiers::NONE),),
+            PromptHistoryPickerOutcome::Accept(selected_text)
+        );
+    }
+
+    #[test]
+    fn closing_prompt_history_never_returns_preview_text() {
+        let mut search = PromptHistorySearchState::new(
+            "History".to_string(),
+            String::new(),
+            String::new(),
+            "No matches".to_string(),
+            Editor::default(),
+            SearchPickerConfig::searchable(),
+            None,
+            (),
+        );
+        search.replace_items(vec![PromptHistorySearchResult {
+            history_index: 0,
+            text: "history prompt".to_string(),
+        }]);
+
+        assert_eq!(
+            handle_prompt_history_picker_key(&mut search, key(KeyCode::Esc, KeyModifiers::NONE),),
+            PromptHistoryPickerOutcome::Close
+        );
     }
 }

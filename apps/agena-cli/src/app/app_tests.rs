@@ -15,10 +15,7 @@ use super::{
 
 #[cfg(test)]
 mod prompt_history_tests {
-    use super::super::{
-        App, ComposerDraft, Editor, PromptHistory, PromptHistorySearchMeta,
-        PromptHistorySearchState, SearchPickerConfig,
-    };
+    use super::super::{App, Editor, PromptHistory, PromptHistorySearchState, SearchPickerConfig};
 
     #[test]
     fn history_search_indexes_the_bounded_catalog_newest_first() {
@@ -33,9 +30,7 @@ mod prompt_history_tests {
             Editor::default(),
             SearchPickerConfig::searchable(),
             None,
-            PromptHistorySearchMeta {
-                original: ComposerDraft::default(),
-            },
+            (),
         );
 
         App::refresh_prompt_history_search(&history, &mut search);

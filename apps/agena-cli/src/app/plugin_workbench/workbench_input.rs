@@ -444,6 +444,14 @@ impl App {
                 overlay.move_selection(1);
                 false
             }
+            Some(KeyAction::PageUp) => {
+                overlay.move_selection_page(-1);
+                false
+            }
+            Some(KeyAction::PageDown) => {
+                overlay.move_selection_page(1);
+                false
+            }
             Some(KeyAction::Accept) => {
                 self.commit_plugin_config_action(dialog);
                 false
@@ -471,6 +479,14 @@ impl App {
             }
             Some(KeyAction::MoveDown) => {
                 overlay.move_selection(1);
+                false
+            }
+            Some(KeyAction::PageUp) => {
+                overlay.move_selection_page(-1);
+                false
+            }
+            Some(KeyAction::PageDown) => {
+                overlay.move_selection_page(1);
                 false
             }
             Some(KeyAction::Toggle) if overlay.meta.multi => {

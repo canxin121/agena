@@ -793,14 +793,8 @@ impl App {
         dialog.refresh_results();
     }
 
-    pub(in crate::app) fn sync_choice_overlay_input(
-        dialog: &mut ChoiceOverlay,
-        prefer_input_value: bool,
-    ) {
+    pub(in crate::app) fn sync_choice_overlay_input(dialog: &mut ChoiceOverlay) {
         Self::refresh_choice_overlay(dialog);
-        if prefer_input_value {
-            dialog.selected = Self::preferred_choice_overlay_selection(dialog);
-        }
     }
 
     pub(in crate::app) fn preferred_choice_overlay_selection(dialog: &ChoiceOverlay) -> usize {

@@ -1,6 +1,18 @@
 impl App {
     pub(in crate::app) fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
+        if matches!(
+            self.current_route,
+            Route::SessionSearch(_)
+                | Route::Picker(_)
+                | Route::SessionModelChooser(_)
+                | Route::Timeline(_)
+        ) {
+            self.render_search_picker_route_background(frame, area);
+            self.render_route(frame, area);
+            self.render_context_help(frame, area);
+            return;
+        }
         if !matches!(self.current_route, Route::Main) {
             let footer_height = self.route_footer_height(area.width, area.height);
             let (body, footer) = if footer_height > 0 && area.height > footer_height {
@@ -24,6 +36,23 @@ impl App {
             return;
         }
 
+        self.render_main_content(frame, area);
+        self.render_overlay(frame, area);
+        self.render_context_help(frame, area);
+    }
+
+    fn render_search_picker_route_background(&mut self, frame: &mut Frame, area: Rect) {
+        if let Some(parent) = self.route_stack.last().cloned()
+            && !matches!(parent, Route::Main)
+        {
+            self.layout = LayoutCache::default();
+            self.render_route_content(frame, area, &parent);
+        } else {
+            self.render_main_content(frame, area);
+        }
+    }
+
+    fn render_main_content(&mut self, frame: &mut Frame, area: Rect) {
         let composer_height = self.composer_height(area.width, area.height);
         let vertical = split_vertical_sections(
             area,
@@ -55,8 +84,6 @@ impl App {
 
         self.render_transcript_surface(frame, transcript_host_area);
         self.render_composer(frame, composer);
-        self.render_overlay(frame, area);
-        self.render_context_help(frame, area);
     }
 
     pub(in crate::app) fn route_footer_height(&self, width: u16, total_height: u16) -> u16 {

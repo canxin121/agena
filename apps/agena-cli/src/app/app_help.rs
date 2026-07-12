@@ -757,9 +757,8 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 search,
                 vec![
                     ("Type", "context-help-key-filter"),
-                    ("↑ / Alt+Up / Ctrl+R", "context-help-key-older"),
-                    ("↓ / Alt+Down", "context-help-key-newer"),
-                    ("Ctrl+S", "context-help-key-newer-stay"),
+                    ("↓ / Alt+Down / Ctrl+R", "context-help-key-older"),
+                    ("↑ / Alt+Up / Ctrl+S", "context-help-key-newer"),
                     ("Enter", "context-help-key-accept"),
                     ("Esc / Ctrl+C", "context-help-key-close"),
                 ],

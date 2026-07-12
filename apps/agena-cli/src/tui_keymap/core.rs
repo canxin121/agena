@@ -81,9 +81,9 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Char('c') if only_ctrl(key) => Some(A::Close),
             K::Enter if unmodified(key) => Some(A::Accept),
             K::Char('r') if only_ctrl(key) => Some(A::Older),
-            K::Up if unmodified(key) || only_alt(key) => Some(A::Older),
-            K::Down if unmodified(key) || only_alt(key) => Some(A::Newer),
-            K::Char('s') if only_ctrl(key) => Some(A::NewerKeepOpen),
+            K::Down if unmodified(key) || only_alt(key) => Some(A::Older),
+            K::Char('s') if only_ctrl(key) => Some(A::Newer),
+            K::Up if unmodified(key) || only_alt(key) => Some(A::Newer),
             _ => None,
         },
         KeyContext::Suggestion => match key.code {

@@ -100,7 +100,7 @@ impl App {
             PendingInteractiveRequest::UserInput { request } => {
                 Some(PendingInteractiveOverlayTarget::UserInput {
                     session_id,
-                    request: request.clone(),
+                    request: Box::new(request.clone()),
                 })
             }
         }
@@ -216,7 +216,7 @@ impl App {
                 self.seen_user_input_request_ids
                     .insert(request.request_id.clone());
                 self.overlay = Some(Overlay::UserInputReply(Self::build_user_input_overlay(
-                    session_id, request,
+                    session_id, *request,
                 )));
             }
             None => {}

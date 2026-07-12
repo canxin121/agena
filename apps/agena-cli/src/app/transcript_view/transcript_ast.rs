@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
 use comrak::{
     Arena, Options,
@@ -162,7 +162,8 @@ pub(in crate::app) fn parse_markdown_document(text: &str) -> Vec<MarkdownBlock> 
 
     let arena = Arena::new();
     let options = markdown_options();
-    let root = parse_document(&arena, markdown.as_str(), &options);
+    let protected_markdown = protect_multiline_display_math(markdown.as_str());
+    let root = parse_document(&arena, protected_markdown.as_ref(), &options);
     let source_lines = markdown.lines().collect::<Vec<_>>();
     let mut previous_end_line = 0_usize;
     let mut blocks = root
@@ -196,6 +197,174 @@ pub(in crate::app) fn parse_markdown_document(text: &str) -> Vec<MarkdownBlock> 
         .collect::<Vec<_>>();
     renumber_footnotes(&mut blocks);
     blocks
+}
+
+/// Protect standalone `$$ ... $$` and `\[ ... \]` blocks from CommonMark
+/// block parsing.
+///
+/// Comrak recognizes dollar math while parsing inlines, after it has already
+/// identified headings, thematic breaks, lists, and other blocks. A formula
+/// line containing only `=` can therefore become a Setext heading underline
+/// before the dollar-math extension sees it. Turning the delimiters into a
+/// temporary math code fence makes the entire body opaque to block parsing;
+/// `convert_block` already maps math fences back to `MarkdownNode::Math`.
+/// Delimiter replacement preserves line count, so source ranges still select
+/// the original Markdown rather than the temporary representation.
+fn protect_multiline_display_math(markdown: &str) -> Cow<'_, str> {
+    if !markdown.contains("$$") && !markdown.contains(r"\[") {
+        return Cow::Borrowed(markdown);
+    }
+    let lines = markdown.split('\n').collect::<Vec<_>>();
+    let mut replacements = Vec::<(usize, String)>::new();
+    let mut index = 0_usize;
+    let mut markdown_fence = None::<(char, usize)>;
+
+    while index < lines.len() {
+        let line = lines[index];
+        if let Some((marker, minimum_len)) = markdown_fence {
+            if closing_markdown_fence(line, marker, minimum_len) {
+                markdown_fence = None;
+            }
+            index += 1;
+            continue;
+        }
+
+        if let Some((marker, len)) = opening_markdown_fence(line) {
+            markdown_fence = Some((marker, len));
+            index += 1;
+            continue;
+        }
+
+        let (opening_delimiter, closing_delimiter) =
+            if standalone_math_delimiter_prefix(line, "$$").is_some() {
+                ("$$", "$$")
+            } else if standalone_math_delimiter_prefix(line, r"\[").is_some() {
+                (r"\[", r"\]")
+            } else {
+                index += 1;
+                continue;
+            };
+        let opening_prefix = standalone_math_delimiter_prefix(line, opening_delimiter)
+            .expect("opening delimiter was identified above");
+        let Some(closing_index) = lines[index + 1..]
+            .iter()
+            .position(|candidate| {
+                standalone_math_delimiter_prefix(candidate, closing_delimiter).is_some()
+            })
+            .map(|offset| index + offset + 1)
+        else {
+            index += 1;
+            continue;
+        };
+
+        let body = &lines[index + 1..closing_index];
+        let (marker, len) = collision_free_math_fence(body);
+        let fence = marker.to_string().repeat(len);
+        replacements.push((index, format!("{opening_prefix}{fence}math")));
+        let closing_prefix =
+            standalone_math_delimiter_prefix(lines[closing_index], closing_delimiter)
+                .expect("closing delimiter was identified above");
+        replacements.push((closing_index, format!("{closing_prefix}{fence}")));
+        index = closing_index + 1;
+    }
+
+    if replacements.is_empty() {
+        return Cow::Borrowed(markdown);
+    }
+
+    let mut replacements = replacements.into_iter().peekable();
+    let mut protected = String::with_capacity(markdown.len().saturating_add(16));
+    for (line_index, line) in lines.into_iter().enumerate() {
+        if line_index > 0 {
+            protected.push('\n');
+        }
+        if replacements
+            .peek()
+            .is_some_and(|(replacement_index, _)| *replacement_index == line_index)
+        {
+            let (_, replacement) = replacements.next().expect("replacement was peeked above");
+            protected.push_str(&replacement);
+        } else {
+            protected.push_str(line);
+        }
+    }
+    Cow::Owned(protected)
+}
+
+fn standalone_math_delimiter_prefix<'a>(line: &'a str, delimiter: &str) -> Option<&'a str> {
+    let (prefix, content) = markdown_container_content(line)?;
+    if content.trim_end() != delimiter {
+        return None;
+    }
+    Some(prefix)
+}
+
+fn opening_markdown_fence(line: &str) -> Option<(char, usize)> {
+    let (_, trimmed) = markdown_container_content(line)?;
+    let marker = trimmed.chars().next()?;
+    if !matches!(marker, '`' | '~') {
+        return None;
+    }
+    let len = trimmed
+        .chars()
+        .take_while(|candidate| *candidate == marker)
+        .count();
+    (len >= 3).then_some((marker, len))
+}
+
+fn closing_markdown_fence(line: &str, marker: char, minimum_len: usize) -> bool {
+    let Some((_, trimmed)) = markdown_container_content(line) else {
+        return false;
+    };
+    let len = trimmed
+        .chars()
+        .take_while(|candidate| *candidate == marker)
+        .count();
+    len >= minimum_len && trimmed[len..].trim().is_empty()
+}
+
+/// Return the block-container prefix and the content that CommonMark sees on
+/// the line. Up to three indentation spaces and nested blockquote markers are
+/// supported; four leading spaces deliberately remain an indented code block.
+fn markdown_container_content(line: &str) -> Option<(&str, &str)> {
+    let bytes = line.as_bytes();
+    let mut position = 0_usize;
+    loop {
+        let indentation_start = position;
+        while bytes.get(position) == Some(&b' ') {
+            position += 1;
+        }
+        if position.saturating_sub(indentation_start) > 3 {
+            return None;
+        }
+        if bytes.get(position) != Some(&b'>') {
+            break;
+        }
+        position += 1;
+        if bytes.get(position) == Some(&b' ') {
+            position += 1;
+        }
+    }
+    Some((&line[..position], &line[position..]))
+}
+
+fn collision_free_math_fence(lines: &[&str]) -> (char, usize) {
+    let longest_backticks = longest_marker_run(lines, '`');
+    let longest_tildes = longest_marker_run(lines, '~');
+    if longest_backticks <= longest_tildes {
+        ('`', longest_backticks.saturating_add(1).max(3))
+    } else {
+        ('~', longest_tildes.saturating_add(1).max(3))
+    }
+}
+
+fn longest_marker_run(lines: &[&str], marker: char) -> usize {
+    lines
+        .iter()
+        .flat_map(|line| line.split(|candidate| candidate != marker))
+        .map(str::len)
+        .max()
+        .unwrap_or(0)
 }
 
 fn renumber_footnotes(blocks: &mut [MarkdownBlock]) {
@@ -2028,6 +2197,107 @@ mod tests {
                 .iter()
                 .any(|block| matches!(block.parsed, MarkdownNode::Math { display: true, .. }))
         );
+    }
+
+    #[test]
+    fn multiline_dollar_math_is_opaque_to_markdown_block_syntax() {
+        let source = concat!(
+            "### 矩阵乘法\n\n",
+            "$$\n",
+            "\\begin{bmatrix}\n",
+            "a_{11} & a_{12} \\\\\n",
+            "a_{21} & a_{22}\n",
+            "\\end{bmatrix}\n",
+            "=\n",
+            "\\begin{bmatrix}\n",
+            "b_{11} & b_{12} \\\\\n",
+            "b_{21} & b_{22}\n",
+            "\\end{bmatrix}\n",
+            "$$",
+        );
+        let blocks = parse_markdown_document(source);
+
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(
+            blocks[0].parsed,
+            MarkdownNode::Heading { level: 3, .. }
+        ));
+        let MarkdownNode::Math { literal, display } = &blocks[1].parsed else {
+            panic!("display formula must remain one semantic math block: {blocks:#?}");
+        };
+        assert!(*display);
+        assert!(literal.contains("a_{11} & a_{12} \\\\"));
+        assert!(literal.contains("\n=\n"));
+        assert!(literal.contains("b_{11} & b_{12} \\\\"));
+        assert_eq!(blocks[1].source, source.split_once("\n\n").unwrap().1);
+
+        let rendered = unicode_formula(literal).join("\n");
+        assert!(!rendered.contains("$$"), "dollar fence leaked:\n{rendered}");
+        assert!(
+            !rendered.contains(r"\begin"),
+            "matrix source leaked:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('='),
+            "matrix equality missing:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('⎡'),
+            "left matrix bracket missing:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('⎤'),
+            "right matrix bracket missing:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn dollar_delimiters_inside_code_fences_are_not_rewritten_as_math() {
+        let source = "```text\n$$\n=\n$$\n```";
+        let blocks = parse_markdown_document(source);
+
+        assert!(matches!(
+            &blocks[0].parsed,
+            MarkdownNode::Code { literal, .. } if literal.contains("$$\n=\n$$")
+        ));
+
+        let indented = parse_markdown_document("    $$\n    =\n    $$");
+        assert!(matches!(indented[0].parsed, MarkdownNode::Code { .. }));
+    }
+
+    #[test]
+    fn dollar_math_protection_is_lazy_and_uses_collision_free_fences() {
+        assert!(matches!(
+            protect_multiline_display_math("plain Markdown"),
+            Cow::Borrowed(_)
+        ));
+
+        let protected = protect_multiline_display_math("$$\n```\n~~~\n=\n$$");
+        let opening = protected.lines().next().unwrap_or_default();
+        let closing = protected.lines().last().unwrap_or_default();
+        assert!(opening.ends_with("math"));
+        assert_eq!(opening.trim_end_matches("math"), closing);
+        assert!(opening.len() >= 5);
+
+        let blocks = parse_markdown_document("$$\n```\n~~~\n=\n$$");
+        assert!(matches!(
+            &blocks[0].parsed,
+            MarkdownNode::Math { literal, display: true }
+                if literal.contains("```\n~~~\n=")
+        ));
+
+        let latex_delimited = parse_markdown_document("\\[\nx\n=\ny\n\\]");
+        assert!(matches!(
+            &latex_delimited[0].parsed,
+            MarkdownNode::Math { literal, display: true } if literal == "x\n=\ny"
+        ));
+
+        let quoted = parse_markdown_document("> $$\n> x\n> =\n> y\n> $$");
+        assert!(matches!(
+            &quoted[0].parsed,
+            MarkdownNode::Quote(children)
+                if matches!(children.as_slice(), [MarkdownNode::Math { display: true, .. }])
+        ));
     }
 
     #[test]

@@ -131,24 +131,17 @@ impl App {
         agena_tui_components::theme::set_active_palette(palette);
     }
 
-    pub async fn run<B: RatatuiBackend>(&mut self, terminal: &mut Terminal<B>) -> Result<()> {
+    pub async fn run(&mut self, terminal: &mut TerminalRuntime) -> Result<()> {
         self.bootstrap();
 
-        let mut events = Some(EventStream::new());
         let mut ticker = interval(Duration::from_millis(UI_TICK_MS));
 
         loop {
-            terminal
-                .draw(|frame| self.draw(frame))
-                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            terminal.draw(|frame| self.draw(frame))?;
+            terminal.set_text_input_active(self.has_active_text_input());
 
             tokio::select! {
-                maybe_event = async {
-                    match events.as_mut() {
-                        Some(events) => events.next().await,
-                        None => std::future::pending().await,
-                    }
-                } => {
+                maybe_event = terminal.next_event() => {
                     match maybe_event {
                         Some(Ok(event)) => self.handle_terminal_event(event),
                         Some(Err(error)) => self.flash_error(self.i18n.text_args(
@@ -171,9 +164,7 @@ impl App {
             }
 
             if let Some(action) = self.pending_ui_action.take() {
-                drop(events.take());
                 self.run_ui_action(action, terminal)?;
-                events = Some(EventStream::new());
             }
 
             if self.should_quit {
@@ -202,7 +193,7 @@ impl App {
 
     pub(in crate::app) fn on_tick(&mut self) {
         let now = Instant::now();
-        self.flush_input_buffers_if_due(now);
+        self.refresh_input_derived_state();
         self.refresh_status_line_if_due(now);
         self.poll_provider_studio_auth_if_due(now);
         if self.transcript.has_animated_activity() {
@@ -297,14 +288,12 @@ fn tui_plugin_color(color: Option<&agena_plugin_sdk::PluginTuiColor>) -> Option<
             .expect("PluginTuiColor guarantees the canonical TUI color grammar")
     })
 }
-use crate::app::RatatuiBackend;
 use crate::app::Result;
 use crate::app::{
     App, BTreeSet, Backend, Color, ComposerQueue, DRAFT_PERSIST_INTERVAL_MS, DraftSlot, DraftStore,
-    Duration, Editor, Event, EventStream, Focus, HashSet, I18n, Instant, LaunchOptions,
-    LayoutCache, PromptHistory, REFRESH_INTERVAL_MS, Route, RunOptionsState, SessionListState,
-    StatusLineState, Terminal, TranscriptDetailDefaults, TranscriptState, UI_TICK_MS,
+    Duration, Editor, Event, Focus, HashSet, I18n, Instant, LaunchOptions, LayoutCache,
+    PromptHistory, REFRESH_INTERVAL_MS, Route, RunOptionsState, SessionListState, StatusLineState,
+    TerminalRuntime, TranscriptDetailDefaults, TranscriptState, UI_TICK_MS,
     default_draft_store_path, default_prompt_history_path, interval,
     provider_studio_auth_poll_interval, ui_text, unbounded_channel,
 };
-use futures_util::StreamExt;

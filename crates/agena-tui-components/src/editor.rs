@@ -1,7 +1,6 @@
 use std::{
     cmp::{max, min},
     ops::Range,
-    time::{Duration, Instant},
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -15,10 +14,6 @@ use unicode_width::UnicodeWidthStr;
 use crate::search_list::SearchListInput;
 
 const WORD_SEPARATORS: &str = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
-const PASTE_BURST_MIN_CHARS: u16 = 3;
-const PASTE_BURST_CHAR_INTERVAL_MS: u64 = 8;
-const PASTE_ENTER_SUPPRESS_WINDOW_MS: u64 = 120;
-
 #[derive(Debug, Clone, Default)]
 pub struct Editor {
     text: String,
@@ -26,7 +21,6 @@ pub struct Editor {
     preferred_column: Option<usize>,
     kill_buffer: String,
     elements: Vec<EditorElement>,
-    paste_burst: PasteBurst,
 }
 
 #[derive(Debug, Clone)]
@@ -41,37 +35,6 @@ struct EditorElement {
     range: Range<usize>,
 }
 
-#[derive(Debug, Clone, Default)]
-struct PasteBurst {
-    last_plain_char_time: Option<Instant>,
-    consecutive_plain_char_burst: u16,
-    burst_window_until: Option<Instant>,
-    buffer: String,
-    active: bool,
-    pending_first_char: Option<(char, Instant)>,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum PasteCharDecision {
-    BeginBuffer { retro_chars: u16 },
-    BufferAppend,
-    RetainFirstChar,
-    BeginBufferFromPending,
-}
-
-#[derive(Debug, Clone)]
-enum PasteFlushResult {
-    Paste(String),
-    Typed(char),
-    None,
-}
-
-#[derive(Debug, Clone)]
-struct RetroGrab {
-    start_byte: usize,
-    grabbed: String,
-}
-
 impl Editor {
     pub fn from_text(text: String) -> Self {
         let cursor = text.len();
@@ -81,7 +44,6 @@ impl Editor {
             preferred_column: None,
             kill_buffer: String::new(),
             elements: Vec::new(),
-            paste_burst: PasteBurst::default(),
         }
     }
 
@@ -111,7 +73,6 @@ impl Editor {
         self.cursor = self.text.len();
         self.preferred_column = None;
         self.elements.clear();
-        self.paste_burst = PasteBurst::default();
     }
 
     pub fn set_elements(&mut self, elements: Vec<Range<usize>>) {
@@ -148,7 +109,6 @@ impl Editor {
         self.cursor = 0;
         self.preferred_column = None;
         self.elements.clear();
-        self.paste_burst = PasteBurst::default();
     }
 
     pub fn insert_char(&mut self, ch: char) {
@@ -289,44 +249,8 @@ impl Editor {
         }
     }
 
-    pub fn should_insert_newline_on_enter(&mut self) -> bool {
-        let now = Instant::now();
-        self.flush_pending_input_if_due(now);
-        self.paste_burst
-            .newline_should_insert_instead_of_submit(now)
-    }
-
     pub fn insert_explicit_newline(&mut self) {
-        self.flush_all_pending_input();
         self.insert_newline();
-        self.paste_burst.clear_window_after_non_char();
-    }
-
-    pub fn insert_newline_from_enter(&mut self) {
-        let now = Instant::now();
-        self.flush_pending_input_if_due(now);
-        if self.paste_burst.append_newline_if_active(now) {
-            return;
-        }
-        self.flush_all_pending_input();
-        self.insert_newline();
-        self.paste_burst.clear_window_after_non_char();
-    }
-
-    pub fn flush_pending_input_if_due(&mut self, now: Instant) {
-        match self.paste_burst.flush_if_due(now) {
-            PasteFlushResult::Paste(text) => self.insert_str(text.as_str()),
-            PasteFlushResult::Typed(ch) => self.insert_char(ch),
-            PasteFlushResult::None => {}
-        }
-    }
-
-    pub fn flush_all_pending_input(&mut self) {
-        match self.paste_burst.flush_now() {
-            PasteFlushResult::Paste(text) => self.insert_str(text.as_str()),
-            PasteFlushResult::Typed(ch) => self.insert_char(ch),
-            PasteFlushResult::None => {}
-        }
     }
 
     pub fn cursor_on_first_line(&self) -> bool {
@@ -338,9 +262,6 @@ impl Editor {
     }
 
     fn handle_input_key(&mut self, key: KeyEvent, multiline: bool) {
-        let now = Instant::now();
-        self.flush_pending_input_if_due(now);
-
         match key {
             KeyEvent {
                 code: KeyCode::Char('\u{0001}'),
@@ -352,7 +273,6 @@ impl Editor {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.prepare_for_command();
                 self.move_home(true);
             }
             KeyEvent {
@@ -370,7 +290,6 @@ impl Editor {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.prepare_for_command();
                 self.move_left();
             }
             KeyEvent {
@@ -378,7 +297,6 @@ impl Editor {
                 modifiers,
                 ..
             } if modifiers == KeyModifiers::CONTROL || modifiers == KeyModifiers::ALT => {
-                self.prepare_for_command();
                 self.move_word_left();
             }
             KeyEvent {
@@ -386,7 +304,6 @@ impl Editor {
                 modifiers,
                 ..
             } if modifiers == KeyModifiers::ALT => {
-                self.prepare_for_command();
                 self.move_word_left();
             }
             KeyEvent {
@@ -399,7 +316,6 @@ impl Editor {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.prepare_for_command();
                 self.move_end(true);
             }
             KeyEvent {
@@ -417,7 +333,6 @@ impl Editor {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.prepare_for_command();
                 self.move_right();
             }
             KeyEvent {
@@ -425,7 +340,6 @@ impl Editor {
                 modifiers,
                 ..
             } if modifiers == KeyModifiers::CONTROL || modifiers == KeyModifiers::ALT => {
-                self.prepare_for_command();
                 self.move_word_right();
             }
             KeyEvent {
@@ -433,7 +347,6 @@ impl Editor {
                 modifiers,
                 ..
             } if modifiers == KeyModifiers::ALT => {
-                self.prepare_for_command();
                 self.move_word_right();
             }
             KeyEvent {
@@ -441,7 +354,6 @@ impl Editor {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if multiline => {
-                self.prepare_for_command();
                 self.move_up();
             }
             KeyEvent {
@@ -454,7 +366,6 @@ impl Editor {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } if multiline => {
-                self.prepare_for_command();
                 self.move_up();
             }
             KeyEvent {
@@ -462,7 +373,6 @@ impl Editor {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if multiline => {
-                self.prepare_for_command();
                 self.move_down();
             }
             KeyEvent {
@@ -475,7 +385,6 @@ impl Editor {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } if multiline => {
-                self.prepare_for_command();
                 self.move_down();
             }
             KeyEvent {
@@ -483,7 +392,6 @@ impl Editor {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.prepare_for_command();
                 self.move_home(false);
             }
             KeyEvent {
@@ -491,7 +399,6 @@ impl Editor {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.prepare_for_command();
                 self.move_end(false);
             }
             KeyEvent {
@@ -499,7 +406,6 @@ impl Editor {
                 modifiers,
                 ..
             } if modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                self.prepare_for_command();
                 self.delete_backward_word();
             }
             KeyEvent {
@@ -507,7 +413,6 @@ impl Editor {
                 modifiers,
                 ..
             } if modifiers == KeyModifiers::ALT => {
-                self.prepare_for_command();
                 self.delete_backward_word();
             }
             KeyEvent {
@@ -515,7 +420,6 @@ impl Editor {
                 modifiers,
                 ..
             } if modifiers == KeyModifiers::ALT => {
-                self.prepare_for_command();
                 self.delete_backward_word();
             }
             KeyEvent {
@@ -528,7 +432,6 @@ impl Editor {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.prepare_for_command();
                 self.backspace();
             }
             KeyEvent {
@@ -536,7 +439,6 @@ impl Editor {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.prepare_for_command();
                 if self.cursor >= self.text.len() {
                     self.backspace();
                 } else {
@@ -548,7 +450,6 @@ impl Editor {
                 modifiers,
                 ..
             } if modifiers == KeyModifiers::ALT => {
-                self.prepare_for_command();
                 self.delete_forward_word();
             }
             KeyEvent {
@@ -561,7 +462,6 @@ impl Editor {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.prepare_for_command();
                 self.delete();
             }
             KeyEvent {
@@ -574,7 +474,6 @@ impl Editor {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.prepare_for_command();
                 self.delete_backward_word();
             }
             KeyEvent {
@@ -587,7 +486,6 @@ impl Editor {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.prepare_for_command();
                 self.kill_to_start_of_line(multiline);
             }
             KeyEvent {
@@ -600,7 +498,6 @@ impl Editor {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.prepare_for_command();
                 self.kill_to_end_of_line(multiline);
             }
             KeyEvent {
@@ -613,50 +510,28 @@ impl Editor {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.prepare_for_command();
                 self.yank();
             }
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
                 ..
-            } if is_altgr(modifiers) => {
-                self.handle_plain_char(c, now);
+            } if is_altgr(modifiers) && !c.is_control() => {
+                self.handle_plain_char(c);
             }
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
                 ..
-            } => {
-                self.handle_plain_char(c, now);
+            } if !c.is_control() => {
+                self.handle_plain_char(c);
             }
             _ => {}
         }
     }
 
-    fn prepare_for_command(&mut self) {
-        self.flush_all_pending_input();
-        self.paste_burst.clear_window_after_non_char();
-    }
-
-    fn handle_plain_char(&mut self, ch: char, now: Instant) {
-        match self.paste_burst.on_plain_char(ch, now) {
-            PasteCharDecision::RetainFirstChar => {}
-            PasteCharDecision::BufferAppend | PasteCharDecision::BeginBufferFromPending => {
-                self.paste_burst.append_char_to_buffer(ch, now);
-            }
-            PasteCharDecision::BeginBuffer { retro_chars } => {
-                if let Some(retro) = self.decide_retro_grab(retro_chars as usize) {
-                    self.remove_range(retro.start_byte, self.cursor);
-                    self.paste_burst
-                        .begin_with_retro_grabbed(retro.grabbed, now);
-                    self.paste_burst.append_char_to_buffer(ch, now);
-                } else {
-                    self.flush_all_pending_input();
-                    self.insert_char(ch);
-                }
-            }
-        }
+    fn handle_plain_char(&mut self, ch: char) {
+        self.insert_char(ch);
     }
 
     fn move_left(&mut self) {
@@ -886,24 +761,6 @@ impl Editor {
         self.adjust_pos_out_of_elements(pos, false)
     }
 
-    fn decide_retro_grab(&self, retro_chars: usize) -> Option<RetroGrab> {
-        let before = &self.text[..self.cursor];
-        let start_byte = retro_start_index(before, retro_chars);
-        if self.range_intersects_element(start_byte..self.cursor) {
-            return None;
-        }
-        let grabbed = before[start_byte..].to_string();
-        let looks_pastey = grabbed.chars().any(char::is_whitespace)
-            || grabbed
-                .chars()
-                .any(|ch| matches!(ch, '/' | '\\' | ':' | '=' | ',' | '.'))
-            || grabbed.chars().count() >= 16;
-        looks_pastey.then_some(RetroGrab {
-            start_byte,
-            grabbed,
-        })
-    }
-
     pub fn insert_str_at(&mut self, at: usize, text: &str) {
         let at = self.clamp_pos_for_insertion(at);
         self.text.insert_str(at, text);
@@ -916,12 +773,6 @@ impl Editor {
         self.elements
             .iter()
             .position(|element| pos > element.range.start && pos < element.range.end)
-    }
-
-    fn range_intersects_element(&self, range: Range<usize>) -> bool {
-        self.elements
-            .iter()
-            .any(|element| element.range.start < range.end && element.range.end > range.start)
     }
 
     fn clamp_pos_to_nearest_boundary(&self, mut pos: usize) -> usize {
@@ -1054,10 +905,6 @@ impl SearchListInput for Editor {
 
     fn handle_line_input_key(&mut self, key: KeyEvent) {
         Self::handle_line_input_key(self, key);
-    }
-
-    fn flush_all_pending_input(&mut self) {
-        Self::flush_all_pending_input(self);
     }
 }
 
@@ -1213,129 +1060,6 @@ fn is_word_grapheme(grapheme: &str) -> bool {
     grapheme
         .chars()
         .any(|ch| !ch.is_whitespace() && !is_word_separator(ch))
-}
-
-fn retro_start_index(before: &str, retro_chars: usize) -> usize {
-    let mut index = before.len();
-    for _ in 0..retro_chars {
-        let previous = previous_grapheme_boundary(before, index);
-        if previous == index {
-            break;
-        }
-        index = previous;
-    }
-    index
-}
-
-impl PasteBurst {
-    fn on_plain_char(&mut self, ch: char, now: Instant) -> PasteCharDecision {
-        let interval = Duration::from_millis(PASTE_BURST_CHAR_INTERVAL_MS);
-        match self.last_plain_char_time {
-            Some(previous) if now.duration_since(previous) <= interval => {
-                self.consecutive_plain_char_burst =
-                    self.consecutive_plain_char_burst.saturating_add(1);
-            }
-            _ => self.consecutive_plain_char_burst = 1,
-        }
-        self.last_plain_char_time = Some(now);
-
-        if self.active {
-            self.extend_window(now);
-            return PasteCharDecision::BufferAppend;
-        }
-
-        if let Some((held, held_at)) = self.pending_first_char
-            && now.duration_since(held_at) <= interval
-        {
-            self.active = true;
-            let _ = self.pending_first_char.take();
-            self.buffer.push(held);
-            self.extend_window(now);
-            return PasteCharDecision::BeginBufferFromPending;
-        }
-
-        if self.consecutive_plain_char_burst >= PASTE_BURST_MIN_CHARS {
-            return PasteCharDecision::BeginBuffer {
-                retro_chars: self.consecutive_plain_char_burst.saturating_sub(1),
-            };
-        }
-
-        self.pending_first_char = Some((ch, now));
-        PasteCharDecision::RetainFirstChar
-    }
-
-    fn flush_if_due(&mut self, now: Instant) -> PasteFlushResult {
-        let timed_out = self.last_plain_char_time.is_some_and(|previous| {
-            now.duration_since(previous) > Duration::from_millis(PASTE_BURST_CHAR_INTERVAL_MS)
-        });
-
-        if !timed_out {
-            return PasteFlushResult::None;
-        }
-
-        self.flush_now()
-    }
-
-    fn flush_now(&mut self) -> PasteFlushResult {
-        self.last_plain_char_time = None;
-        self.consecutive_plain_char_burst = 0;
-
-        if self.active || !self.buffer.is_empty() {
-            self.active = false;
-            self.burst_window_until = None;
-            let text = std::mem::take(&mut self.buffer);
-            return PasteFlushResult::Paste(text);
-        }
-
-        if let Some((ch, _)) = self.pending_first_char.take() {
-            self.burst_window_until = None;
-            return PasteFlushResult::Typed(ch);
-        }
-
-        PasteFlushResult::None
-    }
-
-    fn append_char_to_buffer(&mut self, ch: char, now: Instant) {
-        self.buffer.push(ch);
-        self.extend_window(now);
-    }
-
-    fn begin_with_retro_grabbed(&mut self, grabbed: String, now: Instant) {
-        if !grabbed.is_empty() {
-            self.buffer.push_str(grabbed.as_str());
-        }
-        self.active = true;
-        self.extend_window(now);
-    }
-
-    fn newline_should_insert_instead_of_submit(&self, now: Instant) -> bool {
-        self.active
-            || self.burst_window_until.is_some_and(|until| now <= until)
-            || self.pending_first_char.is_some()
-    }
-
-    fn append_newline_if_active(&mut self, now: Instant) -> bool {
-        if self.active {
-            self.buffer.push('\n');
-            self.extend_window(now);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn extend_window(&mut self, now: Instant) {
-        self.burst_window_until = Some(now + Duration::from_millis(PASTE_ENTER_SUPPRESS_WINDOW_MS));
-    }
-
-    fn clear_window_after_non_char(&mut self) {
-        self.last_plain_char_time = None;
-        self.consecutive_plain_char_burst = 0;
-        self.burst_window_until = None;
-        self.active = false;
-        self.pending_first_char = None;
-        self.buffer.clear();
-    }
 }
 
 #[cfg(test)]

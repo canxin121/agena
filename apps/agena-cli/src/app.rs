@@ -17,8 +17,9 @@ use agena::{
     config::get_json_path,
     event::{DomainEvent, EventKind as AgenaSessionEvent},
     message::{
-        AttachmentKind, ExecutionStatus, MessagePart, MessageStatus, OperationPart, PartContent,
-        ToolInvocation, UserInputQuestion, UserInputReply, UserInputReplyKind, UserInputRequest,
+        AttachmentItem, AttachmentKind, ExecutionStatus, MessagePart, MessageStatus, OperationPart,
+        PartContent, ToolInvocation, UserInputQuestion, UserInputReply, UserInputReplyKind,
+        UserInputRequest,
     },
     model::ModelRef,
     permission::{
@@ -39,10 +40,9 @@ use agena_api::{
 };
 use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
-use crossterm::event::{Event, EventStream, KeyEvent, KeyEventKind};
+use crossterm::event::{Event, KeyEvent, KeyEventKind};
 use ratatui::{
-    Frame, Terminal,
-    backend::Backend as RatatuiBackend,
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
@@ -51,6 +51,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue, json};
 use tokio::{sync::mpsc::unbounded_channel, time::interval};
 use unicode_width::UnicodeWidthChar;
 
+use crate::attachment_source::{ClipboardImageSource, Iterm2UploadSource, acquire_from_source};
 use crate::backend::{
     Backend, ConfigJsonSources, InspectorRow, LiveEvent, ProviderConfigDraft,
     ProviderDraftAdapterRule, ProviderDraftAuthKind, ProviderDraftInteractiveLoginKind,
@@ -59,7 +60,7 @@ use crate::backend::{
     provider_native_tools_preset_from_config,
 };
 use crate::clipboard::{
-    ClipboardCopyMethod, normalize_pasted_path, paste_image_to_temp_png, pasted_image_format,
+    ClipboardCopyMethod, ClipboardTextError, normalize_pasted_path, pasted_image_format,
     set_clipboard_text,
 };
 use crate::commands::{self, CommandId, CommandSpec};
@@ -68,7 +69,7 @@ use crate::external_editor::{edit_text, open_path};
 use crate::external_pager::page_text;
 use crate::i18n::{I18n, SUPPORTED_LOCALES};
 use crate::iterm2;
-use crate::terminal;
+use crate::terminal::{SuspendReason, TerminalRuntime};
 use crate::tui_keymap::ComposerAction;
 use crate::ui_text;
 use agena_api_server::local_api::{

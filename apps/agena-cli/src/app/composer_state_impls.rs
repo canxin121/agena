@@ -155,12 +155,14 @@ impl PersistentComposerDraft {
 impl PersistentComposerItem {
     pub(in crate::app) fn into_item(self) -> ComposerItem {
         match self {
-            Self::Attachment(attachment) => ComposerItem::Attachment(StagedAttachment {
+            Self::Attachment(attachment) => ComposerItem::Attachment(Box::new(StagedAttachment {
                 path: attachment.path,
+                prepared: None,
+                cleanup_root: None,
                 placeholder: attachment.placeholder,
                 label: attachment.label,
                 is_temp: false,
-            }),
+            })),
             Self::LargePaste(paste) => ComposerItem::LargePaste(StagedPaste {
                 placeholder: paste.placeholder,
                 label: paste.label,

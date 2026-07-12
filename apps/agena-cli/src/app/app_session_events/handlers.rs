@@ -405,7 +405,10 @@ impl App {
                     detail_page.selection.selected = preferred_detail_field;
                 }
                 if let Some(text) = action.clipboard_text {
-                    let _ = set_clipboard_text(text.as_str());
+                    self.request_clipboard_copy(
+                        text,
+                        "Copied provider authorization value.".to_string(),
+                    );
                 }
                 if !provider_draft_auth_message_is_pending(&action.message) {
                     self.flash_success(provider_draft_auth_action_message(
@@ -687,7 +690,6 @@ use crate::app::{
     provider_studio_preferred_detail_field_index, provider_studio_provider_rows,
     provider_studio_restore_model_selection, provider_studio_save_error_message,
     provider_studio_save_result_message, provider_studio_selected_adapter_id,
-    restore_provider_studio_adapter_selection, set_clipboard_text,
-    settings_choice_adapter_fallback, settings_choice_default_provider_detail,
-    summarize_lineage_session_items, ui_text,
+    restore_provider_studio_adapter_selection, settings_choice_adapter_fallback,
+    settings_choice_default_provider_detail, summarize_lineage_session_items, ui_text,
 };

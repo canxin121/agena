@@ -4,7 +4,7 @@ impl App {
             return;
         }
 
-        self.flush_input_buffers_if_due(Instant::now());
+        self.refresh_input_derived_state();
 
         let global_action = resolve_tui_key(KeyContext::Global, key);
         if prompt_history_preempts_global_interrupt(self.prompt_history_search.is_some(), key) {

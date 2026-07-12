@@ -16,98 +16,26 @@ impl App {
         self.focus = Focus::Transcript;
     }
 
-    pub(in crate::app) fn flush_input_buffers_if_due(&mut self, now: Instant) {
-        self.composer.flush_pending_input_if_due(now);
+    pub(in crate::app) fn refresh_input_derived_state(&mut self) {
         if let Some(search) = self.prompt_history_search.as_mut() {
-            search.query.flush_pending_input_if_due(now);
             Self::refresh_prompt_history_search(&self.prompt_history, search);
         }
         self.sync_composer_suggestions();
-        match &mut self.current_route {
-            Route::Main => {}
-            Route::Usage(_) => {}
-            Route::SettingsStudio(_) => {}
-            Route::AgentStudio(dialog) => {
-                if let Some(editor) = dialog.workbench.editor.as_mut() {
-                    editor.input.flush_pending_input_if_due(now);
-                }
-            }
-            Route::PermissionStudio(dialog) => {
-                if let Some(editor) = dialog.editor.as_mut() {
-                    editor.input.flush_pending_input_if_due(now);
-                }
-            }
-            Route::PermissionRuleStudio(dialog) => {
-                if let Some(editor) = dialog.workbench.editor.as_mut() {
-                    editor.input.flush_pending_input_if_due(now);
-                }
-            }
-            Route::SessionSearch(dialog) => dialog.input.flush_pending_input_if_due(now),
-            Route::Picker(dialog) => dialog.input.flush_pending_input_if_due(now),
-            Route::SessionModelChooser(dialog) => {
-                dialog.input.flush_pending_input_if_due(now);
-                Self::refresh_session_model_chooser_overlay(dialog, false, None);
-            }
-            Route::Timeline(dialog) => dialog.input.flush_pending_input_if_due(now),
-            Route::PluginPolicyStudio(_) => {}
-            Route::PluginWorkbench(dialog) => Self::flush_plugin_workbench_input(dialog, now),
-            Route::ProviderStudio(dialog) => {
-                if let Some(editor) = dialog.editor.as_mut() {
-                    editor.input.flush_pending_input_if_due(now);
-                }
-            }
-            Route::ModelCatalogStudio(dialog) => {
-                if let Some(editor) = dialog.workbench.editor.as_mut() {
-                    editor.input.flush_pending_input_if_due(now);
-                }
-            }
+        if let Route::SessionModelChooser(dialog) = &mut self.current_route {
+            Self::refresh_session_model_chooser_overlay(dialog, false, None);
         }
         if let Some(overlay) = &mut self.overlay {
             match overlay {
-                Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
-                    dialog.input.flush_pending_input_if_due(now);
-                }
-                Overlay::AgentCreate(dialog) => {
-                    dialog.input.flush_pending_input_if_due(now);
-                }
-                Overlay::SettingsValueEdit(dialog) => {
-                    dialog.input.flush_pending_input_if_due(now);
-                }
-                Overlay::RuntimeSettingEdit(dialog) => {
-                    dialog.input.flush_pending_input_if_due(now);
-                }
                 Overlay::Choice(dialog) => {
-                    dialog.input.flush_pending_input_if_due(now);
                     Self::sync_choice_overlay_input(dialog, false);
                 }
-                Overlay::FileAttach(dialog) => dialog.input.flush_pending_input_if_due(now),
                 Overlay::PathBrowser(dialog) => {
-                    dialog.input.flush_pending_input_if_due(now);
                     Self::refresh_path_browser_overlay_with_root(
                         self.backend.workspace_root(),
                         dialog,
                     );
                 }
-                Overlay::UserInputReply(dialog) => {
-                    if dialog.editing_custom {
-                        dialog.custom_input.flush_pending_input_if_due(now);
-                    }
-                }
-                Overlay::SessionSearch(dialog) => dialog.input.flush_pending_input_if_due(now),
-                Overlay::Picker(dialog) => dialog.input.flush_pending_input_if_due(now),
-                Overlay::Timeline(dialog) => dialog.input.flush_pending_input_if_due(now),
-                Overlay::ProviderStudio(dialog) => {
-                    if let Some(editor) = dialog.editor.as_mut() {
-                        editor.input.flush_pending_input_if_due(now);
-                    }
-                }
-                Overlay::ModelCatalogStudio(dialog) => {
-                    if let Some(editor) = dialog.workbench.editor.as_mut() {
-                        editor.input.flush_pending_input_if_due(now);
-                    }
-                }
-                Overlay::Confirm(_) => {}
-                Overlay::Permission(_) => {}
+                _ => {}
             }
         }
     }
@@ -143,6 +71,20 @@ impl App {
         path: &Path,
         is_temp: bool,
     ) -> UiResult<()> {
+        let prepared = self
+            .backend
+            .prepare_attachment_from_path(path)
+            .map_err(|error| error.to_string())?;
+        self.stage_prepared_attachment(path, is_temp, None, prepared)
+    }
+
+    fn stage_prepared_attachment(
+        &mut self,
+        path: &Path,
+        is_temp: bool,
+        cleanup_root: Option<&Path>,
+        prepared: AttachmentItem,
+    ) -> UiResult<()> {
         let resolved = self.backend.resolve_workspace_path(path);
         let metadata = std::fs::metadata(&resolved).map_err(|error| {
             ui_text::attachment_inspect_failed_message(
@@ -151,10 +93,6 @@ impl App {
                 error.to_string().as_str(),
             )
         })?;
-        let prepared = self
-            .backend
-            .prepare_attachment_from_path(path)
-            .map_err(|error| error.to_string())?;
         let label = attachment_chip_label(
             &self.i18n,
             resolved.as_path(),
@@ -171,12 +109,14 @@ impl App {
 
         self.composer.insert_element(placeholder.as_str());
         self.composer_items
-            .push(ComposerItem::Attachment(StagedAttachment {
+            .push(ComposerItem::Attachment(Box::new(StagedAttachment {
                 path: resolved.clone(),
+                prepared: Some(std::sync::Arc::new(prepared)),
+                cleanup_root: cleanup_root.map(Path::to_path_buf),
                 placeholder,
                 label,
                 is_temp,
-            }));
+            })));
         self.flash_success(self.i18n.text_args(
             "flash-attached",
             &crate::fl_args!("path" => resolved.display().to_string()),
@@ -262,7 +202,6 @@ impl App {
     }
 
     pub(in crate::app) fn current_composer_draft(&mut self) -> ComposerDraft {
-        self.composer.flush_all_pending_input();
         self.sync_composer_items_with_editor();
         ComposerDraft {
             text: self.composer.text().to_string(),
@@ -488,10 +427,13 @@ impl App {
                 })?;
             match item {
                 ComposerItem::Attachment(attachment) => {
-                    let prepared = self
-                        .backend
-                        .prepare_attachment_from_path(attachment.path.as_path())
-                        .map_err(|error| error.to_string())?;
+                    let prepared = match attachment.prepared.as_ref() {
+                        Some(prepared) => prepared.as_ref().clone(),
+                        None => self
+                            .backend
+                            .prepare_attachment_from_path(attachment.path.as_path())
+                            .map_err(|error| error.to_string())?,
+                    };
                     parts.push(PartContent::attachments(vec![prepared]));
                 }
                 ComposerItem::LargePaste(paste) => {
@@ -508,17 +450,29 @@ impl App {
         Ok(parts)
     }
 
-    pub(in crate::app) fn run_ui_action<B: RatatuiBackend>(
+    pub(in crate::app) fn run_ui_action(
         &mut self,
         action: UiAction,
-        terminal: &mut Terminal<B>,
+        terminal: &mut TerminalRuntime,
     ) -> Result<()> {
         match action {
-            UiAction::EditComposerExternally => self.edit_composer_externally(terminal),
-            UiAction::AttachClipboardImage => {
-                self.attach_clipboard_image();
+            UiAction::CopyText { text, success } => {
+                let context = terminal.context().clone();
+                match set_clipboard_text(text.as_str(), &context, |sequence| {
+                    terminal
+                        .write_protocol(sequence)
+                        .map_err(|error| ClipboardTextError(error.to_string()))
+                }) {
+                    Ok(method) => self.flash_clipboard_copy_success(method, success),
+                    Err(error) => self.flash_error(self.i18n.text_args(
+                        "flash-clipboard-copy-failed",
+                        &crate::fl_args!("error" => error.to_string()),
+                    )),
+                }
                 Ok(())
             }
+            UiAction::EditComposerExternally => self.edit_composer_externally(terminal),
+            UiAction::AttachClipboardImage => self.attach_clipboard_image(terminal),
             UiAction::AttachIterm2Files { images_only } => {
                 self.attach_iterm2_files(terminal, images_only)
             }
@@ -531,17 +485,13 @@ impl App {
         }
     }
 
-    pub(in crate::app) fn edit_composer_externally<B: RatatuiBackend>(
+    pub(in crate::app) fn edit_composer_externally(
         &mut self,
-        terminal: &mut Terminal<B>,
+        terminal: &mut TerminalRuntime,
     ) -> Result<()> {
-        self.composer.flush_all_pending_input();
-        terminal
-            .flush()
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        terminal::suspend_stdio_terminal()?;
-        let result = edit_text(self.composer.text());
-        terminal::resume_terminal(terminal)?;
+        let result = terminal.with_suspended(SuspendReason::ExternalEditor, || {
+            edit_text(self.composer.text())
+        })?;
         match result {
             Ok(text) => {
                 self.apply_external_editor_text(text);
@@ -556,17 +506,12 @@ impl App {
         Ok(())
     }
 
-    pub(in crate::app) fn open_path_in_editor<B: RatatuiBackend>(
+    pub(in crate::app) fn open_path_in_editor(
         &mut self,
-        terminal: &mut Terminal<B>,
+        terminal: &mut TerminalRuntime,
         path: &Path,
     ) -> Result<()> {
-        terminal
-            .flush()
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        terminal::suspend_stdio_terminal()?;
-        let result = open_path(path);
-        terminal::resume_terminal(terminal)?;
+        let result = terminal.with_suspended(SuspendReason::OpenPath, || open_path(path))?;
         if let Err(error) = result {
             self.flash_error(self.i18n.text_args(
                 "flash-external-editor-failed",
@@ -576,54 +521,54 @@ impl App {
         Ok(())
     }
 
-    pub(in crate::app) fn attach_clipboard_image(&mut self) {
-        match paste_image_to_temp_png() {
-            Ok((path, info)) => {
-                let format_label = pasted_image_format(path.as_path()).label();
-                if let Err(error) = self.stage_attachment_from_path(path.as_path(), true) {
-                    let _ = std::fs::remove_file(path);
-                    self.flash_error(error);
-                } else {
-                    self.flash_success(self.i18n.text_args(
-                        "flash-clipboard-image-attached",
-                        &crate::fl_args!(
-                            "width" => info.width as i64,
-                            "height" => info.height as i64,
-                            "format" => format_label,
-                        ),
-                    ));
-                }
+    pub(in crate::app) fn attach_clipboard_image(
+        &mut self,
+        terminal: &mut TerminalRuntime,
+    ) -> Result<()> {
+        let source = ClipboardImageSource;
+        let context = terminal.context().clone();
+        let acquisition = match acquire_from_source(&source, &context, terminal)? {
+            Ok(acquisition) => acquisition,
+            Err(error) => {
+                self.flash_error(self.i18n.text_args(
+                    "flash-clipboard-image-attach-failed",
+                    &crate::fl_args!("error" => error),
+                ));
+                return Ok(());
             }
-            Err(error) => self.flash_error(self.i18n.text_args(
-                "flash-clipboard-image-attach-failed",
-                &crate::fl_args!("error" => error.to_string()),
-            )),
+        };
+        let Some(item) = acquisition.items.into_iter().next() else {
+            self.flash_warning("Clipboard did not provide an image.".to_string());
+            return Ok(());
+        };
+        let info = item.image_info.clone();
+        let format_label = pasted_image_format(item.path.as_path()).label();
+        if let Err(error) = self.stage_attachment_from_path(item.path.as_path(), item.temporary) {
+            let _ = std::fs::remove_file(item.path);
+            self.flash_error(error);
+        } else if let Some(info) = info {
+            self.flash_success(self.i18n.text_args(
+                "flash-clipboard-image-attached",
+                &crate::fl_args!(
+                    "width" => info.width as i64,
+                    "height" => info.height as i64,
+                    "format" => format_label,
+                ),
+            ));
         }
+        Ok(())
     }
 
-    pub(in crate::app) fn attach_iterm2_files<B: RatatuiBackend>(
+    pub(in crate::app) fn attach_iterm2_files(
         &mut self,
-        terminal: &mut Terminal<B>,
+        terminal: &mut TerminalRuntime,
         images_only: bool,
     ) -> Result<()> {
-        let destination =
-            env::temp_dir().join(format!("agena-iterm-upload-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&destination).map_err(|error| {
-            anyhow::anyhow!("could not create iTerm2 upload directory: {error}")
-        })?;
-
-        terminal
-            .flush()
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        terminal::suspend_stdio_terminal()?;
-        let result = iterm2::request_upload(destination.as_path())
-            .and_then(|()| iterm2::uploaded_regular_files(destination.as_path()));
-        terminal::resume_terminal(terminal)?;
-
-        let files = match result {
-            Ok(files) => files,
+        let source = Iterm2UploadSource::new();
+        let context = terminal.context().clone();
+        let acquisition = match acquire_from_source(&source, &context, terminal)? {
+            Ok(acquisition) => acquisition,
             Err(error) => {
-                let _ = fs::remove_dir_all(&destination);
                 self.flash_warning(error);
                 return Ok(());
             }
@@ -631,35 +576,48 @@ impl App {
 
         let mut attached = 0_usize;
         let mut skipped = 0_usize;
-        for path in files {
+        for item in acquisition.items {
+            let prepared = match self
+                .backend
+                .prepare_attachment_from_path(item.path.as_path())
+            {
+                Ok(attachment) => attachment,
+                Err(error) => {
+                    skipped += 1;
+                    self.flash_warning(error.to_string());
+                    let _ = std::fs::remove_file(item.path);
+                    continue;
+                }
+            };
             if images_only {
-                match self.backend.prepare_attachment_from_path(path.as_path()) {
-                    Ok(attachment) if attachment.kind == AttachmentKind::Image => {}
-                    Ok(_) => {
+                match prepared.kind {
+                    AttachmentKind::Image => {}
+                    _ => {
                         skipped += 1;
-                        let _ = fs::remove_file(path);
-                        continue;
-                    }
-                    Err(error) => {
-                        skipped += 1;
-                        self.flash_warning(error.to_string());
-                        let _ = fs::remove_file(path);
+                        let _ = std::fs::remove_file(item.path);
                         continue;
                     }
                 }
             }
-            match self.stage_attachment_from_path(path.as_path(), true) {
+            match self.stage_prepared_attachment(
+                item.path.as_path(),
+                item.temporary,
+                acquisition.cleanup_root.as_deref(),
+                prepared,
+            ) {
                 Ok(()) => attached += 1,
                 Err(error) => {
                     skipped += 1;
                     self.flash_warning(error);
-                    let _ = fs::remove_file(path);
+                    let _ = std::fs::remove_file(item.path);
                 }
             }
         }
 
         if attached == 0 {
-            let _ = fs::remove_dir_all(&destination);
+            if let Some(root) = acquisition.cleanup_root {
+                let _ = std::fs::remove_dir_all(root);
+            }
             self.flash_warning(if images_only {
                 "No supported image was selected in iTerm2.".to_string()
             } else {
@@ -673,17 +631,26 @@ impl App {
         Ok(())
     }
 
-    pub(in crate::app) fn download_iterm2_file<B: RatatuiBackend>(
+    pub(in crate::app) fn download_iterm2_file(
         &mut self,
-        terminal: &mut Terminal<B>,
+        terminal: &mut TerminalRuntime,
         path: &Path,
     ) -> Result<()> {
-        terminal
-            .flush()
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        terminal::suspend_stdio_terminal()?;
-        let result = iterm2::request_download(path);
-        terminal::resume_terminal(terminal)?;
+        if terminal.context().in_multiplexer()
+            && !terminal
+                .context()
+                .capabilities
+                .iterm2_file_transfer
+                .is_supported()
+        {
+            self.flash_warning(
+                "iTerm2 file transfer is not enabled through the current multiplexer.".to_string(),
+            );
+            return Ok(());
+        }
+        let result = terminal.with_suspended(SuspendReason::FileDownload, || {
+            iterm2::request_download(path)
+        })?;
         match result {
             Ok(()) => self.flash_success(format!(
                 "Downloaded {} through iTerm2.",
@@ -696,14 +663,14 @@ impl App {
         Ok(())
     }
 }
-use crate::app::RatatuiBackend;
 use crate::app::Result;
 use crate::app::{
-    App, AttachmentKind, BTreeMap, ComposerDraft, ComposerDraftElement, ComposerItem,
-    DRAFT_PERSIST_INTERVAL_MS, DraftSlot, Duration, FileAttachOverlay, Focus, HashSet, Instant,
-    Overlay, PartContent, Path, PromptHistory, Route, StagedAttachment, Terminal, UiAction,
-    UiResult, attachment_chip_label, attachment_placeholder_base, cleanup_temporary_composer_item,
-    cleanup_temporary_composer_items, edit_text, env, find_placeholder_occurrence, fs, iterm2, min,
-    normalize_pasted_path, open_path, paste_image_to_temp_png, pasted_image_format,
-    push_submission_text, terminal, ui_text,
+    App, AttachmentItem, AttachmentKind, BTreeMap, ClipboardImageSource, ClipboardTextError,
+    ComposerDraft, ComposerDraftElement, ComposerItem, DRAFT_PERSIST_INTERVAL_MS, DraftSlot,
+    Duration, FileAttachOverlay, Focus, HashSet, Instant, Iterm2UploadSource, Overlay, PartContent,
+    Path, PromptHistory, Route, StagedAttachment, SuspendReason, TerminalRuntime, UiAction,
+    UiResult, acquire_from_source, attachment_chip_label, attachment_placeholder_base,
+    cleanup_temporary_composer_item, cleanup_temporary_composer_items, edit_text,
+    find_placeholder_occurrence, iterm2, min, normalize_pasted_path, open_path,
+    pasted_image_format, push_submission_text, set_clipboard_text, ui_text,
 };

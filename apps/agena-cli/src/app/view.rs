@@ -69,12 +69,14 @@ mod composer_item_summary_tests {
             label: "paste 1001 chars".to_string(),
             text: "x".repeat(1001),
         });
-        let attachment = ComposerItem::Attachment(StagedAttachment {
+        let attachment = ComposerItem::Attachment(Box::new(StagedAttachment {
             path: PathBuf::from("notes.txt"),
+            prepared: None,
+            cleanup_root: None,
             placeholder: "[notes.txt]".to_string(),
             label: "notes.txt".to_string(),
             is_temp: false,
-        });
+        }));
 
         assert!(!composer_item_needs_summary_chip(&paste));
         assert!(composer_item_needs_summary_chip(&attachment));

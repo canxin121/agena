@@ -1,6 +1,5 @@
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Instant;
 
 use crossterm::event::KeyEvent;
 use ratatui::{

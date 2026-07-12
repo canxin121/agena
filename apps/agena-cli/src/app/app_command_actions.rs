@@ -35,7 +35,6 @@ impl App {
             }
             CommandId::Download => self.request_iterm2_download(args),
             CommandId::Editor => {
-                self.composer.flush_all_pending_input();
                 self.pending_ui_action = Some(UiAction::EditComposerExternally);
             }
             CommandId::Image => {

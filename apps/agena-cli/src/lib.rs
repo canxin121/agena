@@ -1,4 +1,5 @@
 mod app;
+mod attachment_source;
 mod backend;
 mod clipboard;
 mod commands;
@@ -246,8 +247,8 @@ pub async fn run_embedded(
             .as_ref()
             .map(|resolution| &resolution.config.ui),
     );
-    let mut terminal =
-        terminal::TerminalGuard::enter().map_err(|error| AppError::Internal(error.to_string()))?;
+    let mut terminal = terminal::TerminalRuntime::enter()
+        .map_err(|error| AppError::Internal(error.to_string()))?;
     let terminal_background = terminal.background();
     let mut app = App::new(
         backend,
@@ -261,7 +262,7 @@ pub async fn run_embedded(
     );
 
     let result = app
-        .run(terminal.terminal_mut())
+        .run(&mut terminal)
         .await
         .with_context(|| "failed while running agena-tui");
     terminal

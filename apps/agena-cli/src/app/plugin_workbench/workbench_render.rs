@@ -122,29 +122,17 @@ impl App {
 
     pub(in crate::app) fn paste_plugin_workbench(dialog: &mut PluginWorkbenchOverlay, text: &str) {
         if let Some(editor) = dialog.editor.as_mut() {
-            editor.input.flush_all_pending_input();
             editor.input.insert_str(text);
             return;
         }
         if dialog.mode == PluginWorkbenchMode::List {
-            dialog.query.flush_all_pending_input();
             dialog.query.insert_str(text);
             refresh_plugin_workbench_filter(dialog);
         }
     }
-
-    pub(in crate::app) fn flush_plugin_workbench_input(
-        dialog: &mut PluginWorkbenchOverlay,
-        now: Instant,
-    ) {
-        if let Some(editor) = dialog.editor.as_mut() {
-            editor.input.flush_pending_input_if_due(now);
-        }
-        dialog.query.flush_pending_input_if_due(now);
-    }
 }
 use super::{
-    App, Constraint, Direction, Frame, FramedSurfaceSpec, Instant, Layout, Paragraph,
+    App, Constraint, Direction, Frame, FramedSurfaceSpec, Layout, Paragraph,
     PluginPolicyStudioOverlay, PluginWorkbenchMode, PluginWorkbenchOverlay, Rect, SurfaceMode,
     TextPanelSpec, Wrap, clean, compact_vertical_divider, plugin_policy_detail_text,
     plugin_policy_detail_title, plugin_policy_sections_text, plugin_policy_table_text,

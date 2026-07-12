@@ -49,7 +49,6 @@ pub fn drive_editor_dialog_key<TAction: Clone>(
 
     if editor.multiline {
         if input_dialog_action(key, true) == Some(InputDialogAction::Submit) {
-            editor.input.flush_all_pending_input();
             return EditorDialogKeyResult::Submit(
                 editor.action.clone(),
                 editor.input.text().to_string(),
@@ -61,7 +60,6 @@ pub fn drive_editor_dialog_key<TAction: Clone>(
 
     match input_dialog_action(key, false) {
         Some(InputDialogAction::Submit) => {
-            editor.input.flush_all_pending_input();
             EditorDialogKeyResult::Submit(editor.action.clone(), editor.input.text().to_string())
         }
         _ => {

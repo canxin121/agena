@@ -134,30 +134,6 @@ impl App {
                 dialog.state.move_selection(1);
                 false
             }
-            Some(KeyAction::PageUp) => {
-                let page = match dialog.state.focus() {
-                    SectionedListFocus::Navigation => dialog.visible_section_page_size.get().max(1),
-                    SectionedListFocus::Items => dialog.visible_item_page_size.get().max(1),
-                };
-                dialog.state.move_selection_page(-1, page);
-                false
-            }
-            Some(KeyAction::PageDown) => {
-                let page = match dialog.state.focus() {
-                    SectionedListFocus::Navigation => dialog.visible_section_page_size.get().max(1),
-                    SectionedListFocus::Items => dialog.visible_item_page_size.get().max(1),
-                };
-                dialog.state.move_selection_page(1, page);
-                false
-            }
-            Some(KeyAction::Home) => {
-                dialog.state.move_selection_home();
-                false
-            }
-            Some(KeyAction::End) => {
-                dialog.state.move_selection_end();
-                false
-            }
             Some(KeyAction::MoveLeft) if dialog.state.focus() == SectionedListFocus::Items => {
                 dialog.selected_column = PluginPolicyColumn::Prompt;
                 false

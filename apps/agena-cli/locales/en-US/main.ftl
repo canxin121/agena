@@ -163,9 +163,9 @@ overlay-permission-fact-scope = scope={$value}
 overlay-permission-fact-operator = operator={$value}
 overlay-permission-footer = a allow once | s allow session | d deny
 overlay-permission-footer-edit-rule = {$footer} | e edit rule
-overlay-permission-footer-action = ↑/↓ select | Enter/→ activate | Esc/← close
-overlay-permission-footer-scope = ↑/↓ select | Enter/→ activate | Esc/← back
-overlay-permission-footer-details = Esc/← return
+overlay-permission-footer-action = ↑/↓ select | Enter activate | Esc close
+overlay-permission-footer-scope = ↑/↓ select | Enter activate | Esc back
+overlay-permission-footer-details = Esc return
 overlay-permission-decision-heading = Choose how to handle this request
 overlay-permission-scope-heading = Apply this decision for
 overlay-permission-field-tool = Tool
@@ -810,7 +810,7 @@ overlay-user-input-unanswered = unanswered
 overlay-user-input-custom-empty = Press Enter or e to type a custom answer
 overlay-user-input-missing-answer = missing answer for {$label}
 overlay-user-input-footer-review = e edit | Ctrl+X cancel
-overlay-user-input-footer-question = Tab next | Shift+Tab previous | Space toggle | Ctrl+X cancel
+overlay-user-input-footer-question = Tab next | Space toggle | Ctrl+X cancel
 overlay-user-input-custom-allowed = custom value allowed
 overlay-user-input-reply-format = Reply format: question_id=value;other_id=value1,value2
 overlay-user-input-cancel-hint = Ctrl+X cancels the request

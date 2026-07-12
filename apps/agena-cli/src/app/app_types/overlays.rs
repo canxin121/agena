@@ -555,11 +555,6 @@ pub(crate) enum ConfirmAction {
         message_id: i64,
         target: String,
     },
-    RevokePermissionRule {
-        rule_id: i64,
-        label: String,
-        return_query: String,
-    },
     PermissionStudioDeletePathRule {
         pattern: String,
     },

@@ -592,7 +592,7 @@ impl App {
         };
         let footer = Text::from(vec![Line::from(Span::styled(
             sanitize_display_text(format!(
-                "Enter {} · Ctrl+X {} · ↑/↓ choose · PgUp/PgDn scroll · Home/End jump",
+                "Enter {} · Ctrl+X {} · ↑/↓ choose · PgUp/PgDn scroll",
                 user_input_submit_label(&self.i18n, &dialog.request),
                 cancel_label
             )),

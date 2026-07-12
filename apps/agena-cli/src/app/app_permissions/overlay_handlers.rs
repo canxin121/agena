@@ -130,28 +130,11 @@ impl App {
     ) -> bool {
         match resolve_tui_key(KeyContext::SettingsStudio, key) {
             Some(KeyAction::Close) => true,
-            Some(KeyAction::NextTab) if dialog.state.focus() == SettingsStudioFocus::Navigation => {
-                dialog.state.set_focus(SettingsStudioFocus::Items);
-                false
-            }
-            Some(KeyAction::PreviousTab) if dialog.state.focus() == SettingsStudioFocus::Items => {
-                dialog.state.set_focus(SettingsStudioFocus::Navigation);
-                false
-            }
-            Some(KeyAction::PageUp) => {
-                dialog.state.move_selection_page(-1, 10);
-                false
-            }
-            Some(KeyAction::PageDown) => {
-                dialog.state.move_selection_page(1, 10);
-                false
-            }
-            Some(KeyAction::Home) => {
-                dialog.state.move_selection_home();
-                false
-            }
-            Some(KeyAction::End) => {
-                dialog.state.move_selection_end();
+            Some(KeyAction::NextTab) => {
+                dialog.state.set_focus(match dialog.state.focus() {
+                    SettingsStudioFocus::Navigation => SettingsStudioFocus::Items,
+                    SettingsStudioFocus::Items => SettingsStudioFocus::Navigation,
+                });
                 false
             }
             Some(KeyAction::MoveUp) => {
@@ -253,20 +236,6 @@ impl App {
                 set_permission_studio_pane_focus(dialog, next);
                 false
             }
-            Some(KeyAction::PreviousTab) => {
-                let next = match dialog.pane_focus {
-                    PermissionStudioPaneFocus::Navigation
-                        if permission_studio_action_count(dialog) > 0 =>
-                    {
-                        PermissionStudioPaneFocus::Actions
-                    }
-                    PermissionStudioPaneFocus::Navigation => PermissionStudioPaneFocus::Content,
-                    PermissionStudioPaneFocus::Content => PermissionStudioPaneFocus::Navigation,
-                    PermissionStudioPaneFocus::Actions => PermissionStudioPaneFocus::Content,
-                };
-                set_permission_studio_pane_focus(dialog, next);
-                false
-            }
             Some(KeyAction::MoveLeft)
                 if dialog.pane_focus == PermissionStudioPaneFocus::Actions =>
             {
@@ -278,30 +247,6 @@ impl App {
             {
                 dialog.selected_action = (dialog.selected_action + 1)
                     .min(permission_studio_action_count(dialog).saturating_sub(1));
-                false
-            }
-            Some(KeyAction::PageUp)
-                if dialog.pane_focus == PermissionStudioPaneFocus::Navigation =>
-            {
-                permission_studio_nav_move_page(&mut dialog.nav, -1, 10);
-                self.apply_permission_studio_nav_selection(dialog);
-                false
-            }
-            Some(KeyAction::PageDown)
-                if dialog.pane_focus == PermissionStudioPaneFocus::Navigation =>
-            {
-                permission_studio_nav_move_page(&mut dialog.nav, 1, 10);
-                self.apply_permission_studio_nav_selection(dialog);
-                false
-            }
-            Some(KeyAction::Home) if dialog.pane_focus == PermissionStudioPaneFocus::Navigation => {
-                permission_studio_nav_move_home(&mut dialog.nav);
-                self.apply_permission_studio_nav_selection(dialog);
-                false
-            }
-            Some(KeyAction::End) if dialog.pane_focus == PermissionStudioPaneFocus::Navigation => {
-                permission_studio_nav_move_end(&mut dialog.nav);
-                self.apply_permission_studio_nav_selection(dialog);
                 false
             }
             Some(KeyAction::MoveUp)
@@ -316,22 +261,6 @@ impl App {
             {
                 permission_studio_nav_move_step(&mut dialog.nav, 1);
                 self.apply_permission_studio_nav_selection(dialog);
-                false
-            }
-            Some(KeyAction::PageUp) => {
-                dialog.state.move_selection_page(-1, 10);
-                false
-            }
-            Some(KeyAction::PageDown) => {
-                dialog.state.move_selection_page(1, 10);
-                false
-            }
-            Some(KeyAction::Home) => {
-                dialog.state.move_selection_home();
-                false
-            }
-            Some(KeyAction::End) => {
-                dialog.state.move_selection_end();
                 false
             }
             Some(KeyAction::MoveUp) => {
@@ -431,8 +360,7 @@ use crate::app::{
     PermissionStudioOverlay, PermissionStudioPaneFocus, Route, SettingsStudioFocus,
     SettingsStudioOverlay, drive_editor_dialog_key, drive_input_dialog_key,
     permission_overlay_choice, permission_overlay_choices, permission_overlay_reply_label,
-    permission_rule_draft_from_request, permission_studio_nav_move_end,
-    permission_studio_nav_move_home, permission_studio_nav_move_page,
-    permission_studio_nav_move_step, set_permission_studio_pane_focus, ui_text,
+    permission_rule_draft_from_request, permission_studio_nav_move_step,
+    set_permission_studio_pane_focus, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

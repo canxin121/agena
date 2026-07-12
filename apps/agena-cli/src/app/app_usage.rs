@@ -113,20 +113,10 @@ impl App {
         match resolve_tui_key(KeyContext::Usage, key) {
             Some(KeyAction::Close) => return true,
             Some(KeyAction::NextTab) => {
-                move_usage_focus(state, 1);
-            }
-            Some(KeyAction::PreviousTab) => {
-                move_usage_focus(state, -1);
+                move_usage_focus(state);
             }
             Some(KeyAction::MoveUp) if !state.controls_focused => move_usage_selection(state, -1),
             Some(KeyAction::MoveDown) if !state.controls_focused => move_usage_selection(state, 1),
-            Some(KeyAction::Home) if !state.controls_focused => {
-                state.selected = 0;
-                state.scroll = 0;
-            }
-            Some(KeyAction::End) if !state.controls_focused => {
-                state.selected = usage_dashboard_row_count(state).saturating_sub(1);
-            }
             Some(KeyAction::Open) if state.controls_focused => {
                 self.activate_usage_control(state);
             }
@@ -182,22 +172,13 @@ impl App {
     }
 }
 
-fn move_usage_focus(state: &mut UsageDashboardState, delta: isize) {
+fn move_usage_focus(state: &mut UsageDashboardState) {
     let control_count = UsageDashboardControl::ALL.len();
-    if delta > 0 {
-        if !state.controls_focused {
-            state.controls_focused = true;
-            state.selected_control = 0;
-        } else if state.selected_control + 1 < control_count {
-            state.selected_control += 1;
-        } else {
-            state.controls_focused = false;
-        }
-    } else if !state.controls_focused {
+    if !state.controls_focused {
         state.controls_focused = true;
-        state.selected_control = control_count.saturating_sub(1);
-    } else if state.selected_control > 0 {
-        state.selected_control -= 1;
+        state.selected_control = 0;
+    } else if state.selected_control + 1 < control_count {
+        state.selected_control += 1;
     } else {
         state.controls_focused = false;
     }

@@ -133,9 +133,6 @@ pub enum KeyAction {
     NewerKeepOpen,
     Edit,
     CancelRequest,
-    PreviousQuestion,
-    NextQuestion,
-    PreviousTab,
     NextTab,
     Clear,
     ClearOverride,
@@ -268,6 +265,43 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn chat_surface_keeps_its_existing_extended_navigation() {
+        for (context, code, action) in [
+            (KeyContext::Sessions, KeyCode::PageUp, KeyAction::PageUp),
+            (KeyContext::Sessions, KeyCode::PageDown, KeyAction::PageDown),
+            (KeyContext::Sessions, KeyCode::Home, KeyAction::Home),
+            (KeyContext::Sessions, KeyCode::End, KeyAction::End),
+            (KeyContext::Transcript, KeyCode::PageUp, KeyAction::PageUp),
+            (
+                KeyContext::Transcript,
+                KeyCode::PageDown,
+                KeyAction::PageDown,
+            ),
+            (KeyContext::Transcript, KeyCode::Home, KeyAction::Home),
+            (KeyContext::Transcript, KeyCode::End, KeyAction::End),
+        ] {
+            assert_eq!(
+                resolve(context, key(code, KeyModifiers::NONE)),
+                Some(action)
+            );
+        }
+        assert_eq!(
+            resolve(
+                KeyContext::ComposerItem,
+                key(KeyCode::BackTab, KeyModifiers::SHIFT)
+            ),
+            Some(KeyAction::Previous)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::ComposerItem,
+                key(KeyCode::Backspace, KeyModifiers::NONE)
+            ),
+            Some(KeyAction::Delete)
+        );
     }
 
     #[test]
@@ -471,6 +505,65 @@ mod tests {
                     resolve(context, key(KeyCode::Char(character), KeyModifiers::NONE)),
                     None,
                     "{context:?} still binds printable character {character:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn secondary_pages_reject_redundant_navigation_keys() {
+        let contexts = [
+            KeyContext::Help,
+            KeyContext::Usage,
+            KeyContext::SettingsStudio,
+            KeyContext::AgentStudio,
+            KeyContext::PermissionStudio,
+            KeyContext::PermissionRuleStudio,
+            KeyContext::PathBrowser,
+            KeyContext::ProviderStudio,
+            KeyContext::ProviderDetail,
+            KeyContext::ProviderModel,
+            KeyContext::ModelCatalog,
+            KeyContext::PluginPolicy,
+            KeyContext::PluginList,
+            KeyContext::PluginDetail,
+            KeyContext::PluginConfig,
+            KeyContext::PluginConfigActions,
+            KeyContext::PluginConfigSelection,
+            KeyContext::PluginDrilldown,
+        ];
+        for context in contexts {
+            for code in [
+                KeyCode::PageUp,
+                KeyCode::PageDown,
+                KeyCode::Home,
+                KeyCode::End,
+                KeyCode::BackTab,
+                KeyCode::Backspace,
+            ] {
+                assert_eq!(
+                    resolve(context, key(code, KeyModifiers::NONE)),
+                    None,
+                    "{context:?} still binds redundant key {code:?}"
+                );
+            }
+        }
+
+        for context in [KeyContext::PermissionPrompt, KeyContext::UserInputQuestion] {
+            for code in [
+                KeyCode::Left,
+                KeyCode::Right,
+                KeyCode::PageUp,
+                KeyCode::PageDown,
+                KeyCode::Home,
+                KeyCode::End,
+                KeyCode::BackTab,
+                KeyCode::Backspace,
+            ] {
+                assert_eq!(
+                    resolve(context, key(code, KeyModifiers::NONE)),
+                    None,
+                    "{context:?} still binds redundant key {code:?}"
                 );
             }
         }

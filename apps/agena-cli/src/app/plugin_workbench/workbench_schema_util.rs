@@ -551,19 +551,6 @@ pub(in crate::app) fn move_index(index: &mut usize, item_count: usize, delta: is
     *index = (*index as isize + delta).clamp(0, last) as usize;
 }
 
-pub(in crate::app) fn move_index_page(
-    index: &mut usize,
-    item_count: usize,
-    delta: isize,
-    page_size: usize,
-) {
-    move_index(
-        index,
-        item_count,
-        delta.saturating_mul(page_size.max(1) as isize),
-    );
-}
-
 pub(in crate::app) fn truncate_text(text: &str, max_width: usize) -> String {
     if text.width() <= max_width {
         return text.to_owned();

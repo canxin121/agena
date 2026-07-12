@@ -700,7 +700,6 @@ pub(crate) enum ProviderStudioField {
     StartAuthAction,
     ContinueAuthAction,
     EditAuthDetailsAction,
-    DeleteProviderAction,
     BaseUrl,
     InstanceUrl,
     ApiKeySource,
@@ -720,12 +719,6 @@ pub(crate) enum ProviderStudioField {
     ServiceKeyEnv,
     DefaultAdapter,
     DefaultModel,
-    LoadModelsAction,
-    AddModelAction,
-    DeleteAdapterAction,
-    DeleteModelAction,
-    SaveAdapterAction,
-    SaveProviderAction,
 }
 
 #[derive(Debug, Clone)]

@@ -137,6 +137,13 @@ pub enum KeyAction {
     NextTab,
     Clear,
     ClearOverride,
+    ProviderDelete,
+    ProviderRefreshModels,
+    ProviderAddModel,
+    ProviderDeleteAdapter,
+    ProviderSaveAdapter,
+    ProviderDeleteModel,
+    ProviderSave,
 }
 
 pub fn resolve(context: KeyContext, key: KeyEvent) -> Option<KeyAction> {
@@ -495,6 +502,34 @@ mod tests {
     }
 
     #[test]
+    fn provider_actions_require_explicit_control_shortcuts() {
+        for (character, action) in [
+            ('k', KeyAction::ProviderDelete),
+            ('r', KeyAction::ProviderRefreshModels),
+            ('n', KeyAction::ProviderAddModel),
+            ('d', KeyAction::ProviderDeleteAdapter),
+            ('a', KeyAction::ProviderSaveAdapter),
+            ('x', KeyAction::ProviderDeleteModel),
+            ('s', KeyAction::ProviderSave),
+        ] {
+            assert_eq!(
+                resolve(
+                    KeyContext::ProviderStudio,
+                    key(KeyCode::Char(character), KeyModifiers::CONTROL),
+                ),
+                Some(action),
+            );
+            assert_eq!(
+                resolve(
+                    KeyContext::ProviderStudio,
+                    key(KeyCode::Char(character), KeyModifiers::NONE),
+                ),
+                None,
+            );
+        }
+    }
+
+    #[test]
     fn secondary_pages_have_no_plain_character_commands() {
         for context in [
             KeyContext::Help,
@@ -605,6 +640,7 @@ mod tests {
         let composer = crate::ui_text::t(&english, "status-composer");
         let global = crate::ui_text::t(&english, "status-global");
         let help_hint = crate::ui_text::t(&english, "context-help-global-hint");
+        let provider_footer = crate::ui_text::t(&english, "overlay-provider-studio-footer");
 
         assert!(transcript.contains("i insert"));
         assert!(composer.contains("Esc view"));
@@ -614,5 +650,11 @@ mod tests {
         for removed in ["Alt+S", "Alt+P", "q quit"] {
             assert!(!global.contains(removed));
         }
+        for shortcut in [
+            "Ctrl+R", "Ctrl+N", "Ctrl+A", "Ctrl+D", "Ctrl+X", "Ctrl+S", "Ctrl+K",
+        ] {
+            assert!(provider_footer.contains(shortcut));
+        }
+        assert!(!provider_footer.contains("Enter edits or activates"));
     }
 }

@@ -78,7 +78,6 @@ impl Backend {
         } else {
             optional_non_empty(draft.default_model.as_str()).unwrap_or(model_id)
         };
-        let include_defaults = set_default || draft.source_provider_id.is_none();
         let existing_adapter = draft
             .source_provider_id
             .as_deref()
@@ -120,15 +119,17 @@ impl Backend {
                 adapter_id: adapter_patch,
             }),
         );
-        if include_defaults {
-            provider_patch.insert(
-                "defaults".to_owned(),
-                json!({
-                    "adapter": default_adapter,
-                    "model": default_model,
-                }),
-            );
-        }
+        // Always materialize the resolved draft defaults into the writable
+        // provider patch. Otherwise an existing provider whose defaults came
+        // from another config layer fails standalone file validation even
+        // though Provider Studio visibly shows a selected default adapter.
+        provider_patch.insert(
+            "defaults".to_owned(),
+            json!({
+                "adapter": default_adapter,
+                "model": default_model,
+            }),
+        );
         self.patch_provider_settings(provider_id, JsonValue::Object(provider_patch))
             .await
             .map_err(ProviderStudioSaveError::other)?;

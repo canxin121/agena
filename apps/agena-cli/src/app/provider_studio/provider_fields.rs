@@ -9,7 +9,6 @@ pub(in crate::app) fn provider_studio_field_label_key(field: ProviderStudioField
         ProviderStudioField::StartAuthAction => "provider-field-start-auth",
         ProviderStudioField::ContinueAuthAction => "provider-field-continue-auth",
         ProviderStudioField::EditAuthDetailsAction => "provider-field-auth-details",
-        ProviderStudioField::DeleteProviderAction => "provider-field-delete-provider",
         ProviderStudioField::BaseUrl => "provider-field-base-url",
         ProviderStudioField::InstanceUrl => "provider-field-instance-url",
         ProviderStudioField::ApiKeySource => "provider-field-api-key-source",
@@ -29,12 +28,6 @@ pub(in crate::app) fn provider_studio_field_label_key(field: ProviderStudioField
         ProviderStudioField::ServiceKeyEnv => "provider-field-service-key-env",
         ProviderStudioField::DefaultAdapter => "provider-field-default-adapter",
         ProviderStudioField::DefaultModel => "provider-field-default-model",
-        ProviderStudioField::LoadModelsAction => "provider-field-load-models",
-        ProviderStudioField::AddModelAction => "provider-field-add-model",
-        ProviderStudioField::DeleteAdapterAction => "provider-field-delete-adapter",
-        ProviderStudioField::DeleteModelAction => "provider-field-delete-model",
-        ProviderStudioField::SaveAdapterAction => "provider-field-save-adapter",
-        ProviderStudioField::SaveProviderAction => "provider-field-save-provider",
     }
 }
 
@@ -62,14 +55,7 @@ pub(in crate::app) fn provider_studio_field_prompt(
         ),
         ProviderStudioField::StartAuthAction
         | ProviderStudioField::ContinueAuthAction
-        | ProviderStudioField::EditAuthDetailsAction
-        | ProviderStudioField::DeleteProviderAction
-        | ProviderStudioField::LoadModelsAction
-        | ProviderStudioField::AddModelAction
-        | ProviderStudioField::DeleteAdapterAction
-        | ProviderStudioField::DeleteModelAction
-        | ProviderStudioField::SaveAdapterAction
-        | ProviderStudioField::SaveProviderAction => String::new(),
+        | ProviderStudioField::EditAuthDetailsAction => String::new(),
         _ => i18n.text_args(
             "overlay-provider-studio-edit-prompt",
             &crate::fl_args!("field" => provider_studio_field_label(i18n, field)),
@@ -91,14 +77,7 @@ pub(in crate::app) fn provider_studio_field_value(
             .unwrap_or_default(),
         ProviderStudioField::StartAuthAction
         | ProviderStudioField::ContinueAuthAction
-        | ProviderStudioField::EditAuthDetailsAction
-        | ProviderStudioField::DeleteProviderAction
-        | ProviderStudioField::LoadModelsAction
-        | ProviderStudioField::AddModelAction
-        | ProviderStudioField::DeleteAdapterAction
-        | ProviderStudioField::DeleteModelAction
-        | ProviderStudioField::SaveAdapterAction
-        | ProviderStudioField::SaveProviderAction => String::new(),
+        | ProviderStudioField::EditAuthDetailsAction => String::new(),
         ProviderStudioField::BaseUrl => draft.auth.base_url.clone(),
         ProviderStudioField::InstanceUrl => draft.auth.instance_url.clone(),
         ProviderStudioField::ApiKeySource => draft.auth.secret_source_kind.token().to_owned(),
@@ -159,13 +138,6 @@ pub(in crate::app) fn provider_studio_field_editable(
         ProviderStudioField::EditAuthDetailsAction => {
             !provider_studio_detail_fields(dialog).is_empty()
         }
-        ProviderStudioField::DeleteProviderAction => dialog.draft.source_provider_id.is_some(),
-        ProviderStudioField::LoadModelsAction
-        | ProviderStudioField::AddModelAction
-        | ProviderStudioField::DeleteAdapterAction
-        | ProviderStudioField::DeleteModelAction
-        | ProviderStudioField::SaveAdapterAction
-        | ProviderStudioField::SaveProviderAction => true,
         ProviderStudioField::BaseUrl => match dialog.draft.auth_kind {
             ProviderDraftAuthKind::Unset => false,
             ProviderDraftAuthKind::ApiPending => false,

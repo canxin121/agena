@@ -21,6 +21,7 @@ use ratex_layout::{LayoutOptions, layout, to_display_list};
 use ratex_parser::parser::parse;
 use ratex_render::{RenderOptions, render_to_png};
 use ratex_types::{color::Color, math_style::MathStyle};
+use regex::Regex;
 
 const MAX_FORMULA_BYTES: usize = 16 * 1024;
 const MAX_MARKDOWN_IMAGE_BYTES: usize = 20 * 1024 * 1024;
@@ -58,6 +59,15 @@ static LAYOUT_CONFIG: LazyLock<RwLock<MathLayoutConfig>> =
 static GRAPHICS_CONFIG: LazyLock<RwLock<Option<MathGraphicsConfig>>> =
     LazyLock::new(|| RwLock::new(None));
 static MARKDOWN_WORKSPACE: LazyLock<RwLock<Option<PathBuf>>> = LazyLock::new(|| RwLock::new(None));
+static LATEX_FRACTION_ALIAS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\\(?:dfrac|tfrac|cfrac)\b").expect("valid LaTeX fraction alias regex")
+});
+static LATEX_ROW_SPACING: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"\\\\\s*\[\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)\s*(?:pt|pc|in|bp|cm|mm|dd|cc|sp|em|ex|mu)\s*\]",
+    )
+    .expect("valid LaTeX row spacing regex")
+});
 
 #[derive(Clone, Debug)]
 pub(crate) struct MathGraphicsConfig {
@@ -577,7 +587,8 @@ fn cache_dynamic_image(
 }
 
 pub(crate) fn unicode_formula(source: &str) -> Vec<String> {
-    let lines = term_maths::render(source.trim())
+    let source = normalize_unicode_latex(source.trim());
+    let lines = term_maths::render(&source)
         .to_string()
         .lines()
         .map(str::to_owned)
@@ -587,6 +598,14 @@ pub(crate) fn unicode_formula(source: &str) -> Vec<String> {
     } else {
         lines
     }
+}
+
+/// Adapt standard LaTeX accepted by the native RaTeX renderer to the smaller
+/// command surface understood by the Unicode terminal fallback.
+fn normalize_unicode_latex(source: &str) -> String {
+    let source = LATEX_FRACTION_ALIAS.replace_all(source, r"\frac");
+    let source = LATEX_ROW_SPACING.replace_all(&source, r"\\");
+    source.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub(crate) struct MathGraphicsRenderer {
@@ -720,6 +739,50 @@ mod tests {
     fn unicode_fallback_is_two_dimensional_for_a_fraction() {
         let lines = unicode_formula(r"\frac{a}{b}");
         assert!(lines.len() >= 2);
+    }
+
+    #[test]
+    fn unicode_fallback_normalizes_styled_fractions_and_row_spacing() {
+        let lines = unicode_formula(concat!(
+            r"\begin{cases}",
+            "\n",
+            r"x_1 + x_2 = -\dfrac{b}{a} \\[8pt]",
+            "\n",
+            r"x_1 \cdot x_2 = \dfrac{c}{a}",
+            "\n",
+            r"\end{cases}",
+        ));
+        let rendered = lines.join("\n");
+
+        assert!(
+            lines
+                .iter()
+                .all(|line| matches!(line.chars().next(), Some('⎧' | '⎨' | '⎩'))),
+            "multiline source must not split rows away from the cases brace:\n{rendered}"
+        );
+        assert!(rendered.contains('⎧'), "missing cases brace:\n{rendered}");
+        assert!(
+            rendered.contains("x₁ + x₂"),
+            "missing first row:\n{rendered}"
+        );
+        assert!(rendered.contains("x₁"), "missing second x₁:\n{rendered}");
+        assert!(
+            rendered.contains('·'),
+            "missing product operator:\n{rendered}"
+        );
+        assert!(
+            rendered.matches("x₂").count() >= 2,
+            "missing x₂:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('─'),
+            "fractions should have bars:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("dfrac"),
+            "raw command leaked:\n{rendered}"
+        );
+        assert!(!rendered.contains("8pt"), "row spacing leaked:\n{rendered}");
     }
 
     #[test]

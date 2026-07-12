@@ -1498,7 +1498,7 @@ fn render_markdown_node(
             push_math_block(out, prefix, &source, width);
         }
         MarkdownNode::Image { url, title, alt } => {
-            render_image_card(out, prefix, alt, url, title, width)
+            render_image_block(out, prefix, alt, url, title, width)
         }
         MarkdownNode::FootnoteDefinition { name, blocks } => {
             push_single_line(
@@ -2261,7 +2261,7 @@ fn render_rich_table_fallback(
     }
 }
 
-fn render_image_card(
+fn render_image_block(
     out: &mut Vec<RenderedLine>,
     prefix: &str,
     alt: &str,
@@ -2269,11 +2269,7 @@ fn render_image_card(
     title: &str,
     width: u16,
 ) {
-    let label = if alt.trim().is_empty() {
-        "Image"
-    } else {
-        alt.trim()
-    };
+    let caption = markdown_image_caption(alt, title, url);
     if layout_config().native_graphics
         && let Ok(artifact) = render_markdown_image(url)
     {
@@ -2290,11 +2286,6 @@ fn render_image_card(
             artifact,
             size: Size::new(render_width, render_height),
         });
-        let caption = if title.trim().is_empty() {
-            label.to_string()
-        } else {
-            format!("{label} — {}", title.trim())
-        };
         push_single_line(
             out,
             prefix,
@@ -2304,33 +2295,71 @@ fn render_image_card(
         );
         return;
     }
-    push_single_line(
+
+    // Remote images intentionally stay inert: downloading model-provided URLs
+    // during a render pass would leak the user's IP, enable tracking/SSRF, and
+    // stall terminal input. Present an accessible, compact link preview rather
+    // than drawing a decorative card around content that was not actually
+    // loaded. Local/data images use the same fallback on terminals without a
+    // native image protocol.
+    push_wrapped_rich_line(
         out,
         prefix,
-        &format!("╭─ 🖼  {label}"),
-        Style::default()
-            .fg(agena_tui_components::theme::accent_color())
-            .add_modifier(Modifier::BOLD),
+        prefix,
+        Line::from(vec![
+            Span::styled(
+                "🖼  ",
+                Style::default().fg(agena_tui_components::theme::accent_color()),
+            ),
+            Span::styled(caption, Style::default().add_modifier(Modifier::BOLD)),
+        ]),
         width,
     );
-    if !title.trim().is_empty() {
-        push_single_line(
-            out,
-            prefix,
-            &format!("│  {}", title.trim()),
-            Style::default(),
-            width,
-        );
+    let source_prefix = format!("{prefix}   ");
+    push_wrapped_rich_line(
+        out,
+        &source_prefix,
+        &source_prefix,
+        Line::from(Span::styled(
+            format!("↳ {}", markdown_image_source_label(url)),
+            Style::default()
+                .fg(agena_tui_components::theme::info_color())
+                .add_modifier(Modifier::UNDERLINED),
+        )),
+        width,
+    );
+}
+
+fn markdown_image_caption(alt: &str, title: &str, url: &str) -> String {
+    let alt = alt.trim();
+    let title = title.trim();
+    let label = if alt.is_empty() {
+        markdown_image_filename(url).unwrap_or("Image")
+    } else {
+        alt
+    };
+    if title.is_empty() || title == label {
+        label.to_string()
+    } else {
+        format!("{label} — {title}")
     }
-    push_single_line(
-        out,
-        prefix,
-        &format!("╰─ {url}"),
-        Style::default()
-            .fg(agena_tui_components::theme::info_color())
-            .add_modifier(Modifier::UNDERLINED),
-        width,
-    );
+}
+
+fn markdown_image_filename(source: &str) -> Option<&str> {
+    let source = source.split(['?', '#']).next().unwrap_or(source);
+    source
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty() && !name.contains(':'))
+}
+
+fn markdown_image_source_label(source: &str) -> &str {
+    if source.trim_start().starts_with("data:") {
+        "embedded image"
+    } else {
+        source
+    }
 }
 
 fn fit_image_size(size: Size, max_width: u16, max_height: u16) -> (u16, u16) {
@@ -2861,6 +2890,49 @@ mod tests {
             MarkdownNode::Image { url, alt, title }
                 if url == "icon.svg" && alt == "Logo" && title == "Diagram"
         ));
+    }
+
+    #[test]
+    fn unavailable_images_render_as_compact_accessible_link_previews() {
+        let blocks = parse_markdown_document(concat!(
+            "![替代文本](https://example.com/image.png \"悬停标题\")\n\n",
+            "![带引用式链接的图片][logo]\n\n",
+            "[logo]: https://example.com/logo.png \"Placeholder\"",
+        ));
+        assert_eq!(blocks.len(), 2);
+
+        let mut rendered = Vec::new();
+        for block in &blocks {
+            render_parsed_markdown_block(&mut rendered, "", block, 100);
+        }
+        let text = rendered
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(
+            rendered.len(),
+            4,
+            "each preview should use two lines:\n{text}"
+        );
+        assert!(text.contains("🖼  替代文本 — 悬停标题"));
+        assert!(text.contains("↳ https://example.com/image.png"));
+        assert!(text.contains("🖼  带引用式链接的图片 — Placeholder"));
+        assert!(text.contains("↳ https://example.com/logo.png"));
+        assert!(
+            !text.contains(['╭', '╰', '│']),
+            "an unloaded image must not masquerade as a rendered card:\n{text}"
+        );
+
+        assert_eq!(
+            markdown_image_source_label("data:image/png;base64,AAAA"),
+            "embedded image"
+        );
+        assert_eq!(
+            markdown_image_caption("", "", "./assets/diagram.png?raw=1"),
+            "diagram.png"
+        );
     }
 
     #[test]

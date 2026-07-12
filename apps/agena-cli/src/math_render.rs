@@ -32,6 +32,14 @@ const MAX_IMAGE_PIXELS: u64 = 32 * 1024 * 1024;
 const MAX_ARTIFACTS: usize = 128;
 const MAX_CACHED_PIXELS: u64 = 32 * 1024 * 1024;
 const MAX_PROTOCOLS: usize = 256;
+const MAX_MATH_AST_NODES: usize = 4_096;
+const MAX_MATH_NESTING: usize = 128;
+const MAX_UNICODE_GRID_WIDTH: usize = 4_096;
+const MAX_UNICODE_GRID_HEIGHT: usize = 1_024;
+const MAX_UNICODE_GRID_CELLS: usize = 1_048_576;
+const MAX_UNICODE_ARTIFACTS: usize = 256;
+const MAX_CACHED_UNICODE_CELLS: usize = 2_097_152;
+const MAX_EXPLICIT_FALLBACK_CHARS: usize = 512;
 const DEFAULT_DARK_BACKGROUND: TerminalRgb = TerminalRgb::new(24, 24, 27);
 
 #[derive(Debug, Clone, Copy)]
@@ -88,6 +96,14 @@ static LATEX_MATRIX_LIKE_END: LazyLock<Regex> = LazyLock::new(|| {
         r"\\end\{(?:alignedat\*?|array|aligned|align\*?|gathered|gather\*?|split|multline\*?|equation\*?|smallmatrix)\}",
     )
     .expect("valid matrix-like environment end regex")
+});
+static LATEX_INDEXED_ROOT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\\sqrt\s*\[").expect("valid indexed root regex"));
+static LATEX_COMMAND_DELIMITER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\\(?:left|right|middle)\s*\\").expect("valid command delimiter regex")
+});
+static LATEX_ARROW_WITH_LOWER_LABEL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\\x(?:left|right)arrow\s*\[").expect("valid annotated arrow regex")
 });
 
 #[derive(Clone, Debug)]
@@ -278,6 +294,61 @@ fn image_pixels(image: &DynamicImage) -> u64 {
 
 static ARTIFACT_CACHE: LazyLock<Mutex<ArtifactCache>> =
     LazyLock::new(|| Mutex::new(ArtifactCache::default()));
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct UnicodeMathCacheKey {
+    source: String,
+    display: bool,
+    cell_width: u16,
+    cell_height: u16,
+    foreground: [u8; 3],
+    background: [u8; 3],
+}
+
+#[derive(Default)]
+struct UnicodeMathCache {
+    entries: HashMap<UnicodeMathCacheKey, Arc<Vec<String>>>,
+    recency: VecDeque<UnicodeMathCacheKey>,
+    cells: usize,
+}
+
+impl UnicodeMathCache {
+    fn get(&mut self, key: &UnicodeMathCacheKey) -> Option<Arc<Vec<String>>> {
+        let lines = self.entries.get(key).cloned()?;
+        self.recency.retain(|candidate| candidate != key);
+        self.recency.push_back(key.clone());
+        Some(lines)
+    }
+
+    fn insert(&mut self, key: UnicodeMathCacheKey, lines: Arc<Vec<String>>) {
+        if let Some(previous) = self.entries.insert(key.clone(), Arc::clone(&lines)) {
+            self.cells = self.cells.saturating_sub(unicode_grid_cells(&previous));
+        }
+        self.cells = self.cells.saturating_add(unicode_grid_cells(&lines));
+        self.recency.retain(|candidate| candidate != &key);
+        self.recency.push_back(key);
+        while self.entries.len() > MAX_UNICODE_ARTIFACTS || self.cells > MAX_CACHED_UNICODE_CELLS {
+            let Some(expired) = self.recency.pop_front() else {
+                break;
+            };
+            if let Some(previous) = self.entries.remove(&expired) {
+                self.cells = self.cells.saturating_sub(unicode_grid_cells(&previous));
+            }
+        }
+    }
+}
+
+fn unicode_grid_cells(lines: &[String]) -> usize {
+    lines
+        .iter()
+        .map(|line| unicode_width::UnicodeWidthStr::width(line.as_str()))
+        .max()
+        .unwrap_or(0)
+        .saturating_mul(lines.len())
+}
+
+static UNICODE_MATH_CACHE: LazyLock<Mutex<UnicodeMathCache>> =
+    LazyLock::new(|| Mutex::new(UnicodeMathCache::default()));
 
 pub(crate) fn render_formula(source: &str, display: bool) -> Result<Arc<MathArtifact>, String> {
     let source = source.trim();
@@ -607,19 +678,576 @@ fn cache_dynamic_image(
     Ok(artifact)
 }
 
-pub(crate) fn unicode_formula(source: &str) -> Vec<String> {
-    let source = normalize_unicode_latex(source.trim());
-    let ast = normalize_unicode_math_ast(parse_equation(&source));
-    let lines = term_maths::layout::layout(&ast)
+pub(crate) fn unicode_formula(source: &str, display: bool) -> Vec<String> {
+    let source = source.trim();
+    if source.is_empty() {
+        return Vec::new();
+    }
+    if source.len() > MAX_FORMULA_BYTES || latex_nesting_exceeds_limit(source) {
+        return explicit_latex_fallback(source);
+    }
+
+    let config = layout_config();
+    let key = UnicodeMathCacheKey {
+        source: source.to_string(),
+        display,
+        cell_width: config.cell_width,
+        cell_height: config.cell_height,
+        foreground: config.foreground,
+        background: config.background,
+    };
+    if let Some(lines) = UNICODE_MATH_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&key)
+    {
+        return lines.as_ref().clone();
+    }
+
+    let normalized = normalize_unicode_latex(source);
+    let parsed = parse_equation(&normalized);
+    let lines = if !source_requires_raster_fallback(&normalized) && math_ast_within_limits(&parsed)
+    {
+        let ast = normalize_unicode_math_ast(parsed);
+        if math_ast_is_supported(&ast) {
+            bounded_semantic_unicode(&ast, display)
+                .or_else(|| raster_formula_to_braille(source, display))
+                .unwrap_or_else(|| explicit_latex_fallback(source))
+        } else {
+            raster_formula_to_braille(source, display)
+                .unwrap_or_else(|| explicit_latex_fallback(source))
+        }
+    } else {
+        raster_formula_to_braille(source, display)
+            .unwrap_or_else(|| explicit_latex_fallback(source))
+    };
+
+    UNICODE_MATH_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(key, Arc::new(lines.clone()));
+    lines
+}
+
+fn source_requires_raster_fallback(source: &str) -> bool {
+    LATEX_INDEXED_ROOT.is_match(source)
+        || LATEX_COMMAND_DELIMITER.is_match(source)
+        || LATEX_ARROW_WITH_LOWER_LABEL.is_match(source)
+}
+
+fn bounded_semantic_unicode(ast: &EqNode, display: bool) -> Option<Vec<String>> {
+    let mut lines = term_maths::layout::layout(ast)
         .to_string()
         .lines()
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    if lines.is_empty() {
-        vec![source.trim().to_string()]
-    } else {
-        lines
+    if !display
+        && lines.len() > 1
+        && let Some(compact) = compact_inline_math(ast)
+    {
+        lines = vec![compact];
     }
+    let width = lines
+        .iter()
+        .map(|line| unicode_width::UnicodeWidthStr::width(line.as_str()))
+        .max()
+        .unwrap_or(0);
+    let cells = width.saturating_mul(lines.len());
+    (!lines.is_empty()
+        && width <= MAX_UNICODE_GRID_WIDTH
+        && lines.len() <= MAX_UNICODE_GRID_HEIGHT
+        && cells <= MAX_UNICODE_GRID_CELLS)
+        .then_some(lines)
+}
+
+fn compact_inline_math(node: &EqNode) -> Option<String> {
+    let rendered = term_maths::layout::layout(node).to_string();
+    if !rendered.contains('\n')
+        && unicode_width::UnicodeWidthStr::width(rendered.as_str()) <= MAX_UNICODE_GRID_WIDTH
+    {
+        return Some(rendered);
+    }
+    let compact = match node {
+        EqNode::Text(text) | EqNode::TextBlock(text) => text.clone(),
+        EqNode::Space(points) => {
+            if *points > 0.0 {
+                " ".to_string()
+            } else {
+                String::new()
+            }
+        }
+        EqNode::Seq(nodes) => nodes
+            .iter()
+            .map(compact_inline_math)
+            .collect::<Option<Vec<_>>>()?
+            .join(""),
+        EqNode::Sup(base, upper) => format!(
+            "{}{}",
+            compact_inline_atom(base)?,
+            compact_script(upper, true)?
+        ),
+        EqNode::Sub(base, lower) => format!(
+            "{}{}",
+            compact_inline_atom(base)?,
+            compact_script(lower, false)?
+        ),
+        EqNode::SupSub(base, upper, lower) => format!(
+            "{}{}{}",
+            compact_inline_atom(base)?,
+            compact_script(upper, true)?,
+            compact_script(lower, false)?
+        ),
+        EqNode::Frac(numerator, denominator) => format!(
+            "{}⁄{}",
+            compact_inline_atom(numerator)?,
+            compact_inline_atom(denominator)?
+        ),
+        EqNode::Sqrt(body) => format!("√{}", compact_inline_atom(body)?),
+        EqNode::BigOp {
+            symbol,
+            lower,
+            upper,
+        } => {
+            let mut value = symbol.clone();
+            if let Some(upper) = upper {
+                value.push_str(&compact_script(upper, true)?);
+            }
+            if let Some(lower) = lower {
+                value.push_str(&compact_script(lower, false)?);
+            }
+            value
+        }
+        EqNode::Limit { name, lower } => {
+            let mut value = name.clone();
+            if let Some(lower) = lower {
+                value.push_str(&compact_script(lower, false)?);
+            }
+            value
+        }
+        EqNode::MathFont { .. } | EqNode::Accent(_, _) => return None,
+        EqNode::Delimited {
+            left,
+            right,
+            content,
+        } => format!("{left}{}{right}", compact_inline_math(content)?),
+        EqNode::Matrix { .. }
+        | EqNode::Cases { .. }
+        | EqNode::Binom(_, _)
+        | EqNode::Brace { .. }
+        | EqNode::StackRel { .. } => return None,
+    };
+    (unicode_width::UnicodeWidthStr::width(compact.as_str()) <= MAX_UNICODE_GRID_WIDTH)
+        .then_some(compact)
+}
+
+fn compact_inline_atom(node: &EqNode) -> Option<String> {
+    let value = compact_inline_math(node)?;
+    if matches!(node, EqNode::Seq(nodes) if nodes.len() > 1) {
+        Some(format!("({value})"))
+    } else {
+        Some(value)
+    }
+}
+
+fn compact_script(node: &EqNode, superscript: bool) -> Option<String> {
+    let value = compact_inline_math(node)?;
+    let mapped = positional_unicode_text(&value, superscript);
+    mapped.or_else(|| {
+        Some(if superscript {
+            format!("^({value})")
+        } else {
+            format!("_({value})")
+        })
+    })
+}
+
+pub(crate) fn positional_unicode_text(source: &str, superscript: bool) -> Option<String> {
+    source
+        .chars()
+        .map(|ch| positional_unicode_char(ch, superscript))
+        .collect()
+}
+
+fn positional_unicode_char(ch: char, superscript: bool) -> Option<char> {
+    Some(if superscript {
+        match ch {
+            '0' => '⁰',
+            '1' => '¹',
+            '2' => '²',
+            '3' => '³',
+            '4' => '⁴',
+            '5' => '⁵',
+            '6' => '⁶',
+            '7' => '⁷',
+            '8' => '⁸',
+            '9' => '⁹',
+            '+' => '⁺',
+            '-' => '⁻',
+            '=' => '⁼',
+            '(' => '⁽',
+            ')' => '⁾',
+            'a' => 'ᵃ',
+            'b' => 'ᵇ',
+            'c' => 'ᶜ',
+            'd' => 'ᵈ',
+            'e' => 'ᵉ',
+            'f' => 'ᶠ',
+            'g' => 'ᵍ',
+            'h' => 'ʰ',
+            'i' => 'ⁱ',
+            'j' => 'ʲ',
+            'k' => 'ᵏ',
+            'l' => 'ˡ',
+            'm' => 'ᵐ',
+            'n' => 'ⁿ',
+            'o' => 'ᵒ',
+            'p' => 'ᵖ',
+            'r' => 'ʳ',
+            's' => 'ˢ',
+            't' => 'ᵗ',
+            'u' => 'ᵘ',
+            'v' => 'ᵛ',
+            'w' => 'ʷ',
+            'x' => 'ˣ',
+            'y' => 'ʸ',
+            'z' => 'ᶻ',
+            _ => return None,
+        }
+    } else {
+        match ch {
+            '0' => '₀',
+            '1' => '₁',
+            '2' => '₂',
+            '3' => '₃',
+            '4' => '₄',
+            '5' => '₅',
+            '6' => '₆',
+            '7' => '₇',
+            '8' => '₈',
+            '9' => '₉',
+            '+' => '₊',
+            '-' => '₋',
+            '=' => '₌',
+            '(' => '₍',
+            ')' => '₎',
+            'a' => 'ₐ',
+            'e' => 'ₑ',
+            'h' => 'ₕ',
+            'i' => 'ᵢ',
+            'j' => 'ⱼ',
+            'k' => 'ₖ',
+            'l' => 'ₗ',
+            'm' => 'ₘ',
+            'n' => 'ₙ',
+            'o' => 'ₒ',
+            'p' => 'ₚ',
+            'r' => 'ᵣ',
+            's' => 'ₛ',
+            't' => 'ₜ',
+            'u' => 'ᵤ',
+            'v' => 'ᵥ',
+            'x' => 'ₓ',
+            _ => return None,
+        }
+    })
+}
+
+fn latex_nesting_exceeds_limit(source: &str) -> bool {
+    let mut depth = 0_usize;
+    let mut escaped = false;
+    for ch in source.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        match ch {
+            '{' | '[' => {
+                depth = depth.saturating_add(1);
+                if depth > MAX_MATH_NESTING {
+                    return true;
+                }
+            }
+            '}' | ']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    false
+}
+
+fn math_ast_within_limits(root: &EqNode) -> bool {
+    let mut stack = vec![(root, 1_usize)];
+    let mut count = 0_usize;
+    while let Some((node, depth)) = stack.pop() {
+        count = count.saturating_add(1);
+        if count > MAX_MATH_AST_NODES || depth > MAX_MATH_NESTING {
+            return false;
+        }
+        let next_depth = depth.saturating_add(1);
+        match node {
+            EqNode::Seq(nodes) => stack.extend(nodes.iter().map(|node| (node, next_depth))),
+            EqNode::Sup(base, script)
+            | EqNode::Sub(base, script)
+            | EqNode::Frac(base, script)
+            | EqNode::Binom(base, script) => {
+                stack.push((base, next_depth));
+                stack.push((script, next_depth));
+            }
+            EqNode::SupSub(base, upper, lower) => {
+                stack.push((base, next_depth));
+                stack.push((upper, next_depth));
+                stack.push((lower, next_depth));
+            }
+            EqNode::Sqrt(body) | EqNode::Accent(body, _) => stack.push((body, next_depth)),
+            EqNode::BigOp { lower, upper, .. } => {
+                if let Some(lower) = lower {
+                    stack.push((lower, next_depth));
+                }
+                if let Some(upper) = upper {
+                    stack.push((upper, next_depth));
+                }
+            }
+            EqNode::Limit { lower, .. } => {
+                if let Some(lower) = lower {
+                    stack.push((lower, next_depth));
+                }
+            }
+            EqNode::MathFont { content, .. } | EqNode::Delimited { content, .. } => {
+                stack.push((content, next_depth));
+            }
+            EqNode::Matrix { rows, .. } => {
+                if rows.len() > 256 || rows.iter().map(Vec::len).sum::<usize>() > 1_024 {
+                    return false;
+                }
+                for cell in rows.iter().flatten() {
+                    stack.push((cell, next_depth));
+                }
+            }
+            EqNode::Cases { rows } => {
+                if rows.len() > 256 {
+                    return false;
+                }
+                for (value, condition) in rows {
+                    stack.push((value, next_depth));
+                    if let Some(condition) = condition {
+                        stack.push((condition, next_depth));
+                    }
+                }
+            }
+            EqNode::Brace { content, label, .. } => {
+                stack.push((content, next_depth));
+                if let Some(label) = label {
+                    stack.push((label, next_depth));
+                }
+            }
+            EqNode::StackRel {
+                base, annotation, ..
+            } => {
+                stack.push((base, next_depth));
+                stack.push((annotation, next_depth));
+            }
+            EqNode::Text(_) | EqNode::TextBlock(_) | EqNode::Space(_) => {}
+        }
+    }
+    true
+}
+
+fn math_ast_is_supported(root: &EqNode) -> bool {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        match node {
+            EqNode::Text(text) | EqNode::TextBlock(text) if contains_raw_latex_markup(text) => {
+                return false;
+            }
+            EqNode::Seq(nodes) => stack.extend(nodes),
+            EqNode::Sup(base, script)
+            | EqNode::Sub(base, script)
+            | EqNode::Frac(base, script)
+            | EqNode::Binom(base, script) => {
+                stack.push(base);
+                stack.push(script);
+            }
+            EqNode::SupSub(base, upper, lower) => {
+                stack.push(base);
+                stack.push(upper);
+                stack.push(lower);
+            }
+            EqNode::Sqrt(body) | EqNode::Accent(body, _) => stack.push(body),
+            EqNode::BigOp { lower, upper, .. } => {
+                stack.extend(lower.iter().map(Box::as_ref));
+                stack.extend(upper.iter().map(Box::as_ref));
+            }
+            EqNode::Limit { lower, .. } => stack.extend(lower.iter().map(Box::as_ref)),
+            EqNode::MathFont { content, .. } | EqNode::Delimited { content, .. } => {
+                stack.push(content)
+            }
+            EqNode::Matrix { rows, .. } => stack.extend(rows.iter().flatten()),
+            EqNode::Cases { rows } => {
+                for (value, condition) in rows {
+                    stack.push(value);
+                    stack.extend(condition.iter());
+                }
+            }
+            EqNode::Brace { content, label, .. } => {
+                stack.push(content);
+                stack.extend(label.iter().map(Box::as_ref));
+            }
+            EqNode::StackRel {
+                base, annotation, ..
+            } => {
+                stack.push(base);
+                stack.push(annotation);
+            }
+            EqNode::Text(_) | EqNode::TextBlock(_) | EqNode::Space(_) => {}
+        }
+    }
+    true
+}
+
+fn contains_raw_latex_markup(text: &str) -> bool {
+    text.contains('\\')
+}
+
+fn explicit_latex_fallback(source: &str) -> Vec<String> {
+    let compact = source.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut preview = compact
+        .chars()
+        .take(MAX_EXPLICIT_FALLBACK_CHARS)
+        .collect::<String>();
+    if compact.chars().count() > MAX_EXPLICIT_FALLBACK_CHARS {
+        preview.push('…');
+    }
+    vec![format!("⟦LaTeX: {preview}⟧")]
+}
+
+fn raster_formula_to_braille(source: &str, display: bool) -> Option<Vec<String>> {
+    let artifact = render_formula(source, display).ok()?;
+    let config = layout_config();
+    let image = artifact.image.to_rgba8();
+    let output_width = usize::from(artifact.size.width).clamp(1, MAX_UNICODE_GRID_WIDTH);
+    let output_height = usize::from(artifact.size.height).clamp(1, MAX_UNICODE_GRID_HEIGHT);
+    if output_width.saturating_mul(output_height) > MAX_UNICODE_GRID_CELLS {
+        return None;
+    }
+
+    let mut rows = Vec::with_capacity(output_height);
+    for cell_y in 0..output_height {
+        let mut row = String::with_capacity(output_width.saturating_mul(3));
+        for cell_x in 0..output_width {
+            let mut dots = 0_u8;
+            for dot_y in 0..4_usize {
+                for dot_x in 0..2_usize {
+                    let x0 = cell_x
+                        .saturating_mul(image.width() as usize)
+                        .saturating_div(output_width)
+                        + dot_x
+                            .saturating_mul(image.width() as usize)
+                            .saturating_div(output_width.saturating_mul(2));
+                    let x1 = cell_x
+                        .saturating_mul(image.width() as usize)
+                        .saturating_div(output_width)
+                        + (dot_x + 1)
+                            .saturating_mul(image.width() as usize)
+                            .saturating_div(output_width.saturating_mul(2));
+                    let y0 = cell_y
+                        .saturating_mul(image.height() as usize)
+                        .saturating_div(output_height)
+                        + dot_y
+                            .saturating_mul(image.height() as usize)
+                            .saturating_div(output_height.saturating_mul(4));
+                    let y1 = cell_y
+                        .saturating_mul(image.height() as usize)
+                        .saturating_div(output_height)
+                        + (dot_y + 1)
+                            .saturating_mul(image.height() as usize)
+                            .saturating_div(output_height.saturating_mul(4));
+                    if braille_region_has_ink(
+                        &image,
+                        x0,
+                        x1.max(x0 + 1),
+                        y0,
+                        y1.max(y0 + 1),
+                        config.background,
+                    ) {
+                        dots |= braille_dot_mask(dot_x, dot_y);
+                    }
+                }
+            }
+            row.push(if dots == 0 {
+                ' '
+            } else {
+                char::from_u32(0x2800 + u32::from(dots)).unwrap_or(' ')
+            });
+        }
+        rows.push(row.trim_end().to_string());
+    }
+    trim_blank_grid_edges(rows)
+}
+
+fn braille_region_has_ink(
+    image: &image::RgbaImage,
+    x0: usize,
+    x1: usize,
+    y0: usize,
+    y1: usize,
+    background: [u8; 3],
+) -> bool {
+    let max_x = image.width() as usize;
+    let max_y = image.height() as usize;
+    for y in y0.min(max_y)..y1.min(max_y) {
+        for x in x0.min(max_x)..x1.min(max_x) {
+            let pixel = image.get_pixel(x as u32, y as u32);
+            let difference = pixel.0[..3]
+                .iter()
+                .zip(background)
+                .map(|(channel, background)| channel.abs_diff(background))
+                .max()
+                .unwrap_or(0);
+            if pixel[3] >= 64 && difference >= 40 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+const fn braille_dot_mask(x: usize, y: usize) -> u8 {
+    match (x, y) {
+        (0, 0) => 0x01,
+        (0, 1) => 0x02,
+        (0, 2) => 0x04,
+        (0, 3) => 0x40,
+        (1, 0) => 0x08,
+        (1, 1) => 0x10,
+        (1, 2) => 0x20,
+        (1, 3) => 0x80,
+        _ => 0,
+    }
+}
+
+fn trim_blank_grid_edges(mut rows: Vec<String>) -> Option<Vec<String>> {
+    while rows.first().is_some_and(|row| row.trim().is_empty()) {
+        rows.remove(0);
+    }
+    while rows.last().is_some_and(|row| row.trim().is_empty()) {
+        rows.pop();
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    let left = rows
+        .iter()
+        .filter_map(|row| row.chars().position(|ch| ch != ' '))
+        .min()
+        .unwrap_or(0);
+    Some(
+        rows.into_iter()
+            .map(|row| row.chars().skip(left).collect::<String>())
+            .collect(),
+    )
 }
 
 /// Adapt standard LaTeX accepted by the native RaTeX renderer to the smaller
@@ -636,17 +1264,20 @@ fn normalize_unicode_latex(source: &str) -> String {
 
 fn normalize_unicode_math_ast(node: EqNode) -> EqNode {
     match node {
-        EqNode::Text(text) => {
-            unicode_big_operator(&text).map_or(EqNode::Text(text), |symbol| EqNode::BigOp {
+        EqNode::Text(text) => unicode_big_operator(&text).map_or_else(
+            || {
+                unicode_terminal_symbol(&text).map_or(EqNode::Text(text), |symbol| {
+                    EqNode::Text(symbol.to_string())
+                })
+            },
+            |symbol| EqNode::BigOp {
                 symbol: symbol.to_string(),
                 lower: None,
                 upper: None,
-            })
-        }
+            },
+        ),
         EqNode::Space(_) | EqNode::TextBlock(_) => node,
-        EqNode::Seq(nodes) => {
-            EqNode::Seq(nodes.into_iter().map(normalize_unicode_math_ast).collect())
-        }
+        EqNode::Seq(nodes) => normalize_unicode_sequence(nodes),
         EqNode::Sup(base, upper) => attach_big_operator_limits(
             normalize_unicode_math_ast(*base),
             Some(normalize_unicode_math_ast(*upper)),
@@ -703,16 +1334,25 @@ fn normalize_unicode_math_ast(node: EqNode) -> EqNode {
                 .map(|row| row.into_iter().map(normalize_unicode_math_ast).collect())
                 .collect(),
         },
-        EqNode::Cases { rows } => EqNode::Cases {
-            rows: rows
-                .into_iter()
-                .map(|(value, condition)| {
-                    (
-                        normalize_unicode_math_ast(value),
-                        condition.map(normalize_unicode_math_ast),
-                    )
-                })
-                .collect(),
+        // term-maths inserts the English word "if" between both cases
+        // columns. LaTeX does not imply that word, so preserve the source
+        // columns in a brace-delimited plain matrix instead.
+        EqNode::Cases { rows } => EqNode::Delimited {
+            left: "{".to_string(),
+            right: String::new(),
+            content: Box::new(EqNode::Matrix {
+                kind: MatrixKind::Plain,
+                rows: rows
+                    .into_iter()
+                    .map(|(value, condition)| {
+                        let mut row = vec![normalize_unicode_math_ast(value)];
+                        if let Some(condition) = condition {
+                            row.push(normalize_unicode_math_ast(condition));
+                        }
+                        row
+                    })
+                    .collect(),
+            }),
         },
         // term-maths 1.0 gives Binom's two-row body and its delimiters
         // different baselines, which shifts the bottom argument outside the
@@ -743,6 +1383,66 @@ fn normalize_unicode_math_ast(node: EqNode) -> EqNode {
             annotation: Box::new(normalize_unicode_math_ast(*annotation)),
             over,
         },
+    }
+}
+
+fn normalize_unicode_sequence(nodes: Vec<EqNode>) -> EqNode {
+    let mut nodes = nodes.into_iter().map(normalize_unicode_math_ast).peekable();
+    let mut normalized = Vec::new();
+    while let Some(node) = nodes.next() {
+        let command = match &node {
+            EqNode::Text(text) => Some(text.as_str()),
+            _ => None,
+        };
+        match command {
+            Some(r"\xrightarrow" | r"\xleftarrow") => {
+                let Some(annotation) = nodes.next() else {
+                    normalized.push(node);
+                    continue;
+                };
+                normalized.push(EqNode::StackRel {
+                    base: Box::new(EqNode::Text(
+                        if command == Some(r"\xrightarrow") {
+                            "→"
+                        } else {
+                            "←"
+                        }
+                        .to_string(),
+                    )),
+                    annotation: Box::new(annotation),
+                    over: true,
+                });
+            }
+            Some(r"\pmod" | r"\pod") => {
+                let Some(modulus) = nodes.next() else {
+                    normalized.push(node);
+                    continue;
+                };
+                normalized.push(EqNode::Seq(vec![
+                    EqNode::Text("  (mod ".to_string()),
+                    modulus,
+                    EqNode::Text(")".to_string()),
+                ]));
+            }
+            Some(r"\tag") => {
+                if let Some(tag) = nodes.next() {
+                    normalized.push(EqNode::Seq(vec![
+                        EqNode::Text("  (".to_string()),
+                        tag,
+                        EqNode::Text(")".to_string()),
+                    ]));
+                }
+            }
+            Some(r"\label") => {
+                let _ = nodes.next();
+            }
+            _ => normalized.push(node),
+        }
+    }
+    match normalized.len() {
+        0 => EqNode::Text(String::new()),
+        1 => normalized.pop().expect("single normalized node exists"),
+        _ => EqNode::Seq(normalized),
     }
 }
 
@@ -786,6 +1486,23 @@ fn unicode_big_operator(command: &str) -> Option<&'static str> {
         r"\iiiint" => Some("⨌"),
         r"\oiint" => Some("∯"),
         r"\oiiint" => Some("∰"),
+        _ => None,
+    }
+}
+
+fn unicode_terminal_symbol(command: &str) -> Option<&'static str> {
+    match command {
+        r"\blacksquare" | r"\qed" | r"\QED" => Some("∎"),
+        r"\square" => Some("□"),
+        r"\mod" | r"\bmod" => Some(" mod "),
+        r"\displaystyle"
+        | r"\textstyle"
+        | r"\scriptstyle"
+        | r"\scriptscriptstyle"
+        | r"\limits"
+        | r"\nolimits"
+        | r"\notag"
+        | r"\nonumber" => Some(""),
         _ => None,
     }
 }
@@ -919,21 +1636,42 @@ mod tests {
 
     #[test]
     fn unicode_fallback_is_two_dimensional_for_a_fraction() {
-        let lines = unicode_formula(r"\frac{a}{b}");
+        let lines = unicode_formula(r"\frac{a}{b}", true);
         assert!(lines.len() >= 2);
     }
 
     #[test]
+    fn unicode_inline_math_uses_a_compact_text_style() {
+        let inline = unicode_formula(r"x_i=\frac{a+b}{c}", false);
+        assert_eq!(
+            inline.len(),
+            1,
+            "inline formula should not expand the paragraph"
+        );
+        assert!(inline[0].contains('⁄'));
+        assert!(inline[0].contains('ᵢ'));
+
+        let display = unicode_formula(r"x_i=\frac{a+b}{c}", true);
+        assert!(
+            display.len() >= 2,
+            "display formula should retain 2D fractions"
+        );
+    }
+
+    #[test]
     fn unicode_fallback_normalizes_styled_fractions_and_row_spacing() {
-        let lines = unicode_formula(concat!(
-            r"\begin{cases}",
-            "\n",
-            r"x_1 + x_2 = -\dfrac{b}{a} \\[8pt]",
-            "\n",
-            r"x_1 \cdot x_2 = \dfrac{c}{a}",
-            "\n",
-            r"\end{cases}",
-        ));
+        let lines = unicode_formula(
+            concat!(
+                r"\begin{cases}",
+                "\n",
+                r"x_1 + x_2 = -\dfrac{b}{a} \\[8pt]",
+                "\n",
+                r"x_1 \cdot x_2 = \dfrac{c}{a}",
+                "\n",
+                r"\end{cases}",
+            ),
+            true,
+        );
         let rendered = lines.join("\n");
 
         assert!(
@@ -969,9 +1707,11 @@ mod tests {
 
     #[test]
     fn unicode_fallback_renders_extended_big_operators_with_limits() {
-        let rendered =
-            unicode_formula(r"\left|\bigcup_{i=1}^{n} A_i\right| = \sum_{i=1}^{n} |A_i|")
-                .join("\n");
+        let rendered = unicode_formula(
+            r"\left|\bigcup_{i=1}^{n} A_i\right| = \sum_{i=1}^{n} |A_i|",
+            true,
+        )
+        .join("\n");
 
         assert!(
             rendered.contains('⋃'),
@@ -1001,7 +1741,7 @@ mod tests {
             (r"\bigotimes", '⨂'),
             (r"\biguplus", '⨄'),
         ] {
-            let rendered = unicode_formula(&format!(r"{command}_{{i=1}}^n A_i")).join("\n");
+            let rendered = unicode_formula(&format!(r"{command}_{{i=1}}^n A_i"), true).join("\n");
             assert!(
                 rendered.contains(symbol),
                 "{command} did not render as {symbol}:\n{rendered}"
@@ -1015,7 +1755,7 @@ mod tests {
 
     #[test]
     fn unicode_fallback_keeps_binomial_arguments_inside_parentheses() {
-        let lines = unicode_formula(r"\binom{n}{k} = \frac{n!}{k!(n-k)!}");
+        let lines = unicode_formula(r"\binom{n}{k} = \frac{n!}{k!(n-k)!}", true);
         let rendered = lines.join("\n");
         let binomial_rows = lines
             .iter()
@@ -1038,14 +1778,17 @@ mod tests {
 
     #[test]
     fn unicode_fallback_renders_aligned_equation_systems_as_grids() {
-        let rendered = unicode_formula(concat!(
-            r"\begin{aligned}",
-            r"\nabla \cdot \mathbf{E} &= \frac{\rho}{\varepsilon_0} \\",
-            r"\nabla \cdot \mathbf{B} &= 0 \\",
-            r"\nabla \times \mathbf{E} &= -\frac{\partial \mathbf{B}}{\partial t} \\",
-            r"\nabla \times \mathbf{B} &= \mu_0 \mathbf{J}",
-            r"\end{aligned}",
-        ))
+        let rendered = unicode_formula(
+            concat!(
+                r"\begin{aligned}",
+                r"\nabla \cdot \mathbf{E} &= \frac{\rho}{\varepsilon_0} \\",
+                r"\nabla \cdot \mathbf{B} &= 0 \\",
+                r"\nabla \times \mathbf{E} &= -\frac{\partial \mathbf{B}}{\partial t} \\",
+                r"\nabla \times \mathbf{B} &= \mu_0 \mathbf{J}",
+                r"\end{aligned}",
+            ),
+            true,
+        )
         .join("\n");
 
         assert_eq!(
@@ -1076,7 +1819,7 @@ mod tests {
             r"\begin{gathered}a\\b\end{gathered}",
             r"\begin{split}a&=b\\c&=d\end{split}",
         ] {
-            let rendered = unicode_formula(source).join("\n");
+            let rendered = unicode_formula(source, true).join("\n");
             assert!(rendered.contains('a'), "first row missing:\n{rendered}");
             assert!(rendered.contains('d') || rendered.contains('b'));
             assert!(
@@ -1084,6 +1827,122 @@ mod tests {
                 "raw matrix-like environment leaked:\n{rendered}"
             );
         }
+    }
+
+    #[test]
+    fn unicode_fallback_handles_common_ams_commands_without_leaking_latex() {
+        let rendered = unicode_formula(
+            concat!(
+                r"X_n \xrightarrow{P} \mu, ",
+                r"a^{p-1} \equiv 1 \pmod{p} \quad \blacksquare",
+            ),
+            true,
+        )
+        .join("\n");
+
+        assert!(
+            rendered.contains('→'),
+            "annotated arrow missing:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('P'),
+            "arrow annotation missing:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("mod"),
+            "modulus notation missing:\n{rendered}"
+        );
+        assert!(
+            rendered.contains('∎'),
+            "proof terminator missing:\n{rendered}"
+        );
+        assert!(
+            !contains_raw_latex_markup(&rendered),
+            "raw LaTeX leaked:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn unsupported_semantic_math_uses_a_bounded_raster_fallback() {
+        let rendered = unicode_formula(r"\operatorname{rank}(A)=\sqrt[3]{8}", true).join("\n");
+        assert!(
+            rendered
+                .chars()
+                .any(|ch| ('\u{2801}'..='\u{28ff}').contains(&ch)),
+            "unsupported semantic nodes should use visible Braille raster output:\n{rendered}"
+        );
+        assert!(
+            !contains_raw_latex_markup(&rendered),
+            "raw LaTeX leaked:\n{rendered}"
+        );
+
+        let repeated = unicode_formula(r"\operatorname{rank}(A)=\sqrt[3]{8}", true).join("\n");
+        assert_eq!(
+            rendered, repeated,
+            "cached layout must remain deterministic"
+        );
+    }
+
+    #[test]
+    fn session_709_math_compatibility_corpus_never_disappears_or_leaks_commands() {
+        for source in [
+            r"\log_a b = \frac{\log_c b}{\log_c a}",
+            r"\begin{cases}x_1+x_2=-\dfrac{b}{a}\\[8pt]x_1x_2=\dfrac{c}{a}\end{cases}",
+            r"\begin{vmatrix}\mathbf{i}&\mathbf{j}&\mathbf{k}\\\partial_x&\partial_y&\partial_z\\F_x&F_y&F_z\end{vmatrix}",
+            r"\begin{bmatrix}a_{11}&a_{12}\\a_{21}&a_{22}\end{bmatrix}\begin{bmatrix}b_{11}&b_{12}\\b_{21}&b_{22}\end{bmatrix}",
+            r"\binom{n}{k}=\frac{n!}{k!(n-k)!}",
+            r"\left|\bigcup_{i=1}^{n}A_i\right|=\sum_{i=1}^{n}|A_i|",
+            r"\begin{aligned}\nabla\cdot\mathbf E&=\frac{\rho}{\varepsilon_0}\\\nabla\times\mathbf B&=\mu_0\mathbf J\end{aligned}",
+            r"\operatorname{rank}(A)=\sqrt[3]{8}",
+            r"X_n\xrightarrow{P}\mu,\quad a^{p-1}\equiv1\pmod p\quad\blacksquare",
+            r"\left\langle x,y\right\rangle",
+        ] {
+            let lines = unicode_formula(source, true);
+            let rendered = lines.join("\n");
+            assert!(
+                lines.iter().any(|line| !line.trim().is_empty()),
+                "formula disappeared: {source}"
+            );
+            assert!(
+                !contains_raw_latex_markup(&rendered),
+                "raw LaTeX leaked for {source}:\n{rendered}"
+            );
+            assert!(
+                lines.len() <= MAX_UNICODE_GRID_HEIGHT
+                    && unicode_grid_cells(&lines) <= MAX_UNICODE_GRID_CELLS,
+                "formula exceeded its terminal grid budget: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_math_has_an_explicit_visible_failure_mode() {
+        let rendered = unicode_formula(r"\begin{aligned}\nabla\cdot\mathbf E", true).join("\n");
+        assert!(!rendered.trim().is_empty());
+        assert!(
+            rendered.chars().any(|ch| !ch.is_whitespace()),
+            "malformed formulas must never reserve invisible rows"
+        );
+    }
+
+    #[test]
+    fn oversized_unicode_math_fails_explicitly_and_stays_bounded() {
+        let source = "x".repeat(MAX_FORMULA_BYTES + 1);
+        let rendered = unicode_formula(&source, true).join("\n");
+        assert!(rendered.starts_with("⟦LaTeX: "));
+        assert!(rendered.chars().count() <= MAX_EXPLICIT_FALLBACK_CHARS + 12);
+    }
+
+    #[test]
+    fn cases_do_not_invent_an_english_condition_keyword() {
+        let rendered =
+            unicode_formula(r"\begin{cases}x^2 & x \ge 0 \\ -x & x < 0\end{cases}", true)
+                .join("\n");
+        assert!(
+            !rendered.contains(" if "),
+            "source did not contain 'if':\n{rendered}"
+        );
+        assert!(rendered.contains('⎧'));
     }
 
     #[test]

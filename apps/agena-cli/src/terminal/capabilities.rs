@@ -270,20 +270,14 @@ impl TerminalContext {
             None => profile_keyboard,
         };
 
-        // Active stdin queries are intentionally disabled until every response
-        // can be routed through the event parser without consuming user input.
-        let requested_background_query = overrides::boolean(
-            environment,
-            "AGENA_TUI_QUERY_BACKGROUND",
-            &mut override_diagnostics,
-        );
-        let default_color_query = Capability::unsupported(conservative);
-        if requested_background_query == Some(true) && interactive {
-            override_diagnostics.push(
-                "AGENA_TUI_QUERY_BACKGROUND is ignored because active stdin probes are disabled"
-                    .to_owned(),
-            );
-        }
+        // TerminalRuntime folds OSC 11 into the single bounded negotiation
+        // before EventStream is created, then promotes this evidence when a
+        // response is received.
+        let default_color_query = if interactive {
+            Capability::unknown(conservative).with_integration(false)
+        } else {
+            Capability::unsupported(conservative)
+        };
 
         let clipboard_native_override = overrides::boolean(
             environment,

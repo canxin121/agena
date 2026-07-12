@@ -6,14 +6,15 @@ use std::{
     sync::{Arc, LazyLock, Mutex, RwLock},
 };
 
+use agena_tui_components::TerminalRgb;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use image::DynamicImage;
+use image::{DynamicImage, Rgba};
 use ratatui::{
     Frame,
     layout::{Rect, Size},
 };
 use ratatui_image::{
-    picker::{Picker, ProtocolType},
+    picker::{Capability, Picker, ProtocolType, cap_parser::QueryStdioOptions},
     sliced::{SignedPosition, SlicedImage, SlicedProtocol},
 };
 use ratex_layout::{LayoutOptions, layout, to_display_list};
@@ -29,6 +30,7 @@ const MAX_IMAGE_PIXELS: u64 = 32 * 1024 * 1024;
 const MAX_ARTIFACTS: usize = 128;
 const MAX_CACHED_PIXELS: u64 = 32 * 1024 * 1024;
 const MAX_PROTOCOLS: usize = 256;
+const DEFAULT_DARK_BACKGROUND: TerminalRgb = TerminalRgb::new(24, 24, 27);
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MathLayoutConfig {
@@ -36,6 +38,7 @@ pub(crate) struct MathLayoutConfig {
     pub(crate) cell_width: u16,
     pub(crate) cell_height: u16,
     pub(crate) foreground: [u8; 3],
+    pub(crate) background: [u8; 3],
 }
 
 impl Default for MathLayoutConfig {
@@ -45,6 +48,7 @@ impl Default for MathLayoutConfig {
             cell_width: 10,
             cell_height: 20,
             foreground: [235, 235, 235],
+            background: terminal_rgb_array(DEFAULT_DARK_BACKGROUND),
         }
     }
 }
@@ -58,22 +62,43 @@ static MARKDOWN_WORKSPACE: LazyLock<RwLock<Option<PathBuf>>> = LazyLock::new(|| 
 #[derive(Clone, Debug)]
 pub(crate) struct MathGraphicsConfig {
     picker: Picker,
+    background: Option<TerminalRgb>,
+    background_was_reported: bool,
 }
 
 impl MathGraphicsConfig {
-    pub(crate) fn query(foreground: [u8; 3]) -> Self {
-        let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+    pub(crate) fn query(background_hint: Option<TerminalRgb>) -> Self {
+        let mut picker = Picker::from_query_stdio_with_options(QueryStdioOptions {
+            terminal_background_color_osc: true,
+            ..QueryStdioOptions::default()
+        })
+        .unwrap_or_else(|_| Picker::halfblocks());
+        let reported_background = terminal_background_from_capabilities(picker.capabilities());
+        let background = reported_background.or(background_hint);
+        let resolved_background = background.unwrap_or(DEFAULT_DARK_BACKGROUND);
+        let foreground = foreground_for_background(resolved_background);
+        picker.set_background_color(Some(Rgba([
+            resolved_background.red,
+            resolved_background.green,
+            resolved_background.blue,
+            255,
+        ])));
         let font = picker.font_size();
         let config = MathLayoutConfig {
             native_graphics: picker.protocol_type() != ProtocolType::Halfblocks,
             cell_width: font.width.max(1),
             cell_height: font.height.max(1),
             foreground,
+            background: terminal_rgb_array(resolved_background),
         };
         *LAYOUT_CONFIG
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
-        let graphics = Self { picker };
+        let graphics = Self {
+            picker,
+            background,
+            background_was_reported: reported_background.is_some(),
+        };
         *GRAPHICS_CONFIG
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(graphics.clone());
@@ -92,6 +117,25 @@ impl MathGraphicsConfig {
             ProtocolType::Halfblocks => "unicode",
         }
     }
+
+    pub(crate) const fn background(&self) -> Option<TerminalRgb> {
+        self.background
+    }
+
+    pub(crate) const fn background_was_reported(&self) -> bool {
+        self.background_was_reported
+    }
+}
+
+fn terminal_background_from_capabilities(capabilities: &[Capability]) -> Option<TerminalRgb> {
+    capabilities.iter().find_map(|capability| match capability {
+        Capability::Background(red, green, blue) => Some(TerminalRgb::new(*red, *green, *blue)),
+        _ => None,
+    })
+}
+
+const fn terminal_rgb_array(color: TerminalRgb) -> [u8; 3] {
+    [color.red, color.green, color.blue]
 }
 
 pub(crate) fn configured_graphics() -> Option<MathGraphicsConfig> {
@@ -193,6 +237,7 @@ pub(crate) fn render_formula(source: &str, display: bool) -> Result<Arc<MathArti
     config.cell_width.hash(&mut hasher);
     config.cell_height.hash(&mut hasher);
     config.foreground.hash(&mut hasher);
+    config.background.hash(&mut hasher);
     let id = hasher.finish();
     if let Some(artifact) = ARTIFACT_CACHE
         .lock()
@@ -207,6 +252,12 @@ pub(crate) fn render_formula(source: &str, display: bool) -> Result<Arc<MathArti
         f32::from(config.foreground[0]) / 255.0,
         f32::from(config.foreground[1]) / 255.0,
         f32::from(config.foreground[2]) / 255.0,
+        1.0,
+    );
+    let background = Color::new(
+        f32::from(config.background[0]) / 255.0,
+        f32::from(config.background[1]) / 255.0,
+        f32::from(config.background[2]) / 255.0,
         1.0,
     );
     let options = LayoutOptions::default()
@@ -235,7 +286,10 @@ pub(crate) fn render_formula(source: &str, display: bool) -> Result<Arc<MathArti
         &RenderOptions {
             font_size,
             padding,
-            background_color: Color::new(0.0, 0.0, 0.0, 0.0),
+            // Give every formula a self-contained contrast pair. When OSC 11
+            // succeeds this blends into the terminal; when all color evidence
+            // is wrong, the formula remains readable on its own backing color.
+            background_color: background,
             font_dir: String::new(),
             device_pixel_ratio: 1.0,
         },
@@ -573,16 +627,8 @@ impl MathGraphicsRenderer {
     }
 }
 
-pub(crate) fn foreground_for_background(
-    background: Option<agena_tui_components::TerminalRgb>,
-) -> [u8; 3] {
-    let Some(background) = background else {
-        return [235, 235, 235];
-    };
-    let luminance = 0.2126 * f32::from(background.red)
-        + 0.7152 * f32::from(background.green)
-        + 0.0722 * f32::from(background.blue);
-    if luminance > 145.0 {
+fn foreground_for_background(background: TerminalRgb) -> [u8; 3] {
+    if background.is_light() {
         [28, 28, 28]
     } else {
         [235, 235, 235]
@@ -601,6 +647,33 @@ mod tests {
         assert!(artifact.image.height() > 1);
         assert!(artifact.size.width >= 1);
         assert!(artifact.size.height >= 1);
+        let pixels = artifact.image.to_rgba8();
+        assert!(
+            pixels.pixels().all(|pixel| pixel[3] == 255),
+            "formula backing must be opaque on every graphics protocol"
+        );
+        let (darkest, brightest) = pixels.pixels().fold((u8::MAX, u8::MIN), |range, pixel| {
+            let luminance =
+                ((u16::from(pixel[0]) + u16::from(pixel[1]) + u16::from(pixel[2])) / 3) as u8;
+            (range.0.min(luminance), range.1.max(luminance))
+        });
+        assert!(
+            brightest.saturating_sub(darkest) >= 128,
+            "formula ink must contrast with its backing color"
+        );
+    }
+
+    #[test]
+    fn terminal_background_query_drives_formula_contrast() {
+        let capabilities = vec![Capability::Kitty, Capability::Background(248, 249, 250)];
+        let background = terminal_background_from_capabilities(&capabilities)
+            .expect("OSC 11 response should be retained");
+        assert_eq!(background, TerminalRgb::new(248, 249, 250));
+        assert_eq!(foreground_for_background(background), [28, 28, 28]);
+        assert_eq!(
+            foreground_for_background(TerminalRgb::new(18, 18, 20)),
+            [235, 235, 235]
+        );
     }
 
     #[test]

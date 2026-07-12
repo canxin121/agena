@@ -23,6 +23,7 @@ use ratex_types::{color::Color, math_style::MathStyle};
 
 const MAX_FORMULA_BYTES: usize = 16 * 1024;
 const MAX_MARKDOWN_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+const MAX_SVG_BYTES: usize = 2 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION: u32 = 8_192;
 const MAX_IMAGE_PIXELS: u64 = 32 * 1024 * 1024;
 const MAX_ARTIFACTS: usize = 128;
@@ -276,7 +277,15 @@ pub(crate) fn render_markdown_image(source: &str) -> Result<Arc<MathArtifact>, S
     } else {
         read_workspace_image(source)?
     };
-    image_artifact(&bytes)
+    if looks_like_svg(&bytes) {
+        svg_artifact(&bytes)
+    } else {
+        image_artifact(&bytes)
+    }
+}
+
+pub(crate) fn render_markdown_svg(source: &str) -> Result<Arc<MathArtifact>, String> {
+    svg_artifact(source.as_bytes())
 }
 
 fn decode_data_image(source: &str) -> Result<Vec<u8>, String> {
@@ -297,7 +306,6 @@ fn decode_data_image(source: &str) -> Result<Vec<u8>, String> {
     let bytes = BASE64_STANDARD
         .decode(payload)
         .map_err(|_| "invalid base64 image data".to_string())?;
-    validate_encoded_image_size(&bytes)?;
     Ok(bytes)
 }
 
@@ -343,8 +351,18 @@ fn read_workspace_image(source: &str) -> Result<Vec<u8>, String> {
         return Err("image exceeds the encoded byte safety limit".to_string());
     }
     let bytes = fs::read(path).map_err(|error| format!("cannot read image: {error}"))?;
-    validate_encoded_image_size(&bytes)?;
     Ok(bytes)
+}
+
+fn looks_like_svg(bytes: &[u8]) -> bool {
+    let prefix = bytes
+        .get(..bytes.len().min(4096))
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .unwrap_or_default()
+        .trim_start_matches('\u{feff}')
+        .trim_start();
+    prefix.starts_with("<svg")
+        || prefix.starts_with("<?xml") && prefix.to_ascii_lowercase().contains("<svg")
 }
 
 fn validate_encoded_image_size(bytes: &[u8]) -> Result<(), String> {
@@ -380,6 +398,83 @@ fn image_artifact(bytes: &[u8]) -> Result<Arc<MathArtifact>, String> {
         return Ok(artifact);
     }
     let image = image::load_from_memory(bytes).map_err(|error| error.to_string())?;
+    cache_dynamic_image(id, image, config)
+}
+
+fn svg_artifact(bytes: &[u8]) -> Result<Arc<MathArtifact>, String> {
+    if bytes.len() > MAX_SVG_BYTES {
+        return Err("SVG exceeds the encoded byte safety limit".to_string());
+    }
+    let config = layout_config();
+    let mut hasher = DefaultHasher::new();
+    b"svg".hash(&mut hasher);
+    bytes.hash(&mut hasher);
+    config.cell_width.hash(&mut hasher);
+    config.cell_height.hash(&mut hasher);
+    let id = hasher.finish();
+    if let Some(artifact) = ARTIFACT_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(id)
+    {
+        return Ok(artifact);
+    }
+
+    static FONT_DATABASE: LazyLock<Arc<resvg::usvg::fontdb::Database>> = LazyLock::new(|| {
+        let mut database = resvg::usvg::fontdb::Database::new();
+        database.load_system_fonts();
+        Arc::new(database)
+    });
+    let options = resvg::usvg::Options {
+        fontdb: Arc::clone(&FONT_DATABASE),
+        resources_dir: None,
+        ..resvg::usvg::Options::default()
+    };
+    let tree = resvg::usvg::Tree::from_data_nested(bytes, &options)
+        .map_err(|error| format!("invalid SVG: {error}"))?;
+    let size = tree.size();
+    let width = size.width().ceil();
+    let height = size.height().ceil();
+    if !width.is_finite()
+        || !height.is_finite()
+        || width < 1.0
+        || height < 1.0
+        || width > MAX_IMAGE_DIMENSION as f32
+        || height > MAX_IMAGE_DIMENSION as f32
+        || (width as u64).saturating_mul(height as u64) > MAX_IMAGE_PIXELS
+    {
+        return Err("SVG dimensions exceed the safety limit".to_string());
+    }
+    let width = width as u32;
+    let height = height as u32;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)
+        .ok_or_else(|| "cannot allocate SVG raster surface".to_string())?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::identity(),
+        &mut pixmap.as_mut(),
+    );
+    let mut rgba = pixmap.take();
+    for pixel in rgba.chunks_exact_mut(4) {
+        let alpha = u32::from(pixel[3]);
+        if alpha > 0 && alpha < 255 {
+            for channel in &mut pixel[..3] {
+                *channel =
+                    u8::try_from((u32::from(*channel) * 255 / alpha).min(255)).unwrap_or(255);
+            }
+        }
+    }
+    let image = image::RgbaImage::from_raw(width, height, rgba)
+        .map(DynamicImage::ImageRgba8)
+        .ok_or_else(|| "invalid SVG raster buffer".to_string())?;
+    cache_dynamic_image(id, image, config)
+}
+
+fn cache_dynamic_image(
+    id: u64,
+    image: DynamicImage,
+    config: MathLayoutConfig,
+) -> Result<Arc<MathArtifact>, String> {
     let width = image
         .width()
         .div_ceil(u32::from(config.cell_width))
@@ -531,5 +626,18 @@ mod tests {
         let error = render_markdown_image("https://example.com/tracker.png")
             .expect_err("remote image must stay inert");
         assert!(error.contains("not loaded automatically"));
+    }
+
+    #[test]
+    fn markdown_svg_images_are_safely_rasterized() {
+        let svg = concat!(
+            "data:image/svg+xml;base64,",
+            "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMiIg",
+            "aGVpZ2h0PSI4Ij48cmVjdCB3aWR0aD0iMTIiIGhlaWdodD0iOCIgZmlsbD0iI2ZmMDAw",
+            "MCIvPjwvc3ZnPg=="
+        );
+        let artifact = render_markdown_image(svg).expect("small SVG should rasterize");
+        assert_eq!(artifact.image.width(), 12);
+        assert_eq!(artifact.image.height(), 8);
     }
 }

@@ -1578,6 +1578,7 @@ transcript-node-kind-table = 表格
 transcript-node-kind-math = 公式
 transcript-node-kind-image = 图片
 transcript-node-kind-footnote = 脚注
+transcript-node-kind-diagram = 图表
 transcript-node-kind-activity = 活动块
 flash-command-requires-session = 此操作需要先打开一个会话
 flash-snapshot-ready = snapshot 已就绪：{$path} ({$branch})

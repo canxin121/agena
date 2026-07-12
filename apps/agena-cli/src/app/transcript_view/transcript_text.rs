@@ -1,5 +1,4 @@
 use super::transcript_ast::{parse_markdown_document, render_parsed_markdown_block};
-use super::transcript_math::{inline_math_unicode_text, push_inline_math};
 
 pub(in crate::app) fn transcript_message_parts(message: &MessageResource) -> &[MessagePart] {
     message
@@ -294,48 +293,6 @@ pub(in crate::app) fn should_suppress_markdown_block(
         && is_markdown_thematic_break(block.source.as_str())
 }
 
-pub(in crate::app) fn push_markdown_heading(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    level: usize,
-    text: &str,
-    width: u16,
-) {
-    let marker = match level {
-        1 => "══",
-        2 => "──",
-        _ => "›",
-    };
-    if crate::math_render::layout_config().native_graphics
-        && push_inline_math(out, format!("{prefix}{marker} ").as_str(), text, width)
-    {
-        return;
-    }
-    let text = markdown_inline_text(text);
-    let style = Style::default()
-        .fg(if level <= 2 {
-            agena_tui_components::theme::accent_color()
-        } else {
-            agena_tui_components::theme::info_color()
-        })
-        .add_modifier(Modifier::BOLD);
-    let available = width.max(1) as usize;
-    let start = format!("{prefix}{marker} {text} ");
-    if level <= 2 && UnicodeWidthStr::width(start.as_str()) < available {
-        let fill = "─".repeat(available.saturating_sub(UnicodeWidthStr::width(start.as_str())));
-        out.push(RenderedLine::plain(format!("{start}{fill}"), style));
-    } else {
-        push_wrapped_line(
-            out,
-            prefix,
-            prefix,
-            format!("{marker} {text}").as_str(),
-            style,
-            width,
-        );
-    }
-}
-
 pub(in crate::app) fn push_markdown_rule(out: &mut Vec<RenderedLine>, prefix: &str, width: u16) {
     let available = (width.max(1) as usize).saturating_sub(UnicodeWidthStr::width(prefix));
     push_single_line(
@@ -612,23 +569,11 @@ pub(in crate::app) fn wrap_display_text(text: &str, width: usize) -> Vec<String>
     lines
 }
 
-pub(in crate::app) fn markdown_inline_text(text: &str) -> String {
-    let text = inline_math_unicode_text(text);
-    let rendered = markdown_to_text(&text);
-    let plain = rendered
-        .lines
-        .iter()
-        .map(|line| line_plain_text(&owned_line(line)))
-        .collect::<Vec<_>>()
-        .join(" ");
-    sanitize_terminal_text(plain.as_str()).trim().to_string()
-}
 use super::{
     I18n, Line, MarkdownBlock, MessagePart, MessageResource, Modifier, OperationBlock,
     OperationPart, PartContent, RenderedLine, Span, Style, UnicodeWidthStr,
-    file_change_list_item_text, is_markdown_table_header, line_plain_text,
-    markdown_fence_delimiter, markdown_to_text, owned_line, push_limited_markdown,
-    push_limited_tool_text, push_single_line, push_wrapped_line, sanitize_terminal_text,
+    file_change_list_item_text, is_markdown_table_header, markdown_fence_delimiter,
+    push_limited_markdown, push_limited_tool_text, push_single_line, sanitize_terminal_text,
     tool_invocation_label, trim_empty_line_edges, truncate_display_width, ui_text,
 };
 use unicode_segmentation::UnicodeSegmentation;

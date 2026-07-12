@@ -139,6 +139,130 @@ mod pending_message_tests {
 }
 
 #[cfg(test)]
+mod live_transcript_tests {
+    use agena::{
+        event::{
+            DomainEvent, EventKind, EventMeta, MessagePartDeltaEvent, MessagePartUpdatedEvent,
+            PartDeltaField,
+        },
+        message::{ExecutionStatus, MessagePart, MessageStatus, PartContent},
+        role::Role,
+    };
+    use uuid::Uuid;
+
+    use super::super::{MessageRole, TranscriptState, Utc};
+
+    fn event(kind: EventKind, seq: i64) -> DomainEvent {
+        DomainEvent {
+            meta: EventMeta {
+                id: Uuid::new_v4(),
+                seq_global: seq,
+                seq_session: Some(seq),
+                session_id: Some(7),
+                workspace_id: None,
+                created_at: Utc::now(),
+                causation_id: None,
+                correlation_id: None,
+                envelope_schema: 1,
+            },
+            kind,
+        }
+    }
+
+    fn part_updated(message_id: i64, part_id: i64, seq: i64) -> DomainEvent {
+        let now = Utc::now();
+        event(
+            EventKind::MessagePartUpdated(MessagePartUpdatedEvent {
+                session_id: 7,
+                message_id,
+                message_role: Role::Assistant,
+                message_state: MessageStatus::InProgress,
+                message_created_at: now,
+                part: MessagePart::from_content(
+                    part_id,
+                    message_id,
+                    now,
+                    ExecutionStatus::Pending,
+                    PartContent::text(String::new()),
+                ),
+                ts_ms: now.timestamp_millis(),
+            }),
+            seq,
+        )
+    }
+
+    fn text_delta(message_id: i64, part_id: i64, text: &str, seq: i64) -> DomainEvent {
+        event(
+            EventKind::MessagePartDelta(MessagePartDeltaEvent {
+                session_id: 7,
+                message_id,
+                part_id,
+                call_id: None,
+                field: PartDeltaField::Text,
+                delta: text.to_string(),
+                seq: seq as u64,
+                ts_ms: Utc::now().timestamp_millis(),
+            }),
+            seq,
+        )
+    }
+
+    #[test]
+    fn ephemeral_provider_delta_is_rendered_without_waiting_for_a_refresh() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            ..TranscriptState::default()
+        };
+
+        assert!(!transcript.apply_live_event(&part_updated(10, 101, 1), 80, 20));
+        assert!(!transcript.apply_live_event(&text_delta(10, 101, "I'm Grok", 2), 80, 20));
+
+        assert_eq!(transcript.messages.len(), 1);
+        assert_eq!(transcript.messages[0].state, MessageStatus::InProgress);
+        let rendered = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("Grok"),
+            "rendered transcript: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn consecutive_assistant_passes_stream_into_the_collapsed_visible_message() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            ..TranscriptState::default()
+        };
+
+        transcript.apply_live_event(&part_updated(10, 101, 1), 80, 20);
+        transcript.apply_live_event(&text_delta(10, 101, "first", 2), 80, 20);
+        transcript.apply_live_event(&part_updated(11, 102, 3), 80, 20);
+        transcript.apply_live_event(&text_delta(11, 102, "second", 4), 80, 20);
+
+        assert_eq!(transcript.messages.len(), 1);
+        assert_eq!(transcript.messages[0].id, 10);
+        assert_eq!(transcript.messages[0].role, MessageRole::Assistant);
+        let parts = transcript.messages[0].parts.as_ref().expect("live parts");
+        assert_eq!(parts.len(), 2);
+        assert!(parts.iter().all(|part| part.message_id == 10));
+        let rendered = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("first"));
+        assert!(rendered.contains("second"));
+    }
+}
+
+#[cfg(test)]
 mod run_activity_tests {
     use super::super::{RunActivityTarget, RunActivityTracker, RunOperation};
 

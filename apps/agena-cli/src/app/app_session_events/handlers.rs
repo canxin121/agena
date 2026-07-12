@@ -155,17 +155,22 @@ impl App {
                     .items
                     .into_iter()
                     .map(|session| self.session_search_item(session))
-                    .collect();
-                dialog.replace_items(items);
-                dialog.meta.offset = dialog
-                    .meta
-                    .page_index
-                    .saturating_mul(dialog.meta.page_limit);
+                    .collect::<Vec<_>>();
+                if page_index == 0 {
+                    dialog.replace_items(items);
+                } else {
+                    dialog.append_items(items);
+                }
                 dialog.meta.next_cursor = page.page.next_cursor;
                 dialog.meta.has_more = page.page.has_more;
                 dialog.footer = self.session_search_footer(&dialog);
             }
-            Err(error) => self.flash_error(error),
+            Err(error) => {
+                if page_index > 0 {
+                    dialog.meta.page_index = page_index.saturating_sub(1);
+                }
+                self.flash_error(error);
+            }
         }
         self.restore_session_search_dialog(host, dialog);
     }

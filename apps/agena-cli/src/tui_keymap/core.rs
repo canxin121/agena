@@ -127,6 +127,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         KeyContext::Confirm => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
             K::Enter if unmodified(key) => Some(A::Confirm),
+            K::Char('y' | 'Y') if unmodified_or_shift(key) => Some(A::Confirm),
             _ => None,
         },
         KeyContext::PermissionPrompt => match key.code {

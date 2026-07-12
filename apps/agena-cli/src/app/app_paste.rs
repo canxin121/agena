@@ -61,9 +61,6 @@ impl App {
                     if before != after {
                         dialog.meta.page_index = 0;
                         dialog.selected = 0;
-                        dialog.meta.offset = 0;
-                        dialog.meta.cursors.clear();
-                        dialog.meta.cursors.push(None);
                         dialog.meta.next_cursor = None;
                         dialog.meta.has_more = false;
                         dialog.set_loading(true);
@@ -138,7 +135,7 @@ impl App {
                 }
                 Overlay::Choice(dialog) => {
                     dialog.input.insert_str(text.as_str());
-                    Self::sync_choice_overlay_input(dialog, true);
+                    Self::sync_choice_overlay_input(dialog);
                 }
                 Overlay::FileAttach(dialog) => {
                     dialog.input.insert_str(text.as_str());
@@ -170,9 +167,6 @@ impl App {
                     if before != after {
                         dialog.meta.page_index = 0;
                         dialog.selected = 0;
-                        dialog.meta.offset = 0;
-                        dialog.meta.cursors.clear();
-                        dialog.meta.cursors.push(None);
                         dialog.meta.next_cursor = None;
                         dialog.meta.has_more = false;
                         dialog.set_loading(true);

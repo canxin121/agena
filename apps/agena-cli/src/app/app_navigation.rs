@@ -154,7 +154,11 @@ impl App {
         prefer_current_model: bool,
         current_model: Option<&ModelRef>,
     ) {
-        let previous_model = dialog.selected_item().map(|item| item.model.clone());
+        let previous_model = if dialog.query_changed_since_results() {
+            None
+        } else {
+            dialog.selected_item().map(|item| item.model.clone())
+        };
         dialog.refresh_results();
         if dialog.result_count() == 0 {
             dialog.selected = 0;

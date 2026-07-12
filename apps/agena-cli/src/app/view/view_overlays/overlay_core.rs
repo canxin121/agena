@@ -99,7 +99,17 @@ impl App {
     }
 
     pub(in crate::app) fn render_route(&self, frame: &mut Frame, area: Rect) {
-        match &self.current_route {
+        self.render_route_content(frame, area, &self.current_route);
+        self.render_overlay(frame, area);
+    }
+
+    pub(in crate::app) fn render_route_content(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        route: &Route,
+    ) {
+        match route {
             Route::Main => {}
             Route::Usage(dialog) => {
                 self.render_usage_dashboard(frame, area, dialog, SurfaceMode::Route)
@@ -141,7 +151,6 @@ impl App {
                 self.render_model_catalog_studio_overlay(frame, area, dialog, SurfaceMode::Route);
             }
         }
-        self.render_overlay(frame, area);
     }
 
     pub(in crate::app) fn render_file_attach_overlay(

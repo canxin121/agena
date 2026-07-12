@@ -164,13 +164,8 @@ pub(crate) struct FileMentionSuggestionContext {
     pub(crate) mention_range: Range<usize>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct PromptHistorySearchMeta {
-    pub(crate) original: ComposerDraft,
-}
-
 pub(crate) type PromptHistorySearchState =
-    SearchPicker<PromptHistorySearchResult, SearchPickerNoCustom, PromptHistorySearchMeta, Editor>;
+    SearchPicker<PromptHistorySearchResult, SearchPickerNoCustom, (), Editor>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PromptHistorySearchResult {

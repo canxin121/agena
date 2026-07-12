@@ -426,10 +426,7 @@ impl App {
                 all_items: Vec::new(),
                 mode,
                 scope_session_id,
-                page_limit: 50,
                 page_index: 0,
-                offset: 0,
-                cursors: vec![None],
                 next_cursor: None,
                 has_more: false,
             },
@@ -449,7 +446,6 @@ impl App {
             Self::session_model_chooser_overlay_config(),
             None,
             SessionModelChooserOverlayMeta {
-                page_size: 18,
                 current_model_label: None,
             },
         );

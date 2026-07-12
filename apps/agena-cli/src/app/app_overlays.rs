@@ -34,12 +34,12 @@ impl App {
     ) -> bool {
         match resolve_tui_key(KeyContext::Choice, key) {
             Some(KeyAction::Accept) => self.commit_choice_overlay(dialog),
-            _ => match dialog.handle_input_key(key, 10) {
+            _ => match dialog.handle_input_key(key) {
                 SearchPickerInputResult::Close => true,
                 SearchPickerInputResult::Navigated => false,
                 SearchPickerInputResult::Edited { changed } => {
                     if changed {
-                        Self::sync_choice_overlay_input(dialog, true);
+                        Self::sync_choice_overlay_input(dialog);
                     }
                     false
                 }
@@ -69,7 +69,7 @@ impl App {
                     }
                 }
             }
-            _ => match dialog.handle_input_key(key, 10) {
+            _ => match dialog.handle_input_key(key) {
                 SearchPickerInputResult::Close => true,
                 SearchPickerInputResult::Navigated => false,
                 SearchPickerInputResult::Edited { changed } => {
@@ -98,17 +98,17 @@ impl App {
             }
             _ => {
                 let selected_before = dialog.selected;
-                match dialog.handle_input_key(key, 10) {
+                match dialog.handle_input_key(key) {
                     SearchPickerInputResult::Close => true,
                     SearchPickerInputResult::Navigated => {
                         let stayed_at_boundary = dialog.selected == selected_before;
-                        if stayed_at_boundary && matches!(key.code, crossterm::event::KeyCode::Down)
+                        if stayed_at_boundary
+                            && matches!(
+                                key.code,
+                                crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Right
+                            )
                         {
-                            self.move_session_search_page(dialog, 1);
-                        } else if stayed_at_boundary
-                            && matches!(key.code, crossterm::event::KeyCode::Up)
-                        {
-                            self.move_session_search_page(dialog, -1);
+                            self.request_more_session_search_results(dialog);
                         }
                         false
                     }
@@ -126,66 +126,25 @@ impl App {
         }
     }
 
-    fn move_session_search_page(&mut self, dialog: &mut SessionSearchOverlay, delta: isize) {
-        if dialog.is_loading() {
+    fn request_more_session_search_results(&mut self, dialog: &mut SessionSearchOverlay) {
+        if dialog.is_loading() || !dialog.meta.has_more {
             return;
         }
-        if delta < 0 {
-            if dialog.meta.page_index == 0 {
-                return;
-            }
-            dialog.meta.page_index = dialog.meta.page_index.saturating_sub(1);
-            dialog.selected = usize::MAX;
-            match dialog.meta.mode {
-                SessionViewMode::Subtree => self.refresh_session_search_overlay_local(dialog),
-                SessionViewMode::All | SessionViewMode::Roots => {
-                    let cursor = dialog
-                        .meta
-                        .cursors
-                        .get(dialog.meta.page_index)
-                        .cloned()
-                        .flatten();
-                    dialog.set_loading(true);
-                    dialog.footer = self.session_search_footer(dialog);
-                    self.request_session_search_page(
-                        dialog.meta.mode,
-                        dialog.input.text().trim().to_string(),
-                        dialog.meta.page_index,
-                        cursor,
-                    );
-                }
-            }
+        if dialog.meta.mode == SessionViewMode::Subtree {
             return;
         }
-        if !dialog.meta.has_more {
+        let Some(cursor) = dialog.meta.next_cursor.clone() else {
             return;
-        }
-        match dialog.meta.mode {
-            SessionViewMode::Subtree => {
-                dialog.meta.page_index = dialog.meta.page_index.saturating_add(1);
-                dialog.selected = 0;
-                self.refresh_session_search_overlay_local(dialog);
-            }
-            SessionViewMode::All | SessionViewMode::Roots => {
-                let Some(cursor) = dialog.meta.next_cursor.clone() else {
-                    return;
-                };
-                dialog.meta.page_index = dialog.meta.page_index.saturating_add(1);
-                if dialog.meta.cursors.len() <= dialog.meta.page_index {
-                    dialog.meta.cursors.resize(dialog.meta.page_index + 1, None);
-                }
-                dialog.meta.cursors[dialog.meta.page_index] = Some(cursor.clone());
-                dialog.selected = 0;
-                dialog.set_loading(true);
-                dialog.footer = self.session_search_footer(dialog);
-                self.request_session_search_page(
-                    dialog.meta.mode,
-                    dialog.input.text().trim().to_string(),
-                    dialog.meta.page_index,
-                    Some(cursor),
-                );
-            }
-        }
+        };
+        dialog.meta.page_index = dialog.meta.page_index.saturating_add(1);
+        dialog.begin_append();
+        dialog.footer = self.session_search_footer(dialog);
+        self.request_session_search_page(
+            dialog.meta.mode,
+            dialog.input.text().trim().to_string(),
+            dialog.meta.page_index,
+            Some(cursor),
+        );
     }
 
     pub(in crate::app) fn reset_session_search_query(
@@ -195,14 +154,10 @@ impl App {
     ) {
         dialog.meta.page_index = 0;
         dialog.selected = 0;
-        dialog.meta.offset = 0;
-        dialog.meta.cursors.clear();
-        dialog.meta.cursors.push(None);
         dialog.meta.next_cursor = None;
         dialog.meta.has_more = false;
         dialog.set_loading(true);
         dialog.footer = self.session_search_footer(dialog);
-        dialog.meta.page_index = 0;
         match dialog.meta.mode {
             SessionViewMode::Subtree => {
                 if let Some(session_id) = dialog.meta.scope_session_id {
@@ -227,19 +182,10 @@ impl App {
             .filter(|session| session_matches_query(&session.session, query))
             .cloned()
             .collect::<Vec<_>>();
-        let total = filtered.len();
-        let page_limit = dialog.meta.page_limit.max(1);
-        let max_page_index = total.saturating_sub(1) / page_limit;
-        dialog.meta.page_index = min(dialog.meta.page_index, max_page_index);
-        dialog.meta.offset = dialog.meta.page_index.saturating_mul(page_limit);
-        let page_items = filtered
-            .into_iter()
-            .skip(dialog.meta.offset)
-            .take(page_limit)
-            .collect::<Vec<_>>();
-        dialog.meta.has_more = dialog.meta.offset + page_items.len() < total;
+        dialog.meta.page_index = 0;
+        dialog.meta.has_more = false;
         dialog.meta.next_cursor = None;
-        dialog.replace_items(page_items);
+        dialog.replace_items(filtered);
         dialog.set_loading(false);
         dialog.footer = self.session_search_footer(dialog);
     }
@@ -252,12 +198,6 @@ impl App {
                 ui_text::t(&self.i18n, "overlay-session-search-scope-subtree")
             }
         };
-        let start = if dialog.items.is_empty() {
-            0
-        } else {
-            dialog.meta.offset.saturating_add(1)
-        };
-        let end = dialog.meta.offset.saturating_add(dialog.items.len());
         if dialog.meta.mode == SessionViewMode::Subtree {
             let total = dialog
                 .meta
@@ -267,20 +207,11 @@ impl App {
                     session_matches_query(&session.session, dialog.input.text().trim())
                 })
                 .count();
-            let page_total = if total == 0 {
-                0
-            } else {
-                (total + dialog.meta.page_limit.saturating_sub(1)) / dialog.meta.page_limit.max(1)
-            };
             return self.i18n.text_args(
                 "overlay-session-search-footer-local",
                 &crate::fl_args!(
                     "scope" => scope,
-                    "start" => start as i64,
-                    "end" => end as i64,
                     "total" => total as i64,
-                    "page" => dialog.meta.page_index.saturating_add(1) as i64,
-                    "pages" => page_total.max(1) as i64,
                 ),
             );
         }
@@ -294,9 +225,7 @@ impl App {
             "overlay-session-search-footer-remote",
             &crate::fl_args!(
                 "scope" => scope,
-                "start" => start as i64,
-                "end" => end as i64,
-                "page" => dialog.meta.page_index.saturating_add(1) as i64,
+                "loaded" => dialog.items.len() as i64,
                 "tail" => end_state,
             ),
         )
@@ -362,7 +291,7 @@ impl App {
                 self.handle_picker_selection(dialog.meta.kind.clone(), item);
                 true
             }
-            _ => match dialog.handle_input_key(key, 10) {
+            _ => match dialog.handle_input_key(key) {
                 SearchPickerInputResult::Close => true,
                 SearchPickerInputResult::Navigated => false,
                 SearchPickerInputResult::Edited { .. } => false,
@@ -383,7 +312,7 @@ impl App {
                 self.apply_model_override(item.model);
                 true
             }
-            _ => match dialog.handle_input_key(key, dialog.meta.page_size) {
+            _ => match dialog.handle_input_key(key) {
                 SearchPickerInputResult::Close => true,
                 SearchPickerInputResult::Navigated => false,
                 SearchPickerInputResult::Edited { .. } => false,
@@ -406,7 +335,7 @@ impl App {
                 }
                 false
             }
-            _ => match dialog.handle_input_key(key, 10) {
+            _ => match dialog.handle_input_key(key) {
                 SearchPickerInputResult::Close => true,
                 SearchPickerInputResult::Navigated => false,
                 SearchPickerInputResult::Edited { .. } => false,
@@ -627,7 +556,7 @@ use crate::app::{
     ProviderPickerPurpose, ProviderStudioEditorAction, ProviderStudioFocus, ProviderStudioOverlay,
     Route, RuntimeSettingEditOverlay, SearchPickerInputResult, SearchPickerSelection,
     SessionModelChooserOverlay, SessionSearchOverlay, SessionViewMode, TimelineOverlay,
-    drive_editor_dialog_key, drive_input_dialog_key, min, provider_studio_selected_adapter_models,
+    drive_editor_dialog_key, drive_input_dialog_key, provider_studio_selected_adapter_models,
     session_matches_query, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

@@ -408,6 +408,27 @@ mod tests {
             Some(KeyAction::Next)
         );
         assert_eq!(
+            resolve(
+                KeyContext::PromptHistory,
+                key(KeyCode::Right, KeyModifiers::NONE)
+            ),
+            None
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Suggestion,
+                key(KeyCode::Left, KeyModifiers::NONE)
+            ),
+            None
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::PromptHistory,
+                key(KeyCode::PageDown, KeyModifiers::NONE)
+            ),
+            None
+        );
+        assert_eq!(
             ComposerKeyBindings::default().match_action(&key(
                 KeyCode::Enter,
                 KeyModifiers::CONTROL | KeyModifiers::SUPER,
@@ -498,6 +519,48 @@ mod tests {
             bindings.match_action(&key(KeyCode::Char('r'), KeyModifiers::CONTROL)),
             None
         );
+    }
+
+    #[test]
+    fn confirmation_dialog_accepts_the_visible_y_shortcut() {
+        for event in [
+            key(KeyCode::Char('y'), KeyModifiers::NONE),
+            key(KeyCode::Char('Y'), KeyModifiers::SHIFT),
+            key(KeyCode::Enter, KeyModifiers::NONE),
+        ] {
+            assert_eq!(
+                resolve(KeyContext::Confirm, event),
+                Some(KeyAction::Confirm)
+            );
+        }
+        assert_eq!(
+            resolve(
+                KeyContext::Confirm,
+                key(KeyCode::Char('y'), KeyModifiers::CONTROL)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn plugin_search_picker_overlays_share_page_navigation() {
+        for context in [
+            KeyContext::PluginConfigActions,
+            KeyContext::PluginConfigSelection,
+        ] {
+            assert_eq!(
+                resolve(context, key(KeyCode::Left, KeyModifiers::NONE)),
+                Some(KeyAction::PageUp)
+            );
+            assert_eq!(
+                resolve(context, key(KeyCode::Right, KeyModifiers::NONE)),
+                Some(KeyAction::PageDown)
+            );
+            assert_eq!(
+                resolve(context, key(KeyCode::PageDown, KeyModifiers::NONE)),
+                None
+            );
+        }
     }
 
     #[test]

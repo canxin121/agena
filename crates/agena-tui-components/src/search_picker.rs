@@ -1,14 +1,15 @@
 //! Unified searchable selection surface for local catalogs, externally loaded
 //! pages, editable values, multi-selection, pinned actions, and responsive
-//! preview panes.
+//! preview panes. Results are presented as terminal-height-aware pages so the
+//! visible page is stable instead of scrolling around the active row.
 //!
 //! The picker keeps canonical items separate from lightweight match indices.
 //! Filtering therefore does not clone domain items, and rendering only builds
 //! the visible window instead of allocating one Ratatui row per result.
 
-use std::{borrow::Cow, path::PathBuf};
+use std::{borrow::Cow, cell::Cell, path::PathBuf};
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Direction, Layout, Rect},
@@ -57,6 +58,12 @@ pub enum SearchPickerSearchMode {
 pub enum SearchPickerSelectionMode {
     Single,
     Multiple,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchPickerFocus {
+    Input,
+    Results,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -283,9 +290,12 @@ pub struct SearchPicker<TItem, TCustom, TMeta, TInput> {
     pub request_generation: u64,
     pub preview_scroll: u16,
     pub checked_keys: Vec<String>,
+    pub focus: SearchPickerFocus,
     index: Vec<SearchIndexEntry>,
     matches: Vec<SearchMatch>,
     selected_key: Option<String>,
+    results_query: String,
+    visible_page_size: Cell<usize>,
     custom: std::marker::PhantomData<TCustom>,
 }
 
@@ -306,6 +316,12 @@ where
         clear_action: Option<SearchPickerClearAction>,
         meta: TMeta,
     ) -> Self {
+        let results_query = input.text().to_string();
+        let focus = if config.input_mode.is_visible() {
+            SearchPickerFocus::Input
+        } else {
+            SearchPickerFocus::Results
+        };
         Self {
             title,
             prompt,
@@ -322,17 +338,24 @@ where
             request_generation: 0,
             preview_scroll: 0,
             checked_keys: Vec::new(),
+            focus,
             index: Vec::new(),
             matches: Vec::new(),
             selected_key: None,
+            results_query,
+            visible_page_size: Cell::new(1),
             custom: std::marker::PhantomData,
         }
     }
 
     pub fn replace_items(&mut self, items: Vec<TItem>) {
-        let selected_key = self
-            .selected_item()
-            .map(|item| item.search_picker_key().into_owned());
+        let preserve_selection = self.input.text() == self.results_query;
+        let selected_key = preserve_selection
+            .then(|| {
+                self.selected_item()
+                    .map(|item| item.search_picker_key().into_owned())
+            })
+            .flatten();
         self.items = items;
         self.index = self
             .items
@@ -347,7 +370,7 @@ where
             })
             .collect();
         self.selected_key = selected_key;
-        self.refresh_results();
+        self.refresh_results_with_selection(preserve_selection);
     }
 
     pub fn set_loading(&mut self, loading: bool) {
@@ -384,15 +407,28 @@ where
         self.request_generation
     }
 
+    pub fn begin_append(&mut self) {
+        self.phase = SearchPickerPhase::Appending;
+    }
+
     pub fn accepts_generation(&self, generation: u64) -> bool {
         generation == self.request_generation
     }
 
     pub fn refresh_results(&mut self) {
-        let selected_key = self.selected_key.clone().or_else(|| {
-            self.selected_item()
-                .map(|item| item.search_picker_key().into_owned())
-        });
+        let preserve_selection = self.input.text() == self.results_query;
+        self.refresh_results_with_selection(preserve_selection);
+    }
+
+    fn refresh_results_with_selection(&mut self, preserve_selection: bool) {
+        let selected_key = preserve_selection
+            .then(|| {
+                self.selected_key.clone().or_else(|| {
+                    self.selected_item()
+                        .map(|item| item.search_picker_key().into_owned())
+                })
+            })
+            .flatten();
         let query = normalize_search_text(self.input.text().trim());
         self.matches = match self.config.search_mode {
             SearchPickerSearchMode::LocalRanked if !query.is_empty() => {
@@ -431,10 +467,38 @@ where
                 })
                 .collect(),
         };
-        self.restore_selection(selected_key.as_deref());
+        if preserve_selection {
+            self.restore_selection(selected_key.as_deref());
+        } else {
+            self.selected = 0;
+            self.clamp_selection();
+            self.selected_key = self
+                .selected_item()
+                .map(|item| item.search_picker_key().into_owned());
+            self.preview_scroll = 0;
+        }
+        self.results_query = self.input.text().to_string();
         if !self.phase.is_loading() && !matches!(self.phase, SearchPickerPhase::Error { .. }) {
             self.phase = SearchPickerPhase::Ready { complete: true };
         }
+    }
+
+    pub fn append_items(&mut self, items: Vec<TItem>) {
+        let first_new_item = self.items.len();
+        self.items.extend(items);
+        self.index.extend(
+            self.items[first_new_item..]
+                .iter()
+                .map(|item| SearchIndexEntry {
+                    key: item.search_picker_key().into_owned(),
+                    normalized_label: normalize_search_text(item.search_picker_label().as_ref()),
+                    normalized_document: normalize_search_text(
+                        item.search_picker_search_text().as_ref(),
+                    ),
+                    always_visible: item.search_picker_always_visible(),
+                }),
+        );
+        self.refresh_results();
     }
 
     fn restore_selection(&mut self, key: Option<&str>) {
@@ -473,6 +537,10 @@ where
 
     pub fn result_count(&self) -> usize {
         self.matches.len()
+    }
+
+    pub fn query_changed_since_results(&self) -> bool {
+        self.input.text() != self.results_query
     }
 
     pub fn is_empty(&self) -> bool {
@@ -546,6 +614,7 @@ where
     }
 
     pub fn move_selection(&mut self, delta: isize) {
+        self.focus = SearchPickerFocus::Results;
         let count = self.row_count();
         if count == 0 {
             self.selected = 0;
@@ -558,16 +627,52 @@ where
         self.preview_scroll = 0;
     }
 
-    pub fn move_selection_page(&mut self, delta: isize, page_size: usize) {
-        self.move_selection(delta.saturating_mul(page_size.max(1) as isize));
+    pub fn page_size(&self) -> usize {
+        self.visible_page_size.get().max(1)
+    }
+
+    pub fn page_count(&self) -> usize {
+        self.row_count().max(1).div_ceil(self.page_size())
+    }
+
+    pub fn current_page(&self) -> usize {
+        if self.row_count() == 0 {
+            0
+        } else {
+            (self.selected / self.page_size()).min(self.page_count().saturating_sub(1))
+        }
+    }
+
+    fn set_visible_page_size(&self, page_size: usize) {
+        self.visible_page_size.set(page_size.max(1));
+    }
+
+    fn visible_page_bounds(&self) -> (usize, usize) {
+        let start = self.current_page().saturating_mul(self.page_size());
+        (start, (start + self.page_size()).min(self.row_count()))
+    }
+
+    pub fn move_selection_page(&mut self, delta: isize) {
+        let page_size = self.page_size();
+        let page = self.current_page();
+        let target_page =
+            (page as isize + delta).clamp(0, self.page_count().saturating_sub(1) as isize) as usize;
+        let row_in_page = self.selected % page_size;
+        let target = target_page
+            .saturating_mul(page_size)
+            .saturating_add(row_in_page)
+            .min(self.row_count().saturating_sub(1));
+        self.move_selection(target as isize - self.selected as isize);
     }
 
     pub fn move_selection_home(&mut self) {
+        self.focus = SearchPickerFocus::Results;
         self.selected = 0;
         self.preview_scroll = 0;
     }
 
     pub fn move_selection_end(&mut self) {
+        self.focus = SearchPickerFocus::Results;
         self.selected = self.row_count().saturating_sub(1);
         self.preview_scroll = 0;
     }
@@ -588,6 +693,7 @@ where
             return false;
         }
         self.input.set_text(value);
+        self.focus = SearchPickerFocus::Input;
         true
     }
 
@@ -610,20 +716,43 @@ where
         true
     }
 
-    pub fn handle_input_key(&mut self, key: KeyEvent, page_size: usize) -> SearchPickerInputResult {
+    pub fn handle_input_key(&mut self, key: KeyEvent) -> SearchPickerInputResult {
         if input_dialog_action(key, false) == Some(InputDialogAction::Close) {
             return SearchPickerInputResult::Close;
         }
-        if self.handle_navigation_action(search_navigation_action(key), page_size) {
-            return SearchPickerInputResult::Navigated;
-        }
         if !self.config.input_mode.is_visible() {
+            if self.handle_navigation_action(search_navigation_action(key)) {
+                return SearchPickerInputResult::Navigated;
+            }
             return SearchPickerInputResult::Edited { changed: false };
+        }
+
+        if self.focus == SearchPickerFocus::Input {
+            if key.code == KeyCode::Down && key.modifiers.is_empty() && !self.is_empty() {
+                self.focus = SearchPickerFocus::Results;
+                return SearchPickerInputResult::Navigated;
+            }
+        } else if let Some(action) = search_navigation_action(key) {
+            if action == NavigationAction::Up && self.selected == 0 {
+                self.focus = SearchPickerFocus::Input;
+            } else {
+                self.handle_navigation_action(Some(action));
+            }
+            return SearchPickerInputResult::Navigated;
+        } else if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
+            return SearchPickerInputResult::Edited { changed: false };
+        } else {
+            self.focus = SearchPickerFocus::Input;
         }
 
         let before = self.input.text().to_string();
         self.input.handle_line_input_key(key);
         let changed = self.input.text() != before;
+        if changed {
+            self.selected = 0;
+            self.selected_key = None;
+            self.preview_scroll = 0;
+        }
         if changed && self.config.search_mode == SearchPickerSearchMode::LocalRanked {
             self.refresh_results();
         } else if changed {
@@ -632,14 +761,10 @@ where
         SearchPickerInputResult::Edited { changed }
     }
 
-    fn handle_navigation_action(
-        &mut self,
-        action: Option<NavigationAction>,
-        page_size: usize,
-    ) -> bool {
+    fn handle_navigation_action(&mut self, action: Option<NavigationAction>) -> bool {
         match action {
-            Some(NavigationAction::PageUp) => self.move_selection_page(-1, page_size),
-            Some(NavigationAction::PageDown) => self.move_selection_page(1, page_size),
+            Some(NavigationAction::PageUp) => self.move_selection_page(-1),
+            Some(NavigationAction::PageDown) => self.move_selection_page(1),
             Some(NavigationAction::Home) => self.move_selection_home(),
             Some(NavigationAction::End) => self.move_selection_end(),
             Some(NavigationAction::Up) => self.move_selection(-1),
@@ -825,18 +950,24 @@ pub fn render_search_picker_dialog_with_preview<TItem, TCustom, TMeta, F, P>(
             rows[row_index],
         );
     }
-    if let Some(result) = input_result {
+    if let Some(result) = input_result
+        && picker.focus == SearchPickerFocus::Input
+    {
         frame.set_cursor_position(result.cursor);
     }
 }
 
-/// Canonical host rectangle for every searchable selection surface.
-/// Normal terminals keep one row vertically and two columns horizontally;
-/// tiny terminals surrender those margins before sacrificing content.
+/// Canonical centered window for every searchable selection surface.
+/// The window scales with the terminal while retaining enough surrounding
+/// context to read as a modal, and stops growing on very large terminals.
+/// Tiny terminals use the complete area rather than sacrificing usability.
 pub fn search_picker_dialog_area(area: Rect) -> Rect {
-    let horizontal = if area.width > 8 { 2 } else { 0 };
-    let vertical = if area.height > 4 { 1 } else { 0 };
-    crate::inset_rect(area, horizontal, vertical)
+    if area.width < 48 || area.height < 10 {
+        return area;
+    }
+    let target_width = ((u32::from(area.width) * 88) / 100) as u16;
+    let target_height = ((u32::from(area.height) * 82) / 100) as u16;
+    SurfaceMode::Overlay.outer_rect(area, target_width.min(126), target_height.min(34))
 }
 
 fn picker_view_state<'a, TItem, TCustom, TMeta>(
@@ -878,10 +1009,14 @@ fn render_picker_results<TItem, TCustom, TMeta, F>(
     TCustom: SearchPickerCustomValue<TMeta>,
     F: for<'a> Fn(&'a str) -> String,
 {
+    let page_size = area.height.saturating_sub(2).max(1) as usize;
+    picker.set_visible_page_size(page_size);
     let block_title = format!(
-        " {} · {} ",
+        " {} · {} · Page {}/{} ",
         normalize_text(spec.results_title.as_ref()),
-        picker.result_count()
+        picker.result_count(),
+        picker.current_page() + 1,
+        picker.page_count(),
     );
     let block = Block::default().borders(Borders::ALL).title(block_title);
     if picker.phase.hides_results() {
@@ -918,13 +1053,7 @@ fn render_picker_results<TItem, TCustom, TMeta, F>(
         return;
     }
 
-    let body_height = area.height.saturating_sub(2).max(1) as usize;
-    let visible_count = body_height.max(1);
-    let start = picker
-        .selected
-        .saturating_sub(visible_count.saturating_sub(1) / 2)
-        .min(picker.row_count().saturating_sub(visible_count));
-    let end = (start + visible_count).min(picker.row_count());
+    let (start, end) = picker.visible_page_bounds();
     let row_width = area.width.saturating_sub(5).max(1) as usize;
     let list_items = (start..end)
         .map(|row| {
@@ -940,10 +1069,20 @@ fn render_picker_results<TItem, TCustom, TMeta, F>(
         .collect::<Vec<_>>();
     let mut state = ListState::default();
     state.select(Some(picker.selected.saturating_sub(start)));
+    let focused = picker.focus == SearchPickerFocus::Results;
+    let highlight_symbol = if focused {
+        spec.highlight_symbol.to_string()
+    } else {
+        " ".repeat(UnicodeWidthStr::width(spec.highlight_symbol.as_ref()))
+    };
     let list = List::new(list_items)
         .block(block)
-        .highlight_style(spec.highlight_style)
-        .highlight_symbol(spec.highlight_symbol.as_ref());
+        .highlight_style(if focused {
+            spec.highlight_style
+        } else {
+            Style::default()
+        })
+        .highlight_symbol(highlight_symbol);
     frame.render_stateful_widget(list, area, &mut state);
 }
 
@@ -1192,13 +1331,17 @@ where
         ));
         parts.push("Enter confirm".to_string());
     }
+    if picker.config.input_mode.is_visible() {
+        parts.push(
+            "Search ←/→ cursor · Results ←/→ page · ↓ enter · ↑ first row return".to_string(),
+        );
+    } else {
+        parts.push("←/→ page".to_string());
+    }
     if !picker.footer.trim().is_empty() {
         parts.push(normalize_text(&picker.footer));
     } else {
         parts.push("↑/↓ navigate · Enter select · Esc close".to_string());
-    }
-    if picker.phase.is_loading() && !picker.phase.hides_results() {
-        parts.push("refreshing…".to_string());
     }
     parts.join(" · ")
 }
@@ -1317,13 +1460,13 @@ fn find_label_ranges(label: &str, tokens: &[&str]) -> Vec<(usize, usize)> {
 mod tests {
     use super::{
         SearchPicker, SearchPickerConfig, SearchPickerCustomValue, SearchPickerDialogSpec,
-        SearchPickerInput, SearchPickerInputMode, SearchPickerItem, SearchPickerNoCustom,
-        SearchPickerPreviewMode, SearchPickerSearchMode, SearchPickerViewState,
-        render_search_picker_dialog, render_search_picker_dialog_with_preview,
-        search_picker_dialog_area,
+        SearchPickerFocus, SearchPickerInput, SearchPickerInputMode, SearchPickerItem,
+        SearchPickerNoCustom, SearchPickerPreviewMode, SearchPickerSearchMode,
+        SearchPickerViewState, render_search_picker_dialog,
+        render_search_picker_dialog_with_preview, search_picker_dialog_area,
     };
     use crate::{Editor, WorkbenchTextSection};
-    use crossterm::event::KeyEvent;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::{Terminal, backend::TestBackend, text::Text};
     use std::borrow::Cow;
     use std::sync::{
@@ -1414,10 +1557,14 @@ mod tests {
     }
 
     #[test]
-    fn every_picker_uses_the_same_responsive_terminal_margins() {
+    fn every_picker_uses_the_same_centered_responsive_window() {
         assert_eq!(
             search_picker_dialog_area(ratatui::layout::Rect::new(0, 0, 120, 30)),
-            ratatui::layout::Rect::new(2, 1, 116, 28)
+            ratatui::layout::Rect::new(7, 3, 105, 24)
+        );
+        assert_eq!(
+            search_picker_dialog_area(ratatui::layout::Rect::new(0, 0, 200, 50)),
+            ratatui::layout::Rect::new(37, 8, 126, 34)
         );
         assert_eq!(
             search_picker_dialog_area(ratatui::layout::Rect::new(0, 0, 8, 4)),
@@ -1437,9 +1584,217 @@ mod tests {
         let mut picker = picker("");
         picker.move_selection(1);
         assert_eq!(picker.selected_item().unwrap().key, "sonnet");
-        picker.input.set_text("claude".into());
-        picker.refresh_results();
+        picker.replace_items(vec![
+            Item {
+                key: "gpt",
+                label: "GPT",
+                detail: "openai model",
+                pinned: false,
+            },
+            Item {
+                key: "haiku",
+                label: "Claude Haiku",
+                detail: "fast anthropic model",
+                pinned: false,
+            },
+            Item {
+                key: "sonnet",
+                label: "Claude Sonnet",
+                detail: "balanced anthropic model",
+                pinned: false,
+            },
+        ]);
         assert_eq!(picker.selected_item().unwrap().key, "sonnet");
+    }
+
+    #[test]
+    fn every_query_change_returns_to_the_first_page() {
+        let mut picker = picker("");
+        picker.set_visible_page_size(2);
+        picker.move_selection(2);
+        assert_eq!(picker.current_page(), 1);
+
+        picker.input.set_text("model".into());
+        picker.refresh_results();
+
+        assert_eq!(picker.result_count(), 3);
+        assert_eq!(picker.selected, 0);
+        assert_eq!(picker.current_page(), 0);
+        assert_eq!(picker.selected_item().unwrap().key, "haiku");
+    }
+
+    #[test]
+    fn external_query_edits_reset_before_and_after_results_arrive() {
+        let mut config = SearchPickerConfig::searchable();
+        config.search_mode = SearchPickerSearchMode::External;
+        let mut picker = SearchPicker::<Item, SearchPickerNoCustom, (), Editor>::new(
+            "Sessions".into(),
+            String::new(),
+            String::new(),
+            "No sessions".into(),
+            Editor::default(),
+            config,
+            None,
+            (),
+        );
+        let items = vec![
+            Item {
+                key: "one",
+                label: "One",
+                detail: "first",
+                pinned: false,
+            },
+            Item {
+                key: "two",
+                label: "Two",
+                detail: "second",
+                pinned: false,
+            },
+            Item {
+                key: "three",
+                label: "Three",
+                detail: "third",
+                pinned: false,
+            },
+        ];
+        picker.replace_items(items.clone());
+        picker.set_visible_page_size(2);
+        picker.move_selection(2);
+        assert_eq!(picker.current_page(), 1);
+
+        let result = picker.handle_input_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(
+            result,
+            super::SearchPickerInputResult::Edited { changed: true }
+        );
+        assert_eq!(picker.selected, 0);
+        assert_eq!(picker.current_page(), 0);
+
+        picker.replace_items(items);
+        assert_eq!(picker.selected, 0);
+        assert_eq!(picker.current_page(), 0);
+    }
+
+    #[test]
+    fn selection_moves_across_stable_pages_instead_of_sliding_the_window() {
+        let mut picker = picker("");
+        picker.replace_items(vec![
+            Item {
+                key: "one",
+                label: "One",
+                detail: "first",
+                pinned: false,
+            },
+            Item {
+                key: "two",
+                label: "Two",
+                detail: "second",
+                pinned: false,
+            },
+            Item {
+                key: "three",
+                label: "Three",
+                detail: "third",
+                pinned: false,
+            },
+            Item {
+                key: "four",
+                label: "Four",
+                detail: "fourth",
+                pinned: false,
+            },
+            Item {
+                key: "five",
+                label: "Five",
+                detail: "fifth",
+                pinned: false,
+            },
+            Item {
+                key: "six",
+                label: "Six",
+                detail: "sixth",
+                pinned: false,
+            },
+            Item {
+                key: "seven",
+                label: "Seven",
+                detail: "seventh",
+                pinned: false,
+            },
+        ]);
+        picker.set_visible_page_size(3);
+
+        assert_eq!(picker.page_count(), 3);
+        assert_eq!(picker.visible_page_bounds(), (0, 3));
+        picker.move_selection(2);
+        assert_eq!(picker.visible_page_bounds(), (0, 3));
+        picker.move_selection(1);
+        assert_eq!(picker.visible_page_bounds(), (3, 6));
+
+        picker.move_selection_home();
+        picker.move_selection(1);
+        picker.move_selection_page(1);
+        assert_eq!(picker.selected, 4);
+        assert_eq!(picker.visible_page_bounds(), (3, 6));
+        picker.move_selection_page(1);
+        assert_eq!(picker.selected, 6);
+        assert_eq!(picker.visible_page_bounds(), (6, 7));
+    }
+
+    #[test]
+    fn horizontal_keys_follow_the_active_input_or_results_focus() {
+        let mut config = SearchPickerConfig::searchable();
+        config.search_mode = SearchPickerSearchMode::None;
+        let mut picker = SearchPicker::<Item, SearchPickerNoCustom, (), Editor>::new(
+            "Models".into(),
+            String::new(),
+            String::new(),
+            "No models".into(),
+            Editor::from_text("ab".into()),
+            config,
+            None,
+            (),
+        );
+        picker.replace_items(vec![
+            Item {
+                key: "one",
+                label: "One",
+                detail: "first",
+                pinned: false,
+            },
+            Item {
+                key: "two",
+                label: "Two",
+                detail: "second",
+                pinned: false,
+            },
+            Item {
+                key: "three",
+                label: "Three",
+                detail: "third",
+                pinned: false,
+            },
+        ]);
+        picker.set_visible_page_size(2);
+
+        assert_eq!(picker.focus, SearchPickerFocus::Input);
+        assert_eq!(picker.input.cursor(), 2);
+        let _ = picker.handle_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        assert_eq!(picker.input.cursor(), 1);
+        assert_eq!(picker.selected, 0);
+
+        let _ = picker.handle_input_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(picker.focus, SearchPickerFocus::Results);
+        assert_eq!(picker.selected, 0);
+        let _ = picker.handle_input_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(picker.current_page(), 1);
+        assert_eq!(picker.selected, 2);
+        assert_eq!(picker.input.cursor(), 1);
+
+        picker.move_selection_home();
+        let _ = picker.handle_input_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(picker.focus, SearchPickerFocus::Input);
+        assert_eq!(picker.selected, 0);
     }
 
     #[test]
@@ -1448,6 +1803,23 @@ mod tests {
         picker.config.search_mode = SearchPickerSearchMode::External;
         picker.refresh_results();
         assert_eq!(picker.result_count(), 3);
+    }
+
+    #[test]
+    fn appending_remote_batches_preserves_the_current_selection() {
+        let mut picker = picker("");
+        picker.config.search_mode = SearchPickerSearchMode::External;
+        picker.move_selection(1);
+        picker.append_items(vec![Item {
+            key: "opus",
+            label: "Claude Opus",
+            detail: "large anthropic model",
+            pinned: false,
+        }]);
+
+        assert_eq!(picker.result_count(), 4);
+        assert_eq!(picker.selected_item().unwrap().key, "sonnet");
+        assert_eq!(picker.items.last().unwrap().key, "opus");
     }
 
     #[test]
@@ -1628,9 +2000,98 @@ mod tests {
             .unwrap();
         let rendered = rendered_buffer(terminal.backend());
         assert!(rendered.contains("Models · 2 results"));
+        assert!(rendered.contains("Results · 2 · Page 1/1"));
         assert!(rendered.contains("Claude Sonnet"));
         assert!(rendered.contains("Details"));
         assert!(rendered.contains("Selected:"), "{rendered}");
+    }
+
+    #[test]
+    fn rendered_page_size_tracks_the_available_terminal_height() {
+        let picker = SearchPicker::<Item, SearchPickerNoCustom, (), Editor>::new(
+            "Models".into(),
+            String::new(),
+            String::new(),
+            "No models".into(),
+            Editor::default(),
+            SearchPickerConfig::searchable(),
+            None,
+            (),
+        );
+        let spec = SearchPickerDialogSpec::new("Loading…".into(), "Results".into());
+
+        let small_backend = TestBackend::new(80, 10);
+        let mut small_terminal = Terminal::new(small_backend).unwrap();
+        small_terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render_search_picker_dialog(frame, area, &picker, &spec, str::to_owned);
+            })
+            .unwrap();
+        let small_page_size = picker.page_size();
+
+        let tall_backend = TestBackend::new(80, 24);
+        let mut tall_terminal = Terminal::new(tall_backend).unwrap();
+        tall_terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render_search_picker_dialog(frame, area, &picker, &spec, str::to_owned);
+            })
+            .unwrap();
+        let tall_page_size = picker.page_size();
+
+        assert!(small_page_size >= 1);
+        assert!(tall_page_size > small_page_size);
+    }
+
+    #[test]
+    fn changing_focus_does_not_shift_result_columns() {
+        let mut picker = SearchPicker::<Item, SearchPickerNoCustom, (), Editor>::new(
+            "Models".into(),
+            String::new(),
+            String::new(),
+            "No models".into(),
+            Editor::default(),
+            SearchPickerConfig::searchable(),
+            None,
+            (),
+        );
+        picker.replace_items(vec![Item {
+            key: "sonnet",
+            label: "Claude Sonnet",
+            detail: "balanced model",
+            pinned: false,
+        }]);
+        let spec = SearchPickerDialogSpec::new("Loading…".into(), "Results".into());
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render_search_picker_dialog(frame, area, &picker, &spec, str::to_owned);
+            })
+            .unwrap();
+        let input_focused = rendered_buffer(terminal.backend());
+        let input_column = input_focused
+            .lines()
+            .find_map(|line| line.find("Claude Sonnet"))
+            .unwrap();
+
+        picker.focus = SearchPickerFocus::Results;
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render_search_picker_dialog(frame, area, &picker, &spec, str::to_owned);
+            })
+            .unwrap();
+        let results_focused = rendered_buffer(terminal.backend());
+        let results_column = results_focused
+            .lines()
+            .find_map(|line| line.find("Claude Sonnet"))
+            .unwrap();
+
+        assert_eq!(input_column, results_column);
     }
 
     #[test]

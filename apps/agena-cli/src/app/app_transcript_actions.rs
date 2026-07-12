@@ -6,16 +6,10 @@ impl App {
             return;
         }
 
-        match set_clipboard_text(text.as_str()) {
-            Ok(method) => self.flash_clipboard_copy_success(
-                method,
-                ui_text::t(&self.i18n, "flash-copied-loaded-transcript"),
-            ),
-            Err(error) => self.flash_error(self.i18n.text_args(
-                "flash-clipboard-copy-failed",
-                &crate::fl_args!("error" => error.to_string()),
-            )),
-        }
+        self.request_clipboard_copy(
+            text,
+            ui_text::t(&self.i18n, "flash-copied-loaded-transcript"),
+        );
     }
 
     pub(in crate::app) fn copy_last_assistant_message(&mut self) {
@@ -35,16 +29,10 @@ impl App {
             return;
         };
 
-        match set_clipboard_text(text.as_str()) {
-            Ok(method) => self.flash_clipboard_copy_success(
-                method,
-                ui_text::t(&self.i18n, "flash-copied-assistant-message"),
-            ),
-            Err(error) => self.flash_error(self.i18n.text_args(
-                "flash-clipboard-copy-failed",
-                &crate::fl_args!("error" => error.to_string()),
-            )),
-        }
+        self.request_clipboard_copy(
+            text,
+            ui_text::t(&self.i18n, "flash-copied-assistant-message"),
+        );
     }
 
     pub(in crate::app) fn copy_visible_transcript(&mut self) {
@@ -54,21 +42,15 @@ impl App {
             return;
         }
 
-        match set_clipboard_text(text.as_str()) {
-            Ok(method) => self.flash_clipboard_copy_success(
-                method,
-                ui_text::t(&self.i18n, "flash-copied-visible-transcript"),
-            ),
-            Err(error) => self.flash_error(self.i18n.text_args(
-                "flash-clipboard-copy-failed",
-                &crate::fl_args!("error" => error.to_string()),
-            )),
-        }
+        self.request_clipboard_copy(
+            text,
+            ui_text::t(&self.i18n, "flash-copied-visible-transcript"),
+        );
     }
 
-    pub(in crate::app) fn export_transcript_to_editor<B: RatatuiBackend>(
+    pub(in crate::app) fn export_transcript_to_editor(
         &mut self,
-        terminal: &mut Terminal<B>,
+        terminal: &mut TerminalRuntime,
         requested_path: Option<&Path>,
     ) -> Result<()> {
         let text = self.transcript_export_markdown();
@@ -106,12 +88,8 @@ impl App {
             return Ok(());
         }
 
-        terminal
-            .flush()
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        terminal::suspend_stdio_terminal()?;
-        let result = open_path(path.as_path());
-        terminal::resume_terminal(terminal)?;
+        let result =
+            terminal.with_suspended(SuspendReason::OpenPath, || open_path(path.as_path()))?;
 
         match result {
             Ok(()) => self.flash_success(self.i18n.text_args(
@@ -126,22 +104,15 @@ impl App {
         Ok(())
     }
 
-    pub(in crate::app) fn page_transcript<B: RatatuiBackend>(
-        &mut self,
-        terminal: &mut Terminal<B>,
-    ) -> Result<()> {
+    pub(in crate::app) fn page_transcript(&mut self, terminal: &mut TerminalRuntime) -> Result<()> {
         let text = self.transcript_pager_text();
         if text.trim().is_empty() {
             self.flash_warning(ui_text::t(&self.i18n, "flash-no-loaded-transcript"));
             return Ok(());
         }
 
-        terminal
-            .flush()
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        terminal::suspend_stdio_terminal()?;
-        let result = page_text(text.as_str());
-        terminal::resume_terminal(terminal)?;
+        let result =
+            terminal.with_suspended(SuspendReason::ExternalPager, || page_text(text.as_str()))?;
 
         if let Err(error) = result {
             self.flash_error(self.i18n.text_args(
@@ -306,11 +277,10 @@ impl App {
         self.flash(FlashLevel::Info, text);
     }
 }
-use crate::app::RatatuiBackend;
 use crate::app::Result;
 use crate::app::{
     App, Duration, FlashLevel, FlashMessage, Instant, Local, MessageLoadMode, MessageRole, Path,
-    PathBuf, Terminal, TranscriptDetailDefaults, UiResult, assistant_message_text, min, open_path,
-    page_text, render_message_export, render_transcript_export_markdown, set_clipboard_text,
-    terminal, ui_text,
+    PathBuf, SuspendReason, TerminalRuntime, TranscriptDetailDefaults, UiResult,
+    assistant_message_text, min, open_path, page_text, render_message_export,
+    render_transcript_export_markdown, ui_text,
 };

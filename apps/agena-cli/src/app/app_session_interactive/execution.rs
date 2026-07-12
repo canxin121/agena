@@ -76,7 +76,6 @@ impl App {
     /// the steer (e.g. the run is in a non-steerable phase), we fall
     /// back to enqueueing the message so it isn't lost.
     pub(in crate::app) fn submit_or_steer(&mut self) {
-        self.composer.flush_all_pending_input();
         let draft = self.take_composer_draft();
         if draft.is_empty() {
             return;
@@ -115,13 +114,6 @@ impl App {
     /// sends immediately. When the AI is mid-run, the message is appended to
     /// the local pending queue and drained on run completion.
     pub(in crate::app) fn queue_or_submit(&mut self) {
-        // During a multi-character paste burst, an Enter inside it should be
-        // treated as a literal newline rather than a submit/queue.
-        if self.composer.should_insert_newline_on_enter() {
-            self.composer.insert_newline_from_enter();
-            return;
-        }
-        self.composer.flush_all_pending_input();
         let draft = self.take_composer_draft();
         if draft.is_empty() {
             return;
@@ -143,7 +135,6 @@ impl App {
     }
 
     pub(in crate::app) fn submit_composer(&mut self) {
-        self.composer.flush_all_pending_input();
         let draft = self.take_composer_draft();
         if draft.is_empty() || self.transcript.submitting {
             self.restore_composer_draft(draft);

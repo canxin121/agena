@@ -41,24 +41,20 @@ impl App {
         }
     }
 
+    pub(in crate::app) fn request_clipboard_copy(&mut self, text: String, success: String) {
+        self.pending_ui_action = Some(UiAction::CopyText { text, success });
+    }
+
     pub(in crate::app) fn copy_transcript_cursor_node(&mut self) {
         let width = self.layout.transcript_body.width;
         let Some(node) = self.transcript.current_cursor_node_cloned(width) else {
             return;
         };
-        match set_clipboard_text(node.copy_text.as_str()) {
-            Ok(method) => self.flash_clipboard_copy_success(
-                method,
-                self.i18n.text_args(
-                    "flash-transcript-node-copied",
-                    &crate::fl_args!("kind" => transcript_node_kind_label(&self.i18n, node.kind)),
-                ),
-            ),
-            Err(error) => self.flash_error(self.i18n.text_args(
-                "flash-clipboard-copy-failed",
-                &crate::fl_args!("error" => error.to_string()),
-            )),
-        }
+        let success = self.i18n.text_args(
+            "flash-transcript-node-copied",
+            &crate::fl_args!("kind" => transcript_node_kind_label(&self.i18n, node.kind)),
+        );
+        self.request_clipboard_copy(node.copy_text, success);
     }
 
     pub(in crate::app) fn handle_composer_key(&mut self, key: KeyEvent) {
@@ -135,7 +131,6 @@ impl App {
                 }
                 ComposerAction::ExternalEditor => {
                     self.reset_prompt_history_recall();
-                    self.composer.flush_all_pending_input();
                     self.pending_ui_action = Some(UiAction::EditComposerExternally);
                     return;
                 }
@@ -295,7 +290,6 @@ impl App {
             _ => {
                 let before = search.query.text().to_string();
                 search.query.handle_line_input_key(key);
-                search.query.flush_all_pending_input();
                 if search.query.text() != before {
                     search.selected = 0;
                     search.meta.loaded_count = PROMPT_HISTORY_PAGE_SIZE;
@@ -313,7 +307,6 @@ impl App {
     }
 
     pub(in crate::app) fn open_prompt_history_search(&mut self) {
-        self.composer.flush_all_pending_input();
         self.sync_composer_items_with_editor();
         if !self.composer_items.is_empty() {
             self.flash_warning(ui_text::t(&self.i18n, "flash-prompt-history-items"));
@@ -374,7 +367,6 @@ impl App {
         prompt_history: &PromptHistory,
         search: &mut PromptHistorySearchState,
     ) {
-        search.query.flush_all_pending_input();
         let query = search.query.text().trim().to_ascii_lowercase();
         let mut total_matches = 0_usize;
         let mut loaded = Vec::with_capacity(search.meta.loaded_count);
@@ -748,7 +740,7 @@ use crate::app::{
     PromptHistorySearchState, SlashCommandSuggestionContext, SlashCommandSuggestionItem,
     SlashCommandSuggestionMeta, SlashCommandSuggestionState, SlashCommandSuggestionValue, UiAction,
     commands, file_mention_suggestion_context_for_text, min, move_selected_index,
-    runtime_tool_matches_slash_query, set_clipboard_text,
-    slash_command_suggestion_context_for_text, transcript_node_kind_label, ui_text,
+    runtime_tool_matches_slash_query, slash_command_suggestion_context_for_text,
+    transcript_node_kind_label, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

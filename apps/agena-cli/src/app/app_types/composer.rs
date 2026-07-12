@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
     path::PathBuf,
+    sync::Arc,
 };
 
 use agena_tui_components::{Editor, QuerySuggestionState, SuggestionPopupState};
@@ -9,6 +10,7 @@ use ratatui::{layout::Rect, style::Style, text::Line};
 use serde::{Deserialize, Serialize};
 
 use crate::commands::CommandSpec;
+use agena::message::AttachmentItem;
 
 use super::{
     PermissionMode, PermissionRuleDraft, PermissionRuleSubjectKind, RenderedTranscriptNode,
@@ -24,13 +26,18 @@ pub struct ComposerDraft {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComposerItem {
-    Attachment(StagedAttachment),
+    Attachment(Box<StagedAttachment>),
     LargePaste(StagedPaste),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StagedAttachment {
     pub(crate) path: PathBuf,
+    /// Immutable content snapshot created when the attachment is staged.
+    /// Legacy drafts loaded from disk may leave this empty and are upgraded on
+    /// their next successful staging/submission path.
+    pub(crate) prepared: Option<Arc<AttachmentItem>>,
+    pub(crate) cleanup_root: Option<PathBuf>,
     pub(crate) placeholder: String,
     pub(crate) label: String,
     pub(crate) is_temp: bool,

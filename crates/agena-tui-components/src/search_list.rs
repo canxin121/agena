@@ -32,7 +32,6 @@ pub trait SearchListInput: Clone {
     fn text(&self) -> &str;
     fn set_text(&mut self, text: String);
     fn handle_line_input_key(&mut self, key: KeyEvent);
-    fn flush_all_pending_input(&mut self);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -370,7 +369,6 @@ where
 
         let before = self.input.text().to_string();
         self.input.handle_line_input_key(key);
-        self.input.flush_all_pending_input();
         SearchInputKeyResult::Edited {
             changed: self.input.text() != before,
         }

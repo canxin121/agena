@@ -269,7 +269,6 @@ impl App {
             _ if !dialog.list_controls_focused => {
                 let before = dialog.query.text().to_owned();
                 dialog.query.handle_line_input_key(key);
-                dialog.query.flush_all_pending_input();
                 if dialog.query.text() != before {
                     refresh_plugin_workbench_filter(dialog);
                 }

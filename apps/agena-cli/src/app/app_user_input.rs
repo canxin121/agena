@@ -414,7 +414,6 @@ impl App {
         let multiple = question.multiple;
         let question_id = question.id.clone();
         let custom_row = question.options.len();
-        dialog.custom_input.flush_all_pending_input();
         let parsed = dialog
             .custom_input
             .text()

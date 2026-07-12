@@ -1,4 +1,27 @@
 impl App {
+    pub(in crate::app) fn has_active_text_input(&self) -> bool {
+        if self.context_help.is_some() {
+            return false;
+        }
+        if let Some(overlay) = &self.overlay {
+            return !matches!(overlay, Overlay::Confirm(_) | Overlay::Permission(_));
+        }
+        match &self.current_route {
+            Route::Main => self.focus == Focus::Composer,
+            Route::Usage(_) | Route::SettingsStudio(_) | Route::PluginPolicyStudio(_) => false,
+            Route::AgentStudio(dialog) => dialog.workbench.editor.is_some(),
+            Route::PermissionStudio(dialog) => dialog.editor.is_some(),
+            Route::PermissionRuleStudio(dialog) => dialog.workbench.editor.is_some(),
+            Route::SessionSearch(_)
+            | Route::Picker(_)
+            | Route::SessionModelChooser(_)
+            | Route::Timeline(_)
+            | Route::PluginWorkbench(_) => true,
+            Route::ProviderStudio(dialog) => dialog.editor.is_some(),
+            Route::ModelCatalogStudio(dialog) => dialog.workbench.editor.is_some(),
+        }
+    }
+
     pub(in crate::app) fn handle_paste(&mut self, text: String) {
         if self.context_help.is_some() {
             return;
@@ -15,28 +38,24 @@ impl App {
                 }
                 Route::AgentStudio(dialog) => {
                     if let Some(editor) = dialog.workbench.editor.as_mut() {
-                        editor.input.flush_all_pending_input();
                         editor.input.insert_str(text.as_str());
                         handled_route = true;
                     }
                 }
                 Route::PermissionStudio(dialog) => {
                     if let Some(editor) = dialog.editor.as_mut() {
-                        editor.input.flush_all_pending_input();
                         editor.input.insert_str(text.as_str());
                         handled_route = true;
                     }
                 }
                 Route::PermissionRuleStudio(dialog) => {
                     if let Some(editor) = dialog.workbench.editor.as_mut() {
-                        editor.input.flush_all_pending_input();
                         editor.input.insert_str(text.as_str());
                         handled_route = true;
                     }
                 }
                 Route::SessionSearch(dialog) => {
                     let before = dialog.input.text().trim().to_string();
-                    dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                     let after = dialog.input.text().trim().to_string();
                     if before != after {
@@ -54,19 +73,16 @@ impl App {
                     handled_route = true;
                 }
                 Route::Picker(dialog) => {
-                    dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                     Self::refresh_picker_overlay(dialog);
                     handled_route = true;
                 }
                 Route::SessionModelChooser(dialog) => {
-                    dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                     Self::refresh_session_model_chooser_overlay(dialog, false, None);
                     handled_route = true;
                 }
                 Route::Timeline(dialog) => {
-                    dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                     Self::refresh_timeline_overlay(dialog);
                     handled_route = true;
@@ -80,14 +96,12 @@ impl App {
                 }
                 Route::ProviderStudio(dialog) => {
                     if let Some(editor) = dialog.editor.as_mut() {
-                        editor.input.flush_all_pending_input();
                         editor.input.insert_str(text.as_str());
                         handled_route = true;
                     }
                 }
                 Route::ModelCatalogStudio(dialog) => {
                     if let Some(editor) = dialog.workbench.editor.as_mut() {
-                        editor.input.flush_all_pending_input();
                         editor.input.insert_str(text.as_str());
                         handled_route = true;
                     }
@@ -114,24 +128,19 @@ impl App {
                 Overlay::TranscriptSearch(dialog)
                 | Overlay::SessionRename(dialog)
                 | Overlay::AgentCreate(dialog) => {
-                    dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                 }
                 Overlay::SettingsValueEdit(dialog) => {
-                    dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                 }
                 Overlay::RuntimeSettingEdit(dialog) => {
-                    dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                 }
                 Overlay::Choice(dialog) => {
-                    dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                     Self::sync_choice_overlay_input(dialog, true);
                 }
                 Overlay::FileAttach(dialog) => {
-                    dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                     dialog.items = backend
                         .search_workspace_files(dialog.input.text(), 24)
@@ -139,7 +148,6 @@ impl App {
                     dialog.clamp_selection();
                 }
                 Overlay::PathBrowser(dialog) => {
-                    dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                     Self::refresh_path_browser_overlay_with_root(
                         self.backend.workspace_root(),
@@ -153,12 +161,10 @@ impl App {
                     if !dialog.editing_custom && !Self::begin_user_input_custom_edit(dialog) {
                         return;
                     }
-                    dialog.custom_input.flush_all_pending_input();
                     dialog.custom_input.insert_str(text.as_str());
                 }
                 Overlay::SessionSearch(dialog) => {
                     let before = dialog.input.text().trim().to_string();
-                    dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                     let after = dialog.input.text().trim().to_string();
                     if before != after {
@@ -175,24 +181,20 @@ impl App {
                     }
                 }
                 Overlay::Picker(dialog) => {
-                    dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                     Self::refresh_picker_overlay(dialog);
                 }
                 Overlay::ProviderStudio(dialog) => {
                     if let Some(editor) = dialog.editor.as_mut() {
-                        editor.input.flush_all_pending_input();
                         editor.input.insert_str(text.as_str());
                     }
                 }
                 Overlay::ModelCatalogStudio(dialog) => {
                     if let Some(editor) = dialog.workbench.editor.as_mut() {
-                        editor.input.flush_all_pending_input();
                         editor.input.insert_str(text.as_str());
                     }
                 }
                 Overlay::Timeline(dialog) => {
-                    dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                     Self::refresh_timeline_overlay(dialog);
                 }
@@ -216,16 +218,12 @@ impl App {
 
         if self.focus == Focus::Composer {
             self.reset_prompt_history_recall();
-            self.composer.flush_all_pending_input();
             if self.try_stage_pasted_path(text.as_str()) {
                 return;
             }
 
-            // Bracketed-paste capable terminals deliver one `Event::Paste`,
-            // while other terminals deliver the same clipboard contents as a
-            // burst of key events. Insert both paths as ordinary composer
-            // text so the visible result never depends on terminal support
-            // or a hidden character-count threshold.
+            // TerminalRuntime normalizes bracketed paste and the bounded
+            // legacy fallback into the same application event.
             self.composer.insert_str(text.as_str());
             self.after_composer_text_mutated();
         }

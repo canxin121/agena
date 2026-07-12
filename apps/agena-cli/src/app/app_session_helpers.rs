@@ -635,6 +635,9 @@ pub(in crate::app) fn cleanup_temporary_composer_item(item: &ComposerItem) {
         && attachment.is_temp
     {
         let _ = std::fs::remove_file(&attachment.path);
+        if let Some(root) = attachment.cleanup_root.as_ref() {
+            let _ = std::fs::remove_dir(root);
+        }
     }
 }
 

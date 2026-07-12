@@ -618,6 +618,7 @@ pub(super) enum AppMessage {
 
 #[derive(Debug, Clone)]
 pub(super) enum UiAction {
+    CopyText { text: String, success: String },
     EditComposerExternally,
     AttachClipboardImage,
     AttachIterm2Files { images_only: bool },

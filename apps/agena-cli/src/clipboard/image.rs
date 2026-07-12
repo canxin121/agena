@@ -1,14 +1,13 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(not(target_os = "android"))]
-use std::io::Write;
-
-#[cfg(not(target_os = "android"))]
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use tempfile::Builder;
 
 #[cfg(target_os = "linux")]
 use std::process::Command;
+
+#[cfg(target_os = "linux")]
+use super::path::{convert_windows_path_to_wsl, is_probably_wsl};
 
 #[derive(Debug, Clone)]
 pub enum PasteImageError {
@@ -30,29 +29,6 @@ impl std::fmt::Display for PasteImageError {
 }
 
 impl std::error::Error for PasteImageError {}
-
-#[derive(Debug, Clone)]
-pub struct ClipboardTextError(pub String);
-
-impl std::fmt::Display for ClipboardTextError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0.as_str())
-    }
-}
-
-impl std::error::Error for ClipboardTextError {}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClipboardCopyMethod {
-    Native,
-    Osc52,
-}
-
-impl ClipboardCopyMethod {
-    pub const fn is_unconfirmed_terminal_request(self) -> bool {
-        matches!(self, Self::Osc52)
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncodedImageFormat {
@@ -106,63 +82,6 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
     }
 }
 
-#[cfg(not(target_os = "android"))]
-pub fn set_clipboard_text(text: &str) -> Result<ClipboardCopyMethod, ClipboardTextError> {
-    // `arboard` talks to the machine running Agena. Over SSH that is the
-    // server, where X11/Wayland is usually absent or unreachable. OSC 52 is
-    // interpreted by the user's terminal emulator instead, so it reaches the
-    // local clipboard without X11 forwarding.
-    if is_remote_terminal_session() {
-        set_clipboard_text_via_osc52(text)?;
-        return Ok(ClipboardCopyMethod::Osc52);
-    }
-
-    let native_result = (|| {
-        let mut clipboard = arboard::Clipboard::new()?;
-        clipboard.set_text(text.to_string())
-    })();
-    match native_result {
-        Ok(()) => Ok(ClipboardCopyMethod::Native),
-        Err(native_error) => {
-            set_clipboard_text_via_osc52(text).map_err(|osc52_error| {
-                ClipboardTextError(format!(
-                    "native clipboard failed: {native_error}; terminal clipboard fallback failed: {osc52_error}"
-                ))
-            })?;
-            Ok(ClipboardCopyMethod::Osc52)
-        }
-    }
-}
-
-#[cfg(not(target_os = "android"))]
-fn is_remote_terminal_session() -> bool {
-    std::env::var_os("SSH_TTY").is_some() || std::env::var_os("SSH_CONNECTION").is_some()
-}
-
-#[cfg(not(target_os = "android"))]
-fn set_clipboard_text_via_osc52(text: &str) -> Result<(), ClipboardTextError> {
-    let sequence = osc52_copy_sequence(text);
-    let mut stdout = std::io::stdout().lock();
-    stdout
-        .write_all(sequence.as_slice())
-        .and_then(|()| stdout.flush())
-        .map_err(|error| ClipboardTextError(format!("could not write OSC 52 sequence: {error}")))
-}
-
-#[cfg(not(target_os = "android"))]
-fn osc52_copy_sequence(text: &str) -> Vec<u8> {
-    // `c` selects the standard clipboard. The payload is base64 encoded so
-    // copied text cannot escape the terminal control sequence.
-    format!("\x1b]52;c;{}\x07", STANDARD.encode(text.as_bytes())).into_bytes()
-}
-
-#[cfg(target_os = "android")]
-pub fn set_clipboard_text(_: &str) -> Result<ClipboardCopyMethod, ClipboardTextError> {
-    Err(ClipboardTextError(
-        "clipboard text copy is unsupported on Android".to_string(),
-    ))
-}
-
 #[cfg(target_os = "android")]
 pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
     Err(PasteImageError::ClipboardUnavailable(
@@ -212,60 +131,6 @@ fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
     ))
 }
 
-pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
-    let pasted = pasted.trim();
-    if pasted.is_empty() {
-        return None;
-    }
-
-    if let Ok(url) = url::Url::parse(pasted)
-        && url.scheme() == "file"
-    {
-        return url.to_file_path().ok();
-    }
-
-    let looks_like_windows_path = {
-        let drive = pasted
-            .chars()
-            .next()
-            .map(|char| char.is_ascii_alphabetic())
-            .unwrap_or(false)
-            && pasted.get(1..2) == Some(":")
-            && pasted
-                .get(2..3)
-                .map(|component| component == "\\" || component == "/")
-                .unwrap_or(false);
-        let unc = pasted.starts_with("\\\\");
-        drive || unc
-    };
-    if looks_like_windows_path {
-        #[cfg(target_os = "linux")]
-        {
-            if is_probably_wsl()
-                && let Some(converted) = convert_windows_path_to_wsl(pasted)
-            {
-                return Some(converted);
-            }
-        }
-        return Some(PathBuf::from(pasted));
-    }
-
-    let parts: Vec<String> = shlex::Shlex::new(pasted).collect();
-    if parts.len() == 1 {
-        return parts.into_iter().next().map(PathBuf::from);
-    }
-
-    let trimmed_quotes = pasted
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .or_else(|| {
-            pasted
-                .strip_prefix('\'')
-                .and_then(|value| value.strip_suffix('\''))
-        });
-    trimmed_quotes.map(PathBuf::from)
-}
-
 pub fn pasted_image_format(path: &Path) -> EncodedImageFormat {
     match path
         .extension()
@@ -277,40 +142,6 @@ pub fn pasted_image_format(path: &Path) -> EncodedImageFormat {
         Some("jpg") | Some("jpeg") => EncodedImageFormat::Jpeg,
         _ => EncodedImageFormat::Other,
     }
-}
-
-#[cfg(target_os = "linux")]
-pub fn is_probably_wsl() -> bool {
-    if let Ok(version) = std::fs::read_to_string("/proc/version") {
-        let lower = version.to_ascii_lowercase();
-        if lower.contains("microsoft") || lower.contains("wsl") {
-            return true;
-        }
-    }
-
-    std::env::var_os("WSL_DISTRO_NAME").is_some() || std::env::var_os("WSL_INTEROP").is_some()
-}
-
-#[cfg(target_os = "linux")]
-fn convert_windows_path_to_wsl(path: &str) -> Option<PathBuf> {
-    if path.starts_with("\\\\") {
-        return None;
-    }
-    let drive = path.chars().next()?.to_ascii_lowercase();
-    if !drive.is_ascii_lowercase() || path.get(1..2) != Some(":") {
-        return None;
-    }
-
-    let mut out = PathBuf::from(format!("/mnt/{drive}"));
-    for component in path
-        .get(2..)?
-        .trim_start_matches(['\\', '/'])
-        .split(['\\', '/'])
-        .filter(|component| !component.is_empty())
-    {
-        out.push(component);
-    }
-    Some(out)
 }
 
 #[cfg(target_os = "linux")]
@@ -358,17 +189,4 @@ fn try_dump_windows_clipboard_image() -> Option<String> {
         }
     }
     None
-}
-
-#[cfg(all(test, not(target_os = "android")))]
-mod tests {
-    use super::osc52_copy_sequence;
-
-    #[test]
-    fn osc52_copy_sequence_targets_the_local_terminal_clipboard() {
-        assert_eq!(
-            osc52_copy_sequence("copied from Agena"),
-            b"\x1b]52;c;Y29waWVkIGZyb20gQWdlbmE=\x07"
-        );
-    }
 }

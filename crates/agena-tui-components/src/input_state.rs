@@ -35,7 +35,6 @@ pub fn drive_input_dialog_key<TAction: Clone>(
     match input_dialog_action(key, false) {
         Some(InputDialogAction::Close) => InputDialogKeyResult::Close,
         Some(InputDialogAction::Submit) => {
-            dialog.input.flush_all_pending_input();
             InputDialogKeyResult::Submit(dialog.action.clone(), dialog.input.text().to_string())
         }
         _ => {

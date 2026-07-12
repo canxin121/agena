@@ -178,7 +178,6 @@ where
 
         let before = self.input.text().to_string();
         self.input.handle_line_input_key(key);
-        self.input.flush_all_pending_input();
         SearchInputKeyResult::Edited {
             changed: self.input.text() != before,
         }

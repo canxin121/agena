@@ -290,7 +290,10 @@ pub async fn run_embedded(
     terminal
         .restore()
         .map_err(|error| AppError::Internal(error.to_string()))?;
-    result.map_err(|error| AppError::Internal(error.to_string()))
+    // Preserve the complete anyhow context chain. Keeping only `to_string()`
+    // hid the actual suspend/resume or tty I/O failure behind the generic
+    // "failed while running agena-tui" wrapper.
+    result.map_err(|error| AppError::Internal(format!("{error:#}")))
 }
 
 fn launch_args_from_cli(cli: &AgenaTuiCli) -> TuiLaunchArgs {

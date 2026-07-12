@@ -135,7 +135,6 @@ impl App {
             .map(|message| {
                 render_message_export(
                     message,
-                    u16::MAX,
                     &self.i18n,
                     TranscriptDetailDefaults {
                         activity_expanded: true,

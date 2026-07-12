@@ -11,15 +11,18 @@ import {
 import { createChatCommandCatalog, type ChatCommandCatalogActions } from '../lib/chatCommandCatalog'
 import {
   buildPluginCommandPayload,
+  commandMatchesSlash,
   commandSearchText,
   createCommandPalette,
   createCommandPaletteItems,
   type CommandItem,
   type CommandPaletteCatalogInput,
+  type CommandRunResult,
 } from '../lib/commandPalette'
 import { useRegisteredCommandPaletteItems } from '../lib/commandPaletteRegistry'
 import { isPluginUiToolInvokeResponse, resolvePluginCommandOutput } from '../lib/pluginUiActionRuntime'
 import type { ChatUsageSummary } from './chatUsageModel'
+import type { ComposerQueueItem } from './chatQueueModel'
 
 export type ChatCommandStateInput = {
   routeRouter: Router
@@ -27,17 +30,32 @@ export type ChatCommandStateInput = {
   selectedWorkspaceId: Ref<number | null>
   selectedSessionId: Ref<number | null>
   sessions: Ref<SessionResource[]>
+  messages: Ref<import('../lib/agenaApi').MessageResource[]>
+  composerQueue: Ref<ComposerQueueItem[]>
+  timelineEvents: Ref<import('../lib/agenaApi').DomainEventRecord[]>
   workspaces: Ref<WorkspaceResource[]>
   sessionImportJsonl: Ref<string>
   sessionTreeRows: ComputedRef<Array<{ session: SessionResource; depth: number }>>
   rewindCheckpoints: Ref<Array<unknown>>
   ancestorSessions: ComputedRef<SessionResource[]>
+  childSessions: ComputedRef<SessionResource[]>
+  parentSession: ComputedRef<SessionResource | null>
+  sessionState: Ref<import('../lib/agenaApi').SessionExecutionResource | null>
   sessionUsageSummary: ComputedRef<ChatUsageSummary>
   composer: Ref<string>
   localCommandNotice: Ref<string>
   newSessionTitle: Ref<string>
   workspacePath: Ref<string>
-  actions: Omit<ChatCommandCatalogActions, 'setLocalCommandNotice' | 'setNewSessionTitle' | 'setWorkspacePath'>
+  sessionSearch: Ref<string>
+  actions: Omit<
+    ChatCommandCatalogActions,
+    | 'setLocalCommandNotice'
+    | 'setNewSessionTitle'
+    | 'setWorkspacePath'
+    | 'setSessionSearch'
+    | 'runRuntimeEntry'
+    | 'invokeRuntimeTool'
+  >
 }
 
 function slashQuery(value: string): { slashNeedle: string; textNeedle: string } | null {
@@ -67,26 +85,51 @@ function sourcePriority(item: CommandItem): number {
 }
 
 function slashSuggestionScore(item: CommandItem, query: { slashNeedle: string; textNeedle: string }): number | null {
-  const slash = (item.slash || '').toLowerCase()
-  if (!slash) return null
-  if (slash === query.slashNeedle) return 0
-  if (slash.startsWith(query.slashNeedle)) return 1
+  const slashes = [item.slash, ...(item.slashAliases || [])].filter((value): value is string => Boolean(value))
+  if (!slashes.length) return null
+  if (commandMatchesSlash(item, query.slashNeedle)) return 0
+  if (slashes.some((slash) => slash.toLowerCase().startsWith(query.slashNeedle))) return 1
   if (commandSearchText(item).includes(query.textNeedle)) return 2
   return null
 }
 
 export function useChatCommandState(input: ChatCommandStateInput) {
+  async function invokeRuntimeEntry(name: string, args: string): Promise<CommandRunResult> {
+    const response = await invokePluginUiTool({
+      tool: name,
+      payload: { args: args.trim() || null },
+      sessionId: input.selectedSessionId.value,
+    })
+    const prompt = response.output_text.trim()
+    return prompt ? { submitText: prompt } : { notice: `Runtime entry /${name} returned an empty prompt.` }
+  }
+
+  async function invokeRuntimeTool(name: string, payload: Record<string, unknown>): Promise<CommandRunResult> {
+    const response = await invokePluginUiTool({
+      tool: name,
+      payload,
+      sessionId: input.selectedSessionId.value,
+    })
+    return { notice: response.output_text.trim() || `Ran runtime tool ${name}.` }
+  }
+
   const localCommands = computed(() =>
     createChatCommandCatalog(
       {
         selectedWorkspaceId: computed(() => input.selectedWorkspaceId.value),
         selectedSessionId: computed(() => input.selectedSessionId.value),
         sessions: computed(() => input.sessions.value),
+        messages: computed(() => input.messages.value),
+        composerQueue: computed(() => input.composerQueue.value),
+        timelineEvents: computed(() => input.timelineEvents.value),
         workspaces: computed(() => input.workspaces.value),
         sessionImportJsonl: computed(() => input.sessionImportJsonl.value),
         sessionTreeRows: input.sessionTreeRows,
         rewindCheckpoints: computed(() => input.rewindCheckpoints.value),
         ancestorSessions: input.ancestorSessions,
+        childSessions: input.childSessions,
+        parentSession: input.parentSession,
+        sessionState: computed(() => input.sessionState.value),
         sessionUsageSummary: input.sessionUsageSummary,
       },
       {
@@ -100,6 +143,11 @@ export function useChatCommandState(input: ChatCommandStateInput) {
         setWorkspacePath: (value) => {
           input.workspacePath.value = value
         },
+        setSessionSearch: (value) => {
+          input.sessionSearch.value = value
+        },
+        runRuntimeEntry: invokeRuntimeEntry,
+        invokeRuntimeTool,
       },
     ),
   )

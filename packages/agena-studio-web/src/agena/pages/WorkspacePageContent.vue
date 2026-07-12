@@ -79,6 +79,109 @@ function workspaceBadge(workspace: WorkspaceResource) {
       </div>
     </section>
 
+    <section id="workspace-snapshots" class="settings-panel">
+      <div class="settings-panel-header">
+        <div>
+          <p class="settings-panel-kicker">Isolated worktrees</p>
+          <h3 class="settings-panel-title">Session Snapshots</h3>
+          <p class="record-subtitle">
+            Inspect active session ownership, managed directories, and Git/Rift backend readiness.
+          </p>
+        </div>
+        <div class="record-meta">
+          <span class="badge neutral">{{ props.workspace.snapshotStatus.value?.active.length || 0 }} active</span>
+          <span class="badge neutral">{{ props.workspace.snapshotStatus.value?.managed.length || 0 }} managed</span>
+        </div>
+      </div>
+
+      <template v-if="props.workspace.snapshotStatus.value">
+        <div class="facts-grid">
+          <div class="fact-row">
+            <div class="fact-label">Preferred backend</div>
+            <div class="fact-value mono">{{ props.workspace.snapshotStatus.value.preferred_backend || 'none' }}</div>
+          </div>
+          <div class="fact-row">
+            <div class="fact-label">Git backend</div>
+            <div class="fact-value">
+              {{ props.workspace.snapshotStatus.value.git.available ? 'available' : 'unavailable' }} ·
+              {{ props.workspace.snapshotStatus.value.git.detail }}
+            </div>
+          </div>
+          <div class="fact-row">
+            <div class="fact-label">Rift backend</div>
+            <div class="fact-value">
+              {{ props.workspace.snapshotStatus.value.rift.available ? 'available' : 'unavailable' }} ·
+              {{ props.workspace.snapshotStatus.value.rift.detail }}
+            </div>
+          </div>
+          <div class="fact-row">
+            <div class="fact-label">Registry</div>
+            <div class="fact-value">
+              runtime={{ props.workspace.snapshotStatus.value.session_runtime_available ? 'ready' : 'unavailable' }} ·
+              registry={{ props.workspace.snapshotStatus.value.registry_available ? 'ready' : 'unavailable' }}
+            </div>
+          </div>
+        </div>
+
+        <div v-if="props.workspace.snapshotStatus.value.active.length" class="record-list">
+          <article
+            v-for="snapshot in props.workspace.snapshotStatus.value.active"
+            :key="snapshot.session_id"
+            class="record-card"
+          >
+            <div class="record-header">
+              <div>
+                <h4 class="record-title">Session #{{ snapshot.session_id }} · {{ snapshot.branch }}</h4>
+                <p class="record-subtitle mono">{{ snapshot.path }}</p>
+              </div>
+              <div class="record-meta">
+                <span class="badge neutral">{{ snapshot.backend }}</span>
+                <span class="badge" :class="snapshot.created_here ? 'success' : 'neutral'">
+                  {{ snapshot.created_here ? 'managed here' : 'attached' }}
+                </span>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <details v-if="props.workspace.snapshotStatus.value.managed.length" class="record-card">
+          <summary>All managed snapshot directories</summary>
+          <div class="record-list">
+            <article
+              v-for="snapshot in props.workspace.snapshotStatus.value.managed"
+              :key="snapshot.path"
+              class="record-card"
+            >
+              <div class="record-header">
+                <div>
+                  <h4 class="record-title mono">{{ snapshot.path }}</h4>
+                  <p class="record-subtitle">
+                    session={{ snapshot.session_id ?? 'none' }} · branch={{ snapshot.branch || 'unknown' }} · git={{
+                      snapshot.registered_with_git ? 'yes' : 'no'
+                    }}
+                    · rift={{ snapshot.registered_with_rift ? 'yes' : 'no' }}
+                  </p>
+                </div>
+                <span class="badge" :class="snapshot.stale ? 'danger' : 'neutral'">{{
+                  snapshot.stale ? 'stale' : snapshot.backend || 'unknown'
+                }}</span>
+              </div>
+            </article>
+          </div>
+        </details>
+
+        <div
+          v-if="
+            !props.workspace.snapshotStatus.value.active.length && !props.workspace.snapshotStatus.value.managed.length
+          "
+          class="empty-state"
+        >
+          No active or managed snapshots were found.
+        </div>
+      </template>
+      <div v-else class="empty-state">Snapshot status is not available.</div>
+    </section>
+
     <section class="settings-panel">
       <div class="settings-panel-header">
         <div>
@@ -258,6 +361,123 @@ function workspaceBadge(workspace: WorkspaceResource) {
         <pre v-if="props.workspace.rawDiff.value" class="mono raw-block">{{ props.workspace.rawDiff.value }}</pre>
         <div v-else class="muted">No tracked or untracked changes to preview.</div>
       </details>
+
+      <div v-if="props.workspace.gitStatus.value?.repo" class="git-workflow-grid">
+        <article class="record-card">
+          <div class="record-header">
+            <div>
+              <h4 class="record-title">Stage and Commit</h4>
+              <p class="record-subtitle">Stage runtime-workspace changes, then create an intentional commit.</p>
+            </div>
+            <span class="badge neutral">{{ props.workspace.gitStatus.value.staged_files }} staged</span>
+          </div>
+          <div class="field">
+            <label class="label" for="workspace-commit-message">Commit message</label>
+            <input
+              id="workspace-commit-message"
+              v-model="props.workspace.commitMessage.value"
+              class="input"
+              placeholder="Describe the completed change"
+              @keyup.enter="props.workspace.createGitCommitAction"
+            />
+          </div>
+          <div class="button-row">
+            <button
+              class="button"
+              :disabled="
+                props.workspace.gitActionLoading.value ||
+                props.workspace.gitStatus.value.unstaged_files + props.workspace.gitStatus.value.untracked_files === 0
+              "
+              @click="props.workspace.stageAllGitChangesAction"
+            >
+              Stage All
+            </button>
+            <button
+              class="button primary"
+              :disabled="
+                props.workspace.gitActionLoading.value ||
+                props.workspace.gitStatus.value.staged_files === 0 ||
+                !props.workspace.commitMessage.value.trim()
+              "
+              @click="props.workspace.createGitCommitAction"
+            >
+              Create Commit
+            </button>
+          </div>
+        </article>
+
+        <article class="record-card">
+          <div class="record-header">
+            <div>
+              <h4 class="record-title">Create Pull Request</h4>
+              <p class="record-subtitle">Use GitHub CLI with explicit title, body, base, and head values.</p>
+            </div>
+            <span class="badge" :class="props.workspace.gitStatus.value.gh_available ? 'success' : 'danger'">
+              gh {{ props.workspace.gitStatus.value.gh_available ? 'available' : 'missing' }}
+            </span>
+          </div>
+          <div class="form-grid">
+            <div class="field full">
+              <label class="label" for="workspace-pr-title">Title</label>
+              <input
+                id="workspace-pr-title"
+                v-model="props.workspace.pullRequestTitle.value"
+                class="input"
+                placeholder="Pull request title"
+              />
+            </div>
+            <div class="field">
+              <label class="label" for="workspace-pr-base">Base branch</label>
+              <input
+                id="workspace-pr-base"
+                v-model="props.workspace.pullRequestBase.value"
+                class="input mono"
+                placeholder="repository default"
+              />
+            </div>
+            <div class="field">
+              <label class="label" for="workspace-pr-head">Head branch</label>
+              <input
+                id="workspace-pr-head"
+                v-model="props.workspace.pullRequestHead.value"
+                class="input mono"
+                :placeholder="props.workspace.gitStatus.value.branch || 'current branch'"
+              />
+            </div>
+            <div class="field full">
+              <label class="label" for="workspace-pr-body">Body</label>
+              <textarea
+                id="workspace-pr-body"
+                v-model="props.workspace.pullRequestBody.value"
+                class="textarea"
+                placeholder="Summary, verification, and review notes"
+              />
+            </div>
+          </div>
+          <div class="button-row">
+            <button
+              class="button primary"
+              :disabled="
+                props.workspace.gitActionLoading.value ||
+                !props.workspace.gitStatus.value.gh_available ||
+                !props.workspace.pullRequestTitle.value.trim()
+              "
+              @click="props.workspace.createGitPullRequestAction"
+            >
+              Create Pull Request
+            </button>
+            <a
+              v-if="props.workspace.pullRequestUrl.value"
+              class="button ghost"
+              :href="props.workspace.pullRequestUrl.value"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Open Pull Request
+            </a>
+          </div>
+        </article>
+      </div>
     </section>
 
     <section class="settings-panel">
@@ -338,13 +558,20 @@ function workspaceBadge(workspace: WorkspaceResource) {
           v-for="row in props.workspace.rows.value"
           :key="row.node.path"
           class="list-item file-row"
-          :class="{ active: row.node.kind === 'directory' }"
+          :class="{ active: row.node.kind === 'directory' || row.node.kind === 'file' }"
           :style="{ paddingLeft: `${14 + row.depth * 18}px` }"
-          @click="props.workspace.openDirectory(row.node)"
+          :disabled="props.workspace.downloadingFilePath.value === row.node.path"
+          @click="props.workspace.openWorkspaceNode(row.node)"
         >
-          <span class="mono">{{ row.node.kind === 'directory' ? '▸' : '·' }}</span>
+          <span class="mono">{{ row.node.kind === 'directory' ? '▸' : row.node.kind === 'file' ? '↓' : '·' }}</span>
           <span class="file-name mono">{{ row.node.path || row.node.name }}</span>
-          <span class="muted">{{ props.workspace.formatSize(row.node) }}</span>
+          <span class="muted">
+            {{
+              props.workspace.downloadingFilePath.value === row.node.path
+                ? 'downloading…'
+                : props.workspace.formatSize(row.node)
+            }}
+          </span>
         </button>
       </div>
       <div v-else class="empty-state">No files to display.</div>

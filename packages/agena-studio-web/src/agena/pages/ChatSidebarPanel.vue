@@ -7,12 +7,14 @@ const props = defineProps<{
   workspaces: WorkspaceResource[]
   selectedWorkspaceId: number | null
   sessionSearch: string
+  sessionViewMode: 'all' | 'roots' | 'subtree'
   newSessionTitle: string
   sessions: SessionResource[]
   selectedSessionId: number | null
   resolveWorkspaceAction: (createIfMissing: boolean) => void | Promise<void>
   selectWorkspace: (workspaceId: number) => void | Promise<void>
   loadSessionsForWorkspace: (workspaceId: number, preserveSelection?: boolean) => void | Promise<void>
+  setSessionViewMode: (mode: 'all' | 'roots' | 'subtree', query?: string) => void | Promise<void>
   createSessionAction: () => void | Promise<void>
   selectSession: (sessionId: number) => void | Promise<void>
   formatMessageTime: (value: string) => string
@@ -47,7 +49,11 @@ const emit = defineEmits<{
         >
           Resolve or Create
         </button>
-        <button class="button" :disabled="props.loading || !props.workspacePath.trim()" @click="props.resolveWorkspaceAction(false)">
+        <button
+          class="button"
+          :disabled="props.loading || !props.workspacePath.trim()"
+          @click="props.resolveWorkspaceAction(false)"
+        >
           Create Only
         </button>
       </div>
@@ -75,6 +81,24 @@ const emit = defineEmits<{
     <section class="card">
       <h3>Sessions</h3>
       <div class="field">
+        <label class="label" for="session-view-mode">View</label>
+        <select
+          id="session-view-mode"
+          :value="props.sessionViewMode"
+          class="select"
+          @change="
+            props.setSessionViewMode(
+              ($event.target as HTMLSelectElement).value as 'all' | 'roots' | 'subtree',
+              props.sessionSearch,
+            )
+          "
+        >
+          <option value="all">All sessions</option>
+          <option value="roots">Root sessions</option>
+          <option value="subtree" :disabled="!props.selectedSessionId">Selected subtree</option>
+        </select>
+      </div>
+      <div class="field">
         <label class="label" for="session-search">Search</label>
         <input
           id="session-search"
@@ -96,7 +120,11 @@ const emit = defineEmits<{
         />
       </div>
       <div class="button-row" style="margin-top: 12px">
-        <button class="button primary" :disabled="!props.selectedWorkspaceId || props.loading" @click="props.createSessionAction">
+        <button
+          class="button primary"
+          :disabled="!props.selectedWorkspaceId || props.loading"
+          @click="props.createSessionAction"
+        >
           Create Session
         </button>
       </div>

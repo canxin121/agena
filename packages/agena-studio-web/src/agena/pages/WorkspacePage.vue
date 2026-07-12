@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { nextTick, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import WorkspacePageContent from './WorkspacePageContent.vue'
@@ -11,9 +11,13 @@ const router = useRouter()
 
 const workspace = useWorkspacePageState({ route, router })
 
-onMounted(() => {
+onMounted(async () => {
   workspace.syncFromRoute()
-  void workspace.load()
+  await workspace.load()
+  if (route.hash) {
+    await nextTick()
+    document.querySelector<HTMLElement>(route.hash)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 })
 </script>
 

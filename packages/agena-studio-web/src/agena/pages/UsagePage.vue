@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import { fetchUsageStats, type UsagePeriod, type UsageStats, type UsageTotals } from '@/agena/lib/agenaApi'
 import {
@@ -7,20 +8,34 @@ import {
   formatUsageInteger,
   formatUsagePercent,
   hasUsage,
+  isUsagePeriod,
   usageFactLine,
   usageHeadline,
   usagePeriodOptions,
 } from './usageStatsModel'
 
 const activePeriod = ref<UsagePeriod>('last_7_days')
+const providerFilter = ref('')
+const modelFilter = ref('')
+const includeSubagents = ref(true)
+const sortBy = ref<'cost' | 'tokens' | 'runs'>('cost')
 const loading = ref(false)
 const error = ref('')
 const stats = ref<UsageStats | null>(null)
 
 const headline = computed(() => usageHeadline(stats.value))
 const facts = computed(() => (stats.value ? usageFactLine(stats.value.totals) : []))
-const topModels = computed(() => stats.value?.by_model.slice(0, 10) || [])
-const topSessions = computed(() => stats.value?.by_session.slice(0, 8) || [])
+const route = useRoute()
+const router = useRouter()
+
+function sortUsageRows<T extends UsageTotals>(rows: T[]): T[] {
+  const field = sortBy.value === 'tokens' ? 'total_tokens' : sortBy.value === 'runs' ? 'runs' : 'total_cost_usd'
+  return [...rows].sort((left, right) => Number(right[field]) - Number(left[field]))
+}
+
+const topProviders = computed(() => sortUsageRows(stats.value?.by_provider || []).slice(0, 10))
+const topModels = computed(() => sortUsageRows(stats.value?.by_model || []).slice(0, 10))
+const topSessions = computed(() => sortUsageRows(stats.value?.by_session || []).slice(0, 10))
 const dailyRows = computed(() => stats.value?.by_day.slice(-14) || [])
 
 async function loadUsage(period = activePeriod.value) {
@@ -28,7 +43,18 @@ async function loadUsage(period = activePeriod.value) {
   loading.value = true
   error.value = ''
   try {
-    stats.value = await fetchUsageStats({ period })
+    stats.value = await fetchUsageStats({
+      period,
+      providerIds: providerFilter.value.trim() ? [providerFilter.value.trim()] : [],
+      modelIds: modelFilter.value.trim() ? [modelFilter.value.trim()] : [],
+      includeSubagents: includeSubagents.value,
+      timezoneOffsetMinutes: -new Date().getTimezoneOffset(),
+    })
+    const query: Record<string, string> = { period }
+    if (providerFilter.value.trim()) query.provider = providerFilter.value.trim()
+    if (modelFilter.value.trim()) query.model = modelFilter.value.trim()
+    if (!includeSubagents.value) query.include_subagents = 'false'
+    await router.replace({ path: '/usage', query })
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -47,6 +73,11 @@ function tokenSummary(totals: UsageTotals): string {
 }
 
 onMounted(() => {
+  const routePeriod = typeof route.query.period === 'string' ? route.query.period : ''
+  if (isUsagePeriod(routePeriod)) activePeriod.value = routePeriod
+  providerFilter.value = typeof route.query.provider === 'string' ? route.query.provider.trim() : ''
+  modelFilter.value = typeof route.query.model === 'string' ? route.query.model.trim() : ''
+  includeSubagents.value = route.query.include_subagents !== 'false'
   void loadUsage()
 })
 </script>
@@ -73,6 +104,34 @@ onMounted(() => {
     </section>
 
     <div v-if="error" class="notice">{{ error }}</div>
+
+    <section class="card">
+      <div class="page-header" style="align-items: flex-end">
+        <div class="form-grid" style="flex: 1">
+          <div class="field">
+            <label class="label" for="usage-provider-filter">Provider filter</label>
+            <input id="usage-provider-filter" v-model="providerFilter" class="input mono" placeholder="all providers" />
+          </div>
+          <div class="field">
+            <label class="label" for="usage-model-filter">Model filter</label>
+            <input id="usage-model-filter" v-model="modelFilter" class="input mono" placeholder="all models" />
+          </div>
+          <div class="field">
+            <label class="label" for="usage-sort">Sort breakdowns</label>
+            <select id="usage-sort" v-model="sortBy" class="select">
+              <option value="cost">Cost</option>
+              <option value="tokens">Tokens</option>
+              <option value="runs">Runs</option>
+            </select>
+          </div>
+          <label class="field checkbox-field">
+            <input v-model="includeSubagents" type="checkbox" />
+            <span>Include subagent sessions</span>
+          </label>
+        </div>
+        <button class="button primary" :disabled="loading" @click="loadUsage()">Apply Filters</button>
+      </div>
+    </section>
 
     <section class="card">
       <div class="page-header" style="align-items: flex-start">
@@ -123,6 +182,23 @@ onMounted(() => {
 
     <section class="grid two">
       <div class="card">
+        <h3 style="margin-top: 0">By Provider</h3>
+        <div v-if="topProviders.length" class="list">
+          <div v-for="provider in topProviders" :key="provider.provider_id" class="list-item">
+            <div>
+              <strong>{{ provider.provider_id }}</strong>
+              <div class="muted mono">{{ tokenSummary(provider) }}</div>
+            </div>
+            <div class="stack" style="justify-items: end">
+              <span class="badge">{{ formatUsageCost(provider.total_cost_usd) }}</span>
+              <span class="muted mono">{{ formatUsageInteger(provider.runs) }} runs</span>
+            </div>
+          </div>
+        </div>
+        <p v-else class="muted">No provider usage for this period.</p>
+      </div>
+
+      <div class="card">
         <h3 style="margin-top: 0">By Model</h3>
         <div v-if="topModels.length" class="list">
           <div v-for="model in topModels" :key="`${model.provider_id}/${model.model_id}`" class="list-item">
@@ -145,7 +221,9 @@ onMounted(() => {
           <div v-for="day in dailyRows" :key="day.date" class="list-item">
             <div>
               <strong>{{ day.date }}</strong>
-              <div class="muted mono">runs {{ formatUsageInteger(day.runs) }} · sessions {{ formatUsageInteger(day.sessions) }}</div>
+              <div class="muted mono">
+                runs {{ formatUsageInteger(day.runs) }} · sessions {{ formatUsageInteger(day.sessions) }}
+              </div>
             </div>
             <div class="stack" style="justify-items: end">
               <span class="badge">{{ formatUsageCost(day.total_cost_usd) }}</span>

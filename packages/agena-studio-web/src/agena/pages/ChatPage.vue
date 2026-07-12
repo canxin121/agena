@@ -19,12 +19,21 @@ import { useChatSessionLifecycle } from './useChatSessionLifecycle'
 import { useChatPageState } from './useChatPageState'
 import { useChatPageUiState } from './useChatPageUiState'
 import { formatUsageCount, formatUsageUsd } from './chatUsageModel'
+import {
+  createComposerAttachmentDraft,
+  MAX_COMPOSER_ATTACHMENT_TOTAL_BYTES,
+  MAX_COMPOSER_ATTACHMENTS,
+  validateComposerAttachment,
+} from './chatAttachmentModel'
 import { useChatSidebarState } from './useChatSidebarState'
 
 const route = useRoute()
 const router = useRouter()
 const {
+  attachments,
+  attachmentLoading,
   composer,
+  composerQueue,
   continuing,
   errorMessage,
   interactiveRequestInFlight,
@@ -37,6 +46,7 @@ const {
   newSessionTitle,
   providerModels,
   providers,
+  queueDraining,
   rewindCheckpoints,
   runtime,
   selectedAdapterId,
@@ -46,11 +56,15 @@ const {
   selectedSpeedMode,
   selectedVerbosity,
   selectedParallelToolCalls,
+  selectedTemperature,
+  selectedMaxOutput,
+  selectedSystemPrompt,
   selectedSessionId,
   selectedWorkspaceId,
   sending,
   sessionImportJsonl,
   sessionSearch,
+  sessionViewMode,
   sessionState,
   sessions,
   sessionTree,
@@ -59,6 +73,45 @@ const {
   workspacePath,
   workspaces,
 } = useChatPageState()
+
+async function addComposerFiles(files: File[], imageOnly = false) {
+  if (!files.length) return
+  errorMessage.value = ''
+  const available = Math.max(0, MAX_COMPOSER_ATTACHMENTS - attachments.value.length)
+  if (!available) {
+    errorMessage.value = `A maximum of ${MAX_COMPOSER_ATTACHMENTS} attachments can be sent at once.`
+    return
+  }
+  const selectedFiles = files.slice(0, available)
+  const totalBytes =
+    attachments.value.reduce((total, attachment) => total + attachment.size, 0) +
+    selectedFiles.reduce((total, file) => total + file.size, 0)
+  if (totalBytes > MAX_COMPOSER_ATTACHMENT_TOTAL_BYTES) {
+    errorMessage.value = 'Attachments for one message cannot exceed 64 MB in total.'
+    return
+  }
+  attachmentLoading.value = true
+  try {
+    const next = []
+    for (const file of selectedFiles) {
+      const validationError = validateComposerAttachment(file, imageOnly)
+      if (validationError) throw new Error(validationError)
+      next.push(await createComposerAttachmentDraft(file))
+    }
+    attachments.value = [...attachments.value, ...next]
+    if (files.length > available) {
+      errorMessage.value = `Only the first ${available} attachment(s) were added; the limit is ${MAX_COMPOSER_ATTACHMENTS}.`
+    }
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    attachmentLoading.value = false
+  }
+}
+
+function removeComposerAttachment(id: string) {
+  attachments.value = attachments.value.filter((attachment) => attachment.id !== id)
+}
 
 watch(
   () => [route.query.prompt, route.query.slash] as const,
@@ -84,7 +137,15 @@ const {
   formatEventTime,
   formatMessageTime,
   openRuntimeSection,
+  openAttachmentPicker,
+  openMemorySettings,
+  openPermissionSettings,
+  forgetMemory,
+  focusComposer,
+  focusTranscript,
+  focusRunOptions,
   openWorkspaceBrowser,
+  openSnapshotInspector,
   providerAdapterOptions,
   providerDefaultAdapter,
   providerDefaultModel,
@@ -92,10 +153,16 @@ const {
   providerModelOptions,
   modelThinkingModeOptions,
   modelSpeedModeOptions,
+  modelVerbosityOptions,
+  modelParallelToolCallsOptions,
   readUserAnswer,
   scrollToMessage,
   updateUserAnswer,
   copySessionUsageSummary,
+  copyText,
+  createCommit,
+  createPullRequest,
+  downloadWorkspaceFile,
 } = useChatPageUiState(
   {
     localCommandNotice,
@@ -119,11 +186,13 @@ const {
   loadRewindCheckpoints,
   loadSessionsForWorkspace,
   loadSessionTree,
+  loadSessionTimeline,
   loadSidebar,
   openSessionById,
   refreshConversation,
   selectSession,
   selectWorkspace,
+  setSessionViewMode,
   syncEventStream,
 } = useChatSessionLifecycle({
   composer,
@@ -143,9 +212,13 @@ const {
   selectedSpeedMode,
   selectedVerbosity,
   selectedParallelToolCalls,
+  selectedTemperature,
+  selectedMaxOutput,
+  selectedSystemPrompt,
   selectedSessionId,
   selectedWorkspaceId,
   sessionSearch,
+  sessionViewMode,
   sessionState,
   sessions,
   sessionTree,
@@ -186,18 +259,23 @@ let slashSuggestions: ReturnType<typeof useChatCommandState>['slashSuggestions']
 
 const {
   approvePermission,
+  askAside,
   cancelCurrentSessionRun,
   cancelUserAnswers,
+  clearComposerQueue,
   clearSessionGoalAction,
+  compactCurrentSession,
   completeSessionGoalAction,
   continueCurrentSession,
   createSessionAction,
   deleteCurrentSession,
+  drainComposerQueue,
   exportCurrentSession,
   forkCurrentSession,
   importSessionFromJsonl,
   inspectMessage,
   isInteractiveRequestBusy,
+  popComposerQueue,
   renameCurrentSession,
   resolveWorkspaceAction,
   rewindToMessage,
@@ -206,6 +284,8 @@ const {
   showSessionGoalAction,
   submitUserAnswers,
 } = useChatSessionActions({
+  attachments,
+  composerQueue,
   confirm: (message) => (typeof window === 'undefined' ? false : window.confirm(message)),
   composer,
   continuing,
@@ -227,9 +307,13 @@ const {
   selectedSpeedMode,
   selectedVerbosity,
   selectedParallelToolCalls,
+  selectedTemperature,
+  selectedMaxOutput,
+  selectedSystemPrompt,
   selectedSessionId,
   selectedWorkspaceId,
   sending,
+  queueDraining,
   sessionImportJsonl,
   sessionState,
   sessions,
@@ -243,28 +327,60 @@ const {
   selectWorkspace,
 })
 
+watch(
+  () =>
+    [sessionState.value?.run_state, sessionState.value?.blocked, sending.value, composerQueue.value.length] as const,
+  ([runState, blocked, isSending, queueLength]) => {
+    if (runState === 'idle' && !blocked && !isSending && queueLength) void drainComposerQueue()
+  },
+)
 ;({ commandPalette, slashSuggestions } = useChatCommandState({
   routeRouter: router,
   runtime,
   selectedWorkspaceId,
   selectedSessionId,
   sessions,
+  messages,
+  composerQueue,
+  timelineEvents,
   workspaces,
   sessionImportJsonl,
   sessionTreeRows,
   rewindCheckpoints,
   ancestorSessions,
+  childSessions,
+  parentSession,
+  sessionState,
   sessionUsageSummary,
   composer,
   localCommandNotice,
   newSessionTitle,
   workspacePath,
+  sessionSearch,
   actions: {
+    approvePermission,
+    askAside,
+    clearComposerQueue,
+    copyText,
+    createCommit,
+    createPullRequest,
+    downloadWorkspaceFile,
+    forgetMemory,
+    focusComposer,
+    focusTranscript,
+    focusRunOptions,
+    openCommandPalette: openGlobalCommandPalette,
+    openAttachmentPicker,
+    openMemorySettings,
+    openPermissionSettings,
+    popComposerQueue,
     openWorkspaceBrowser,
+    openSnapshotInspector,
     openRuntimeSection,
     openSessionById,
     createSessionAction,
     continueCurrentSession,
+    compactCurrentSession,
     forkCurrentSession,
     exportCurrentSession,
     importSessionFromJsonl,
@@ -275,7 +391,12 @@ const {
     completeSessionGoalAction,
     clearSessionGoalAction,
     loadSessionTree,
+    loadSessionTimeline,
     loadRewindCheckpoints,
+    refreshConversation,
+    renameCurrentSession,
+    selectSession,
+    setSessionViewMode,
   },
 }))
 
@@ -292,19 +413,26 @@ const sidebar = useChatSidebarState({
   selectSession,
   selectWorkspace,
   sessionSearch,
+  sessionViewMode,
   sessions,
+  setSessionViewMode,
   workspacePath,
   workspaces,
 })
 
 const pageContent = createChatPageContentState({
+  addComposerFiles,
+  attachments,
+  attachmentLoading,
   ancestorSessions,
   approvePermission,
   cancelCurrentSessionRun,
   cancelUserAnswers,
+  clearComposerQueue,
   childSessions,
   contextUsageLabel,
   composer,
+  composerQueue,
   continueCurrentSession,
   continuing,
   copySessionUsageSummary,
@@ -318,6 +446,9 @@ const pageContent = createChatPageContentState({
   formatUsageUsd,
   importSessionFromJsonl,
   inspectMessage,
+  inspectedMessage,
+  inspectedMessageParts,
+  inspectedPart,
   isInteractiveRequestBusy,
   loadRewindCheckpoints,
   loadSessionTree,
@@ -327,6 +458,7 @@ const pageContent = createChatPageContentState({
   messageUsageFacts,
   openGlobalCommandPalette,
   parentSession,
+  popComposerQueue,
   permissionActionView,
   permissionExplainability,
   permissionReplyPreview,
@@ -336,10 +468,13 @@ const pageContent = createChatPageContentState({
   providerModelOptions,
   modelThinkingModeOptions,
   modelSpeedModeOptions,
+  modelVerbosityOptions,
+  modelParallelToolCallsOptions,
   providers,
   readPayloadMessageId,
   readPayloadPartId,
   readUserAnswer,
+  removeComposerAttachment,
   refreshConversation,
   renameCurrentSession,
   rewindCheckpointFacts,
@@ -352,6 +487,10 @@ const pageContent = createChatPageContentState({
   selectedThinkingMode,
   selectedSpeedMode,
   selectedVerbosity,
+  selectedParallelToolCalls,
+  selectedTemperature,
+  selectedMaxOutput,
+  selectedSystemPrompt,
   selectedSession,
   selectedWorkspace,
   sendPrompt,

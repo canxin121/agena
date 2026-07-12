@@ -1,21 +1,25 @@
 import { watch, type Ref } from 'vue'
 import type { Router } from 'vue-router'
 
-import type { ProviderModel, ProviderSummary, WorkspaceResource } from '../lib/agenaApi'
+import {
+  createGitCommit,
+  createGitPullRequest,
+  deleteMemory,
+  downloadWorkspaceFile as downloadWorkspaceFileFromApi,
+  type ProviderModel,
+  type ProviderSummary,
+  type WorkspaceResource,
+} from '../lib/agenaApi'
 import { buildRuntimeSectionPath, type RuntimeRouteSection } from './runtimePageStateModel'
 
 function supportedVerbosityLevelsForModel(
   modelId: string | null | undefined,
-  metadata:
-    | { supports_verbosity?: boolean | null; default_verbosity?: string | null }
-    | null
-    | undefined,
+  metadata: { supports_verbosity?: boolean | null; default_verbosity?: string | null } | null | undefined,
 ): string[] {
   const defaultVerbosity = metadata?.default_verbosity?.trim().toLowerCase() || ''
   if (!metadata?.supports_verbosity && !defaultVerbosity) return []
   const loweredId = (modelId || '').trim().toLowerCase()
-  const levels =
-    loweredId.includes('gpt-5') && loweredId.includes('-chat') ? ['medium'] : ['low', 'medium', 'high']
+  const levels = loweredId.includes('gpt-5') && loweredId.includes('-chat') ? ['medium'] : ['low', 'medium', 'high']
   if (defaultVerbosity && !levels.includes(defaultVerbosity)) levels.push(defaultVerbosity)
   return levels
 }
@@ -63,8 +67,74 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
     void deps.router.push({ path: '/workspace', query })
   }
 
+  function openSnapshotInspector() {
+    const workspaceId = input.selectedWorkspaceId.value || input.workspaces.value[0]?.id
+    const query = workspaceId ? { workspace: String(workspaceId) } : undefined
+    void deps.router.push({ path: '/workspace', query, hash: '#workspace-snapshots' })
+  }
+
   function openRuntimeSection(section: RuntimeRouteSection, tab: string) {
     void deps.router.push(buildRuntimeSectionPath(section, tab))
+  }
+
+  function openAttachmentPicker(imageOnly = false) {
+    if (typeof document === 'undefined') return
+    const id = imageOnly ? 'composer-image-input' : 'composer-file-input'
+    document.getElementById(id)?.click()
+  }
+
+  function focusComposer() {
+    if (typeof document === 'undefined') return
+    const composer = document.getElementById('composer') as HTMLTextAreaElement | null
+    composer?.focus()
+    composer?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+
+  function focusTranscript() {
+    if (typeof document === 'undefined') return
+    const transcript = document.getElementById('chat-messages-panel') as HTMLElement | null
+    transcript?.focus()
+    transcript?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  function focusRunOptions() {
+    if (typeof document === 'undefined') return
+    const panel = document.getElementById('chat-run-options') as HTMLElement | null
+    panel?.focus()
+    panel?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+
+  function openMemorySettings(name?: string) {
+    const query = name?.trim() ? { memory: name.trim().replace(/\.md$/i, '') } : undefined
+    void deps.router.push({ path: buildRuntimeSectionPath('settings', 'memory'), query })
+  }
+
+  function openPermissionSettings(mode?: string) {
+    const query = mode?.trim() ? { mode: mode.trim().toLowerCase() } : undefined
+    void deps.router.push({ path: buildRuntimeSectionPath('settings', 'permissions'), query })
+  }
+
+  async function forgetMemory(name: string) {
+    try {
+      const removed = await deleteMemory(name)
+      input.localCommandNotice.value = `Forgot memory ${removed.name}.`
+    } catch (error) {
+      input.localCommandNotice.value = error instanceof Error ? error.message : String(error)
+    }
+  }
+
+  async function downloadWorkspaceFile(path: string) {
+    const workspaceId = input.selectedWorkspaceId.value
+    if (!workspaceId) {
+      input.localCommandNotice.value = 'Select a workspace before downloading a file.'
+      return
+    }
+    try {
+      await downloadWorkspaceFileFromApi({ workspaceId, path })
+      input.localCommandNotice.value = `Downloaded ${path.trim()}.`
+    } catch (error) {
+      input.localCommandNotice.value = error instanceof Error ? error.message : String(error)
+    }
   }
 
   function providerAdapterOptions(providerId: string): string[] {
@@ -166,6 +236,42 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
       : 'No assistant usage has been recorded for the active session yet.'
   }
 
+  async function copyText(text: string, successMessage: string) {
+    const normalized = text.trim()
+    if (!normalized) {
+      input.localCommandNotice.value = 'There is no text to copy.'
+      return
+    }
+    if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+      input.localCommandNotice.value = 'Clipboard access is unavailable in this browser context.'
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(normalized)
+      input.localCommandNotice.value = successMessage
+    } catch (error) {
+      input.localCommandNotice.value = `Clipboard write failed: ${error instanceof Error ? error.message : String(error)}`
+    }
+  }
+
+  async function createCommit(message: string) {
+    try {
+      const result = await createGitCommit(message)
+      input.localCommandNotice.value = `Created commit ${result.commit.slice(0, 12)}: ${result.summary}`
+    } catch (error) {
+      input.localCommandNotice.value = error instanceof Error ? error.message : String(error)
+    }
+  }
+
+  async function createPullRequest(options: { title: string; body?: string; base?: string; head?: string }) {
+    try {
+      const result = await createGitPullRequest(options)
+      input.localCommandNotice.value = `Created pull request: ${result.url}`
+    } catch (error) {
+      input.localCommandNotice.value = error instanceof Error ? error.message : String(error)
+    }
+  }
+
   watch(input.selectedProviderId, (providerId) => {
     if (!providerId) return
     input.selectedThinkingMode.value = ''
@@ -196,10 +302,22 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
 
   return {
     copySessionUsageSummary,
+    copyText,
+    createCommit,
+    createPullRequest,
+    downloadWorkspaceFile,
     formatEventTime,
     formatMessageTime,
     openRuntimeSection,
+    openAttachmentPicker,
+    openMemorySettings,
+    openPermissionSettings,
+    forgetMemory,
+    focusComposer,
+    focusTranscript,
+    focusRunOptions,
     openWorkspaceBrowser,
+    openSnapshotInspector,
     providerAdapterOptions,
     providerDefaultAdapter,
     providerDefaultModel,

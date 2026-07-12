@@ -24,11 +24,15 @@ const props = defineProps<{
 </script>
 
 <template>
-  <section class="card">
+  <section id="chat-messages-panel" class="card" tabindex="-1">
     <div class="page-header" style="margin-bottom: 12px">
       <h3 style="margin: 0">Messages</h3>
       <div class="button-row">
-        <button class="button ghost" :disabled="!props.selectedSessionId || props.loading" @click="props.refreshConversation(true)">
+        <button
+          class="button ghost"
+          :disabled="!props.selectedSessionId || props.loading"
+          @click="props.refreshConversation(true)"
+        >
           Refresh
         </button>
       </div>
@@ -45,8 +49,12 @@ const props = defineProps<{
         <div class="message-head">
           <div class="message-role">{{ message.role }}</div>
           <div class="button-row">
-            <button class="button ghost" :disabled="props.loading" @click="props.inspectMessage(message.id)">Inspect</button>
-            <button class="button ghost" :disabled="props.loading" @click="props.rewindToMessage(message.id)">Rewind Here</button>
+            <button class="button ghost" :disabled="props.loading" @click="props.inspectMessage(message.id)">
+              Inspect
+            </button>
+            <button class="button ghost" :disabled="props.loading" @click="props.rewindToMessage(message.id)">
+              Rewind Here
+            </button>
             <div>{{ props.formatMessageTime(message.created_at) }}</div>
           </div>
         </div>
@@ -73,7 +81,8 @@ const props = defineProps<{
       <div class="page-header" style="margin-bottom: 12px">
         <h3 style="margin: 0">Message Inspector</h3>
         <div class="muted mono">
-          message={{ props.inspectedMessage.id }} · parts={{ props.inspectedMessageParts.length }} · summary list · full detail on demand
+          message={{ props.inspectedMessage.id }} · parts={{ props.inspectedMessageParts.length }} · summary list · full
+          detail on demand
         </div>
       </div>
       <div class="stack">
@@ -84,7 +93,9 @@ const props = defineProps<{
           <div v-for="part in props.inspectedMessageParts" :key="part.id" class="list-item">
             <div class="page-header" style="align-items: flex-start">
               <div>
-                <div><strong>#{{ part.part_index }}</strong> · {{ part.kind }}</div>
+                <div>
+                  <strong>#{{ part.part_index }}</strong> · {{ part.kind }}
+                </div>
                 <div class="muted">{{ part.summary || 'No summary' }}</div>
                 <div class="muted mono">
                   part={{ part.id }} · status={{ part.status }} · detail={{ part.has_detail ? 'yes' : 'no' }}
@@ -103,10 +114,13 @@ const props = defineProps<{
         <div v-if="props.inspectedPart" class="stack">
           <strong>Selected Part</strong>
           <div class="muted mono">
-            part={{ props.inspectedPart.id }} · operation={{ props.inspectedPart.operation_id || 'n/a' }} ·
-            detail={{ props.inspectedPart.has_detail ? 'full' : 'summary-only' }}
+            part={{ props.inspectedPart.id }} · operation={{ props.inspectedPart.operation_id || 'n/a' }} · detail={{
+              props.inspectedPart.has_detail ? 'full' : 'summary-only'
+            }}
           </div>
-          <pre v-if="props.inspectedPart.content != null" class="message-block mono">{{ JSON.stringify(props.inspectedPart.content, null, 2) }}</pre>
+          <pre v-if="props.inspectedPart.content != null" class="message-block mono">{{
+            JSON.stringify(props.inspectedPart.content, null, 2)
+          }}</pre>
           <div v-else class="muted">{{ props.inspectedPart.summary || 'No full detail stored for this part.' }}</div>
         </div>
       </div>

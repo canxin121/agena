@@ -7,11 +7,71 @@ export type UsagePeriodOption = {
 
 export const usagePeriodOptions: UsagePeriodOption[] = [
   { id: 'today', label: 'Today' },
+  { id: 'yesterday', label: 'Yesterday' },
   { id: 'last_7_days', label: '7 Days' },
+  { id: 'last_14_days', label: '14 Days' },
   { id: 'last_30_days', label: '30 Days' },
+  { id: 'last_90_days', label: '90 Days' },
   { id: 'month_to_date', label: 'Month' },
+  { id: 'year_to_date', label: 'Year' },
   { id: 'all_time', label: 'All' },
 ]
+
+export type UsageCommandPlan = { kind: 'open'; query: Record<string, string> } | { kind: 'error'; message: string }
+
+const usagePeriodAliases: Record<string, UsageStats['period']> = {
+  today: 'today',
+  '1d': 'today',
+  yesterday: 'yesterday',
+  yd: 'yesterday',
+  week: 'last_7_days',
+  '7d': 'last_7_days',
+  '2w': 'last_14_days',
+  '14d': 'last_14_days',
+  '30d': 'last_30_days',
+  '90d': 'last_90_days',
+  month: 'month_to_date',
+  mtd: 'month_to_date',
+  year: 'year_to_date',
+  ytd: 'year_to_date',
+  all: 'all_time',
+  'all-time': 'all_time',
+}
+
+const usageCommandHelp =
+  'Usage: /usage [today|yesterday|7d|14d|30d|90d|month|year|all] [--provider ID] [--model ID] [--no-subagents]'
+
+export function parseUsageCommandArgs(args: string[]): UsageCommandPlan {
+  const query: Record<string, string> = { period: 'last_7_days' }
+  let index = 0
+  while (index < args.length) {
+    const token = (args[index] || '').toLowerCase()
+    const period = usagePeriodAliases[token]
+    if (period) {
+      query.period = period
+      index += 1
+      continue
+    }
+    if (token === '--no-subagents') {
+      query.include_subagents = 'false'
+      index += 1
+      continue
+    }
+    if (token === '--provider' || token === '-p' || token === '--model' || token === '-m') {
+      const value = args[index + 1]?.trim()
+      if (!value) return { kind: 'error', message: usageCommandHelp }
+      query[token === '--provider' || token === '-p' ? 'provider' : 'model'] = value
+      index += 2
+      continue
+    }
+    return { kind: 'error', message: usageCommandHelp }
+  }
+  return { kind: 'open', query }
+}
+
+export function isUsagePeriod(value: string): value is UsageStats['period'] {
+  return usagePeriodOptions.some((option) => option.id === value)
+}
 
 function finite(value: number): number {
   return Number.isFinite(value) ? value : 0

@@ -409,4 +409,33 @@ mod tests {
         );
         assert_eq!(display_math_source("```math\nx+y").as_deref(), Some("x+y"));
     }
+
+    #[test]
+    fn unicode_math_fallback_never_reserves_blank_formula_rows() {
+        let mut display = Vec::new();
+        push_math_block(
+            &mut display,
+            "  ",
+            r"$$\frac{-b\pm\sqrt{b^2-4ac}}{2a}$$",
+            80,
+        );
+        assert!(!display.is_empty());
+        assert!(display.iter().any(|line| !line.text.trim().is_empty()));
+        assert!(display.iter().all(|line| line.math.is_empty()));
+
+        let mut inline = Vec::new();
+        assert!(push_inline_math(
+            &mut inline,
+            "  ",
+            r"等号当且仅当 $a_1=a_2=\cdots=a_n$ 时成立。",
+            80,
+        ));
+        let rendered = inline
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("等号当且仅当"));
+        assert!(inline.iter().all(|line| line.math.is_empty()));
+    }
 }

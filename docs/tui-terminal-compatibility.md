@@ -147,6 +147,11 @@ hidden by containers, SSH configuration or multiplexers:
 
 Do not force a protocol merely because the outer terminal supports it. Every
 hop between Agena and that terminal must preserve the protocol and its replies.
+For the same reason, remote and multiplexed sessions render formulas with the
+two-dimensional Unicode renderer. Even when a Kitty or Sixel capability reply
+crosses the transport, that response does not prove that image placement will
+survive the layered screen model; reserving native-image rows in that case can
+produce an entirely blank transcript.
 
 ## Diagnostics
 

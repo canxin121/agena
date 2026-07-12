@@ -505,6 +505,45 @@ impl App {
                 self.move_provider_studio_selection(dialog, 1);
                 false
             }
+            Some(KeyAction::ProviderDelete) => {
+                if let Some(provider_id) = dialog.draft.source_provider_id.clone() {
+                    self.open_provider_studio_delete_provider_confirm(provider_id);
+                }
+                false
+            }
+            Some(KeyAction::ProviderRefreshModels) => {
+                self.request_provider_studio_adapter_models(dialog);
+                false
+            }
+            Some(KeyAction::ProviderAddModel) => {
+                self.open_provider_studio_new_model_editor(dialog);
+                false
+            }
+            Some(KeyAction::ProviderDeleteAdapter) => {
+                self.open_provider_studio_delete_selected_adapter_confirm(dialog);
+                false
+            }
+            Some(KeyAction::ProviderSaveAdapter) => {
+                if provider_studio_selected_adapter_models(dialog).is_none() {
+                    self.flash_warning(ui_text::t(
+                        &self.i18n,
+                        "flash-provider-studio-adapter-required",
+                    ));
+                    return false;
+                }
+                dialog.saving = true;
+                self.request_provider_studio_save_selected_adapter(dialog.clone());
+                false
+            }
+            Some(KeyAction::ProviderDeleteModel) => {
+                self.open_provider_studio_delete_selected_model_confirm(dialog);
+                false
+            }
+            Some(KeyAction::ProviderSave) => {
+                dialog.saving = true;
+                self.request_provider_studio_save_draft(dialog.clone());
+                false
+            }
             Some(KeyAction::Activate) => {
                 self.activate_provider_studio_focus(dialog);
                 false
@@ -601,7 +640,8 @@ use crate::app::{
     ProviderPickerPurpose, ProviderStudioEditorAction, ProviderStudioFocus, ProviderStudioOverlay,
     Route, RuntimeSettingEditOverlay, SearchInputKeyResult, SearchListRow,
     SessionModelChooserOverlay, SessionSearchOverlay, SessionViewMode, TimelineOverlay,
-    drive_editor_dialog_key, drive_input_dialog_key, min, ui_text,
+    drive_editor_dialog_key, drive_input_dialog_key, min, provider_studio_selected_adapter_models,
+    ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui_components::SearchListItem;

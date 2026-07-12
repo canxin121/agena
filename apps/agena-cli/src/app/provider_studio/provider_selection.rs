@@ -290,16 +290,34 @@ pub(in crate::app) fn provider_studio_ensure_default_selection(dialog: &mut Prov
         .contains(dialog.draft.default_adapter.as_str())
         && provider_studio_adapter_selectable(dialog, dialog.draft.default_adapter.as_str());
     if !default_adapter_valid {
-        dialog.draft.default_adapter.clear();
-        dialog.draft.default_model.clear();
-        return;
+        let replacement = provider_studio_selected_adapter_id(dialog)
+            .filter(|adapter_id| dialog.selected_adapter_ids.contains(adapter_id.as_str()))
+            .filter(|adapter_id| provider_studio_adapter_selectable(dialog, adapter_id.as_str()))
+            .or_else(|| {
+                dialog
+                    .selected_adapter_ids
+                    .iter()
+                    .find(|adapter_id| {
+                        provider_studio_adapter_selectable(dialog, adapter_id.as_str())
+                    })
+                    .cloned()
+            });
+        let Some(replacement) = replacement else {
+            dialog.draft.default_adapter.clear();
+            dialog.draft.default_model.clear();
+            return;
+        };
+        dialog.draft.default_adapter = replacement;
     }
 
-    let default_model_valid =
-        provider_studio_first_selected_model(dialog, dialog.draft.default_adapter.as_str())
-            .is_some_and(|model| model.id.as_ref() == dialog.draft.default_model.as_str());
+    let first_selected_model =
+        provider_studio_first_selected_model(dialog, dialog.draft.default_adapter.as_str());
+    let default_model_valid = first_selected_model
+        .is_some_and(|model| model.id.as_ref() == dialog.draft.default_model.as_str());
     if !default_model_valid {
-        dialog.draft.default_model.clear();
+        dialog.draft.default_model = first_selected_model
+            .map(|model| model.id.to_string())
+            .unwrap_or_default();
     }
 }
 

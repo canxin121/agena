@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode as K, KeyEvent};
 
-use super::{KeyAction as A, KeyContext, unmodified};
+use super::{KeyAction as A, KeyContext, only_ctrl, unmodified};
 
 pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
     match context {
@@ -39,6 +39,13 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         KeyContext::ProviderStudio => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
             K::Tab if unmodified(key) => Some(A::NextTab),
+            K::Char('k') if only_ctrl(key) => Some(A::ProviderDelete),
+            K::Char('r') if only_ctrl(key) => Some(A::ProviderRefreshModels),
+            K::Char('n') if only_ctrl(key) => Some(A::ProviderAddModel),
+            K::Char('d') if only_ctrl(key) => Some(A::ProviderDeleteAdapter),
+            K::Char('a') if only_ctrl(key) => Some(A::ProviderSaveAdapter),
+            K::Char('x') if only_ctrl(key) => Some(A::ProviderDeleteModel),
+            K::Char('s') if only_ctrl(key) => Some(A::ProviderSave),
             K::Char(' ') if unmodified(key) => Some(A::Toggle),
             K::Up if unmodified(key) => Some(A::MoveUp),
             K::Down if unmodified(key) => Some(A::MoveDown),

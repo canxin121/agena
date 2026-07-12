@@ -19,38 +19,6 @@ impl App {
                     ProviderStudioField::EditAuthDetailsAction => {
                         self.open_provider_studio_detail_page(dialog);
                     }
-                    ProviderStudioField::DeleteProviderAction => {
-                        if let Some(provider_id) = dialog.draft.source_provider_id.clone() {
-                            self.open_provider_studio_delete_provider_confirm(provider_id);
-                        }
-                    }
-                    ProviderStudioField::LoadModelsAction => {
-                        self.request_provider_studio_adapter_models(dialog);
-                    }
-                    ProviderStudioField::AddModelAction => {
-                        self.open_provider_studio_new_model_editor(dialog);
-                    }
-                    ProviderStudioField::DeleteAdapterAction => {
-                        self.open_provider_studio_delete_selected_adapter_confirm(dialog);
-                    }
-                    ProviderStudioField::DeleteModelAction => {
-                        self.open_provider_studio_delete_selected_model_confirm(dialog);
-                    }
-                    ProviderStudioField::SaveAdapterAction => {
-                        if provider_studio_selected_adapter_models(dialog).is_none() {
-                            self.flash_warning(ui_text::t(
-                                &self.i18n,
-                                "flash-provider-studio-adapter-required",
-                            ));
-                            return;
-                        }
-                        dialog.saving = true;
-                        self.request_provider_studio_save_selected_adapter(dialog.clone());
-                    }
-                    ProviderStudioField::SaveProviderAction => {
-                        dialog.saving = true;
-                        self.request_provider_studio_save_draft(dialog.clone());
-                    }
                     _ => self.activate_provider_studio_field_editor(dialog, field),
                 }
             }
@@ -90,14 +58,7 @@ impl App {
             }
             ProviderStudioField::StartAuthAction
             | ProviderStudioField::ContinueAuthAction
-            | ProviderStudioField::EditAuthDetailsAction
-            | ProviderStudioField::DeleteProviderAction
-            | ProviderStudioField::LoadModelsAction
-            | ProviderStudioField::AddModelAction
-            | ProviderStudioField::DeleteAdapterAction
-            | ProviderStudioField::DeleteModelAction
-            | ProviderStudioField::SaveAdapterAction
-            | ProviderStudioField::SaveProviderAction => {}
+            | ProviderStudioField::EditAuthDetailsAction => {}
             ProviderStudioField::AuthMode => {
                 match ProviderDraftAuthKind::parse_category(
                     value.as_str(),

@@ -700,18 +700,8 @@ impl Backend {
                 preferred_catalog_model_for_provider_model(&catalog_entries, model).is_some()
             })
             .count();
-        let provider_patch = build_provider_patch_value_for_save(
-            &draft,
-            optional_non_empty(draft.default_adapter.as_str()).unwrap_or(adapter_id),
-            Some(optional_non_empty(draft.default_model.as_str()).unwrap_or("default")),
-            json!({
-                adapter_id: {
-                    "enabled": true,
-                    "models": configured_models,
-                }
-            }),
-            false,
-        )?;
+        let provider_patch =
+            build_provider_adapter_matches_patch(&draft, adapter_id, configured_models)?;
         self.patch_provider_settings(provider_id, provider_patch)
             .await
             .map_err(ProviderStudioSaveError::other)?;
@@ -760,5 +750,62 @@ impl Backend {
             model_id,
             provider_model,
         ))
+    }
+}
+
+fn build_provider_adapter_matches_patch(
+    draft: &ProviderConfigDraft,
+    adapter_id: &str,
+    configured_models: JsonMap<String, JsonValue>,
+) -> std::result::Result<JsonValue, ProviderStudioSaveError> {
+    // Provider drafts are built from the fully resolved configuration,
+    // while partial adapter saves patch the writable file layer. The file
+    // layer may not contain `defaults` yet (for example when the defaults
+    // came from another config layer), so every provider patch must carry
+    // the visible draft defaults instead of relying on an existing object.
+    build_provider_patch_value_for_save(
+        draft,
+        optional_non_empty(draft.default_adapter.as_str()).unwrap_or(adapter_id),
+        optional_non_empty(draft.default_model.as_str()),
+        json!({
+            adapter_id: {
+                "enabled": true,
+                "models": configured_models,
+            }
+        }),
+        true,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_provider_adapter_matches_patch;
+    use crate::backend::{
+        JsonMap, ProviderConfigDraft, ProviderDraftAuthKind, ProviderDraftSecretSourceKind,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn selected_adapter_patch_materializes_visible_resolved_defaults() {
+        let mut draft = ProviderConfigDraft::new_empty();
+        draft.source_provider_id = Some("jiuuij".to_owned());
+        draft.provider_id = "jiuuij".to_owned();
+        draft.auth_kind = ProviderDraftAuthKind::Api;
+        draft.auth.base_url = "https://jiuuij.example/v1".to_owned();
+        draft.auth.secret_source_kind = ProviderDraftSecretSourceKind::Inline;
+        draft.auth.secret_source_value = "test-key".to_owned();
+        draft.default_adapter = "openai".to_owned();
+        draft.default_model = "grok-4.3-fast".to_owned();
+
+        let patch = build_provider_adapter_matches_patch(
+            &draft,
+            "openai",
+            JsonMap::from_iter([("grok-4.3-fast".to_owned(), json!({}))]),
+        )
+        .expect("adapter patch should serialize");
+
+        assert_eq!(patch["defaults"]["adapter"], "openai");
+        assert_eq!(patch["defaults"]["model"], "grok-4.3-fast");
+        assert!(patch["adapters"]["openai"]["models"]["grok-4.3-fast"].is_object());
     }
 }

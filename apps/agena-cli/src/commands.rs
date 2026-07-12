@@ -255,7 +255,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         id: CommandId::Attach,
         name: "attach",
         aliases: &["file"],
-        arguments: "",
+        arguments: "[local-path ...]",
         summary_key: "command-attach-summary",
     },
     CommandSpec {
@@ -276,7 +276,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         id: CommandId::Image,
         name: "image",
         aliases: &["paste-image"],
-        arguments: "",
+        arguments: "[local-path ...]",
         summary_key: "command-image-summary",
     },
     CommandSpec {
@@ -437,7 +437,7 @@ mod tests {
     use super::{CommandId, parse_command};
 
     #[test]
-    fn parses_iterm2_download_command_and_alias() {
+    fn parses_terminal_download_command_and_alias() {
         let command = parse_command("/download artifacts/build.zip").expect("download command");
         assert_eq!(command.spec.id, CommandId::Download);
         assert_eq!(command.args, "artifacts/build.zip");

@@ -1,10 +1,14 @@
 impl App {
     pub(in crate::app) fn render_context_help(&mut self, frame: &mut Frame, area: Rect) {
-        let modal_title = ui_text::t(&self.i18n, "context-help-title");
-        let eyebrow = ui_text::t(&self.i18n, "context-help-eyebrow");
-        let footer_hint = ui_text::t(&self.i18n, "context-help-footer");
         let Some(help) = self.context_help.as_mut() else {
             return;
+        };
+        let modal_title = help.modal_title.clone();
+        let eyebrow = help.eyebrow.clone();
+        let footer_hint = help.footer.clone();
+        let badge = match help.kind {
+            crate::app::InfoOverlayKind::Help => " ? ",
+            crate::app::InfoOverlayKind::Diagnostics => " ◈ ",
         };
 
         let target_height = area.height.saturating_sub(4).clamp(12, 38);
@@ -13,7 +17,7 @@ impl App {
         let frame_block = Block::default()
             .title(Line::from(vec![
                 Span::styled(
-                    " ? ",
+                    badge,
                     Style::default()
                         .fg(agena_tui_components::theme::active_palette().selection_fg)
                         .bg(agena_tui_components::theme::accent_color())
@@ -227,7 +231,7 @@ fn context_help_entry_lines(entry: &HelpEntry, width: u16) -> Vec<Line<'static>>
 use super::{
     Alignment, App, Block, BorderType, Borders, Clear, Constraint, Direction, Frame, HelpEntry,
     HelpOverlay, Layout, Line, Modifier, Paragraph, Rect, Span, Style, SurfaceMode, Text,
-    UnicodeWidthStr, Wrap, sanitize_display_text, truncate_display_text, ui_text,
+    UnicodeWidthStr, Wrap, sanitize_display_text, truncate_display_text,
 };
 
 #[cfg(test)]
@@ -238,6 +242,10 @@ mod tests {
 
     fn fixture() -> HelpOverlay {
         HelpOverlay {
+            kind: crate::app::InfoOverlayKind::Help,
+            modal_title: "Help".to_string(),
+            eyebrow: "Quick reference".to_string(),
+            footer: "Esc close".to_string(),
             context: "Transcript".to_string(),
             summary: "Navigate the conversation".to_string(),
             sections: vec![HelpSection {

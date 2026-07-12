@@ -479,10 +479,11 @@ impl App {
             }
             UiAction::EditComposerExternally => self.edit_composer_externally(terminal),
             UiAction::AttachClipboardImage => self.attach_clipboard_image(terminal),
-            UiAction::AttachIterm2Files { images_only } => {
-                self.attach_iterm2_files(terminal, images_only)
-            }
-            UiAction::DownloadIterm2File { path } => self.download_iterm2_file(terminal, &path),
+            UiAction::AttachTerminalFiles {
+                source,
+                images_only,
+            } => self.attach_terminal_files(terminal, source, images_only),
+            UiAction::DownloadTerminalFile { path } => self.download_terminal_file(terminal, &path),
             UiAction::ExportTranscript { path } => {
                 self.export_transcript_to_editor(terminal, path.as_deref())
             }
@@ -531,26 +532,47 @@ impl App {
         &mut self,
         terminal: &mut TerminalRuntime,
     ) -> Result<()> {
-        let source = ClipboardImageSource;
         let context = terminal.context().clone();
-        let acquisition = match acquire_from_source(&source, &context, terminal)? {
+        let acquisition = match acquire_clipboard_image(&context, terminal)? {
             Ok(acquisition) => acquisition,
             Err(error) => {
                 self.flash_error(self.i18n.text_args(
                     "flash-clipboard-image-attach-failed",
-                    &crate::fl_args!("error" => error),
+                    &crate::fl_args!("error" => error.to_string()),
                 ));
                 return Ok(());
             }
         };
-        let Some(item) = acquisition.items.into_iter().next() else {
+        let AttachmentAcquisition {
+            mut items,
+            cleanup_root,
+        } = acquisition;
+        let Some(item) = items.pop() else {
+            if let Some(root) = cleanup_root {
+                let _ = std::fs::remove_dir_all(root);
+            }
             self.flash_warning("Clipboard did not provide an image.".to_string());
             return Ok(());
         };
         let info = item.image_info.clone();
         let format_label = pasted_image_format(item.path.as_path()).label();
-        if let Err(error) = self.stage_attachment_from_path(item.path.as_path(), item.temporary) {
+        let prepared = self
+            .backend
+            .prepare_attachment_from_path(item.path.as_path())
+            .map_err(|error| error.to_string());
+        let staged = prepared.and_then(|prepared| {
+            self.stage_prepared_attachment(
+                item.path.as_path(),
+                item.temporary,
+                cleanup_root.as_deref(),
+                prepared,
+            )
+        });
+        if let Err(error) = staged {
             let _ = std::fs::remove_file(item.path);
+            if let Some(root) = cleanup_root {
+                let _ = std::fs::remove_dir_all(root);
+            }
             self.flash_error(error);
         } else if let Some(info) = info {
             self.flash_success(self.i18n.text_args(
@@ -565,17 +587,24 @@ impl App {
         Ok(())
     }
 
-    pub(in crate::app) fn attach_iterm2_files(
+    pub(in crate::app) fn attach_terminal_files(
         &mut self,
         terminal: &mut TerminalRuntime,
+        request: TerminalUploadRequest,
         images_only: bool,
     ) -> Result<()> {
-        let source = Iterm2UploadSource::new();
+        let source: Box<dyn AttachmentSource> = match request {
+            TerminalUploadRequest::Iterm2 => Box::new(Iterm2UploadSource::new()),
+            TerminalUploadRequest::Kitty { local_sources } => {
+                Box::new(KittyUploadSource::new(local_sources))
+            }
+        };
+        let provider = source.label();
         let context = terminal.context().clone();
-        let acquisition = match acquire_from_source(&source, &context, terminal)? {
+        let acquisition = match acquire_from_source(source.as_ref(), &context, terminal)? {
             Ok(acquisition) => acquisition,
             Err(error) => {
-                self.flash_warning(error);
+                self.flash_warning(error.to_string());
                 return Ok(());
             }
         };
@@ -625,9 +654,9 @@ impl App {
                 let _ = std::fs::remove_dir_all(root);
             }
             self.flash_warning(if images_only {
-                "No supported image was selected in iTerm2.".to_string()
+                format!("No supported image was received through {provider}.")
             } else {
-                "No supported file was selected in iTerm2.".to_string()
+                format!("No supported file was received through {provider}.")
             });
         } else if skipped > 0 {
             self.flash_warning(format!(
@@ -637,46 +666,59 @@ impl App {
         Ok(())
     }
 
-    pub(in crate::app) fn download_iterm2_file(
+    pub(in crate::app) fn download_terminal_file(
         &mut self,
         terminal: &mut TerminalRuntime,
         path: &Path,
     ) -> Result<()> {
-        if terminal.context().in_multiplexer()
-            && !terminal
-                .context()
-                .capabilities
-                .iterm2_file_transfer
-                .is_supported()
-        {
-            self.flash_warning(
-                "iTerm2 file transfer is not enabled through the current multiplexer.".to_string(),
-            );
+        let context = terminal.context().clone();
+        let providers = download_providers(&context);
+        if providers.is_empty() {
+            self.flash_warning(format!(
+                "No verified terminal download provider is available. {}",
+                context.diagnostic_summary()
+            ));
             return Ok(());
         }
-        let result = terminal.with_suspended(SuspendReason::FileDownload, || {
-            iterm2::request_download(path)
-        })?;
-        match result {
-            Ok(()) => self.flash_success(format!(
-                "Downloaded {} through iTerm2.",
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("file")
-            )),
-            Err(error) => self.flash_error(error),
+        let mut failures = Vec::new();
+        for provider in providers {
+            let result = terminal.with_suspended(SuspendReason::FileDownload, || {
+                request_download(provider, path)
+            })?;
+            match result {
+                Ok(()) => {
+                    self.flash_success(format!(
+                        "Downloaded {} through {}.",
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("file"),
+                        provider.label(),
+                    ));
+                    return Ok(());
+                }
+                Err(error) if error.allows_fallback() => {
+                    failures.push(format!("{}: {error}", provider.label()));
+                }
+                Err(error) => {
+                    self.flash_error(error.to_string());
+                    return Ok(());
+                }
+            }
         }
+        self.flash_error(failures.join("; "));
         Ok(())
     }
 }
 use crate::app::Result;
 use crate::app::{
-    App, AttachmentItem, AttachmentKind, BTreeMap, ClipboardImageSource, ClipboardTextError,
-    ComposerDraft, ComposerDraftElement, ComposerItem, DRAFT_PERSIST_INTERVAL_MS, DraftSlot,
-    Duration, FileAttachOverlay, Focus, HashSet, Instant, Iterm2UploadSource, Overlay, PartContent,
-    Path, PromptHistory, Route, RunActivityTarget, RunOperation, StagedAttachment, SuspendReason,
-    TerminalRuntime, UiAction, UiResult, acquire_from_source, attachment_chip_label,
-    attachment_placeholder_base, cleanup_temporary_composer_item, cleanup_temporary_composer_items,
-    edit_text, find_placeholder_occurrence, iterm2, min, normalize_pasted_path, open_path,
-    pasted_image_format, push_submission_text, set_clipboard_text, ui_text,
+    App, AttachmentAcquisition, AttachmentItem, AttachmentKind, AttachmentSource, BTreeMap,
+    ClipboardTextError, ComposerDraft, ComposerDraftElement, ComposerItem,
+    DRAFT_PERSIST_INTERVAL_MS, DraftSlot, Duration, FileAttachOverlay, Focus, HashSet, Instant,
+    Iterm2UploadSource, KittyUploadSource, Overlay, PartContent, Path, PromptHistory, Route,
+    RunActivityTarget, RunOperation, StagedAttachment, SuspendReason, TerminalRuntime,
+    TerminalUploadRequest, UiAction, UiResult, acquire_clipboard_image, acquire_from_source,
+    attachment_chip_label, attachment_placeholder_base, cleanup_temporary_composer_item,
+    cleanup_temporary_composer_items, download_providers, edit_text, find_placeholder_occurrence,
+    min, normalize_pasted_path, open_path, pasted_image_format, push_submission_text,
+    request_download, set_clipboard_text, ui_text,
 };

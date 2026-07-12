@@ -15,8 +15,19 @@ impl App {
         // opens the native file picker on the local Mac, even though Agena is
         // running in the remote SSH session. If it is not installed, retain
         // the existing workspace picker (or native clipboard-image path).
-        if iterm2::upload_utility().is_some() {
-            self.pending_ui_action = Some(UiAction::AttachIterm2Files { images_only });
+        let detected_context;
+        let context = match self.launch.terminal_context.as_ref() {
+            Some(context) => context,
+            None => {
+                detected_context = TerminalContext::detect();
+                &detected_context
+            }
+        };
+        if Iterm2UploadSource::provider_available(context) {
+            self.pending_ui_action = Some(UiAction::AttachTerminalFiles {
+                source: TerminalUploadRequest::Iterm2,
+                images_only,
+            });
         } else if images_only {
             self.pending_ui_action = Some(UiAction::AttachClipboardImage);
         } else {
@@ -24,17 +35,52 @@ impl App {
         }
     }
 
-    pub(in crate::app) fn request_iterm2_download(&mut self, raw_path: &str) {
+    pub(in crate::app) fn request_file_attachment_from_terminal(
+        &mut self,
+        images_only: bool,
+        raw_paths: &str,
+    ) {
+        if raw_paths.trim().is_empty() {
+            self.request_file_attachment(images_only);
+            return;
+        }
+        let detected_context;
+        let context = match self.launch.terminal_context.as_ref() {
+            Some(context) => context,
+            None => {
+                detected_context = TerminalContext::detect();
+                &detected_context
+            }
+        };
+        if !context.capabilities.kitty_file_transfer.is_supported() {
+            self.flash_warning(
+                "Local-path terminal upload is available through Kitty file transfer; omit the path to use this terminal's normal attachment source."
+                    .to_owned(),
+            );
+            return;
+        }
+        if !KittyUploadSource::provider_available(context) {
+            self.flash_warning(
+                "Kitty transfer helper `kitten` is unavailable. Use Kitty's SSH kitten or install the standalone kitten binary on this host."
+                    .to_owned(),
+            );
+            return;
+        }
+        let local_sources = shlex::Shlex::new(raw_paths).collect::<Vec<_>>();
+        if local_sources.is_empty() {
+            self.flash_warning("Usage: /attach <local-path> [local-path ...]".to_owned());
+            return;
+        }
+        self.pending_ui_action = Some(UiAction::AttachTerminalFiles {
+            source: TerminalUploadRequest::Kitty { local_sources },
+            images_only,
+        });
+    }
+
+    pub(in crate::app) fn request_terminal_download(&mut self, raw_path: &str) {
         let raw_path = raw_path.trim();
         if raw_path.is_empty() {
             self.flash_warning("Usage: /download <workspace-path>".to_string());
-            return;
-        }
-        if iterm2::download_utility().is_none() {
-            self.flash_warning(
-                "iTerm2 download utility `it2dl` is unavailable; install iTerm2 Shell Integration and Utilities on this remote account."
-                    .to_string(),
-            );
             return;
         }
         let requested = Path::new(raw_path);
@@ -86,7 +132,7 @@ impl App {
             );
             return;
         }
-        self.pending_ui_action = Some(UiAction::DownloadIterm2File {
+        self.pending_ui_action = Some(UiAction::DownloadTerminalFile {
             path: canonical_path,
         });
     }
@@ -409,8 +455,9 @@ impl App {
     }
 }
 use crate::app::{
-    App, JsonValue, Overlay, Path, Route, SectionedListState, SettingsPickerAction,
-    SettingsStudioFocus, SettingsStudioItem, SettingsStudioOverlay, SettingsStudioSection,
-    SettingsStudioSectionId, UiAction, UiResult, fs, get_json_path, iterm2, min,
-    settings_studio_file_items, settings_studio_model_catalog_items, ui_text,
+    App, Iterm2UploadSource, JsonValue, KittyUploadSource, Overlay, Path, Route,
+    SectionedListState, SettingsPickerAction, SettingsStudioFocus, SettingsStudioItem,
+    SettingsStudioOverlay, SettingsStudioSection, SettingsStudioSectionId, TerminalContext,
+    TerminalUploadRequest, UiAction, UiResult, fs, get_json_path, min, settings_studio_file_items,
+    settings_studio_model_catalog_items, ui_text,
 };

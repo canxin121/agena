@@ -1,4 +1,4 @@
-use std::{io, io::Write, panic, sync::Once};
+use std::{io, panic, sync::Once};
 
 use agena_tui_components::TerminalRgb;
 use anyhow::Result;
@@ -6,12 +6,19 @@ use crossterm::event::{Event, EventStream};
 use futures_util::StreamExt;
 use ratatui::{Frame, Terminal, backend::CrosstermBackend};
 
+mod broker;
 mod capabilities;
+mod identity;
 mod input;
 mod lifecycle;
+mod overrides;
+mod profiles;
 mod protocol;
+mod transport;
+mod version;
 
-pub use capabilities::TerminalContext;
+pub use capabilities::{CapabilityEvidence, TerminalContext};
+pub use identity::TerminalFamily;
 pub use lifecycle::SuspendReason;
 
 type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
@@ -26,6 +33,7 @@ pub struct TerminalRuntime {
     terminal: AppTerminal,
     events: Option<EventStream>,
     input: input::InputNormalizer,
+    broker: broker::TerminalProtocolBroker,
     lifecycle: lifecycle::TerminalLifecycle,
     context: TerminalContext,
     background: Option<TerminalRgb>,
@@ -41,9 +49,8 @@ impl TerminalRuntime {
         let mut lifecycle = lifecycle::TerminalLifecycle::default();
         lifecycle.enter(&context.capabilities)?;
 
-        // This is an exclusive startup transaction: no EventStream exists yet.
-        // Environment evidence is preferred and the bounded OSC transaction is
-        // used only when the transport topology is safe enough to attempt it.
+        // Background hints are environment-only. Agena does not read terminal
+        // query responses outside the application event stream.
         let background = protocol::detect_terminal_background(&context);
 
         let backend = CrosstermBackend::new(io::stdout());
@@ -56,6 +63,7 @@ impl TerminalRuntime {
             terminal,
             events: Some(EventStream::new()),
             input: input::InputNormalizer::default(),
+            broker: broker::TerminalProtocolBroker::default(),
             lifecycle,
             context,
             background,
@@ -76,11 +84,7 @@ impl TerminalRuntime {
     /// supply a complete OSC/CSI/DCS frame; partial protocol writes are never
     /// exposed outside the runtime.
     pub fn write_protocol(&mut self, frame: &[u8]) -> Result<()> {
-        self.terminal
-            .backend_mut()
-            .write_all(frame)
-            .and_then(|()| self.terminal.backend_mut().flush())
-            .map_err(|error| anyhow::anyhow!(error.to_string()))
+        self.broker.write_frame(self.terminal.backend_mut(), frame)
     }
 
     pub fn draw(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> Result<()> {
@@ -140,17 +144,24 @@ impl TerminalRuntime {
 
         self.events.take();
         self.input.flush_all();
-        self.lifecycle.suspend(reason)?;
+        let preserved_input = self.input.take_ready();
+        if let Err(error) = self.lifecycle.suspend(reason) {
+            self.input.restore_ready(preserved_input);
+            self.events = Some(EventStream::new());
+            return Err(error);
+        }
 
         let result = panic::catch_unwind(panic::AssertUnwindSafe(operation));
         let resume_result = self.lifecycle.resume(&self.context.capabilities);
         if resume_result.is_ok() {
             self.generation = self.generation.saturating_add(1);
+            self.broker.next_generation();
+            self.events = Some(EventStream::new());
+            self.input.reset();
+            self.input.restore_ready(preserved_input);
             self.terminal
                 .clear()
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-            self.events = Some(EventStream::new());
-            self.input.reset();
         }
 
         match result {

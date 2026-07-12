@@ -1,3 +1,8 @@
+use super::{
+    ApiError, ApiResult, ApiService, DateTime, HashMap, Message, MessageCursor, MessageListQuery,
+    MessageResource, PageOrder, PaginatedResponse, PartLoadMode, SessionManager, Utc,
+    api_error_from_app, build_page, decode_cursor, normalize_limit,
+};
 use agena::message::MessagePart;
 
 impl ApiService {
@@ -331,8 +336,3 @@ mod tests {
         );
     }
 }
-use super::{
-    ApiError, ApiResult, ApiService, DateTime, HashMap, Message, MessageCursor, MessageListQuery,
-    MessageResource, PageOrder, PaginatedResponse, PartLoadMode, SessionManager, Utc,
-    api_error_from_app, build_page, decode_cursor, normalize_limit,
-};
